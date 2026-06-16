@@ -300,9 +300,28 @@ into `versions.body` / `snapshots.body`.
 
 ---
 
-## 10. Stack (TBD)
+## 10. Stack (decided)
 
-Not yet decided. Constraints implied by the above: a TUI front-end; local-first storage that
-naturally supports content-addressed immutable nodes + a head pointer (SQLite is the obvious
-default); a vector index for embeddings; an LLM for enrichment + Q&A. To be chosen when build
-step 1 starts.
+Chosen at founding; rationale where non-obvious. Most choices follow the existing job-harness
+ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk.
+
+| Layer | Choice | Notes |
+|---|---|---|
+| Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
+| TUI | **Textual** | Already a proven front-end in the sibling project |
+| CLI | **Typer** | Repo convention (never argparse) |
+| Storage | **SQLite** | Local-first single file; content-addressed immutable nodes + head pointer fit it directly |
+| Vector index | **sqlite-vec** | Keeps embeddings in the *same* SQLite file, preserving "drop the derived layer = one place." Fallback if outgrown: LanceDB |
+| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
+| Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. Bulk re-enrichment goes through the **Batches API** (50% off, non-interactive) |
+| Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Every answer grounded in retrieved note text; citations required in the response schema |
+
+**Embeddings reality check:** Anthropic has **no first-party embeddings API**, so embeddings was
+always going to be a separate vendor/runtime decision regardless of using Claude for the LLM work.
+Going local resolves it in favor of the privacy principle.
+
+**Auth:** no hardcoded `ANTHROPIC_API_KEY` — resolve from env or an `ant auth login` profile, same
+as the harness.
+
+**Model-tier split mirrors the harness:** cheap/deterministic high-volume work on Haiku;
+judgment-sensitive synthesis on Sonnet/Opus.
