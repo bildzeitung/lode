@@ -30,6 +30,15 @@ grounded in your own notes. The TUI keeps capture instant; intelligence runs asy
 - **Externals are snapshotted, never bookmarked.** Tickets, repos, wikis, email, and linked web
   pages get mirrored as immutable snapshots, so the knowledge graph is immune to link rot.
 
+## Stack
+
+One converged, local store: **Oracle AI Database 26ai** (Docker) holds the content, the knowledge
+graph (SQL property graphs), and the embeddings (native `VECTOR`/HNSW) in one engine — accessed
+from **Python** via `python-oracledb`, with a **Textual** TUI. Embeddings run **locally**
+(fastembed/ONNX) so content never leaves the machine; **Claude** does background enrichment (Haiku
+4.5) and cited Q&A (Sonnet 4.6 / Opus 4.8). See [`docs/design.md`](docs/design.md) §10 for the full
+rationale, including why Oracle over SQLite/SurrealDB/Postgres+AGE.
+
 ## Status
 
 **Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the full

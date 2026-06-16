@@ -287,6 +287,12 @@ edges        from, to, source(ai|user), reason, confidence,            # the kno
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.
 
+This maps onto one Oracle 26ai engine (§10): `notes`/`versions`/`externals`/`snapshots`/
+`annotations` as relational/JSON tables, `embeddings` as `VECTOR` columns (HNSW-indexed), and the
+`edges` knowledge graph as a **SQL property graph** over the note/external nodes. The shape is kept
+engine-agnostic behind a repository interface so the store stays portable (Postgres + pgvector +
+AGE is the documented fallback).
+
 ---
 
 ## 9. Open decisions (deferred, not forgotten)
@@ -296,6 +302,10 @@ into `versions.body` / `snapshots.body`.
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
   Decide per connector when building it.
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
+- **Oracle Free data ceiling (~12 GB user data).** The live storage watch-item: mirrored external
+  content (web/repo/email snapshots + their vectors) is what grows toward it, not the notes
+  themselves. Track usage; if it approaches the cap, the exit is the engine-portable schema →
+  Postgres + pgvector + AGE (or Oracle licensing). Confirm the exact 26ai Free data cap during build.
 - **Span-annotation fuzzy re-anchor threshold** — tune when span annotations are actually built.
 
 ---
@@ -310,15 +320,38 @@ ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk.
 | Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
 | TUI | **Textual** | Already a proven front-end in the sibling project |
 | CLI | **Typer** | Repo convention (never argparse) |
-| Storage | **SQLite** | Local-first single file; content-addressed immutable nodes + head pointer fit it directly |
-| Vector index | **sqlite-vec** | Keeps embeddings in the *same* SQLite file, preserving "drop the derived layer = one place." Fallback if outgrown: LanceDB |
-| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
+| **Unified store** | **Oracle AI Database 26ai** (Free, via Docker) | One converged engine holds **all three** data shapes: relational/JSON tables (the immutable content store + derived annotation layer), **SQL property graphs** (the knowledge graph), and **native `VECTOR` columns with HNSW indexes** (embeddings). Runs locally via Docker / docker-compose, optionally on a LAN box. Driver: **`python-oracledb`** (thin mode, pure-Python, native `VECTOR` binding) |
+| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. The resulting vectors are stored in Oracle `VECTOR` columns. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
 | Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. Bulk re-enrichment goes through the **Batches API** (50% off, non-interactive) |
 | Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Every answer grounded in retrieved note text; citations required in the response schema |
 
+**Why Oracle 26ai (decided after evaluating SQLite+sqlite-vec, SurrealDB, FalkorDB, Neo4j,
+Postgres+pgvector+AGE):** the priorities that drove it were **unified** (one engine for content +
+graph + vectors, not a split), **reliable storage** (durability matters more than feature
+newness), **Python bindings**, and **overhead is a non-issue** (Docker/LAN box is fine). Oracle is
+the strongest match on all four. Two 26ai features land squarely on this design:
+
+- **Transactional DML on HNSW-indexed tables.** lode is append-heavy (every note version and every
+  mirrored snapshot is an `INSERT`); 26ai lets those writes update the vector index within the same
+  transaction, with consistent results — no index-rebuild dance. This was the main operational
+  wart in 23ai and the reason this fix is the headline, not a footnote.
+- **Native GraphRAG.** SQL property graphs + AI Vector Search + **automated entity/relationship
+  extraction from text** map almost directly onto lode's "ingest → extract entities → build
+  knowledge graph → hybrid vector+graph retrieval" pipeline — in-engine rather than hand-rolled.
+
+**Accepted caveats (Oracle Free):** self-limits to **2 CPU / ~2 GB RAM** and **~12 GB user data**
+(years of headroom for text notes; the *mirrored external content* in §6 is what would eventually
+press the ceiling — see §9). Free is **unsupported and unpatched**, incl. security patches — low
+practical risk for a single-user box on a private LAN, but named because lode aggregates sensitive
+data. Proprietary; licensing cost only arises if the data ceiling forces a move beyond Free.
+
+**Keep the schema engine-portable.** The §8 shape (content nodes, derived annotations, embeddings,
+edges) is engine-agnostic; keep the access layer behind a thin repository interface so Postgres +
+pgvector + AGE remains a fallback if the Free ceiling or licensing ever bites.
+
 **Embeddings reality check:** Anthropic has **no first-party embeddings API**, so embeddings was
-always going to be a separate vendor/runtime decision regardless of using Claude for the LLM work.
-Going local resolves it in favor of the privacy principle.
+always going to be a separate runtime decision regardless of using Claude for the LLM work. Going
+local resolves it in favor of the privacy principle; Oracle just stores the resulting vectors.
 
 **Auth:** no hardcoded `ANTHROPIC_API_KEY` — resolve from env or an `ant auth login` profile, same
 as the harness.
