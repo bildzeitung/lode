@@ -70,8 +70,14 @@ something."
 keyed to the note. User notes are the source of truth; the AI layer is a sidecar that can be
 regenerated or thrown away without ever risking the original.
 
-Test of a clean separation: **drop the entire derived layer and you lose zero user data and
-can rebuild it from the notes.**
+Test of a clean separation: **drop the AI-derived cache — embeddings, AI annotations, inferred
+edges — and you lose zero user data; it rebuilds from the notes.**
+
+**One caveat the build must honor:** *user* corrections (`source: user` — a fixed tag, a confirmed
+or deleted link) live in the derived layer but are **not** AI output and **not** regenerable —
+they're genuine user decisions. So the real partition is not *owned vs derived* but
+**irreplaceable** (owned content **+** user curation) **vs regenerable cache** (everything the AI
+produced). The irreplaceable set is what must be backed up; the cache is rebuildable (§10).
 
 This constraint doesn't simplify the design — it *forces* solving invalidation (§5).
 
@@ -287,11 +293,13 @@ edges        from, to, source(ai|user), reason, confidence,            # the kno
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.
 
-This maps onto one Oracle 26ai engine (§10): `notes`/`versions`/`externals`/`snapshots`/
-`annotations` as relational/JSON tables, `embeddings` as `VECTOR` columns (HNSW-indexed), and the
-`edges` knowledge graph as a **SQL property graph** over the note/external nodes. The shape is kept
-engine-agnostic behind a repository interface so the store stays portable (Postgres + pgvector +
-AGE is the documented fallback).
+This maps onto the split store (§10). **Irreplaceable** — `notes`, `versions`, `externals`,
+`snapshots`, plus the `annotations`/`edges` rows where `source = user` — lives in **SQLite**
+(one-file backup). **Regenerable cache** — `embeddings`, the `source = ai` `annotations`/`edges`,
+and the lexical index — is rebuildable: vectors in **LanceDB**, lexical in **SQLite FTS5**, and the
+`edges` knowledge graph traversed **in-memory with networkx** (loaded from the edge rows). The whole
+shape sits behind a thin repository interface, so the cache engine is swappable without touching the
+core.
 
 ---
 
@@ -302,10 +310,13 @@ AGE is the documented fallback).
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
   Decide per connector when building it.
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
-- **Oracle Free data ceiling (~12 GB user data).** The live storage watch-item: mirrored external
-  content (web/repo/email snapshots + their vectors) is what grows toward it, not the notes
-  themselves. Track usage; if it approaches the cap, the exit is the engine-portable schema →
-  Postgres + pgvector + AGE (or Oracle licensing). Confirm the exact 26ai Free data cap during build.
+- **Cache rebuild cost is non-uniform** (§10 chart). Embeddings / lexical / explicit edges rebuild
+  cheaply (local, minutes); AI annotations + inferred edges cost real dollars + hours (Claude
+  Batches) to regenerate from scratch. Decide whether to *snapshot* the LLM tier of the cache purely
+  to skip recompute on restore — not for correctness, only to dodge the cost.
+- **LanceDB maturity.** Younger / faster-moving than the rest of the stack; acceptable because the
+  cache is disposable and lives behind the repository interface. Watch for breaking changes;
+  sqlite-vec is the simpler fallback-down if it churns too hard.
 - **Span-annotation fuzzy re-anchor threshold** — tune when span annotations are actually built.
 
 ---
@@ -320,38 +331,52 @@ ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk.
 | Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
 | TUI | **Textual** | Already a proven front-end in the sibling project |
 | CLI | **Typer** | Repo convention (never argparse) |
-| **Unified store** | **Oracle AI Database 26ai** (Free, via Docker) | One converged engine holds **all three** data shapes: relational/JSON tables (the immutable content store + derived annotation layer), **SQL property graphs** (the knowledge graph), and **native `VECTOR` columns with HNSW indexes** (embeddings). Runs locally via Docker / docker-compose, optionally on a LAN box. Driver: **`python-oracledb`** (thin mode, pure-Python, native `VECTOR` binding) |
-| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. The resulting vectors are stored in Oracle `VECTOR` columns. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
+| **Irreplaceable store** | **SQLite** (one file) | Holds everything that can't be regenerated: owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`), plus the **FTS5** lexical index. Tiny, durable, **backup = copy one file** |
+| **Regenerable cache** | **LanceDB** (vectors) + **networkx** (graph, in-memory) | Disposable, rebuildable from the notes. LanceDB: columnar on-disk embeddings with a real ANN index, metadata filtering, and **native hybrid lexical+vector fusion** (higher-quality retrieval — see §6). Graph traversal runs in-memory via networkx over the edge rows — no graph server. AI annotation/edge rows live in SQLite alongside the rest. Behind a thin **repository interface**, so the cache engine is swappable (sqlite-vec is the simpler fallback-down) |
+| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
 | Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. Bulk re-enrichment goes through the **Batches API** (50% off, non-interactive) |
 | Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Every answer grounded in retrieved note text; citations required in the response schema |
 
-**Why Oracle 26ai (decided after evaluating SQLite+sqlite-vec, SurrealDB, FalkorDB, Neo4j,
-Postgres+pgvector+AGE):** the priorities that drove it were **unified** (one engine for content +
-graph + vectors, not a split), **reliable storage** (durability matters more than feature
-newness), **Python bindings**, and **overhead is a non-issue** (Docker/LAN box is fine). Oracle is
-the strongest match on all four. Two 26ai features land squarely on this design:
+**Why a split store (decided after evaluating a unified Oracle AI Database 26ai, plus
+SQLite+sqlite-vec, SurrealDB, FalkorDB, Neo4j, Postgres+pgvector+AGE):** the ownership boundary
+(§3) already partitions the data by *value*, so the storage follows it. The irreplaceable set is
+**tiny and structurally trivial** but must be durable and trivial to back up — SQLite is the ideal
+fit (one file, atomic, restore-anywhere). The cache is **heavy but disposable**, so it optimizes for
+*retrieval quality and feature fit*, not durability — which frees the pick to the best embedded
+tools (LanceDB + networkx) with no server, licensing, or unpatched-security risk.
 
-- **Transactional DML on HNSW-indexed tables.** lode is append-heavy (every note version and every
-  mirrored snapshot is an `INSERT`); 26ai lets those writes update the vector index within the same
-  transaction, with consistent results — no index-rebuild dance. This was the main operational
-  wart in 23ai and the reason this fix is the headline, not a footnote.
-- **Native GraphRAG.** SQL property graphs + AI Vector Search + **automated entity/relationship
-  extraction from text** map almost directly onto lode's "ingest → extract entities → build
-  knowledge graph → hybrid vector+graph retrieval" pipeline — in-engine rather than hand-rolled.
+A single unified engine (the original Oracle 26ai choice) was rejected because it inverted that
+match: it put the **heaviest, least-durability-critical machinery under the most sensitive data**.
+Oracle Free is unsupported/unpatched (security included) on a box aggregating email + tickets + repo
+contents; it makes backup a full-DB dump instead of a file copy; and it front-loads the heaviest
+yak-shaving onto an MVP (build step 1, §7) that needs none of its differentiators (the note↔note
+graph fits in memory; entity extraction is Claude's job — with provenance — not a DB black box).
 
-**Accepted caveats (Oracle Free):** self-limits to **2 CPU / ~2 GB RAM** and **~12 GB user data**
-(years of headroom for text notes; the *mirrored external content* in §6 is what would eventually
-press the ceiling — see §9). Free is **unsupported and unpatched**, incl. security patches — low
-practical risk for a single-user box on a private LAN, but named because lode aggregates sensitive
-data. Proprietary; licensing cost only arises if the data ceiling forces a move beyond Free.
+**The derived layer is not uniformly disposable** — three rebuildable tiers, plus one
+non-regenerable exception that belongs with the irreplaceable set:
 
-**Keep the schema engine-portable.** The §8 shape (content nodes, derived annotations, embeddings,
-edges) is engine-agnostic; keep the access layer behind a thin repository interface so Postgres +
-pgvector + AGE remains a fallback if the Free ceiling or licensing ever bites.
+| Derived item | Rebuilt by | Regeneration cost |
+|---|---|---|
+| Embeddings | Local CPU model over head nodes | **Cheap** — minutes for thousands of notes, tens of minutes for ~100k. No dollars, no network. |
+| Lexical (FTS5) + explicit edges | Deterministic re-parse | **Trivial** — pure computation, no model. |
+| AI annotations + inferred edges | Claude Haiku via the Batches API | **Real $ + hours** — ~tens of dollars per ~10k notes, non-interactive. Not prohibitive, but not free. |
+| **User curation** (`source = user`) | — (not derived from anything) | **Not regenerable.** A fixed tag, a confirmed or deleted link — genuine user decisions. Stored with the irreplaceable set in SQLite. |
+
+So "drop the derived layer and lose nothing" holds only for the first three tiers; user curation is
+irreplaceable.
+
+**Backup stays simple:** copy the one SQLite file and you have the entire irreplaceable set (owned
+content + user curation). The cache is never *required* in a backup — losing it costs a rebuild,
+never data. Optionally snapshot just the LLM tier of the cache to skip the dollars + hours of
+re-enrichment on restore (§9) — an optimization, not a correctness need.
+
+**Keep the cache behind a repository interface.** The §8 shape is engine-agnostic; the access layer
+hides the cache engine so LanceDB can be swapped (sqlite-vec is the simpler fallback-down) without
+touching the core.
 
 **Embeddings reality check:** Anthropic has **no first-party embeddings API**, so embeddings was
 always going to be a separate runtime decision regardless of using Claude for the LLM work. Going
-local resolves it in favor of the privacy principle; Oracle just stores the resulting vectors.
+local resolves it in favor of the privacy principle; LanceDB just stores the resulting vectors.
 
 **Auth:** no hardcoded `ANTHROPIC_API_KEY` — resolve from env or an `ant auth login` profile, same
 as the harness.

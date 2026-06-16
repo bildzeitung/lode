@@ -32,12 +32,15 @@ grounded in your own notes. The TUI keeps capture instant; intelligence runs asy
 
 ## Stack
 
-One converged, local store: **Oracle AI Database 26ai** (Docker) holds the content, the knowledge
-graph (SQL property graphs), and the embeddings (native `VECTOR`/HNSW) in one engine — accessed
-from **Python** via `python-oracledb`, with a **Textual** TUI. Embeddings run **locally**
+A **split** store that follows the ownership boundary. The **irreplaceable** set — your notes and
+your own corrections — lives in one **SQLite** file (backup = copy the file). The **regenerable
+cache** — embeddings, AI annotations, the knowledge graph — is rebuildable from the notes, so it
+optimizes for retrieval quality: **LanceDB** for vectors (native hybrid lexical+vector search),
+**networkx** for in-memory graph traversal, **SQLite FTS5** for lexical. Accessed from **Python**
+behind a thin repository interface, with a **Textual** TUI. Embeddings run **locally**
 (fastembed/ONNX) so content never leaves the machine; **Claude** does background enrichment (Haiku
 4.5) and cited Q&A (Sonnet 4.6 / Opus 4.8). See [`docs/design.md`](docs/design.md) §10 for the full
-rationale, including why Oracle over SQLite/SurrealDB/Postgres+AGE.
+rationale, including why a split store over a unified Oracle/Postgres engine.
 
 ## Status
 
