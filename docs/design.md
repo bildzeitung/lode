@@ -43,7 +43,10 @@ something."
 
 1. **Async enrichment at capture, never blocking.** On save, a background pass extracts
    entities (people, projects, systems, tickets), suggests a title, and tags. User leaves
-   immediately; structuring happens after.
+   immediately; structuring happens after. **Extraction is a Claude pass** (Haiku, structured
+   outputs — §10), recorded with full provenance (`model`, `prompt_ver`, source `version_id`) —
+   never a storage-engine black box, so it stays auditable and re-runnable on a model upgrade. The
+   same pass proposes inferred edges (§6), gated as suggestions.
 2. **Surfacing connections.** When writing a new note, passively show related past notes
    ("you wrote about this 3 weeks ago"). Where a personal KB beats a search box.
 3. **Distillation of meeting notes** into decisions / action items / open questions.
@@ -119,13 +122,21 @@ head moved underneath it.** Do not pay for merge semantics we will never use.
 Two distinct ids:
 
 - `note_id` — the **logical** note, stable across its whole lineage.
-- `version_id` — the immutable node; `version_id` = **content hash** (content-addressed, so
-  identical re-saves dedup for free).
+- `version_id` — the immutable node; `version_id` = **`hash(note_id ‖ parent_version_id ‖ body)`**
+  (git's model). Folding in `note_id` makes cross-note collisions impossible (two different notes
+  both containing `"TODO"` would otherwise alias); folding in the parent keeps each chain position
+  distinct even on a revert to an earlier body (otherwise the reverted node aliases the original and
+  `parent_version_id` becomes ambiguous).
 - **head pointer**: `note_id → current version_id`.
+
+**Dedup of no-op saves is an explicit guard, not hash luck:** before writing, compare the proposed
+body to the *head's* body; if equal, return the head and write nothing. (With the parent-inclusive
+hash a re-save parents the current head, so it would *not* auto-collide — the dedup has to be an
+explicit check.)
 
 Store **full content snapshot per save** (notes are small; do not prematurely delta-compress).
 History grows forever — fine for years of personal notes. A compaction/squash policy can come
-much later; content-addressing already dedups no-op saves.
+much later; the no-op-save guard above keeps the chain from growing on saves that change nothing.
 
 ---
 
@@ -251,8 +262,27 @@ for enrichment and Q&A. Therefore:
 
 - Be deliberate about **what text leaves the machine** to the model.
 - **Redact obvious secrets (keys, tokens) before embedding** — a pasted `.env` or API key must
-  not end up vectorised and retrievable.
+  not end up vectorised and retrievable. (Preventive half.)
 - Care for local-at-rest storage.
+
+### Hard delete — the deliberate immutability break (corrective half)
+
+Append-only + content-addressing means a pasted secret otherwise lives in `versions.body`
+**forever**, and a normal delete only writes a tombstone — the bytes survive. Because this box
+aggregates sensitive data, there must be an escape hatch that **violates immutability on purpose**:
+
+- **`purge` operates at version or whole-note granularity** (v1 — substring/span redaction is
+  deferred, §9). It overwrites the body of the targeted version(s) with a redaction marker
+  (`[purged YYYY-MM-DD]`) and sets `purged_at`. Node identity, `parent_version_id`, `op`, and
+  `created` are **kept**, so lineage and undo structure survive — only the sensitive bytes die.
+- **It sweeps the note's whole chain**, including soft-deleted (tombstoned) notes — a secret pasted
+  then edited-around persists in older versions.
+- **It cascades to the cache:** drop every derived entry referencing the purged versions (LanceDB
+  vectors, FTS rows, `source: ai` annotations), then re-derive cheaply/locally so nothing leaks
+  through the index. `source: user` annotations stay (metadata, not content).
+- **Hash consequence (accepted):** a purged body no longer hashes to its `version_id`; that id stays
+  as the historical identifier, flagged `purged`, and is no longer recomputable. This is the cost of
+  an explicit immutability break, taken knowingly.
 
 ---
 
@@ -276,11 +306,12 @@ before the core loop works.
 
 ```
 notes        note_id, head_version_id, created                         # logical identity
-versions     version_id(=hash), note_id, parent_version_id, body,
-             op(create|update|delete), created                         # immutable, owned
+versions     version_id(=hash(note_id‖parent‖body)), note_id,
+             parent_version_id, body, op(create|update|delete),
+             purged_at?, created                                       # immutable, owned
 externals    external_id, source_type, head_snapshot_id, created       # logical identity
-snapshots    snapshot_id(=hash), external_id, body, raw_payload,
-             fetched_at, status(ok|tombstone)                          # immutable, mirrored
+snapshots    snapshot_id(=hash(external_id‖body)), external_id, body,
+             raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),
@@ -318,6 +349,9 @@ core.
   cache is disposable and lives behind the repository interface. Watch for breaking changes;
   sqlite-vec is the simpler fallback-down if it churns too hard.
 - **Span-annotation fuzzy re-anchor threshold** — tune when span annotations are actually built.
+- **Substring/span redaction** (upgrade to §6's hard delete). v1 purges at version/note
+  granularity; surgical "redact this string everywhere it appears, keep the rest of the note" is
+  deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.
 
 ---
 
