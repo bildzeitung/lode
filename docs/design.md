@@ -22,6 +22,20 @@ The UI is a TUI precisely so capture stays instant: get in, dump what you learne
 **No AI in the capture path.** Intelligence is async (background enrichment) or on-demand
 (you ask). Capture stays dumb and fast forever.
 
+Precisely, the save path has three tiers (it's worth being exact, because "AI" and "embedding"
+are easy to conflate):
+
+- **Synchronous on save** — write the version row **and** update the **FTS5 lexical index**. This
+  is mechanical tokenization, not a model, so it stays in the capture path: it guarantees a
+  just-captured note is **findable by keyword the instant save returns**.
+- **Async, fast, local** — generate the **embedding** (lands in ms–seconds). It raises semantic
+  recall but never blocks capture; the brief pre-vector window is masked by the lexical leg of
+  hybrid retrieval (§5/§6), so a fresh note is never invisible.
+- **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges).
+
+So *both* the embedding and the LLM are derived/async; the embedding is merely the cheap-local one.
+Only the mechanical lexical index rides the capture path.
+
 ---
 
 ## 2. The primary bet: grounded Q&A over your own notes
@@ -247,6 +261,32 @@ marked with its age. Never index full history (a note edited 5× would return 5 
 hits and cite a stale copy). History exists for audit, undo, and annotation migration — not
 retrieval.
 
+**The v1 retrieval pipeline is hybrid, fused app-side:**
+
+```
+retrieve(q):
+  L     = FTS5.search(q)          # lexical / BM25 — sync, always fresh
+  V     = lancedb.search(emb(q))  # dense vector — async cache
+  fused = RRF(L, V)               # app-side Reciprocal Rank Fusion (~20 lines)
+  top   = rerank(q, fused)        # local cross-encoder stage (toggleable)
+  ctx   = graph_expand(top)       # GraphRAG: traverse edges from the seeds
+  return trust_rank(ctx)          # §6 trust gradient orders the final context
+```
+
+- **Hybrid, never vector-only.** Pure dense retrieval underperforms on keyword-heavy technical
+  queries ("rotate the staging certs"); the **lexical leg carries those** — and, because FTS5 is
+  the synchronous index (§1/§5), it also covers a just-written note before its vector lands.
+- **Fusion is app-side RRF.** One lexical index (FTS5, fresh) + LanceDB for vectors only. LanceDB's
+  *own* native hybrid goes unused — its lexical leg would lag (it's the async cache), and RRF over
+  our two lists is the same fusion family with zero quality loss and no duplicate index. (So
+  LanceDB earns its place on columnar vectors / ANN / metadata filtering — **not** native hybrid.)
+- **Reranking is a first-class stage, wired in v1 behind a toggle.** A **local cross-encoder**
+  (e.g. `bge-reranker-v2-m3` via the ONNX runtime already shipped for embeddings — no new stack,
+  no content leaving the box per §6) re-scores the fused top-N. It's the biggest quality lever and
+  matters most in lode's regime (small corpus, short queries), and cited Q&A lives or dies on
+  ranking. The *seam* is non-negotiable (painful to retrofit); the *model* is swappable/disableable
+  so it can be A/B'd once there's a real corpus. Don't tune rerank models/thresholds pre-data (§9).
+
 ### Link-rot immunity (the payoff that justifies draw-down)
 
 Because we **snapshot** externals instead of storing bare URLs, the knowledge graph is **immune
@@ -352,6 +392,9 @@ core.
 - **Substring/span redaction** (upgrade to §6's hard delete). v1 purges at version/note
   granularity; surgical "redact this string everywhere it appears, keep the rest of the note" is
   deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.
+- **Rerank model + threshold tuning.** The rerank *stage* ships in v1 (§6) with a default local
+  cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and A/B'ing rerank vs none
+  — waits until there's a real corpus to evaluate against. Don't tune pre-data.
 
 ---
 
@@ -366,8 +409,9 @@ ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk.
 | TUI | **Textual** | Already a proven front-end in the sibling project |
 | CLI | **Typer** | Repo convention (never argparse) |
 | **Irreplaceable store** | **SQLite** (one file) | Holds everything that can't be regenerated: owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`), plus the **FTS5** lexical index. Tiny, durable, **backup = copy one file** |
-| **Regenerable cache** | **LanceDB** (vectors) + **networkx** (graph, in-memory) | Disposable, rebuildable from the notes. LanceDB: columnar on-disk embeddings with a real ANN index, metadata filtering, and **native hybrid lexical+vector fusion** (higher-quality retrieval — see §6). Graph traversal runs in-memory via networkx over the edge rows — no graph server. AI annotation/edge rows live in SQLite alongside the rest. Behind a thin **repository interface**, so the cache engine is swappable (sqlite-vec is the simpler fallback-down) |
+| **Regenerable cache** | **LanceDB** (vectors) + **networkx** (graph, in-memory) | Disposable, rebuildable from the notes. LanceDB: columnar on-disk embeddings with a real ANN index and metadata filtering (its native hybrid is **unused** — lexical stays in FTS5; fusion is app-side RRF, §6). Graph traversal runs in-memory via networkx over the edge rows — no graph server. AI annotation/edge rows live in SQLite alongside the rest. Behind a thin **repository interface**, so the cache engine is swappable (sqlite-vec is the simpler fallback-down) |
 | Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
+| Reranker | **Local cross-encoder** (e.g. `bge-reranker-v2-m3`) | First-class retrieval stage (§6), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings — no new stack, content stays on-box. Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus (§9) |
 | Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. Bulk re-enrichment goes through the **Batches API** (50% off, non-interactive) |
 | Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Every answer grounded in retrieved note text; citations required in the response schema |
 
