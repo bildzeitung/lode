@@ -40,11 +40,11 @@ app-side (RRF) with a local cross-encoder **reranker**, and **networkx** for in-
 traversal. Accessed from **Python**
 behind a thin repository interface, with a **Textual** TUI. Embeddings run **locally**
 (fastembed/ONNX) so content never leaves the machine; **Claude** does background enrichment (Haiku
-4.5) and cited Q&A (Sonnet 4.6 / Opus 4.8). See [`docs/design.md`](docs/design.md) §10 for the full
+4.5) and cited Q&A (Sonnet 4.6 / Opus 4.8). See [`docs/stack.md`](docs/stack.md) for the full
 rationale, including why a split store over a unified Oracle/Postgres engine.
 
 ## Status
 
-**Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the full
-architecture and the reasoning behind every decision. Build is incremental: notes + cited Q&A
-first, external connectors added one at a time afterward.
+**Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the overview and a
+map of the design docs, with the reasoning behind every decision. Build is incremental: notes +
+cited Q&A first, external connectors added one at a time afterward.

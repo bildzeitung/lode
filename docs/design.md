@@ -3,9 +3,23 @@
 > An AI-first, TUI-first personal knowledge base for "things I learn during my day at work" —
 > meeting notes, technical instructions, decisions. Fast to capture, intelligent to retrieve.
 
-Status: **design captured, not yet built.** This document records the reasoning and the
+Status: **design captured, not yet built.** These documents record the reasoning and the
 decisions from the founding discussion so the build can proceed incrementally without
 re-litigating settled questions.
+
+## Map of the docs
+
+This overview holds the thesis, the primary bet, the principles, and the build order. The
+mechanics live in focused companion docs:
+
+| Doc | Covers |
+|---|---|
+| **design.md** (this file) | The core problem, the primary bet, principles, the save path, build sequencing |
+| [storage.md](storage.md) | The ownership boundary, event-sourced version chains, invalidation, the data shape |
+| [retrieval.md](retrieval.md) | The hybrid retrieval pipeline: FTS5 + vectors → RRF → rerank → graph expand → trust rank |
+| [externals.md](externals.md) | External sources, snapshots, the knowledge graph, edges, link-rot immunity, privacy, hard delete |
+| [stack.md](stack.md) | The decided stack and the split-store rationale |
+| [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 
 ---
 
@@ -22,19 +36,49 @@ The UI is a TUI precisely so capture stays instant: get in, dump what you learne
 **No AI in the capture path.** Intelligence is async (background enrichment) or on-demand
 (you ask). Capture stays dumb and fast forever.
 
-Precisely, the save path has three tiers (it's worth being exact, because "AI" and "embedding"
-are easy to conflate):
+### The save path has three tiers
+
+It's worth being exact, because "AI" and "embedding" are easy to conflate:
 
 - **Synchronous on save** — write the version row **and** update the **FTS5 lexical index**. This
   is mechanical tokenization, not a model, so it stays in the capture path: it guarantees a
   just-captured note is **findable by keyword the instant save returns**.
 - **Async, fast, local** — generate the **embedding** (lands in ms–seconds). It raises semantic
   recall but never blocks capture; the brief pre-vector window is masked by the lexical leg of
-  hybrid retrieval (§5/§6), so a fresh note is never invisible.
+  hybrid retrieval (see [retrieval.md](retrieval.md)), so a fresh note is never invisible.
 - **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges).
 
 So *both* the embedding and the LLM are derived/async; the embedding is merely the cheap-local one.
 Only the mechanical lexical index rides the capture path.
+
+```mermaid
+flowchart TD
+    U["User saves note<br>(create / update / delete)"] --> SYNC
+
+    subgraph SYNC["Synchronous — in the capture path"]
+        V["Write immutable version row<br>(append to chain, move head)"]
+        F["Update FTS5 lexical index"]
+        V --> F
+    end
+
+    F --> RET["save() returns<br>note is keyword-findable NOW"]
+
+    SYNC -. enqueue jobs .-> Q[["Async work queue<br>(single-owner instance)"]]
+
+    Q --> E["Async · fast · local<br>Embedding (fastembed/ONNX)<br>→ LanceDB vector"]
+    Q --> X["Async · slow<br>Claude Haiku enrichment<br>→ tags · entities · inferred edges"]
+
+    E -. raises semantic recall .-> CACHE[("Derived cache<br>(regenerable)")]
+    X -. with full provenance .-> CACHE
+
+    classDef sync fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
+    classDef async fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
+    class V,F,RET sync;
+    class E,X,Q async;
+```
+
+The synchronous leg (green) is the only thing the user waits on. Everything that touches a model
+(blue) is off the capture path and lands in the regenerable cache.
 
 ---
 
@@ -51,16 +95,18 @@ you stop agonising over filing and just dump. It is also the foundation every ot
 reuses — connection-surfacing, promotion, and synthesis are all "find related notes, then do
 something."
 
-**Build this first.** Embeddings on every note + cited Q&A retrieval.
+**Build this first.** Embeddings on every note + cited Q&A retrieval (the pipeline lives in
+[retrieval.md](retrieval.md)).
 
 ### Supporting features (roughly in value order)
 
 1. **Async enrichment at capture, never blocking.** On save, a background pass extracts
    entities (people, projects, systems, tickets), suggests a title, and tags. User leaves
    immediately; structuring happens after. **Extraction is a Claude pass** (Haiku, structured
-   outputs — §10), recorded with full provenance (`model`, `prompt_ver`, source `version_id`) —
-   never a storage-engine black box, so it stays auditable and re-runnable on a model upgrade. The
-   same pass proposes inferred edges (§6), gated as suggestions.
+   outputs — see [stack.md](stack.md)), recorded with full provenance (`model`, `prompt_ver`,
+   source `version_id`) — never a storage-engine black box, so it stays auditable and
+   re-runnable on a model upgrade. The same pass proposes inferred edges
+   ([externals.md](externals.md)), gated as suggestions.
 2. **Surfacing connections.** When writing a new note, passively show related past notes
    ("you wrote about this 3 weeks ago"). Where a personal KB beats a search box.
 3. **Distillation of meeting notes** into decisions / action items / open questions.
@@ -80,261 +126,22 @@ something."
 
 ---
 
-## 3. The ownership boundary (foundational decision)
-
-**The user does CRUD on notes. The AI never touches note content.** Anything the AI produces
-— annotations, links, tags, extracted items, embeddings — lives in a **parallel derived layer**
-keyed to the note. User notes are the source of truth; the AI layer is a sidecar that can be
-regenerated or thrown away without ever risking the original.
-
-Test of a clean separation: **drop the AI-derived cache — embeddings, AI annotations, inferred
-edges — and you lose zero user data; it rebuilds from the notes.**
-
-**One caveat the build must honor:** *user* corrections (`source: user` — a fixed tag, a confirmed
-or deleted link) live in the derived layer but are **not** AI output and **not** regenerable —
-they're genuine user decisions. So the real partition is not *owned vs derived* but
-**irreplaceable** (owned content **+** user curation) **vs regenerable cache** (everything the AI
-produced). The irreplaceable set is what must be backed up; the cache is rebuildable (§10).
-
-This constraint doesn't simplify the design — it *forces* solving invalidation (§5).
-
----
-
-## 4. Storage model: event-sourced, linear per-note chains
-
-Notes are stored as an **append-only version chain**. Each mutating operation **at save time**
-(create / update / delete — not per keystroke) creates a new **immutable node**.
-
-- **create** → new root node
-- **update** → new node parented to the prior version
-- **delete** → a tombstone node (soft delete; recovery = repoint the head)
-
-This was chosen specifically *because* the AI sidecar is the whole point. It hands us, for free:
-immutability **by construction**, precise staleness, deterministic annotation migration, full
-provenance, and undo. Without the AI layer this would be over-engineering; with it, it pays.
-
-### Two graphs — do not conflate them
-
-- **Version lineage** — per-note history. With the decisions below, this is a **linear chain**,
-  not a branching DAG.
-- **The knowledge graph** — links *between* notes (and later, external resources). This is the
-  valuable graph and the actual product.
-
-### Single-user / single-instance → linear chains, no merge
-
-**Decision: single person, single instance, no sync.** This is a **scope boundary**, not a runtime
-invariant: it says we will never build the only genuinely hard distributed problem (CRDT / merge
-conflict resolution), because the branches that need merging only arise from concurrent edits across
-synced devices. We are explicitly not doing that.
-
-The version "graph" is therefore a **linear chain per note**. Two separate mechanisms keep it linear
-— and the doc should lean on the mechanisms, not on the "single instance" assertion:
-
-- **Branch prevention = head compare-and-swap (CAS).** Every save parents the current head and is
-  **rejected if the head moved since the editor loaded it.** This is the load-bearing guard and it
-  holds *regardless of process count* — including two editor panes on the same note inside one
-  running app. Correctness here comes from the CAS (plus SQLite serializing writes), not from there
-  being one process.
-- **Single-instance = a startup advisory lock** (lockfile/PID beside the DB; refuse to start if
-  held, pointing at the running PID). This is **not** needed for data integrity — CAS + SQLite cover
-  that — but the **async workers (§1/§5) need a single owner**: two instances would run duplicate,
-  racing enrichment + embedding loops and double-spend on Claude Batches. That, not corruption, is
-  why we enforce one instance.
-
-Do not pay for merge semantics we will never use.
-
-### Identity vs version
-
-Two distinct ids:
-
-- `note_id` — the **logical** note, stable across its whole lineage.
-- `version_id` — the immutable node; `version_id` = **`hash(note_id ‖ parent_version_id ‖ body)`**
-  (git's model). Folding in `note_id` makes cross-note collisions impossible (two different notes
-  both containing `"TODO"` would otherwise alias); folding in the parent keeps each chain position
-  distinct even on a revert to an earlier body (otherwise the reverted node aliases the original and
-  `parent_version_id` becomes ambiguous).
-- **head pointer**: `note_id → current version_id`.
-
-**Dedup of no-op saves is an explicit guard, not hash luck:** before writing, compare the proposed
-body to the *head's* body; if equal, return the head and write nothing. (With the parent-inclusive
-hash a re-save parents the current head, so it would *not* auto-collide — the dedup has to be an
-explicit check.)
-
-Store **full content snapshot per save** (notes are small; do not prematurely delta-compress).
-History grows forever — fine for years of personal notes. A compaction/squash policy can come
-much later; the no-op-save guard above keeps the chain from growing on saves that change nothing.
-
----
-
-## 5. Invalidation — the problem the ownership boundary forces
-
-Because CRUD includes **update**, and AI may not fix the note to match, the derived layer must
-*know* when it is stale and re-derive. The event-sourced model makes this **structural rather
-than a maintained flag**:
-
-- Each AI annotation records the `version_id` it was derived from.
-- If the note's head pointer has moved past that version, the annotation is **stale** — read
-  directly off the graph. No hashing, no flag to keep in sync.
-
-### Re-anchoring is a deterministic graph op
-
-Because old and new versions are both retained and linked, on update we diff them and migrate
-annotations forward by rule:
-
-- anchored quote **unchanged** → carry annotation forward as **fresh**
-- anchored quote **changed** → mark **stale**
-- anchored quote **gone** → mark **orphaned**
-
-### Anchoring strategy
-
-- **Whole-note annotations** (tags, summary, links, extracted items): default; trivially robust.
-- **Span annotations** (highlight a sentence): anchor by **quoted text + version**, never raw
-  character offsets (offsets shatter on any edit above them). On edit, fuzzy-match the quote to
-  re-anchor; if no match, mark orphaned rather than guess.
-
-### Stale-display policy (decided)
-
-- **Tags / links:** show, but flagged stale (avoids UI flicker on every typo fix).
-- **Assertive items (extracted action items, etc.):** hide until re-enrichment is fresh — the
-  cost of a wrong action item is higher than a wrong tag.
-
-Stale annotations are never treated as ground truth.
-
-### Provenance & user override
-
-- **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,
-  confidence. Enables re-running enrichment after a model upgrade, auditing a bad link, bulk
-  purge. Cheap now, painful to retrofit.
-- **`source: ai | user` on the annotation layer.** Users *will* correct an AI tag or link. That
-  correction is still metadata (doesn't touch note content), and it is **pinned**:
-  - **AI annotations are version-scoped** — regenerable, allowed to go stale, re-derived per head.
-  - **User annotations attach to `note_id`** (the logical identity) — they ride across every
-    version automatically, so re-enrichment never re-adds a link the user just removed.
-
----
-
-## 6. External sources & the knowledge graph
-
-The AI annotation layer gains read access to external sources — **tickets, source repos, wikis,
-email** — and **draws down explicitly linked web pages**, integrating everything into the
-knowledge graph. This is added **incrementally, after the core loop works** (§7).
-
-### Externals fit the *same* model
-
-A fetched ticket / wiki page / email / web page is structurally **a note version**: an immutable,
-point-in-time snapshot. The whole store collapses to one shape:
-
-> immutable content nodes (some **owned** = your notes, some **mirrored** = externals)
-> + a derived annotation/link layer + head pointers.
-
-Axes on a content node: `origin: owned | mirrored`; on derived items: `source: ai | user`.
-
-### The broken assumption: external staleness is NOT topological
-
-For owned notes, staleness is free (head moved → you know instantly). For externals, **the true
-head lives on someone else's server and changes without telling you.** Consequences:
-
-- **Externals need a refresh policy** (TTL / on-access revalidation / webhook) — there is no
-  structural staleness signal.
-- **Every AI claim from an external must cite "as of `fetched_at`."** "The ticket is open" is a
-  lie; "the ticket was open as of last sync, 3 days ago" is honest.
-- **Retrieval uses an explicit trust gradient**, in both ranking and citation display:
-  **your note > your annotation > current external snapshot > stale external snapshot >
-  AI-inferred edge.** The user's own words are highest-trust; externals corroborate, they do
-  not override.
-
-### External identity — same two-id split
-
-- `external_id` — stable logical identity: `JIRA-1234`, `repo@path@commit`, email `Message-ID`,
-  normalized URL.
-- `snapshot_id` — immutable fetched version (content hash).
-- One canonical node per `external_id` with many edges — never five copies of a ticket linked
-  from five notes. Dedup on `external_id`; version on `snapshot_id`.
-
-### Edges: explicit vs inferred
-
-- **Explicit** (a note cites `JIRA-1234` or pastes a URL): high confidence, user-asserted edge.
-- **Inferred** (AI decides "the auth migration" *is* PR #42): a **suggestion** (`source: ai`,
-  confidence-scored), **never an asserted fact**. Surface for confirmation; a user nod promotes
-  it. This is where a hallucinated link would silently corrupt the graph — keep it gated.
-
-### Draw-down rules
-
-- **Follow explicit links one hop, then stop.** Pull the linked page, extract *its* entities,
-  but do not follow that page's links outward. Recursion = unbounded web crawler, not a notes app.
-- **Readability extraction + graceful failure.** Many pages (JS-rendered, paywalled, 403) return
-  scaffolding to a naive GET; strip nav/ads, snapshot cleaned text (+ optional raw HTML), and on
-  failure write a tombstone snapshot rather than garbage.
-
-### Retrieval over the heterogeneous graph
-
-Index **heads only** — for notes, the current head version; for externals, the latest snapshot,
-marked with its age. Never index full history (a note edited 5× would return 5 near-duplicate
-hits and cite a stale copy). History exists for audit, undo, and annotation migration — not
-retrieval.
-
-**The v1 retrieval pipeline is hybrid, fused app-side:**
-
-```
-retrieve(q):
-  L     = FTS5.search(q)          # lexical / BM25 — sync, always fresh
-  V     = lancedb.search(emb(q))  # dense vector — async cache
-  fused = RRF(L, V)               # app-side Reciprocal Rank Fusion (~20 lines)
-  top   = rerank(q, fused)        # local cross-encoder stage (toggleable)
-  ctx   = graph_expand(top)       # GraphRAG: traverse edges from the seeds
-  return trust_rank(ctx)          # §6 trust gradient orders the final context
-```
-
-- **Hybrid, never vector-only.** Pure dense retrieval underperforms on keyword-heavy technical
-  queries ("rotate the staging certs"); the **lexical leg carries those** — and, because FTS5 is
-  the synchronous index (§1/§5), it also covers a just-written note before its vector lands.
-- **Fusion is app-side RRF.** One lexical index (FTS5, fresh) + LanceDB for vectors only. LanceDB's
-  *own* native hybrid goes unused — its lexical leg would lag (it's the async cache), and RRF over
-  our two lists is the same fusion family with zero quality loss and no duplicate index. (So
-  LanceDB earns its place on columnar vectors / ANN / metadata filtering — **not** native hybrid.)
-- **Reranking is a first-class stage, wired in v1 behind a toggle.** A **local cross-encoder**
-  (e.g. `bge-reranker-v2-m3` via the ONNX runtime already shipped for embeddings — no new stack,
-  no content leaving the box per §6) re-scores the fused top-N. It's the biggest quality lever and
-  matters most in lode's regime (small corpus, short queries), and cited Q&A lives or dies on
-  ranking. The *seam* is non-negotiable (painful to retrofit); the *model* is swappable/disableable
-  so it can be A/B'd once there's a real corpus. Don't tune rerank models/thresholds pre-data (§9).
-
-### Link-rot immunity (the payoff that justifies draw-down)
-
-Because we **snapshot** externals instead of storing bare URLs, the knowledge graph is **immune
-to link rot**: when the ticket is deleted, the wiki reorganised, the page taken down, the
-mirrored snapshot — and everything the AI derived from it — survives. The opposite of bookmarks.
-**Principle: always snapshot, never store a bare URL.**
-
-### Privacy (consequence of aggregation)
-
-Single-user does not mean low-stakes. Once this box holds embeddings of email + internal tickets
-+ repo contents, it is a concentrated high-value target, and that content is shipped to an LLM
-for enrichment and Q&A. Therefore:
-
-- Be deliberate about **what text leaves the machine** to the model.
-- **Redact obvious secrets (keys, tokens) before embedding** — a pasted `.env` or API key must
-  not end up vectorised and retrievable. (Preventive half.)
-- Care for local-at-rest storage.
-
-### Hard delete — the deliberate immutability break (corrective half)
-
-Append-only + content-addressing means a pasted secret otherwise lives in `versions.body`
-**forever**, and a normal delete only writes a tombstone — the bytes survive. Because this box
-aggregates sensitive data, there must be an escape hatch that **violates immutability on purpose**:
-
-- **`purge` operates at version or whole-note granularity** (v1 — substring/span redaction is
-  deferred, §9). It overwrites the body of the targeted version(s) with a redaction marker
-  (`[purged YYYY-MM-DD]`) and sets `purged_at`. Node identity, `parent_version_id`, `op`, and
-  `created` are **kept**, so lineage and undo structure survive — only the sensitive bytes die.
-- **It sweeps the note's whole chain**, including soft-deleted (tombstoned) notes — a secret pasted
-  then edited-around persists in older versions.
-- **It cascades to the cache:** drop every derived entry referencing the purged versions (LanceDB
-  vectors, FTS rows, `source: ai` annotations), then re-derive cheaply/locally so nothing leaks
-  through the index. `source: user` annotations stay (metadata, not content).
-- **Hash consequence (accepted):** a purged body no longer hashes to its `version_id`; that id stays
-  as the historical identifier, flagged `purged`, and is no longer recomputable. This is the cost of
-  an explicit immutability break, taken knowingly.
+## 3. Principles
+
+The decisions everything else hangs on. Each links to its full treatment.
+
+- **You own the notes; the AI never touches them.** Anything the AI produces lives in a
+  parallel **derived layer**, keyed to the note, that can be regenerated or thrown away without
+  risking a single character of your content. The real partition is **irreplaceable** (owned
+  content **+** user curation) **vs regenerable cache**. → [the ownership boundary](storage.md#the-ownership-boundary)
+- **Append-only, immutable history.** Every save writes a new immutable, content-addressed
+  node. Single-user, single-instance, no sync → a simple linear chain per note, no merge.
+  → [storage model](storage.md#storage-model-event-sourced-linear-per-note-chains)
+- **Answers, with citations.** Retrieval always points back to the source note, "as of" a known
+  version. Fidelity over fluency. → [retrieval.md](retrieval.md)
+- **Externals are snapshotted, never bookmarked.** Tickets, repos, wikis, email, and linked web
+  pages get mirrored as immutable snapshots, so the knowledge graph is immune to link rot.
+  → [externals.md](externals.md)
 
 ---
 
@@ -352,124 +159,5 @@ before the core loop works.
    never learns source-specific quirks and adding source N+1 doesn't touch the core.
 3. Fan out only after the single-connector loop genuinely works end-to-end.
 
----
-
-## 8. Data shape (sketch)
-
-```
-notes        note_id, head_version_id, created                         # logical identity
-versions     version_id(=hash(note_id‖parent‖body)), note_id,
-             parent_version_id, body, op(create|update|delete),
-             purged_at?, created                                       # immutable, owned
-externals    external_id, source_type, head_snapshot_id, created       # logical identity
-snapshots    snapshot_id(=hash(external_id‖body)), external_id, body,
-             raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
-annotations  id, target(note_id|external_id), source_version,          # derived layer
-             kind, payload, source(ai|user),
-             status(fresh|stale|orphaned),
-             model, prompt_ver, confidence, created
-embeddings   target_version(version_id|snapshot_id), vector, model     # derived; heads only
-edges        from, to, source(ai|user), reason, confidence,            # the knowledge graph
-             source_version, status
-```
-
-The UI composes `content node + its annotations` at render time. Nothing is ever written back
-into `versions.body` / `snapshots.body`.
-
-This maps onto the split store (§10). **Irreplaceable** — `notes`, `versions`, `externals`,
-`snapshots`, plus the `annotations`/`edges` rows where `source = user` — lives in **SQLite**
-(one-file backup). **Regenerable cache** — `embeddings`, the `source = ai` `annotations`/`edges`,
-and the lexical index — is rebuildable: vectors in **LanceDB**, lexical in **SQLite FTS5**, and the
-`edges` knowledge graph traversed **in-memory with networkx** (loaded from the edge rows). The whole
-shape sits behind a thin repository interface, so the cache engine is swappable without touching the
-core.
-
----
-
-## 9. Open decisions (deferred, not forgotten)
-
-- **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
-  **on-access with a short TTL cache** for a single instance with finite API quota — but it's
-  really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
-  Decide per connector when building it.
-- **History compaction / squash policy.** Not needed for years; revisit if storage matters.
-- **Cache rebuild cost is non-uniform** (§10 chart). Embeddings / lexical / explicit edges rebuild
-  cheaply (local, minutes); AI annotations + inferred edges cost real dollars + hours (Claude
-  Batches) to regenerate from scratch. Decide whether to *snapshot* the LLM tier of the cache purely
-  to skip recompute on restore — not for correctness, only to dodge the cost.
-- **LanceDB maturity.** Younger / faster-moving than the rest of the stack; acceptable because the
-  cache is disposable and lives behind the repository interface. Watch for breaking changes;
-  sqlite-vec is the simpler fallback-down if it churns too hard.
-- **Span-annotation fuzzy re-anchor threshold** — tune when span annotations are actually built.
-- **Substring/span redaction** (upgrade to §6's hard delete). v1 purges at version/note
-  granularity; surgical "redact this string everywhere it appears, keep the rest of the note" is
-  deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.
-- **Rerank model + threshold tuning.** The rerank *stage* ships in v1 (§6) with a default local
-  cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and A/B'ing rerank vs none
-  — waits until there's a real corpus to evaluate against. Don't tune pre-data.
-
----
-
-## 10. Stack (decided)
-
-Chosen at founding; rationale where non-obvious. Most choices follow the existing job-harness
-ecosystem (Python + Textual + Typer + SQLite) so there's no new framework risk.
-
-| Layer | Choice | Notes |
-|---|---|---|
-| Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
-| TUI | **Textual** | Already a proven front-end in the sibling project |
-| CLI | **Typer** | Repo convention (never argparse) |
-| **Irreplaceable store** | **SQLite** (one file) | Holds everything that can't be regenerated: owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`), plus the **FTS5** lexical index. Tiny, durable, **backup = copy one file** |
-| **Regenerable cache** | **LanceDB** (vectors) + **networkx** (graph, in-memory) | Disposable, rebuildable from the notes. LanceDB: columnar on-disk embeddings with a real ANN index and metadata filtering (its native hybrid is **unused** — lexical stays in FTS5; fusion is app-side RRF, §6). Graph traversal runs in-memory via networkx over the edge rows — no graph server. AI annotation/edge rows live in SQLite alongside the rest. Behind a thin **repository interface**, so the cache engine is swappable (sqlite-vec is the simpler fallback-down) |
-| Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor §6**: note/email/ticket content is never sent off-box. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
-| Reranker | **Local cross-encoder** (e.g. `bge-reranker-v2-m3`) | First-class retrieval stage (§6), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings — no new stack, content stays on-box. Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus (§9) |
-| Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. Bulk re-enrichment goes through the **Batches API** (50% off, non-interactive) |
-| Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Every answer grounded in retrieved note text; citations required in the response schema |
-
-**Why a split store (decided after evaluating a unified Oracle AI Database 26ai, plus
-SQLite+sqlite-vec, SurrealDB, FalkorDB, Neo4j, Postgres+pgvector+AGE):** the ownership boundary
-(§3) already partitions the data by *value*, so the storage follows it. The irreplaceable set is
-**tiny and structurally trivial** but must be durable and trivial to back up — SQLite is the ideal
-fit (one file, atomic, restore-anywhere). The cache is **heavy but disposable**, so it optimizes for
-*retrieval quality and feature fit*, not durability — which frees the pick to the best embedded
-tools (LanceDB + networkx) with no server, licensing, or unpatched-security risk.
-
-A single unified engine (the original Oracle 26ai choice) was rejected because it inverted that
-match: it put the **heaviest, least-durability-critical machinery under the most sensitive data**.
-Oracle Free is unsupported/unpatched (security included) on a box aggregating email + tickets + repo
-contents; it makes backup a full-DB dump instead of a file copy; and it front-loads the heaviest
-yak-shaving onto an MVP (build step 1, §7) that needs none of its differentiators (the note↔note
-graph fits in memory; entity extraction is Claude's job — with provenance — not a DB black box).
-
-**The derived layer is not uniformly disposable** — three rebuildable tiers, plus one
-non-regenerable exception that belongs with the irreplaceable set:
-
-| Derived item | Rebuilt by | Regeneration cost |
-|---|---|---|
-| Embeddings | Local CPU model over head nodes | **Cheap** — minutes for thousands of notes, tens of minutes for ~100k. No dollars, no network. |
-| Lexical (FTS5) + explicit edges | Deterministic re-parse | **Trivial** — pure computation, no model. |
-| AI annotations + inferred edges | Claude Haiku via the Batches API | **Real $ + hours** — ~tens of dollars per ~10k notes, non-interactive. Not prohibitive, but not free. |
-| **User curation** (`source = user`) | — (not derived from anything) | **Not regenerable.** A fixed tag, a confirmed or deleted link — genuine user decisions. Stored with the irreplaceable set in SQLite. |
-
-So "drop the derived layer and lose nothing" holds only for the first three tiers; user curation is
-irreplaceable.
-
-**Backup stays simple:** copy the one SQLite file and you have the entire irreplaceable set (owned
-content + user curation). The cache is never *required* in a backup — losing it costs a rebuild,
-never data. Optionally snapshot just the LLM tier of the cache to skip the dollars + hours of
-re-enrichment on restore (§9) — an optimization, not a correctness need.
-
-**Keep the cache behind a repository interface.** The §8 shape is engine-agnostic; the access layer
-hides the cache engine so LanceDB can be swapped (sqlite-vec is the simpler fallback-down) without
-touching the core.
-
-**Embeddings reality check:** Anthropic has **no first-party embeddings API**, so embeddings was
-always going to be a separate runtime decision regardless of using Claude for the LLM work. Going
-local resolves it in favor of the privacy principle; LanceDB just stores the resulting vectors.
-
-**Auth:** no hardcoded `ANTHROPIC_API_KEY` — resolve from env or an `ant auth login` profile, same
-as the harness.
-
-**Model-tier split mirrors the harness:** cheap/deterministic high-volume work on Haiku;
-judgment-sensitive synthesis on Sonnet/Opus.
+> Section numbers (§1, §2, §7) are kept from the original single-file design so existing
+> cross-references stay meaningful. §3–§6 and §8–§10 now live in the companion docs above.
