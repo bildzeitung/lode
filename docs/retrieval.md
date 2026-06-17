@@ -108,39 +108,47 @@ Runs app-side, after the Q&A LLM returns and before display:
 
 1. **Verbatim-span check (deterministic, v1).** Every `quoted_span` must occur (exact, or
    normalized-whitespace) in the body of its cited `version_id`/`snapshot_id`. No model, no latency.
-2. **Extractive coupling (deterministic, v1).** The claim's load-bearing payload must lie **inside**
-   the quoted span — not merely sit beside a free-form claim. This stops a model pairing a real but
-   inverted quote with a contradicting claim, and stops a drifted number being both quoted-verbatim
-   and wrong.
-3. **Drop or flag** claims that fail; never silently display them.
-4. **Abstain.** If nothing survives the gate, the system says **"your notes don't answer this"** —
+2. **Extractive coupling (deterministic, v1).** A **fast path**: if the claim's load-bearing payload
+   lies **inside** the quoted span, the claim is verified outright. This is the cheap common case and
+   stops a model pairing a real but inverted quote with a contradicting claim, or a drifted number
+   being both quoted-verbatim and wrong.
+3. **Entailment check (local NLI, v1 — coarse, tuning pending).** Claims that pass the span check but
+   *not* extractive coupling — genuine multi-note **synthesis**, and legitimate paraphrase that sits
+   outside any single span — fall through to a **local NLI / cross-encoder** that scores whether the
+   cited spans *jointly entail* the claim. Above a **deliberately conservative threshold** the
+   synthesized claim is accepted; below it, dropped. This is what gives v1 real synthesis
+   *capability* — "connect these two notes" gets answered, not refused. It runs on the **same ONNX
+   runtime** as the reranker — on-box, no $, no Anthropic round-trip.
+4. **Drop or flag** claims that fail; never silently display them.
+5. **Abstain.** If nothing survives the gate, the system says **"your notes don't answer this"** —
    the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than
    a confident hallucination.
 
+> **The entailment threshold ships untuned and must be revisited.** Steps 1–2 are deterministic and
+> need no tuning. Step 3's model choice and acceptance threshold are a real knob that cannot be set
+> honestly without a corpus: shipped too loose, it readmits unsupported synthesis (mode 4); too
+> tight, it collapses back to extractive-only. v1 ships it **conservative and fail-closed** so the
+> capability exists from day one, and the model + threshold are **tuned against the eval harness**
+> once there's real Q&A data ([decisions.md](decisions.md)). Treat v1 synthesis answers as
+> capability-present, quality-untuned.
+
 ### What v1 catches — and what it doesn't
 
-The gate **fails closed**: any claim it cannot verify is dropped, and if nothing survives, the
-system abstains. So the safety question ("could a hallucination *ship*?") and the capability
-question ("can a valid claim of this kind get *answered*?") have different answers — and the table
-must say which it means. **v1 is safe on all four modes; it is conservative on synthesis.**
+The gate **fails closed**: any claim it cannot verify (deterministically *or* by entailment) is
+dropped, and if nothing survives, the system abstains. So the safety question ("could a hallucination
+*ship*?") and the capability question ("can a valid claim of this kind get *answered*?") are separate
+— and the table says which it means. **v1 is safe on all four modes, and has the capability for all
+four — with synthesis quality gated on tuning.**
 
 | Failure mode | Shipped to user in v1? (safety) | Answerable in v1? (capability) |
 |---|---|---|
 | 2 · Quote fabrication | **Never** — quote isn't in the version, dropped | n/a |
 | 1 · Citation–claim mismatch | **Almost never** — extractive coupling rejects a quote that doesn't contain the claim | yes |
-| 3 · Paraphrase drift | **Almost never** — a drifted payload can't be both quoted-verbatim and wrong | yes |
-| 4 · Unsupported synthesis | **Never** — a composed claim is verbatim in no single span, so extractive coupling **drops it** | **No — abstains.** The same check that blocks *bad* synthesis also blocks *good* synthesis; v1 can't tell them apart |
+| 3 · Paraphrase drift | **Almost never** — caught by extractive coupling, or by the entailment check when the paraphrase sits outside a span | yes |
+| 4 · Unsupported synthesis | **Conservatively** — the entailment gate admits a composed claim only when the cited spans jointly entail it above threshold; below, dropped | **Yes (coarse)** — synthesis is answered via the entailment gate; quality depends on a threshold that ships untuned and is **revisited** post-corpus |
 
-So mode 4 is **safe by abstention**, not by validation: v1 refuses all genuine multi-note synthesis
-rather than risk an unsupported one. The cost is capability — questions that truly require combining
-notes get an abstention or the raw extractive pieces, not a synthesized answer.
-
-Reclaiming that capability is the job of an **entailment check**: a **local NLI / cross-encoder**
-scoring whether the cited spans *jointly entail* a composed claim, running on the **same ONNX
-runtime** as the reranker — on-box, no $, no Anthropic round-trip. It lets *valid* synthesis through
-while still catching *invalid* synthesis, and it tightens the residual cases in modes 1/3 (paraphrase
-that legitimately sits outside a verbatim span). It is **deferred behind the gate's seam**, not
-shipped blind: like rerank, the *stage* is the commitment and the *model/threshold* waits for the
-eval harness ([decisions.md](decisions.md)) so it's tuned against real data, not guessed. An optional
-LLM-judge second pass can serve as a "high-assurance" toggle, but it costs a round-trip + dollars per
-answer and re-ships content off-box, so it is not the default.
+Mode 4 is now handled by **validation, not blanket abstention**: the entailment check lets *valid*
+synthesis through while still catching *invalid* synthesis. The residual risk is concentrated in one
+place — the untuned threshold — which is why it's called out as a revisit, not a settled value. An
+optional **LLM-judge** second pass can serve as a "high-assurance" toggle (stronger than local NLI),
+but it costs a round-trip + dollars per answer and re-ships content off-box, so it is not the default.

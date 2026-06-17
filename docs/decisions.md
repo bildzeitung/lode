@@ -22,12 +22,16 @@ when the build reaches the feature that forces it.
 - **Substring/span redaction** (upgrade to the [hard delete](externals.md#hard-delete-the-deliberate-immutability-break-corrective-half)).
   v1 purges at version/note granularity; surgical "redact this string everywhere it appears, keep
   the rest of the note" is deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.
-- **Faithfulness entailment layer.** v1 verifies citations deterministically (verbatim-span +
-  extractive coupling) and abstains ([retrieval.md](retrieval.md#faithfulness-verify-citations-dont-just-require-them)).
-  The semantic residue — unsupported multi-note synthesis, legitimate paraphrase — needs an
-  entailment check (local NLI / cross-encoder on the ONNX runtime; an LLM-judge as a high-assurance
-  toggle). The *seam* ships in v1; the *model + threshold* wait for the eval harness so they're tuned
-  against real Q&A data, not guessed. Decide the NLI model and acceptance threshold then.
+- **Faithfulness entailment threshold (ships untuned, must be revisited).** v1 verifies citations
+  deterministically (verbatim-span + extractive coupling) **and** runs a local NLI / cross-encoder
+  **entailment check** so genuine multi-note synthesis is *answered*, not refused
+  ([retrieval.md](retrieval.md#faithfulness-verify-citations-dont-just-require-them)). The stage and a
+  default model ship in v1, deliberately **conservative and fail-closed**. The open knob is the
+  **model choice + acceptance threshold**: too loose readmits unsupported synthesis (mode 4), too
+  tight collapses to extractive-only. It cannot be set honestly without data, so tune it against the
+  eval harness once there's a real corpus; treat v1 synthesis answers as capability-present,
+  quality-untuned. An LLM-judge second pass remains an optional high-assurance toggle (off by
+  default — round-trip + $ + off-box).
 - **Eval harness for retrieval + faithfulness.** Several "tune post-data" decisions (rerank, the
   entailment threshold above) presuppose a way to *measure* quality. There is no measurement plan
   yet — a small held-out Q&A set with known-good citations, scored on retrieval recall and citation
