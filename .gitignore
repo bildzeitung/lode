@@ -1,3 +1,8 @@
+# Claude — worktrees and local (machine-specific) settings stay untracked;
+# .claude/settings.json IS tracked (shared project config)
+.claude/worktrees/
+.claude/settings.local.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -6,6 +11,7 @@ venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.nox/
 
 # Local data / secrets
 *.db
