@@ -105,14 +105,60 @@ mirrored snapshot — and everything the AI derived from it — survives. The op
 
 ## Privacy (consequence of aggregation)
 
-Single-user does not mean low-stakes. Once this box holds embeddings of email + internal tickets
-+ repo contents, it is a concentrated high-value target, and that content is shipped to an LLM
-for enrichment and Q&A. Therefore:
+Single-user does not mean low-stakes. Once this box holds email + internal tickets + repo contents,
+it is a concentrated high-value target — and the precise privacy claim matters.
 
-- Be deliberate about **what text leaves the machine** to the model.
-- **Redact obvious secrets (keys, tokens) before embedding** — a pasted `.env` or API key must
-  not end up vectorised and retrievable. (Preventive half.)
-- Care for local-at-rest storage.
+### What leaves the box, and what doesn't
+
+> **Content never leaves the box *for indexing*. Enrichment and Q&A are explicit, governed egress.**
+
+Not "content never leaves the machine" — that's false and the headline must not say it:
+
+- **Local, never leaves:** chunking, embeddings, reranking, NLI entailment. **Indexing and
+  retrieval are fully on-box.**
+- **Leaves the box to Anthropic:** **enrichment** (Haiku, *every note*, background) and **Q&A**
+  (Sonnet/Opus, the *retrieved passages* — which can include mirrored ticket/email/repo snapshots —
+  *per question*). The aggregation that makes this box valuable is exactly what Q&A ships into the
+  cloud prompt, often invisibly.
+
+### Two redactions, aimed at the right legs
+
+Redaction is not one control. Because embedding is **local**, redacting before it only affects local
+*retrievability* — it does **nothing** about egress, since the secret still sits in `versions.body`
+and is still sent to Claude at enrichment/Q&A time:
+
+- **Redact-before-index** — a pasted `.env` / API key doesn't become locally *retrievable* (vector
+  + FTS). Local-at-rest concern.
+- **Redact-before-egress** — strip known secret patterns from the **enrichment payload and the Q&A
+  context** before they're sent to Claude. This is the control that actually limits cloud exposure,
+  and it's the one §6 originally omitted.
+- **`purge`** (the [corrective half](#hard-delete-the-deliberate-immutability-break-corrective-half))
+  remains the only thing that removes the durable copy from `versions.body`.
+
+### No-egress tier (for genuinely sensitive notes/sources)
+
+A note — or an external source (a specific repo / ticket project) — can be marked **`no_egress`**:
+
+- still **captured, chunked, embedded, and locally retrievable** (keyword + vector);
+- **never sent to Claude** — no enrichment, and **excluded from cloud Q&A context**;
+- in an answer it is **cited as "present, withheld from cloud synthesis"** rather than silently
+  dropped, so the user knows relevant material exists but was kept local. (A local-LLM fallback that
+  could synthesize over withheld notes is a future option — see [decisions.md](decisions.md).)
+
+This keeps work secrets *in* the KB and retrievable while guaranteeing they never reach the cloud.
+
+### Egress log (auditability)
+
+Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa`), model,
+the `version_id`/`passage_id`s sent, and which redactions were applied. This extends the provenance
+already on annotations into a straight answer to *"what of mine has gone to the cloud, and when?"*
+Cheap to keep, high-trust, and the natural audit surface if a sensitive note is ever suspected of
+having leaked.
+
+### Local-at-rest
+
+Care for the on-disk store itself — the SQLite file and LanceDB sit on the machine holding all of
+the above.
 
 ---
 

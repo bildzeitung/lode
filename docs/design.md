@@ -155,6 +155,10 @@ The decisions everything else hangs on. Each links to its full treatment.
 - **Externals are snapshotted, never bookmarked.** Tickets, repos, wikis, email, and linked web
   pages get mirrored as immutable snapshots, so the knowledge graph is immune to link rot.
   → [externals.md](externals.md)
+- **Content never leaves the box for indexing; enrichment and Q&A are explicit, governed egress.**
+  Chunking, embeddings, reranking, and citation-checking are local; only enrichment and Q&A send
+  text to Claude — logged, redacted-before-egress, and skippable per note/source via `no_egress`.
+  → [privacy](externals.md#privacy-consequence-of-aggregation)
 
 ---
 

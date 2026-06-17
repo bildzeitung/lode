@@ -24,6 +24,15 @@ when the build reaches the feature that forces it.
   sqlite-vec is the simpler fallback-down if it churns too hard.
 - **Span-annotation fuzzy re-anchor threshold** — tune when span annotations are actually built.
   ([storage.md](storage.md#anchoring-strategy))
+- **Local-LLM fallback for `no_egress` notes.** v1 marks sensitive notes/sources `no_egress`: they
+  are locally retrievable but excluded from cloud enrichment + Q&A and cited as "withheld from
+  synthesis" ([externals.md](externals.md#privacy-consequence-of-aggregation)). A future option is a
+  **local generative model** that could enrich and synthesize over withheld notes entirely on-box, so
+  they participate in answers without egress. Deferred — it needs a local LLM (quality/latency hit)
+  and is a large scope addition; decide if the "withheld" gap proves too limiting in practice.
+- **Redact-before-egress pattern set.** What counts as an "obvious secret" stripped before content is
+  sent to Claude (keys, tokens, `.env` shapes, PII?) is a rule set that will need iterating; start
+  with high-precision patterns to avoid mangling legitimate content, expand from real misses.
 - **Substring/span redaction** (upgrade to the [hard delete](externals.md#hard-delete-the-deliberate-immutability-break-corrective-half)).
   v1 purges at version/note granularity; surgical "redact this string everywhere it appears, keep
   the rest of the note" is deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.

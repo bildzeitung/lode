@@ -251,11 +251,12 @@ flowchart LR
 *(§8)*
 
 ```
-notes        note_id, head_version_id, created                         # logical identity
+notes        note_id, head_version_id, no_egress, created              # logical identity
 versions     version_id(=hash(note_id‖parent‖body)), note_id,
              parent_version_id, body, op(create|update|delete),
              purged_at?, created                                       # immutable, owned
-externals    external_id, source_type, head_snapshot_id, created       # logical identity
+externals    external_id, source_type, head_snapshot_id, no_egress,    # logical identity
+             created
 snapshots    snapshot_id(=hash(external_id‖body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
 annotations  id, target(note_id|external_id), source_version,          # derived layer
@@ -270,7 +271,13 @@ edges        from, to, source(ai|user), reason, confidence,            # the kno
 jobs         id, type(embed|enrich|refresh), target_version,           # async work queue
              prompt_ver?, status(pending|running|done|failed),
              attempts, last_error?, batch_handle?, created             #   durable, single-owner
+egress_log   id, ts, purpose(enrich|qa), model,                        # cloud-egress audit trail
+             sent_targets(version_id|passage_id …), redactions
 ```
+
+`no_egress` on `notes`/`externals` marks content that is **indexed locally but never sent to Claude**
+(no enrichment, excluded from cloud Q&A context — see [externals.md](externals.md#privacy-consequence-of-aggregation)).
+`egress_log` records every time content leaves the box, so exposure is auditable.
 
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.
