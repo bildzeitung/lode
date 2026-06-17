@@ -177,6 +177,75 @@ Stale annotations are never treated as ground truth.
 
 ---
 
+## The async work queue
+
+The "capture stays instant" promise ([design.md](design.md) §1) is structurally a promise that the
+derived work happens *later*: chunk + embed, enrich via Claude, propose inferred edges, refresh
+externals, and re-derive the corpus when `prompt_ver` or the model bumps. That backlog needs a home.
+
+### One property makes this easy: lag is safe by construction
+
+Because every derived row records its `source_version` and **staleness is structural** (see
+[invalidation](#invalidation-the-problem-the-ownership-boundary-forces)), workers can **lag
+arbitrarily without corrupting anything.** A job that finishes late just writes a possibly-stale
+annotation, which the head-pointer comparison flags for re-derivation. So:
+
+- the queue needs **no locking against edits**, and
+- **every job is idempotent by key** (`version_id`, or `version_id + prompt_ver`) — re-running
+  overwrites or no-ops. The safe default on any failure is simply *do it again*.
+
+### Shape: a durable `jobs` table + a reconciliation safety net
+
+- **Durable rows in SQLite, enqueued in the same transaction as the save.** `write version row +
+  enqueue its derive jobs` is **atomic**, so a crash can never leave a saved note with no pending
+  work. (This does put more cache-ish state in the "irreplaceable" file — see the partition caveat
+  in [stack.md](stack.md).)
+- **Job types:** `embed(version)` — fast, local, **high priority**; `enrich(version, prompt_ver)` —
+  slow, Claude; `refresh(external)` — arrives with connectors. Priority `embed > enrich` so semantic
+  recall lands fast while tags/edges lag.
+- **Reconciliation scan on startup + periodically** re-enqueues any head version missing a fresh
+  embedding/enrichment. This is the self-healing net for crashes, dropped jobs, and `prompt_ver`
+  bumps (a bump makes every note's enrichment stale → the scan re-enqueues the corpus). Idempotency
+  makes running it anytime safe.
+- **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
+  correct with no distributed locking.
+
+### The one thing reconciliation can't reconstruct: a submitted Batch
+
+Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
+submitted Claude Batch.** Once POSTed, that's money in flight (`batch_abc123`); a reconciliation
+scan would see "not yet enriched" and **resubmit, double-spending.** So **batch handles and their
+member jobs are persisted durably and resumed on restart** — re-poll the handle, ingest results,
+mark done. This is the requirement that rules out an in-memory queue.
+
+### Enrichment latency: interactive now, batch for bulk
+
+A freshly-captured note enriches via **one immediate Haiku call** (seconds, full Haiku price — tiny
+per note) so its tags/entities/edges appear promptly. Only **bulk / backfill / re-enrichment** goes
+through the 50%-off **Batches API** (≤24h, non-interactive). Either way the **embedding lands in
+seconds**, so the note is retrievable immediately regardless.
+
+```mermaid
+flowchart LR
+    SAVE["save (txn)"] --> Q[("jobs<br>(SQLite, durable)")]
+    REC["reconcile<br>startup + periodic"] -.->|enqueue gaps| Q
+    Q --> CLAIM["claim<br>(single owner)"]
+    CLAIM --> RUN["run<br>embed · enrich · refresh"]
+    RUN -->|ok| DONE["done<br>(idempotent by key)"]
+    RUN -->|transient err| RETRY["backoff + retry"]
+    RETRY --> Q
+    RUN -->|poison| DEAD["dead-letter<br>attempts, last_error → UI"]
+    RUN -.->|enrich = batch| BATCH["submit Batch<br>persist handle"]
+    BATCH -.->|resume poll on restart| RUN
+
+    classDef store fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
+    classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
+    class Q store;
+    class DEAD bad;
+```
+
+---
+
 ## Data shape (sketch)
 
 *(§8)*
@@ -198,6 +267,9 @@ passages     passage_id, target_version(version_id|snapshot_id), ord,  # derived
 embeddings   passage_id, vector, model                                 # derived; one per passage
 edges        from, to, source(ai|user), reason, confidence,            # the knowledge graph
              source_version, status
+jobs         id, type(embed|enrich|refresh), target_version,           # async work queue
+             prompt_ver?, status(pending|running|done|failed),
+             attempts, last_error?, batch_handle?, created             #   durable, single-owner
 ```
 
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
@@ -218,3 +290,9 @@ This maps onto the split store ([stack.md](stack.md)). **Irreplaceable** — `no
 lexical in **SQLite FTS5** (also per passage), and the `edges` knowledge graph traversed **in-memory
 with networkx** (loaded from the edge rows). The whole shape sits behind a thin repository interface, so the cache engine is
 swappable without touching the core.
+
+The `jobs` table is **operational state** in SQLite: mostly regenerable (the reconciliation scan
+rebuilds the backlog from the content↔derived diff), with **one durable exception — in-flight
+`batch_handle`s**, which a scan can't reconstruct without double-spending. So it doesn't fit cleanly
+on either side of the irreplaceable/regenerable line — another reason the partition is by *rows*,
+not by *file* (revisited in [stack.md](stack.md)).

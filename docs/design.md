@@ -47,10 +47,15 @@ It's worth being exact, because "AI" and "embedding" are easy to conflate:
   It raises semantic recall but never blocks capture; the brief pre-vector window is masked by the
   lexical leg of hybrid retrieval (see [retrieval.md](retrieval.md)), so a fresh note is never
   invisible.
-- **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges).
+- **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges). A fresh note
+  enriches via one immediate Haiku call; bulk/backfill/re-enrichment goes through the 50%-off
+  Batches API.
 
 So *both* the embedding and the LLM are derived/async; the embedding is merely the cheap-local one.
-Only the mechanical lexical index rides the capture path.
+Only the mechanical lexical index rides the capture path. The async tiers are driven by a **durable
+work queue** enqueued in the same transaction as the save (so capture never loses pending work) and
+self-healed by a reconciliation scan — see
+[the async work queue](storage.md#the-async-work-queue).
 
 ```mermaid
 flowchart TD
@@ -64,10 +69,10 @@ flowchart TD
 
     F --> RET["save() returns<br>note is keyword-findable NOW"]
 
-    SYNC -. enqueue jobs .-> Q[["Async work queue<br>(single-owner instance)"]]
+    SYNC -. enqueue jobs (same txn) .-> Q[["Durable work queue<br>(SQLite · single owner)<br>+ reconciliation scan"]]
 
     Q --> E["Async · fast · local<br>Chunk → embed passages<br>(fastembed/ONNX) → LanceDB"]
-    Q --> X["Async · slow<br>Claude Haiku enrichment<br>→ tags · entities · inferred edges"]
+    Q --> X["Async · slow<br>Claude Haiku enrichment<br>(interactive now · Batches for bulk)<br>→ tags · entities · inferred edges"]
 
     E -. raises semantic recall .-> CACHE[("Derived cache<br>(regenerable)")]
     X -. with full provenance .-> CACHE
