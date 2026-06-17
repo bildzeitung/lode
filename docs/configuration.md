@@ -9,7 +9,7 @@ Every parameter the design exposes, in one place. Three kinds, flagged in the **
 
 Defaults below are starting points, not measured optima.
 
-## Retrieval & ranking
+## Retrieval and ranking
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
@@ -68,6 +68,8 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 | Enrichment LLM | runtime | Claude Haiku 4.5 | High-volume background extraction. |
 | Q&A LLM | runtime | Claude Sonnet 4.6 | Default interactive synthesis model. |
 | Q&A "think harder" | runtime | Opus 4.8 (toggle) | Higher-quality, higher-cost synthesis on demand. |
+
+The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs (Claude). See [stack.md](stack.md).
 
 ## Build constants (chosen once)
 
