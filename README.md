@@ -48,3 +48,16 @@ rationale, including why a split store over a unified Oracle/Postgres engine.
 **Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the overview and a
 map of the design docs, with the reasoning behind every decision. Build is incremental: notes +
 cited Q&A first, external connectors added one at a time afterward.
+
+## Working on the docs
+
+The design docs contain [Mermaid](https://mermaid.js.org/) diagrams. They're validated against the
+same parser GitHub renders with, via the **`minlag/mermaid-cli`** Docker image — no Node/Chromium
+toolchain needed on the host:
+
+```bash
+scripts/update-images.sh      # pull the mermaid-cli image (one-time / on update)
+scripts/validate-mermaid.sh   # parse every ```mermaid block in docs/, fail on syntax errors
+```
+
+`docker` is the only host requirement.
