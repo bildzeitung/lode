@@ -82,7 +82,7 @@ flowchart LR
 - **The knowledge graph** — links *between* notes (and later, external resources). This is the
   valuable graph and the actual product. It lives in [externals.md](externals.md).
 
-### Single-user / single-instance → linear chains, no merge
+### Single-user, single-instance: linear chains, no merge
 
 **Decision: single person, single instance, no sync.** This is a **scope boundary**, not a runtime
 invariant: it says we will never build the only genuinely hard distributed problem (CRDT / merge
@@ -140,7 +140,7 @@ concatenation. Same for `snapshot_id`.
 
 **`H` is a fast *non-cryptographic* hash (e.g. xxh3-128), not SHA/BLAKE.** Content addressing here
 needs only **low accidental-collision probability**, not adversarial collision resistance: lode is
-**single-user, single-instance, no sync** ([above](#single-user--single-instance--linear-chains-no-merge)),
+**single-user, single-instance, no sync** ([above](#single-user-single-instance-linear-chains-no-merge)),
 so there is no untrusted party who could craft a colliding body, and the store is never reconciled
 against a copy held by someone else. 128 bits keeps accidental collisions negligible at personal-KB
 scale while costing far less than a crypto hash. (`H` is a build constant, not a runtime knob — see
@@ -158,7 +158,7 @@ much later; the no-op-save guard above keeps the chain from growing on saves tha
 
 ---
 
-## Invalidation — the problem the ownership boundary forces
+## Invalidation: the problem the ownership boundary forces
 
 *(§5)*
 
@@ -228,8 +228,8 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
 
 - **Durable rows in SQLite, enqueued in the same transaction as the save.** `write version row +
   enqueue its derive jobs` is **atomic**, so a crash can never leave a saved note with no pending
-  work. (This does put more cache-ish state in the "irreplaceable" file — see the partition caveat
-  in [stack.md](stack.md).)
+  work. (This does put more cache-ish state in the "irreplaceable" file — see
+  [the partition is by rows](stack.md#the-partition-is-by-rows-not-by-file).)
 - **Job types:** `embed(version)` — fast, local, **high priority**; `enrich(version, prompt_ver)` —
   slow, Claude; `refresh(external)` — arrives with connectors. Priority `embed > enrich` so semantic
   recall lands fast while tags/edges lag.

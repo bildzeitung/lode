@@ -85,7 +85,7 @@ flowchart TD
   LanceDB earns its place on columnar vectors / ANN / metadata filtering — **not** native hybrid.)
 - **Reranking is a first-class stage, wired in v1 behind a toggle.** A **local cross-encoder**
   (e.g. `bge-reranker-v2-m3` via the ONNX runtime already shipped for embeddings — no new stack,
-  no content leaving the box per [externals.md](externals.md#privacy)) re-scores the fused top-N.
+  no content leaving the box per [externals.md](externals.md#privacy-consequence-of-aggregation)) re-scores the fused top-N.
   It's the biggest quality lever and matters most in lode's regime (small corpus, short queries),
   and cited Q&A lives or dies on ranking. The *seam* is non-negotiable (painful to retrofit); the
   *model* is swappable/disableable so it can be A/B'd once there's a real corpus. Don't tune rerank

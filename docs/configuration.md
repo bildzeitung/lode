@@ -49,7 +49,7 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | Refresh policy / TTL (per source) | runtime | per-source | On-access revalidation vs scheduled; a closed ticket rarely changes, an active PR hourly. ([decisions.md](decisions.md)) |
-| Re-enrichment materiality threshold | tune | size/similarity delta | Gates the paid re-enrichment of a changed external snapshot; below it, carry prior enrichment forward. Caps cloud spend on chatty sources. ([externals.md](externals.md#snapshot-churn--decouple-new-snapshot-from-re-enrich)) |
+| Re-enrichment materiality threshold | tune | size/similarity delta | Gates the paid re-enrichment of a changed external snapshot; below it, carry prior enrichment forward. Caps cloud spend on chatty sources. ([externals.md](externals.md#snapshot-churn-decouple-new-snapshot-from-re-enrich)) |
 | Draw-down hop limit | build | 1 | Follow explicit links one hop, then stop. ([externals.md](externals.md#draw-down-rules)) |
 
 ## Privacy & egress
@@ -74,4 +74,4 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
 | Content-address hash `H` | build | non-crypto 128-bit (xxh3-128) | Single-user/no-sync needs only low accidental-collision probability, not crypto resistance; length-prefixed framing. Changing `H` re-keys every node. blake2b-128 (stdlib) is the no-dep fallback. ([storage.md](storage.md#identity-vs-version)) |
-| Single-instance advisory lock | build | on | Lockfile/PID beside the DB; required so async workers have a single owner. ([storage.md](storage.md#single-user--single-instance--linear-chains-no-merge)) |
+| Single-instance advisory lock | build | on | Lockfile/PID beside the DB; required so async workers have a single owner. ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)) |

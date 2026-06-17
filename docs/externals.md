@@ -73,7 +73,7 @@ head lives on someone else's server and changes without telling you.** Consequen
 - One canonical node per `external_id` with many edges — never five copies of a ticket linked
   from five notes. Dedup on `external_id`; version on `snapshot_id`.
 
-### Snapshot churn — decouple "new snapshot" from "re-enrich"
+### Snapshot churn: decouple new snapshot from re-enrich
 
 `snapshot_id = H(external_id ‖ body)` makes an *identical* refetch free (same hash, no new row). But
 a chatty external — an active PR refreshed hourly, one new comment each time — produces a **new
@@ -179,7 +179,7 @@ the above.
 
 ---
 
-## Hard delete — the deliberate immutability break (corrective half)
+## Hard delete: the deliberate immutability break (corrective half)
 
 Append-only + content-addressing means a pasted secret otherwise lives in `versions.body`
 **forever**, and a normal delete only writes a tombstone — the bytes survive. Because this box
