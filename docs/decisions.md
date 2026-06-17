@@ -1,7 +1,8 @@
 # lode — Open decisions (deferred, not forgotten)
 
 *(§9)* Decisions deliberately left open, with the current leaning where there is one. Revisit each
-when the build reaches the feature that forces it.
+when the build reaches the feature that forces it. The tunable parameters several of these reference
+are catalogued in [configuration.md](configuration.md).
 
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
@@ -52,11 +53,11 @@ when the build reaches the feature that forces it.
   re-introduces the recall dilution chunking was meant to fix. Pick a sane default (e.g. ~256–512
   tokens) and tune against the eval harness — passages are regenerable, so re-chunking with new
   parameters is a cheap local rebuild.
-- **Eval harness for retrieval + faithfulness.** Several "tune post-data" decisions (rerank, the
-  entailment threshold above) presuppose a way to *measure* quality. There is no measurement plan
-  yet — a small held-out Q&A set with known-good citations, scored on retrieval recall and citation
-  accuracy. Without it, "A/B once there's a corpus" has nothing to A/B against. (Cross-references
-  finding #9; promote to a build-step-1 deliverable when we reach it.)
+- **Eval harness for retrieval + faithfulness — scheduled for build step 1.** A small held-out Q&A
+  set (~20–50 questions with known-good citations) scored on retrieval recall@k, citation/faithfulness
+  accuracy, and abstention correctness. It is **no longer deferred** — it ships in step 1
+  ([design.md](design.md) §7) because three knobs (rerank, the entailment threshold, chunk size) all
+  tune against it. Open sub-question: the exact metric weighting and how the golden set is curated.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune

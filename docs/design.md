@@ -19,6 +19,7 @@ mechanics live in focused companion docs:
 | [retrieval.md](retrieval.md) | The hybrid retrieval pipeline: FTS5 + vectors → RRF → rerank → graph expand → trust rank |
 | [externals.md](externals.md) | External sources, snapshots, the knowledge graph, edges, link-rot immunity, privacy, hard delete |
 | [stack.md](stack.md) | The decided stack and the split-store rationale |
+| [configuration.md](configuration.md) | Every tunable knob and build constant, in one table |
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 
 ---
@@ -168,13 +169,20 @@ Incremental, core-first. The graph is the easy part; **connectors are the hard, 
 (auth, rate limits, pagination, alien data models). Do not fan out into six mediocre connectors
 before the core loop works.
 
-1. **Notes + version chains + derived layer + note↔note knowledge graph + cited Q&A.**
-   Externals = none. This is the whole value on its own.
+1. **Notes + version chains + derived layer + note↔note knowledge graph + cited Q&A** — plus a
+   **minimal eval harness** as a first-class deliverable, not an afterthought. The harness is a
+   small held-out Q&A set (~20–50 questions with known-good citations) scored on **retrieval
+   recall@k**, **citation/faithfulness accuracy**, and **abstention correctness** (does it correctly
+   decline when the notes don't answer). It exists *in step 1* because three quality knobs — rerank,
+   the faithfulness-entailment threshold, and chunk size/overlap — all ship "tune post-data," and
+   without a target they get guessed. Externals = none. This is the whole value on its own.
 2. **Then connectors, one at a time**, starting with whichever source the notes actually
    reference most (likely tickets or the repo, not email). Normalize every connector to one
    interface — `(external_id, snapshot, fetched_at, source_type, raw_payload)` — so the graph
    never learns source-specific quirks and adding source N+1 doesn't touch the core.
 3. Fan out only after the single-connector loop genuinely works end-to-end.
+
+The knobs these stages expose are catalogued in [configuration.md](configuration.md).
 
 > Section numbers (§1, §2, §7) are kept from the original single-file design so existing
 > cross-references stay meaningful. §3–§6 and §8–§10 now live in the companion docs above.

@@ -105,17 +105,47 @@ The version "graph" is therefore a **linear chain per note**. Two separate mecha
 
 Do not pay for merge semantics we will never use.
 
+#### What the user sees when CAS rejects a save
+
+Scoping out *merge* is not the same as ignoring *conflict* — the CAS above can reject a save (two
+editor panes on one note, or an edit made while a slow save was in flight), and the design must say
+what happens then. It is **manual reconciliation, never auto-merge and never clobber**:
+
+- The save is refused with **"this note changed since you opened it."**
+- The user is shown a **diff of their buffer against the new head**, and chooses to **re-apply**
+  (their edit re-parented onto the new head as the next version) or **discard**.
+- The **rejected buffer is preserved as a draft** until they resolve it, so an unlucky CAS loss
+  never costs the unsaved work.
+
+This keeps the chain linear (the resolved save parents the *current* head) without any merge
+machinery — the conflict is surfaced honestly and resolved by the one person who can.
+
 ### Identity vs version
 
 Two distinct ids:
 
 - `note_id` — the **logical** note, stable across its whole lineage.
-- `version_id` — the immutable node; `version_id` = **`hash(note_id ‖ parent_version_id ‖ body)`**
+- `version_id` — the immutable node; `version_id` = **`H(len(note_id)‖note_id ‖ len(parent)‖parent ‖ body)`**
   (git's model). Folding in `note_id` makes cross-note collisions impossible (two different notes
   both containing `"TODO"` would otherwise alias); folding in the parent keeps each chain position
   distinct even on a revert to an earlier body (otherwise the reverted node aliases the original and
   `parent_version_id` becomes ambiguous).
 - **head pointer**: `note_id → current version_id`.
+
+**Framing is length-prefixed, not bare concatenation.** A plain `note_id ‖ parent ‖ body` has
+ambiguous field boundaries — `H("a","bc") == H("ab","c")` — a latent aliasing bug in a
+content-addressed store. Each field is therefore length-prefixed (equivalently, hash the sub-hashes
+`H(H(note_id) ‖ H(parent) ‖ H(body))`); the `‖` above denotes that framed encoding, not raw
+concatenation. Same for `snapshot_id`.
+
+**`H` is a fast *non-cryptographic* hash (e.g. xxh3-128), not SHA/BLAKE.** Content addressing here
+needs only **low accidental-collision probability**, not adversarial collision resistance: lode is
+**single-user, single-instance, no sync** ([above](#single-user--single-instance--linear-chains-no-merge)),
+so there is no untrusted party who could craft a colliding body, and the store is never reconciled
+against a copy held by someone else. 128 bits keeps accidental collisions negligible at personal-KB
+scale while costing far less than a crypto hash. (`H` is a build constant, not a runtime knob — see
+[configuration.md](configuration.md); changing it re-keys every node, so pick once. blake2b-128 from
+the Python stdlib is the zero-dependency fallback if avoiding the `xxhash` dep is preferred.)
 
 **Dedup of no-op saves is an explicit guard, not hash luck:** before writing, compare the proposed
 body to the *head's* body; if equal, return the head and write nothing. (With the parent-inclusive
@@ -252,12 +282,12 @@ flowchart LR
 
 ```
 notes        note_id, head_version_id, no_egress, created              # logical identity
-versions     version_id(=hash(note_id‖parent‖body)), note_id,
+versions     version_id(=H(framed: note_id,parent,body)), note_id,
              parent_version_id, body, op(create|update|delete),
              purged_at?, created                                       # immutable, owned
 externals    external_id, source_type, head_snapshot_id, no_egress,    # logical identity
              created
-snapshots    snapshot_id(=hash(external_id‖body)), external_id, body,
+snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),

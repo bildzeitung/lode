@@ -73,6 +73,23 @@ head lives on someone else's server and changes without telling you.** Consequen
 - One canonical node per `external_id` with many edges — never five copies of a ticket linked
   from five notes. Dedup on `external_id`; version on `snapshot_id`.
 
+### Snapshot churn — decouple "new snapshot" from "re-enrich"
+
+`snapshot_id = H(external_id ‖ body)` makes an *identical* refetch free (same hash, no new row). But
+a chatty external — an active PR refreshed hourly, one new comment each time — produces a **new
+snapshot every refresh**, and naively each one would trigger a paid Claude **re-enrichment**
+([stack.md](stack.md) Batches). Owned notes have a no-op-save guard; externals need the analogous
+cost control, so the two operations are gated separately:
+
+- **Re-embed on any change** — local, cheap, keeps retrieval current.
+- **Re-enrich only on *material* change** — gate the expensive enrichment on a local delta between
+  the new snapshot and its predecessor (size / similarity below a threshold); below the bar, **carry
+  the prior enrichment forward**, re-anchored to the new snapshot. A one-comment PR update re-embeds
+  but does not re-enrich.
+
+The materiality threshold is a tunable knob ([configuration.md](configuration.md)); it caps cloud
+spend on noisy sources without letting enrichment rot.
+
 ---
 
 ## Edges: explicit vs inferred
