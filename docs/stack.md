@@ -9,7 +9,7 @@ is the storage realization of the ownership boundary and data shape in [storage.
 | Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
 | TUI | **Textual** | Already a proven front-end in the sibling project |
 | CLI | **Typer** | Repo convention (never argparse) |
-| **Irreplaceable store** | **SQLite** (one file) | Holds everything that can't be regenerated: owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`), plus the **FTS5** lexical index. Tiny, durable, **backup = copy one file** |
+| **SQLite store** (one file) | **SQLite** | A single **container** file. Holds the **irreplaceable** rows — owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`) — *and*, in the same file, rebuildable cache (**FTS5**, `source = ai` rows, `passages`) + operational `jobs`. The partition is by **rows / value, not by file** (see [below](#the-partition-is-by-rows-not-by-file)). Tiny, durable, **backup = copy the file** (a harmless *superset* of the irreplaceable set) |
 | **Regenerable cache** | **LanceDB** (vectors) + **networkx** (graph, in-memory) | Disposable, rebuildable from the notes. LanceDB: columnar on-disk embeddings with a real ANN index and metadata filtering (its native hybrid is **unused** — lexical stays in FTS5; fusion is app-side RRF, see [retrieval.md](retrieval.md)). Graph traversal runs in-memory via networkx over the edge rows — no graph server. AI annotation/edge rows live in SQLite alongside the rest. Behind a thin **repository interface**, so the cache engine is swappable (sqlite-vec is the simpler fallback-down) |
 | Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (e.g. `nomic-embed-text-v1.5`, `bge-*`) — CPU-only, no torch. **Chosen specifically to honor [privacy](externals.md#privacy)**: note/email/ticket content is never sent off-box *for indexing*. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
 | Reranker | **Local cross-encoder** (e.g. `bge-reranker-v2-m3`) | First-class retrieval stage ([retrieval.md](retrieval.md)), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings — no new stack, content stays on-box. Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus ([decisions.md](decisions.md)) |
@@ -55,10 +55,41 @@ Three rebuildable tiers, plus one non-regenerable exception that belongs with th
 So "drop the derived layer and lose nothing" holds only for the first three tiers; user curation is
 irreplaceable.
 
-**Backup stays simple:** copy the one SQLite file and you have the entire irreplaceable set (owned
-content + user curation). The cache is never *required* in a backup — losing it costs a rebuild,
-never data. Optionally snapshot just the LLM tier of the cache to skip the dollars + hours of
-re-enrichment on restore ([decisions.md](decisions.md)) — an optimization, not a correctness need.
+---
+
+## The partition is by rows, not by file
+
+The value boundary (§3, irreplaceable vs regenerable) and the engine boundary (SQLite vs
+LanceDB/networkx) do **not** coincide. The SQLite file is a *container* that holds irreplaceable
+rows **and** rebuildable cache (FTS5, `source = ai` rows, `passages`) **and** operational `jobs`.
+So the partition is **by rows / value, not by file** — and the docs say so rather than implying the
+file equals the irreplaceable set.
+
+It stays a **single file** (not split into `core.db` + `cache.db`) for three concrete reasons:
+
+- **Atomic enqueue.** "Write version row + enqueue its derive jobs" must be one transaction
+  ([storage.md](storage.md#the-async-work-queue)); across two attached DBs in WAL mode commit is
+  **not** atomic, which would break that invariant.
+- **FTS5 sits next to `versions`.** An external-content FTS5 index references `versions.body` to
+  avoid duplicating text; that reference doesn't cross database files cleanly.
+- **Nuking the cache needs no file boundary** — it's a `DROP`/`DELETE` of the cache tables within
+  the one file, not a file deletion.
+
+**Backup, stated honestly:**
+
+- **`cp lode.db` is the default** — a *superset* backup: it includes rebuildable cache (harmless
+  extra bytes you could have regenerated). Trivial and always correct.
+- **A minimal / archival irreplaceable-only dump** is a *row-level* export (owned tables +
+  `source = user` rows); restore rebuilds the cache via the reconciliation scan
+  ([storage.md](storage.md#the-async-work-queue)) + re-embed/re-enrich. Deferred — the superset copy
+  is correct and free; the minimal export is an optimization ([decisions.md](decisions.md)).
+- **Restore is robustly sloppy.** A restored file may carry *stale* cache (AI rows from an old
+  `prompt_ver`, FTS rows, a dangling `batch_handle`); all of it is absorbed by structural staleness
+  + reconciliation, so a superset restore is safe.
+
+The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
+snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
+([decisions.md](decisions.md)) — an optimization, not a correctness need.
 
 **Keep the cache behind a repository interface.** The [data shape](storage.md#data-shape-sketch) is
 engine-agnostic; the access layer hides the cache engine so LanceDB can be swapped (sqlite-vec is

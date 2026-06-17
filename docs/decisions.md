@@ -9,6 +9,11 @@ when the build reaches the feature that forces it.
   Decide per connector when building it. ([externals.md](externals.md#the-broken-assumption-external-staleness-is-not-topological))
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
   ([storage.md](storage.md#identity-vs-version))
+- **Minimal / archival backup export.** v1 backup is `cp lode.db` — a superset copy that drags
+  rebuildable cache (harmless). A true irreplaceable-only dump is a row-level `lode export` (owned
+  tables + `source = user` rows), with restore rebuilding the cache via reconciliation + re-embed/
+  re-enrich ([stack.md](stack.md#the-partition-is-by-rows-not-by-file)). Deferred — the superset
+  copy is correct and free; build the export only if a minimal dump is actually wanted.
 - **Cache rebuild cost is non-uniform** ([stack.md](stack.md#the-derived-layer-is-not-uniformly-disposable)).
   Embeddings / lexical / explicit edges rebuild cheaply (local, minutes); AI annotations + inferred
   edges cost real dollars + hours (Claude Batches) to regenerate from scratch. Decide whether to
