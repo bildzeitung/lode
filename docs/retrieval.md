@@ -15,31 +15,59 @@ not retrieval.
 
 ---
 
+## Chunking: passages are the retrieval unit
+
+A whole-note embedding dilutes recall (a long meeting note mixes standup + a deploy decision + an
+unrelated bug into one averaged vector) and forces citations up to "this 600-word note." So the
+**head version's body is chunked into passages**, and the **passage — not the note — is the unit
+that gets embedded, lexically indexed, fused, and reranked.** Both retrieval legs must rank the
+**same unit** or RRF fuses apples and oranges, so FTS5 indexes passages too.
+
+- **Structure-aware, with a token fallback.** Split on the note's own structure — markdown
+  headings, paragraphs, list items (meeting notes have sections; runbooks have numbered steps) —
+  then **sub-split any block over N tokens** with slight overlap so passage size stays bounded.
+  Deterministic and local — no LLM in the chunker (consistent with the capture-path and privacy
+  stances); it rides the async embedding leg ([design.md](design.md) §1), so capture stays instant.
+- **Small-to-big retrieval.** Match on the small passage (precision), but expand each hit to its
+  **parent block** (`parent_block` in [storage.md](storage.md#data-shape-sketch)) so the Q&A LLM
+  gets enough surrounding context to synthesize — while the **citation still points to the precise
+  passage/span.** Match a sentence, reason over its section, cite the sentence.
+- **Cleaner spans feed the faithfulness gate.** A coherent passage is a far better unit for
+  extractive coupling and NLI entailment ([below](#faithfulness-verify-citations-dont-just-require-them))
+  than an arbitrary slice — so chunking quality directly sets citation-verification accuracy.
+
+Passages are **regenerable cache**, re-chunked per head version ([storage.md](storage.md#data-shape-sketch)).
+Chunk size `N` and overlap are tuning knobs, deferred to the eval harness ([decisions.md](decisions.md)).
+
+---
+
 ## The v1 retrieval pipeline is hybrid, fused app-side
 
 ```
 retrieve(q):
-  L     = FTS5.search(q)          # lexical / BM25 — sync, always fresh
-  V     = lancedb.search(emb(q))  # dense vector — async cache
+  L     = FTS5.search(q)          # lexical / BM25 over passages — sync, always fresh
+  V     = lancedb.search(emb(q))  # dense vector over passages — async cache
   fused = RRF(L, V)               # app-side Reciprocal Rank Fusion (~20 lines)
   top   = rerank(q, fused)        # local cross-encoder stage (toggleable)
-  ctx   = graph_expand(top)       # GraphRAG: traverse edges from the seeds
+  big   = expand_parents(top)     # small-to-big: passage hit → its parent block for context
+  ctx   = graph_expand(big)       # GraphRAG: traverse edges from the seeds' notes
   return trust_rank(ctx)          # trust gradient orders the final context
 ```
 
 ```mermaid
 flowchart TD
-    Q["query q"] --> L["FTS5.search(q)<br>lexical / BM25<br>sync · always fresh"]
+    Q["query q"] --> L["FTS5.search(q)<br>lexical / BM25 · over passages<br>sync · always fresh"]
     Q --> EMB["emb(q)<br>local ONNX embedder"]
-    EMB --> V["lancedb.search<br>dense vector<br>async cache"]
+    EMB --> V["lancedb.search<br>dense vector · over passages<br>async cache"]
 
     L --> RRF["RRF(L, V)<br>app-side Reciprocal Rank Fusion<br>(~20 lines)"]
     V --> RRF
 
     RRF --> RR["rerank(q, fused)<br>local cross-encoder<br>(toggleable seam)"]
-    RR --> GE["graph_expand(top)<br>traverse edges from seeds<br>(GraphRAG)"]
+    RR --> EP["expand_parents(top)<br>small-to-big: passage hit<br>→ parent block for context"]
+    EP --> GE["graph_expand<br>traverse edges from seeds' notes<br>(GraphRAG)"]
     GE --> TR["trust_rank(ctx)<br>order by trust gradient"]
-    TR --> OUT["grounded context<br>→ Q&A LLM (cited answer)"]
+    TR --> OUT["grounded context → Q&A LLM<br>cite the precise passage/span"]
 
     classDef fresh fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     classDef cache fill:#d9edf7,stroke:#31708f,color:#1b1b1b;

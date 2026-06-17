@@ -43,9 +43,10 @@ It's worth being exact, because "AI" and "embedding" are easy to conflate:
 - **Synchronous on save** — write the version row **and** update the **FTS5 lexical index**. This
   is mechanical tokenization, not a model, so it stays in the capture path: it guarantees a
   just-captured note is **findable by keyword the instant save returns**.
-- **Async, fast, local** — generate the **embedding** (lands in ms–seconds). It raises semantic
-  recall but never blocks capture; the brief pre-vector window is masked by the lexical leg of
-  hybrid retrieval (see [retrieval.md](retrieval.md)), so a fresh note is never invisible.
+- **Async, fast, local** — **chunk the body into passages and embed each** (lands in ms–seconds).
+  It raises semantic recall but never blocks capture; the brief pre-vector window is masked by the
+  lexical leg of hybrid retrieval (see [retrieval.md](retrieval.md)), so a fresh note is never
+  invisible.
 - **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges).
 
 So *both* the embedding and the LLM are derived/async; the embedding is merely the cheap-local one.
@@ -65,7 +66,7 @@ flowchart TD
 
     SYNC -. enqueue jobs .-> Q[["Async work queue<br>(single-owner instance)"]]
 
-    Q --> E["Async · fast · local<br>Embedding (fastembed/ONNX)<br>→ LanceDB vector"]
+    Q --> E["Async · fast · local<br>Chunk → embed passages<br>(fastembed/ONNX) → LanceDB"]
     Q --> X["Async · slow<br>Claude Haiku enrichment<br>→ tags · entities · inferred edges"]
 
     E -. raises semantic recall .-> CACHE[("Derived cache<br>(regenerable)")]

@@ -193,7 +193,9 @@ annotations  id, target(note_id|external_id), source_version,          # derived
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),
              model, prompt_ver, confidence, created
-embeddings   target_version(version_id|snapshot_id), vector, model     # derived; heads only
+passages     passage_id, target_version(version_id|snapshot_id), ord,  # derived; heads only
+             char_range, text, parent_block                            #   structure-aware chunks
+embeddings   passage_id, vector, model                                 # derived; one per passage
 edges        from, to, source(ai|user), reason, confidence,            # the knowledge graph
              source_version, status
 ```
@@ -201,10 +203,18 @@ edges        from, to, source(ai|user), reason, confidence,            # the kno
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
 into `versions.body` / `snapshots.body`.
 
+**Passages are the retrieval unit** (see [retrieval.md](retrieval.md#chunking-passages-are-the-retrieval-unit)):
+a version's body is chunked into structure-aware passages, each embedded and lexically indexed
+separately, with `parent_block` recording the enclosing section/note for small-to-big context
+expansion. They are **regenerable cache** — re-chunked and re-embedded from the body on every new
+head version (deterministic, local, cheap). This is *distinct* from the §5 span-annotation
+anchoring: passages are **regenerated per version**, never fuzzy-migrated like user span marks —
+different lifecycles, do not conflate.
+
 This maps onto the split store ([stack.md](stack.md)). **Irreplaceable** — `notes`, `versions`,
 `externals`, `snapshots`, plus the `annotations`/`edges` rows where `source = user` — lives in
-**SQLite** (one-file backup). **Regenerable cache** — `embeddings`, the `source = ai`
-`annotations`/`edges`, and the lexical index — is rebuildable: vectors in **LanceDB**, lexical in
-**SQLite FTS5**, and the `edges` knowledge graph traversed **in-memory with networkx** (loaded from
-the edge rows). The whole shape sits behind a thin repository interface, so the cache engine is
+**SQLite** (one-file backup). **Regenerable cache** — `passages`, `embeddings`, the `source = ai`
+`annotations`/`edges`, and the lexical index — is rebuildable: passage vectors in **LanceDB**,
+lexical in **SQLite FTS5** (also per passage), and the `edges` knowledge graph traversed **in-memory
+with networkx** (loaded from the edge rows). The whole shape sits behind a thin repository interface, so the cache engine is
 swappable without touching the core.

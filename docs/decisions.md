@@ -32,6 +32,12 @@ when the build reaches the feature that forces it.
   eval harness once there's a real corpus; treat v1 synthesis answers as capability-present,
   quality-untuned. An LLM-judge second pass remains an optional high-assurance toggle (off by
   default — round-trip + $ + off-box).
+- **Chunk size + overlap.** Passages are structure-aware with a token-window fallback
+  ([retrieval.md](retrieval.md#chunking-passages-are-the-retrieval-unit)); the fallback threshold
+  `N` and the overlap are tuning knobs. Too small fragments context and citations; too large
+  re-introduces the recall dilution chunking was meant to fix. Pick a sane default (e.g. ~256–512
+  tokens) and tune against the eval harness — passages are regenerable, so re-chunking with new
+  parameters is a cheap local rebuild.
 - **Eval harness for retrieval + faithfulness.** Several "tune post-data" decisions (rerank, the
   entailment threshold above) presuppose a way to *measure* quality. There is no measurement plan
   yet — a small held-out Q&A set with known-good citations, scored on retrieval recall and citation
