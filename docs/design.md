@@ -122,14 +122,26 @@ provenance, and undo. Without the AI layer this would be over-engineering; with 
 
 ### Single-user / single-instance → linear chains, no merge
 
-**Decision: single person, single instance, no sync.** Branches in a version graph only arise
-from concurrent edits of the same note (multi-device offline → sync). We are explicitly *not*
-doing that, which kills the only genuinely hard distributed problem (CRDT/merge conflict
-resolution).
+**Decision: single person, single instance, no sync.** This is a **scope boundary**, not a runtime
+invariant: it says we will never build the only genuinely hard distributed problem (CRDT / merge
+conflict resolution), because the branches that need merging only arise from concurrent edits across
+synced devices. We are explicitly not doing that.
 
-Therefore the version "graph" is a **linear chain per note**, built as one and refusing
-branches by construction: **a save always parents the current head; reject the save if the
-head moved underneath it.** Do not pay for merge semantics we will never use.
+The version "graph" is therefore a **linear chain per note**. Two separate mechanisms keep it linear
+— and the doc should lean on the mechanisms, not on the "single instance" assertion:
+
+- **Branch prevention = head compare-and-swap (CAS).** Every save parents the current head and is
+  **rejected if the head moved since the editor loaded it.** This is the load-bearing guard and it
+  holds *regardless of process count* — including two editor panes on the same note inside one
+  running app. Correctness here comes from the CAS (plus SQLite serializing writes), not from there
+  being one process.
+- **Single-instance = a startup advisory lock** (lockfile/PID beside the DB; refuse to start if
+  held, pointing at the running PID). This is **not** needed for data integrity — CAS + SQLite cover
+  that — but the **async workers (§1/§5) need a single owner**: two instances would run duplicate,
+  racing enrichment + embedding loops and double-spend on Claude Batches. That, not corruption, is
+  why we enforce one instance.
+
+Do not pay for merge semantics we will never use.
 
 ### Identity vs version
 
