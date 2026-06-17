@@ -38,13 +38,29 @@ cache** — embeddings, AI annotations, the knowledge graph — is rebuildable f
 optimizes for retrieval quality: **LanceDB** for vectors, **SQLite FTS5** for lexical, fused
 app-side (RRF) with a local cross-encoder **reranker**, and **networkx** for in-memory graph
 traversal. Accessed from **Python**
-behind a thin repository interface, with a **Textual** TUI. Embeddings run **locally**
-(fastembed/ONNX) so content never leaves the machine; **Claude** does background enrichment (Haiku
-4.5) and cited Q&A (Sonnet 4.6 / Opus 4.8). See [`docs/design.md`](docs/design.md) §10 for the full
-rationale, including why a split store over a unified Oracle/Postgres engine.
+behind a thin repository interface, with a **Textual** TUI. Indexing is fully on-box — embeddings,
+reranking, and citation-checking all run **locally** (fastembed/ONNX), so **content never leaves the
+box for indexing or retrieval**. **Claude** does background enrichment (Haiku 4.5) and cited Q&A
+(Sonnet 4.6 / Opus 4.8) — these are *explicit, logged egress*, and notes/sources marked `no_egress`
+are kept local and never sent to the cloud. See [`docs/stack.md`](docs/stack.md) for the full
+rationale (including why a split store over a unified Oracle/Postgres engine) and
+[`docs/externals.md`](docs/externals.md#privacy-consequence-of-aggregation) for the privacy model.
 
 ## Status
 
-**Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the full
-architecture and the reasoning behind every decision. Build is incremental: notes + cited Q&A
-first, external connectors added one at a time afterward.
+**Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the overview and a
+map of the design docs, with the reasoning behind every decision. Build is incremental: notes +
+cited Q&A first, external connectors added one at a time afterward.
+
+## Working on the docs
+
+The design docs contain [Mermaid](https://mermaid.js.org/) diagrams. They're validated against the
+same parser GitHub renders with, via the **`minlag/mermaid-cli`** Docker image — no Node/Chromium
+toolchain needed on the host:
+
+```bash
+scripts/update-images.sh      # pull the mermaid-cli image (one-time / on update)
+scripts/validate-mermaid.sh   # parse every ```mermaid block in docs/, fail on syntax errors
+```
+
+`docker` is the only host requirement.
