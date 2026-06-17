@@ -98,6 +98,13 @@ something."
 **Build this first.** Embeddings on every note + cited Q&A retrieval (the pipeline lives in
 [retrieval.md](retrieval.md)).
 
+A citation is only worth something if it's *true*: the answer is returned as discrete claims, each
+pinned to a verbatim span of a specific note version, and a **faithfulness gate** verifies that
+evidence before display — dropping unsupported claims and **abstaining** ("your notes don't answer
+this") rather than emitting a confident hallucination. Requiring a citation *field* is not the same
+as guaranteeing the citation *holds*; see
+[faithfulness](retrieval.md#faithfulness-verify-citations-dont-just-require-them).
+
 ### Supporting features (roughly in value order)
 
 1. **Async enrichment at capture, never blocking.** On save, a background pass extracts

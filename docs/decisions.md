@@ -22,6 +22,17 @@ when the build reaches the feature that forces it.
 - **Substring/span redaction** (upgrade to the [hard delete](externals.md#hard-delete-the-deliberate-immutability-break-corrective-half)).
   v1 purges at version/note granularity; surgical "redact this string everywhere it appears, keep
   the rest of the note" is deferred as YAGNI. Revisit if coarse purge proves too lossy in practice.
+- **Faithfulness entailment layer.** v1 verifies citations deterministically (verbatim-span +
+  extractive coupling) and abstains ([retrieval.md](retrieval.md#faithfulness-verify-citations-dont-just-require-them)).
+  The semantic residue — unsupported multi-note synthesis, legitimate paraphrase — needs an
+  entailment check (local NLI / cross-encoder on the ONNX runtime; an LLM-judge as a high-assurance
+  toggle). The *seam* ships in v1; the *model + threshold* wait for the eval harness so they're tuned
+  against real Q&A data, not guessed. Decide the NLI model and acceptance threshold then.
+- **Eval harness for retrieval + faithfulness.** Several "tune post-data" decisions (rerank, the
+  entailment threshold above) presuppose a way to *measure* quality. There is no measurement plan
+  yet — a small held-out Q&A set with known-good citations, scored on retrieval recall and citation
+  accuracy. Without it, "A/B once there's a corpus" has nothing to A/B against. (Cross-references
+  finding #9; promote to a build-step-1 deliverable when we reach it.)
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune

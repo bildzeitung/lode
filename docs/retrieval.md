@@ -67,3 +67,72 @@ The final `trust_rank` step applies the **trust gradient** — your note > your 
 external snapshot > stale external snapshot > AI-inferred edge — defined in
 [externals.md](externals.md#the-broken-assumption-external-staleness-is-not-topological). The
 user's own words are highest-trust; externals corroborate, they do not override.
+
+---
+
+## Faithfulness: verify citations, don't just require them
+
+The primary bet is *cited* Q&A, and the stated value is "hallucinated synthesis is worse than none"
+([design.md](design.md) §2). Requiring a citation **field in the response schema** does not deliver
+that — an LLM will emit a well-formed citation that doesn't support its claim. A confident answer
+with a plausible-but-wrong citation is the **worst** outcome: a hallucination wearing the uniform of
+a verified fact, which the user trusts *more* because it's cited. So citation **faithfulness** is
+enforced as a pipeline stage, not assumed from the schema.
+
+### Failure modes
+
+1. **Citation–claim mismatch** — cites a note that says the opposite of the claim.
+2. **Quote fabrication** — emits a "quoted" span that appears in no version.
+3. **Paraphrase drift** — the note is topically right but a specific payload (number, date,
+   decision) is wrong.
+4. **Unsupported synthesis** — fuses notes A + B into a claim neither supports.
+
+### Make the answer schema verifiable
+
+The Q&A LLM does not return prose + `[note_id]`. It returns a list of **claims**, each carrying the
+exact evidence it rests on — pinned to the **version**, not the logical note (bytes drift across
+versions), and to a **span**, not the whole note:
+
+```
+answer = [
+  { text: "<one factual claim>",
+    support: [ { version_id | snapshot_id,
+                 quoted_span: "<verbatim text from that version>" } ] },
+  ...
+]
+```
+
+### The faithfulness gate (a stage, like rerank)
+
+Runs app-side, after the Q&A LLM returns and before display:
+
+1. **Verbatim-span check (deterministic, v1).** Every `quoted_span` must occur (exact, or
+   normalized-whitespace) in the body of its cited `version_id`/`snapshot_id`. No model, no latency.
+2. **Extractive coupling (deterministic, v1).** The claim's load-bearing payload must lie **inside**
+   the quoted span — not merely sit beside a free-form claim. This stops a model pairing a real but
+   inverted quote with a contradicting claim, and stops a drifted number being both quoted-verbatim
+   and wrong.
+3. **Drop or flag** claims that fail; never silently display them.
+4. **Abstain.** If nothing survives the gate, the system says **"your notes don't answer this"** —
+   the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than
+   a confident hallucination.
+
+### What v1 catches — and what it doesn't
+
+The deterministic gate is cheap and free of network/$, but its limits are on the record:
+
+| Failure mode | Deterministic gate (v1) | Needs entailment layer |
+|---|---|---|
+| 2 · Quote fabrication | **Fully** — the quote isn't in the version | — |
+| 1 · Citation–claim mismatch | **Mostly** (with extractive coupling) | residual inversion |
+| 3 · Paraphrase drift | **Mostly** (with extractive coupling) | paraphrase outside the span |
+| 4 · Unsupported synthesis | **No** — each span exists; the combination isn't checked | yes |
+
+The semantic residue (genuine multi-note synthesis, legitimate paraphrase) needs an **entailment
+check**: a **local NLI / cross-encoder** scoring whether each span actually *entails* its claim,
+running on the **same ONNX runtime** as the reranker — on-box, no $, no Anthropic round-trip. It is
+**deferred behind the gate's seam**, not shipped blind: like rerank, the *stage* is the commitment
+and the *model/threshold* waits for the eval harness ([decisions.md](decisions.md)) so it's tuned
+against real data, not guessed. An optional LLM-judge second pass can serve as a "high-assurance"
+toggle, but it costs a round-trip + dollars per answer and re-ships content off-box, so it is not
+the default.
