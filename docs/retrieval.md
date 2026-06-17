@@ -119,20 +119,28 @@ Runs app-side, after the Q&A LLM returns and before display:
 
 ### What v1 catches — and what it doesn't
 
-The deterministic gate is cheap and free of network/$, but its limits are on the record:
+The gate **fails closed**: any claim it cannot verify is dropped, and if nothing survives, the
+system abstains. So the safety question ("could a hallucination *ship*?") and the capability
+question ("can a valid claim of this kind get *answered*?") have different answers — and the table
+must say which it means. **v1 is safe on all four modes; it is conservative on synthesis.**
 
-| Failure mode | Deterministic gate (v1) | Needs entailment layer |
+| Failure mode | Shipped to user in v1? (safety) | Answerable in v1? (capability) |
 |---|---|---|
-| 2 · Quote fabrication | **Fully** — the quote isn't in the version | — |
-| 1 · Citation–claim mismatch | **Mostly** (with extractive coupling) | residual inversion |
-| 3 · Paraphrase drift | **Mostly** (with extractive coupling) | paraphrase outside the span |
-| 4 · Unsupported synthesis | **No** — each span exists; the combination isn't checked | yes |
+| 2 · Quote fabrication | **Never** — quote isn't in the version, dropped | n/a |
+| 1 · Citation–claim mismatch | **Almost never** — extractive coupling rejects a quote that doesn't contain the claim | yes |
+| 3 · Paraphrase drift | **Almost never** — a drifted payload can't be both quoted-verbatim and wrong | yes |
+| 4 · Unsupported synthesis | **Never** — a composed claim is verbatim in no single span, so extractive coupling **drops it** | **No — abstains.** The same check that blocks *bad* synthesis also blocks *good* synthesis; v1 can't tell them apart |
 
-The semantic residue (genuine multi-note synthesis, legitimate paraphrase) needs an **entailment
-check**: a **local NLI / cross-encoder** scoring whether each span actually *entails* its claim,
-running on the **same ONNX runtime** as the reranker — on-box, no $, no Anthropic round-trip. It is
-**deferred behind the gate's seam**, not shipped blind: like rerank, the *stage* is the commitment
-and the *model/threshold* waits for the eval harness ([decisions.md](decisions.md)) so it's tuned
-against real data, not guessed. An optional LLM-judge second pass can serve as a "high-assurance"
-toggle, but it costs a round-trip + dollars per answer and re-ships content off-box, so it is not
-the default.
+So mode 4 is **safe by abstention**, not by validation: v1 refuses all genuine multi-note synthesis
+rather than risk an unsupported one. The cost is capability — questions that truly require combining
+notes get an abstention or the raw extractive pieces, not a synthesized answer.
+
+Reclaiming that capability is the job of an **entailment check**: a **local NLI / cross-encoder**
+scoring whether the cited spans *jointly entail* a composed claim, running on the **same ONNX
+runtime** as the reranker — on-box, no $, no Anthropic round-trip. It lets *valid* synthesis through
+while still catching *invalid* synthesis, and it tightens the residual cases in modes 1/3 (paraphrase
+that legitimately sits outside a verbatim span). It is **deferred behind the gate's seam**, not
+shipped blind: like rerank, the *stage* is the commitment and the *model/threshold* waits for the
+eval harness ([decisions.md](decisions.md)) so it's tuned against real data, not guessed. An optional
+LLM-judge second pass can serve as a "high-assurance" toggle, but it costs a round-trip + dollars per
+answer and re-ships content off-box, so it is not the default.
