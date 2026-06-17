@@ -1,5 +1,8 @@
 {
     "spinnerTipsEnabled": false,
+    "worktree": {
+        "baseRef": "head"
+    },
     "permissions": {
     "allow": [
       "WebSearch", "WebFetch", "Agent(*)",

@@ -63,6 +63,14 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 2. **Simplest solution first.** Always implement the simplest thing that could work. Do not add abstractions or flexibility that weren't explicitly requested.
 3. **Flag uncertainty explicitly.** If you are not confident about an approach or technical detail, say so before proceeding.
 
+## Memory & where project knowledge lives
+
+Claude Code gives each session an automatic, per-project memory store — no setup needed. But for lode, **`docs/` is the source of truth for every design decision**, so route knowledge deliberately:
+
+- **Design facts and decisions → `docs/`**, never memory. Settled architecture goes in the relevant doc; open questions in [`docs/decisions.md`](docs/decisions.md); tunables in [`docs/configuration.md`](docs/configuration.md). A design fact that lives only in memory **forks the record** — the next reader trusts the docs and misses it.
+- **Memory is for working context and user preferences** that don't belong in the design — how the user likes things done, in-flight task state, cross-session reminders. Not a second home for architecture.
+- When a conversation settles something architectural, the deliverable is a **doc edit (in a worktree)**, not a memory entry.
+
 # RTK (Rust Token Killer) — Token-Optimized Commands
 
 ## Golden Rule
