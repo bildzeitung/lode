@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lode"
+version = "0.0.0"
+description = "AI-first, TUI-first personal knowledge base for things you learn at work."
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Runtime dependencies are seeded from the decided stack (docs/stack.md), the
+# same source as requirements.txt. Intentionally unpinned until the build starts
+# (docs/design.md §7); pin both files together when that happens.
+dependencies = [
+    "textual",   # TUI
+    "typer",     # CLI (repo convention — never argparse)
+    "anthropic", # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
+    "pydantic",  # structured outputs for the derived layer
+    "fastembed", # embeddings + reranker + NLI via bundled ONNX runtime
+    "lancedb",   # on-disk vector store (ANN + metadata filtering)
+    "networkx",  # in-memory knowledge-graph traversal
+    "xxhash",    # 128-bit content-address hash (docs/storage.md)
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest", # tests (run via nox)
+    "nox",    # task runner (`nox -t fix` before merging)
+    "ruff",   # lint / format
+]
+
+[project.scripts]
+lode = "lode.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
