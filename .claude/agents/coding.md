@@ -55,18 +55,20 @@ Honor the dependency graph the tracker encodes — **do not jump ahead**:
 rtk bd update <id> --claim     # sets in_progress + assignee in one step
 ```
 
-### 3. Create the worktree
+### 3. Create and enter the worktree
 
-Preferred: the harness **EnterWorktree** tool (creates `.claude/worktrees/<name>` from
-`trunk` HEAD — the repo's `worktree.baseRef=head` — and switches the session into it).
+**Use `EnterWorktree`** — manual `git -C` for every step costs more tokens than the tool does. It's
+a **deferred** tool, so load it once via `ToolSearch` (`select:EnterWorktree,ExitWorktree`) before
+first use. I launch with a **pinned cwd** (the main checkout), so I can't create-and-switch in a
+single `EnterWorktree(name)` call. The supported flow for a pinned agent is the two-step `path` form
+the tool documents — create the branch+worktree with one git op, then switch into it with
+`EnterWorktree(path:…)`, which works from a pinned agent and moves only *my* cwd (not the parent's):
 
-Manual equivalent (note: `git -C`, never `cd && git`, which trips the chained-command prompt):
+1. `rtk git worktree add .claude/worktrees/<id> -b <id> trunk`   — branch from local `trunk` HEAD
+2. `EnterWorktree(path: ".claude/worktrees/<id>")`               — switch my cwd into it
 
-```bash
-rtk git worktree add .claude/worktrees/<id> -b <id> trunk
-```
-
-All subsequent work happens **inside the worktree**. Do not touch the main checkout.
+After step 2 my working directory **is** the worktree, so every edit, gate, and commit runs there
+with normal paths — no `git -C` threaded through the task. Do not touch the main checkout's tree.
 
 ### 4. Read before writing; record approach for bugs
 
@@ -118,12 +120,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 
 ### 8. Merge `--no-ff` into trunk, then drop the worktree
 
-So a unit of work lands as one grouped, revertible change:
+So a unit of work lands as one grouped, revertible change. Step back out with the tool first:
+`ExitWorktree(action: "keep")` returns my cwd to the main checkout (it won't *remove* a
+`path`-entered worktree, but it does walk me back). From there `trunk` is checked out, so neither
+step below needs `git -C`. The harness has **no merge tool**, so `git merge --no-ff` is the one
+genuinely unavoidable git step:
 
-```bash
-rtk git -C <main-checkout> merge --no-ff <id>        # or the harness merge path
-rtk git worktree remove .claude/worktrees/<id>       # ExitWorktree(action:"remove") if entered via the tool
-```
+1. `ExitWorktree(action: "keep")`                    — back to the main checkout; worktree left on disk
+2. `rtk git merge --no-ff <id>`                      — cwd is the main checkout (`trunk`); `--no-ff` keeps the unit grouped
+3. `rtk git worktree remove .claude/worktrees/<id>`  — drop the now-merged worktree (ExitWorktree can't, for a `path`-entered one)
 
 (If the human runs a review gate — e.g. `/code-review` — do it on the branch *before* the merge.)
 
