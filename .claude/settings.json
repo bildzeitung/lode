@@ -1,19 +1,62 @@
 {
-    "spinnerTipsEnabled": false,
-    "worktree": {
-        "baseRef": "head"
-    },
-    "permissions": {
-    "allow": [
-      "WebSearch", "WebFetch", "Agent(*)",
-      "Read(docs/**)", "Write(docs/**)", "Edit(docs/**)",
-      "Read(scripts/**)", "Read(.claude/**)",
-      "Write(.claude/worktrees/**)", "Edit(.claude/worktrees/**)",
-      "Bash(git *)", "Bash(bash -c *)", "Bash(python3 *)", "Bash(uv *)",
-      "Bash(pytest *)", "Bash(nox *)", "Bash(ruff *)", "Bash(docker *)",
-      "Bash(ls *)", "Bash(cat *)", "Bash(grep *)", "Bash(find *)",
-      "Bash(mkdir *)", "Bash(cp *)", "Bash(mv *)", "Bash(rm *)",
-      "Bash(chmod *)", "Bash(./scripts/*)"
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bd prime",
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Agent(*)",
+      "Read(docs/**)",
+      "Write(docs/**)",
+      "Edit(docs/**)",
+      "Read(scripts/**)",
+      "Read(.claude/**)",
+      "Write(.claude/worktrees/**)",
+      "Edit(.claude/worktrees/**)",
+      "Bash(git *)",
+      "Bash(bash -c *)",
+      "Bash(python3 *)",
+      "Bash(uv *)",
+      "Bash(pytest *)",
+      "Bash(nox *)",
+      "Bash(ruff *)",
+      "Bash(docker *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(rm *)",
+      "Bash(chmod *)",
+      "Bash(./scripts/*)"
+    ]
+  },
+  "spinnerTipsEnabled": false,
+  "worktree": {
+    "baseRef": "head"
   }
 }
