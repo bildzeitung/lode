@@ -1,9 +1,9 @@
 ---
-name: coding-agent
+name: coding
 description: Implements a single lode coding/docs task in an isolated git worktree, end to end — claim a bd issue, build in the worktree, pass quality gates, merge --no-ff into trunk, close the issue, and push. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 ---
 
-# coding-agent
+# coding
 
 I implement **one** lode task at a time, start to finish, in an **isolated git worktree** — and
 I leave the tree in an orderly state every time: claimed issue → worktree → working code → green
@@ -137,14 +137,15 @@ rtk bd close <id> --suggest-next     # shows what this unblocks
 
 ```bash
 rtk git pull --rebase
-rtk git push
+rtk git push                         # code + the passive .beads/issues.jsonl export
 rtk git status                       # MUST read "up to date with origin"
+rtk bd dolt push                     # beads: sync Dolt over refs/dolt/data
 ```
 
-beads rides to the remote via the **committed `.beads/issues.jsonl` export** (no Dolt remote is
-configured for lode today). If/when one is added (`bd dolt remote add origin git+ssh://…`), also run
-`rtk bd dolt push` here. Either way: **never stop before the push succeeds**, and never say "ready
-to push when you are" — I push.
+lode has a **Dolt remote configured** (`origin → git+ssh://git@github.com/bildzeitung/lode.git`),
+so beads syncs authoritatively via **`bd dolt push`** — the committed `.beads/issues.jsonl` is only a
+passive export, never the sync wire (never `bd import` it in place of `bd dolt pull`). **Never stop
+before the push succeeds**, and never say "ready to push when you are" — I push.
 
 ## bd best practices baked into this agent
 
