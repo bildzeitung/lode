@@ -62,3 +62,25 @@ are catalogued in [configuration.md](configuration.md).
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
   pre-data.
+- **Landing loop — `ready-for-land` representation.** The durable hand-off marks a ticket
+  ready-to-merge ([agents-workflow.md](agents-workflow.md#the-landing-loop--durable-land-hand-off-planned)).
+  beads has fixed built-in statuses (`open`/`in_progress`/`blocked`/`deferred`/`closed`/…) plus
+  configurable custom statuses (`bd config set status.custom`) **and** labels. Open: model the state
+  as a **custom status** `ready-for-land` (one-state-per-issue, shows in `bd list --status`) or a
+  **label** `ready-for-land` (composes with the existing `in_progress`/`blocked` lifecycle and with a
+  `land-failed` bounce label). Leaning **label** — it keeps the normal status lifecycle intact and a
+  bounced ticket can carry both a status and a reason — but decide when the lander is built.
+- **Landing loop — landing-context schema + where it lives.** The producer attaches remote branch
+  name, head SHA, gate results, and a one-line summary to the ticket for the lander to consume. Open:
+  a structured blob (JSON in a `--notes`/`--design` field, machine-parsed via `bd show --json`) vs.
+  discrete fields. Keep it parseable, not scraped; settle the exact shape with the `/land` build.
+- **Landing loop — uniform hand-off vs. fan-out-only.** Does *every* producer defer landing to
+  `/land` (solo `/code` too — one code path, but a hand-off even for a single task), or does `/code`
+  keep landing in-session and only `/code-parallel` hands off? Leaning **uniform** (one landing path
+  is simpler to reason about and reuses the re-validation gate), with `/code` optionally auto-running
+  a single `/land` pass for the solo convenience. Decide when building the producers' change.
+- **Landing loop — lander serialization across machines.** A single in-session `/land` loop is
+  serial by construction, but multi-machine dev means two `/land` loops could run at once and both
+  try to merge `trunk`. Open: a lock (a beads `pinned`/`hooked` claim on a sentinel, a remote lock
+  ref, or just "only run `/land` on one machine") to guarantee a single active lander. This is the
+  seam where the design later hands off to real CI. Decide when the lander is built.

@@ -1,9 +1,12 @@
 # lode — Agent dev workflow
 
-How lode is *built*. The other docs describe the system; this one describes the **two agent
+How lode is *built*. The other docs describe the system; this one describes the **agent
 loops that produce it** — a **design loop** that stress-tests a plan before it's built, and a
-**coding loop** that implements one task end-to-end in an isolated worktree. See
-[design.md](design.md) for the thesis and the build sequencing the work flows through.
+**coding loop** that implements one task end-to-end in an isolated worktree (with a fan-out
+variant, `/code-parallel`, for several independent tasks at once). A third stage — a **landing
+loop** that decouples *landing* from *building* through a durable hand-off — is **designed but
+not yet built**; it is the last section of this doc. See [design.md](design.md) for the thesis and
+the build sequencing the work flows through.
 
 The operational source of truth for each loop is its skill/agent definition under
 [`.claude/`](../.claude); this doc is the map, not the mechanics. The hard project invariants live
@@ -181,3 +184,109 @@ the docs and the ticket tree; the coding loop then reads the settled docs and th
 writes code to them. Nothing skips the middle — a design decision that exists only in a chat
 transcript, a bd note, or memory has *forked the record*, and the next loop will trust the docs and
 miss it. Keep the decisions in the docs, and the two loops stay in agreement.
+
+---
+
+## The landing loop — durable land hand-off (planned)
+
+> **Status: designed, not yet built.** Today both `/code` and `/code-parallel` *land in the same
+> session that built the work* — the coding agent (or the `/code-parallel` orchestrator) merges
+> `--no-ff` into `trunk`, pushes, and closes the issue itself. The landing loop replaces that
+> in-session land with a **durable hand-off**; the sections above describe the current behaviour,
+> this one the intended evolution.
+
+### Why decouple landing from building
+
+In-session landing has two limits that show up the moment work goes parallel or spans more than one
+sitting:
+
+- **It isn't durable.** The build→land hand-off lives in the orchestrator's context. If that session
+  compacts, crashes, or is closed between "branch is green" and "branch is merged," the work is
+  stranded on a branch nobody lands.
+- **It doesn't cross machines.** Landing in-session ties the merge to the machine that did the build.
+  Development here happens across **multiple machines**, and a local worktree branch on machine A is
+  invisible to a lander on machine B.
+
+The fix is to make "this branch is built and green, ready to merge" a **durable fact** — recorded in
+beads, with the branch itself living somewhere both machines can see — and to let a **separate
+lander** act on it whenever and wherever it next runs.
+
+### The producers — build a green branch, mark it ready, stop
+
+A code agent (solo `/code` or one of a `/code-parallel` fan-out) runs its build cycle as today —
+claim → build → `nox -t fix` / `nox -s tests` green — but instead of merging it:
+
+1. **Pushes its branch to the remote** (`git push -u origin <branch>`). The durable artifact is a
+   **remote branch**, not a local worktree branch: it survives the worktree being auto-removed on
+   session exit, and it is reachable from any machine. (Pushing a *new* branch ref does not race
+   `trunk` the way pushing `trunk` does, so parallel producers stay safe.)
+2. **Marks the ticket `ready-for-land`** and attaches the **landing context** — remote branch name,
+   head SHA, the gate results, and a one-line summary — then **stops**. It does *not* merge, close,
+   push `trunk`, or touch the main checkout.
+
+### The lander — `/land`, drained by a self-paced loop
+
+A single **`/land` merge agent** owns every write to shared state. It is run as a **self-paced
+loop** — `/loop 5m /land` — so it drains the queue periodically while you work, with no daemon to
+manage. Being the *single* lander is what serializes landing: only one process ever touches `trunk`,
+so the index race that makes naive parallel landing flaky cannot happen.
+
+For each `ready-for-land` ticket, one at a time, it:
+
+1. **Re-validates — never trusts the ticket.** beads state and git state are separate stores that can
+   drift, so it confirms the remote branch still exists and its head SHA matches the landing context
+   before doing anything.
+2. **Merges `--no-ff`** `origin/<branch>` into `trunk` in the main checkout.
+3. **Re-runs the gates on the merged result.** Gates were green against an *older* `trunk`; two
+   branches that each passed in isolation can break *combined* (a clean git merge with broken
+   behaviour). Re-running `nox -t fix` / `nox -s tests` after the merge, before pushing, is what
+   makes a deferred land trustworthy.
+4. On success: **push `trunk`, `bd close`, `bd dolt push`, delete the remote branch.** On any failure
+   (branch missing, SHA drift, conflict, gates red): **bounce the ticket** — flag it land-failed with
+   the reason and leave the remote branch intact for follow-up — and move to the next. One bad branch
+   never blocks the others.
+
+```mermaid
+flowchart TD
+    subgraph PROD["Producers — build green branches"]
+        P1["/code<br>(one task)"]
+        P2["/code-parallel<br>(fan-out · N tasks)"]
+    end
+    P1 --> BUILD["coding agent:<br>claim · build · gates green ·<br>git push -u origin &lt;branch&gt;"]
+    P2 --> BUILD
+    BUILD --> MARK["Mark ticket ready-for-land<br>+ landing context<br>(remote branch · head SHA ·<br>gate results · summary)"]
+    MARK --> Q[("ready-for-land queue<br>(durable: beads + remote branch)")]
+
+    Q --> LAND["/land merge agent<br>(self-paced: /loop 5m /land)"]
+    LAND --> ONE["Take ONE ticket<br>(single lander · serial ·<br>no trunk-index race)"]
+    ONE --> VAL{"Re-validate:<br>branch on origin? SHA matches?"}
+    VAL -->|"no"| BOUNCE["Bounce ticket<br>(land-failed + reason);<br>keep remote branch"]
+    VAL -->|"yes"| MERGE["git -C main:<br>merge --no-ff origin/&lt;branch&gt;"]
+    MERGE --> REGATE{"Re-run gates on merged trunk<br>(catch stale-trunk breakage)"}
+    REGATE -->|"fail / conflict"| BOUNCE
+    REGATE -->|"pass"| PUSH["push trunk · bd close ·<br>bd dolt push · delete remote branch"]
+    PUSH --> NEXT["Next ready-for-land ticket"]
+    NEXT -.-> ONE
+    BOUNCE -.-> NEXT
+
+    classDef start fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
+    classDef work fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
+    classDef gate fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
+    classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
+    classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
+    class P1,P2 start;
+    class BUILD,MARK,LAND,ONE,MERGE,PUSH,NEXT work;
+    class VAL,REGATE gate;
+    class BOUNCE bad;
+    class Q good;
+```
+
+### Where this is heading — a green-branch merge queue
+
+This is, deliberately, a **merge queue**: producers open "ready" branches, a single lander drains
+the green ones into `trunk`. That is the first step on the path toward a proper **CI/CD** setup —
+the natural end state is the re-validation and merge moving to **real CI** (e.g. a service that
+merges green PRs), with `/land` being the local-dev stand-in until then. We are building toward it
+on purpose; v1 keeps the lander a local agent so it stays simple and needs no external
+infrastructure. The open sub-choices that this design defers are recorded in
+[decisions.md](decisions.md).
