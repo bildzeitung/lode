@@ -136,6 +136,8 @@ bd close <id>         # Complete work
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
+**Dolt is authoritative — `issues.jsonl` is EXPORT-ONLY (`import.auto: false`).** beads' default `import.auto: true` makes the `post-checkout`/`post-merge` git hooks auto-import `issues.jsonl` back into Dolt; a `git pull --rebase` or merge after a `bd close` then replays an intermediate committed jsonl from *before* the close and silently **reverts** it (this bit `lode-8bh` / `lode-wvf` / `lode-bxz`). It is disabled in [`.beads/config.yaml`](.beads/config.yaml) (committed, so it travels to every machine). Keep it off. Practical rules: **sync bd state only via `bd dolt push` / `bd dolt pull`** (never `bd import` the jsonl as a substitute); always `bd dolt push` after bd writes so the wire carries them; treat a committed `issues.jsonl` as a read-only snapshot, never edit or import it by hand. (lode-6ra)
+
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

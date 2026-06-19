@@ -57,3 +57,12 @@
 sync.remote: "git+ssh://git@github.com/bildzeitung/lode.git"
 
 validation.on-create: "warn"
+
+# Dolt is the source of truth; .beads/issues.jsonl is a PASSIVE export, never a sync wire.
+# import.auto=false disables the auto jsonl->Dolt import that the post-checkout / post-merge
+# git hooks would otherwise run. With it on, a `git pull --rebase` (or merge) after a `bd close`
+# replays an intermediate committed jsonl whose state predates the close, and the hook re-imports
+# it — silently REVERTING the close (observed reverting lode-8bh / lode-wvf / lode-bxz). Disabling
+# it keeps Dolt authoritative; bd state still syncs cross-machine via `bd dolt push` / `bd dolt
+# pull` over refs/dolt/data. Committed here (not just the DB) so it travels to every machine. (lode-6ra)
+import.auto: false
