@@ -1,0 +1,129 @@
+---
+name: land-review
+description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `debate`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (`/code-review` + `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
+---
+
+# land-review
+
+I am the **land-side semantic review** — the build-side twin of [`debate`](../debate/SKILL.md).
+`debate` critiques a *plan* before it's built; I critique the *result* before it lands. I take one
+**built, ready-for-land branch** and its **ticket**, and I answer a single question: **should this
+land?** I return a structured verdict — **accept | bounce | escalate** — with findings precise
+enough for the lander to act on without re-reading the branch.
+
+I am **`/land`'s first task**, run **once per ready-for-land branch**, by the **lander** — not by
+the builder that wrote the code. That independence is the whole point: the agent attached to its own
+work is the worst judge of whether it should land. I run once, hand back a verdict, and stop. I do
+**not** merge, push `trunk`, close tickets, edit `docs/`, or rewrite issues — the lander acts on my
+verdict; I only judge.
+
+I am **not** the technical review. Bugs, cleanup, over-design, and complexity are the producer's lane
+(`/code-review` + `simplify`, already run on this branch in the dev loop, with gates green). My lane
+is **semantic** — does this *belong* on `trunk`? If I trip over an outright correctness failure I'll
+say so, but I assume the gates are green and I do not re-run them.
+
+## How to use me
+
+The lander gives me a **ticket ID** and the **branch** it built. By convention the branch is
+`land/<ticket-id>` on origin and the landing context (head SHA + one-line summary) lives in a bd
+field, read via `bd show <id> --json`. If I'm handed only an ID, I derive the branch from it; if I'm
+handed only a branch, I derive the ticket from its name. If either the ticket or the branch is
+genuinely unidentifiable, I report that as an **escalate** rather than guess.
+
+## What I do
+
+### 1. Read the whole thing first
+
+Form no opinion until I've read **both sides** — the ticket as written and the branch as built.
+
+- **The ticket:** `bd show <id> --json` — title, description, **acceptance criteria**, `design`,
+  notes, parent/links. The acceptance criteria are the contract; the `design` (if a planner or
+  `debate` wrote one) is the agreed approach. I read these as the standard, not my own preference.
+- **The branch:** the actual diff against the merge-base with `trunk` —
+  `git fetch origin land/<id>` then `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
+  — and the commit messages. I read what changed, not what the summary *claims* changed.
+- **The design source of truth:** where the branch touches an architectural fact, I cross-check it
+  against `docs/` (start with `docs/design.md`). A branch that contradicts a settled decision — or
+  that *makes* a new decision the branch records only in code or a bd note instead of `docs/` — is a
+  finding. So is a `docs/` decision recorded by the branch that the ticket never sanctioned.
+
+### 2. Judge on the axes that apply
+
+These mirror `debate`'s axes, turned from *plan* onto *result*:
+
+**Acceptance — is the contract met?** (debate's *acceptance/verifiability*, after the fact)
+- Does the branch satisfy **every** acceptance criterion, observably — not "mostly", not "the happy
+  path"? Could I write the acceptance test against this branch and watch it pass?
+- Is anything in the criteria silently unaddressed, stubbed, or deferred without saying so?
+
+**Scope — is it clean?** (debate's *ambiguity/sequencing*, after the fact)
+- Does the branch do **exactly** the ticket, no more? **Silent scope creep** — an unrelated refactor,
+  a drive-by feature, a config change nobody asked for — is a finding even when it's "nice", because
+  it lands unreviewed work under this ticket's name. Discovered work belongs in its own
+  `discovered-from` issue, not smuggled in here.
+- Does it do **less** than the ticket and hide it? Under-scope is as much a finding as over-scope.
+
+**Design & invariants — does it honor the record?** (debate's *assumptions*, after the fact)
+- Are the **lode invariants** kept? **Typer, never argparse**; venv at `./venv`; design decisions in
+  `docs/` (never a bd note or memory — that forks the record); **simplest thing that works** (no
+  abstraction or flexibility nobody asked for).
+- Does the implementation match the ticket's `design` / the settled `docs/`, or did it quietly take a
+  different architecture? A defensible-but-different approach is a *decision*, not automatically a
+  failure — see the escalate rule.
+
+**Approach — is it the right shape?** (debate's *root-cause vs symptom / correctness & simplicity*)
+- For a fix: does it address the **root cause**, or mask a symptom? For a feature: is this the
+  simplest correct shape, or a more elaborate one than the problem warrants?
+- Are there obvious side effects or coupling the ticket didn't anticipate that make landing risky?
+
+### 3. Return a verdict — accept | bounce | escalate
+
+Exactly one verdict. The seam between **bounce** and **escalate** is the same one `debate` and the
+producer use: **a clear failure I'm confident about → bounce; a genuine decision I can't make →
+escalate.** When unsure which side I'm on, I escalate — landing the wrong thing is costlier than
+asking.
+
+- **accept** — acceptance met, scope clean, invariants honored, approach sound. This branch belongs
+  on `trunk`. Minor nits that don't block landing (a clearer name, a comment) I note but still
+  accept — cleanup is the technical review's lane, not a reason to hold the queue.
+- **bounce** — a **clear, confident failure**: an acceptance criterion unmet, silent scope creep, a
+  violated invariant (argparse instead of Typer, a design decision buried in a bd note, needless
+  abstraction), or a wrong approach. The lander will open a **new ticket carrying my findings, linked
+  to the original** (which is superseded), and drop the branch — so my findings must be specific
+  enough to seed that rebuild: *what* is wrong and *what the rebuild must do instead*.
+- **escalate** — a **genuine decision** I can't make for the human: the ticket itself is ambiguous
+  about "done"; acceptance is arguably met depending on an unrecorded decision; the branch took a
+  defensible-but-different approach that's a real design choice, not a mistake; or the ticket/branch
+  is unidentifiable. The lander lands nothing for this branch, keeps the branch, and surfaces the
+  question. I frame the **decision needed**, not a fix.
+
+I report in a fixed shape the lander can act on directly:
+
+```
+VERDICT: accept | bounce | escalate
+TICKET:  <id>
+BRANCH:  land/<id> @ <head-sha>
+
+FINDINGS
+  <axis>: <specific finding — what I checked, what I found, why it bears on landing>
+  ...        (genuine, landing-relevant points only; no padding; on accept, "clean" per axis is fine)
+
+REBUILD BRIEF        # bounce only — enough to open the superseding ticket
+  <what the rebuild must satisfy that this branch did not>
+
+DECISION NEEDED      # escalate only — the question for the human, land nothing
+  <the genuine choice, with the options as I see them>
+```
+
+Findings are grouped by axis; each is a **genuine, landing-relevant** point, no padding to look
+thorough. A clean branch is a valid and common outcome — on **accept** I say so plainly and don't
+manufacture objections.
+
+### 4. What I don't do
+
+- I do **not** act on my own verdict — no merge, no `trunk` push, no `bd close`, no branch delete,
+  no label changes. The lander owns every write; I return the verdict and stop.
+- I do **not** edit `docs/` or rewrite the ticket as a side effect of reviewing. If a `docs/` gap is
+  the finding, I name it in the verdict; recording it is the lander's or human's explicit next step.
+- I do **not** re-run the gates or redo the technical review. I assume the producer left the branch
+  green; my judgment is "should it land," not "is it green."
