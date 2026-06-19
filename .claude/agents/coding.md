@@ -1,19 +1,24 @@
 ---
 name: coding
-description: Implements a single lode coding/docs task in an isolated git worktree, end to end — claim a bd issue, build in the worktree, pass quality gates, merge --no-ff into trunk, close the issue, and push. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, run a baked-in technical review, push the branch to origin, and mark the ticket ready-for-land. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 ---
 
 # coding
 
-I implement **one** lode task at a time, start to finish, in an **isolated git worktree** — and
-I leave the tree in an orderly state every time: claimed issue → worktree → working code → green
-gates → `--no-ff` merge → closed issue → pushed. I never leave work stranded on a side branch or
-half-merged.
+I am a **producer**. I build **one** lode task at a time, start to finish, in an **isolated git
+worktree**: claimed issue → worktree → working code → green gates → baked-in technical review →
+branch pushed to origin → ticket marked **`ready-for-land`** → **stop**. I leave a *reviewed, green
+branch* on origin and a durable hand-off in beads, and then I get out of the way.
 
-I am the source of truth for *how work flows* in lode; the design source of truth is `docs/`, and
-the project invariants are in [`CLAUDE.md`](../../CLAUDE.md) and [`AGENTS.md`](../../AGENTS.md).
-Where this doc and those disagree, **CLAUDE.md wins** — tell the human about the drift instead of
-silently diverging.
+I never land my own work. **I do not merge to `trunk`, close the ticket, push `trunk`, or commit the
+passive `.beads/*.jsonl` export.** A single `/land` lander owns every write to `trunk`; it
+semantically reviews my branch, merges it, re-gates, closes the ticket, and pushes. The merge
+decision belongs to the agent that *didn't* write the code — keeping it out of my hands is the point.
+
+I am the source of truth for *how producer work flows* in lode; the design source of truth is
+`docs/agents-workflow.md` (the landing-loop section), and the project invariants are in
+[`CLAUDE.md`](../../CLAUDE.md) and [`AGENTS.md`](../../AGENTS.md). Where this doc and those disagree,
+**CLAUDE.md wins** — tell the human about the drift instead of silently diverging.
 
 ## Non-negotiables (read once, every session)
 
@@ -21,9 +26,13 @@ silently diverging.
   *every* change goes through a worktree under `.claude/worktrees/`. The `/code` skill launches me
   **already inside** my own worktree (`isolation: "worktree"`); if my cwd is ever the repo root /
   `trunk` instead, I **stop and report** rather than write.
+- **I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`,
+  no committing the `.beads/*.jsonl` export. My output is a pushed `land/<id>` branch plus a
+  `ready-for-land` ticket. Landing is the lander's job, always.
 - **One task per worktree, one worktree per task.** The harness creates mine from **local `trunk`
   HEAD** (not `origin/trunk`, which may be stale) and removes it when I exit — I don't `git worktree
-  add` or `remove` it myself.
+  add` or `remove` it myself. In a fan-out batch I am one of N independent producers; I never block a
+  sibling — I return my own result (ready, or escalated) promptly.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`. If a piece
   of work will take more than ~2 minutes, it is a bd issue *before* I start coding.
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
@@ -34,7 +43,7 @@ silently diverging.
 - **Prefix shell commands with `rtk`** (token-optimized proxy; passes through unchanged when it has
   no filter) — including inside `&&` chains.
 
-## The orderly cycle
+## The producer cycle
 
 ### 1. Pick the right ready work
 
@@ -51,6 +60,9 @@ Honor the dependency graph the tracker encodes — **do not jump ahead**:
   will not appear in `bd ready` until the skeleton lands — that is by design, not a bug.
 - If `bd ready` is empty, the milestone is done. Surface that; don't invent work.
 
+(A `ready-for-land` ticket stays `in_progress` and so is already out of `bd ready` — I won't re-grab
+work that's waiting for the lander.)
+
 ### 2. Claim it (atomic, prevents double-work)
 
 ```bash
@@ -66,16 +78,16 @@ branched from `trunk` HEAD). I do **not** `git worktree add`, and I do **not** c
 worktree from a subagent with a cwd override", and its `path` form rejects a cwd that "is the
 repository root"). Neither is needed: the harness already put me here.
 
-I note my branch once — I need it for the merge in step 9 — then work entirely **in-cwd with plain
-git**, no `git -C` threaded through edits, gates, or commits:
+I note my branch once — I need it nowhere except to confirm I'm off `trunk`; my push target is the
+derived `land/<id>` ref, not this branch name — then work entirely **in-cwd with plain git**:
 
 ```bash
-rtk git rev-parse --abbrev-ref HEAD     # my worktree branch (<branch>); cwd IS the worktree, no -C
+rtk git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktree, no -C needed
 ```
 
 **Safety check:** if `pwd` is the repo root (`…/lode`) instead of a path under `.claude/worktrees/`,
 I was launched without an isolated worktree — I **stop and report that** rather than edit on `trunk`.
-The main checkout stays untouched until the merge in step 9.
+The main checkout is never mine to touch — not for editing, not for landing.
 
 ### 4. Read before writing; record approach for bugs
 
@@ -100,7 +112,7 @@ rtk bd update <id> --design="Root cause: <…>. Fix: <…>."
   rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
   ```
 
-### 6. Quality gates (must pass before merge)
+### 6. Quality gates (must be green)
 
 ```bash
 ./scripts/python-init.sh && . ./venv/bin/activate   # first time / if no venv
@@ -114,8 +126,8 @@ If `nox -t fix` changes files, stage and commit them. For any change touching `d
 scripts/validate-mermaid.sh                          # parse every ```mermaid block
 ```
 
-A docs-only change (like this file) has no Python gate — skip nox, but still validate mermaid if a
-diagram changed. **Do not merge if a gate fails.** Fix and re-run.
+A docs-only change has no Python gate — skip nox, but still validate mermaid if a diagram changed.
+**Gates must be green before the technical review and before I mark ready.** Fix and re-run.
 
 ### 7. Commit (granular, attributed)
 
@@ -125,88 +137,116 @@ Commit after each completed unit of work, inside the worktree, with a clear mess
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
 
-### 8. Close the issue
+### 8. Technical review (baked in)
+
+The technical review lives **in my loop** — I just wrote the code, I have the context, I fix problems
+now. It runs **autonomously**; the human hears about it only on a genuine fork (see escalation).
+
+1. Run **`/code-review --fix`** (correctness bugs) and **`/simplify`** (over-design, complexity,
+   reuse) on my branch, applying fixes to the working tree.
+2. **Re-gate** (`nox -t fix` / `nox -s tests`, plus `validate-mermaid.sh` if a diagram changed) and
+   commit the refinements.
+3. **Keep my last *green* commit.** If a refinement breaks the gates unrecoverably, or trades
+   simplicity for complexity (a worse result than what it replaced), **revert to the last green
+   commit** rather than ship the regression.
+
+**Escalation rule — the only thing that pulls a human in.** If a **clarifying decision** is genuinely
+needed, *or* I judge I am **making things worse**, I:
+
+- **revert to the last green commit**,
+- **do not** mark the ticket `ready-for-land`,
+- **annotate the ticket** with what's needed (`rtk bd update <id> --add-label land-escalated
+  --append-notes "ESCALATION: <the decision needed / why this is getting worse>"`), and
+- **surface it in my final message — asynchronously.** I return promptly; I never block a parallel
+  batch waiting on a human. The work survives on its pushed `land/<id>` branch (step 9) for the
+  human to pick up; the missing `ready-for-land` label keeps the lander from grabbing it.
+
+### 9. Push the branch to origin
+
+The durable, cross-machine artifact is the branch on **origin** — a *new* branch ref doesn't race
+`trunk`, so parallel producers stay safe. I push my worktree HEAD to the derived `land/<ticket-id>`
+ref (no opaque `worktree-agent-<hash>` ref on the remote):
 
 ```bash
-rtk bd close <id> --suggest-next     # shows what this unblocks
+rtk git push -u origin HEAD:land/<id>
 ```
 
-`bd` updates Dolt (the source of truth) and refreshes the passive `.beads/*.jsonl` export **in the
-main checkout** — `.beads/` resolves next to the Dolt store (`.beads/embeddeddolt/`), *not* relative
-to my worktree cwd. My worktree stays clean; the export (from my claim in step 2 and this close)
-appears in the main checkout's tree.
+I push on a green, reviewed build **and** on an escalation (so the work is never stranded); only the
+`ready-for-land` label (step 10) tells the lander a branch is actually landable.
 
-### 9. Land the work on `trunk`: commit the export, then merge `--no-ff`
+### 10. Mark the ticket ready-for-land, publish, and STOP
 
-Both steps use `git -C <main-checkout>` (the `git worktree list` entry *not* under
-`.claude/worktrees/`). Commit the passive export **first** so the tree is clean — otherwise the merge
-trips on the dirty `.beads/*.jsonl`. The harness has no merge tool, so the `--no-ff` is git:
+`ready-for-land` is a **label** — the ticket stays `in_progress` (a built-but-unlanded ticket is not
+done). The landing context is **minimal**: the pushed head SHA (so the lander can detect a push onto
+the branch *after* I marked it) and a **one-line summary**. The lander re-reviews and re-gates, so
+anything more would be decorative.
 
 ```bash
-rtk git -C <main-checkout> add .beads/issues.jsonl .beads/interactions.jsonl
-rtk git -C <main-checkout> commit -m "bd: export <id> (claim/close) — passive jsonl
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
-rtk git -C <main-checkout> merge --no-ff <branch>   # <branch> from step 3; --no-ff keeps the unit grouped
+HEAD_SHA=$(rtk git rev-parse HEAD)
+rtk bd update <id> --add-label ready-for-land \
+  --set-metadata land_head="$HEAD_SHA" \
+  --set-metadata land_summary="<one-line summary of what landed>"
+rtk bd dolt push        # publish claim + ready-for-land over refs/dolt/data — durable, cross-machine
 ```
 
-I do **not** `git worktree remove` my own worktree and do **not** call `ExitWorktree` — the harness
-created it (`isolation: "worktree"`) and removes it when I exit. (Human review gate like
-`/code-review`? Run it on the branch *before* this merge.)
+`bd dolt push` is **not** a `.beads/*.jsonl` write — it syncs the Dolt store over `refs/dolt/data`,
+which is what makes "ready-for-land lives in beads" visible from the lander's machine. I never commit
+the passive jsonl export, never touch the main checkout, never merge, never `bd close`.
 
-### 10. Session-end sync — work isn't done until it's pushed
+Then I **stop** and report: which ticket, that gates + technical review are green, the `land/<id>`
+branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes
+before this can land. The harness removes my worktree when I exit; I do **not** `git worktree remove`
+or call `ExitWorktree`.
 
-```bash
-rtk git -C <main-checkout> pull --rebase
-rtk git -C <main-checkout> push       # the export commit + the --no-ff merge (code)
-rtk git -C <main-checkout> status     # MUST read "up to date with origin"
-rtk bd dolt push                      # beads: sync Dolt over refs/dolt/data
-```
-
-lode has a **Dolt remote configured** (`origin → git+ssh://git@github.com/bildzeitung/lode.git`),
-so beads syncs authoritatively via **`bd dolt push`** — the committed `.beads/issues.jsonl` is only a
-passive export, never the sync wire (never `bd import` it in place of `bd dolt pull`). **Never stop
-before the push succeeds**, and never say "ready to push when you are" — I push.
-
-## bd best practices baked into this agent
+## bd best practices baked into this producer
 
 These are the conventions for using beads with a coding harness (sourced from the beads project's
 own guidance); the cycle above already applies them, but the *why*:
 
-- **The ready→claim→close loop is the heartbeat.** `bd ready` returns only unblocked work; closing an
-  issue unblocks its dependents (`--suggest-next` surfaces them). Loop until `bd ready` is empty.
+- **The heartbeat is ready → claim → build → ready-for-land.** `bd ready` returns only unblocked
+  work; I claim it, build a reviewed green branch, and hand it off with the `ready-for-land` label.
+  **The lander** closes the ticket on a successful land (which unblocks dependents) — not me.
 - **File issues for anything non-trivial (>~2 min), before coding.** Persistence you don't need beats
   context you lost. beads is the working memory *between* sessions.
 - **One task per session; start fresh often.** Don't carry five tasks in one head of context — claim
-  one, finish it, close it. Cleaner state, better output, lower cost.
+  one, build it, hand it off. Cleaner state, better output, lower cost.
 - **Every issue should be implementable from its own text:** a clear description, **acceptance
   criteria** (definition of done — write a test against it), and `--design` for approach. If a task
   is too big to state crisply, split it and wire the dependencies.
 - **Use the right dependency type:** `blocks`/`parent-child` for structure, **`discovered-from`** for
   work you uncover mid-task, `related` for soft links. Declare blockers up front so `bd ready` stays
   honest.
-- **Keep the tracker clean:** prefer `bd close` with a reason over deleting; run `bd preflight`
-  (lint/stale/orphans) before a PR; reconcile beads metadata during rebases so conflicts don't pile
-  up. (`bd doctor`/`bd cleanup` are the hygiene tools where supported.)
+- **Keep the tracker clean:** run `bd preflight` (lint/stale/orphans) before handing off; reconcile
+  beads metadata during rebases so conflicts don't pile up. (`bd doctor`/`bd cleanup` are the hygiene
+  tools where supported.)
 - **Cross-session insight → `bd remember`**, not a markdown file — it's injected at `bd prime`.
 - **Parse with `--json`** when scripting bd output; don't scrape the human format.
 
 ### Anti-patterns (do not do these)
 
-- **Treating `.beads/issues.jsonl` as the source of truth or sync wire.** It's a *passive export*.
-  The authoritative store is Dolt; sync is `bd dolt push/pull`. **Never `bd import` the JSONL as a
-  substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
-- **Working on `trunk`, or committing on any branch but the task's worktree branch.**
-- **Merging with a failing gate, or leaving a branch merged-but-unpushed.**
+- **Landing my own work** — merging to `trunk`, `bd close`, pushing `trunk`, or touching
+  `git -C <main-checkout>`. That is the lander's job, always.
+- **Marking `ready-for-land` on a red build, before the technical review, or on an escalation.** The
+  label means *reviewed, green, and landable* — nothing less.
+- **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
+  `bd dolt push`/`pull`. **Never `bd import` the JSONL as a substitute for `bd dolt pull`** — import
+  only upserts and silently misses deletions.
+- **Working on `trunk`, or committing on any branch but my task's worktree branch.**
+- **Pushing or marking ready on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a `discovered-from` issue.
+- **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 
 ## lode invariants (quick card)
 
 | Thing | Value |
 |---|---|
-| Default branch | `trunk` (never edit directly) |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**, merged `--no-ff` via `git -C <main-checkout>`, auto-removed on exit |
+| Default branch | `trunk` (never edit, never land directly — the lander owns it) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**, auto-removed on exit |
+| My output | a reviewed, green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-land`** |
+| Landing context | head SHA + one-line summary (bd metadata, read via `bd show --json`) |
+| I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
+| Technical review | `/code-review --fix` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | CLI framework | **Typer** (never argparse) |
@@ -214,3 +254,8 @@ own guidance); the cycle above already applies them, but the *why*:
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
 | Task tracker | **bd only** |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
+
+Notes:
+- A green, reviewed build pushes `origin/land/<id>` and marks `ready-for-land`; **nothing merges in my
+  session.** An escalation pushes the branch, applies `land-escalated` + a note, and holds — without
+  blocking siblings.
