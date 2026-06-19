@@ -27,31 +27,9 @@ Work moves through two distinct passes, with the human as the hinge between them
    → push.
 
 The boundary between them is deliberate: **debate decides *what* and *whether*; coding decides
-*how* and *does it*.** Design decisions settle into `docs/` and beads; only then does code get
-written.
-
-```mermaid
-flowchart LR
-    H["Human"] -->|"plan / ticket tree /<br>doc change"| DBG["debate<br>(design loop)"]
-    DBG -->|"findings: ambiguity,<br>assumptions, sequencing"| H
-    H -->|"revise until sound"| DBG
-
-    H -.->|"sound plan, captured<br>as beads issues"| CODE["/code → coding<br>(coding loop)"]
-    CODE -->|"merged, closed, pushed"| H
-
-    DOCS[("docs/ + beads<br>(source of truth)")]
-    DBG -.->|"reads / cross-checks"| DOCS
-    CODE -.->|"reads, then writes"| DOCS
-
-    classDef human fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
-    classDef design fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
-    classDef build fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
-    classDef store fill:#f2f2f2,stroke:#777,color:#1b1b1b;
-    class H human;
-    class DBG design;
-    class CODE build;
-    class DOCS store;
-```
+*how* and *does it*.** The two are **separate tasks** — each has its own diagram below. Design
+decisions settle into `docs/` and beads; only then does code get written (see
+[how the loops connect](#how-the-loops-connect)).
 
 ---
 
