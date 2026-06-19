@@ -1,12 +1,12 @@
 # lode — Agent dev workflow
 
 How lode is *built*. The other docs describe the system; this one describes the **agent
-loops that produce it** — a **design loop** that stress-tests a plan before it's built, and a
-**coding loop** that implements one task end-to-end in an isolated worktree (with a fan-out
-variant, `/code-parallel`, for several independent tasks at once). A third stage — a **landing
-loop** that decouples *landing* from *building* through a durable hand-off — is **designed but
-not yet built**; it is the last section of this doc. See [design.md](design.md) for the thesis and
-the build sequencing the work flows through.
+loops that produce it** — a **design loop** that stress-tests a plan before it's built, a
+**coding loop** in which a *producer* carries one task through to a reviewed, green branch (solo,
+or fanned out across several tasks at once with `/code <id> <id> …`), and a **landing loop** in
+which a single `/land` lander is the **only** thing that writes `trunk`. The three are the last
+three sections of this doc. See [design.md](design.md) for the thesis and the build sequencing the
+work flows through.
 
 The operational source of truth for each loop is its skill/agent definition under
 [`.claude/`](../.claude); this doc is the map, not the mechanics. The hard project invariants live
@@ -15,22 +15,28 @@ in [`CLAUDE.md`](../CLAUDE.md) and [`AGENTS.md`](../AGENTS.md) — **where they 
 
 ---
 
-## The two loops
+## The loops
 
-Work moves through two distinct passes, with the human as the hinge between them:
+Work moves through three passes, with the human as the hinge:
 
 1. **Design loop — `debate`.** Before anything is built, a plan, a beads ticket tree, a bug-fix
    approach, or a proposed `docs/` change is handed to the `debate` skill, which *pushes back*:
    it surfaces ambiguity, hidden assumptions, sequencing gaps, and risky approaches, and reports
    them to the human. It never edits `docs/` or beads as a side effect. The human revises until
    the plan is sound.
-2. **Coding loop — `/code` → `coding`.** Once the plan is sound and captured as beads issues, the
-   `/code` skill dispatches exactly one `coding` subagent to carry **one** task through its
-   orderly cycle in an isolated worktree: claim → build → green gates → `--no-ff` merge → close
-   → push.
+2. **Coding loop — `/code` → `coding` producers.** Once the plan is sound and captured as beads
+   issues, `/code` dispatches one `coding` **producer** per task to carry it through an orderly
+   cycle in an isolated worktree: claim → build → green gates → baked-in technical review → push a
+   `land/<id>` branch → mark `ready-for-land` → **stop**. A producer never merges, closes, or
+   writes `trunk`.
+3. **Landing loop — `/land`.** A single lander drains the `ready-for-land` queue: it semantically
+   reviews each branch, merges the accepted set into `trunk`, re-gates, closes the tickets, and
+   pushes. It is the **only** thing that writes `trunk` (see
+   [the landing loop](#the-landing-loop--build-review-land)).
 
-The boundary between them is deliberate: **debate decides *what* and *whether*; coding decides
-*how* and *does it*.** The two are **separate tasks** — each has its own diagram below. Design
+The boundaries are deliberate: **debate decides *what* and *whether*; the coding loop decides *how*
+and *builds and reviews* it; the landing loop decides *whether it lands* and *does the merge*.**
+Keeping the merge decision out of the hands of the agent that wrote the code is the point. Design
 decisions settle into `docs/` and beads; only then does code get written (see
 [how the loops connect](#how-the-loops-connect)).
 
@@ -98,10 +104,12 @@ flowchart TD
 ## The coding loop — `/code` → `coding`
 
 `/code` is the **only** sanctioned way to start coding work from the main session (which is
-otherwise told not to spawn agents). The skill resolves the task from its argument and dispatches
-**exactly one** `coding` subagent — in the foreground, with `isolation: "worktree"`, never
-`run_in_background`. (Skill: [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md);
-agent: [`.claude/agents/coding.md`](../.claude/agents/coding.md).)
+otherwise told not to spawn agents). The skill resolves the task from its argument and dispatches a
+`coding` **producer** per task — `/code <id>` is one producer; `/code <id> <id> …` /
+`/code --all-ready` fans out **N producers in parallel**, each in its own isolated worktree. There
+is **no `/code-parallel`**. (Skill:
+[`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md); agent:
+[`.claude/agents/coding.md`](../.claude/agents/coding.md).)
 
 Argument resolution:
 
@@ -110,14 +118,17 @@ Argument resolution:
 - **No argument** → the agent picks the top unblocked item from `bd ready` — *the subagent chooses,
   not the dispatcher*, honoring the dependency frontier and the phase-a skeleton order.
 
-The subagent then runs its orderly cycle. The worktree is **handed to it by the harness**
+Each producer then runs its orderly cycle. The worktree is **handed to it by the harness**
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins
 *already inside* `.claude/worktrees/agent-<hash>` on a branch off local `trunk` HEAD. It works
 in-cwd with plain git, and if its `pwd` is ever the repo root it **stops and reports** rather than
-writing on `trunk`. It merges back with `git -C <main-checkout>`; the main session stays on `trunk`
-and never edits files there. The final agent message isn't shown to the user, so `/code` relays
-what came back — which issue, that gates passed, that it merged and pushed, or exactly where it
-stopped and why.
+writing on `trunk`. It claims the issue, builds the simplest thing that works, takes it green
+through the gates, and runs a **baked-in technical review** (`/code-review` + `simplify`, re-gate,
+keep the last green commit). Then it **pushes a `land/<id>` branch to origin, marks the ticket
+`ready-for-land`, and stops.** It never merges, closes, or writes `trunk` — landing is
+[`/land`](#the-landing-loop--build-review-land)'s job. The final agent message isn't shown to the
+user, so `/code` relays what came back — which issue, that the gates and technical review passed,
+the pushed branch and head SHA, or exactly where it stopped (an escalation) and why.
 
 ```mermaid
 flowchart TD
@@ -138,14 +149,14 @@ flowchart TD
     CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
     IMPL --> GATES{"Quality gates"}
     GATES -->|"nox -t fix · nox -s tests ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
-    GFAIL -->|"no"| FIX["Fix & re-run —<br>do NOT merge on a failing gate"]
+    GFAIL -->|"no"| FIX["Fix & re-run —<br>never mark ready on a failing gate"]
     FIX --> GATES
     GFAIL -->|"yes"| COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
 
-    COMMIT --> CLOSE["bd close --suggest-next"]
-    CLOSE --> MERGE["git -C main: commit passive .beads export,<br>then merge --no-ff &lt;branch&gt;"]
-    MERGE --> PUSH["git -C main: pull --rebase · push ·<br>status = 'up to date' · bd dolt push"]
-    PUSH --> DONE["Worktree auto-removed on exit;<br>/code relays result to human"]
+    COMMIT --> TR["Technical review (baked in):<br>/code-review + simplify --fix ·<br>re-gate · keep last green"]
+    TR --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
+    PUSH --> MARK["Mark ticket ready-for-land<br>(head SHA · one-line summary) · bd dolt push"]
+    MARK --> STOP["STOP — never merge/close/push trunk;<br>/land lands it. Worktree auto-removed;<br>/code relays result"]
 
     classDef start fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
     classDef work fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
@@ -153,10 +164,10 @@ flowchart TD
     classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,RES start;
-    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,CLOSE,MERGE,PUSH work;
+    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,TR,PUSH,MARK work;
     class GATES,GFAIL,GUARD gate;
     class BAIL,FIX bad;
-    class DONE good;
+    class STOP good;
 ```
 
 ### Invariants the coding loop never breaks
@@ -166,13 +177,13 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 
 | Thing | Rule |
 |---|---|
-| Default branch | `trunk` — **never** edit directly; every change goes through a worktree |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, merged `--no-ff`, auto-removed on exit |
+| Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`, auto-removed on exit |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
-| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — no merge on a failing gate |
+| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never mark `ready-for-land` on a failing gate |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
-| Done | not done until `git push` *and* `bd dolt push` succeed |
+| Done (producer) | branch pushed to `origin/land/<id>` *and* ticket marked `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 
 ---
 
@@ -187,13 +198,12 @@ miss it. Keep the decisions in the docs, and the two loops stay in agreement.
 
 ---
 
-## The landing loop — build, review, land (planned)
+## The landing loop — build, review, land
 
-> **Status: designed, not yet built.** Today `/code` *lands in the same session that built the
-> work* — the coding agent merges `--no-ff` into `trunk`, pushes, and closes the issue itself. The
-> landing loop replaces that with **one landing path for everything**: producers build and review a
-> branch, mark it ready, and stop; a single `/land` lander is the **only** thing that ever writes
-> `trunk`. The sections above describe the current behaviour; this one the intended evolution.
+> **One landing path for everything.** Producers (the coding loop above) build and review a branch,
+> mark it `ready-for-land`, and stop; a single `/land` lander is the **only** thing that ever writes
+> `trunk` — solo or batch, one machine or several. This decouples *landing* from *building* through a
+> durable hand-off, so the merge decision lands with the agent that *didn't* write the code.
 
 ### Why one landing path
 
@@ -278,10 +288,12 @@ flowchart TD
 
 ### The lander — `/land`, drained by a self-paced loop
 
-A **single** `/land` lander owns every write to `trunk`, run as a self-paced loop — `/loop 5m
-/land` — so it drains the queue while you work, with no daemon to manage. Being the *single* lander
-is what serializes landing; guaranteeing only one is active across machines is an open mechanism
-(see [decisions.md](decisions.md)). A drain pass:
+A **single** `/land` lander owns every write to `trunk`, **run self-paced as `/loop 5m /land` on one
+machine** — start it and it drains the `ready-for-land` queue in the background while you build; stop
+it by ending the loop, and there's no daemon to manage. Run exactly **one** such loop at a time:
+being the *single* lander is what serializes landing (the single-lander lock in
+[Mechanics](#mechanics-decided) below keeps overlapping ticks from colliding). Guaranteeing only one
+is active across machines is an open mechanism (see [decisions.md](decisions.md)). A drain pass:
 
 1. **Semantic review — the first task.** For each ready-for-land branch, the `debate`-twin reviews it
    against the ticket (acceptance, scope, design, invariants, approach) and returns a verdict:
