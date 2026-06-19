@@ -324,6 +324,27 @@ flowchart TD
     class PUSH good;
 ```
 
+### Mechanics (decided)
+
+- **Queue state is a label, not a status.** A built-but-unlanded ticket stays `in_progress` and
+  carries a **`ready-for-land`** label, which the lander polls. Escalations and bounces are their own
+  labels (`land-escalated`, …), composing on top of the lifecycle status rather than replacing it. (A
+  claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to land.)
+- **Landing context is minimal — head SHA + a one-line summary** (small JSON in a bd field, read via
+  `bd show --json`). The lander re-reviews and re-gates, so stored gate-results would be decorative;
+  the SHA exists only to detect drift (a push onto the branch *after* it was marked ready). The branch
+  name isn't stored — it's derived (below).
+- **Branches are `land/<ticket-id>` on origin** (`git push -u origin HEAD:land/<id>`) — derivable from
+  the ticket, no opaque `worktree-agent-<hash>` refs on the remote. **GC:** delete `origin/land/<id>`
+  on a successful land *or* a bounce (a rebuild gets a fresh `land/<new-id>`); keep it for an
+  *escalated* ticket until the human resolves it (a stale-escalation sweep is a later hygiene task).
+- **Single-lander lock (v1): a local "skip if already running" guard + the convention that the
+  `/land` loop runs on one machine.** The guard stops a `/loop 5m /land` tick from overlapping a
+  still-running land on the same machine; the one-machine convention covers cross-machine. A
+  **distributed remote-lock ref** (atomic `refs/locks/land` on origin, owner + timestamp for
+  stale-break) is the documented upgrade for true concurrent multi-machine landing — and the natural
+  seam toward real CI.
+
 ### Where this is heading — a green-branch merge queue
 
 This is, deliberately, a **merge queue**: producers open reviewed "ready" branches, a single lander
