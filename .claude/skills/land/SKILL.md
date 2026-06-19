@@ -204,27 +204,29 @@ ticket frees the next layer of `bd ready`. Closing is mine because the merge dec
 A **bounce** is a confident "this branch should not land as-is" (an unmet acceptance criterion,
 silent scope creep, a violated invariant, a wrong approach — or drift/conflict from Sections 2a/3).
 The original ticket is **superseded** by a fresh ticket that carries the `land-review` findings, so a
-producer can rebuild from a clean brief:
+producer can rebuild from a clean brief. I create the rebuild ticket first, then mark the original
+superseded with **`bd supersede`** (the dedicated command — `supersedes` is **not** a `--deps` type):
 
 ```bash
 NEW=$(rtk bd create --type=<same-type-as-original> \
   --title="<original title> (rebuild after land bounce)" \
-  --description="Supersedes <id>, bounced by /land semantic review.
+  --description="Rebuild of <id>, bounced by /land semantic review.
 
 REBUILD BRIEF (from land-review):
 <the findings + what the rebuild must satisfy that the bounced branch did not>" \
-  --deps "supersedes:<id>" --json | jq -r '.id')   # structural link; new supersedes original
+  --json | jq -r '.id')
 
-rtk bd update <id> --remove-label ready-for-land \
-  --append-notes "Bounced by /land: superseded by $NEW. <one-line reason>"
+rtk bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> as superseded
+rtk bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
 
 rtk git push origin --delete "land/<id>"    # drop the rejected branch (a rebuild gets a fresh land/<new-id>)
-rtk bd dolt push                            # publish the new ticket + label changes
+rtk bd dolt push                            # publish the new ticket + supersede over refs/dolt/data
 ```
 
-The bounced original keeps its lifecycle status but loses `ready-for-land` (it's out of my queue); the
-`supersedes` dependency records that the new ticket replaces it, and the new ticket is the live work.
-I do **not** `bd close` the original — superseded ≠ done.
+`bd supersede` **closes** the original (with a reference to `NEW`) — superseded means *replaced*, and
+`NEW` is the live work. That is the right outcome for a bounce: the bounced attempt is done-as-replaced,
+not lingering open. (It is the one case where landing-side closes an `in_progress` producer ticket; a
+normal **accept**/land closes via Section 4, an **escalate** never closes.)
 
 ## Escalate — genuine decision
 
