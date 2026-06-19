@@ -55,7 +55,7 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 - The venv lives at **`./venv`** (repo root), not in module subdirs.
 - Every Python CLI in this repo uses **Typer**, never argparse.
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
-- `requirements.txt` is seeded from the decided stack (`docs/stack.md`) and unpinned until the build starts.
+- `requirements.txt` is a single editable-install line (`-e .[dev]`) so `pyproject.toml` is the one source of truth for dependencies; the actual dep list lives there (`[project].dependencies` + the `dev` extra), seeded from the decided stack (`docs/stack.md`) and unpinned until the build starts.
 
 ## General Directives
 
