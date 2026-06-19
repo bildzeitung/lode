@@ -1,26 +1,2 @@
 # lode — Python dependencies
-#
-# Seeded from the decided stack (docs/stack.md). The project is design-captured,
-# not yet built, so versions are intentionally unpinned for now; pin them as the
-# build starts (build sequencing: docs/design.md §7).
-
-# --- Front end / CLI ---
-textual            # TUI
-typer              # CLI (repo convention — never argparse)
-
-# --- LLM ---
-anthropic          # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
-pydantic           # structured outputs for the derived layer
-
-# --- Local indexing / retrieval (all on-box) ---
-fastembed          # embeddings + reranker + NLI via bundled ONNX runtime (CPU, no torch)
-lancedb            # on-disk vector store (ANN + metadata filtering)
-networkx           # in-memory knowledge-graph traversal
-
-# --- Content addressing ---
-xxhash             # fast non-cryptographic 128-bit content-address hash (docs/storage.md)
-
-# --- Dev ---
-pytest             # tests (run via nox)
-nox                # task runner (run `nox -t fix` before merging)
-ruff               # lint / format
+-e .[dev]
