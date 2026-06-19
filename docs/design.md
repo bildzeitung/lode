@@ -21,6 +21,7 @@ mechanics live in focused companion docs:
 | [stack.md](stack.md) | The decided stack and the split-store rationale |
 | [configuration.md](configuration.md) | Every tunable knob and build constant, in one table |
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
+| [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`debate`) and the coding loop (`/code` → `coding`) |
 
 ---
 
