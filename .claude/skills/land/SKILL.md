@@ -179,6 +179,7 @@ Only now — combined `trunk` is green — do I write the world. Order matters (
 publish bd state, then GC branches.
 
 ```bash
+rtk git add -A -- ':!.beads' && rtk git commit -q -m "style: nox -t fix on merged trunk" || true   # commit any re-gate reformat (skip if clean); the ':!.beads' pathspec keeps the passive jsonl export OUT of the commit
 rtk git push origin trunk
 rtk git status                 # MUST show trunk up to date with origin
 
@@ -212,18 +213,18 @@ NEW=$(rtk bd create --type=<same-type-as-original> \
 
 REBUILD BRIEF (from land-review):
 <the findings + what the rebuild must satisfy that the bounced branch did not>" \
-  --deps "related:<id>" --json | jq -r '.id')
+  --deps "supersedes:<id>" --json | jq -r '.id')   # structural link; new supersedes original
 
-rtk bd update <id> --add-label superseded --remove-label ready-for-land \
+rtk bd update <id> --remove-label ready-for-land \
   --append-notes "Bounced by /land: superseded by $NEW. <one-line reason>"
 
 rtk git push origin --delete "land/<id>"    # drop the rejected branch (a rebuild gets a fresh land/<new-id>)
 rtk bd dolt push                            # publish the new ticket + label changes
 ```
 
-The bounced original keeps its lifecycle status but loses `ready-for-land` (it's out of my queue) and
-gains `superseded`; the new ticket is the live work. I do **not** `bd close` the original — superseded
-≠ done.
+The bounced original keeps its lifecycle status but loses `ready-for-land` (it's out of my queue); the
+`supersedes` dependency records that the new ticket replaces it, and the new ticket is the live work.
+I do **not** `bd close` the original — superseded ≠ done.
 
 ## Escalate — genuine decision
 
