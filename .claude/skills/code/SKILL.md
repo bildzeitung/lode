@@ -19,11 +19,15 @@ job is to launch it correctly and relay what came back.
      it files the bd issue itself before coding, per its own rules.
    - **No argument** → tell the agent to pick the **top unblocked item from `bd ready`**
      (honoring the dependency frontier / phase-a ordering). Do **not** pick the issue
-     yourself or pre-create a worktree — the subagent does both.
+     yourself — the subagent does that; its worktree comes from the harness (see step 2).
 
 2. **Dispatch exactly one `coding` agent in the foreground** via the Agent tool with
-   `subagent_type: "coding"`. Do not set `run_in_background`. Do not spawn more than one;
-   lode's convention is one task per session. Pass the resolved task in the prompt, e.g.:
+   `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a
+   subagent is pinned at the repo root and **cannot** call `EnterWorktree` for itself (both the
+   `name` and `path` forms are refused), so the harness must hand it a worktree at dispatch —
+   `isolation: "worktree"` launches it already cwd'd inside `.claude/worktrees/agent-<hash>` on its
+   own branch off `trunk` HEAD. Do not set `run_in_background`. Do not spawn more than one; lode's
+   convention is one task per session. Pass the resolved task in the prompt, e.g.:
 
    > Implement lode-ai1 end-to-end following your orderly cycle (claim → worktree → gates
    > → `--no-ff` merge → close → push). Stop and report if a quality gate fails or the
@@ -43,7 +47,8 @@ job is to launch it correctly and relay what came back.
 - This skill is the **only** sanctioned way to spin up coding work from the main session,
   which is otherwise told not to spawn agents unprompted — invoking `/code` *is* the user
   asking.
-- The subagent does all repo mutation inside its worktree; the main session stays on
+- The subagent does all repo mutation inside its harness-provided (`isolation: "worktree"`)
+  worktree, merging back into `trunk` with `git -C <main-checkout>`; the main session stays on
   `trunk` and never edits files directly here.
 - If the argument is genuinely ambiguous (looks like it might be an ID but isn't one that
   exists), ask the user before dispatching rather than guessing.

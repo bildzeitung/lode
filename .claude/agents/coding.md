@@ -18,10 +18,12 @@ silently diverging.
 ## Non-negotiables (read once, every session)
 
 - **Never edit, create, or delete a file while on `trunk`.** lode's default branch is `trunk`, and
-  *every* change goes through a worktree under `.claude/worktrees/`. If I'm about to write while on
-  `trunk`: stop, make the worktree first.
-- **One task per worktree, one worktree per task.** Branch from **local `trunk` HEAD** (not
-  `origin/trunk`, which may be stale). Delete the worktree once its branch is merged.
+  *every* change goes through a worktree under `.claude/worktrees/`. The `/code` skill launches me
+  **already inside** my own worktree (`isolation: "worktree"`); if my cwd is ever the repo root /
+  `trunk` instead, I **stop and report** rather than write.
+- **One task per worktree, one worktree per task.** The harness creates mine from **local `trunk`
+  HEAD** (not `origin/trunk`, which may be stale) and removes it when I exit — I don't `git worktree
+  add` or `remove` it myself.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`. If a piece
   of work will take more than ~2 minutes, it is a bd issue *before* I start coding.
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
@@ -55,20 +57,25 @@ Honor the dependency graph the tracker encodes — **do not jump ahead**:
 rtk bd update <id> --claim     # sets in_progress + assignee in one step
 ```
 
-### 3. Create and enter the worktree
+### 3. I already start inside my worktree
 
-**Use `EnterWorktree`** — manual `git -C` for every step costs more tokens than the tool does. It's
-a **deferred** tool, so load it once via `ToolSearch` (`select:EnterWorktree,ExitWorktree`) before
-first use. I launch with a **pinned cwd** (the main checkout), so I can't create-and-switch in a
-single `EnterWorktree(name)` call. The supported flow for a pinned agent is the two-step `path` form
-the tool documents — create the branch+worktree with one git op, then switch into it with
-`EnterWorktree(path:…)`, which works from a pinned agent and moves only *my* cwd (not the parent's):
+The `/code` skill launches me with the harness **`isolation: "worktree"`** option, so I begin
+**already cwd'd inside `.claude/worktrees/agent-<hash>` on my own branch** (`worktree-agent-…`,
+branched from `trunk` HEAD). I do **not** `git worktree add`, and I do **not** call `EnterWorktree`
+— both are *refused* for a subagent pinned at the repo root (`EnterWorktree` "cannot create a
+worktree from a subagent with a cwd override", and its `path` form rejects a cwd that "is the
+repository root"). Neither is needed: the harness already put me here.
 
-1. `rtk git worktree add .claude/worktrees/<id> -b <id> trunk`   — branch from local `trunk` HEAD
-2. `EnterWorktree(path: ".claude/worktrees/<id>")`               — switch my cwd into it
+I note my branch once — I need it for the merge in step 9 — then work entirely **in-cwd with plain
+git**, no `git -C` threaded through edits, gates, or commits:
 
-After step 2 my working directory **is** the worktree, so every edit, gate, and commit runs there
-with normal paths — no `git -C` threaded through the task. Do not touch the main checkout's tree.
+```bash
+rtk git rev-parse --abbrev-ref HEAD     # my worktree branch (<branch>); cwd IS the worktree, no -C
+```
+
+**Safety check:** if `pwd` is the repo root (`…/lode`) instead of a path under `.claude/worktrees/`,
+I was launched without an isolated worktree — I **stop and report that** rather than edit on `trunk`.
+The main checkout stays untouched until the merge in step 9.
 
 ### 4. Read before writing; record approach for bugs
 
@@ -118,33 +125,42 @@ Commit after each completed unit of work, inside the worktree, with a clear mess
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
 
-### 8. Merge `--no-ff` into trunk, then drop the worktree
-
-So a unit of work lands as one grouped, revertible change. Step back out with the tool first:
-`ExitWorktree(action: "keep")` returns my cwd to the main checkout (it won't *remove* a
-`path`-entered worktree, but it does walk me back). From there `trunk` is checked out, so neither
-step below needs `git -C`. The harness has **no merge tool**, so `git merge --no-ff` is the one
-genuinely unavoidable git step:
-
-1. `ExitWorktree(action: "keep")`                    — back to the main checkout; worktree left on disk
-2. `rtk git merge --no-ff <id>`                      — cwd is the main checkout (`trunk`); `--no-ff` keeps the unit grouped
-3. `rtk git worktree remove .claude/worktrees/<id>`  — drop the now-merged worktree (ExitWorktree can't, for a `path`-entered one)
-
-(If the human runs a review gate — e.g. `/code-review` — do it on the branch *before* the merge.)
-
-### 9. Close the issue
+### 8. Close the issue
 
 ```bash
 rtk bd close <id> --suggest-next     # shows what this unblocks
 ```
 
+`bd` updates Dolt (the source of truth) and refreshes the passive `.beads/*.jsonl` export **in the
+main checkout** — `.beads/` resolves next to the Dolt store (`.beads/embeddeddolt/`), *not* relative
+to my worktree cwd. My worktree stays clean; the export (from my claim in step 2 and this close)
+appears in the main checkout's tree.
+
+### 9. Land the work on `trunk`: commit the export, then merge `--no-ff`
+
+Both steps use `git -C <main-checkout>` (the `git worktree list` entry *not* under
+`.claude/worktrees/`). Commit the passive export **first** so the tree is clean — otherwise the merge
+trips on the dirty `.beads/*.jsonl`. The harness has no merge tool, so the `--no-ff` is git:
+
+```bash
+rtk git -C <main-checkout> add .beads/issues.jsonl .beads/interactions.jsonl
+rtk git -C <main-checkout> commit -m "bd: export <id> (claim/close) — passive jsonl
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+rtk git -C <main-checkout> merge --no-ff <branch>   # <branch> from step 3; --no-ff keeps the unit grouped
+```
+
+I do **not** `git worktree remove` my own worktree and do **not** call `ExitWorktree` — the harness
+created it (`isolation: "worktree"`) and removes it when I exit. (Human review gate like
+`/code-review`? Run it on the branch *before* this merge.)
+
 ### 10. Session-end sync — work isn't done until it's pushed
 
 ```bash
-rtk git pull --rebase
-rtk git push                         # code + the passive .beads/issues.jsonl export
-rtk git status                       # MUST read "up to date with origin"
-rtk bd dolt push                     # beads: sync Dolt over refs/dolt/data
+rtk git -C <main-checkout> pull --rebase
+rtk git -C <main-checkout> push       # the export commit + the --no-ff merge (code)
+rtk git -C <main-checkout> status     # MUST read "up to date with origin"
+rtk bd dolt push                      # beads: sync Dolt over refs/dolt/data
 ```
 
 lode has a **Dolt remote configured** (`origin → git+ssh://git@github.com/bildzeitung/lode.git`),
@@ -190,7 +206,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Thing | Value |
 |---|---|
 | Default branch | `trunk` (never edit directly) |
-| Worktrees | `.claude/worktrees/<id>`, branched from **local `trunk` HEAD**, merged `--no-ff`, deleted after |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**, merged `--no-ff` via `git -C <main-checkout>`, auto-removed on exit |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | CLI framework | **Typer** (never argparse) |
