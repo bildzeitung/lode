@@ -11,3 +11,4 @@
 {"id":"int-a90eb62f","kind":"field_change","created_at":"2026-06-19T05:05:48.467617097Z","actor":"bildzeitung","issue_id":"lode-txh.3","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-7093547e","kind":"field_change","created_at":"2026-06-19T05:07:35.758060422Z","actor":"bildzeitung","issue_id":"lode-1a8","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Closed"}}
 {"id":"int-a8dd5b6b","kind":"field_change","created_at":"2026-06-19T05:12:59.667695004Z","actor":"bildzeitung","issue_id":"lode-ubm","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"Closed"}}
+{"id":"int-98afbfa5","kind":"field_change","created_at":"2026-06-19T05:13:48.336748969Z","actor":"bildzeitung","issue_id":"lode-wu2","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Combined overview removed; doc now has two separate diagrams (design, code)."}}
