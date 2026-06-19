@@ -56,6 +56,10 @@
     ]
   },
   "spinnerTipsEnabled": false,
+  "statusLine": {
+    "type": "command",
+    "command": "in=$(cat); d=$(printf '%s' \"$in\" | jq -r '.workspace.project_dir // .cwd // empty'); printf '%s' \"$in\" | bash \"$d/.claude/statusline.sh\""
+  },
   "worktree": {
     "baseRef": "head"
   }
