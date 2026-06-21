@@ -11,6 +11,8 @@ login`` profile on the dev machine can't leak in. Branch-level cases monkeypatch
 without a network call.
 """
 
+from pathlib import Path
+
 import anthropic
 import pytest
 
@@ -31,7 +33,7 @@ def no_ambient_credentials(monkeypatch, tmp_path):
 def test_no_hardcoded_key_in_source() -> None:
     # No literal key is embedded: build_client constructs Anthropic() with no
     # api_key argument and resolution is delegated to the SDK.
-    src = (auth.__file__ and open(auth.__file__).read()) or ""
+    src = Path(auth.__file__).read_text()
     assert "sk-ant" not in src
     assert "api_key=" not in src
 
