@@ -6,6 +6,10 @@ order with their citations intact; and when zero claims survive, the gate abstai
 ("your notes don't answer this") and returns no claims.
 """
 
+import dataclasses
+
+import pytest
+
 from lode.answer import Answer, Claim, Support
 from lode.gate import ABSTENTION_MESSAGE, GateResult, apply_gate
 
@@ -93,10 +97,6 @@ def test_abstention_message_is_the_honest_failure_string() -> None:
 
 
 def test_gate_result_is_immutable() -> None:
-    import dataclasses
-
-    import pytest
-
     result = GateResult(surviving_claims=())
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.surviving_claims = (_claim("x", "rerank OFF"),)  # type: ignore[misc]
