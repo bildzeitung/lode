@@ -16,13 +16,15 @@ each field's description. Invalid values fail validation at construction
 
 The local-model ids (embedder vector dim, reranker, NLI loader) are pinned for
 real in ``lode-txh.6``; the placeholders here keep config loadable until then.
-The redaction pattern *sets* are seeded for real in ``lode-fk8.2``; the seeds
-here are a minimal high-precision starting point.
+The redaction pattern *sets* are the high-precision seed (``lode-fk8.2``) that
+drives :mod:`lode.redact`'s redact-before-index / redact-before-egress controls;
+each pattern is validated to compile at load.
 """
 
+import re
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class Kind(str, Enum):
@@ -38,6 +40,33 @@ def _knob(default: object, kind: Kind, doc: str, **constraints: object) -> objec
     return Field(
         default, description=doc, json_schema_extra={"kind": kind.value}, **constraints
     )
+
+
+# High-precision secret seed set (docs/configuration.md "Privacy & egress",
+# docs/externals.md "Two redactions"). Each pattern is distinctive enough to
+# almost never fire on prose, so it can run unattended on every payload; the set
+# is meant to be iterated from real misses, not to be exhaustive. Seeds BOTH the
+# redact-before-index and redact-before-egress knobs (they read separate fields
+# so an operator can tune them apart, but ship identical). Consumed by
+# :mod:`lode.redact`.
+_SECRET_SEED_PATTERNS: list[str] = [
+    # PEM private-key headers (RSA/EC/DSA/OpenSSH/PGP and bare).
+    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----",
+    # AWS access-key id: long-term (AKIA) and temporary (ASIA).
+    r"(?:AKIA|ASIA)[0-9A-Z]{16}",
+    # GitHub PATs: classic/oauth/user/server/refresh tokens.
+    r"gh[pousr]_[0-9A-Za-z]{36}",
+    # GitHub fine-grained PAT.
+    r"github_pat_[0-9A-Za-z_]{82}",
+    # Slack tokens (bot/user/app/refresh/legacy).
+    r"xox[baprs]-[0-9A-Za-z-]{10,}",
+    # Stripe live secret/restricted keys.
+    r"(?:sk|rk)_live_[0-9A-Za-z]{24,}",
+    # Google API key.
+    r"AIza[0-9A-Za-z_-]{35}",
+    # Anthropic API key.
+    r"sk-ant-[0-9A-Za-z_-]{20,}",
+]
 
 
 class Settings(BaseModel):
@@ -163,14 +192,16 @@ class Settings(BaseModel):
         "Default no_egress for new notes/sources (indexed locally only).",
     )
     redact_before_egress_patterns: list[str] = _knob(
-        ["-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "AKIA[0-9A-Z]{16}"],
+        _SECRET_SEED_PATTERNS,
         Kind.RUNTIME,
-        "High-precision secret patterns stripped before sending to Claude; expanded in lode-fk8.2.",
+        "High-precision secret regexes stripped before content is sent to Claude "
+        "(enrich + Q&A); iterate from real misses. Drives lode.redact.",
     )
     redact_before_index_patterns: list[str] = _knob(
-        ["-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", "AKIA[0-9A-Z]{16}"],
+        _SECRET_SEED_PATTERNS,
         Kind.RUNTIME,
-        "High-precision secret patterns kept out of the local index; expanded in lode-fk8.2.",
+        "High-precision secret regexes kept out of the local vector/FTS index; "
+        "iterate from real misses. Drives lode.redact.",
     )
 
     # --- Models ---------------------------------------------------------------
@@ -206,6 +237,21 @@ class Settings(BaseModel):
         Kind.BUILD,
         "Single-instance advisory lockfile beside the DB (single owner).",
     )
+
+    @field_validator("redact_before_egress_patterns", "redact_before_index_patterns")
+    @classmethod
+    def _redaction_patterns_compile(cls, patterns: list[str]) -> list[str]:
+        """Fail loudly at load if any redaction pattern is not a valid regex.
+
+        These run on every egress/index payload, so a bad regex must surface at
+        config-load time, not at the first (precondition) Claude call.
+        """
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid redaction regex {pattern!r}: {exc}") from exc
+        return patterns
 
 
 def knob_kinds() -> dict[str, str]:
