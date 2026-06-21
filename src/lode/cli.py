@@ -9,6 +9,7 @@ stubs; their real behaviour is built in later E0/E10 tasks.
 import typer
 
 from lode import __version__
+from lode.logconfig import configure_logging
 
 app = typer.Typer(
     name="lode",
@@ -23,7 +24,9 @@ def main() -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
     # subcommands. Real behaviour for add / ask / purge / status / eval lands
-    # in later E0/E10 tasks.
+    # in later E0/E10 tasks. Configure logging once, here, so every subcommand
+    # (and the Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG).
+    configure_logging()
 
 
 def _stub(command: str) -> None:
