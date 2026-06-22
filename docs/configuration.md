@@ -16,7 +16,7 @@ Defaults below are starting points, not measured optima.
 | Retrieval `top-k` (passages fused/fed) | tune | ~20 → trim | How many passages survive fusion into rerank, and how many reach the Q&A context. ([retrieval.md](retrieval.md)) |
 | RRF constant `k` | tune | 60 | Reciprocal-Rank-Fusion smoothing constant; standard default rarely needs moving. |
 | Rerank stage | runtime | on | Toggle the cross-encoder stage on/off (the *seam* is permanent; the stage is switchable). |
-| Rerank model | tune | `bge-reranker-v2-m3` | Local cross-encoder, ONNX. Swappable; A/B once there's a corpus. |
+| Rerank model | tune | `BAAI/bge-reranker-base` | Local cross-encoder via `fastembed` (`TextCrossEncoder`), ONNX. Swappable; A/B once there's a corpus. `fastembed` does **not** ship `bge-reranker-v2-m3`, so `bge-reranker-base` is the loadable bge-family pick (verified — see [Models](#models)). |
 | Rerank keep-N / score cutoff | tune | top-N | How many reranked hits proceed to graph expansion. |
 
 ## Chunking (passages)
@@ -32,7 +32,8 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
-| Entailment model | tune | local NLI / cross-encoder | Same ONNX runtime as rerank. ([retrieval.md](retrieval.md#faithfulness-verify-citations-dont-just-require-them)) |
+| Entailment model | tune | `BAAI/bge-reranker-base` | Cross-encoder reranker **repurposed** as the entailment scorer — `fastembed` ships no dedicated NLI model, so the gate sigmoid's the cross-encoder logit. Same ONNX runtime as rerank. ([retrieval.md](retrieval.md#faithfulness-verify-citations-dont-just-require-them)) |
+| Entailment loader | build | `fastembed-cross-encoder` | How the NLI model is loaded: `fastembed`'s `TextCrossEncoder` on the bundled ONNX runtime, in-process — **no** separate `optimum`/`onnxruntime` loader needed (verified — see [Models](#models)). |
 | Entailment acceptance threshold | tune | **conservative** | The one residual-risk knob for synthesis: too loose readmits unsupported synthesis, too tight collapses to extractive-only. Ships fail-closed, untuned. |
 | LLM-judge second pass | runtime | off | Optional "high-assurance" verification; costs a round-trip + $ + off-box egress. |
 
@@ -64,12 +65,15 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
-| Embedding model | build | `nomic-embed-text-v1.5` / `bge-*` | Local ONNX. A change re-keys the vector space → full re-embed + re-index. ([stack.md](stack.md)) |
+| Embedding model | build | `nomic-ai/nomic-embed-text-v1.5` | Local ONNX via `fastembed`. A change re-keys the vector space → full re-embed + re-index. ([stack.md](stack.md)) |
+| Embedding vector dimension | build | `768` | Output dimension of the embedding model. **LanceDB table creation needs this fixed**; it must match the model (`nomic-embed-text-v1.5` → 768). Re-keying it = full re-embed. |
 | Enrichment LLM | runtime | Claude Haiku 4.5 | High-volume background extraction. |
 | Q&A LLM | runtime | Claude Sonnet 4.6 | Default interactive synthesis model. |
 | Q&A "think harder" | runtime | Opus 4.8 (toggle) | Higher-quality, higher-cost synthesis on demand. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs (Claude). See [stack.md](stack.md).
+
+These local ids/dim were pinned and **verified to load** on the `fastembed` ONNX runtime in `lode-txh.6` (`fastembed 0.8.0`); the spike's standing proof is `tests/test_models_smoke.py` (opt-in, `LODE_SMOKE_MODELS=1`, since loading downloads the models). Two spike findings shaped the pins: (1) `fastembed` does **not** ship the originally-assumed `bge-reranker-v2-m3`, so the reranker is `BAAI/bge-reranker-base` (the loadable bge-family cross-encoder); (2) `fastembed` ships **no dedicated NLI model**, so the NLI/entailment leg repurposes that same cross-encoder via `TextCrossEncoder` — confirming the docs' "bge-reranker repurposed" option and removing the need for a separate `optimum`/`onnxruntime` loader. The model + threshold remain [open tuning knobs](decisions.md), revisited against the eval harness.
 
 ## Build constants (chosen once)
 
