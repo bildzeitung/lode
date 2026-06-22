@@ -24,7 +24,6 @@ def test_documented_defaults_load() -> None:
     assert s.retrieval_top_k == 20
     assert s.rrf_k == 60
     assert s.rerank_enabled is True
-    assert s.rerank_model == "bge-reranker-v2-m3"
     assert s.drawdown_hop_limit == 1
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
@@ -35,6 +34,17 @@ def test_model_ids_are_pinned() -> None:
     assert s.enrichment_llm == "claude-haiku-4-5"
     assert s.qa_llm == "claude-sonnet-4-6"
     assert s.qa_think_harder_llm == "claude-opus-4-8"
+
+
+def test_local_model_ids_and_dim_are_pinned() -> None:
+    # lode-txh.6: embedder + vector dim, reranker, NLI model + loader pinned to
+    # fastembed-loadable ids (load verified in tests/test_models_smoke.py).
+    s = Settings()
+    assert s.embedding_model == "nomic-ai/nomic-embed-text-v1.5"
+    assert s.embedding_vector_dim == 768
+    assert s.rerank_model == "BAAI/bge-reranker-base"
+    assert s.entailment_model == "BAAI/bge-reranker-base"
+    assert s.entailment_loader == "fastembed-cross-encoder"
 
 
 def test_entailment_gate_ships_fail_closed() -> None:

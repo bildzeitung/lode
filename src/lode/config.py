@@ -14,8 +14,9 @@ rendered here as concrete conservative values; the source phrasing is noted in
 each field's description. Invalid values fail validation at construction
 (``Settings()`` / :func:`load_settings`), since pydantic validates every field.
 
-The local-model ids (embedder vector dim, reranker, NLI loader) are pinned for
-real in ``lode-txh.6``; the placeholders here keep config loadable until then.
+The local-model ids — embedder + vector dim, reranker, and the NLI/entailment
+model + loader — are pinned for real in ``lode-txh.6``, each verified to load on
+the ``fastembed`` ONNX runtime (``tests/test_models_smoke.py``).
 The redaction pattern *sets* are the high-precision seed (``lode-fk8.2``) that
 drives :mod:`lode.redact`'s redact-before-index / redact-before-egress controls;
 each pattern is validated to compile at load.
@@ -94,9 +95,12 @@ class Settings(BaseModel):
         "Toggle the cross-encoder rerank stage (the seam is permanent).",
     )
     rerank_model: str = _knob(
-        "bge-reranker-v2-m3",
+        "BAAI/bge-reranker-base",
         Kind.TUNE,
-        "Local cross-encoder reranker, ONNX. Swappable.",
+        "Local cross-encoder reranker via fastembed TextCrossEncoder, ONNX. "
+        "Swappable. (Doc default bge-reranker-v2-m3 is not in fastembed's "
+        "supported set; bge-reranker-base is the loadable bge-family pick — "
+        "lode-txh.6.)",
     )
     rerank_keep_n: int = _knob(
         10,
@@ -121,9 +125,18 @@ class Settings(BaseModel):
 
     # --- Faithfulness gate ----------------------------------------------------
     entailment_model: str = _knob(
-        "bge-reranker-v2-m3",
+        "BAAI/bge-reranker-base",
         Kind.TUNE,
-        "Local NLI / cross-encoder for citation entailment; loader pinned in lode-txh.6.",
+        "Local NLI / cross-encoder for citation entailment. fastembed ships no "
+        "dedicated NLI model, so the cross-encoder reranker is repurposed as the "
+        "entailment scorer (its raw logit, sigmoid'd by the gate) — lode-txh.6.",
+    )
+    entailment_loader: str = _knob(
+        "fastembed-cross-encoder",
+        Kind.BUILD,
+        "How the NLI/entailment model is loaded. fastembed's TextCrossEncoder "
+        "runs it on the bundled ONNX runtime in-process (no separate "
+        "optimum/onnxruntime loader needed) — lode-txh.6.",
     )
     entailment_threshold: float = _knob(
         0.9,
@@ -206,9 +219,18 @@ class Settings(BaseModel):
 
     # --- Models ---------------------------------------------------------------
     embedding_model: str = _knob(
-        "nomic-embed-text-v1.5",
+        "nomic-ai/nomic-embed-text-v1.5",
         Kind.BUILD,
-        "Local ONNX embedder; a change re-keys the vector space. Pinned + dim in lode-txh.6.",
+        "Local ONNX embedder via fastembed; a change re-keys the vector space "
+        "(full re-embed + re-index) — lode-txh.6.",
+    )
+    embedding_vector_dim: int = _knob(
+        768,
+        Kind.BUILD,
+        "Output dimension of embedding_model. LanceDB table creation needs this "
+        "fixed; re-keying it implies a full re-embed. Must match the model "
+        "(nomic-embed-text-v1.5 → 768) — lode-txh.6.",
+        gt=0,
     )
     enrichment_llm: str = _knob(
         "claude-haiku-4-5",
