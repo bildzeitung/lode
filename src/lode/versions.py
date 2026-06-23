@@ -228,15 +228,14 @@ def recover(
     note_id: str,
     *,
     target_version: str,
-    settings: Settings | None = None,
 ) -> SaveResult:
     """Recover a soft-deleted note by repointing its head to ``target_version``.
 
     Recovery is *not* a new version (``docs/storage.md``: "recovery = repoint the
     head") — it simply moves the head pointer to an existing version of this note,
     typically the pre-delete head. ``target_version`` must be a version that
-    belongs to ``note_id`` (``KeyError`` otherwise). ``settings`` is accepted for a
-    uniform signature though no hashing is needed.
+    belongs to ``note_id`` (``KeyError`` otherwise). No hashing is involved, so —
+    unlike :func:`save` / :func:`delete` — there is no ``settings`` parameter.
     """
     with conn:
         row = conn.execute(
