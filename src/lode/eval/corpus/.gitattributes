@@ -1,0 +1,4 @@
+# The seed corpus bodies are hashed verbatim into reproducible version_ids
+# (lode.eval.seed). Pin them to LF on every checkout so a CRLF conversion
+# (git autocrlf, a Windows clone) cannot change the bytes and re-key every id.
+* text eol=lf
