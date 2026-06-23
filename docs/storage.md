@@ -125,7 +125,7 @@ machinery — the conflict is surfaced honestly and resolved by the one person w
 Two distinct ids:
 
 - `note_id` — the **logical** note, stable across its whole lineage.
-- `version_id` — the immutable node; `version_id` = **`H(len(note_id)‖note_id ‖ len(parent)‖parent ‖ body)`**
+- `version_id` — the immutable node; `version_id` = **`H(len(note_id)‖note_id ‖ len(parent)‖parent ‖ len(body)‖body)`**
   (git's model). Folding in `note_id` makes cross-note collisions impossible (two different notes
   both containing `"TODO"` would otherwise alias); folding in the parent keeps each chain position
   distinct even on a revert to an earlier body (otherwise the reverted node aliases the original and
@@ -134,9 +134,17 @@ Two distinct ids:
 
 **Framing is length-prefixed, not bare concatenation.** A plain `note_id ‖ parent ‖ body` has
 ambiguous field boundaries — `H("a","bc") == H("ab","c")` — a latent aliasing bug in a
-content-addressed store. Each field is therefore length-prefixed (equivalently, hash the sub-hashes
-`H(H(note_id) ‖ H(parent) ‖ H(body))`); the `‖` above denotes that framed encoding, not raw
-concatenation. Same for `snapshot_id`.
+content-addressed store. The **frozen encoding** length-prefixes *every* field: each field is its
+UTF-8 bytes preceded by an **8-byte big-endian unsigned length**, and the framed fields are
+concatenated in order — `framed(note_id) ‖ framed(parent) ‖ framed(body)` for `version_id`, and
+`framed(external_id) ‖ framed(body)` for `snapshot_id`. A root `create` has no parent: the empty
+string, framed as an 8-byte zero length followed by no bytes. `H` returns a lowercase hex digest.
+(A hash-of-sub-hashes form `H(H(note_id) ‖ H(parent) ‖ H(body))` is *also* unambiguous, but it hashes
+to a **different** value, so it is not interchangeable; the length-prefixed form above is the one
+canonical encoding.) This is implemented once in `lode.hashing.content_version_id` /
+`content_snapshot_id` — the single source of truth that the version-save path and the eval seed
+fixture both import, so no two callers can frame ids differently. The `blake2b-128` fallback frames
+identically, so it produces the same ids as `xxh3-128` would for the same encoding choice.
 
 **`H` is a fast *non-cryptographic* hash (e.g. xxh3-128), not SHA/BLAKE.** Content addressing here
 needs only **low accidental-collision probability**, not adversarial collision resistance: lode is
