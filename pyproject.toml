@@ -35,3 +35,8 @@ lode = "lode.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the data-shape DDL (docs/storage.md §8) with the package so
+# lode.storage.init_db can load it via importlib.resources at runtime.
+lode = ["*.sql"]
