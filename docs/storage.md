@@ -117,6 +117,13 @@ what happens then. It is **manual reconciliation, never auto-merge and never clo
 - The **rejected buffer is preserved as a draft** until they resolve it, so an unlucky CAS loss
   never costs the unsaved work.
 
+**Where the split falls (decided).** The *storage* layer's contract stops at the honest CAS reject
+plus the **buffer-preserving structured conflict** it hands back — the rejected buffer alongside the
+new head (version id + body) for the diff — and it persists nothing itself. *Persisting* that buffer
+as a durable draft is the **consumer's** job: the `lode add` CLI already writes a `*.draft` beside
+the DB, and the TUI (E11) owns the interactive re-apply/discard store. A dedicated `drafts`
+table/mechanism is **deferred** until the system is exercised in production.
+
 This keeps the chain linear (the resolved save parents the *current* head) without any merge
 machinery — the conflict is surfaced honestly and resolved by the one person who can.
 
