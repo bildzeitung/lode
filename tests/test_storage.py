@@ -4,6 +4,7 @@ Asserts the acceptance criteria: schema.sql creates every data-shape table in a
 fresh WAL DB, and a round-trip insert/select on notes+versions succeeds.
 """
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -90,8 +91,6 @@ def test_round_trip_note_and_version(tmp_path: Path) -> None:
 
 
 def test_check_constraint_rejects_bad_op(tmp_path: Path) -> None:
-    import sqlite3
-
     conn = init_db(tmp_path / "lode.db")
     try:
         conn.execute(
