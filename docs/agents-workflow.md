@@ -130,6 +130,12 @@ keep the last green commit). Then it **pushes a `land/<id>` branch to origin, ma
 user, so `/code` relays what came back — which issue, that the gates and technical review passed,
 the pushed branch and head SHA, or exactly where it stopped (an escalation) and why.
 
+> **Adding a brand-new `src/lode/*.py` module?** Build a worktree-local venv before `nox` — run
+> `./scripts/python-init.sh` from *inside* the worktree. The shared `./venv` editable install
+> resolves `lode` to the **main checkout's** `src`, so a new module that exists only in the worktree
+> is invisible to it and `nox -s tests` fails with `ModuleNotFoundError`. **Editing an existing
+> module needs no fresh venv** — that file already resolves under the main-checkout package.
+
 ```mermaid
 flowchart TD
     INV["Human: /code &lt;arg&gt;"] --> RES{"Resolve arg"}
