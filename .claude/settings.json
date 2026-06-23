@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}\"; [ -n \"$root\" ] && git -C \"$root\" checkout HEAD -- .beads/issues.jsonl .beads/interactions.jsonl 2>/dev/null; true",
+            "type": "command",
+            "statusMessage": "Discarding passive bd export churn"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
