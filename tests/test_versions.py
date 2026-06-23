@@ -164,3 +164,62 @@ def test_recover_rejects_a_version_from_another_note(conn):
     other = save(conn, "note-2", "b").version_id
     with pytest.raises(KeyError):
         recover(conn, "note-1", target_version=other)
+
+
+# --- structured conflict surface (lode-s2f.4) -------------------------------
+
+
+def test_update_conflict_carries_rejected_buffer_and_new_head(conn):
+    """A CAS-rejected update hands back the buffer + new head for reconciliation.
+
+    The conflict is the "changed since you opened it" surface (docs/storage.md):
+    it carries the caller's rejected buffer (preserved, never lost) and the new
+    live head (id + body) so the TUI can diff and let the user re-apply/discard —
+    while clobbering nothing (the chain is untouched).
+    """
+    root = save(conn, "note-1", "v1").version_id
+    new_head = save(conn, "note-1", "v2", parent=root).version_id  # head moves
+    with pytest.raises(HeadConflictError) as exc:
+        save(conn, "note-1", "my-unsaved-edit", parent=root)  # stale parent
+    # The rejected buffer is preserved on the conflict, not clobbered or merged.
+    assert exc.value.rejected_buffer == "my-unsaved-edit"
+    # The new head (id + body) is carried for the diff the user is shown.
+    assert exc.value.actual_head == new_head
+    assert exc.value.actual_head_body == "v2"
+    assert exc.value.expected_parent == root
+    # Nothing was written: no auto-merge, no clobber.
+    assert _count_versions(conn, "note-1") == 2
+    assert _head(conn, "note-1") == new_head
+
+
+def test_recreate_conflict_carries_buffer_and_existing_head(conn):
+    """Re-rooting an existing note conflicts and preserves the rejected body."""
+    head = save(conn, "note-1", "hello").version_id
+    with pytest.raises(HeadConflictError) as exc:
+        save(conn, "note-1", "again")  # NO_PARENT against a present note
+    assert exc.value.rejected_buffer == "again"
+    assert exc.value.actual_head == head
+    assert exc.value.actual_head_body == "hello"
+
+
+def test_update_on_absent_note_conflict_has_no_head_to_diff(conn):
+    """A parented save on a missing note preserves the buffer; there is no head."""
+    with pytest.raises(HeadConflictError) as exc:
+        save(conn, "ghost", "my-edit", parent="some-parent")
+    assert exc.value.rejected_buffer == "my-edit"
+    # No note exists, so there is nothing to diff against.
+    assert exc.value.actual_head is None
+    assert exc.value.actual_head_body is None
+
+
+def test_delete_conflict_surfaces_new_head_with_no_buffer(conn):
+    """A CAS-rejected delete surfaces the new head but has no buffer to preserve."""
+    root = save(conn, "note-1", "original").version_id
+    new_head = save(conn, "note-1", "edited", parent=root).version_id  # head moves
+    with pytest.raises(HeadConflictError) as exc:
+        delete(conn, "note-1", parent=root)  # stale parent
+    # A delete has no user-typed buffer, so nothing is "lost" to preserve.
+    assert exc.value.rejected_buffer is None
+    # The new head is still surfaced so the UI can re-confirm the delete.
+    assert exc.value.actual_head == new_head
+    assert exc.value.actual_head_body == "edited"
