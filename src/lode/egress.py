@@ -23,11 +23,26 @@ no_egress note stays keyword- and vector-retrievable locally -- the whole point 
 the tier (work secrets stay *in* the KB, they just never reach the cloud). A
 withheld item is **routed to** :attr:`EgressDecision.withheld`, never dropped, so
 the Q&A layer can cite it as present-but-withheld.
+
+This module also owns the **Q&A egress gate** (``lode-az0.4``). :func:`gate_qa_egress`
+runs the full cloud-egress precondition for a Q&A send -- exclude no_egress
+passages, redact secret spans from what remains (:mod:`lode.redact`), and write one
+``egress_log`` audit row (``docs/storage.md`` §8, ``docs/externals.md`` "Egress
+log") recording purpose, model, the target ids sent, and which redactions were
+applied. It returns the redacted payloads to send plus the present-but-withheld
+citations, leaving the live Claude call and terminal rendering to the Q&A/CLI
+layer. :func:`log_egress` is the lower-level audit write the enrichment send (E7)
+will reuse with ``purpose='enrich'``.
 """
 
+import json
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
+
+from lode.config import Settings
+from lode.redact import redact_before_egress_counting
 
 WITHHELD_CITATION = "present, withheld from cloud synthesis"
 """How a no_egress item is cited in an answer (``docs/externals.md``)."""
@@ -109,3 +124,125 @@ def partition_egress(items: Iterable[T]) -> EgressDecision[T]:
     for item in items:
         (withheld if item.no_egress else sendable).append(item)
     return EgressDecision(sendable=tuple(sendable), withheld=tuple(withheld))
+
+
+QA_PURPOSE = "qa"
+"""``egress_log.purpose`` for a Q&A send (the schema CHECK allows ``enrich``/``qa``)."""
+
+
+class EgressPassage(Withholdable, Protocol):
+    """A retrieved passage the Q&A send considers: a :class:`Withholdable` with text.
+
+    The Q&A gate needs the actual ``text`` to redact before egress, on top of the
+    ``target_id``/``no_egress`` every :class:`Withholdable` carries. Any retrieval
+    passage qualifies structurally; :class:`PassageItem` is the minimal concrete
+    stand-in for callers/tests without the (not-yet-built) retrieval passage type.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
+class PassageItem:
+    """Minimal concrete :class:`EgressPassage` -- a target id, its text, no_egress."""
+
+    target_id: str
+    text: str
+    no_egress: bool = False
+
+
+@dataclass(frozen=True)
+class RedactedSend:
+    """One passage cleared for egress, with secret spans already stripped.
+
+    ``text`` is the redact-before-egress output (:mod:`lode.redact`) -- exactly the
+    bytes the live Q&A call sends for ``target_id``. ``redactions`` is how many
+    secret spans were stripped from it, recorded in the ``egress_log`` audit row.
+    """
+
+    target_id: str
+    text: str
+    redactions: int
+
+
+@dataclass(frozen=True)
+class QaEgress:
+    """Outcome of the Q&A egress gate: what to send, what was withheld, audit id.
+
+    ``sent`` are the redacted passages cleared for the live Claude call (in order);
+    ``withheld_citations`` are the no_egress items to surface as "present, withheld
+    from cloud synthesis" instead; ``egress_log_id`` is the audit row just written.
+    """
+
+    sent: tuple[RedactedSend, ...]
+    withheld_citations: tuple[WithheldCitation, ...]
+    egress_log_id: int
+
+
+def log_egress(
+    conn: sqlite3.Connection,
+    purpose: str,
+    model: str,
+    sent_targets: Iterable[str],
+    redactions: object | None = None,
+) -> int:
+    """Write one ``egress_log`` row and return its id (``docs/storage.md`` §8).
+
+    One row per time content leaves the box, so cloud exposure is auditable.
+    ``sent_targets`` (the version/snapshot/passage ids sent) and ``redactions``
+    (which redactions were applied) are stored as JSON summaries; ``redactions``
+    may be ``None`` when nothing was stripped. ``purpose`` is ``qa`` here; the
+    enrichment send (E7) reuses this with ``enrich``. Commits before returning.
+    """
+    cur = conn.execute(
+        "INSERT INTO egress_log (purpose, model, sent_targets, redactions) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            purpose,
+            model,
+            json.dumps(list(sent_targets)),
+            None if redactions is None else json.dumps(redactions),
+        ),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def gate_qa_egress(
+    conn: sqlite3.Connection,
+    model: str,
+    passages: Iterable[EgressPassage],
+    settings: Settings | None = None,
+) -> QaEgress:
+    """Run the full cloud-egress gate for a Q&A send and audit it.
+
+    The single entry point the Q&A send calls before reaching Claude:
+
+    1. **Exclude no_egress** passages (:func:`partition_egress`) -- they are never
+       sent and come back as :attr:`QaEgress.withheld_citations`.
+    2. **Redact-before-egress** the surviving passages (:mod:`lode.redact`),
+       counting the secret spans stripped from each.
+    3. **Write one** ``egress_log`` row (purpose ``qa``, the model, the sent target
+       ids, and a per-target redaction summary) so the send is auditable.
+
+    Returns the redacted payloads to send plus the withheld citations; it does not
+    make the live Claude call or render anything -- that is the Q&A/CLI layer's job.
+    """
+    decision = partition_egress(passages)
+    sent: list[RedactedSend] = []
+    for passage in decision.sendable:
+        redacted, count = redact_before_egress_counting(passage.text, settings)
+        sent.append(RedactedSend(passage.target_id, redacted, count))
+    redactions = {s.target_id: s.redactions for s in sent if s.redactions}
+    log_id = log_egress(
+        conn,
+        QA_PURPOSE,
+        model,
+        [s.target_id for s in sent],
+        redactions or None,
+    )
+    return QaEgress(
+        sent=tuple(sent),
+        withheld_citations=decision.withheld_citations,
+        egress_log_id=log_id,
+    )
