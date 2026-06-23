@@ -41,6 +41,21 @@ def _compiled(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
     return tuple(re.compile(pattern) for pattern in patterns)
 
 
+def redact_counting(text: str, patterns: Sequence[str]) -> tuple[str, int]:
+    """Redact ``text`` and report how many secret spans were replaced.
+
+    The counting twin of :func:`redact`: same in-order, idempotent substitution,
+    but also returns the total number of matches replaced across all patterns.
+    The egress audit log (:mod:`lode.egress`) records this count per sent target
+    so an audit answers *which redactions were applied* (``docs/externals.md``).
+    """
+    count = 0
+    for regex in _compiled(tuple(patterns)):
+        text, replaced = regex.subn(REDACTION_MARKER, text)
+        count += replaced
+    return text, count
+
+
 def redact(text: str, patterns: Sequence[str]) -> str:
     """Replace every match of any ``patterns`` regex in ``text`` with the marker.
 
@@ -48,9 +63,7 @@ def redact(text: str, patterns: Sequence[str]) -> str:
     redaction is idempotent (re-running over already-redacted text is a no-op).
     An empty pattern set returns ``text`` unchanged.
     """
-    for regex in _compiled(tuple(patterns)):
-        text = regex.sub(REDACTION_MARKER, text)
-    return text
+    return redact_counting(text, patterns)[0]
 
 
 def redact_before_index(text: str, settings: Settings | None = None) -> str:
@@ -63,3 +76,15 @@ def redact_before_egress(text: str, settings: Settings | None = None) -> str:
     """Strip secrets from a payload before it is sent to Claude (enrich / Q&A)."""
     settings = settings or Settings()
     return redact(text, settings.redact_before_egress_patterns)
+
+
+def redact_before_egress_counting(
+    text: str, settings: Settings | None = None
+) -> tuple[str, int]:
+    """:func:`redact_before_egress`, also reporting how many spans were stripped.
+
+    The egress gate (:mod:`lode.egress`) uses the count to summarise which
+    redactions were applied per sent target in the ``egress_log`` audit row.
+    """
+    settings = settings or Settings()
+    return redact_counting(text, settings.redact_before_egress_patterns)
