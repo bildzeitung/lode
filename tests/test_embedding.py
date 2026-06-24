@@ -16,7 +16,8 @@ import lancedb
 import pytest
 
 from lode.config import load_settings
-from lode.embedding import embed
+from lode.embedding import EmbeddingCacheBackend, embed
+from lode.repository import CacheBackend, CompositeCache, Repository
 from lode.storage import init_db
 from lode.versions import save
 
@@ -166,5 +167,85 @@ def test_empty_body_embeds_nothing(tmp_path: Path) -> None:
         assert n == 0
         # Nothing to embed → the model is never invoked.
         assert stub.calls == []
+    finally:
+        conn.close()
+
+
+# --- EmbeddingCacheBackend: vectors reached THROUGH the Repository (lode-1f9) ---
+#
+# The embed leg wrapped as a CacheBackend, so a save on the Repository fills the
+# vector cache without the caller ever touching lode.embedding / VectorStore.
+
+
+def test_embedding_backend_satisfies_the_cache_protocol():
+    """The vector engine plugs into the same seam the composite fans out to."""
+    backend = EmbeddingCacheBackend(None, lance_dir="unused")  # type: ignore[arg-type]
+    assert isinstance(backend, CacheBackend)
+
+
+def test_repository_save_fills_the_vector_cache_through_the_backend(
+    tmp_path: Path,
+) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        lance_dir = tmp_path / "vectors"
+        settings = _settings()
+        backend = EmbeddingCacheBackend(
+            conn, lance_dir=lance_dir, embedder=_StubEmbedder(DIM), settings=settings
+        )
+        repo = Repository(conn, CompositeCache([backend]))
+
+        # The caller only touches the Repository — never embed() / VectorStore.
+        result = repo.save("note-1", BODY, settings=settings)
+
+        rows = _open_vector_table(lance_dir).to_arrow().to_pylist()
+        assert len(rows) > 1
+        assert {r["target_version"] for r in rows} == {result.version_id}
+    finally:
+        conn.close()
+
+
+def test_repository_dedup_save_does_not_re_embed(tmp_path: Path) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        lance_dir = tmp_path / "vectors"
+        settings = _settings()
+        stub = _StubEmbedder(DIM)
+        repo = Repository(
+            conn,
+            CompositeCache(
+                [
+                    EmbeddingCacheBackend(
+                        conn, lance_dir=lance_dir, embedder=stub, settings=settings
+                    )
+                ]
+            ),
+        )
+
+        root = repo.save("note-1", BODY, settings=settings).version_id
+        calls_after_create = len(stub.calls)
+        repo.save("note-1", BODY, parent=root, settings=settings)  # no-op dedup
+
+        # The deduped save changed no body, so the cache seam never fires.
+        assert len(stub.calls) == calls_after_create
+    finally:
+        conn.close()
+
+
+def test_embedding_backend_evict_drops_the_versions_vectors(tmp_path: Path) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        lance_dir = tmp_path / "vectors"
+        settings = _settings()
+        backend = EmbeddingCacheBackend(
+            conn, lance_dir=lance_dir, embedder=_StubEmbedder(DIM), settings=settings
+        )
+        version = _save_note(conn)
+
+        backend.index("note-1", version, BODY)
+        assert _open_vector_table(lance_dir).count_rows() > 0
+
+        backend.evict("note-1", version)
+        assert _open_vector_table(lance_dir).count_rows() == 0
     finally:
         conn.close()
