@@ -65,6 +65,15 @@ def _open_db(db: Path | None) -> sqlite3.Connection:
     return init_db(db_path)
 
 
+#: Shared ``--db`` option (path / ``LODE_DB`` / default) for the db-backed commands.
+_DB_OPTION = typer.Option(
+    None,
+    "--db",
+    envvar="LODE_DB",
+    help="SQLite database path (default: ~/.local/share/lode/lode.db).",
+)
+
+
 def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     """Persist a CAS-rejected capture buffer beside the DB so it is never lost.
 
@@ -85,12 +94,7 @@ def add(
     text: str | None = typer.Argument(
         None, help="Note body. Omit to read the note verbatim from stdin."
     ),
-    db: Path | None = typer.Option(
-        None,
-        "--db",
-        envvar="LODE_DB",
-        help="SQLite database path (default: ~/.local/share/lode/lode.db).",
-    ),
+    db: Path | None = _DB_OPTION,
 ) -> None:
     """Capture a note into lode and enqueue its derive jobs.
 
@@ -167,12 +171,7 @@ def _short(target_version: str) -> str:
 
 @app.command()
 def status(
-    db: Path | None = typer.Option(
-        None,
-        "--db",
-        envvar="LODE_DB",
-        help="SQLite database path (default: ~/.local/share/lode/lode.db).",
-    ),
+    db: Path | None = _DB_OPTION,
 ) -> None:
     """Show work-queue health: job counts, dead-letters, and an egress summary.
 
@@ -220,12 +219,7 @@ def jobs_(
     status: JobStatus | None = typer.Option(
         None, "--status", help="Only list jobs in this status (default: all)."
     ),
-    db: Path | None = typer.Option(
-        None,
-        "--db",
-        envvar="LODE_DB",
-        help="SQLite database path (default: ~/.local/share/lode/lode.db).",
-    ),
+    db: Path | None = _DB_OPTION,
 ) -> None:
     """List the derive jobs on the work queue (``jobs`` table, ``docs/storage.md``).
 
