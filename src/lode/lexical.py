@@ -30,6 +30,7 @@ Two pieces:
 """
 
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from lode.chunking import Passage, chunk
@@ -90,7 +91,13 @@ class LexicalIndex:
                     [(p.passage_id, p.target_version, p.text) for p in passages],
                 )
 
-    def search(self, query: str, *, k: int) -> list[LexicalHit]:
+    def search(
+        self,
+        query: str,
+        *,
+        k: int,
+        target_versions: Collection[str] | None = None,
+    ) -> list[LexicalHit]:
         """Return the ``k`` best BM25 matches for ``query``, best match first.
 
         ``query`` is an FTS5 ``MATCH`` expression (bare keywords are ANDed) — the
@@ -98,13 +105,28 @@ class LexicalIndex:
         ordered by ``bm25()`` ascending (most negative = best). Returns at most
         ``k`` :class:`LexicalHit`, empty if nothing matches (a query against an
         empty index simply finds none).
+
+        ``target_versions`` optionally scopes the match to a set of versions — the
+        retrieval read side (lode-72m.1) passes the **live-head** set so stale
+        prior-head and soft-deleted passages never surface (the index keeps them
+        as soft history). ``None`` matches every version (the unfiltered index
+        read); an empty collection matches none.
         """
-        rows = self._conn.execute(
+        sql = (
             f"SELECT passage_id, target_version, bm25({_FTS_TABLE}) AS score "
-            f"FROM {_FTS_TABLE} WHERE {_FTS_TABLE} MATCH ? "
-            "ORDER BY score LIMIT ?",
-            (query, k),
-        ).fetchall()
+            f"FROM {_FTS_TABLE} WHERE {_FTS_TABLE} MATCH ?"
+        )
+        params: list[object] = [query]
+        if target_versions is not None:
+            versions = list(target_versions)
+            if not versions:
+                return []
+            placeholders = ", ".join("?" for _ in versions)
+            sql += f" AND target_version IN ({placeholders})"
+            params.extend(versions)
+        sql += " ORDER BY score LIMIT ?"
+        params.append(k)
+        rows = self._conn.execute(sql, params).fetchall()
         return [
             LexicalHit(passage_id=row[0], target_version=row[1], score=row[2])
             for row in rows
