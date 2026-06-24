@@ -35,15 +35,9 @@ import sqlite3
 from pathlib import Path
 from typing import Protocol
 
-import pyarrow as pa
-
 from lode.chunking import Passage, chunk
 from lode.config import Settings
-
-#: LanceDB table holding one vector row per passage. Mirrors the ``embeddings``
-#: SQLite table's role (``schema.sql``) — passage_id keyed — but is the *live*
-#: vector store (``docs/stack.md``).
-_VECTOR_TABLE = "embeddings"
+from lode.vectorstore import VectorStore
 
 #: Task prefix nomic-embed-text-v1.5 expects on documents being indexed (the
 #: query side uses ``search_query:``). It is a fixed property of the pinned
@@ -132,49 +126,6 @@ def _persist_passages(conn: sqlite3.Connection, passages: list[Passage]) -> None
         )
 
 
-def _vector_schema(settings: Settings) -> pa.Schema:
-    """The LanceDB table schema: a fixed-width vector keyed by passage_id.
-
-    The vector width is the ``embedding_vector_dim`` build constant; LanceDB needs
-    it fixed at table creation (``docs/configuration.md``), and re-keying it
-    implies a full re-embed.
-    """
-    return pa.schema(
-        [
-            pa.field("passage_id", pa.string()),
-            pa.field("target_version", pa.string()),
-            pa.field("vector", pa.list_(pa.float32(), settings.embedding_vector_dim)),
-            pa.field("model", pa.string()),
-        ]
-    )
-
-
-def _write_vectors(
-    lance_dir: str | Path,
-    target_version: str,
-    rows: list[dict[str, object]],
-    settings: Settings,
-) -> None:
-    """Replace ``target_version``'s vectors in LanceDB with ``rows`` (idempotent).
-
-    Opens (or, on first write, creates with the pinned schema) the vector table
-    via ``exist_ok``, deletes any rows already keyed to ``target_version``, then
-    adds the fresh batch. The delete-then-add is what makes re-embedding the same
-    head version converge instead of accumulate. ``target_version`` is a lowercase
-    hex content-address (``lode.hashing``), so it is safe to inline in the delete
-    predicate.
-    """
-    import lancedb
-
-    db = lancedb.connect(lance_dir)
-    table = db.create_table(
-        _VECTOR_TABLE, schema=_vector_schema(settings), exist_ok=True
-    )
-    table.delete(f"target_version = '{target_version}'")
-    if rows:
-        table.add(rows)
-
-
 def embed(
     conn: sqlite3.Connection,
     target_version: str,
@@ -211,5 +162,5 @@ def embed(
         }
         for p, vector in zip(passages, vectors, strict=True)
     ]
-    _write_vectors(lance_dir, target_version, rows, settings)
+    VectorStore(lance_dir, settings).replace_vectors(target_version, rows)
     return len(rows)
