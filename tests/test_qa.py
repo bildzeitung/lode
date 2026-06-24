@@ -1,0 +1,187 @@
+"""Tests for lode.qa -- the Q&A structured-claims call (lode-az0.2).
+
+Asserts the acceptance criteria offline (the Anthropic client is mocked, so no
+network call is ever made and the gates run without credentials):
+
+- structured claims are parsed via the anthropic ``messages.parse`` + Pydantic path;
+- Claude Sonnet 4.6 is the default model, Opus 4.8 the "think harder" toggle;
+- ``no_egress`` passages are EXCLUDED from the cloud context (and surfaced as
+  present-but-withheld);
+- redaction is applied to the context BEFORE it is sent;
+- the send is recorded in the ``egress_log``.
+"""
+
+from types import SimpleNamespace
+
+import pytest
+
+from lode.answer import Answer, Claim, Support
+from lode.config import Settings
+from lode.qa import (
+    OPUS_MODEL,
+    SONNET_MODEL,
+    QaPassage,
+    answer_question,
+)
+from lode.storage import init_db
+
+
+class _FakeMessages:
+    """Records every parse() call and returns a fixed parsed envelope."""
+
+    def __init__(self, parsed: object) -> None:
+        self._parsed = parsed
+        self.calls: list[dict] = []
+
+    def parse(self, **kwargs: object) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return SimpleNamespace(parsed_output=self._parsed)
+
+
+class _FakeClient:
+    """Stand-in for anthropic.Anthropic -- no network, just records the call."""
+
+    def __init__(self, parsed: object) -> None:
+        self.messages = _FakeMessages(parsed)
+
+
+def _envelope(claims: list[Claim]) -> SimpleNamespace:
+    """A minimal _ClaimsEnvelope stand-in (only .claims is read)."""
+    return SimpleNamespace(claims=claims)
+
+
+@pytest.fixture
+def conn():
+    """An in-memory lode database with the egress_log table."""
+    connection = init_db(":memory:")
+    yield connection
+    connection.close()
+
+
+def _user_prompt(client: _FakeClient) -> str:
+    """The user-message text of the single recorded parse() call."""
+    (call,) = client.messages.calls
+    (message,) = call["messages"]
+    return message["content"]
+
+
+def test_returns_parsed_structured_claims(conn) -> None:
+    # The structured response is parsed into answer.Answer, claims preserved.
+    claims = [
+        Claim(
+            text="lode is event-sourced.",
+            support=[Support(version_id="v1", quoted_span="event-sourced")],
+        ),
+    ]
+    client = _FakeClient(_envelope(claims))
+    result = answer_question(
+        conn,
+        "How is lode stored?",
+        [QaPassage("v1", "lode is event-sourced")],
+        client=client,
+    )
+    assert isinstance(result.answer, Answer)
+    assert [c.text for c in result.answer.claims] == ["lode is event-sourced."]
+    assert result.answer.claims[0].support[0].version_id == "v1"
+
+
+def test_sonnet_is_the_default_model(conn) -> None:
+    client = _FakeClient(_envelope([]))
+    result = answer_question(conn, "q", [QaPassage("v1", "text")], client=client)
+    assert result.model == SONNET_MODEL
+    assert client.messages.calls[0]["model"] == SONNET_MODEL
+
+
+def test_opus_when_think_harder(conn) -> None:
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn, "q", [QaPassage("v1", "text")], think_harder=True, client=client
+    )
+    assert result.model == OPUS_MODEL
+    assert client.messages.calls[0]["model"] == OPUS_MODEL
+
+
+def test_no_egress_passage_excluded_from_context(conn) -> None:
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn,
+        "q",
+        [
+            QaPassage("v-open", "shareable note body"),
+            QaPassage("v-secret", "private note body", no_egress=True),
+        ],
+        client=client,
+    )
+    prompt = _user_prompt(client)
+    # The no_egress body and id never reach the cloud context...
+    assert "private note body" not in prompt
+    assert "v-secret" not in prompt
+    # ...the sendable one does...
+    assert "shareable note body" in prompt
+    # ...and the withheld item is surfaced, not dropped.
+    assert [c.target_id for c in result.withheld_citations] == ["v-secret"]
+
+
+def test_redaction_applied_before_send(conn) -> None:
+    settings = Settings(
+        redact_before_egress_patterns=[r"TOPSECRET-\d+"],
+        redact_before_index_patterns=[],
+    )
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "the key is TOPSECRET-42 keep it safe")],
+        client=client,
+        settings=settings,
+    )
+    prompt = _user_prompt(client)
+    # The secret was stripped from the context the model received.
+    assert "TOPSECRET-42" not in prompt
+    assert "[redacted]" in prompt
+
+
+def test_external_and_note_sources_are_labelled(conn) -> None:
+    # The prompt tells Claude which support field to cite per source kind.
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [
+            QaPassage("v-note", "note text"),
+            QaPassage("s-ext", "external text", is_external=True),
+        ],
+        client=client,
+    )
+    prompt = _user_prompt(client)
+    assert '<source id="v-note" kind="note">' in prompt
+    assert '<source id="s-ext" kind="external">' in prompt
+
+
+def test_send_is_recorded_in_egress_log(conn) -> None:
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text"), QaPassage("v-secret", "x", no_egress=True)],
+        client=client,
+    )
+    row = conn.execute(
+        "SELECT id, purpose, model, sent_targets FROM egress_log WHERE id = ?",
+        (result.egress_log_id,),
+    ).fetchone()
+    assert row is not None
+    log_id, purpose, model, sent_targets = row
+    assert log_id == result.egress_log_id
+    assert purpose == "qa"
+    assert model == SONNET_MODEL
+    # Only the sendable target is recorded as sent; the no_egress one is not.
+    assert "v1" in sent_targets
+    assert "v-secret" not in sent_targets
+
+
+def test_empty_answer_is_valid(conn) -> None:
+    # The model asserting nothing is a valid answer (downstream abstention path).
+    client = _FakeClient(_envelope([]))
+    result = answer_question(conn, "q", [QaPassage("v1", "text")], client=client)
+    assert result.answer.claims == []
