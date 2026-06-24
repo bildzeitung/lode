@@ -1,4 +1,4 @@
-"""The E4 retrieval read side: the two passage-search legs, heads only (lode-72m.1).
+"""The E4 retrieval read side: the two passage-search legs + app-side RRF fusion.
 
 This is the **read side** of the hybrid retrieval pipeline (``docs/retrieval.md``,
 "The v1 retrieval pipeline is hybrid, fused app-side"). It consumes the two
@@ -12,8 +12,9 @@ storage:
 
 Both rank the **same passage unit** (``docs/retrieval.md``, "Both retrieval legs
 must rank the same unit"), so their two ranked lists fuse apples to apples under
-the app-side RRF step — which is a **later ticket** (lode-72m.2), not this one.
-This ticket is only the two legs each returning a ranked passage list for a query.
+the app-side RRF step (:func:`reciprocal_rank_fusion`, lode-72m.2) — Reciprocal
+Rank Fusion app-side, which is why LanceDB's *own* native hybrid stays unused
+(``docs/retrieval.md``, "Fusion is app-side RRF").
 
 **Heads only.** Both indexes accumulate passages for *non-head* versions: an
 update re-indexes the new head but deliberately leaves the prior head's rows in
@@ -34,6 +35,7 @@ landed :meth:`VectorStore.search` signature and keeping this read side model-fre
 
 import sqlite3
 from collections.abc import Collection
+from dataclasses import dataclass
 
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
@@ -94,6 +96,54 @@ def vector_search(
         return []
     where = _in_clause("target_version", heads)
     return store.search(query_vector, k=k, where=where)
+
+
+@dataclass(frozen=True, slots=True)
+class FusedHit:
+    """One passage's combined standing across both legs: its RRF score, best-first.
+
+    ``passage_id`` and ``target_version`` are carried straight from the leg hits;
+    both legs rank the **same passage unit**, so a passage seen in both agrees on
+    them. ``score`` is the Reciprocal-Rank-Fusion score — a sum of ``1 / (k + rank)``
+    over the legs the passage appears in — so **larger is better** and the fused
+    list sorts descending (the inverse of the legs' own raw metrics, where smaller
+    bm25/distance is better; RRF consumes only the rank, not the absolute value).
+    """
+
+    passage_id: str
+    target_version: str
+    score: float
+
+
+def reciprocal_rank_fusion(
+    lexical: list[LexicalHit],
+    vector: list[VectorHit],
+    *,
+    k: int = 60,
+) -> list[FusedHit]:
+    """Fuse the two already-ranked legs into one RRF-scored list, best-first.
+
+    App-side Reciprocal Rank Fusion (``docs/retrieval.md``, "Fusion is app-side
+    RRF"): each passage scores ``sum over legs of 1 / (k + rank)``, where ``rank``
+    is its 1-based position in a leg's best-first list and ``k`` is the smoothing
+    constant (``Settings.rrf_k``, default 60 — ``docs/configuration.md``). This
+    reuses the landed legs' output (:func:`lexical_search`, :func:`vector_search`)
+    and re-queries neither, which is why LanceDB's own native hybrid stays unused.
+
+    A passage present in only **one** leg still scores from that leg alone and so
+    still appears — e.g. a just-saved note matched lexically (FTS5 is synchronous)
+    before its vector lands in the async cache. Higher score sorts first; ties keep
+    first-seen order (a stable sort, lexical leg before dense).
+    """
+    scores: dict[str, float] = {}
+    versions: dict[str, str] = {}
+    for leg in (lexical, vector):
+        for rank, hit in enumerate(leg, start=1):
+            scores[hit.passage_id] = scores.get(hit.passage_id, 0.0) + 1.0 / (k + rank)
+            versions[hit.passage_id] = hit.target_version
+    fused = [FusedHit(pid, versions[pid], score) for pid, score in scores.items()]
+    fused.sort(key=lambda hit: hit.score, reverse=True)
+    return fused
 
 
 def _in_clause(column: str, values: Collection[str]) -> str:

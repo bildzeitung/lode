@@ -20,11 +20,16 @@ import pytest
 
 from lode.config import load_settings
 from lode.embedding import EmbeddingCacheBackend
-from lode.lexical import LexicalCacheBackend
+from lode.lexical import LexicalCacheBackend, LexicalHit
 from lode.repository import CompositeCache, Repository
-from lode.retrieval import lexical_search, live_head_versions, vector_search
+from lode.retrieval import (
+    lexical_search,
+    live_head_versions,
+    reciprocal_rank_fusion,
+    vector_search,
+)
 from lode.storage import init_db
-from lode.vectorstore import VectorStore
+from lode.vectorstore import VectorHit, VectorStore
 
 # A four-word vocabulary mapped 1:1 onto the (overridden, tiny) vector dimension.
 _VOCAB = ("alpha", "beta", "gamma", "delta")
@@ -200,3 +205,56 @@ def test_both_legs_rank_the_same_passage_unit(repo, conn, store) -> None:
     assert lex and vec
     # Identical passage ids: both legs rank over the one shared passage unit.
     assert {h.passage_id for h in lex} == {h.passage_id for h in vec}
+
+
+# --- app-side RRF fusion of the two ranked legs (lode-72m.2) --------------------
+
+
+def _lex(passage_id: str) -> LexicalHit:
+    return LexicalHit(
+        passage_id=passage_id, target_version=f"v-{passage_id}", score=-1.0
+    )
+
+
+def _vec(passage_id: str) -> VectorHit:
+    return VectorHit(
+        passage_id=passage_id, target_version=f"v-{passage_id}", distance=0.1
+    )
+
+
+def test_rrf_fuses_both_legs_best_first() -> None:
+    """A passage ranked in both legs scores highest; output is score-descending."""
+    lexical = [_lex("p1"), _lex("p2")]  # ranks 1, 2
+    vector = [_vec("p2"), _vec("p3")]  # ranks 1, 2
+
+    fused = reciprocal_rank_fusion(lexical, vector)
+
+    # p2 is in both legs (lexical rank 2 + dense rank 1 = 1/62 + 1/61); p1 only
+    # lexical (rank 1 = 1/61); p3 only dense (rank 2 = 1/62).
+    assert [h.passage_id for h in fused] == ["p2", "p1", "p3"]
+    assert fused[0].score == pytest.approx(1 / 62 + 1 / 61)
+    assert fused[1].score == pytest.approx(1 / 61)  # p1 at rank 1 of the lexical leg
+    assert fused[2].score == pytest.approx(1 / 62)  # p3 at rank 2 of the dense leg
+
+
+def test_rrf_keeps_a_passage_present_in_only_one_leg() -> None:
+    """Acceptance: a lexical-only hit (vector not yet landed) still survives fusion."""
+    lexical = [_lex("just-saved")]  # FTS5 is synchronous
+    vector: list[VectorHit] = []  # the async vector hasn't landed yet
+
+    fused = reciprocal_rank_fusion(lexical, vector)
+
+    assert [h.passage_id for h in fused] == ["just-saved"]
+    assert fused[0].target_version == "v-just-saved"  # carried straight from the leg
+
+
+def test_rrf_default_k_is_60_and_is_tunable() -> None:
+    """The smoothing constant defaults to 60 and changes the score when overridden."""
+    lexical = [_lex("p1")]
+
+    assert reciprocal_rank_fusion(lexical, [])[0].score == pytest.approx(1 / 61)
+    assert reciprocal_rank_fusion(lexical, [], k=9)[0].score == pytest.approx(1 / 10)
+
+
+def test_rrf_of_two_empty_legs_is_empty() -> None:
+    assert reciprocal_rank_fusion([], []) == []
