@@ -1,14 +1,18 @@
 """lode command-line entry point.
 
 A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
-subcommand surface). ``add`` (capture + save, lode-y42.1) is real; ``ask`` /
-``purge`` / ``status`` / ``eval`` remain dispatching stubs until their E10 tasks.
+subcommand surface). ``add`` (capture + save, lode-y42.1) and the operational
+``status`` / ``jobs`` read-outs (lode-y42.3) are real; ``ask`` / ``eval`` remain
+dispatching stubs until their E10 tasks. ``purge`` is a deliberate refusing stub
+until its hard-delete mechanism (E8, lode-fk8.4) exists — it never half-deletes.
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
 import uuid
+from enum import Enum
 from pathlib import Path
 
 import typer
@@ -49,6 +53,27 @@ def _default_db_path() -> Path:
     return Path.home() / ".local" / "share" / "lode" / "lode.db"
 
 
+def _open_db(db: Path | None) -> sqlite3.Connection:
+    """Open the lode database (creating it if absent) with the schema applied.
+
+    Resolves the path like ``add`` (flag/``LODE_DB``/default), ensures the parent
+    directory exists, and returns an :func:`init_db` connection — so the read-out
+    commands always see the ``jobs`` / ``egress_log`` tables even on a first run.
+    """
+    db_path = db or _default_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return init_db(db_path)
+
+
+#: Shared ``--db`` option (path / ``LODE_DB`` / default) for the db-backed commands.
+_DB_OPTION = typer.Option(
+    None,
+    "--db",
+    envvar="LODE_DB",
+    help="SQLite database path (default: ~/.local/share/lode/lode.db).",
+)
+
+
 def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     """Persist a CAS-rejected capture buffer beside the DB so it is never lost.
 
@@ -69,12 +94,7 @@ def add(
     text: str | None = typer.Argument(
         None, help="Note body. Omit to read the note verbatim from stdin."
     ),
-    db: Path | None = typer.Option(
-        None,
-        "--db",
-        envvar="LODE_DB",
-        help="SQLite database path (default: ~/.local/share/lode/lode.db).",
-    ),
+    db: Path | None = _DB_OPTION,
 ) -> None:
     """Capture a note into lode and enqueue its derive jobs.
 
@@ -118,14 +138,123 @@ def ask() -> None:
 
 @app.command()
 def purge() -> None:
-    """Hard-delete notes and their derived data (stub; lands in E10)."""
-    _stub("purge")
+    """Hard-delete notes and their derived data (refuses: needs E8/lode-fk8.4).
+
+    purge is an E8 hard delete — overwrite the body with ``[purged YYYY-MM-DD]``,
+    set ``purged_at``, sweep the whole version chain, and cascade-drop the derived
+    cache (vectors, FTS, ``source='ai'`` annotations) (``docs/externals.md`` "Hard
+    delete"). That mechanism lands in **lode-fk8.4** and does not exist yet, so this
+    command refuses rather than ship a partial, unsafe delete.
+    """
+    typer.echo(
+        "lode purge: hard-delete is not yet available — it needs the chain-sweep + "
+        "cache-cascade mechanism (E8, lode-fk8.4), which is not built. Refusing "
+        "rather than partially delete.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+class JobStatus(str, Enum):
+    """The ``jobs.status`` enum from ``schema.sql`` — accepted by ``--status``."""
+
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+def _short(target_version: str) -> str:
+    """Abbreviate a version-id digest for a one-line listing (full id is a hash)."""
+    return target_version if len(target_version) <= 12 else f"{target_version[:12]}…"
 
 
 @app.command()
-def status() -> None:
-    """Show store and work-queue status (stub; lands in E10)."""
-    _stub("status")
+def status(
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Show work-queue health: job counts, dead-letters, and an egress summary.
+
+    Reads the ``jobs`` and ``egress_log`` tables (``docs/storage.md`` §8): the
+    pending/running/done/failed job counts, the dead-letter (failed) jobs with
+    their last error, and how much content has left the box, by purpose.
+    """
+    conn = _open_db(db)
+    try:
+        job_counts = dict(
+            conn.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall()
+        )
+        dead_letters = conn.execute(
+            "SELECT id, type, target_version, last_error FROM jobs "
+            "WHERE status = 'failed' ORDER BY id"
+        ).fetchall()
+        egress_counts = conn.execute(
+            "SELECT purpose, COUNT(*) FROM egress_log GROUP BY purpose ORDER BY purpose"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    typer.echo(
+        "jobs: "
+        f"{job_counts.get('pending', 0)} pending, "
+        f"{job_counts.get('running', 0)} running, "
+        f"{job_counts.get('done', 0)} done, "
+        f"{job_counts.get('failed', 0)} failed"
+    )
+
+    total_egress = sum(n for _, n in egress_counts)
+    by_purpose = ", ".join(f"{purpose}: {n}" for purpose, n in egress_counts) or "none"
+    typer.echo(f"egress: {total_egress} sends ({by_purpose})")
+
+    typer.echo(f"dead-letters (failed jobs): {len(dead_letters)}")
+    for job_id, job_type, target_version, last_error in dead_letters:
+        typer.echo(
+            f"  job {job_id} ({job_type}) target={_short(target_version)}: "
+            f"{last_error or 'no error recorded'}"
+        )
+
+
+@app.command(name="jobs")
+def jobs_(
+    status: JobStatus | None = typer.Option(
+        None, "--status", help="Only list jobs in this status (default: all)."
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """List the derive jobs on the work queue (``jobs`` table, ``docs/storage.md``).
+
+    One row per job — id, type, status, attempts, target version — newest last;
+    a failed job also shows its last error. ``--status`` narrows the list to a
+    single queue state.
+    """
+    conn = _open_db(db)
+    try:
+        if status is None:
+            rows = conn.execute(
+                "SELECT id, type, status, attempts, target_version, last_error "
+                "FROM jobs ORDER BY id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, type, status, attempts, target_version, last_error "
+                "FROM jobs WHERE status = ? ORDER BY id",
+                (status.value,),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        typer.echo("no jobs")
+        return
+
+    for job_id, job_type, job_status, attempts, target_version, last_error in rows:
+        line = (
+            f"{job_id}  {job_type:<7} {job_status:<8} "
+            f"attempts={attempts}  target={_short(target_version)}"
+        )
+        if last_error:
+            line += f"  ! {last_error}"
+        typer.echo(line)
 
 
 @app.command(name="eval")

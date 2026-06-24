@@ -1,10 +1,12 @@
 """Tests for the lode CLI.
 
 Covers the skeleton surface (lode-txh.5: the subcommands exist, dispatch, and are
-listed by ``--help``) plus the real ``lode add`` capture command (lode-y42.1):
-it persists via ``versions.save`` with no AI in the path, enqueues embed/enrich
+listed by ``--help``), the real ``lode add`` capture command (lode-y42.1) — it
+persists via ``versions.save`` with no AI in the path, enqueues embed/enrich
 derive jobs, refuses an empty note, and on a CAS reject preserves the buffer as a
-draft rather than clobbering.
+draft rather than clobbering — and the operational read-outs (lode-y42.3): ``status``
+(job-queue health, dead-letters, egress summary), ``jobs`` (list/filter the derive
+queue), and ``purge`` (a refusing stub until its hard-delete mechanism, lode-fk8.4).
 """
 
 import sqlite3
@@ -21,9 +23,10 @@ from lode.versions import save
 
 runner = CliRunner()
 
-# `add` now has real behaviour; the rest are still dispatching stubs.
-STUB_SUBCOMMANDS = ["ask", "purge", "status", "eval"]
-ALL_SUBCOMMANDS = ["add", *STUB_SUBCOMMANDS]
+# `add` (lode-y42.1) and `status` / `jobs` (lode-y42.3) are real; `ask` / `eval`
+# are still dispatching stubs; `purge` is a deliberate refusing stub (lode-fk8.4).
+STUB_SUBCOMMANDS = ["ask", "eval"]
+ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "eval"]
 
 
 def test_version_command_prints_version() -> None:
@@ -38,7 +41,7 @@ def test_help_lists_usage() -> None:
     assert "Usage" in result.stdout
 
 
-def test_help_lists_all_five_subcommands() -> None:
+def test_help_lists_all_subcommands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     for name in ALL_SUBCOMMANDS:
@@ -160,3 +163,105 @@ def test_add_cas_reject_writes_draft_and_does_not_clobber(
     drafts = list(db_path.parent.glob(f"{fixed_id}.*.draft"))
     assert len(drafts) == 1
     assert drafts[0].read_text(encoding="utf-8") == "rejected body"
+
+
+# --- lode status / jobs (lode-y42.3) ----------------------------------------
+
+
+def _seed_jobs(db_path: Path) -> None:
+    """Seed a spread of job rows + egress_log rows to read back via status/jobs."""
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.executemany(
+                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    ("embed", "ver-aaaaaaaaaaaaaaaa", "pending", 0, None),
+                    ("enrich", "ver-aaaaaaaaaaaaaaaa", "running", 1, None),
+                    ("embed", "ver-bbbbbbbbbbbbbbbb", "done", 1, None),
+                    ("enrich", "ver-bbbbbbbbbbbbbbbb", "failed", 3, "RateLimitError"),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO egress_log (purpose, model, sent_targets) "
+                "VALUES (?, ?, ?)",
+                [
+                    ("enrich", "claude", "[]"),
+                    ("qa", "claude", "[]"),
+                    ("qa", "claude", "[]"),
+                ],
+            )
+    finally:
+        conn.close()
+
+
+def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "jobs: 0 pending, 0 running, 0 done, 0 failed" in result.stdout
+    assert "egress: 0 sends (none)" in result.stdout
+    assert "dead-letters (failed jobs): 0" in result.stdout
+
+
+def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_jobs(db_path)
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "jobs: 1 pending, 1 running, 1 done, 1 failed" in result.stdout
+    # Egress summary totals across purposes and breaks them out.
+    assert "egress: 3 sends (enrich: 1, qa: 2)" in result.stdout
+    # The single failed job surfaces as a dead-letter with its last error.
+    assert "dead-letters (failed jobs): 1" in result.stdout
+    assert "(enrich) target=ver-bbbbbbbb…: RateLimitError" in result.stdout
+
+
+def test_jobs_empty_db_says_no_jobs(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["jobs", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "no jobs"
+
+
+def test_jobs_lists_every_job(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_jobs(db_path)
+    result = runner.invoke(app, ["jobs", "--db", str(db_path)])
+    assert result.exit_code == 0
+    # One line per job (4 seeded), in id order, with type/status/attempts.
+    assert len([ln for ln in result.stdout.splitlines() if ln.strip()]) == 4
+    assert "embed" in result.stdout and "enrich" in result.stdout
+    assert "target=ver-bbbbbbbb…" in result.stdout
+    # The failed job carries its last error inline.
+    assert "! RateLimitError" in result.stdout
+
+
+def test_jobs_status_filter_narrows_to_one_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_jobs(db_path)
+    result = runner.invoke(app, ["jobs", "--status", "failed", "--db", str(db_path)])
+    assert result.exit_code == 0
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "failed" in lines[0]
+    assert "! RateLimitError" in lines[0]
+
+
+def test_jobs_rejects_unknown_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["jobs", "--status", "bogus", "--db", str(db_path)])
+    assert result.exit_code != 0
+
+
+# --- lode purge (refusing stub until lode-fk8.4) ----------------------------
+
+
+def test_purge_refuses_and_points_at_fk8_4() -> None:
+    result = runner.invoke(app, ["purge"])
+    # Never a silent partial delete: it exits non-zero and names the missing
+    # hard-delete mechanism (lode-fk8.4) so it cannot be mistaken for success.
+    assert result.exit_code == 1
+    assert "lode-fk8.4" in result.stderr
+    assert "not yet available" in result.stderr
