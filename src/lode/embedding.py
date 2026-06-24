@@ -164,3 +164,54 @@ def embed(
     ]
     VectorStore(lance_dir, settings).replace_vectors(target_version, rows)
     return len(rows)
+
+
+class EmbeddingCacheBackend:
+    """The passage-vector engine behind the Repository cache seam (lode-1f9).
+
+    Wraps the embed leg as a :class:`lode.repository.CacheBackend` so passage
+    vectors are reached *through the Repository*, never by calling
+    :func:`embed` / :class:`~lode.vectorstore.VectorStore` directly — the
+    "access is through the repository interface" criterion that lode-x6r.3
+    deferred. It plugs into :class:`~lode.repository.CompositeCache` alongside the
+    FTS5 leg (lode-x6r.4) and the future graph, all on the same two-method seam.
+
+    - :meth:`index` → :func:`embed`: chunk the head's body, embed each passage,
+      and replace this version's vectors in LanceDB (idempotent re-embed).
+    - :meth:`evict` → drop *this version's* vectors from LanceDB. A soft-delete
+      tombstone has no passages of its own, so this is the symmetric "clear this
+      version" of :meth:`index`; it deliberately does **not** sweep the note's
+      prior content vectors — soft-delete is reversible (``recover`` repoints the
+      head with no re-embed) and retrieval filters to the live head, so the
+      note-wide hard cascade is purge's job (E8, lode-fk8.4), not the seam's.
+
+    The connection, ``lance_dir`` and (optional) ``embedder`` the embed leg needs
+    are held on the backend; the body the seam hands :meth:`index` is the version
+    just committed, which :func:`embed` re-reads from ``conn`` to also persist the
+    ``passages`` rows the vectors reference.
+    """
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        lance_dir: str | Path,
+        embedder: Embedder | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        self._conn = conn
+        self._lance_dir = lance_dir
+        self._embedder = embedder
+        self._settings = settings or Settings()
+
+    def index(self, note_id: str, version_id: str, body: str) -> None:
+        embed(
+            self._conn,
+            version_id,
+            lance_dir=self._lance_dir,
+            embedder=self._embedder,
+            settings=self._settings,
+        )
+
+    def evict(self, note_id: str, version_id: str) -> None:
+        VectorStore(self._lance_dir, self._settings).replace_vectors(version_id, [])

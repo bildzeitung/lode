@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from lode.hashing import NO_PARENT, content_version_id
-from lode.repository import CacheBackend, NullCache, Repository
+from lode.repository import CacheBackend, CompositeCache, NullCache, Repository
 from lode.storage import init_db
 from lode.versions import HeadConflictError
 
@@ -205,3 +205,56 @@ def test_recover_reindexes_the_recovered_head(conn):
     cache.calls.clear()
     repo.recover("note-1", target_version=root)
     assert cache.calls == [CacheCall("index", "note-1", root, "body")]
+
+
+# --- CompositeCache: one slot fans every head change out to N engines ----------
+#
+# The composition decision lode-1f9 settles: the repository keeps one cache slot,
+# and the several regenerable engines (vectors, FTS5, graph) ride a CompositeCache
+# that is itself a backend and forwards each index/evict to every member in order.
+
+
+def test_composite_is_a_cache_backend():
+    """The multiplexer plugs into the same seam it fans out to (it is a backend)."""
+    assert isinstance(CompositeCache([]), CacheBackend)
+
+
+def test_composite_fans_index_and_evict_to_every_engine_in_order(conn):
+    a, b = FakeCache(), FakeCache()
+    repo = Repository(conn, CompositeCache([a, b]))
+
+    root = repo.save("note-1", "body").version_id
+    repo.delete("note-1", parent=root)
+
+    # Both engines saw the same head changes, in the same sequence.
+    expected = [
+        CacheCall("index", "note-1", root, "body"),
+        CacheCall("evict", "note-1", _head(conn, "note-1")),
+    ]
+    assert a.calls == expected
+    assert b.calls == expected
+
+
+def test_composite_with_no_engines_is_a_safe_noop(conn):
+    """An empty composite degrades to NullCache behaviour — the core still saves."""
+    repo = Repository(conn, CompositeCache([]))
+    assert repo.save("note-1", "hello").op == "create"
+
+
+def test_composite_preserves_engine_order(conn):
+    """Engines are driven in the order given (a shared log records the sequence)."""
+    order: list[str] = []
+
+    class _Named:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def index(self, note_id: str, version_id: str, body: str) -> None:
+            order.append(self.name)
+
+        def evict(self, note_id: str, version_id: str) -> None:
+            order.append(self.name)
+
+    repo = Repository(conn, CompositeCache([_Named("vectors"), _Named("fts")]))
+    repo.save("note-1", "hello")
+    assert order == ["vectors", "fts"]

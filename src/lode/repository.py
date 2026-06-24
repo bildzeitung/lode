@@ -23,6 +23,7 @@ and its body, the regeneration input.
 """
 
 import sqlite3
+from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
 from lode import versions
@@ -66,6 +67,40 @@ class NullCache:
 
     def evict(self, note_id: str, version_id: str) -> None:
         pass
+
+
+class CompositeCache:
+    """One cache slot, many engines — the multiplexer behind the cache seam.
+
+    The :class:`Repository` holds a *single* cache, but the regenerable cache is
+    several engines that must all see every head change: passage vectors in
+    LanceDB (:class:`lode.embedding.EmbeddingCacheBackend`, lode-x6r.3/x6r.2), the
+    FTS5 lexical index (lode-x6r.4), and later the networkx knowledge graph. This
+    backend *is itself* a :class:`CacheBackend` that simply fans each
+    :meth:`index` / :meth:`evict` out to its member engines in order. So the
+    composition decision is: the Repository never grows a second slot or learns
+    the engine list — adding the FTS leg is appending one engine to the composite
+    at the wiring point, and every engine plugs into the same two-method seam
+    rather than inventing its own (``docs/storage.md`` "the whole shape sits behind
+    a thin repository interface"; ``docs/stack.md`` "Keep the cache behind a
+    repository interface").
+
+    Fan-out is sequential and order-preserving (engines are driven in the order
+    given); it does no error isolation, so a failing engine propagates — the
+    cache is touched only after the irreplaceable write has committed
+    (:class:`Repository`), so a propagated failure costs a rebuild, never data.
+    """
+
+    def __init__(self, backends: Iterable[CacheBackend]) -> None:
+        self._backends = tuple(backends)
+
+    def index(self, note_id: str, version_id: str, body: str) -> None:
+        for backend in self._backends:
+            backend.index(note_id, version_id, body)
+
+    def evict(self, note_id: str, version_id: str) -> None:
+        for backend in self._backends:
+            backend.evict(note_id, version_id)
 
 
 class Repository:

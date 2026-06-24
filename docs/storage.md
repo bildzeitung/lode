@@ -345,6 +345,17 @@ lexical in **SQLite FTS5** (also per passage), and the `edges` knowledge graph t
 with networkx** (loaded from the edge rows). The whole shape sits behind a thin repository interface, so the cache engine is
 swappable without touching the core.
 
+**The cache slot holds one engine that may be many.** The repository exposes a *single* cache behind
+a two-method seam (`index` on each head change, `evict` on a delete tombstone), but the regenerable
+cache is several engines that must all see every head change — passage vectors (LanceDB), the FTS5
+lexical index, and later the networkx graph. They compose through a **`CompositeCache`** that is
+itself a cache backend and simply fans each `index`/`evict` out to its member engines in order. So
+the repository never grows a second slot or learns the engine list: adding the FTS leg (lode-x6r.4)
+is appending one engine to the composite at the wiring point, and every engine — the vector
+`EmbeddingCacheBackend`, the FTS index, the graph — plugs into the *same* seam rather than inventing
+its own. Fan-out runs only after the irreplaceable write commits, so a failing engine costs a
+rebuild, never data (lode-1f9).
+
 The `jobs` table is **operational state** in SQLite: mostly regenerable (the reconciliation scan
 rebuilds the backlog from the content↔derived diff), with **one durable exception — in-flight
 `batch_handle`s**, which a scan can't reconstruct without double-spending. So it doesn't fit cleanly
