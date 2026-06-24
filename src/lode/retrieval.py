@@ -36,6 +36,7 @@ landed :meth:`VectorStore.search` signature and keeping this read side model-fre
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
+from enum import IntEnum
 
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
@@ -212,6 +213,181 @@ def expand_parents(conn: sqlite3.Connection, hits: list[FusedHit]) -> list[Expan
             )
         )
     return expanded
+
+
+class TrustTier(IntEnum):
+    """The documented trust gradient that orders the final Q&A context.
+
+    ``docs/externals.md`` ("Retrieval uses an explicit trust gradient") and
+    ``docs/retrieval.md`` (the ``trust_rank`` step): **your note > your annotation
+    > current external snapshot > stale external snapshot > AI-inferred edge.** The
+    user's own words are highest-trust; externals corroborate, they do not
+    override. The integer value *is* that rank, so **lower sorts earlier** (higher
+    trust) in the context handed to the Q&A LLM.
+
+    Only :data:`OWNED_NOTE`, :data:`CURRENT_EXTERNAL`, and :data:`STALE_EXTERNAL`
+    are reachable from an :class:`ExpandedHit` today — those are the passage units
+    the read side produces. :data:`USER_ANNOTATION` and :data:`AI_EDGE` are the
+    graph-expansion tiers (annotations / inferred edges, ``docs/externals.md``);
+    they slot in at their documented rank once ``graph_expand`` lands and feeds
+    this step, without renumbering the gradient.
+    """
+
+    OWNED_NOTE = 1
+    USER_ANNOTATION = 2
+    CURRENT_EXTERNAL = 3
+    STALE_EXTERNAL = 4
+    AI_EDGE = 5
+
+
+@dataclass(frozen=True, slots=True)
+class ContextItem:
+    """One trust-ranked unit of Q&A context, with its citation carried through.
+
+    ``tier`` is the unit's place on the trust gradient (:class:`TrustTier`) and
+    orders the context. ``target_version`` is the polymorphic citation target
+    (``passages.target_version`` — a note ``version_id`` for :data:`OWNED_NOTE`, an
+    external ``snapshot_id`` otherwise; the tier discriminates which, so the
+    downstream answer fills the matching field of ``answer.Support``), with
+    ``char_range`` (the half-open span) and ``passage_text`` pinning the precise
+    citation while ``parent_block`` gives the LLM the surrounding context
+    (``docs/retrieval.md`` small-to-big). ``score`` is the upstream RRF ranking,
+    carried so within a tier the better-ranked unit still leads.
+    """
+
+    tier: TrustTier
+    passage_id: str
+    target_version: str
+    char_range: str
+    passage_text: str
+    parent_block: str
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
+class WithheldHit:
+    """An E4 hit the trust ranker could not place on the gradient — surfaced, not dropped.
+
+    The acceptance criterion is that the context builder **withholds nothing
+    silently**: a hit whose ``target_version`` resolves to neither a note version
+    nor a known external snapshot cannot be assigned a trust tier (nor reliably
+    cited), so rather than silently omit it the ranker returns it here with the
+    ``reason``, for the caller to log or report.
+    """
+
+    passage_id: str
+    target_version: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class TrustRankedContext:
+    """The ``trust_rank`` output: ordered Q&A context plus everything withheld.
+
+    ``context`` is the citation-carrying units ordered by the trust gradient
+    (``docs/retrieval.md`` ``trust_rank``), best-trust first. ``withheld`` is every
+    input hit that could not be placed on the gradient — empty in the normal case,
+    non-empty exactly when something was dropped, so nothing leaves silently.
+    """
+
+    context: list[ContextItem]
+    withheld: list[WithheldHit]
+
+
+def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRankedContext:
+    """Order the expanded hits into Q&A context by the trust gradient.
+
+    The final ``trust_rank`` step of the read pipeline (``docs/retrieval.md``): the
+    expanded hits are reordered by the **trust gradient** (``docs/externals.md`` —
+    your note > current external snapshot > stale external snapshot), carrying each
+    hit's citation (version/snapshot id + span) straight through to the
+    :class:`ContextItem`. Each hit's polymorphic ``target_version`` is classified
+    by a single lookup against ``versions`` and ``snapshots``:
+
+    - present in ``versions`` → an owned note (:data:`TrustTier.OWNED_NOTE`);
+    - present in ``snapshots`` → an external, **current** if it is its external's
+      ``head_snapshot_id`` else **stale** (:data:`TrustTier.CURRENT_EXTERNAL` /
+      :data:`TrustTier.STALE_EXTERNAL`).
+
+    The sort is stable, so within a tier the upstream best-first (RRF) order is
+    preserved. A hit whose ``target_version`` matches neither table cannot be
+    placed on the gradient (nor cited); rather than drop it silently it is returned
+    in ``withheld`` (acceptance: **withholds nothing silently**). The annotation /
+    inferred-edge tiers attach when ``graph_expand`` feeds this step.
+    """
+    if not hits:
+        return TrustRankedContext(context=[], withheld=[])
+
+    targets = {hit.target_version for hit in hits}
+    placeholders = ", ".join("?" for _ in targets)
+    target_list = list(targets)
+
+    owned = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
+            target_list,
+        )
+    }
+    # snapshot_id -> is it its external's current head? (current vs stale external)
+    snapshots = {
+        row[0]: row[0] == row[1]
+        for row in conn.execute(
+            f"SELECT s.snapshot_id, e.head_snapshot_id "
+            f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            f"WHERE s.snapshot_id IN ({placeholders})",
+            target_list,
+        )
+    }
+
+    context: list[ContextItem] = []
+    withheld: list[WithheldHit] = []
+    for hit in hits:
+        tier = _classify(hit.target_version, owned, snapshots)
+        if tier is None:
+            withheld.append(
+                WithheldHit(
+                    passage_id=hit.passage_id,
+                    target_version=hit.target_version,
+                    reason="target_version is neither a note version nor a known "
+                    "external snapshot; cannot place on the trust gradient",
+                )
+            )
+            continue
+        context.append(
+            ContextItem(
+                tier=tier,
+                passage_id=hit.passage_id,
+                target_version=hit.target_version,
+                char_range=hit.char_range,
+                passage_text=hit.passage_text,
+                parent_block=hit.parent_block,
+                score=hit.score,
+            )
+        )
+    # Stable sort by tier: preserves the upstream best-first order within a tier.
+    context.sort(key=lambda item: item.tier)
+    return TrustRankedContext(context=context, withheld=withheld)
+
+
+def _classify(
+    target_version: str, owned: set[str], snapshots: dict[str, bool]
+) -> TrustTier | None:
+    """Place one ``target_version`` on the trust gradient, or ``None`` if it can't.
+
+    Owned notes outrank externals (the documented gradient), so ``versions`` is
+    checked first; an external is current or stale by whether it is its external's
+    head snapshot. ``None`` means the target matched neither table.
+    """
+    if target_version in owned:
+        return TrustTier.OWNED_NOTE
+    if target_version in snapshots:
+        return (
+            TrustTier.CURRENT_EXTERNAL
+            if snapshots[target_version]
+            else TrustTier.STALE_EXTERNAL
+        )
+    return None
 
 
 def _in_clause(column: str, values: Collection[str]) -> str:
