@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from datetime import date
+from datetime import datetime, timezone
 
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
@@ -244,7 +244,9 @@ def test_purge_overwrites_targeted_body_and_sets_purged_at(conn):
 
     result = purge(conn, "note-1")
 
-    marker = f"[purged {date.today():%Y-%m-%d}]"
+    # The marker date is UTC (matching the store's UTC timestamps), so compare
+    # against the UTC date — comparing local date would flake near midnight.
+    marker = f"[purged {datetime.now(timezone.utc):%Y-%m-%d}]"
     assert result.marker_body == marker
     (body, purged_at) = conn.execute(
         "SELECT body, purged_at FROM versions WHERE version_id = ?", (root,)
