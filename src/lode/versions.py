@@ -24,6 +24,19 @@ checked at COMMIT):
 - **recover** (:func:`recover`) — soft-delete recovery is just **repointing the
   head** back to a prior version; it writes no new row.
 
+A fifth operation, **purge** (:func:`purge`), is the deliberate immutability break
+(``docs/externals.md`` "Hard delete", ``docs/storage.md``) — the E8 escape hatch
+for sensitive content. Unlike the four above it *rewrites* existing version rows:
+it overwrites every body in the chain (incl. tombstones) with a ``[purged
+YYYY-MM-DD]`` marker and sets ``purged_at``, keeping ``version_id`` /
+``parent_version_id`` / ``op`` / ``created`` so lineage survives — only the bytes
+die. The id stays as the historical identifier but no longer hashes to its body
+(``purged_at`` is the flag; the hash is no longer recomputable). It also drops the
+chain's regenerable ``source='ai'`` annotations (keeping ``source='user'``
+corrections, which are curation, not content). The cache-side cascade — LanceDB
+vectors and FTS rows — is driven by :class:`lode.repository.Repository`, which
+owns the cache seam.
+
 **Branch prevention is the CAS** (``docs/storage.md``): every update/delete
 parents the live head and is rejected if the head moved since the caller loaded
 it. A reject raises :class:`HeadConflictError` — the **structured "changed since
@@ -38,6 +51,7 @@ is the honest reject plus the buffer-preserving conflict it hands back.
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from lode.config import Settings
 from lode.hashing import NO_PARENT, content_version_id
@@ -57,6 +71,25 @@ class SaveResult:
     version_id: str
     op: str
     deduped: bool = False
+
+
+@dataclass(frozen=True)
+class PurgeResult:
+    """The outcome of a :func:`purge`: what the hard delete swept and rewrote.
+
+    ``head_version_id`` / ``head_op`` identify the live head (and its op, so the
+    caller knows whether the head is a soft-delete tombstone) for the cache-side
+    re-derive. ``marker_body`` is the ``[purged YYYY-MM-DD]`` redaction marker every
+    swept version now carries. ``purged_versions`` is the whole chain (incl.
+    tombstones) whose bodies were overwritten — the exact set the cache cascade
+    must evict.
+    """
+
+    note_id: str
+    head_version_id: str
+    head_op: str
+    marker_body: str
+    purged_versions: tuple[str, ...]
 
 
 class HeadConflictError(Exception):
@@ -300,3 +333,58 @@ def recover(
             (target_version, note_id),
         )
         return SaveResult(note_id, target_version, "recover")
+
+
+def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
+    """Hard-delete ``note_id``: overwrite its whole chain and drop ``ai`` annotations.
+
+    The deliberate immutability break (``docs/externals.md`` "Hard delete"). In one
+    transaction it:
+
+    - overwrites **every** version body of the note — the live head, prior updates,
+      and soft-delete tombstones alike — with a ``[purged YYYY-MM-DD]`` marker and
+      stamps ``purged_at`` (a secret pasted then edited-around survives in older
+      versions, so the sweep is chain-wide, not head-only);
+    - keeps ``version_id`` / ``parent_version_id`` / ``op`` / ``created`` so lineage
+      and undo structure survive — only the sensitive bytes die. ``purged_at`` is
+      now the structural "this id no longer hashes to its body" flag;
+    - drops the chain's regenerable ``source='ai'`` annotations (version-scoped, so
+      keyed by ``source_version``), keeping ``source='user'`` corrections — those
+      attach to the logical note and are curation, not content
+      (``docs/storage.md`` "Provenance & user override").
+
+    Returns a :class:`PurgeResult` carrying the swept version ids and the live head,
+    which :class:`lode.repository.Repository` uses to drive the cache-side cascade
+    (LanceDB vectors + FTS rows) through its cache seam. ``KeyError`` if the note
+    does not exist. Idempotent: re-purging a purged note re-stamps the same marker.
+    """
+    with conn:
+        row = conn.execute(
+            "SELECT n.head_version_id, v.op FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            "WHERE n.note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(note_id)
+        head_version_id, head_op = row
+        version_ids = tuple(
+            r[0]
+            for r in conn.execute(
+                "SELECT version_id FROM versions WHERE note_id = ? ORDER BY created",
+                (note_id,),
+            )
+        )
+        now = datetime.now(timezone.utc)
+        marker = f"[purged {now:%Y-%m-%d}]"
+        purged_at = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        conn.execute(
+            "UPDATE versions SET body = ?, purged_at = ? WHERE note_id = ?",
+            (marker, purged_at, note_id),
+        )
+        conn.execute(
+            "DELETE FROM annotations WHERE source = 'ai' AND source_version IN "
+            "(SELECT version_id FROM versions WHERE note_id = ?)",
+            (note_id,),
+        )
+        return PurgeResult(note_id, head_version_id, head_op, marker, version_ids)

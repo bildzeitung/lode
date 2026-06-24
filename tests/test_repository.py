@@ -258,3 +258,64 @@ def test_composite_preserves_engine_order(conn):
     repo = Repository(conn, CompositeCache([_Named("vectors"), _Named("fts")]))
     repo.save("note-1", "hello")
     assert order == ["vectors", "fts"]
+
+
+# --- purge: the note-wide hard cascade through the cache seam (lode-fk8.4) -----
+#
+# purge evicts EVERY version in the chain (the per-head soft-delete evict leaves
+# superseded versions' cache rows behind), then re-derives the live head from the
+# now-purged marker — unless that head is a soft-delete tombstone.
+
+
+def test_purge_evicts_the_whole_chain_then_redrives_the_head(conn):
+    cache = FakeCache()
+    repo = Repository(conn, cache)
+    root = repo.save("note-1", "secret v1").version_id
+    head = repo.save("note-1", "secret v2", parent=root).version_id
+    cache.calls.clear()
+
+    result = repo.purge("note-1")
+
+    # Every version is evicted (chain-wide drop), then the live head is re-derived
+    # locally from the purge marker so the note stays present without leaking.
+    assert cache.calls == [
+        CacheCall("evict", "note-1", root),
+        CacheCall("evict", "note-1", head),
+        CacheCall("index", "note-1", head, result.marker_body),
+    ]
+
+
+def test_purge_of_a_soft_deleted_note_does_not_reindex_the_tombstone(conn):
+    cache = FakeCache()
+    repo = Repository(conn, cache)
+    root = repo.save("note-1", "secret").version_id
+    tombstone = repo.delete("note-1", parent=root).version_id
+    cache.calls.clear()
+
+    repo.purge("note-1")
+
+    # A tombstone head carries no passages of its own, so it is left evicted (no
+    # re-derive) — mirroring the normal delete path.
+    assert cache.calls == [
+        CacheCall("evict", "note-1", root),
+        CacheCall("evict", "note-1", tombstone),
+    ]
+
+
+def test_purge_clears_the_secret_from_the_real_lexical_index(conn):
+    from lode.lexical import LexicalCacheBackend, LexicalIndex
+
+    repo = Repository(conn, CompositeCache([LexicalCacheBackend(conn)]))
+    root = repo.save("note-1", "the launch code is hunter2").version_id
+    repo.save("note-1", "the launch code is hunter2 plus extra", parent=root)
+
+    index = LexicalIndex(conn)
+    assert index.search("hunter2", k=10)  # secret is findable before purge
+
+    result = repo.purge("note-1")
+
+    # No FTS row carries the original content anymore (every chain version swept).
+    assert index.search("hunter2", k=10) == []
+    # The head is re-derived to the marker, so the purged note stays findable.
+    assert index.search("purged", k=10)
+    assert result.head_op == "update"

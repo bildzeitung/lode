@@ -10,9 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from datetime import datetime, timezone
+
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
-from lode.versions import HeadConflictError, delete, recover, save
+from lode.versions import HeadConflictError, delete, purge, recover, save
 
 
 @pytest.fixture
@@ -223,3 +225,83 @@ def test_delete_conflict_surfaces_new_head_with_no_buffer(conn):
     # The new head is still surfaced so the UI can re-confirm the delete.
     assert exc.value.actual_head == new_head
     assert exc.value.actual_head_body == "edited"
+
+
+# --- purge (the hard delete) ------------------------------------------------
+
+
+def _bodies(conn, note_id: str) -> list[str]:
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT body FROM versions WHERE note_id = ? ORDER BY created", (note_id,)
+        )
+    ]
+
+
+def test_purge_overwrites_targeted_body_and_sets_purged_at(conn):
+    root = save(conn, "note-1", "the secret password is hunter2").version_id
+
+    result = purge(conn, "note-1")
+
+    # The marker date is UTC (matching the store's UTC timestamps), so compare
+    # against the UTC date — comparing local date would flake near midnight.
+    marker = f"[purged {datetime.now(timezone.utc):%Y-%m-%d}]"
+    assert result.marker_body == marker
+    (body, purged_at) = conn.execute(
+        "SELECT body, purged_at FROM versions WHERE version_id = ?", (root,)
+    ).fetchone()
+    assert body == marker
+    assert purged_at is not None  # purged_at is the structural "purged" flag
+
+
+def test_purge_sweeps_the_whole_chain_including_tombstones(conn):
+    root = save(conn, "note-1", "secret v1").version_id
+    v2 = save(conn, "note-1", "secret v2", parent=root).version_id
+    delete(conn, "note-1", parent=v2)  # soft-delete tombstone carries the body forward
+
+    result = purge(conn, "note-1")
+
+    # Every version body — root, update, and tombstone — is now the marker.
+    assert _bodies(conn, "note-1") == [result.marker_body] * 3
+    assert len(result.purged_versions) == 3
+    # The id stays as the historical identifier (lineage survives), only bytes die.
+    (op,) = conn.execute(
+        "SELECT op FROM versions WHERE version_id = ?", (root,)
+    ).fetchone()
+    assert op == "create"
+
+
+def test_purge_drops_ai_annotations_but_keeps_user_annotations(conn):
+    root = save(conn, "note-1", "secret").version_id
+    conn.execute(
+        "INSERT INTO annotations (target, source_version, kind, payload, source, status) "
+        "VALUES (?, ?, 'tag', 'ai-tag', 'ai', 'fresh')",
+        ("note-1", root),
+    )
+    conn.execute(
+        "INSERT INTO annotations (target, source_version, kind, payload, source, status) "
+        "VALUES (?, NULL, 'tag', 'user-tag', 'user', 'fresh')",
+        ("note-1",),
+    )
+    conn.commit()
+
+    purge(conn, "note-1")
+
+    rows = conn.execute(
+        "SELECT source, payload FROM annotations ORDER BY source"
+    ).fetchall()
+    assert rows == [("user", "user-tag")]
+
+
+def test_purge_is_idempotent(conn):
+    save(conn, "note-1", "secret")
+    first = purge(conn, "note-1")
+    second = purge(conn, "note-1")
+    assert _bodies(conn, "note-1") == [first.marker_body]
+    assert second.purged_versions == first.purged_versions
+
+
+def test_purge_unknown_note_raises(conn):
+    with pytest.raises(KeyError):
+        purge(conn, "ghost")

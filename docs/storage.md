@@ -220,6 +220,31 @@ Stale annotations are never treated as ground truth.
   - **User annotations attach to `note_id`** (the logical identity) — they ride across every
     version automatically, so re-enrichment never re-adds a link the user just removed.
 
+### Purge: the note-wide hard cascade (decided)
+
+`purge` (the [hard delete](externals.md#hard-delete-the-deliberate-immutability-break-corrective-half),
+E8) is the one op that sweeps a note's **whole chain**, not just its head — and it is implemented as
+two halves split along the ownership boundary:
+
+- **Irreplaceable side** (`lode.versions.purge`): in one transaction, overwrite *every* version body
+  in the chain — live head, prior updates, and soft-delete tombstones alike — with the `[purged
+  YYYY-MM-DD]` marker and set `purged_at`; `version_id` / `parent_version_id` / `op` / `created`
+  survive, so lineage does. `purged_at` **is** the "purged" flag (no separate column): a non-null
+  `purged_at` means the body no longer hashes to its `version_id`, which stays as the historical id.
+  The chain's regenerable `source='ai'` annotations are dropped here too (they are version-scoped, so
+  keyed by `source_version`); `source='user'` corrections survive (curation, not content).
+- **Cache side** (`lode.repository.Repository.purge`): the cascade runs **through the cache seam**,
+  never reaching into an engine module — every swept version is `evict`-ed, so the `CompositeCache`
+  fans the drop to every engine (LanceDB vectors, FTS rows, future graph). This is exactly the
+  note-wide drop the per-head soft-delete `evict` *omits*: a normal update/delete only indexes the
+  new head, so each superseded version's cache rows linger (retrieval filters to the live head) —
+  purge is the only op that clears them all. The live head is then **re-derived locally** from the
+  now-purged marker body (`index`), so the note stays present in the index as `[purged …]` with no
+  leaked content — *unless* the head is a soft-delete tombstone, which carries no passages of its own
+  and is left evicted (mirroring the normal delete path). "Every cache row referencing the purged
+  version is gone" means the **secret-bearing** rows: after the cascade no cache row carries the
+  original content, only the marker.
+
 ---
 
 ## The async work queue
