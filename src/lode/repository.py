@@ -162,6 +162,35 @@ class Repository:
         self.cache.index(note_id, result.version_id, self._body(result.version_id))
         return result
 
+    def purge(self, note_id: str) -> versions.PurgeResult:
+        """Hard-delete ``note_id`` (see :func:`lode.versions.purge`), then cascade.
+
+        The irreplaceable side — overwrite every body in the chain with the
+        ``[purged YYYY-MM-DD]`` marker, set ``purged_at``, drop ``source='ai'``
+        annotations — runs first via :func:`lode.versions.purge`. Then the cache
+        cascade runs **through the cache seam**, never reaching into an engine
+        module: every swept version is :meth:`CacheBackend.evict`-ed, so the
+        :class:`CompositeCache` fans the drop to every engine (LanceDB vectors, FTS
+        rows, …). This is the **note-wide hard cascade** the soft-delete evict
+        deliberately leaves to purge: an update/delete only ever indexes the new
+        head, so each superseded version's vectors/FTS rows linger (retrieval just
+        filters to the live head) — purge is the one op that clears the whole chain.
+
+        Finally the live head is re-derived locally from the now-purged marker body
+        (:meth:`CacheBackend.index`), so a purged note stays present in the index as
+        ``[purged …]`` without leaking the original content — unless the head is a
+        soft-delete tombstone, which carries no passages of its own and so is left
+        evicted (mirroring the normal delete path). The cache is touched only after
+        the irreplaceable rewrite has committed, so a cache-engine failure costs a
+        rebuild, never the purge.
+        """
+        result = versions.purge(self.conn, note_id)
+        for version_id in result.purged_versions:
+            self.cache.evict(note_id, version_id)
+        if result.head_op != "delete":
+            self.cache.index(note_id, result.head_version_id, result.marker_body)
+        return result
+
     def _body(self, version_id: str) -> str:
         """Read a version's body from the irreplaceable store (cache regen input)."""
         (body,) = self.conn.execute(
