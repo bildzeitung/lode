@@ -117,6 +117,22 @@ CREATE TABLE IF NOT EXISTS passages (
 
 CREATE INDEX IF NOT EXISTS idx_passages_target ON passages (target_version);
 
+-- passages_fts — regenerable lexical cache; SQLite FTS5 over the SAME passage
+-- unit as the vector leg (docs/retrieval.md "FTS5 indexes passages too"), so the
+-- two legs rank apples to apples for app-side RRF. Written SYNCHRONOUSLY on the
+-- save path — it is model-free, so a just-saved note is keyword-findable before
+-- any async embedding runs (docs/design.md save path, docs/retrieval.md "FTS5 is
+-- the synchronous index"). `passage_id` / `target_version` are UNINDEXED metadata
+-- (passage_id joins back to the `passages` row; target_version is the head this
+-- row belongs to, the unit replaced per head change); `text` is the one indexed
+-- column. Lives in the SQLite container next to `versions` (docs/stack.md "FTS5
+-- sits next to versions") — not LanceDB; lexical stays here, fusion is app-side.
+CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5 (
+    passage_id UNINDEXED,
+    target_version UNINDEXED,
+    text
+);
+
 -- embeddings — derived cache, one per passage. The vector physically lives in
 -- LanceDB in the running system (docs/stack.md "Why a split store"); this table
 -- is the data-shape row and the sqlite-vec fallback home for the vector blob.
