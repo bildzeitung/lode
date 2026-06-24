@@ -146,6 +146,74 @@ def reciprocal_rank_fusion(
     return fused
 
 
+@dataclass(frozen=True, slots=True)
+class ExpandedHit:
+    """A fused passage hit expanded for small-to-big retrieval.
+
+    The **citation stays pinned to the precise passage/span** (``passage_id``,
+    ``target_version``, ``char_range`` — the half-open char offsets so
+    ``body[start:end]`` is the cited text — and ``passage_text``), while
+    ``parent_block`` carries the **larger enclosing section** the passage was
+    chunked from to give the Q&A LLM enough surrounding context to synthesize
+    (``docs/retrieval.md``, "Small-to-big retrieval": match the small passage,
+    expand to its parent block for context, cite the precise span). ``score`` is
+    carried straight from the fused hit so the expansion preserves the upstream
+    ranking.
+    """
+
+    passage_id: str
+    target_version: str
+    char_range: str
+    passage_text: str
+    parent_block: str
+    score: float
+
+
+def expand_parents(conn: sqlite3.Connection, hits: list[FusedHit]) -> list[ExpandedHit]:
+    """Expand each fused passage hit to its parent block, best-first order kept.
+
+    Small-to-big retrieval (``docs/retrieval.md``, ``expand_parents`` in the
+    pipeline sketch): for each top passage hit, resolve its stored ``passages``
+    row (``schema.sql``) to recover the precise span and the enclosing
+    ``parent_block`` the chunker recorded (``lode.chunking``). The returned
+    :class:`ExpandedHit` carries the larger parent block for the Q&A context
+    window **while its citation stays pinned to the precise passage/span** —
+    never the expanded block.
+
+    Reuses the landed fusion output (:func:`reciprocal_rank_fusion`) and the
+    chunker's ``passages`` table; it reimplements neither search nor chunking. A
+    hit whose passage row is no longer present (the passages cache is
+    regenerable, re-chunked per head — ``schema.sql``) is dropped, since it can
+    be neither expanded nor cited. Input order (best-first) is preserved.
+    """
+    if not hits:
+        return []
+    placeholders = ", ".join("?" for _ in hits)
+    rows = conn.execute(
+        f"SELECT passage_id, char_range, text, parent_block FROM passages "
+        f"WHERE passage_id IN ({placeholders})",
+        [hit.passage_id for hit in hits],
+    ).fetchall()
+    by_id = {row[0]: row for row in rows}
+    expanded: list[ExpandedHit] = []
+    for hit in hits:
+        row = by_id.get(hit.passage_id)
+        if row is None:
+            continue
+        _, char_range, text, parent_block = row
+        expanded.append(
+            ExpandedHit(
+                passage_id=hit.passage_id,
+                target_version=hit.target_version,
+                char_range=char_range,
+                passage_text=text,
+                parent_block=parent_block,
+                score=hit.score,
+            )
+        )
+    return expanded
+
+
 def _in_clause(column: str, values: Collection[str]) -> str:
     """A ``<column> IN ('a', 'b', ...)`` predicate over content-address hex values.
 

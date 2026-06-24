@@ -23,6 +23,8 @@ from lode.embedding import EmbeddingCacheBackend
 from lode.lexical import LexicalCacheBackend, LexicalHit
 from lode.repository import CompositeCache, Repository
 from lode.retrieval import (
+    FusedHit,
+    expand_parents,
     lexical_search,
     live_head_versions,
     reciprocal_rank_fusion,
@@ -258,3 +260,72 @@ def test_rrf_default_k_is_60_and_is_tunable() -> None:
 
 def test_rrf_of_two_empty_legs_is_empty() -> None:
     assert reciprocal_rank_fusion([], []) == []
+
+
+# --- small-to-big parent expansion (lode-72m.4) --------------------------------
+
+# A structured note: one section whose list items each chunk into their own
+# passage, so a passage's parent_block (the whole section) is strictly larger
+# than the precise passage it cites.
+_RUNBOOK = (
+    "# Deploy runbook\n"
+    "- rotate the alpha certs\n"
+    "- restart the beta service\n"
+    "- verify the gamma health check\n"
+)
+
+
+def _insert_passage(conn, passage_id, ord_, char_range, text, parent_block) -> None:
+    conn.execute(
+        "INSERT INTO passages "
+        "(passage_id, target_version, ord, char_range, text, parent_block) "
+        "VALUES (?, 'v1', ?, ?, ?, ?)",
+        (passage_id, ord_, char_range, text, parent_block),
+    )
+
+
+def test_expand_parents_expands_to_section_but_cites_the_passage(repo, conn) -> None:
+    """Acceptance: a hit expands to its parent block while the citation stays
+    pinned to the precise passage/span."""
+    v = repo.save("runbook", _RUNBOOK).version_id
+
+    # The lexical leg finds the precise "alpha" list-item passage.
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    assert fused, "the alpha passage should match"
+
+    expanded = expand_parents(conn, fused)
+
+    assert expanded
+    top = expanded[0]
+    # Citation pins to the precise passage/span ...
+    assert top.passage_text == "- rotate the alpha certs"
+    start, end = (int(x) for x in top.char_range.split(":"))
+    assert _RUNBOOK[start:end] == top.passage_text
+    assert top.target_version == v
+    assert top.score == fused[0].score  # the upstream ranking is carried
+    # ... while the expanded context is the larger enclosing section.
+    assert top.parent_block != top.passage_text
+    assert "Deploy runbook" in top.parent_block
+    assert "restart the beta service" in top.parent_block
+    assert top.passage_text in top.parent_block
+
+
+def test_expand_parents_preserves_best_first_order(conn) -> None:
+    """The input's best-first order is preserved through expansion."""
+    _insert_passage(conn, "p-a", 0, "0:5", "alpha", "alpha beta section")
+    _insert_passage(conn, "p-b", 1, "6:10", "beta", "alpha beta section")
+    hits = [FusedHit("p-b", "v1", 0.9), FusedHit("p-a", "v1", 0.5)]
+
+    expanded = expand_parents(conn, hits)
+
+    assert [e.passage_id for e in expanded] == ["p-b", "p-a"]
+    assert [e.score for e in expanded] == [0.9, 0.5]
+
+
+def test_expand_parents_drops_a_hit_with_no_passage_row(conn) -> None:
+    """A fused hit whose regenerable passage row is gone can't be cited — dropped."""
+    assert expand_parents(conn, [FusedHit("missing", "v1", 0.5)]) == []
+
+
+def test_expand_parents_of_no_hits_is_empty(conn) -> None:
+    assert expand_parents(conn, []) == []
