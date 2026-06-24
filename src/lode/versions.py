@@ -26,12 +26,14 @@ checked at COMMIT):
 
 **Branch prevention is the CAS** (``docs/storage.md``): every update/delete
 parents the live head and is rejected if the head moved since the caller loaded
-it. A reject raises :class:`HeadConflictError`, carrying the note, the parent the
-caller expected, and the head it actually found. That exception is the **clean
-seam** for ``lode-s2f.4``, which turns a reject into the user-facing conflict
-surface (diff the buffer against the new head, preserve it as a draft, re-apply
-or discard). This module deliberately stops at the honest reject; it does not
-build that surface.
+it. A reject raises :class:`HeadConflictError` — the **structured "changed since
+you opened it" conflict** (``lode-s2f.4``): it carries the rejected buffer (the
+caller's body, preserved so the unsaved edit is never lost) and the new live head
+(version id + body) for the diff the user is shown. The reject never auto-merges
+and never clobbers the newer head; the TUI reconciliation UI (E11) consumes the
+conflict to let the user re-apply onto the new head or discard. The durable draft
+store and the diff/resolution UI are that consumer's job — this module's contract
+is the honest reject plus the buffer-preserving conflict it hands back.
 """
 
 import sqlite3
@@ -58,21 +60,41 @@ class SaveResult:
 
 
 class HeadConflictError(Exception):
-    """A save was rejected because the head is not where the caller parented on.
+    """A save/delete was rejected because the head moved — the structured conflict.
 
     Raised by the compare-and-swap when ``expected_parent`` (the head the caller
-    loaded) no longer matches ``actual_head`` (the live head) — two editor panes
-    on one note, or an edit landed while a slow save was in flight. The chain
-    stays linear because the reject is honest rather than auto-merged.
+    loaded) no longer matches the live head — two editor panes on one note, or an
+    edit that landed while a slow save was in flight. The chain stays linear
+    because the reject is honest: never auto-merged, never clobbering the newer
+    head.
 
-    The attributes are the seam ``lode-s2f.4`` builds the conflict surface on:
-    it catches this, diffs the caller's buffer against ``actual_head``, and lets
-    the user re-apply or discard. ``actual_head`` is ``None`` when the conflict is
-    a create against a note that already exists.
+    This **is** the "changed since you opened it" conflict surface
+    (``docs/storage.md``, "What the user sees when CAS rejects a save"). It
+    carries everything the TUI reconciliation UI (E11) needs to let the user
+    re-apply onto the new head or discard, with no merge machinery and no lost
+    work:
+
+    - ``rejected_buffer`` — the caller's body the save would have written. It is
+      **preserved here** (handed back, never dropped) so an unlucky CAS loss
+      never costs the unsaved edit; the durable draft store is the consumer's
+      job, this layer's contract is simply that the buffer survives the reject.
+      A delete has no user-typed buffer, so it is ``None`` there — the conflict
+      still carries the new head so the UI can re-confirm the delete.
+    - ``actual_head`` / ``actual_head_body`` — the new live head's version id and
+      body, the right-hand side of the diff the user is shown. Both are ``None``
+      when the conflict is a save against a note that does not exist (there is no
+      head to diff against).
+    - ``expected_parent`` — the head the caller parented on, for context.
     """
 
     def __init__(
-        self, note_id: str, expected_parent: str, actual_head: str | None
+        self,
+        note_id: str,
+        expected_parent: str,
+        actual_head: str | None,
+        *,
+        actual_head_body: str | None = None,
+        rejected_buffer: str | None = None,
     ) -> None:
         super().__init__(
             f"note {note_id!r} changed since it was opened: "
@@ -81,6 +103,8 @@ class HeadConflictError(Exception):
         self.note_id = note_id
         self.expected_parent = expected_parent
         self.actual_head = actual_head
+        self.actual_head_body = actual_head_body
+        self.rejected_buffer = rejected_buffer
 
 
 def _head(conn: sqlite3.Connection, note_id: str) -> tuple[str | None, str | None]:
@@ -125,21 +149,34 @@ def _write_version(
 
 
 def _cas_head(
-    conn: sqlite3.Connection, note_id: str, new_head: str, expected_parent: str
+    conn: sqlite3.Connection,
+    note_id: str,
+    new_head: str,
+    expected_parent: str,
+    rejected_buffer: str | None,
 ) -> None:
     """Move the head to ``new_head`` only if it still equals ``expected_parent``.
 
     The conditional UPDATE is the compare-and-swap itself: a zero rowcount means
     the head moved between the read and the write (a race), so the save loses and
-    raises rather than clobbering the newer head.
+    raises rather than clobbering the newer head. On the loss it re-reads the new
+    live head (id + body) and raises the structured :class:`HeadConflictError`
+    carrying ``rejected_buffer`` (the save's body, or ``None`` for a delete) so an
+    unsaved edit survives the reject.
     """
     cur = conn.execute(
         "UPDATE notes SET head_version_id = ? WHERE note_id = ? AND head_version_id = ?",
         (new_head, note_id, expected_parent),
     )
     if cur.rowcount != 1:
-        actual_head, _ = _head(conn, note_id)
-        raise HeadConflictError(note_id, expected_parent, actual_head)
+        actual_head, actual_head_body = _head(conn, note_id)
+        raise HeadConflictError(
+            note_id,
+            expected_parent,
+            actual_head,
+            actual_head_body=actual_head_body,
+            rejected_buffer=rejected_buffer,
+        )
 
 
 def save(
@@ -174,7 +211,7 @@ def save(
             # Create: a root version. A non-empty parent on an absent note, or a
             # note that already exists, is a conflict (you cannot re-root).
             if parent != NO_PARENT:
-                raise HeadConflictError(note_id, parent, None)
+                raise HeadConflictError(note_id, parent, None, rejected_buffer=body)
             version_id = content_version_id(note_id, NO_PARENT, body, settings)
             # Note row first: its head points at the not-yet-written version (the
             # deferred FK permits this), satisfying the version's note_id FK.
@@ -187,12 +224,18 @@ def save(
 
         # Update: CAS against the live head.
         if parent != head:
-            raise HeadConflictError(note_id, parent, head)
+            raise HeadConflictError(
+                note_id,
+                parent,
+                head,
+                actual_head_body=head_body,
+                rejected_buffer=body,
+            )
         if body == head_body:
             return SaveResult(note_id, head, "update", deduped=True)
         version_id = content_version_id(note_id, head, body, settings)
         _write_version(conn, version_id, note_id, head, body, "update")
-        _cas_head(conn, note_id, version_id, head)
+        _cas_head(conn, note_id, version_id, head, body)
         return SaveResult(note_id, version_id, "update")
 
 
@@ -216,10 +259,18 @@ def delete(
         if head is None:
             raise KeyError(note_id)
         if parent != head:
-            raise HeadConflictError(note_id, parent, head)
+            # A delete carries no user buffer, so rejected_buffer is None; the
+            # new head still surfaces so the UI can re-confirm against the change.
+            raise HeadConflictError(
+                note_id,
+                parent,
+                head,
+                actual_head_body=head_body,
+                rejected_buffer=None,
+            )
         version_id = content_version_id(note_id, head, head_body, settings)
         _write_version(conn, version_id, note_id, head, head_body, "delete")
-        _cas_head(conn, note_id, version_id, head)
+        _cas_head(conn, note_id, version_id, head, rejected_buffer=None)
         return SaveResult(note_id, version_id, "delete")
 
 
