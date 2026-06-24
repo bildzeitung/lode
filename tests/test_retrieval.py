@@ -23,11 +23,14 @@ from lode.embedding import EmbeddingCacheBackend
 from lode.lexical import LexicalCacheBackend, LexicalHit
 from lode.repository import CompositeCache, Repository
 from lode.retrieval import (
+    ExpandedHit,
     FusedHit,
+    TrustTier,
     expand_parents,
     lexical_search,
     live_head_versions,
     reciprocal_rank_fusion,
+    trust_rank,
     vector_search,
 )
 from lode.storage import init_db
@@ -329,3 +332,124 @@ def test_expand_parents_drops_a_hit_with_no_passage_row(conn) -> None:
 
 def test_expand_parents_of_no_hits_is_empty(conn) -> None:
     assert expand_parents(conn, []) == []
+
+
+# --- trust-ordered context builder (lode-az0.1) --------------------------------
+
+
+def _expanded(passage_id: str, target_version: str, score: float) -> ExpandedHit:
+    """An ExpandedHit citing ``target_version`` (a version_id or snapshot_id)."""
+    return ExpandedHit(
+        passage_id=passage_id,
+        target_version=target_version,
+        char_range="0:5",
+        passage_text=f"text-{passage_id}",
+        parent_block=f"block-{passage_id}",
+        score=score,
+    )
+
+
+def _insert_external_snapshot(
+    conn, *, external_id: str, snapshot_id: str, is_head: bool
+) -> str:
+    """Insert an external + one snapshot; point head at it iff ``is_head``.
+
+    Externals/snapshots are UNUSED until connectors (schema), so the test seeds the
+    rows directly to exercise the current/stale classification. Returns the
+    snapshot_id for citation as a ``target_version``.
+    """
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+        (external_id,),
+    )
+    conn.execute(
+        "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+        "VALUES (?, ?, ?, 'ok')",
+        (snapshot_id, external_id, f"body-{snapshot_id}"),
+    )
+    if is_head:
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+    return snapshot_id
+
+
+def test_trust_rank_owned_note_is_highest_trust_and_carries_citation(
+    repo, conn
+) -> None:
+    """Acceptance: an owned note ranks tier 1 and carries version id + span through."""
+    v = repo.save("note-a", "alpha").version_id
+
+    ranked = trust_rank(conn, [_expanded("p1", v, 0.9)])
+
+    assert ranked.withheld == []
+    assert len(ranked.context) == 1
+    item = ranked.context[0]
+    assert item.tier is TrustTier.OWNED_NOTE
+    assert item.target_version == v  # citation target carried through
+    assert item.char_range == "0:5" and item.passage_text == "text-p1"
+    assert item.score == 0.9
+
+
+def test_trust_rank_orders_note_above_current_above_stale_external(repo, conn) -> None:
+    """The documented gradient: your note > current external > stale external."""
+    v = repo.save("note-a", "alpha").version_id
+    current = _insert_external_snapshot(
+        conn, external_id="EXT-1", snapshot_id="snap-current", is_head=True
+    )
+    stale = _insert_external_snapshot(
+        conn, external_id="EXT-2", snapshot_id="snap-stale", is_head=False
+    )
+
+    # Feed worst-trust first; the ranker must reorder to the gradient.
+    ranked = trust_rank(
+        conn,
+        [
+            _expanded("p-stale", stale, 0.9),
+            _expanded("p-current", current, 0.8),
+            _expanded("p-note", v, 0.1),
+        ],
+    )
+
+    assert ranked.withheld == []
+    assert [item.target_version for item in ranked.context] == [v, current, stale]
+    assert [item.tier for item in ranked.context] == [
+        TrustTier.OWNED_NOTE,
+        TrustTier.CURRENT_EXTERNAL,
+        TrustTier.STALE_EXTERNAL,
+    ]
+
+
+def test_trust_rank_is_stable_within_a_tier(repo, conn) -> None:
+    """Within one trust tier the upstream best-first (RRF) order is preserved."""
+    v1 = repo.save("note-a", "alpha").version_id
+    v2 = repo.save("note-b", "beta").version_id
+
+    ranked = trust_rank(conn, [_expanded("p1", v1, 0.9), _expanded("p2", v2, 0.5)])
+
+    assert [item.passage_id for item in ranked.context] == ["p1", "p2"]
+
+
+def test_trust_rank_withholds_unclassifiable_hit_instead_of_dropping(
+    repo, conn
+) -> None:
+    """Acceptance: a hit that can't be placed on the gradient is surfaced, not dropped."""
+    v = repo.save("note-a", "alpha").version_id
+
+    ranked = trust_rank(
+        conn, [_expanded("p-note", v, 0.9), _expanded("p-ghost", "unknown-id", 0.8)]
+    )
+
+    # The classifiable hit still lands in context ...
+    assert [item.target_version for item in ranked.context] == [v]
+    # ... and the unplaceable one is surfaced with a reason, never silently omitted.
+    assert len(ranked.withheld) == 1
+    assert ranked.withheld[0].passage_id == "p-ghost"
+    assert ranked.withheld[0].target_version == "unknown-id"
+    assert ranked.withheld[0].reason
+
+
+def test_trust_rank_of_no_hits_is_empty(conn) -> None:
+    ranked = trust_rank(conn, [])
+    assert ranked.context == [] and ranked.withheld == []
