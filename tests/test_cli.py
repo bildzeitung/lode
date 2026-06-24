@@ -7,11 +7,12 @@ derive jobs, refuses an empty note, and on a CAS reject preserves the buffer as 
 draft rather than clobbering — the operational read-outs (lode-y42.3): ``status``
 (job-queue health, dead-letters, egress summary), ``jobs`` (list/filter the derive
 queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
-ids/redactions); and ``purge`` (a refusing stub until its hard-delete mechanism,
-lode-fk8.4).
+ids/redactions); and ``purge`` (the E8 hard delete via ``Repository.purge``,
+lode-7cx).
 """
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,8 @@ from lode.versions import save
 
 runner = CliRunner()
 
-# `add` (lode-y42.1) and `status` / `jobs` (lode-y42.3) are real; `ask` / `eval`
-# are still dispatching stubs; `purge` is a deliberate refusing stub (lode-fk8.4).
+# `add` (lode-y42.1), `status` / `jobs` (lode-y42.3) and `purge` (lode-7cx) are
+# real; `ask` / `eval` are still dispatching stubs.
 STUB_SUBCOMMANDS = ["ask", "eval"]
 ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "egress", "eval"]
 
@@ -332,13 +333,31 @@ def test_egress_rejects_unknown_purpose(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
-# --- lode purge (refusing stub until lode-fk8.4) ----------------------------
+# --- lode purge (E8 hard delete via Repository.purge, lode-7cx) -------------
 
 
-def test_purge_refuses_and_points_at_fk8_4() -> None:
-    result = runner.invoke(app, ["purge"])
-    # Never a silent partial delete: it exits non-zero and names the missing
-    # hard-delete mechanism (lode-fk8.4) so it cannot be mistaken for success.
+def test_purge_hard_deletes_a_note_and_reports_the_sweep(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "secret hunter2", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["purge", note_id, "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert note_id in result.stdout  # it reports what it swept, not refuses
+
+    # The body is overwritten with the [purged YYYY-MM-DD] marker and purged_at set.
+    marker = f"[purged {datetime.now(timezone.utc):%Y-%m-%d}]"
+    assert marker in result.stdout
+    assert _rows(
+        db_path,
+        "SELECT body, purged_at IS NOT NULL FROM versions WHERE note_id = ?",
+        (note_id,),
+    ) == [(marker, 1)]
+
+
+def test_purge_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["purge", "ghost", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "lode-fk8.4" in result.stderr
-    assert "not yet available" in result.stderr
+    assert "no such note" in result.stderr

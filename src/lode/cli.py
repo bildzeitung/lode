@@ -3,9 +3,9 @@
 A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
 subcommand surface). ``add`` (capture + save, lode-y42.1), the operational
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
-(E8, lode-fk8.3) are real; ``ask`` / ``eval`` remain dispatching stubs until
-their E10 tasks. ``purge`` is a deliberate refusing stub until its hard-delete
-mechanism (E8, lode-fk8.4) exists — it never half-deletes.
+(E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
+:meth:`lode.repository.Repository.purge`. ``ask`` / ``eval`` remain dispatching
+stubs until their E10 tasks.
 """
 
 import json
@@ -21,6 +21,7 @@ import typer
 
 from lode import __version__, jobs, versions
 from lode.logconfig import configure_logging
+from lode.repository import Repository
 from lode.storage import init_db
 
 app = typer.Typer(
@@ -35,8 +36,8 @@ app = typer.Typer(
 def main() -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
-    # subcommands. Real behaviour for add / ask / purge / status / eval lands
-    # in later E0/E10 tasks. Configure logging once, here, so every subcommand
+    # subcommands. Real behaviour for ask / eval lands in later E10 tasks.
+    # Configure logging once, here, so every subcommand
     # (and the Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG).
     configure_logging()
 
@@ -139,22 +140,32 @@ def ask() -> None:
 
 
 @app.command()
-def purge() -> None:
-    """Hard-delete notes and their derived data (refuses: needs E8/lode-fk8.4).
+def purge(
+    target: str = typer.Argument(..., help="Note id to hard-delete."),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Hard-delete a note and its derived data (E8 hard delete, ``docs/externals.md``).
 
-    purge is an E8 hard delete — overwrite the body with ``[purged YYYY-MM-DD]``,
-    set ``purged_at``, sweep the whole version chain, and cascade-drop the derived
-    cache (vectors, FTS, ``source='ai'`` annotations) (``docs/externals.md`` "Hard
-    delete"). That mechanism lands in **lode-fk8.4** and does not exist yet, so this
-    command refuses rather than ship a partial, unsafe delete.
+    The deliberate immutability break: overwrite every body in the note's version
+    chain with a ``[purged YYYY-MM-DD]`` marker, stamp ``purged_at``, drop the
+    chain's ``source='ai'`` annotations (keeping ``source='user'`` corrections), and
+    cascade-evict the derived cache through the repository's cache seam. Delegates to
+    :meth:`lode.repository.Repository.purge` — no half-delete. (The cache is a no-op
+    :class:`~lode.repository.NullCache` until the engine wiring lands, lode-1f9.)
     """
+    conn = _open_db(db)
+    try:
+        try:
+            result = Repository(conn).purge(target)
+        except KeyError:
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1) from None
+    finally:
+        conn.close()
     typer.echo(
-        "lode purge: hard-delete is not yet available — it needs the chain-sweep + "
-        "cache-cascade mechanism (E8, lode-fk8.4), which is not built. Refusing "
-        "rather than partially delete.",
-        err=True,
+        f"purged {result.note_id}: swept {len(result.purged_versions)} version(s); "
+        f"body now {result.marker_body}"
     )
-    raise typer.Exit(code=1)
 
 
 class JobStatus(str, Enum):
