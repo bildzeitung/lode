@@ -4,9 +4,11 @@ Covers the skeleton surface (lode-txh.5: the subcommands exist, dispatch, and ar
 listed by ``--help``), the real ``lode add`` capture command (lode-y42.1) — it
 persists via ``versions.save`` with no AI in the path, enqueues embed/enrich
 derive jobs, refuses an empty note, and on a CAS reject preserves the buffer as a
-draft rather than clobbering — and the operational read-outs (lode-y42.3): ``status``
+draft rather than clobbering — the operational read-outs (lode-y42.3): ``status``
 (job-queue health, dead-letters, egress summary), ``jobs`` (list/filter the derive
-queue), and ``purge`` (a refusing stub until its hard-delete mechanism, lode-fk8.4).
+queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
+ids/redactions); and ``purge`` (a refusing stub until its hard-delete mechanism,
+lode-fk8.4).
 """
 
 import sqlite3
@@ -26,7 +28,7 @@ runner = CliRunner()
 # `add` (lode-y42.1) and `status` / `jobs` (lode-y42.3) are real; `ask` / `eval`
 # are still dispatching stubs; `purge` is a deliberate refusing stub (lode-fk8.4).
 STUB_SUBCOMMANDS = ["ask", "eval"]
-ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "eval"]
+ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "egress", "eval"]
 
 
 def test_version_command_prints_version() -> None:
@@ -252,6 +254,81 @@ def test_jobs_status_filter_narrows_to_one_state(tmp_path: Path) -> None:
 def test_jobs_rejects_unknown_status(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["jobs", "--status", "bogus", "--db", str(db_path)])
+    assert result.exit_code != 0
+
+
+# --- lode egress (lode-fk8.3) -----------------------------------------------
+
+
+def _seed_egress(db_path: Path) -> None:
+    """Seed egress_log rows spanning purposes, sent ids, and redactions."""
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.executemany(
+                "INSERT INTO egress_log (purpose, model, sent_targets, redactions) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    # enrich send: one long target id, no redactions.
+                    ("enrich", "claude-haiku-4-5", '["ver-aaaaaaaaaaaaaaaa"]', None),
+                    # qa send: two passages, one of them redacted twice.
+                    (
+                        "qa",
+                        "claude-sonnet-4-6",
+                        '["psg-bbbbbbbbbbbbbbbb", "psg-cccccccccccccccc"]',
+                        '{"psg-bbbbbbbbbbbbbbbb": 2}',
+                    ),
+                ],
+            )
+    finally:
+        conn.close()
+
+
+def test_egress_empty_db_says_no_egress(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["egress", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "no egress"
+
+
+def test_egress_lists_every_send_with_ts_purpose_model_ids_redactions(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_egress(db_path)
+    result = runner.invoke(app, ["egress", "--db", str(db_path)])
+    assert result.exit_code == 0
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    # One row per send (2 seeded).
+    assert len(lines) == 2
+    # The enrich send: purpose, model, its shortened sent id, no redactions.
+    assert "enrich" in lines[0]
+    assert "claude-haiku-4-5" in lines[0]
+    assert "sent: ver-aaaaaaaa…" in lines[0]
+    assert "redactions: none" in lines[0]
+    # The qa send: both passage ids and the redaction count surface.
+    assert "qa" in lines[1]
+    assert "claude-sonnet-4-6" in lines[1]
+    assert "sent: psg-bbbbbbbb…, psg-cccccccc…" in lines[1]
+    assert "redactions: psg-bbbbbbbb…×2" in lines[1]
+    # Every row carries a ts (the schema-default ISO-8601 UTC stamp: ...T...Z).
+    assert all("T" in ln and "Z" in ln for ln in lines)
+
+
+def test_egress_purpose_filter_narrows_to_one_purpose(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_egress(db_path)
+    result = runner.invoke(app, ["egress", "--purpose", "qa", "--db", str(db_path)])
+    assert result.exit_code == 0
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert "qa" in lines[0]
+    assert "enrich" not in result.stdout
+
+
+def test_egress_rejects_unknown_purpose(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["egress", "--purpose", "bogus", "--db", str(db_path)])
     assert result.exit_code != 0
 
 

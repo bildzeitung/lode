@@ -1,12 +1,14 @@
 """lode command-line entry point.
 
 A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
-subcommand surface). ``add`` (capture + save, lode-y42.1) and the operational
-``status`` / ``jobs`` read-outs (lode-y42.3) are real; ``ask`` / ``eval`` remain
-dispatching stubs until their E10 tasks. ``purge`` is a deliberate refusing stub
-until its hard-delete mechanism (E8, lode-fk8.4) exists — it never half-deletes.
+subcommand surface). ``add`` (capture + save, lode-y42.1), the operational
+``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
+(E8, lode-fk8.3) are real; ``ask`` / ``eval`` remain dispatching stubs until
+their E10 tasks. ``purge`` is a deliberate refusing stub until its hard-delete
+mechanism (E8, lode-fk8.4) exists — it never half-deletes.
 """
 
+import json
 import os
 import sqlite3
 import sys
@@ -164,9 +166,34 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
+class EgressPurpose(str, Enum):
+    """The ``egress_log.purpose`` enum from ``schema.sql`` — accepted by ``--purpose``."""
+
+    enrich = "enrich"
+    qa = "qa"
+
+
 def _short(target_version: str) -> str:
     """Abbreviate a version-id digest for a one-line listing (full id is a hash)."""
     return target_version if len(target_version) <= 12 else f"{target_version[:12]}…"
+
+
+def _format_sent(sent_targets: str) -> str:
+    """Render the JSON ``sent_targets`` array as shortened, comma-joined ids."""
+    ids = json.loads(sent_targets)
+    return ", ".join(_short(i) for i in ids) if ids else "(none)"
+
+
+def _format_redactions(redactions: str | None) -> str:
+    """Render the JSON ``redactions`` summary as ``id×count`` pairs (or ``none``).
+
+    ``redactions`` is the per-target span count written by ``gate_qa_egress``
+    (``{target_id: n}``), or ``NULL`` when nothing was stripped.
+    """
+    by_target = json.loads(redactions) if redactions else {}
+    if not by_target:
+        return "none"
+    return ", ".join(f"{_short(t)}×{n}" for t, n in by_target.items())
 
 
 @app.command()
@@ -255,6 +282,49 @@ def jobs_(
         if last_error:
             line += f"  ! {last_error}"
         typer.echo(line)
+
+
+@app.command()
+def egress(
+    purpose: EgressPurpose | None = typer.Option(
+        None, "--purpose", help="Only list sends of this purpose (default: all)."
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """List what content has left the box for the cloud, and when (``egress_log``).
+
+    The audit read-out over ``egress_log`` (``docs/externals.md`` "Egress log") —
+    a straight answer to "what of mine has gone to the cloud, and when?". One row
+    per cloud send, oldest first: id, ts, purpose, model, the version/passage ids
+    sent, and which redactions were applied. ``--purpose`` narrows to ``enrich``
+    or ``qa`` sends.
+    """
+    conn = _open_db(db)
+    try:
+        if purpose is None:
+            rows = conn.execute(
+                "SELECT id, ts, purpose, model, sent_targets, redactions "
+                "FROM egress_log ORDER BY id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, ts, purpose, model, sent_targets, redactions "
+                "FROM egress_log WHERE purpose = ? ORDER BY id",
+                (purpose.value,),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        typer.echo("no egress")
+        return
+
+    for log_id, ts, log_purpose, model, sent_targets, redactions in rows:
+        typer.echo(
+            f"{log_id}  {ts}  {log_purpose:<7} {model:<20}  "
+            f"sent: {_format_sent(sent_targets)}  "
+            f"redactions: {_format_redactions(redactions)}"
+        )
 
 
 @app.command(name="eval")
