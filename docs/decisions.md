@@ -57,7 +57,16 @@ are catalogued in [configuration.md](configuration.md).
   set (~20–50 questions with known-good citations) scored on retrieval recall@k, citation/faithfulness
   accuracy, and abstention correctness. It is **no longer deferred** — it ships in step 1
   ([design.md](design.md) §7) because three knobs (rerank, the entailment threshold, chunk size) all
-  tune against it. Open sub-question: the exact metric weighting and how the golden set is curated.
+  tune against it. **Determinism — settled (lode-5y8.1):** the scorer
+  (`lode.eval.harness.score_golden_set`) is reproducible for a fixed corpus because it injects two
+  seams. Retrieval is model-free in the lexical leg (FTS5/BM25) and deterministic in the dense leg
+  (local embeddings), so **recall@k is corpus-deterministic** — and it is the leg that scores real
+  seed prose even with a stubbed embedder. The Q&A LLM call is *not* deterministic, so the
+  faithfulness/abstention legs are sourced through an injected **answerer** seam (the same mock seam
+  `cited_answer.ask` / `qa.answer_question` already expose via their `client` parameter): a fixed
+  answerer over a fixed corpus yields a fixed score. Tests inject deterministic stubs and never hit
+  the network; production wires the real embedder + a real-client `ask`. Open sub-question: the exact
+  metric weighting and how the golden set is curated.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
