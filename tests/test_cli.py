@@ -471,14 +471,15 @@ def test_ask_retrieves_and_renders_a_cited_claim(
     db_path = tmp_path / "lode.db"
     body = "We decided to use OAuth for service auth."
     _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
-    # The model's claim cites v1 with a span verbatim in the body, so it survives
-    # the faithfulness gate and renders with its citation.
+    # The model's claim cites v1 with a span verbatim in the body, and its payload
+    # lies inside that span (extractive coupling), so it survives the faithfulness
+    # gate and renders with its citation.
     client = _mock_qa(
         monkeypatch,
         [
             Claim(
-                text="We use OAuth.",
-                support=[Support(version_id="v1", quoted_span="OAuth")],
+                text="use OAuth",
+                support=[Support(version_id="v1", quoted_span="use OAuth")],
             )
         ],
     )
@@ -488,9 +489,9 @@ def test_ask_retrieves_and_renders_a_cited_claim(
     )
 
     assert result.exit_code == 0
-    assert "We use OAuth." in result.stdout
+    assert "use OAuth" in result.stdout
     assert "version_id v1" in result.stdout
-    assert '"OAuth"' in result.stdout
+    assert '"use OAuth"' in result.stdout
     # Retrieval actually fed the cited context to the Q&A send (v1's body reached it).
     (call,) = client.messages.calls
     assert "OAuth" in call["messages"][0]["content"]

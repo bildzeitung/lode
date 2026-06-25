@@ -8,16 +8,22 @@
        willingness to return nothing rather than a confident hallucination.
 
 This module is the **orchestration** the per-stage verdicts feed into: it runs
-each claim through the gate's checks, **drops** the ones that fail, and decides
-**abstention** when nothing survives. ``faithfulness.py`` supplies the verdict
-(it reports whether a span is verbatim-present); this module turns those verdicts
-into a survivor set or an abstention.
+each claim through the gate's staged checks, **drops** the ones that fail, and
+decides **abstention** when nothing survives. ``faithfulness.py`` supplies the
+verdicts (whether a span is verbatim-present, whether a claim is extractively
+coupled); this module sequences them and turns the result into a survivor set or
+an abstention.
 
-Scope is the walking skeleton: the only gate stage that exists today is the
-deterministic verbatim-span check (step 1, ``faithfulness.claim_spans_verified``,
-lode-1k3.2). Extractive coupling (step 2) and NLI entailment (step 3) are later
-``lode-1k3`` tickets; when they land they compose into the same survivor test
-here without changing this module's contract.
+The per-claim decision is **staged** (``docs/retrieval.md`` faithfulness gate):
+the deterministic verbatim-span check (step 1,
+``faithfulness.claim_spans_verified``, lode-1k3.2) runs first, then the
+deterministic extractive-coupling fast path (step 2,
+``faithfulness.claim_extractively_coupled``, lode-1k3.3). NLI entailment (step 3,
+lode-1k3.4) is not yet built; until it lands, a claim that passes the span check
+but is *not* extractively coupled (genuine synthesis / out-of-span paraphrase)
+has nothing to verify it, so the gate **fails closed** and drops it -- the same
+conservative posture as a fabricated quote. When NLI lands it slots into the one
+seam in ``_claim_survives`` without changing this module's contract.
 
 The decision is a **pure function** over an ``Answer`` and the caller-resolved
 ``bodies`` map (a ``target_id`` -> body-text mapping; resolving a
@@ -31,7 +37,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from lode.answer import Answer, Claim
-from lode.faithfulness import claim_spans_verified
+from lode.faithfulness import claim_extractively_coupled, claim_spans_verified
 
 ABSTENTION_MESSAGE = "your notes don't answer this"
 """The honest failure mode shown when no claim survives the gate (step 5)."""
@@ -56,17 +62,41 @@ class GateResult:
         return not self.surviving_claims
 
 
+def _claim_survives(claim: Claim, bodies: Mapping[str, str]) -> bool:
+    """Whether ``claim`` passes the gate's staged per-claim decision.
+
+    The stages run cheapest-first and short-circuit:
+
+    1. **Verbatim-span check** (``claim_spans_verified``). A fabricated quote --
+       a span not present in its cited body -- drops the claim outright.
+    2. **Extractive-coupling fast path** (``claim_extractively_coupled``). With
+       the span proven present, a claim whose load-bearing payload lies inside a
+       cited span is verified outright, with no model invoked.
+    3. **NLI entailment** (step 3, lode-1k3.4) is the seam below. A claim that
+       passes step 1 but not step 2 is genuine synthesis / out-of-span
+       paraphrase; NLI is what would judge it. Until NLI lands there is nothing
+       to verify such a claim, so the gate **fails closed** and drops it. When
+       NLI lands, this is the one line that changes.
+    """
+    if not claim_spans_verified(claim, bodies):
+        return False
+    if claim_extractively_coupled(claim):
+        return True
+    return False
+
+
 def apply_gate(answer: Answer, bodies: Mapping[str, str]) -> GateResult:
     """Run ``answer`` through the gate: drop failing claims, decide abstention.
 
-    Every claim is checked against the verbatim-span verdict
-    (``claim_spans_verified``) over the caller-resolved ``bodies``; claims that
-    fail are dropped (step 4 -- never silently displayed). The survivors are
-    returned in order. When none survive, ``GateResult.abstained`` is true and
-    the caller shows ``ABSTENTION_MESSAGE`` (step 5). An empty ``answer`` (the
-    model asserted nothing) abstains the same way -- there is nothing to verify.
+    Every claim is run through the staged per-claim decision
+    (:func:`_claim_survives`: verbatim-span check, then the extractive-coupling
+    fast path) over the caller-resolved ``bodies``; claims that fail are dropped
+    (step 4 -- never silently displayed). The survivors are returned in order.
+    When none survive, ``GateResult.abstained`` is true and the caller shows
+    ``ABSTENTION_MESSAGE`` (step 5). An empty ``answer`` (the model asserted
+    nothing) abstains the same way -- there is nothing to verify.
     """
     survivors = tuple(
-        claim for claim in answer.claims if claim_spans_verified(claim, bodies)
+        claim for claim in answer.claims if _claim_survives(claim, bodies)
     )
     return GateResult(surviving_claims=survivors)

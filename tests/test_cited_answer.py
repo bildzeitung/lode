@@ -126,11 +126,14 @@ def _note_claim(text: str, span: str, version_id: str) -> Claim:
 
 
 def test_surviving_claim_renders_with_its_citation(conn) -> None:
-    # The gate runs before display; a verbatim-supported claim survives and carries
-    # its version_id + span citation through for the CLI to render.
+    # The gate runs before display; a verbatim-supported, extractively coupled claim
+    # (its payload lies inside the span) survives and carries its version_id + span
+    # citation through for the CLI to render.
     body = "lode is event-sourced and append-only."
     _insert_note(conn, note_id="n1", version_id="v1", body=body)
-    client = _FakeClient([_note_claim("lode is event-sourced.", "event-sourced", "v1")])
+    client = _FakeClient(
+        [_note_claim("lode is event-sourced.", "lode is event-sourced", "v1")]
+    )
 
     answer = ask(
         conn, "How is lode stored?", [_note_context("v1", body)], client=client
@@ -140,7 +143,7 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
     (claim,) = answer.claims
     assert claim.text == "lode is event-sourced."
     assert claim.support[0].version_id == "v1"
-    assert claim.support[0].quoted_span == "event-sourced"
+    assert claim.support[0].quoted_span == "lode is event-sourced"
 
 
 def test_fabricated_claim_is_dropped_and_abstains(conn) -> None:
@@ -162,16 +165,16 @@ def test_partial_survival_drops_only_the_failures(conn) -> None:
     _insert_note(conn, note_id="n1", version_id="v1", body=body)
     client = _FakeClient(
         [
-            _note_claim("first", "event-sourced", "v1"),  # verifies
-            _note_claim("second", "fabricated quote", "v1"),  # dropped
-            _note_claim("third", "append-only", "v1"),  # verifies
+            _note_claim("event-sourced", "event-sourced", "v1"),  # span ok + coupled
+            _note_claim("second", "fabricated quote", "v1"),  # span absent -> dropped
+            _note_claim("append-only", "append-only", "v1"),  # span ok + coupled
         ]
     )
 
     answer = ask(conn, "q", [_note_context("v1", body)], client=client)
 
     assert not answer.abstained
-    assert [c.text for c in answer.claims] == ["first", "third"]
+    assert [c.text for c in answer.claims] == ["event-sourced", "append-only"]
 
 
 def test_empty_answer_abstains(conn) -> None:
@@ -261,7 +264,7 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
 def test_gate_cited_answer_composes_survivors_with_withheld() -> None:
     # The pure gate step: survivors from apply_gate plus the result's withheld set.
     body = "lode abstains rather than hallucinate."
-    answer = Answer([_note_claim("lode abstains", "abstains", "v1")])
+    answer = Answer([_note_claim("lode abstains", "lode abstains", "v1")])
     result = QaResult(
         answer=answer, withheld_citations=(), model=SONNET_MODEL, egress_log_id=1
     )
