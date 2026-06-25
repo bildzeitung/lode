@@ -152,6 +152,13 @@ Runs app-side, after the Q&A LLM returns and before display:
    the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than
    a confident hallucination.
 
+The gate verifies each span against the **stored bytes of the cited version/snapshot**, resolved
+only for the **egress-cleared** targets — the same set eligible to reach the model. A
+[no-egress](externals.md) target's body is withheld from that verification set, so a
+claim citing content the model was never shown fails closed and is dropped, exactly like a fabricated
+quote; the withheld item still surfaces as "present, withheld from cloud synthesis" rather than being
+silently lost.
+
 > **The entailment threshold ships untuned and must be revisited.** Steps 1–2 are deterministic and
 > need no tuning. Step 3's model choice and acceptance threshold are a real knob that cannot be set
 > honestly without a corpus: shipped too loose, it readmits unsupported synthesis (mode 4); too
