@@ -39,25 +39,39 @@ from lode.chunking import Passage, chunk
 from lode.config import Settings
 from lode.vectorstore import VectorStore
 
-#: Task prefix nomic-embed-text-v1.5 expects on documents being indexed (the
-#: query side uses ``search_query:``). It is a fixed property of the pinned
-#: ``embedding_model`` build constant — re-keying the model updates this with it —
-#: so it rides the default embedder rather than a separate config knob. Matches
-#: the embedder usage proven in ``tests/test_models_smoke.py`` (lode-txh.6).
+#: Task prefixes nomic-embed-text-v1.5 expects: ``search_document:`` on the
+#: documents being indexed, ``search_query:`` on the queries searched against them.
+#: The model is **asymmetric** — it was trained with this query/document pair, so a
+#: query embedded with the *document* prefix lands in a subtly wrong region and
+#: softens dense recall; the query side must use its own prefix (``docs/stack.md``
+#: local embedding, ``docs/retrieval.md`` the ``emb(q)`` node). Both are fixed
+#: properties of the pinned ``embedding_model`` build constant — re-keying the
+#: model updates them with it — so they ride the default embedder rather than a
+#: separate config knob. Match the embedder usage proven in
+#: ``tests/test_models_smoke.py`` (lode-txh.6).
 _DOCUMENT_PREFIX = "search_document: "
+_QUERY_PREFIX = "search_query: "
 
 
 class Embedder(Protocol):
-    """Embeds a batch of passage texts into fixed-dimension vectors.
+    """Embeds passage texts (indexing) or a query (retrieval) into fixed-dim vectors.
 
-    The one seam between :func:`embed` and the model: production uses
+    The one seam between the embed leg / read side and the model: production uses
     :class:`FastEmbedEmbedder`; tests pass a stub so the gate never downloads a
-    model. Implementations return one vector per input text, in order, each of
-    length ``Settings.embedding_vector_dim``.
+    model. The two methods cover the **asymmetric** pair the pinned model expects —
+    :meth:`embed_passages` for the documents being indexed, :meth:`embed_query` for
+    the question searched against them (:data:`_DOCUMENT_PREFIX` /
+    :data:`_QUERY_PREFIX`) — and both produce vectors of length
+    ``Settings.embedding_vector_dim`` in the same space, so a query vector and a
+    passage vector are directly comparable under the cosine ANN.
     """
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         """Return one embedding vector per text in ``texts``, in input order."""
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
+        """Return the query-side embedding of ``text`` (asymmetric query prefix)."""
         ...
 
 
@@ -65,10 +79,10 @@ class FastEmbedEmbedder:
     """Default :class:`Embedder`: the pinned local ONNX model via ``fastembed``.
 
     Constructs ``fastembed.TextEmbedding`` for ``settings.embedding_model`` lazily
-    on first :meth:`embed_passages` call (the model download/load is hundreds of
-    MB, so it is deferred out of import and out of any code path that never
-    embeds). Passages are prefixed with :data:`_DOCUMENT_PREFIX` as the model
-    requires for indexed documents.
+    on first embed call (the model download/load is hundreds of MB, so it is
+    deferred out of import and out of any code path that never embeds). Documents
+    are prefixed with :data:`_DOCUMENT_PREFIX` and queries with :data:`_QUERY_PREFIX`
+    as the asymmetric model requires.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -87,6 +101,14 @@ class FastEmbedEmbedder:
         prefixed = [f"{_DOCUMENT_PREFIX}{text}" for text in texts]
         # fastembed yields one numpy array per input, in order.
         return [vector.tolist() for vector in model.embed(prefixed)]
+
+    def embed_query(self, text: str) -> list[float]:
+        # The asymmetric query side: same model, the ``search_query:`` prefix
+        # instead of ``search_document:``. fastembed's ``embed`` is batch-only and
+        # yields a generator, so embed the one query and take the single vector.
+        model = self._load()
+        (vector,) = model.embed([f"{_QUERY_PREFIX}{text}"])
+        return vector.tolist()
 
 
 def _version_body(conn: sqlite3.Connection, target_version: str) -> str:

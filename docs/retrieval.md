@@ -79,6 +79,12 @@ flowchart TD
   queries ("rotate the staging certs"); the **lexical leg carries those** — and, because FTS5 is
   the synchronous index ([design.md](design.md) save path), it also covers a just-written note
   before its vector lands.
+- **`emb(q)` is the asymmetric query side.** The pinned local model (`nomic-embed-text-v1.5`,
+  [stack.md](stack.md)) is **asymmetric**: documents are embedded with a `search_document:` prefix,
+  queries with `search_query:`. Embedding the question with the *document* prefix lands it in a
+  subtly wrong region of the space and softens dense recall, so the embedder exposes a distinct
+  **`embed_query`** method that applies `search_query:` — the one query-embedding primitive the read
+  side (`emb(q)`) and the eval harness both call, paired with the document-side `embed_passages`.
 - **Fusion is app-side RRF.** One lexical index (FTS5, fresh) + LanceDB for vectors only. LanceDB's
   *own* native hybrid goes unused — its lexical leg would lag (it's the async cache), and RRF over
   our two lists is the same fusion family with zero quality loss and no duplicate index. (So

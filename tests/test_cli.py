@@ -24,7 +24,9 @@ from lode import __version__, cli
 from lode.answer import Claim, Support
 from lode.cli import app
 from lode.cited_answer import CitedAnswer
+from lode.config import load_settings
 from lode.egress import WithheldCitation
+from lode.embedding import embed
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
 from lode.versions import save
@@ -425,6 +427,36 @@ def _mock_qa(monkeypatch: pytest.MonkeyPatch, claims: list[Claim]) -> _FakeClien
     return client
 
 
+class _ConstantEmbedder:
+    """Offline stand-in for the embedder: every text maps to one fixed direction.
+
+    ``ask``'s dense leg constructs :class:`lode.embedding.FastEmbedEmbedder` (a
+    model download) unless one is injected, so the ``ask`` tests monkeypatch this in
+    its place to keep the gate offline. A single fixed direction means any query is a
+    perfect cosine match for any passage it indexed — so when vectors *are* present
+    the dense leg surfaces them, and when the store is empty it simply contributes
+    nothing. The dimension follows ``settings`` so the query vector matches the
+    LanceDB table's width.
+    """
+
+    def __init__(self, settings) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def _vector(self) -> list[float]:
+        return [1.0] + [0.0] * (self._dim - 1)
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector() for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector()
+
+
+def _offline_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swap the default ONNX embedder for :class:`_ConstantEmbedder` (no download)."""
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+
 def _seed_corpus(
     db_path: Path, *, note_id: str, version_id: str, body: str, passage_id: str
 ) -> None:
@@ -471,6 +503,7 @@ def test_ask_retrieves_and_renders_a_cited_claim(
     db_path = tmp_path / "lode.db"
     body = "We decided to use OAuth for service auth."
     _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
+    _offline_embedder(monkeypatch)
     # The model's claim cites v1 with a span verbatim in the body, and its payload
     # lies inside that span (extractive coupling), so it survives the faithfulness
     # gate and renders with its citation.
@@ -503,6 +536,7 @@ def test_ask_abstains_when_no_claim_survives(
     db_path = tmp_path / "lode.db"
     body = "We decided to use OAuth for service auth."
     _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
+    _offline_embedder(monkeypatch)
     # The model asserts nothing — the gate abstains, the honest failure mode.
     _mock_qa(monkeypatch, [])
 
@@ -517,12 +551,56 @@ def test_ask_out_of_corpus_question_abstains(
 ) -> None:
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _offline_embedder(monkeypatch)
     _mock_qa(monkeypatch, [])
 
     result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
 
     assert result.exit_code == 0
     assert cli._ABSTAIN_LINE in result.stdout
+
+
+def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None:
+    """A passage matched only by the dense leg still reaches the Q&A context (lode-bkc).
+
+    The question shares no word tokens with the note's body, so the lexical leg
+    cannot find it; the only path to retrieval is the dense leg. Indexing the note
+    through the embed leg with a constant-direction stub embedder makes the query's
+    embedding a cosine match for the indexed passages, so the version surfaces in the
+    trust-ranked context — proving ``_retrieve`` fuses the dense leg, not lexical
+    alone. The small vector dim keeps the LanceDB table trivial; the stub keeps it
+    offline.
+    """
+    settings = load_settings(embedding_vector_dim=4)
+    db_path = tmp_path / "lode.db"
+    lance_dir = cli._default_lance_dir(db_path)
+    conn = init_db(db_path)
+    try:
+        body = "alpha bravo charlie delta echo foxtrot"
+        version = save(conn, "n1", body, settings=settings).version_id
+        # Index passages + vectors for the head through the embed leg, so the dense
+        # store and the SQLite passages rows (parent-expansion reads them) exist.
+        embedder = _ConstantEmbedder(settings)
+        assert (
+            embed(
+                conn, version, lance_dir=lance_dir, embedder=embedder, settings=settings
+            )
+            > 0
+        )
+
+        # A lexically disjoint question: the lexical leg matches nothing, so only the
+        # dense leg can surface this note.
+        context = cli._retrieve(
+            conn,
+            "unrelated wording entirely",
+            lance_dir=lance_dir,
+            embedder=embedder,
+            settings=settings,
+        )
+
+        assert version in {item.target_version for item in context}
+    finally:
+        conn.close()
 
 
 def test_ask_requires_a_question() -> None:
