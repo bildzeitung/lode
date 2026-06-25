@@ -31,6 +31,7 @@ from lode.retrieval import (
     lexical_search,
     live_head_versions,
     reciprocal_rank_fusion,
+    rerank,
     trust_rank,
     vector_search,
 )
@@ -333,6 +334,115 @@ def test_expand_parents_drops_a_hit_with_no_passage_row(conn) -> None:
 
 def test_expand_parents_of_no_hits_is_empty(conn) -> None:
     assert expand_parents(conn, []) == []
+
+
+# --- cross-encoder rerank stage (lode-72m.3) -----------------------------------
+
+
+class _StubCrossEncoder:
+    """An offline stub scorer: relevance is a fixed per-text score map.
+
+    Keeps the rerank gate offline (no model download) and the ranking trivial to
+    assert. Records the documents it was handed (``seen``) so a test can prove the
+    stage was *bypassed* — never called — when the toggle is off.
+    """
+
+    def __init__(self, scores: dict[str, float]) -> None:
+        self._scores = scores
+        self.seen: list[str] | None = None
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        self.seen = list(documents)
+        return [self._scores[doc] for doc in documents]
+
+
+def test_rerank_reorders_by_cross_encoder_score_and_carries_it(conn) -> None:
+    """Acceptance: when enabled the cross-encoder re-scores the fused top-N — the
+    output order and each hit's score become the cross-encoder relevance."""
+    _insert_passage(conn, "p-a", 0, "0:5", "alpha", "section")
+    _insert_passage(conn, "p-b", 1, "6:10", "beta", "section")
+    # RRF puts p-a first; the cross-encoder reverses that (beta more relevant).
+    fused = [FusedHit("p-a", "v1", 0.9), FusedHit("p-b", "v1", 0.1)]
+    scorer = _StubCrossEncoder({"alpha": 0.2, "beta": 0.8})
+
+    out = rerank(conn, "q", fused, scorer=scorer, settings=load_settings())
+
+    assert [h.passage_id for h in out] == ["p-b", "p-a"]
+    assert [h.score for h in out] == [0.8, 0.2]  # score is now the rerank relevance
+    assert out[0].target_version == "v1"  # citation target carried straight through
+
+
+def test_rerank_trims_to_keep_n(conn) -> None:
+    """Only ``rerank_keep_n`` reranked hits proceed downstream."""
+    _insert_passage(conn, "p-a", 0, "0:5", "alpha", "section")
+    _insert_passage(conn, "p-b", 1, "6:10", "beta", "section")
+    _insert_passage(conn, "p-c", 2, "11:16", "gamma", "section")
+    fused = [
+        FusedHit("p-a", "v1", 0.9),
+        FusedHit("p-b", "v1", 0.5),
+        FusedHit("p-c", "v1", 0.1),
+    ]
+    scorer = _StubCrossEncoder({"alpha": 0.1, "beta": 0.9, "gamma": 0.5})
+
+    out = rerank(
+        conn, "q", fused, scorer=scorer, settings=load_settings(rerank_keep_n=1)
+    )
+
+    assert [h.passage_id for h in out] == ["p-b"]  # the single best by rerank score
+
+
+def test_rerank_scores_only_the_fused_top_k(conn) -> None:
+    """``retrieval_top_k`` caps how many fused passages enter rerank; the rest are
+    dropped before scoring."""
+    _insert_passage(conn, "p-a", 0, "0:5", "alpha", "section")
+    _insert_passage(conn, "p-b", 1, "6:10", "beta", "section")
+    _insert_passage(conn, "p-c", 2, "11:16", "gamma", "section")
+    fused = [
+        FusedHit("p-a", "v1", 0.9),
+        FusedHit("p-b", "v1", 0.5),
+        FusedHit("p-c", "v1", 0.1),
+    ]
+    scorer = _StubCrossEncoder({"alpha": 0.1, "beta": 0.2})  # p-c never scored
+
+    out = rerank(
+        conn, "q", fused, scorer=scorer, settings=load_settings(retrieval_top_k=2)
+    )
+
+    assert scorer.seen == ["alpha", "beta"]  # only the top-k entered the model
+    assert {h.passage_id for h in out} == {"p-a", "p-b"}  # p-c excluded entirely
+
+
+def test_rerank_disabled_is_fully_bypassed(conn) -> None:
+    """Acceptance: the seam is permanent but the stage toggles off — when off the
+    call returns the input unchanged and never invokes the model."""
+    fused = [FusedHit("p-a", "v1", 0.9), FusedHit("p-b", "v1", 0.1)]
+    scorer = _StubCrossEncoder({})
+
+    out = rerank(
+        conn, "q", fused, scorer=scorer, settings=load_settings(rerank_enabled=False)
+    )
+
+    assert out == fused  # unchanged: order and RRF scores preserved
+    assert scorer.seen is None  # the cross-encoder was never called
+
+
+def test_rerank_of_no_hits_is_empty(conn) -> None:
+    scorer = _StubCrossEncoder({})
+    assert rerank(conn, "q", [], scorer=scorer, settings=load_settings()) == []
+    assert scorer.seen is None  # nothing to score, model untouched
+
+
+def test_rerank_drops_a_hit_with_no_passage_row(conn) -> None:
+    """A fused hit whose regenerable passage row is gone can't be scored or cited —
+    dropped, exactly as expand_parents drops it."""
+    _insert_passage(conn, "p-a", 0, "0:5", "alpha", "section")
+    fused = [FusedHit("p-a", "v1", 0.9), FusedHit("missing", "v1", 0.5)]
+    scorer = _StubCrossEncoder({"alpha": 0.7})
+
+    out = rerank(conn, "q", fused, scorer=scorer, settings=load_settings())
+
+    assert [h.passage_id for h in out] == ["p-a"]
+    assert scorer.seen == ["alpha"]  # the missing hit never reached the model
 
 
 # --- trust-ordered context builder (lode-az0.1) --------------------------------

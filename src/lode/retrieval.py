@@ -38,7 +38,9 @@ import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Protocol
 
+from lode.config import Settings
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
 
@@ -172,6 +174,123 @@ def reciprocal_rank_fusion(
     fused = [FusedHit(pid, versions[pid], score) for pid, score in scores.items()]
     fused.sort(key=lambda hit: hit.score, reverse=True)
     return fused
+
+
+class CrossEncoder(Protocol):
+    """Scores a batch of (query, passage) pairs by relevance, higher is better.
+
+    The one seam between :func:`rerank` and the reranker model — the build-side
+    twin of :class:`lode.embedding.Embedder`. Production uses
+    :class:`FastEmbedCrossEncoder` (the pinned ``rerank_model`` on the shared
+    ONNX runtime); tests pass a stub so the gate never downloads a model.
+    Implementations return one score per document, in input order.
+    """
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        """Return one relevance score per document for ``query``, in input order."""
+        ...
+
+
+class FastEmbedCrossEncoder:
+    """Default :class:`CrossEncoder`: the pinned local ONNX reranker via ``fastembed``.
+
+    Mirrors :class:`lode.embedding.FastEmbedEmbedder`: it constructs
+    ``fastembed``'s ``TextCrossEncoder`` for ``settings.rerank_model``
+    (``BAAI/bge-reranker-base`` — the loadable bge-family pick, lode-txh.6) lazily
+    on first :meth:`rerank` call, so the model download/load (hundreds of MB) is
+    deferred out of import and out of any path that never reranks. It runs on the
+    **same ONNX runtime** as the embedder — no new stack, content stays on-box
+    (``docs/stack.md`` "Reranker"). The model + threshold ship untuned, revisited
+    against the eval harness (``docs/decisions.md``).
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._model_name = settings.rerank_model
+        self._model: object | None = None
+
+    def _load(self) -> object:
+        if self._model is None:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+            self._model = TextCrossEncoder(model_name=self._model_name)
+        return self._model
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        model = self._load()
+        # fastembed yields one score per document, in input order.
+        return list(model.rerank(query, documents))
+
+
+def rerank(
+    conn: sqlite3.Connection,
+    query: str,
+    hits: list[FusedHit],
+    *,
+    scorer: CrossEncoder | None = None,
+    settings: Settings | None = None,
+) -> list[FusedHit]:
+    """Re-score the fused top-N with a local cross-encoder — a toggleable stage.
+
+    The ``rerank(q, fused)`` step of the read pipeline (``docs/retrieval.md`` "The
+    v1 retrieval pipeline"), slotted between fusion (:func:`reciprocal_rank_fusion`)
+    and parent-expansion (:func:`expand_parents`). The **seam is permanent** — the
+    pipeline always calls through this insertion point — while the **stage is
+    toggleable** via ``Settings.rerank_enabled`` (default on, ``runtime`` knob,
+    ``docs/configuration.md``). When the stage is off the call is **fully bypassed**:
+    ``hits`` is returned unchanged, with no model loaded.
+
+    When on, a local cross-encoder re-scores the fused top-N: the
+    ``retrieval_top_k`` best-fused passages are paired with ``query`` and scored by
+    ``scorer`` (default :class:`FastEmbedCrossEncoder`, the pinned reranker on the
+    **same ONNX runtime** as the embedder — on-box, no egress). The returned
+    :class:`FusedHit` list is sorted by that relevance score, best-first, and
+    trimmed to ``rerank_keep_n`` (``docs/configuration.md``); each hit's ``score``
+    **becomes the cross-encoder relevance** (replacing the upstream RRF score), so
+    order and score agree for the downstream stages that carry it through.
+
+    The cross-encoder needs each passage's text, so the ``passages`` rows are read
+    here (the same regenerable cache :func:`expand_parents` reads). A hit whose
+    passage row is gone cannot be scored (nor later cited) and is dropped — the
+    same drop :func:`expand_parents` makes. Model/threshold tuning is deferred to
+    the eval harness (``docs/decisions.md``); nothing is tuned here.
+    """
+    settings = settings or Settings()
+    if not settings.rerank_enabled or not hits:
+        return hits
+
+    top = hits[: settings.retrieval_top_k]
+    texts = _passage_texts(conn, [hit.passage_id for hit in top])
+    scorable = [hit for hit in top if hit.passage_id in texts]
+    if not scorable:
+        return []
+
+    scorer = scorer or FastEmbedCrossEncoder(settings)
+    scores = scorer.rerank(query, [texts[hit.passage_id] for hit in scorable])
+    ranked = sorted(
+        zip(scorable, scores, strict=True), key=lambda pair: pair[1], reverse=True
+    )
+    return [
+        FusedHit(hit.passage_id, hit.target_version, score)
+        for hit, score in ranked[: settings.rerank_keep_n]
+    ]
+
+
+def _passage_texts(conn: sqlite3.Connection, passage_ids: list[str]) -> dict[str, str]:
+    """Map each present ``passage_id`` to its passage text, for cross-encoder scoring.
+
+    Reads the regenerable ``passages`` cache (``schema.sql``) the same way
+    :func:`expand_parents` does. Ids with no row are simply absent from the map —
+    the caller drops them, since a passage with no text can be neither scored nor
+    cited.
+    """
+    if not passage_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in passage_ids)
+    rows = conn.execute(
+        f"SELECT passage_id, text FROM passages WHERE passage_id IN ({placeholders})",
+        passage_ids,
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
 
 
 @dataclass(frozen=True, slots=True)
