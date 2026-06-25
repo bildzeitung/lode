@@ -217,8 +217,10 @@ class FastEmbedCrossEncoder:
 
     def rerank(self, query: str, documents: list[str]) -> list[float]:
         model = self._load()
-        # fastembed yields one score per document, in input order.
-        return list(model.rerank(query, documents))
+        # fastembed yields one (numpy) score per document, in input order; coerce
+        # to plain float so the score carried on FusedHit stays a Python float
+        # (mirrors FastEmbedEmbedder's .tolist()).
+        return [float(score) for score in model.rerank(query, documents)]
 
 
 def rerank(
