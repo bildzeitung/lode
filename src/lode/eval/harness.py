@@ -187,6 +187,14 @@ def _retrieve(
     expanded small-to-big (:func:`~lode.retrieval.expand_parents`) and ordered by
     the trust gradient (:func:`~lode.retrieval.trust_rank`). Deterministic for a
     fixed corpus + embedder.
+
+    The query is embedded through the same ``embedder.embed_passages`` seam the
+    documents use. With the production model (nomic-embed-text-v1.5) that applies
+    the ``search_document:`` prefix to the query too, where the model expects
+    ``search_query:`` for the asymmetric pair -- a dense-leg bias tracked in
+    lode-7yw (the ``Embedder`` seam exposes no query side yet). Recall@k stays
+    sound because the model-free lexical leg carries it; the bias only softens the
+    dense leg's contribution.
     """
     match = _fts_query(question)
     lexical = lexical_search(conn, match, k=k) if match else []
