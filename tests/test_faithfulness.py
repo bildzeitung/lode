@@ -9,10 +9,23 @@ load-bearing payload lies inside one of its cited spans is extractively coupled
 (verified outright); a claim whose payload is not inside any single span -- an
 inverted quote, a drifted number, or a synthesis split across spans -- is not
 coupled. Both steps are pure string checks; no model is ever invoked.
+
+Step 3 (lode-1k3.4): a claim that passes step 1 but is not coupled is scored by a
+local NLI / cross-encoder (the :class:`EntailmentScorer` seam) for whether its
+cited spans jointly entail it. ``claim_entailed`` joins the spans into one premise
+and compares the score to a threshold (fail-closed); these tests inject a stub so
+they stay offline, and exercise the :func:`_sigmoid` squash + the lazy
+FastEmbed-backed default's wiring without loading the real model.
 """
 
+import math
+
 from lode.answer import Claim, Support
+from lode.config import Settings
 from lode.faithfulness import (
+    FastEmbedEntailmentScorer,
+    _sigmoid,
+    claim_entailed,
     claim_extractively_coupled,
     claim_spans_verified,
     normalize_whitespace,
@@ -139,3 +152,93 @@ def test_all_glue_claim_is_not_coupled() -> None:
 
 def test_coupling_is_case_insensitive() -> None:
     assert _coupled("RERANK OFF", "rerank off in the skeleton")
+
+
+# --- Step 3: NLI entailment ------------------------------------------------
+
+
+class _StubScorer:
+    """Offline stub EntailmentScorer: fixed score, records the (premise, hypothesis)."""
+
+    def __init__(self, score: float) -> None:
+        self._score = score
+        self.calls: list[tuple[str, str]] = []
+
+    def entailment(self, premise: str, hypothesis: str) -> float:
+        self.calls.append((premise, hypothesis))
+        return self._score
+
+
+def _entailed(text: str, *spans: str, scorer, threshold: float = 0.9) -> bool:
+    return claim_entailed(
+        Claim(
+            text=text,
+            support=[Support(version_id="v-1", quoted_span=s) for s in spans],
+        ),
+        scorer,
+        threshold=threshold,
+    )
+
+
+def test_entailed_above_threshold() -> None:
+    assert _entailed("rerank is on", "rerank OFF", scorer=_StubScorer(0.95))
+
+
+def test_not_entailed_below_threshold_fails_closed() -> None:
+    assert not _entailed("rerank is on", "rerank OFF", scorer=_StubScorer(0.1))
+
+
+def test_threshold_boundary_is_inclusive() -> None:
+    # At/above threshold survives -- the comparison is ``>=``.
+    assert _entailed("x", "y", scorer=_StubScorer(0.9), threshold=0.9)
+    assert not _entailed("x", "y", scorer=_StubScorer(0.89), threshold=0.9)
+
+
+def test_entailment_joins_spans_into_one_premise() -> None:
+    # Jointly entail: the cited spans are concatenated into a single premise so the
+    # scorer weighs them together; the claim text is the hypothesis.
+    scorer = _StubScorer(0.95)
+    _entailed("the combined claim", "first span", "second span", scorer=scorer)
+    assert scorer.calls == [("first span second span", "the combined claim")]
+
+
+def test_sigmoid_is_monotonic_and_bounded() -> None:
+    assert _sigmoid(0.0) == 0.5
+    assert math.isclose(_sigmoid(20.0), 1.0, abs_tol=1e-6)
+    assert math.isclose(_sigmoid(-20.0), 0.0, abs_tol=1e-6)
+    assert _sigmoid(-1.0) < _sigmoid(0.0) < _sigmoid(1.0)
+
+
+def test_sigmoid_handles_large_magnitudes_without_overflow() -> None:
+    # The two-branch stable form must not raise OverflowError on extreme logits.
+    assert 0.0 < _sigmoid(1000.0) <= 1.0
+    assert 0.0 <= _sigmoid(-1000.0) < 1.0
+
+
+class _FakeCrossEncoder:
+    """Stands in for fastembed's TextCrossEncoder: returns one fixed logit."""
+
+    def __init__(self, logit: float) -> None:
+        self._logit = logit
+        self.seen: tuple[str, list[str]] | None = None
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        self.seen = (query, documents)
+        return [self._logit]
+
+
+def test_fastembed_scorer_construction_loads_no_model() -> None:
+    # Lazy load: constructing the default scorer must not touch fastembed (mirrors
+    # the rerank cross-encoder), so a gate run reaching no step-3 claim stays cheap.
+    scorer = FastEmbedEntailmentScorer(Settings())
+    assert scorer._model is None
+
+
+def test_fastembed_scorer_squashes_logit_and_frames_pair() -> None:
+    # With a fake cross-encoder injected, entailment() sigmoid's the raw logit and
+    # frames (hypothesis=query, premise=document) -- no real model, no download.
+    scorer = FastEmbedEntailmentScorer(Settings())
+    scorer._model = _FakeCrossEncoder(2.0)
+    score = scorer.entailment("the cited span", "the claim")
+    assert math.isclose(score, _sigmoid(2.0))
+    assert scorer._model.seen == ("the claim", ["the cited span"])
