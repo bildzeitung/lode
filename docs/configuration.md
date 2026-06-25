@@ -9,6 +9,29 @@ Every parameter the design exposes, in one place. Three kinds, flagged in the **
 
 Defaults below are starting points, not measured optima.
 
+## Paths & locations
+
+Everything lode persists lives under **one user-controllable root**, `$LODE_HOME` (default `~/.lode`). One inspectable directory — trivial to surface, back up (`cp -r`), or relocate — rather than scattering data/state/config across separate trees. (This is deliberately *not* the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) split of `$XDG_DATA_HOME` / `$XDG_STATE_HOME` / `$XDG_CONFIG_HOME`; a single root is simpler to reason about and matches the design's "co-locate the lock beside the DB" and "partition by rows, not by file" stance, [storage.md](storage.md#the-partition-is-by-rows-not-by-file).)
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| `LODE_HOME` | runtime | `~/.lode` | Root for all on-disk state. Env-var override; one directory holds the DB, vector store, logs, lock, and config. |
+| Database path | build | `$LODE_HOME/lode.db` | The SQLite file (irreplaceable rows + rebuildable cache + `jobs`). The single-instance advisory lock lives beside it as `lode.db.lock` ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)). |
+| Vector store path | build | `$LODE_HOME/lancedb/` | LanceDB passage-vector store (rebuildable cache). A subdir keeps the root readable. |
+| Log directory | runtime | `$LODE_HOME/logs/` | Application logs. |
+| Config file path | runtime | `$LODE_HOME/config.toml` | User-editable runtime knobs. **Optional** — if absent, every knob uses its default below; no config file is a valid, fully-working state. |
+
+```text
+$LODE_HOME/                 # default ~/.lode, overridable by env var
+├── lode.db                 # SQLite (irreplaceable rows + rebuildable cache + jobs)
+├── lode.db.lock            # single-instance advisory lock (PID) — beside the DB
+├── lancedb/                # LanceDB vector store (rebuildable cache)
+├── logs/                   # application logs
+└── config.toml             # user-editable runtime knobs (optional; absent = defaults)
+```
+
+These resolved paths are what the CLI/TUI surfaces to the user (E10/E11).
+
 ## Retrieval and ranking
 
 | Knob | Kind | Default | Notes |

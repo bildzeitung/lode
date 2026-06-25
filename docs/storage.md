@@ -364,7 +364,8 @@ This maps onto the store ([stack.md](stack.md)), but **by rows, not by file**
 ([the partition is by rows](stack.md#the-partition-is-by-rows-not-by-file)). The **irreplaceable**
 rows — `notes`, `versions`, `externals`, `snapshots`, plus the `annotations`/`edges` rows where
 `source = user` — live in **SQLite**; the same file *also* holds rebuildable cache, so `cp lode.db`
-is a harmless *superset* backup. **Regenerable cache** — `passages`, `embeddings`, the `source = ai`
+is a harmless *superset* backup (the DB, vector store, logs, lock, and config all live under one
+root, `$LODE_HOME` — see [configuration.md](configuration.md#paths--locations)). **Regenerable cache** — `passages`, `embeddings`, the `source = ai`
 `annotations`/`edges`, and the lexical index — is rebuildable: passage vectors in **LanceDB**,
 lexical in **SQLite FTS5** (also per passage), and the `edges` knowledge graph traversed **in-memory
 with networkx** (loaded from the edge rows). The whole shape sits behind a thin repository interface, so the cache engine is
