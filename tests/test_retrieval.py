@@ -26,6 +26,7 @@ from lode.retrieval import (
     ExpandedHit,
     FusedHit,
     TrustTier,
+    build_match_query,
     expand_parents,
     lexical_search,
     live_head_versions,
@@ -453,3 +454,38 @@ def test_trust_rank_withholds_unclassifiable_hit_instead_of_dropping(
 def test_trust_rank_of_no_hits_is_empty(conn) -> None:
     ranked = trust_rank(conn, [])
     assert ranked.context == [] and ranked.withheld == []
+
+
+# --- build_match_query: natural-language question -> FTS5 MATCH --------------
+
+
+def test_build_match_query_ors_quoted_word_tokens() -> None:
+    # Each word becomes a quoted term, OR-ed (not AND-ed) for recall; the trailing
+    # "?" and whitespace are separators, never part of a term.
+    assert build_match_query("what about auth?") == '"what" OR "about" OR "auth"'
+
+
+def test_build_match_query_quotes_terms_colliding_with_fts5_operators() -> None:
+    # A bare "or"/"and"/"not" would be parsed as an FTS5 operator; quoting keeps it
+    # a literal term so the expression stays valid.
+    assert build_match_query("alpha or beta") == '"alpha" OR "or" OR "beta"'
+
+
+def test_build_match_query_empty_when_no_word_tokens() -> None:
+    # No \w tokens -> empty expression; the caller skips the lexical leg (an empty
+    # MATCH is an FTS5 syntax error, not a match-none).
+    assert build_match_query("???  ...") == ""
+
+
+def test_build_match_query_result_is_a_valid_fts5_match(conn) -> None:
+    # End-to-end: the built expression parses and matches as a real FTS5 query.
+    conn.execute(
+        "INSERT INTO passages_fts (passage_id, target_version, text) VALUES (?, ?, ?)",
+        ("p1", "v1", "we use oauth for auth"),
+    )
+    conn.commit()
+    match = build_match_query("what about auth?")
+    rows = conn.execute(
+        "SELECT passage_id FROM passages_fts WHERE passages_fts MATCH ?", (match,)
+    ).fetchall()
+    assert rows == [("p1",)]

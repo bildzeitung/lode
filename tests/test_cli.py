@@ -7,28 +7,33 @@ derive jobs, refuses an empty note, and on a CAS reject preserves the buffer as 
 draft rather than clobbering — the operational read-outs (lode-y42.3): ``status``
 (job-queue health, dead-letters, egress summary), ``jobs`` (list/filter the derive
 queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
-ids/redactions); and ``purge`` (the E8 hard delete via ``Repository.purge``,
-lode-7cx).
+ids/redactions); ``purge`` (the E8 hard delete via ``Repository.purge``, lode-7cx);
+and ``ask`` (the cited Q&A loop, lode-y42.2: retrieve → synthesize → faithfulness
+gate → cite or abstain, with the Anthropic client mocked so the gate runs offline).
 """
 
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from lode import __version__, cli
+from lode.answer import Claim, Support
 from lode.cli import app
+from lode.cited_answer import CitedAnswer
+from lode.egress import WithheldCitation
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
 from lode.versions import save
 
 runner = CliRunner()
 
-# `add` (lode-y42.1), `status` / `jobs` (lode-y42.3) and `purge` (lode-7cx) are
-# real; `ask` / `eval` are still dispatching stubs.
-STUB_SUBCOMMANDS = ["ask", "eval"]
+# `add` (lode-y42.1), `status` / `jobs` (lode-y42.3), `purge` (lode-7cx) and `ask`
+# (lode-y42.2) are real; `eval` is still a dispatching stub.
+STUB_SUBCOMMANDS = ["eval"]
 ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "egress", "eval"]
 
 
@@ -361,3 +366,179 @@ def test_purge_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
     result = runner.invoke(app, ["purge", "ghost", "--db", str(db_path)])
     assert result.exit_code == 1
     assert "no such note" in result.stderr
+
+
+# --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
+
+
+class _FakeMessages:
+    """Records every parse() call and returns a fixed parsed claims envelope."""
+
+    def __init__(self, claims: list[Claim]) -> None:
+        self._claims = claims
+        self.calls: list[dict] = []
+
+    def parse(self, **kwargs: object) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return SimpleNamespace(parsed_output=SimpleNamespace(claims=self._claims))
+
+
+class _FakeClient:
+    """Stand-in for anthropic.Anthropic — no network, just records the call."""
+
+    def __init__(self, claims: list[Claim]) -> None:
+        self.messages = _FakeMessages(claims)
+
+
+def _mock_qa(monkeypatch: pytest.MonkeyPatch, claims: list[Claim]) -> _FakeClient:
+    """Mock the Q&A SDK client so cited_answer.ask runs offline; return the client."""
+    client = _FakeClient(claims)
+    monkeypatch.setattr("lode.qa.build_client", lambda: client)
+    return client
+
+
+def _seed_corpus(
+    db_path: Path, *, note_id: str, version_id: str, body: str, passage_id: str
+) -> None:
+    """Seed one note (head) plus the passage + FTS rows retrieval reads.
+
+    Mirrors what the capture-side indexing will populate once it is wired (the
+    ``passages`` table from the embed leg, the ``passages_fts`` row from the
+    synchronous lexical leg), so ``ask``'s retrieval has a live head to find.
+    """
+    conn = init_db(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO notes (note_id, head_version_id, no_egress) VALUES (?, NULL, 0)",
+            (note_id,),
+        )
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES (?, ?, ?, 'create')",
+            (version_id, note_id, body),
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = ? WHERE note_id = ?",
+            (version_id, note_id),
+        )
+        conn.execute(
+            "INSERT INTO passages "
+            "(passage_id, target_version, ord, char_range, text, parent_block) "
+            "VALUES (?, ?, 0, ?, ?, ?)",
+            (passage_id, version_id, f"0:{len(body)}", body, body),
+        )
+        conn.execute(
+            "INSERT INTO passages_fts (passage_id, target_version, text) "
+            "VALUES (?, ?, ?)",
+            (passage_id, version_id, body),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_ask_retrieves_and_renders_a_cited_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    body = "We decided to use OAuth for service auth."
+    _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
+    # The model's claim cites v1 with a span verbatim in the body, so it survives
+    # the faithfulness gate and renders with its citation.
+    client = _mock_qa(
+        monkeypatch,
+        [
+            Claim(
+                text="We use OAuth.",
+                support=[Support(version_id="v1", quoted_span="OAuth")],
+            )
+        ],
+    )
+
+    result = runner.invoke(
+        app, ["ask", "what did we decide about auth?", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0
+    assert "We use OAuth." in result.stdout
+    assert "version_id v1" in result.stdout
+    assert '"OAuth"' in result.stdout
+    # Retrieval actually fed the cited context to the Q&A send (v1's body reached it).
+    (call,) = client.messages.calls
+    assert "OAuth" in call["messages"][0]["content"]
+
+
+def test_ask_abstains_when_no_claim_survives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    body = "We decided to use OAuth for service auth."
+    _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
+    # The model asserts nothing — the gate abstains, the honest failure mode.
+    _mock_qa(monkeypatch, [])
+
+    result = runner.invoke(app, ["ask", "what about auth?", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert cli._ABSTAIN_LINE in result.stdout
+
+
+def test_ask_out_of_corpus_question_abstains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _mock_qa(monkeypatch, [])
+
+    result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert cli._ABSTAIN_LINE in result.stdout
+
+
+def test_ask_requires_a_question() -> None:
+    result = runner.invoke(app, ["ask"])
+    assert result.exit_code != 0  # missing required argument
+
+
+def test_format_cited_answer_renders_claim_with_citation() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="lode is append-only.",
+                support=[Support(version_id="v9", quoted_span="append-only")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+
+    lines = cli._format_cited_answer(answer)
+
+    assert lines[0] == "lode is append-only."
+    assert "version_id v9" in lines[1]
+    assert '"append-only"' in lines[1]
+
+
+def test_format_cited_answer_renders_snapshot_citation() -> None:
+    answer = CitedAnswer(
+        claims=(
+            Claim(
+                text="rotate the certs.",
+                support=[Support(snapshot_id="s3", quoted_span="rotate the certs")],
+            ),
+        ),
+        withheld_citations=(),
+    )
+
+    lines = cli._format_cited_answer(answer)
+
+    assert "snapshot_id s3" in lines[1]
+
+
+def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
+    answer = CitedAnswer(claims=(), withheld_citations=(WithheldCitation("v-secret"),))
+
+    lines = cli._format_cited_answer(answer)
+
+    assert lines[0] == cli._ABSTAIN_LINE
+    assert any("v-secret" in line and "withheld" in line for line in lines)
