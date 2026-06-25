@@ -20,6 +20,7 @@ import dataclasses
 import pytest
 
 from lode.answer import Answer, Claim, Support
+from lode.config import Settings
 from lode.gate import ABSTENTION_MESSAGE, GateResult, apply_gate
 
 BODY = "lode ships rerank OFF in the walking skeleton; deepen it later."
@@ -158,8 +159,6 @@ def test_synthesis_claim_above_threshold_survives() -> None:
 
 def test_entailment_at_threshold_survives() -> None:
     # The boundary is inclusive: a score equal to the threshold survives (>=).
-    from lode.config import Settings
-
     threshold = Settings().entailment_threshold
     answer = Answer([_claim("rerank is on", "rerank OFF")])
     result = apply_gate(answer, {"v-1": BODY}, scorer=_StubScorer(threshold))
@@ -192,8 +191,6 @@ def test_entailment_premise_joins_all_cited_spans() -> None:
 def test_custom_threshold_from_settings_is_honored() -> None:
     # The acceptance threshold reads from settings; a stricter threshold drops a
     # mid-confidence synthesis claim that a laxer one would admit.
-    from lode.config import Settings
-
     answer = Answer([_claim("rerank is on", "rerank OFF")])
     strict = apply_gate(
         answer,
