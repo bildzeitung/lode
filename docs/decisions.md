@@ -65,8 +65,16 @@ are catalogued in [configuration.md](configuration.md).
   faithfulness/abstention legs are sourced through an injected **answerer** seam (the same mock seam
   `cited_answer.ask` / `qa.answer_question` already expose via their `client` parameter): a fixed
   answerer over a fixed corpus yields a fixed score. Tests inject deterministic stubs and never hit
-  the network; production wires the real embedder + a real-client `ask`. Open sub-question: the exact
-  metric weighting and how the golden set is curated.
+  the network; production wires the real embedder + a real-client `ask`. **Command + CI wiring —
+  settled (lode-5y8.2):** `lode eval` (`src/lode/cli.py`) runs the scorer against a fresh ephemeral
+  store (in-memory SQLite + a throwaway LanceDB dir — never the user's notes) and prints the three
+  metrics; it sources the *real* seams — the local ONNX embedder (`FastEmbedEmbedder`) and a
+  real-client answerer (`cited_answer.ask`) — so its Q&A leg needs `ANTHROPIC_API_KEY` and the
+  network. Because of that, eval is **not** part of the offline test gate: the noxfile keeps
+  `nox.options.sessions = ["fix", "tests"]` so a bare `nox` and `nox -s tests` stay offline + keyless,
+  and the `nox -s eval` session (which runs `lode eval`) is the explicit, credential-gated CI-style
+  check — it `skip`s itself when `ANTHROPIC_API_KEY` is absent rather than failing or hitting the
+  network. Open sub-question: the exact metric weighting and how the golden set is curated.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
