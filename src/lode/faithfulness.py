@@ -1,6 +1,6 @@
-"""The faithfulness gate, steps 1-2: verbatim-span check + extractive coupling.
+"""The faithfulness gate, steps 1-3: span check, extractive coupling, NLI entailment.
 
-``docs/retrieval.md`` ("The faithfulness gate"), steps 1-2:
+``docs/retrieval.md`` ("The faithfulness gate"), steps 1-3:
 
     1. Verbatim-span check (deterministic, v1). Every ``quoted_span`` must occur
        (exact, or normalized-whitespace) in the body of its cited
@@ -9,26 +9,39 @@
        load-bearing payload lies inside the quoted span, the claim is verified
        outright -- stopping an inverted quote paired with a contradicting claim,
        or a drifted number that is both quoted-verbatim and wrong.
+    3. NLI entailment (local cross-encoder, v1). A claim that passes step 1 but
+       is *not* extractively coupled -- genuine multi-note synthesis, or
+       paraphrase sitting outside any single span -- is scored by a local NLI /
+       cross-encoder for whether its cited spans **jointly entail** it; it
+       survives only above a deliberately conservative threshold, else drops
+       (fail-closed).
 
-Both stages are **deterministic** -- no model is ever invoked. Step 1
-(lode-1k3.2) operates over a ``Support``/``Claim`` plus the already-resolved
-**body text** of the cited target; resolving a ``version_id``/``snapshot_id`` to
-its bytes is the caller's job (the storage core, ``docs/storage.md``), so this
-module deliberately never touches a store. Step 2 (lode-1k3.3) is purely
-``claim.text`` against its own ``quoted_span`` -- step 1 already proved the span
-is in the body, so coupling needs no body and resolves nothing.
+Steps 1-2 are **deterministic** -- no model is ever invoked. Step 1 (lode-1k3.2)
+operates over a ``Support``/``Claim`` plus the already-resolved **body text** of
+the cited target; resolving a ``version_id``/``snapshot_id`` to its bytes is the
+caller's job (the storage core, ``docs/storage.md``), so this module deliberately
+never touches a store. Step 2 (lode-1k3.3) is purely ``claim.text`` against its
+own ``quoted_span`` -- step 1 already proved the span is in the body, so coupling
+needs no body and resolves nothing. Step 3 (lode-1k3.4) reaches a **local model**
+behind the :class:`EntailmentScorer` seam (a Protocol + a lazily-loaded
+FastEmbed-backed default + an injectable seam so tests stay offline), mirroring
+the rerank cross-encoder seam (``lode.retrieval``); it too needs no body, because
+step 1 already proved every span present.
 
-NLI entailment (step 3, ``lode-1k3.4``) is a later ticket; the actual drop / flag
-/ abstain orchestration (step 4-5) is ``lode-1k3.5``. This module supplies the
-*verdicts* those stages consume -- it reports whether a span is verbatim-present
-and whether a claim is extractively coupled; it does not itself drop claims,
-sequence the stages, or decide abstention (that staging lives in ``gate.py``).
+The actual drop / flag / abstain orchestration (step 4-5) is ``lode-1k3.5``. This
+module supplies the *verdicts* those stages consume -- whether a span is
+verbatim-present, whether a claim is extractively coupled, and whether its spans
+entail it; it does not itself drop claims, sequence the stages, or decide
+abstention (that staging lives in ``gate.py``).
 """
 
+import math
 import re
 from collections.abc import Mapping
+from typing import Protocol
 
 from lode.answer import Claim, Support
+from lode.config import Settings
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -133,3 +146,87 @@ def claim_extractively_coupled(claim: Claim) -> bool:
     return any(
         payload <= _word_tokens(support.quoted_span) for support in claim.support
     )
+
+
+class EntailmentScorer(Protocol):
+    """Scores whether a premise entails a hypothesis, in ``[0, 1]`` (higher = stronger).
+
+    The one seam between :func:`claim_entailed` and the NLI model -- the
+    faithfulness twin of :class:`lode.retrieval.CrossEncoder`. Production uses
+    :class:`FastEmbedEntailmentScorer` (the pinned ``entailment_model`` on the
+    shared ONNX runtime); tests pass a stub so the gate never downloads a model.
+    """
+
+    def entailment(self, premise: str, hypothesis: str) -> float:
+        """Return an entailment score in ``[0, 1]`` for ``premise`` entailing ``hypothesis``."""
+        ...
+
+
+def _sigmoid(logit: float) -> float:
+    """Squash a raw cross-encoder logit into a ``[0, 1]`` entailment probability.
+
+    The numerically stable two-branch form, so a large-magnitude logit never
+    overflows ``math.exp`` (the reranker logits sit in a small range, but the
+    guard costs nothing and keeps the score a clean probability).
+    """
+    if logit < 0.0:
+        exp = math.exp(logit)
+        return exp / (1.0 + exp)
+    return 1.0 / (1.0 + math.exp(-logit))
+
+
+class FastEmbedEntailmentScorer:
+    """Default :class:`EntailmentScorer`: the pinned cross-encoder repurposed as NLI.
+
+    ``fastembed`` ships no dedicated NLI model, so the local cross-encoder
+    (``settings.entailment_model`` -- ``BAAI/bge-reranker-base``, lode-txh.6) is
+    repurposed as the entailment scorer via ``fastembed``'s ``TextCrossEncoder``,
+    on the **same ONNX runtime** as the embedder and reranker -- on-box, no
+    separate loader, no egress (``docs/stack.md`` "Faithfulness NLI"). The model
+    is loaded lazily on first :meth:`entailment` call (mirroring
+    :class:`lode.retrieval.FastEmbedCrossEncoder`), so a gate run in which no
+    claim reaches step 3 never downloads or loads it. The cross-encoder's raw
+    relevance logit for the (claim, spans) pair is squashed to a ``[0, 1]``
+    entailment probability (:func:`_sigmoid`). The model + threshold ship
+    untuned, revisited against the eval harness (``docs/decisions.md``).
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._model_name = settings.entailment_model
+        self._model: object | None = None
+
+    def _load(self) -> object:
+        if self._model is None:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+            self._model = TextCrossEncoder(model_name=self._model_name)
+        return self._model
+
+    def entailment(self, premise: str, hypothesis: str) -> float:
+        model = self._load()
+        # The cross-encoder scores a document's relevance to a query; framing the
+        # claim as the query and the cited spans as the document turns that into
+        # an entailment proxy. One pair in, one logit out, sigmoid'd to [0, 1].
+        (logit,) = model.rerank(hypothesis, [premise])
+        return _sigmoid(float(logit))
+
+
+def claim_entailed(claim: Claim, scorer: EntailmentScorer, *, threshold: float) -> bool:
+    """Whether ``claim``'s cited spans **jointly entail** it, at or above ``threshold``.
+
+    The **entailment check** (``docs/retrieval.md`` step 3): a claim that passed
+    the verbatim-span check but is *not* extractively coupled -- genuine
+    multi-note synthesis, or legitimate paraphrase that sits outside any single
+    span -- is judged here. Its cited ``quoted_span``s are joined into one premise
+    (so the spans are weighed *jointly*, as the design requires) and scored
+    against the claim text by ``scorer``; the claim is entailed iff the score
+    reaches ``threshold``.
+
+    The check is **conservative and fail-closed**: ``threshold`` ships high and
+    untuned (``Settings.entailment_threshold``), so a claim the model does not
+    confidently support is dropped -- the same posture as a fabricated quote.
+    Step 1 (:func:`claim_spans_verified`) already proved every span present, so
+    this needs no bodies; the spans are verbatim text from the cited targets.
+    """
+    premise = " ".join(support.quoted_span for support in claim.support)
+    return scorer.entailment(premise, claim.text) >= threshold

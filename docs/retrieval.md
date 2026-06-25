@@ -145,16 +145,22 @@ Runs app-side, after the Q&A LLM returns and before display:
    "off"/"no"/"all", which are exactly what drift turns on. A claim couples iff **some single** cited
    span's tokens contain its whole payload; a payload split across spans is synthesis and falls to
    step 3. The stopword set is deliberately minimal — omitting a word only makes coupling *stricter*
-   (a faithful claim falls through to NLI rather than fast-pathing), the fail-closed direction. **Until
-   the step-3 NLI gate lands (lode-1k3.4), a claim that passes step 1 but not coupling has nothing to
-   verify it and is dropped** (fail-closed), so v1's gate is extractive-only.
-3. **Entailment check (local NLI, v1 — coarse, tuning pending).** Claims that pass the span check but
-   *not* extractive coupling — genuine multi-note **synthesis**, and legitimate paraphrase that sits
-   outside any single span — fall through to a **local NLI / cross-encoder** that scores whether the
-   cited spans *jointly entail* the claim. Above a **deliberately conservative threshold** the
-   synthesized claim is accepted; below it, dropped. This is what gives v1 real synthesis
-   *capability* — "connect these two notes" gets answered, not refused. It runs on the **same ONNX
-   runtime** as the reranker — on-box, no $, no Anthropic round-trip.
+   (a faithful claim falls through to NLI rather than fast-pathing), the fail-closed direction. A claim
+   that passes step 1 but not coupling is handed to the step-3 entailment check below, not dropped on
+   the spot.
+3. **Entailment check (local NLI, v1 — coarse, tuning pending; lode-1k3.4).** Claims that pass the span
+   check but *not* extractive coupling — genuine multi-note **synthesis**, and legitimate paraphrase
+   that sits outside any single span — fall through to a **local NLI / cross-encoder** that scores
+   whether the cited spans *jointly entail* the claim. The cited spans are joined into one premise and
+   scored against the claim text; `fastembed` ships no dedicated NLI model, so the reranker
+   cross-encoder (`BAAI/bge-reranker-base` via `TextCrossEncoder`) is **repurposed** as the entailment
+   scorer (its raw logit sigmoid'd to a `[0, 1]` probability) — verified in lode-txh.6. Above a
+   **deliberately conservative threshold** (`entailment_threshold`, untuned) the synthesized claim is
+   accepted; at/below it, dropped (fail-closed). This is what gives v1 real synthesis *capability* —
+   "connect these two notes" gets answered, not refused. The scorer is an injectable seam (a Protocol +
+   a lazily-loaded FastEmbed default), so it loads no model unless a claim actually reaches step 3 and
+   tests stay offline. It runs on the **same ONNX runtime** as the reranker — on-box, no $, no
+   Anthropic round-trip.
 4. **Drop or flag** claims that fail; never silently display them.
 5. **Abstain.** If nothing survives the gate, the system says **"your notes don't answer this"** —
    the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than
