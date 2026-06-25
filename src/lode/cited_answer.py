@@ -128,16 +128,26 @@ def ask(
     ``client`` defaults to a credential-resolved SDK client inside
     :func:`lode.qa.answer_question`; tests pass a mock so the loop stays offline.
     """
-    resolved = [_resolve_target(conn, item) for item in context]
-    passages = [
-        QaPassage(
-            target_id=r.item.target_version,
-            text=r.item.parent_block,
-            no_egress=r.no_egress,
-            is_external=r.is_external,
+    passages: list[QaPassage] = []
+    # Verify spans only against bodies the model was eligible to see: a no_egress
+    # body (withheld from the send) and an unresolved target are kept out of the
+    # map, so a claim citing content the model never received fails closed, just
+    # like a fabricated quote.
+    bodies: dict[str, str] = {}
+    for item in context:
+        is_external = item.tier in _EXTERNAL_TIERS
+        body, no_egress = _resolve_target(conn, item.target_version, is_external)
+        passages.append(
+            QaPassage(
+                target_id=item.target_version,
+                text=item.parent_block,
+                no_egress=no_egress,
+                is_external=is_external,
+            )
         )
-        for r in resolved
-    ]
+        if body is not None and not no_egress:
+            bodies[item.target_version] = body
+
     result = answer_question(
         conn,
         question,
@@ -146,53 +156,37 @@ def ask(
         client=client,
         settings=settings,
     )
-    # Verify spans only against bodies the model was eligible to see: drop no_egress
-    # (withheld from the send) and unresolved targets, so a claim citing content the
-    # model never received fails closed, just like a fabricated quote.
-    bodies = {
-        r.item.target_version: r.body
-        for r in resolved
-        if r.body is not None and not r.no_egress
-    }
     return gate_cited_answer(result, bodies)
 
 
-@dataclass(frozen=True)
-class _ResolvedTarget:
-    """A context item paired with its store-resolved body and no_egress flag."""
+def _resolve_target(
+    conn: sqlite3.Connection, target_version: str, is_external: bool
+) -> tuple[str | None, bool]:
+    """Resolve a cited target's stored body and no_egress flag from the store.
 
-    item: ContextItem
-    is_external: bool
-    body: str | None
-    no_egress: bool
-
-
-def _resolve_target(conn: sqlite3.Connection, item: ContextItem) -> _ResolvedTarget:
-    """Resolve one context item's stored body and no_egress flag from the store.
-
-    The polymorphic ``target_version`` is a note ``version_id`` for an owned-note
-    tier (body on ``versions``, no_egress on its ``notes`` row) or an external
+    The polymorphic ``target_version`` is a note ``version_id`` when ``is_external``
+    is false (body on ``versions``, no_egress on its ``notes`` row) or an external
     ``snapshot_id`` otherwise (body on ``snapshots``, no_egress on its ``externals``
-    row); the trust tier discriminates which. A target absent from the store
-    resolves to ``None`` body (the gate then fails any claim citing it closed) and a
-    safe ``no_egress`` default.
+    row); the caller derives ``is_external`` from the trust tier. Returns
+    ``(body, no_egress)``; a target absent from the store resolves to a ``None``
+    body (the gate then fails any claim citing it closed) and a safe ``no_egress``
+    default.
     """
-    is_external = item.tier in _EXTERNAL_TIERS
     if is_external:
         row = conn.execute(
             "SELECT s.body, e.no_egress FROM snapshots s "
             "JOIN externals e ON e.external_id = s.external_id "
             "WHERE s.snapshot_id = ?",
-            (item.target_version,),
+            (target_version,),
         ).fetchone()
     else:
         row = conn.execute(
             "SELECT v.body, n.no_egress FROM versions v "
             "JOIN notes n ON n.note_id = v.note_id "
             "WHERE v.version_id = ?",
-            (item.target_version,),
+            (target_version,),
         ).fetchone()
     if row is None:
-        return _ResolvedTarget(item, is_external, body=None, no_egress=False)
+        return None, False
     body, no_egress = row
-    return _ResolvedTarget(item, is_external, body=body, no_egress=bool(no_egress))
+    return body, bool(no_egress)
