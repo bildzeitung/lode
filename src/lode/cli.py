@@ -17,23 +17,24 @@ import tempfile
 import uuid
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
-from lode import __version__, cited_answer, jobs, versions
-from lode.answer import Support
+from lode import __version__, jobs, versions
 from lode.config import Settings
 from lode.logconfig import configure_logging
 from lode.repository import Repository
-from lode.retrieval import (
-    ContextItem,
-    build_match_query,
-    expand_parents,
-    lexical_search,
-    reciprocal_rank_fusion,
-    trust_rank,
-)
 from lode.storage import init_db
+
+if TYPE_CHECKING:
+    # Type-only; the runtime imports live inside ``ask`` / ``_retrieve`` so the
+    # capture-path commands (``add`` is "instant by design") never pay the cost of
+    # loading the Q&A SDK (anthropic) or the vector stack (pyarrow), which the
+    # cited Q&A loop pulls in but the rest of the CLI never touches.
+    from lode.answer import Support
+    from lode.cited_answer import CitedAnswer
+    from lode.retrieval import ContextItem
 
 app = typer.Typer(
     name="lode",
@@ -180,6 +181,10 @@ def ask(
     query-side embedding step, so retrieval currently runs on the synchronous
     lexical leg alone — RRF scores a single-leg passage fine (lode-bkc).
     """
+    # Imported here, not at module scope: cited_answer pulls in the Anthropic SDK,
+    # which the instant capture path (``add``) must never load.
+    from lode import cited_answer
+
     conn = _open_db(db)
     try:
         context = _retrieve(conn, question)
@@ -192,7 +197,7 @@ def ask(
 
 def _retrieve(
     conn: sqlite3.Connection, question: str, *, settings: Settings | None = None
-) -> list[ContextItem]:
+) -> "list[ContextItem]":
     """Build the trust-ranked Q&A context for ``question`` (lexical leg, E4).
 
     Lexical search (heads only) → app-side RRF → small-to-big parent expansion →
@@ -203,6 +208,16 @@ def _retrieve(
     no word tokens skips the lexical leg and yields empty context (an honest
     abstention).
     """
+    # Imported here, not at module scope: retrieval pulls in the vector stack
+    # (pyarrow via lode.vectorstore), which the instant capture path never loads.
+    from lode.retrieval import (
+        build_match_query,
+        expand_parents,
+        lexical_search,
+        reciprocal_rank_fusion,
+        trust_rank,
+    )
+
     settings = settings or Settings()
     match = build_match_query(question)
     lexical = lexical_search(conn, match, k=settings.retrieval_top_k) if match else []
@@ -211,7 +226,7 @@ def _retrieve(
     return trust_rank(conn, expanded).context
 
 
-def _format_cited_answer(answer: cited_answer.CitedAnswer) -> list[str]:
+def _format_cited_answer(answer: "CitedAnswer") -> list[str]:
     """Render a gated answer for the terminal: cited claims, or an abstention.
 
     Each surviving claim prints its text followed by one indented citation line per
@@ -232,7 +247,7 @@ def _format_cited_answer(answer: cited_answer.CitedAnswer) -> list[str]:
     return lines
 
 
-def _format_citation(support: Support) -> str:
+def _format_citation(support: "Support") -> str:
     """Render one support as an indented ``<id-kind> <id>  "<span>"`` citation."""
     if support.version_id is not None:
         target = f"version_id {support.version_id}"
