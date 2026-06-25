@@ -1,13 +1,19 @@
-"""Tests for lode.faithfulness step 1 -- the verbatim-span check (lode-1k3.2).
+"""Tests for lode.faithfulness steps 1-2 -- span check + extractive coupling.
 
-Acceptance (docs/retrieval.md, faithfulness gate step 1): a ``quoted_span`` absent
-from the cited version body fails the check (so the claim is dropped downstream); a
-span differing only by whitespace is accepted via normalized-whitespace match; no
-model is ever invoked -- these are pure string checks.
+Step 1 (lode-1k3.2): a ``quoted_span`` absent from the cited version body fails
+the check (so the claim is dropped downstream); a span differing only by
+whitespace is accepted via normalized-whitespace match.
+
+Step 2 (lode-1k3.3, docs/retrieval.md faithfulness gate): a claim whose
+load-bearing payload lies inside one of its cited spans is extractively coupled
+(verified outright); a claim whose payload is not inside any single span -- an
+inverted quote, a drifted number, or a synthesis split across spans -- is not
+coupled. Both steps are pure string checks; no model is ever invoked.
 """
 
 from lode.answer import Claim, Support
 from lode.faithfulness import (
+    claim_extractively_coupled,
     claim_spans_verified,
     normalize_whitespace,
     span_occurs,
@@ -79,3 +85,57 @@ def test_claim_with_unresolved_target_is_not_verified() -> None:
         support=[Support(version_id="v-missing", quoted_span="rerank OFF")],
     )
     assert not claim_spans_verified(claim, {})
+
+
+def _coupled(text: str, *spans: str) -> bool:
+    return claim_extractively_coupled(
+        Claim(
+            text=text,
+            support=[Support(version_id="v-1", quoted_span=s) for s in spans],
+        )
+    )
+
+
+def test_payload_inside_span_is_coupled() -> None:
+    # Glue ("is") is dropped; the load-bearing "rerank"/"off" both lie in the span.
+    assert _coupled("rerank is off", "lode ships rerank OFF in the skeleton")
+
+
+def test_inverted_quote_is_not_coupled() -> None:
+    # Real but inverted quote: "on" is nowhere in a span that says "off".
+    assert not _coupled("rerank is on", "lode ships rerank OFF in the skeleton")
+
+
+def test_drifted_number_is_not_coupled() -> None:
+    # The claim's number is not the span's number -- the drifted digit breaks coupling.
+    assert not _coupled("the limit is 5000 requests", "limit is 3000 requests")
+
+
+def test_correct_number_is_coupled() -> None:
+    assert _coupled("the limit is 3000 requests", "the limit is 3000 requests/min")
+
+
+def test_number_token_is_word_bounded_not_substring() -> None:
+    # "5000" must not couple just because it appears inside "150000".
+    assert not _coupled("exactly 5000", "the ceiling is 150000 rows")
+
+
+def test_payload_split_across_spans_is_synthesis_not_coupled() -> None:
+    # Each token is in *a* span, but no *single* span holds the whole payload --
+    # that is synthesis (step 3's job), not extractive coupling.
+    assert not _coupled("rerank off skeleton", "rerank OFF here", "walking skeleton")
+
+
+def test_payload_inside_one_of_several_spans_is_coupled() -> None:
+    # Coupling needs only one span to contain the full payload; extra spans are fine.
+    assert _coupled("walking skeleton", "unrelated quote", "the walking skeleton ships")
+
+
+def test_all_glue_claim_is_not_coupled() -> None:
+    # Every token is grammatical glue -- no load-bearing payload survives, so there
+    # is nothing to find inside a span and the claim fails closed (not coupled).
+    assert not _coupled("the is a", "the is a verbatim span")
+
+
+def test_coupling_is_case_insensitive() -> None:
+    assert _coupled("RERANK OFF", "rerank off in the skeleton")

@@ -139,7 +139,15 @@ Runs app-side, after the Q&A LLM returns and before display:
 2. **Extractive coupling (deterministic, v1).** A **fast path**: if the claim's load-bearing payload
    lies **inside** the quoted span, the claim is verified outright. This is the cheap common case and
    stops a model pairing a real but inverted quote with a contradicting claim, or a drifted number
-   being both quoted-verbatim and wrong.
+   being both quoted-verbatim and wrong. *v1 operationalization:* the load-bearing payload is the
+   claim's word-token set (case-folded, letters/digits) minus a small fixed set of grammatical glue
+   (articles + the copula "to be") — never numbers, entities, or polarity/quantity words like
+   "off"/"no"/"all", which are exactly what drift turns on. A claim couples iff **some single** cited
+   span's tokens contain its whole payload; a payload split across spans is synthesis and falls to
+   step 3. The stopword set is deliberately minimal — omitting a word only makes coupling *stricter*
+   (a faithful claim falls through to NLI rather than fast-pathing), the fail-closed direction. **Until
+   the step-3 NLI gate lands (lode-1k3.4), a claim that passes step 1 but not coupling has nothing to
+   verify it and is dropped** (fail-closed), so v1's gate is extractive-only.
 3. **Entailment check (local NLI, v1 — coarse, tuning pending).** Claims that pass the span check but
    *not* extractive coupling — genuine multi-note **synthesis**, and legitimate paraphrase that sits
    outside any single span — fall through to a **local NLI / cross-encoder** that scores whether the

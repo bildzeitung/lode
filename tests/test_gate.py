@@ -1,9 +1,15 @@
 """Tests for lode.gate -- the faithfulness gate's drop/abstain orchestration (lode-1k3.5).
 
 Acceptance (docs/retrieval.md, faithfulness gate steps 4-5): claims that fail the
-verbatim-span check are dropped, never displayed; surviving claims are returned in
-order with their citations intact; and when zero claims survive, the gate abstains
-("your notes don't answer this") and returns no claims.
+staged per-claim decision are dropped, never displayed; surviving claims are
+returned in order with their citations intact; and when zero claims survive, the
+gate abstains ("your notes don't answer this") and returns no claims.
+
+The decision is staged: verbatim-span check (step 1), then the extractive-coupling
+fast path (step 2, lode-1k3.3). With the step-3 NLI gate not yet built, a claim
+that passes the span check but is *not* extractively coupled has nothing to verify
+it and is dropped fail-closed -- so a real quote that does not contain the claim's
+load-bearing payload is rejected, and only a coupled claim survives.
 """
 
 import dataclasses
@@ -62,14 +68,47 @@ def test_empty_answer_abstains() -> None:
 def test_partial_survival_drops_only_the_failures_and_keeps_order() -> None:
     answer = Answer(
         [
-            _claim("first", "rerank OFF"),  # verifies
-            _claim("second", "fabricated"),  # dropped
-            _claim("third", "walking skeleton"),  # verifies
+            _claim("rerank off", "rerank OFF"),  # span ok + coupled -> survives
+            _claim("second", "fabricated"),  # span absent -> dropped
+            _claim("walking skeleton", "walking skeleton"),  # span ok + coupled
         ]
     )
     result = apply_gate(answer, {"v-1": BODY})
     assert not result.abstained
-    assert [c.text for c in result.surviving_claims] == ["first", "third"]
+    assert [c.text for c in result.surviving_claims] == [
+        "rerank off",
+        "walking skeleton",
+    ]
+
+
+def test_real_quote_not_containing_payload_is_rejected() -> None:
+    # Inverted quote: the span is verbatim-present (passes step 1) but the claim's
+    # payload "on" is not inside it -- not coupled, and with no NLI gate yet it is
+    # dropped fail-closed (acceptance: a real quote lacking the payload is rejected).
+    answer = Answer([_claim("rerank is on", "rerank OFF")])
+    result = apply_gate(answer, {"v-1": BODY})
+    assert result.abstained
+
+
+def test_drifted_number_is_rejected() -> None:
+    # The wrong number is both quoted-verbatim (step 1 passes) and not the claim's
+    # number -- coupling fails on the drifted digit, so the claim is dropped.
+    body = "the cache holds 3000 entries before eviction."
+    answer = Answer(
+        [_claim("the cache holds 5000 entries", "cache holds 3000 entries")]
+    )
+    result = apply_gate(answer, {"v-1": body})
+    assert result.abstained
+
+
+def test_coupled_claim_is_verified_without_nli() -> None:
+    # Payload lies inside the span -> verified outright on the deterministic fast
+    # path (acceptance: a claim whose payload is inside the span survives, no NLI).
+    body = "the cache holds 3000 entries before eviction."
+    answer = Answer([_claim("cache holds 3000", "cache holds 3000 entries")])
+    result = apply_gate(answer, {"v-1": body})
+    assert not result.abstained
+    assert result.surviving_claims[0].text == "cache holds 3000"
 
 
 def test_claim_with_one_failing_support_is_dropped() -> None:
