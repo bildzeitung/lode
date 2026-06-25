@@ -58,8 +58,10 @@ lode --help        # lists the subcommands: add, ask, status, jobs, ...
 lode version       # prints the installed version
 ```
 
-Some subcommands (`ask`, `eval`, `purge`) are intentional stubs until their build
-phases land — `--help` marks which. `lode add`, `status`, and `jobs` are real.
+Every subcommand is real: `add`, `ask`, `status`, `jobs`, `egress`, `purge`, and
+`eval`. `lode eval` scores the golden Q&A set (recall@k, faithfulness, abstention)
+and needs Anthropic credentials, so CI runs it via the gated `nox -s eval` session
+rather than the offline `nox -s tests` gate.
 
 ### 4. Run the dev loop (nox)
 
@@ -70,6 +72,10 @@ phases land — `--help` marks which. `lode add`, `status`, and `jobs` are real.
 nox -t fix         # ruff format + ruff check --fix (the pre-merge fixer)
 nox -s tests       # pytest — the test gate
 ```
+
+A third session, `nox -s eval`, runs the golden-set eval (`lode eval`); it is
+opt-in and credential-gated (it `skip`s without `ANTHROPIC_API_KEY`), so a bare
+`nox` and `nox -s tests` stay offline and never run it.
 
 A successful `nox -s tests` ends with a line like `=== N passed, M skipped ===` and
 `Session tests was successful`. That green run is your "the environment is wired up

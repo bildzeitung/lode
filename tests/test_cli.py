@@ -31,9 +31,8 @@ from lode.versions import save
 
 runner = CliRunner()
 
-# `add` (lode-y42.1), `status` / `jobs` (lode-y42.3), `purge` (lode-7cx) and `ask`
-# (lode-y42.2) are real; `eval` is still a dispatching stub.
-STUB_SUBCOMMANDS = ["eval"]
+# Every subcommand is real: `add` (lode-y42.1), `ask` (lode-y42.2), `status` /
+# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `eval` (lode-5y8.2).
 ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "egress", "eval"]
 
 
@@ -56,11 +55,40 @@ def test_help_lists_all_subcommands() -> None:
         assert name in result.stdout
 
 
-@pytest.mark.parametrize("name", STUB_SUBCOMMANDS)
-def test_subcommand_dispatches(name: str) -> None:
-    result = runner.invoke(app, [name])
+# --- lode eval --------------------------------------------------------------
+
+
+def test_eval_reports_the_three_metrics(monkeypatch) -> None:
+    """`lode eval` runs the scorer and prints recall@k, faithfulness, abstention.
+
+    The command wires real, heavy seams (the fastembed model + a real Anthropic
+    client), so the scorer and embedder are stubbed: this asserts the command's
+    output contract (it drives ``score_golden_set`` and reports its three metrics),
+    not the harness itself, which has its own offline coverage.
+    """
+    from lode.eval.harness import GoldenScore
+
+    score = GoldenScore(
+        k=7,
+        recall_at_k=0.8,
+        faithfulness_accuracy=0.9,
+        abstention_accuracy=1.0,
+        items=(),
+    )
+    # Stub the embedder construction (no model download) and the scorer (no network
+    # / no real corpus build); the answerer closure is never called once the scorer
+    # is replaced.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", lambda settings: object())
+    monkeypatch.setattr(
+        "lode.eval.harness.score_golden_set", lambda *args, **kwargs: score
+    )
+
+    result = runner.invoke(app, ["eval"])
+
     assert result.exit_code == 0
-    assert name in result.stdout
+    assert "recall@7: 0.800" in result.stdout
+    assert "faithfulness/citation accuracy: 0.900" in result.stdout
+    assert "abstention correctness: 1.000" in result.stdout
 
 
 # --- lode add ---------------------------------------------------------------
