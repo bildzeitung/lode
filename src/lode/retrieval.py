@@ -33,6 +33,7 @@ pipeline is the embedder's concern, distinct from the search node), so
 landed :meth:`VectorStore.search` signature and keeping this read side model-free.
 """
 
+import re
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -40,6 +41,32 @@ from enum import IntEnum
 
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
+
+#: Word-token pattern for turning a natural-language question into FTS5 terms.
+#: ``\w+`` runs (letters/digits/underscore) are the terms; everything else
+#: (whitespace, the trailing ``?``, punctuation) is a separator. A token can never
+#: contain a double-quote, so quoting each term in :func:`build_match_query` is safe.
+_QUERY_TOKEN = re.compile(r"\w+")
+
+
+def build_match_query(question: str) -> str:
+    """Build an FTS5 ``MATCH`` expression from a natural-language ``question``.
+
+    The lexical leg's ``query`` is an FTS5 ``MATCH`` expression, and building it
+    from the user's question is the read side's job (``lode.lexical`` — "the
+    retrieval pipeline owns building it from a user question"). The question's word
+    tokens are extracted and **OR-ed** rather than left to FTS5's default AND: a
+    real question's every word rarely co-occurs in one passage, so AND would almost
+    always match nothing, while OR widens recall and BM25 still ranks a passage
+    matching more terms higher. Each token is double-quoted so a stop-word that
+    collides with an FTS5 operator (``and`` / ``or`` / ``not`` / ``near``) or a
+    stray punctuation char is matched as a literal term, not parsed as syntax.
+
+    Returns ``""`` when the question has no word tokens — the caller skips the
+    lexical leg, since an empty ``MATCH`` is an FTS5 syntax error, not a match-none.
+    """
+    tokens = _QUERY_TOKEN.findall(question)
+    return " OR ".join(f'"{token}"' for token in tokens)
 
 
 def live_head_versions(conn: sqlite3.Connection) -> list[str]:

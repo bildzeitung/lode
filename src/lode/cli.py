@@ -4,8 +4,9 @@ A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
 subcommand surface). ``add`` (capture + save, lode-y42.1), the operational
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
-:meth:`lode.repository.Repository.purge`. ``ask`` / ``eval`` remain dispatching
-stubs until their E10 tasks.
+:meth:`lode.repository.Repository.purge`; ``ask`` (lode-y42.2) runs the cited Q&A
+loop (retrieve → synthesize → faithfulness gate → cite or abstain). ``eval``
+remains a dispatching stub until its E10 task.
 """
 
 import json
@@ -19,9 +20,19 @@ from pathlib import Path
 
 import typer
 
-from lode import __version__, jobs, versions
+from lode import __version__, cited_answer, jobs, versions
+from lode.answer import Support
+from lode.config import Settings
 from lode.logconfig import configure_logging
 from lode.repository import Repository
+from lode.retrieval import (
+    ContextItem,
+    build_match_query,
+    expand_parents,
+    lexical_search,
+    reciprocal_rank_fusion,
+    trust_rank,
+)
 from lode.storage import init_db
 
 app = typer.Typer(
@@ -36,7 +47,7 @@ app = typer.Typer(
 def main() -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
-    # subcommands. Real behaviour for ask / eval lands in later E10 tasks.
+    # subcommands. Real behaviour for eval lands in a later E10 task.
     # Configure logging once, here, so every subcommand
     # (and the Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG).
     configure_logging()
@@ -133,10 +144,101 @@ def add(
     typer.echo(note_id)
 
 
+#: How an abstention reads at the terminal — the honest "no grounded answer"
+#: failure mode (``docs/retrieval.md`` the faithfulness gate's abstention path),
+#: printed when no claim survives the gate.
+_ABSTAIN_LINE = (
+    "No grounded answer: your notes don't support a cited claim for this question."
+)
+
+
 @app.command()
-def ask() -> None:
-    """Ask a cited question over the corpus (stub; lands in E10)."""
-    _stub("ask")
+def ask(
+    question: str = typer.Argument(
+        ..., help="Your question, answered from your own notes with citations."
+    ),
+    think_harder: bool = typer.Option(
+        False,
+        "--think-harder",
+        help="Use the higher-quality 'think harder' Q&A model (Claude Opus).",
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Answer a question from your notes — retrieve, synthesize, gate, then cite.
+
+    Runs the read pipeline (lexical search → RRF fusion → small-to-big parent
+    expansion → trust-rank) to build a cited context, hands it to the Q&A loop
+    (:func:`lode.cited_answer.ask`, which synthesizes structured claims and runs
+    the faithfulness gate **before display**), and prints either the surviving
+    cited claims — each with its ``version_id`` / ``snapshot_id`` plus the verbatim
+    span it rests on — or an honest abstention when nothing is grounded. Any
+    no_egress material that matched is surfaced as "present, withheld from cloud
+    synthesis" rather than silently dropped.
+
+    The dense (vector) retrieval leg is not wired in yet: it needs the on-disk
+    LanceDB location the capture-side indexing establishes (lode-1f9) and a
+    query-side embedding step, so retrieval currently runs on the synchronous
+    lexical leg alone — RRF scores a single-leg passage fine (lode-bkc).
+    """
+    conn = _open_db(db)
+    try:
+        context = _retrieve(conn, question)
+        answer = cited_answer.ask(conn, question, context, think_harder=think_harder)
+    finally:
+        conn.close()
+    for line in _format_cited_answer(answer):
+        typer.echo(line)
+
+
+def _retrieve(
+    conn: sqlite3.Connection, question: str, *, settings: Settings | None = None
+) -> list[ContextItem]:
+    """Build the trust-ranked Q&A context for ``question`` (lexical leg, E4).
+
+    Lexical search (heads only) → app-side RRF → small-to-big parent expansion →
+    trust-rank, capped at ``retrieval_top_k``. The dense leg is passed as empty
+    until the capture-side vector index + query embedding land (see :func:`ask`,
+    lode-bkc); RRF scores a passage present in one leg from that leg alone, so the
+    lexical-only pass is a valid subset of the documented pipeline. A question with
+    no word tokens skips the lexical leg and yields empty context (an honest
+    abstention).
+    """
+    settings = settings or Settings()
+    match = build_match_query(question)
+    lexical = lexical_search(conn, match, k=settings.retrieval_top_k) if match else []
+    fused = reciprocal_rank_fusion(lexical, [], k=settings.rrf_k)
+    expanded = expand_parents(conn, fused[: settings.retrieval_top_k])
+    return trust_rank(conn, expanded).context
+
+
+def _format_cited_answer(answer: cited_answer.CitedAnswer) -> list[str]:
+    """Render a gated answer for the terminal: cited claims, or an abstention.
+
+    Each surviving claim prints its text followed by one indented citation line per
+    support — its ``version_id`` / ``snapshot_id`` and the verbatim span. When the
+    answer abstained (no claim survived the gate) the honest abstention line is
+    printed instead. Either way, any no_egress material is surfaced as "present,
+    withheld from cloud synthesis" so the user knows relevant local content exists.
+    """
+    lines: list[str] = []
+    if answer.abstained:
+        lines.append(_ABSTAIN_LINE)
+    else:
+        for claim in answer.claims:
+            lines.append(claim.text)
+            lines.extend(_format_citation(support) for support in claim.support)
+    for withheld in answer.withheld_citations:
+        lines.append(f"  withheld {withheld.target_id}: {withheld.note}")
+    return lines
+
+
+def _format_citation(support: Support) -> str:
+    """Render one support as an indented ``<id-kind> <id>  "<span>"`` citation."""
+    if support.version_id is not None:
+        target = f"version_id {support.version_id}"
+    else:
+        target = f"snapshot_id {support.snapshot_id}"
+    return f'  - {target}  "{support.quoted_span}"'
 
 
 @app.command()
