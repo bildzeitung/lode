@@ -16,7 +16,7 @@ import lancedb
 import pytest
 
 from lode.config import load_settings
-from lode.embedding import EmbeddingCacheBackend, embed
+from lode.embedding import EmbeddingCacheBackend, FastEmbedEmbedder, embed
 from lode.repository import CacheBackend, CompositeCache, Repository
 from lode.storage import init_db
 from lode.versions import save
@@ -169,6 +169,37 @@ def test_empty_body_embeds_nothing(tmp_path: Path) -> None:
         assert stub.calls == []
     finally:
         conn.close()
+
+
+# --- FastEmbedEmbedder.embed_query: the asymmetric query side (lode-bkc) --------
+#
+# The query path applies the ``search_query:`` prefix (vs ``search_document:`` for
+# indexed passages) and returns a single vector. Verified offline by stubbing the
+# model so the gate never downloads it; the real model load is the smoke test.
+
+
+def test_embed_query_applies_search_query_prefix() -> None:
+    captured: dict[str, list[str]] = {}
+
+    class _FakeVector:
+        def tolist(self) -> list[float]:
+            return [0.1, 0.2, 0.3]
+
+    class _FakeModel:
+        def embed(self, texts: list[str]) -> list[_FakeVector]:
+            captured["texts"] = list(texts)
+            return [_FakeVector()]
+
+    embedder = FastEmbedEmbedder(_settings())
+    # Bypass the real (downloaded) model with the offline fake.
+    embedder._load = lambda: _FakeModel()  # type: ignore[method-assign]
+
+    vector = embedder.embed_query("how do I rotate the certs?")
+
+    # The query is prefixed for the asymmetric query side, embedded as a single
+    # item, and returned as one plain-float vector.
+    assert captured["texts"] == ["search_query: how do I rotate the certs?"]
+    assert vector == [0.1, 0.2, 0.3]
 
 
 # --- EmbeddingCacheBackend: vectors reached THROUGH the Repository (lode-1f9) ---

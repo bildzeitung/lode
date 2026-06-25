@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     # cited Q&A loop pulls in but the rest of the CLI never touches.
     from lode.answer import Support
     from lode.cited_answer import CitedAnswer
+    from lode.embedding import Embedder
     from lode.retrieval import ContextItem
 
 app = typer.Typer(
@@ -60,6 +61,19 @@ def _default_db_path() -> Path:
     fallthrough default when neither the flag nor the env var is set.
     """
     return Path.home() / ".local" / "share" / "lode" / "lode.db"
+
+
+def _default_lance_dir(db_path: Path) -> Path:
+    """Resolve the LanceDB vector store: a ``lancedb/`` subdir beside the DB file.
+
+    ``docs/configuration.md`` co-locates everything lode persists under one root —
+    ``$LODE_HOME/lode.db`` next to ``$LODE_HOME/lancedb/`` — so the dense leg reads
+    from the same store the capture-side embed leg fills, derived from the resolved
+    DB path rather than introduced as a second, divergeable path knob. (Where
+    vectors live is lode-1f9's to own once cache composition wires the add path;
+    this read-side default just points at the documented sibling.)
+    """
+    return db_path.parent / "lancedb"
 
 
 def _open_db(db: Path | None) -> sqlite3.Connection:
@@ -161,27 +175,23 @@ def ask(
 ) -> None:
     """Answer a question from your notes — retrieve, synthesize, gate, then cite.
 
-    Runs the read pipeline (lexical search → RRF fusion → small-to-big parent
-    expansion → trust-rank) to build a cited context, hands it to the Q&A loop
-    (:func:`lode.cited_answer.ask`, which synthesizes structured claims and runs
-    the faithfulness gate **before display**), and prints either the surviving
+    Runs the read pipeline (lexical + dense search → RRF fusion → small-to-big
+    parent expansion → trust-rank) to build a cited context, hands it to the Q&A
+    loop (:func:`lode.cited_answer.ask`, which synthesizes structured claims and
+    runs the faithfulness gate **before display**), and prints either the surviving
     cited claims — each with its ``version_id`` / ``snapshot_id`` plus the verbatim
     span it rests on — or an honest abstention when nothing is grounded. Any
     no_egress material that matched is surfaced as "present, withheld from cloud
     synthesis" rather than silently dropped.
-
-    The dense (vector) retrieval leg is not wired in yet: it needs the on-disk
-    LanceDB location the capture-side indexing establishes (lode-1f9) and a
-    query-side embedding step, so retrieval currently runs on the synchronous
-    lexical leg alone — RRF scores a single-leg passage fine (lode-bkc).
     """
     # Imported here, not at module scope: cited_answer pulls in the Anthropic SDK,
     # which the instant capture path (``add``) must never load.
     from lode import cited_answer
 
-    conn = _open_db(db)
+    db_path = db or _default_db_path()
+    conn = _open_db(db_path)
     try:
-        context = _retrieve(conn, question)
+        context = _retrieve(conn, question, lance_dir=_default_lance_dir(db_path))
         answer = cited_answer.ask(conn, question, context, think_harder=think_harder)
     finally:
         conn.close()
@@ -190,32 +200,53 @@ def ask(
 
 
 def _retrieve(
-    conn: sqlite3.Connection, question: str, *, settings: Settings | None = None
+    conn: sqlite3.Connection,
+    question: str,
+    *,
+    lance_dir: str | Path,
+    embedder: "Embedder | None" = None,
+    settings: Settings | None = None,
 ) -> "list[ContextItem]":
-    """Build the trust-ranked Q&A context for ``question`` (lexical leg, E4).
+    """Build the trust-ranked Q&A context for ``question`` — both legs fused (E4).
 
-    Lexical search (heads only) → app-side RRF → small-to-big parent expansion →
-    trust-rank, capped at ``retrieval_top_k``. The dense leg is passed as empty
-    until the capture-side vector index + query embedding land (see :func:`ask`,
-    lode-bkc); RRF scores a passage present in one leg from that leg alone, so the
-    lexical-only pass is a valid subset of the documented pipeline. A question with
-    no word tokens skips the lexical leg and yields empty context (an honest
-    abstention).
+    The full read side: lexical search (FTS5/BM25, heads only) and the dense leg
+    (cosine ANN over the LanceDB store under ``lance_dir``, the question embedded
+    query-side via ``embedder.embed_query``) each capped at ``retrieval_top_k``,
+    fused app-side (:func:`~lode.retrieval.reciprocal_rank_fusion`), the top fused
+    passages expanded small-to-big (:func:`~lode.retrieval.expand_parents`) and
+    ordered by the trust gradient (:func:`~lode.retrieval.trust_rank`). RRF scores
+    a passage present in one leg from that leg alone, so a passage matched only by
+    the dense leg still reaches the Q&A context (lode-bkc). A question with no word
+    tokens skips the lexical leg, but the dense leg still runs.
+
+    ``embedder`` defaults to the pinned local ONNX model
+    (:class:`lode.embedding.FastEmbedEmbedder`); tests inject a stub so the gate
+    stays offline.
     """
     # Imported here, not at module scope: retrieval pulls in the vector stack
-    # (pyarrow via lode.vectorstore), which the instant capture path never loads.
+    # (pyarrow via lode.vectorstore) and the embedder (fastembed), which the instant
+    # capture path never loads.
+    from lode.embedding import FastEmbedEmbedder
     from lode.retrieval import (
         build_match_query,
         expand_parents,
         lexical_search,
         reciprocal_rank_fusion,
         trust_rank,
+        vector_search,
     )
+    from lode.vectorstore import VectorStore
 
     settings = settings or Settings()
     match = build_match_query(question)
     lexical = lexical_search(conn, match, k=settings.retrieval_top_k) if match else []
-    fused = reciprocal_rank_fusion(lexical, [], k=settings.rrf_k)
+
+    embedder = embedder or FastEmbedEmbedder(settings)
+    query_vector = embedder.embed_query(question)
+    store = VectorStore(lance_dir, settings)
+    vector = vector_search(store, conn, query_vector, k=settings.retrieval_top_k)
+
+    fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)
     expanded = expand_parents(conn, fused[: settings.retrieval_top_k])
     return trust_rank(conn, expanded).context
 
