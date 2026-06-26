@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from lode.config import (
     Kind,
     Settings,
+    config_path,
     default_db_path,
     knob_kinds,
     lance_dir,
@@ -90,9 +91,11 @@ def test_layout_lives_under_one_root(
     monkeypatch.setenv("LODE_HOME", str(root))
     db = default_db_path()
     assert db == root / "lode.db"
-    # lancedb sits beside the DB, logs under the root — one inspectable tree.
+    # lancedb sits beside the DB, logs + the optional config under the root —
+    # one inspectable tree.
     assert lance_dir(db) == root / "lancedb"
     assert log_dir() == root / "logs"
+    assert config_path() == root / "config.toml"
 
 
 def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:

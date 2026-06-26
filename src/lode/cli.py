@@ -22,7 +22,15 @@ from typing import TYPE_CHECKING
 import typer
 
 from lode import __version__, jobs, versions
-from lode.config import Settings, default_db_path, lance_dir, log_dir
+from lode.config import (
+    LODE_HOME_ENV,
+    Settings,
+    config_path,
+    default_db_path,
+    lance_dir,
+    lode_home,
+    log_dir,
+)
 from lode.logconfig import configure_logging
 from lode.repository import Repository
 from lode.storage import init_db
@@ -509,6 +517,50 @@ def eval_() -> None:
     typer.echo(f"recall@{score.k}: {score.recall_at_k:.3f}")
     typer.echo(f"faithfulness/citation accuracy: {score.faithfulness_accuracy:.3f}")
     typer.echo(f"abstention correctness: {score.abstention_accuracy:.3f}")
+
+
+def _config_lines(db: Path | None) -> list[str]:
+    """Render the resolved on-disk locations as aligned ``label  path`` lines.
+
+    The root, log dir, and ``config.toml`` come from ``$LODE_HOME`` (lode.config);
+    the DB, its sibling lock, and the vector store reflect a ``--db`` override when
+    given — the lock and store are derived beside the chosen DB, matching the
+    "co-locate beside the DB" layout (``docs/configuration.md``). Whether
+    ``$LODE_HOME`` is set in the environment (vs the ``~/.lode`` default) and
+    whether the optional ``config.toml`` is present are surfaced inline.
+    """
+    db_path = db or default_db_path()
+    lock_path = db_path.with_name(db_path.name + ".lock")
+    cfg = config_path()
+    home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
+    config_state = "present" if cfg.exists() else "absent"
+    rows = [
+        ("LODE_HOME", f"{lode_home()}  ({home_source})"),
+        ("database", str(db_path)),
+        ("db lock", str(lock_path)),
+        ("vector store", str(lance_dir(db_path))),
+        ("logs", str(log_dir())),
+        ("config", f"{cfg}  ({config_state})"),
+    ]
+    width = max(len(label) for label, _ in rows)
+    return [f"{label:<{width}}  {value}" for label, value in rows]
+
+
+@app.command()
+def config(
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Show the resolved on-disk locations lode uses (``docs/configuration.md``).
+
+    A read-out of the single-root layout under ``$LODE_HOME`` (default ``~/.lode``)
+    so you can find, back up, or inspect lode's state: the root, the SQLite DB and
+    its sibling lock, the LanceDB vector store, the log directory, and the optional
+    ``config.toml`` (shown present/absent). Reads the resolved paths from
+    :mod:`lode.config` rather than re-deriving them; ``--db`` shifts the displayed
+    DB (and its lock + co-located vector store) to an explicit override.
+    """
+    for line in _config_lines(db):
+        typer.echo(line)
 
 
 @app.command()
