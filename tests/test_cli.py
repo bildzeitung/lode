@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from lode import __version__, cli
+from lode import __version__, cli, config
 from lode.answer import Claim, Support
 from lode.cli import app
 from lode.cited_answer import CitedAnswer
@@ -138,11 +138,22 @@ def test_add_reads_body_from_stdin_verbatim(tmp_path: Path) -> None:
     ) == [("from stdin\n",)]
 
 
-def test_add_uses_lode_db_env_var(tmp_path: Path) -> None:
-    db_path = tmp_path / "env.db"
-    result = runner.invoke(app, ["add", "via env"], env={"LODE_DB": str(db_path)})
+def test_add_uses_lode_home_env_var(tmp_path: Path) -> None:
+    # $LODE_HOME is the single root: with no --db, `add` writes $LODE_HOME/lode.db
+    # (lode-qd9, replacing the old $LODE_DB binding).
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["add", "via env"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
-    assert db_path.exists()
+    assert (home / "lode.db").exists()
+
+
+def test_add_logs_land_under_lode_home(tmp_path: Path) -> None:
+    # Acceptance: logs land in $LODE_HOME/logs/ (lode-qd9). The group callback
+    # attaches a file handler there on every command.
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["add", "logged"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    assert (home / "logs").is_dir()
 
 
 @pytest.mark.parametrize("body", ["", "   ", "\n\t  \n"])
@@ -573,7 +584,7 @@ def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None
     """
     settings = load_settings(embedding_vector_dim=4)
     db_path = tmp_path / "lode.db"
-    lance_dir = cli._default_lance_dir(db_path)
+    lance_dir = config.lance_dir(db_path)
     conn = init_db(db_path)
     try:
         body = "alpha bravo charlie delta echo foxtrot"

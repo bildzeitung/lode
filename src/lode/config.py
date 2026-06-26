@@ -22,8 +22,10 @@ drives :mod:`lode.redact`'s redact-before-index / redact-before-egress controls;
 each pattern is validated to compile at load.
 """
 
+import os
 import re
 from enum import Enum
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -289,3 +291,50 @@ def knob_kinds() -> dict[str, str]:
 def load_settings(**overrides: object) -> Settings:
     """Construct and validate settings; invalid overrides raise at load."""
     return Settings(**overrides)
+
+
+# --- On-disk layout (docs/configuration.md "Paths & locations") --------------
+# Everything lode persists lives under one user-controllable root, $LODE_HOME
+# (default ~/.lode): the DB (+ its sibling lock), the LanceDB vector store, and
+# the log directory. These helpers are the single place the layout is resolved,
+# so the CLI/TUI surface (lode-ftc) reads it rather than re-deriving it. $LODE_HOME
+# replaces the older $LODE_DB env binding (lode-qd9); --db stays an explicit
+# per-invocation override of just the DB file (used by tests).
+
+#: Env var naming the single on-disk root for all of lode's state.
+LODE_HOME_ENV = "LODE_HOME"
+
+_DEFAULT_HOME = "~/.lode"
+
+
+def lode_home() -> Path:
+    """Resolve the on-disk root: ``$LODE_HOME`` (default ``~/.lode``), expanded."""
+    raw = os.environ.get(LODE_HOME_ENV) or _DEFAULT_HOME
+    return Path(raw).expanduser()
+
+
+def default_db_path() -> Path:
+    """The SQLite DB path under the root: ``$LODE_HOME/lode.db``.
+
+    The single-instance advisory lock lives beside it as ``lode.db.lock``.
+    """
+    return lode_home() / "lode.db"
+
+
+def lance_dir(db_path: Path) -> Path:
+    """The LanceDB vector store as a ``lancedb/`` sibling of the DB file.
+
+    Derived from the resolved DB path rather than the root directly, so an
+    explicit ``--db`` override co-locates its vector store beside the chosen DB
+    (and the default ``$LODE_HOME/lode.db`` still yields ``$LODE_HOME/lancedb/``).
+    Capture-side embed and read-side dense search therefore read/write the *same*
+    store. (Where vectors physically land once the embed leg is wired into the
+    capture path is lode-1f9's cache-composition territory; this just keeps the
+    path one documented value, lode-qd9 / lode-bkc.)
+    """
+    return db_path.parent / "lancedb"
+
+
+def log_dir() -> Path:
+    """The application log directory under the root: ``$LODE_HOME/logs/``."""
+    return lode_home() / "logs"

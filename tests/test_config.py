@@ -1,13 +1,25 @@
 """Tests for lode.config — the typed settings module (lode-txh.3).
 
 Asserts the acceptance criteria: every knob has a kind tag (runtime/tune/build),
-documented defaults load, and invalid values fail validation at load.
+documented defaults load, and invalid values fail validation at load. Also covers
+the single-root on-disk layout under ``$LODE_HOME`` (lode-qd9).
 """
+
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from lode.config import Kind, Settings, knob_kinds, load_settings
+from lode.config import (
+    Kind,
+    Settings,
+    default_db_path,
+    knob_kinds,
+    lance_dir,
+    load_settings,
+    lode_home,
+    log_dir,
+)
 
 VALID_KINDS = {k.value for k in Kind}
 
@@ -49,6 +61,45 @@ def test_local_model_ids_and_dim_are_pinned() -> None:
 
 def test_entailment_gate_ships_fail_closed() -> None:
     assert Settings().entailment_threshold == 0.9
+
+
+# --- On-disk layout under $LODE_HOME (lode-qd9) -----------------------------
+
+
+def test_lode_home_defaults_to_dot_lode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LODE_HOME", raising=False)
+    assert lode_home() == Path.home() / ".lode"
+
+
+def test_lode_home_honours_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    assert lode_home() == tmp_path / "root"
+
+
+def test_lode_home_expands_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LODE_HOME", "~/custom-lode")
+    assert lode_home() == Path.home() / "custom-lode"
+
+
+def test_layout_lives_under_one_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "root"
+    monkeypatch.setenv("LODE_HOME", str(root))
+    db = default_db_path()
+    assert db == root / "lode.db"
+    # lancedb sits beside the DB, logs under the root — one inspectable tree.
+    assert lance_dir(db) == root / "lancedb"
+    assert log_dir() == root / "logs"
+
+
+def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:
+    # --db relocates the DB file; the vector store co-locates beside the chosen DB
+    # so capture and retrieval still share one store.
+    db = tmp_path / "elsewhere" / "custom.db"
+    assert lance_dir(db) == tmp_path / "elsewhere" / "lancedb"
 
 
 @pytest.mark.parametrize(

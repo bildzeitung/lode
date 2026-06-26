@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import typer
 
 from lode import __version__, jobs, versions
-from lode.config import Settings
+from lode.config import Settings, default_db_path, lance_dir, log_dir
 from lode.logconfig import configure_logging
 from lode.repository import Repository
 from lode.storage import init_db
@@ -49,51 +49,31 @@ app = typer.Typer(
 def main() -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
-    # subcommands. Configure logging once, here, so every subcommand
-    # (and the Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG).
-    configure_logging()
-
-
-def _default_db_path() -> Path:
-    """Resolve the database path: ``$LODE_DB`` else ``~/.local/share/lode/lode.db``.
-
-    The ``--db`` option's ``envvar`` already reads ``LODE_DB``; this is the
-    fallthrough default when neither the flag nor the env var is set.
-    """
-    return Path.home() / ".local" / "share" / "lode" / "lode.db"
-
-
-def _default_lance_dir(db_path: Path) -> Path:
-    """Resolve the LanceDB vector store: a ``lancedb/`` subdir beside the DB file.
-
-    ``docs/configuration.md`` co-locates everything lode persists under one root —
-    ``$LODE_HOME/lode.db`` next to ``$LODE_HOME/lancedb/`` — so the dense leg reads
-    from the same store the capture-side embed leg fills, derived from the resolved
-    DB path rather than introduced as a second, divergeable path knob. (Where
-    vectors live is lode-1f9's to own once cache composition wires the add path;
-    this read-side default just points at the documented sibling.)
-    """
-    return db_path.parent / "lancedb"
+    # subcommands. Configure logging once, here, so every subcommand (and the
+    # Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG) and lands
+    # in $LODE_HOME/logs/ (lode.config.log_dir, docs/configuration.md).
+    configure_logging(log_dir=log_dir())
 
 
 def _open_db(db: Path | None) -> sqlite3.Connection:
     """Open the lode database (creating it if absent) with the schema applied.
 
-    Resolves the path like ``add`` (flag/``LODE_DB``/default), ensures the parent
-    directory exists, and returns an :func:`init_db` connection — so the read-out
-    commands always see the ``jobs`` / ``egress_log`` tables even on a first run.
+    Resolves the path like ``add`` (the ``--db`` flag else the ``$LODE_HOME``
+    default), ensures the parent directory exists, and returns an :func:`init_db`
+    connection — so the read-out commands always see the ``jobs`` / ``egress_log``
+    tables even on a first run.
     """
-    db_path = db or _default_db_path()
+    db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return init_db(db_path)
 
 
-#: Shared ``--db`` option (path / ``LODE_DB`` / default) for the db-backed commands.
+#: Shared ``--db`` option for the db-backed commands — an explicit per-invocation
+#: override of just the DB file; the default root is ``$LODE_HOME`` (lode.config).
 _DB_OPTION = typer.Option(
     None,
     "--db",
-    envvar="LODE_DB",
-    help="SQLite database path (default: ~/.local/share/lode/lode.db).",
+    help="SQLite database path (default: $LODE_HOME/lode.db, i.e. ~/.lode/lode.db).",
 )
 
 
@@ -126,7 +106,7 @@ def add(
     path, ``docs/design.md``). The body comes from the ``TEXT`` argument or, if
     omitted, verbatim from stdin; an empty / whitespace-only body is refused.
     """
-    db_path = db or _default_db_path()
+    db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
     if not body.strip():
         typer.echo("refusing to save an empty note", err=True)
@@ -188,10 +168,10 @@ def ask(
     # which the instant capture path (``add``) must never load.
     from lode import cited_answer
 
-    db_path = db or _default_db_path()
+    db_path = db or default_db_path()
     conn = _open_db(db_path)
     try:
-        context = _retrieve(conn, question, lance_dir=_default_lance_dir(db_path))
+        context = _retrieve(conn, question, lance_dir=lance_dir(db_path))
         answer = cited_answer.ask(conn, question, context, think_harder=think_harder)
     finally:
         conn.close()
