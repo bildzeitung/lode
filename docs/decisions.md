@@ -79,6 +79,19 @@ are catalogued in [configuration.md](configuration.md).
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
   pre-data.
+- **`$LODE_HOME` migration from the old XDG-style data dir (mechanism unsettled).** The on-disk
+  layout is now a single root, `$LODE_HOME` (default `~/.lode`), holding the DB, lock, `lancedb/`,
+  `logs/`, and optional `config.toml` ([configuration.md](configuration.md#paths--locations)) — the
+  shipped code resolved the DB from an XDG-style `~/.local/share/lode/lode.db` (an old `$LODE_DB`
+  binding), now replaced (lode-qd9). **New installs are settled: they use `$LODE_HOME`.** What is
+  *not* settled is how an existing user with data at `~/.local/share/lode/lode.db` reaches the new
+  root — the two candidates are (a) a **one-time move-if-present on startup** (zero-touch, but the CLI
+  silently relocates a user's irreplaceable DB, a data-safety call) versus (b) **document a manual
+  move** (a release note / `lode doctor` hint; safe, but a stale install silently starts empty at
+  `~/.lode` until the user acts). This is a genuine product/UX + data-safety decision, deliberately
+  **not** picked inside lode-qd9 (which delivers the consolidation for new installs without touching
+  any existing data); tracked as the discovered-from migration ticket. Pick before the first real
+  release, since the longer users run on `~/.local/share/lode` the more data a migration must move.
 - **Landing loop — architecture + mechanics settled; two future upgrades noted.** The whole landing
   loop is decided in
   [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land-planned) — all landing
