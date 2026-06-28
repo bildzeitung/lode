@@ -5,8 +5,11 @@ subcommand surface). ``add`` (capture + save, lode-y42.1), the operational
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
 :meth:`lode.repository.Repository.purge`; ``ask`` (lode-y42.2) runs the cited Q&A
-loop (retrieve → synthesize → faithfulness gate → cite or abstain). ``eval``
-(lode-5y8.2) scores the golden Q&A set on recall@k, faithfulness, and abstention.
+loop (retrieve → synthesize → faithfulness gate → cite or abstain).
+
+The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
+integration test run via ``nox -s eval`` — it is **not** a shipped end-user
+command (``docs/decisions.md``, the eval-harness entry, Shape A, lode-5y8.5).
 """
 
 import json
@@ -518,57 +521,6 @@ def egress(
             f"sent: {_format_sent(sent_targets)}  "
             f"redactions: {_format_redactions(redactions)}"
         )
-
-
-@app.command(name="eval")
-def eval_() -> None:
-    """Score the golden Q&A set: recall@k, faithfulness, and abstention.
-
-    Builds the deterministic seed corpus into a fresh ephemeral store, drives the
-    landed retrieval + cited-Q&A pipeline over the golden set, and prints the three
-    eval metrics (:func:`lode.eval.harness.score_golden_set`): retrieval
-    **recall@k**, citation/**faithfulness accuracy**, and **abstention correctness**.
-
-    Wires the *real* seams the scorer injects: the local ONNX embedder
-    (:class:`lode.embedding.FastEmbedEmbedder` — deterministic, in-process, no
-    network for inference) builds the corpus + query vectors, and a real-client
-    answerer (:func:`lode.cited_answer.ask` with the credential-resolved Anthropic
-    client) sources the cited answers. The Q&A leg therefore needs Anthropic
-    credentials, so this is **not** part of the offline test gate — CI runs it via
-    the credential-gated ``nox -s eval`` session (``docs/decisions.md``, the
-    eval-harness entry).
-    """
-    # Imported here, not at module scope: the eval path pulls in the embedder
-    # (fastembed) and the Q&A SDK (anthropic), which the instant capture path
-    # (``add``) must never load.
-    from lode.cited_answer import ask
-    from lode.embedding import FastEmbedEmbedder
-    from lode.eval.harness import score_golden_set
-
-    settings = Settings()
-    embedder = FastEmbedEmbedder(settings)
-
-    # The scorer builds its own seed corpus into a fresh, empty store, so eval runs
-    # against an ephemeral in-memory DB + a throwaway LanceDB dir — never the user's
-    # real notes — and leaves nothing behind.
-    with tempfile.TemporaryDirectory() as tmp:
-        conn = init_db(":memory:")
-        try:
-            score = score_golden_set(
-                conn,
-                lance_dir=Path(tmp) / "vectors",
-                embedder=embedder,
-                answerer=lambda question, context: ask(
-                    conn, question, context, settings=settings
-                ),
-                settings=settings,
-            )
-        finally:
-            conn.close()
-
-    typer.echo(f"recall@{score.k}: {score.recall_at_k:.3f}")
-    typer.echo(f"faithfulness/citation accuracy: {score.faithfulness_accuracy:.3f}")
-    typer.echo(f"abstention correctness: {score.abstention_accuracy:.3f}")
 
 
 def _config_lines(db: Path | None) -> list[str]:

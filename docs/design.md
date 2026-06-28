@@ -177,6 +177,10 @@ before the core loop works.
    decline when the notes don't answer). It exists *in step 1* because three quality knobs — rerank,
    the faithfulness-entailment threshold, and chunk size/overlap — all ship "tune post-data," and
    without a target they get guessed. Externals = none. This is the whole value on its own.
+   The Phase-A exit gate is met when `lode add` → `lode ask` works end-to-end through the CLI
+   and **`nox -s eval` integration test runs green** on the golden fixture (see `docs/decisions.md`,
+   Shape A). The eval harness is a maintainer/CI check (`tests/test_eval_live.py`), not a shipped
+   end-user command.
 2. **Then connectors, one at a time**, starting with whichever source the notes actually
    reference most (likely tickets or the repo, not email). Normalize every connector to one
    interface — `(external_id, snapshot, fetched_at, source_type, raw_payload)` — so the graph
