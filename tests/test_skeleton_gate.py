@@ -17,7 +17,8 @@ close Phase A and unblock the deepening tasks:
 
 3. The deterministic offline eval scorer (``score_golden_set`` over the golden
    fixture, stub embedder + oracle answerer) reports perfect recall@k,
-   faithfulness, and abstention — the offline analog of ``lode eval``.
+   faithfulness, and abstention — the offline analog of the live ``nox -s eval``
+   integration test.
 
 All three run offline and reproducibly. The two non-deterministic seams are
 replaced:
@@ -278,19 +279,20 @@ def test_gate2_out_of_corpus_question_abstains(
 
 
 # ---------------------------------------------------------------------------
-# Gate 3: lode eval — deterministic offline scorer reports green metrics
+# Gate 3: eval scorer — deterministic offline scorer reports green metrics
 # ---------------------------------------------------------------------------
 
 
 def test_gate3_eval_scorer_reports_green_on_golden_fixture(tmp_path: Path) -> None:
     """The eval scorer reports recall@k=1, faithfulness=1, abstention=1.
 
-    The acceptance criterion (lode-6w1.1): ``lode eval`` reports recall@k /
-    faithfulness / abstention on the fixture without error.
+    The acceptance criterion (lode-6w1.1): the ``nox -s eval`` integration test
+    runs green — the scorer reports recall@k / faithfulness / abstention on the
+    fixture without error.
 
-    The scorer is driven here directly (not via the CLI's ``lode eval`` command,
-    which needs Anthropic credentials for the real Q&A leg; the credential-gated
-    ``nox -s eval`` session covers that path). The three metrics are graded against
+    The scorer is driven here directly with stub seams (not via the live
+    ``nox -s eval`` integration test, which needs Anthropic credentials for the
+    real Q&A leg; that credential-gated session covers the live path). The three metrics are graded against
     the oracle answerer that returns the known-good citations for every golden item
     — so a correct scorer reports perfect scores.
     """

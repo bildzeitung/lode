@@ -59,9 +59,9 @@ lode version       # prints the installed version
 ```
 
 Every subcommand is real: `add`, `ask`, `status`, `jobs`, `egress`, `purge`, and
-`eval`. `lode eval` scores the golden Q&A set (recall@k, faithfulness, abstention)
-and needs Anthropic credentials, so CI runs it via the gated `nox -s eval` session
-rather than the offline `nox -s tests` gate.
+`config`. The eval harness (`lode.eval.harness.score_golden_set`) is a
+maintainer/CI integration test, not a shipped end-user command — run it via
+`nox -s eval` (see below and `docs/decisions.md`, Shape A).
 
 ### 4. Run the dev loop (nox)
 
@@ -73,9 +73,10 @@ nox -t fix         # ruff format + ruff check --fix (the pre-merge fixer)
 nox -s tests       # pytest — the test gate
 ```
 
-A third session, `nox -s eval`, runs the golden-set eval (`lode eval`); it is
-opt-in and credential-gated (it `skip`s without `ANTHROPIC_API_KEY`), so a bare
-`nox` and `nox -s tests` stay offline and never run it.
+A third session, `nox -s eval`, runs the live eval integration test
+(`tests/test_eval_live.py`); it is opt-in and credential-gated (it `skip`s
+without `ANTHROPIC_API_KEY`), so a bare `nox` and `nox -s tests` stay offline
+and never run it.
 
 A successful `nox -s tests` ends with a line like `=== N passed, M skipped ===` and
 `Session tests was successful`. That green run is your "the environment is wired up
