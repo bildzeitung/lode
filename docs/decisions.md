@@ -66,7 +66,7 @@ are catalogued in [configuration.md](configuration.md).
   `cited_answer.ask` / `qa.answer_question` already expose via their `client` parameter): a fixed
   answerer over a fixed corpus yields a fixed score. Tests inject deterministic stubs and never hit
   the network; production wires the real embedder + a real-client `ask`. **Command + CI wiring —
-  settled (lode-5y8.2), then re-settled (Shape A, lode-5y8.3):** the original wiring shipped eval as
+  settled (lode-5y8.2), then re-settled (Shape A, lode-5y8.5):** the original wiring shipped eval as
   a top-level `lode eval` command (`src/lode/cli.py`) that ran the scorer against a fresh ephemeral
   store and printed the three metrics. **Re-decided (Shape A, supersedes lode-5y8.2):** eval is a
   maintainer/CI **integration test in a live-like state**, not an end-user feature, so it is **no
