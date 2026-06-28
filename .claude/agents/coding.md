@@ -1,6 +1,7 @@
 ---
 name: coding
 description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, run a baked-in technical review, push the branch to origin, and mark the ticket ready-for-land. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+model: sonnet
 ---
 
 # coding

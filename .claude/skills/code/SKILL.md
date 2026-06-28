@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS by dispatching the `coding` subagent — each claims a bd issue, builds in an isolated worktree, passes the quality gates, runs a baked-in technical review, pushes its branch to origin, and marks the ticket ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. `/code <id>` is one producer; `/code <id> <id> …` / `/code --all-ready` fans out N parallel producers. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code lode-123", "/code lode-1 lode-2 lode-3", "/code --all-ready", "/code add a --json flag to the search CLI", "/code" (top item from `bd ready`).
+description: Build one or more lode tasks as PRODUCERS by dispatching the `coding` subagent — each claims a bd issue, builds in an isolated worktree, passes the quality gates, runs a baked-in technical review, pushes its branch to origin, and marks the ticket ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -15,9 +15,10 @@ There is **no separate `/code-parallel`.** Once landing left the producer, build
 building five became the same act — a producer just leaves a green branch on origin, and a *new*
 branch ref doesn't race `trunk`, so N producers run safely in parallel. `/code` covers both:
 
-- **`/code <id>`** — **one** producer.
-- **`/code <id> <id> …`** or **`/code --all-ready`** — **N producers in parallel**, each in its own
-  isolated worktree.
+- **bare `/code`** (no argument), **`/code --all-ready`**, or **`/code <id> <id> …`** — **N producers
+  in parallel**, each in its own isolated worktree. Bare `/code` is the **default**: it fans out
+  across the whole independent, unblocked ready frontier.
+- **`/code <id>`** or **`/code --single`** — **one** producer.
 
 The subagent already owns *how producer work flows* in lode (it honors `CLAUDE.md` / `AGENTS.md`,
 `docs/agents-workflow.md`, and the phase-a skeleton order) — this skill's only job is to launch it
@@ -26,17 +27,19 @@ correctly, one producer per task, and relay what came back.
 ## What to do when invoked
 
 1. **Resolve the task set** from the argument:
+   - **No argument** (the **default**), or **`--all-ready`** → read `bd ready` and **fan out** across
+     the **independent, unblocked** frontier (honoring the dependency graph and phase-a ordering).
+     Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the
+     order.
+   - **`--single`** (no ID) → one producer; tell the agent to pick the **top unblocked item from `bd
+     ready`**. Do **not** pick the issue yourself — the subagent does that. (This is the former
+     bare-`/code` behavior, now opt-in.)
    - **One bd issue ID** (e.g. `lode-ai1`) → one producer; tell the agent to claim and implement it.
    - **Several bd issue IDs** → **fan-out**: one producer per ID. Only dispatch IDs that are
      genuinely **independent** (no unmet dependency between them); if two share a dependency, say so
      and let the human sequence them rather than racing.
-   - **`--all-ready`** → read `bd ready` and fan out across the **independent, unblocked** frontier
-     (honoring the dependency graph and phase-a ordering). Don't dispatch a ticket whose blocker is
-     also in the batch — surface that instead of guessing the order.
    - **Free-text** (e.g. "add a --json flag to search") → one producer; tell the agent that is the
      task — it files the bd issue itself before coding, per its own rules.
-   - **No argument** → one producer; tell the agent to pick the **top unblocked item from `bd
-     ready`**. Do **not** pick the issue yourself — the subagent does that.
 
 2. **Dispatch one `coding` producer per task** via the Agent tool with `subagent_type: "coding"`
    **and `isolation: "worktree"`**. The isolation is required: a subagent is pinned at the repo root
@@ -44,8 +47,9 @@ correctly, one producer per task, and relay what came back.
    the harness must hand each producer a worktree at dispatch — `isolation: "worktree"` launches it
    already cwd'd inside `.claude/worktrees/agent-<hash>` on its own branch off `trunk` HEAD.
 
-   - **Solo** (`/code <id>`, free-text, no-arg): dispatch **exactly one** producer in the foreground.
-   - **Fan-out** (`/code <id> <id> …`, `--all-ready`): dispatch **one producer per ticket,
+   - **Solo** (`/code <id>`, `/code --single`, free-text): dispatch **exactly one** producer in the
+     foreground.
+   - **Fan-out** (bare `/code`, `--all-ready`, `/code <id> <id> …`): dispatch **one producer per ticket,
      concurrently** (`run_in_background: true`), and collect each result as it finishes. Each builds,
      reviews, pushes `origin/land/<its-id>`, and marks its own ticket `ready-for-land` independently;
      one producer's escalation must **not** block its siblings.
@@ -57,7 +61,7 @@ correctly, one producer per task, and relay what came back.
    > push trunk. Stop and escalate (revert to green, annotate, don't mark ready) if a clarifying
    > decision is needed or a refinement makes it worse; stop and report if a gate fails.
 
-   (For the no-arg case: *"Pick the top ready item from `bd ready` and produce it…"*)
+   (For the `--single` case: *"Pick the top ready item from `bd ready` and produce it…"*)
 
 3. **Relay each result to the user.** The agent's final message is not shown to the user — surface
    what matters per producer: which ticket, that gates + technical review passed, the
