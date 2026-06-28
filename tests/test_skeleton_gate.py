@@ -1,28 +1,32 @@
-"""Phase-A exit gate (lode-6w1.1): add → embed → ask → cited claim / abstain → eval green.
+"""Phase-A exit gate (lode-6w1.1 / lode-6w1.2): add → embed → ask → cited claim / abstain → eval green.
 
 Verification gate for the walking skeleton end-to-end. Three sub-gates together
 close Phase A and unblock the deepening tasks:
 
-1. ``lode add`` saves a note; processing the derive job (chunk + embed + FTS) makes
-   the note keyword- and vector-findable; ``lode ask`` retrieves it, sends the
-   context to the Q&A step, and the faithfulness gate verifies the claimed
-   ``quoted_span`` is verbatim in the cited version's stored body — the cited claim
-   survives and renders.
+1. ``lode add`` saves a note **and runs chunk+embed+FTS inline** (lode-x6r.2
+   intent, lode-6w1.2 fix) so the note is immediately keyword- and
+   vector-findable; ``lode ask`` retrieves it, sends the context to the Q&A
+   step, and the faithfulness gate verifies the claimed ``quoted_span`` is
+   verbatim in the cited version's stored body — the cited claim survives and
+   renders. No in-test derive-job stand-in: the real CLI ``add`` command
+   performs the embed.
 
-2. An out-of-corpus question against the same corpus ends in honest abstention when
-   the Q&A step asserts nothing: the gate finds no surviving claim and the
+2. An out-of-corpus question against the same corpus ends in honest abstention
+   when the Q&A step asserts nothing: the gate finds no surviving claim and the
    abstention line is printed.
 
 3. The deterministic offline eval scorer (``score_golden_set`` over the golden
-   fixture, stub embedder + oracle answerer) reports perfect recall@k, faithfulness,
-   and abstention — the offline analog of ``lode eval``.
+   fixture, stub embedder + oracle answerer) reports perfect recall@k,
+   faithfulness, and abstention — the offline analog of ``lode eval``.
 
 All three run offline and reproducibly. The two non-deterministic seams are
 replaced:
 
 - **Embedder**: ``_ConstantEmbedder`` — a deterministic, constant-direction stub
   that produces dim-768 vectors (the LanceDB table width the embed job creates
-  under the default ``Settings``).  No fastembed model download.
+  under the default ``Settings``).  No fastembed model download.  Injected via
+  ``monkeypatch`` into ``lode.embedding.FastEmbedEmbedder`` so it is used by
+  both ``lode add`` (inline embed) and ``lode ask`` (query embedding).
 - **Q&A client**: ``_FakeClient`` — returns known claims for the in-corpus question
   and no claims for the out-of-corpus question.  No Anthropic API call.
 
@@ -40,15 +44,13 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from lode import cli, config
+from lode import cli
 from lode.answer import Claim, Support
 from lode.cli import app
 from lode.config import Settings, load_settings
-from lode.embedding import embed
 from lode.eval.golden import golden_set
 from lode.eval.harness import score_golden_set
 from lode.faithfulness import span_occurs
-from lode.lexical import LexicalIndex
 from lode.storage import init_db
 
 runner = CliRunner()
@@ -148,41 +150,6 @@ def _get_head_version_id(db_path: Path, note_id: str) -> str:
         conn.close()
 
 
-def _run_derive_job(db_path: Path, version_id: str, body: str) -> None:
-    """Process the embed derive job for ``version_id`` — the sync skeleton stand-in.
-
-    The real derive jobs are async (the worker loop lands later); for the walking
-    skeleton integration test we run them synchronously here to simulate the worker
-    processing the enqueued embed job.  Populates both the SQLite ``passages`` table
-    (for parent expansion) and the ``passages_fts`` table (for lexical search) and
-    stores vectors in LanceDB under the db's sibling ``lancedb/`` directory.
-    """
-    settings = Settings()
-    lance_dir_path = config.lance_dir(db_path)
-    embedder = _ConstantEmbedder(settings)
-
-    conn = sqlite3.connect(db_path)
-    try:
-        # Vector leg: chunk + embed + persist passages + store vectors in LanceDB.
-        n = embed(
-            conn,
-            version_id,
-            lance_dir=lance_dir_path,
-            embedder=embedder,
-            settings=settings,
-        )
-        assert n > 0, f"embed produced no passages for version {version_id!r}"
-
-        # Lexical leg: chunk the same body and populate passages_fts so BM25 search
-        # can find the note by keyword — same passage unit as the vector leg.
-        from lode.chunking import chunk
-
-        passages = chunk(body, version_id, settings=settings)
-        LexicalIndex(conn).replace_passages(version_id, passages)
-    finally:
-        conn.close()
-
-
 def _oracle_answerer(question, context):
     """Oracle for the eval harness: returns known-good citations for the golden set."""
     from lode.cited_answer import CitedAnswer
@@ -200,23 +167,26 @@ def _oracle_answerer(question, context):
 
 
 # ---------------------------------------------------------------------------
-# Gate 1: lode add → derive job → lode ask → verbatim-grounded cited claim
+# Gate 1: lode add → (inline embed) → lode ask → verbatim-grounded cited claim
 # ---------------------------------------------------------------------------
 
 
 def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """lode add + derive job + lode ask → cited claim; quoted_span is verbatim in body.
+    """lode add (inline embed) + lode ask → cited claim; quoted_span is verbatim in body.
 
-    The acceptance criterion (lode-6w1.1): a scripted ``lode add`` of a known note
-    followed by ``lode ask`` returns a cited claim whose ``quoted_span`` occurs
-    verbatim in the cited version's stored body.
+    The acceptance criterion (lode-6w1.1 / lode-6w1.2): a scripted ``lode add``
+    of a known note followed by ``lode ask`` returns a cited claim whose
+    ``quoted_span`` occurs verbatim in the cited version's stored body. No
+    in-test derive-job stand-in — the real ``add`` command runs embed inline.
 
     Step by step:
-    1. ``lode add`` saves the note (version row + enqueued derive jobs).
-    2. The embed derive job is processed synchronously (skeleton stand-in for the
-       worker): chunk + embed (stub embedder) + index passages in FTS5.
+    1. Stub ``lode.embedding.FastEmbedEmbedder`` (before ``add`` runs, since the
+       CLI now embeds inline on capture) with ``_ConstantEmbedder`` — deterministic,
+       no model download, same dim-768 space for both document and query vectors.
+    2. ``lode add`` saves the note, enqueues the derive jobs, and runs chunk+embed
+       +FTS inline — no separate worker step, no in-test ``_run_derive_job``.
     3. ``lode ask`` retrieves the indexed note (both legs), sends the context to the
        Q&A step (fake client returning a known claim), the faithfulness gate verifies
        the span, and the surviving cited claim is printed.
@@ -225,17 +195,22 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
     """
     db_path = tmp_path / "lode.db"
 
-    # Step 1: add the note via the CLI.
+    # Stub the embedder BEFORE ``lode add`` runs — the CLI now embeds inline on
+    # capture, so the stub must be in place when add is invoked.  The same stub
+    # is used by ``lode ask``'s query-embedding step (FastEmbedEmbedder is patched
+    # in lode.embedding, so both the add and ask code paths see it).
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Step 1+2: add the note via the real CLI (embed runs inline — no stand-in).
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0, add_result.output
     note_id = add_result.stdout.strip()
     assert note_id, "lode add should print the note_id"
 
-    # Step 2: process the embed derive job (synchronous skeleton worker).
+    # Step 3: get the version_id for the fake client's citation support.
     version_id = _get_head_version_id(db_path, note_id)
-    _run_derive_job(db_path, version_id, _NOTE_BODY)
 
-    # Step 3: ask via the CLI, with the two non-deterministic seams replaced.
+    # Step 4: ask via the CLI with the fake Q&A client.
     # The fake client returns a claim whose quoted_span is a verbatim substring of
     # the body — so the faithfulness gate will verify it and let it through.
     fake_client = _FakeClient(
@@ -246,13 +221,12 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
             )
         ]
     )
-    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
     monkeypatch.setattr("lode.qa.build_client", lambda: fake_client)
 
     ask_result = runner.invoke(app, ["ask", _IN_CORPUS_QUESTION, "--db", str(db_path)])
     assert ask_result.exit_code == 0, ask_result.output
 
-    # Step 4: the claim survived the faithfulness gate and was rendered.
+    # Step 5: the claim survived the faithfulness gate and was rendered.
     output = ask_result.stdout
     assert cli._ABSTAIN_LINE not in output, "expected a cited claim, not abstention"
     assert _QUOTED_SPAN in output, f"quoted_span not in ask output: {output!r}"
@@ -275,23 +249,23 @@ def test_gate2_out_of_corpus_question_abstains(
 ) -> None:
     """An out-of-corpus question against the corpus returns honest abstention.
 
-    The acceptance criterion (lode-6w1.1): an out-of-corpus question abstains.
-    The fake Q&A asserts nothing (empty claims) — which is the correct behaviour
-    when the sources don't support an answer. The gate finds no surviving claim and
-    the abstention line is printed.
+    The acceptance criterion (lode-6w1.1 / lode-6w1.2): an out-of-corpus
+    question abstains.  The embedder stub is injected before ``lode add`` so the
+    inline embed uses it; the fake Q&A asserts nothing (empty claims) — which is
+    the correct behaviour when the sources don't support an answer.  The gate
+    finds no surviving claim and the abstention line is printed.
     """
     db_path = tmp_path / "lode.db"
 
-    # Add and index the note (same flow as Gate 1, but we'll ask something unrelated).
+    # Stub the embedder before ``lode add`` — the CLI now embeds inline on capture.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Add and index the note via the real CLI (embed runs inline — no stand-in).
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0
-    note_id = add_result.stdout.strip()
-    version_id = _get_head_version_id(db_path, note_id)
-    _run_derive_job(db_path, version_id, _NOTE_BODY)
 
     # The fake client returns no claims for the out-of-corpus question — the Q&A
     # step can't assert anything grounded, so the gate abstains.
-    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
     monkeypatch.setattr("lode.qa.build_client", lambda: _FakeClient([]))
 
     ask_result = runner.invoke(
