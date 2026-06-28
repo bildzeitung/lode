@@ -2,11 +2,11 @@
 
 How lode is *built*. The other docs describe the system; this one describes the **agent
 loops that produce it** — a **design loop** that stress-tests a plan before it's built, a
-**coding loop** in which a *producer* carries one task through to a reviewed, green branch (solo,
-or fanned out across several tasks at once with `/code <id> <id> …`), and a **landing loop** in
-which a single `/land` lander is the **only** thing that writes `trunk`. The three are the last
-three sections of this doc. See [design.md](design.md) for the thesis and the build sequencing the
-work flows through.
+**coding loop** in which a *builder* (Sonnet) produces a green branch and a separate *code-reviewer*
+(Opus) runs the technical review on it (solo, or fanned out across several tasks at once with
+`/code <id> <id> …`), and a **landing loop** in which a single `/land` lander is the **only** thing
+that writes `trunk`. The three are the last three sections of this doc. See [design.md](design.md)
+for the thesis and the build sequencing the work flows through.
 
 The operational source of truth for each loop is its skill/agent definition under
 [`.claude/`](../.claude); this doc is the map, not the mechanics. The hard project invariants live
@@ -24,11 +24,13 @@ Work moves through three passes, with the human as the hinge:
    it surfaces ambiguity, hidden assumptions, sequencing gaps, and risky approaches, and reports
    them to the human. It never edits `docs/` or beads as a side effect. The human revises until
    the plan is sound.
-2. **Coding loop — `/code` → `coding` producers.** Once the plan is sound and captured as beads
-   issues, `/code` dispatches one `coding` **producer** per task to carry it through an orderly
-   cycle in an isolated worktree: claim → build → green gates → baked-in technical review → push a
-   `land/<id>` branch → mark `ready-for-land` → **stop**. A producer never merges, closes, or
-   writes `trunk`.
+2. **Coding loop — `/code` → `coding` builder, then `code-reviewer`.** Once the plan is sound and
+   captured as beads issues, `/code` runs each task in **two dispatched phases**. First a `coding`
+   **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
+   green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
+   → stop. Then a `code-reviewer` (Opus) enters that worktree, runs the technical review
+   (`/code-review` + `/simplify`), re-gates, re-pushes, and swaps the ticket to **`ready-for-land`**.
+   The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
 3. **Landing loop — `/land`.** A single lander drains the `ready-for-land` queue: it semantically
    reviews each branch, merges the accepted set into `trunk`, re-gates, closes the tickets, and
    pushes. It is the **only** thing that writes `trunk` (see
@@ -101,34 +103,44 @@ flowchart TD
 
 ---
 
-## The coding loop — `/code` → `coding`
+## The coding loop — `/code` → `coding` + `code-reviewer`
 
 `/code` is the **only** sanctioned way to start coding work from the main session (which is
-otherwise told not to spawn agents). The skill resolves the task from its argument and dispatches a
-`coding` **producer** per task — `/code <id>` is one producer; `/code <id> <id> …` /
-`/code --all-ready` fans out **N producers in parallel**, each in its own isolated worktree. There
+otherwise told not to spawn agents). The skill resolves the task from its argument and runs each task
+in **two dispatched phases** — a `coding` **builder** (Sonnet), then a `code-reviewer` (Opus). **Bare
+`/code`** fans out across the whole ready frontier; `/code --single` does the top one task;
+`/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N builders in
+parallel** (one per task, each in its own isolated worktree), each followed by its own reviewer. There
 is **no `/code-parallel`**. (Skill:
-[`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md); agent:
-[`.claude/agents/coding.md`](../.claude/agents/coding.md).)
+[`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md); agents:
+[`.claude/agents/coding.md`](../.claude/agents/coding.md),
+[`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md).)
 
 Argument resolution:
 
-- **A bd issue ID** (`lode-1a8`) → claim and implement that issue.
+- **No argument** (the default) / **`--all-ready`** → fan out across the **independent, unblocked**
+  `bd ready` frontier, honoring the dependency graph and the phase-a skeleton order.
+- **`--single`** → one task: the agent picks the top unblocked item from `bd ready` — *the subagent
+  chooses, not the dispatcher*.
+- **A bd issue ID** (`lode-1a8`) / **several IDs** → claim and implement those (one builder each).
 - **Free text** ("add a `--json` flag to search") → the agent files the bd issue itself, then codes.
-- **No argument** → the agent picks the top unblocked item from `bd ready` — *the subagent chooses,
-  not the dispatcher*, honoring the dependency frontier and the phase-a skeleton order.
 
-Each producer then runs its orderly cycle. The worktree is **handed to it by the harness**
+Each builder then runs its orderly cycle. The worktree is **handed to it by the harness**
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins
 *already inside* `.claude/worktrees/agent-<hash>` on a branch off local `trunk` HEAD. It works
 in-cwd with plain git, and if its `pwd` is ever the repo root it **stops and reports** rather than
-writing on `trunk`. It claims the issue, builds the simplest thing that works, takes it green
-through the gates, and runs a **baked-in technical review** (`/code-review` + `simplify`, re-gate,
-keep the last green commit). Then it **pushes a `land/<id>` branch to origin, marks the ticket
-`ready-for-land`, and stops.** It never merges, closes, or writes `trunk` — landing is
-[`/land`](#the-landing-loop--build-review-land)'s job. The final agent message isn't shown to the
-user, so `/code` relays what came back — which issue, that the gates and technical review passed,
-the pushed branch and head SHA, or exactly where it stopped (an escalation) and why.
+writing on `trunk`. It claims the issue, builds the simplest thing that works, takes it green through
+the gates, then **pushes a `land/<id>` branch to origin, marks the ticket `ready-for-code-review`
+(recording its worktree path), keeps the worktree, and stops** — it does **not** review its own work.
+
+Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It `EnterWorktree`s into the
+builder's worktree (by the recorded path), runs the **technical review** (`/code-review --fix` +
+`/simplify`, re-gate, keep the last green commit), re-pushes `land/<id>`, and swaps the ticket to
+**`ready-for-land`**. Neither agent merges, closes, or writes `trunk` — landing is
+[`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't shown to the user,
+so `/code` relays what came back across **both** phases — which issue, that the build gates and the
+technical review passed, the pushed branch and head SHA, or exactly where it stopped (a build- or
+review-time escalation) and why.
 
 > **Adding a brand-new `src/lode/*.py` module?** Build a worktree-local venv before `nox` — run
 > `./scripts/python-init.sh` from *inside* the worktree. The shared `./venv` editable install
@@ -138,12 +150,12 @@ the pushed branch and head SHA, or exactly where it stopped (an escalation) and 
 
 ```mermaid
 flowchart TD
-    INV["Human: /code &lt;arg&gt;"] --> RES{"Resolve arg"}
-    RES -->|"bd id"| T1["Claim that issue"]
+    INV["Human: /code &lt;arg&gt;<br>(bare /code fans out — one builder per ready task)"] --> RES{"Resolve arg"}
+    RES -->|"bd id(s)"| T1["Claim that issue"]
     RES -->|"free text"| T2["Agent files the issue, then codes"]
-    RES -->|"none"| T3["Agent picks top of bd ready<br>(dependency frontier · phase-a order)"]
+    RES -->|"--single / none"| T3["Agent picks top of bd ready<br>(dependency frontier · phase-a order)"]
 
-    T1 --> DISP["Dispatch ONE coding subagent<br>(foreground · isolation: worktree)"]
+    T1 --> DISP["Phase 1 — dispatch coding builder<br>(Sonnet · isolation: worktree)"]
     T2 --> DISP
     T3 --> DISP
 
@@ -155,14 +167,15 @@ flowchart TD
     CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
     IMPL --> GATES{"Quality gates"}
     GATES -->|"nox -t fix · nox -s tests ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
-    GFAIL -->|"no"| FIX["Fix & re-run —<br>never mark ready on a failing gate"]
+    GFAIL -->|"no"| FIX["Fix & re-run —<br>never hand off on a failing gate"]
     FIX --> GATES
     GFAIL -->|"yes"| COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
 
-    COMMIT --> TR["Technical review (baked in):<br>/code-review + simplify --fix ·<br>re-gate · keep last green"]
-    TR --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
-    PUSH --> MARK["Mark ticket ready-for-land<br>(head SHA · one-line summary) · bd dolt push"]
-    MARK --> STOP["STOP — never merge/close/push trunk;<br>/land lands it. Worktree auto-removed;<br>/code relays result"]
+    COMMIT --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
+    PUSH --> HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>EnterWorktree(path) ·<br>/code-review --fix + simplify · re-gate"]
+    REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
+    MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
     classDef start fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
     classDef work fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
@@ -170,10 +183,10 @@ flowchart TD
     classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,RES start;
-    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,TR,PUSH,MARK work;
+    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,PUSH,HANDOFF,REV work;
     class GATES,GFAIL,GUARD gate;
     class BAIL,FIX bad;
-    class STOP good;
+    class MARKL,DONE good;
 ```
 
 ### Invariants the coding loop never breaks
@@ -184,12 +197,13 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Thing | Rule |
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`, auto-removed on exit |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** for the code-reviewer (removed after land) |
+| Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
-| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never mark `ready-for-land` on a failing gate |
+| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
-| Done (producer) | branch pushed to `origin/land/<id>` *and* ticket marked `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
+| Done (coding loop) | builder hands off at `ready-for-code-review` (worktree kept); code-reviewer reviews, re-gates, swaps to `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 
 ---
 
@@ -206,10 +220,11 @@ miss it. Keep the decisions in the docs, and the two loops stay in agreement.
 
 ## The landing loop — build, review, land
 
-> **One landing path for everything.** Producers (the coding loop above) build and review a branch,
-> mark it `ready-for-land`, and stop; a single `/land` lander is the **only** thing that ever writes
-> `trunk` — solo or batch, one machine or several. This decouples *landing* from *building* through a
-> durable hand-off, so the merge decision lands with the agent that *didn't* write the code.
+> **One landing path for everything.** Producers (the coding loop above) build a branch and a separate
+> Opus code-reviewer technically reviews it; once it carries `ready-for-land`, a single `/land` lander
+> is the **only** thing that ever writes `trunk` — solo or batch, one machine or several. This
+> decouples *landing* from *building* through a durable hand-off, so the merge decision lands with the
+> agent that *didn't* write the code.
 
 ### Why one landing path
 
@@ -230,10 +245,13 @@ durable hand-off is two facts: the branch lives on **origin**, and "ready-for-la
 
 ### Two reviews, two stages
 
-Review splits along a clean seam, and the two halves live in different loops:
+Review splits along a clean seam, and — crucially — **neither half is done by the author of the
+code:**
 
-- **Technical review — *in the dev loop*.** Bugs, cleanup, over-design, complexity. The **builder
-  owns this**: it just wrote the code, it has the context, it fixes problems immediately. It runs
+- **Technical review — *the second phase of the coding loop*.** Bugs, cleanup, over-design,
+  complexity. A separate **`code-reviewer` (Opus) owns this** — it enters the builder's worktree and
+  fixes problems, but it did **not** write the code. Splitting it out (the builder runs cheaper, on
+  Sonnet) is what buys the independence *and* puts the review spend where it matters. It runs
   **autonomously** and you only hear about it on a real fork (see below).
 - **Semantic review — *the first task of `/land`*.** Does it meet the ticket's acceptance? Is scope
   clean (no silent creep)? Are the design and the lode invariants honored? Is the approach right?
@@ -249,36 +267,50 @@ in (and, for the technical review, "I think I'm making it worse"). Everything el
 There is **no separate `/code-parallel`** — once landing leaves the producer, building one task and
 building five are the same act, just a different count:
 
-- `/code <id>` — one producer.
-- `/code <id> <id> …` / `/code --all-ready` — **N producers in parallel**, each in its own isolated
-  worktree.
+- **bare `/code`** / `/code --all-ready` — **N builders in parallel** across the ready frontier.
+- `/code --single` — one builder (top of `bd ready`).
+- `/code <id>` / `/code <id> <id> …` — one builder per named id.
 
-Each producer (the `coding` agent), in its worktree:
+Each builder (the `coding` agent, on **Sonnet**), in its worktree:
 
 1. **Claims and builds** the simplest thing that works; `nox -t fix` / `nox -s tests` green.
-2. **Technical review, baked in.** Runs `/code-review` (bugs) and `simplify` (over-design /
-   complexity) on its own branch in `--fix` mode, then **re-gates**. It keeps its last **green**
-   commit; if a refinement breaks the gates unrecoverably or trades simplicity for complexity, it
-   **reverts to green**. Escalation rule: if a **clarifying decision** is genuinely needed, or it
-   judges it is **making things worse**, it stops, **does not** mark the ticket ready, **annotates
-   the ticket**, and surfaces it — *asynchronously*, never blocking a parallel batch.
-3. **Pushes the branch to origin** (`git push -u origin <branch>`) — the durable, cross-machine
+2. **Pushes the branch to origin** (`git push -u origin HEAD:land/<id>`) — the durable, cross-machine
    artifact (a *new* branch ref doesn't race `trunk`, so parallel producers stay safe).
-4. **Marks the ticket `ready-for-land`** with the landing context (remote branch, head SHA, summary)
-   and **stops**. It never merges, closes, pushes `trunk`, or touches the main checkout.
+3. **Marks the ticket `ready-for-code-review`** with the review context (worktree path, branch, head
+   SHA), **keeps its worktree**, and **stops**. It does **not** review its own work, merge, close,
+   push `trunk`, or touch the main checkout. A build-time **clarifying decision** is the only thing
+   that escalates it (revert to green, `land-escalated`, surface async — never blocking a sibling).
+
+### The code-review pass — `code-reviewer` (Opus)
+
+`/code` then dispatches a **`code-reviewer`** (Opus) for each `ready-for-code-review` ticket. Because
+the technical review now lives in its own agent — not the builder — **neither review of a branch is
+done by its author** (the lander's semantic review is the other). The reviewer:
+
+1. **Enters the builder's worktree** by the recorded path (`EnterWorktree`, `path` form — legal from a
+   subagent launched with `isolation: "worktree"`), confirming it is off `trunk`.
+2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
+   complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
+   unrecoverably or trades simplicity for complexity, it **reverts to green**.
+3. **Re-pushes `land/<id>`** and **swaps the ticket to `ready-for-land`** (refreshed head SHA +
+   summary), then stops. Its escalation rule mirrors the builder's: a genuine **decision**, or "I'm
+   making it worse," reverts to green, swaps the label to `land-escalated`, and surfaces async —
+   landing nothing.
 
 ```mermaid
 flowchart TD
-    INV["/code &lt;id&gt; · /code &lt;id&gt; &lt;id&gt; … · /code --all-ready"] --> N{"one or many?"}
-    N -->|"one"| ONE["1 producer"]
-    N -->|"many"| FAN["N producers<br>(parallel · isolated worktrees)"]
-    ONE --> BUILD["claim · build (simplest thing) ·<br>nox -t fix / nox -s tests green"]
+    INV["bare /code · /code --single · /code &lt;id&gt; … · /code --all-ready"] --> N{"one or many?"}
+    N -->|"one"| ONE["1 builder"]
+    N -->|"many"| FAN["N builders<br>(parallel · isolated worktrees)"]
+    ONE --> BUILD["coding builder (Sonnet):<br>claim · build (simplest thing) ·<br>nox -t fix / nox -s tests green"]
     FAN --> BUILD
-    BUILD --> TR["Technical review (baked in):<br>/code-review + simplify --fix ·<br>re-gate · keep last green"]
-    TR --> ESC{"clarifying decision?<br>or making it worse?"}
-    ESC -->|"yes"| HOLD["Revert to last green ·<br>do NOT mark ready ·<br>annotate ticket · surface async"]
-    ESC -->|"no"| PUSH["git push -u origin &lt;branch&gt;"]
-    PUSH --> MARK["Mark ticket ready-for-land<br>(remote branch · SHA · summary) · STOP"]
+    BUILD --> BESC{"build-time<br>clarifying decision?"}
+    BESC -->|"yes"| BHOLD["Revert to green · push ·<br>land-escalated · surface async"]
+    BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(worktree path · SHA) · KEEP worktree"]
+    PUSH --> REV["code-reviewer (Opus):<br>EnterWorktree(path) ·<br>/code-review + simplify --fix · re-gate"]
+    REV --> RESC{"clarifying decision?<br>or making it worse?"}
+    RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
+    RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
 
     classDef start fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
     classDef work fill:#d9edf7,stroke:#31708f,color:#1b1b1b;
@@ -286,9 +318,9 @@ flowchart TD
     classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,N start;
-    class ONE,FAN,BUILD,TR,PUSH work;
-    class ESC gate;
-    class HOLD bad;
+    class ONE,FAN,BUILD,PUSH,REV work;
+    class BESC,RESC gate;
+    class BHOLD,RHOLD bad;
     class MARK good;
 ```
 
@@ -344,14 +376,17 @@ flowchart TD
 
 ### Mechanics (decided)
 
-- **Queue state is a label, not a status.** A built-but-unlanded ticket stays `in_progress` and
-  carries a **`ready-for-land`** label, which the lander polls. Escalations and bounces are their own
-  labels (`land-escalated`, …), composing on top of the lifecycle status rather than replacing it. (A
-  claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to land.)
-- **Landing context is minimal — head SHA + a one-line summary** (small JSON in a bd field, read via
-  `bd show --json`). The lander re-reviews and re-gates, so stored gate-results would be decorative;
-  the SHA exists only to detect drift (a push onto the branch *after* it was marked ready). The branch
-  name isn't stored — it's derived (below).
+- **Queue state is a label, not a status.** A built-but-unlanded ticket stays `in_progress` and moves
+  through **two labels**: the builder sets **`ready-for-code-review`** (the code-reviewer's queue), and
+  the reviewer swaps it to **`ready-for-land`** (the lander's queue). Escalations and bounces are their
+  own labels (`land-escalated`, …), composing on top of the lifecycle status rather than replacing it.
+  (A claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to review
+  or land.)
+- **Hand-off context is minimal — head SHA + a one-line summary**, plus the **builder's worktree path**
+  so the code-reviewer can `EnterWorktree` into it (small JSON in bd fields, read via `bd show --json`).
+  The lander re-reviews and re-gates, so stored gate-results would be decorative; the SHA exists only to
+  detect drift (a push onto the branch *after* it was marked ready). The branch name isn't stored — it's
+  derived (below).
 - **Branches are `land/<ticket-id>` on origin** (`git push -u origin HEAD:land/<id>`) — derivable from
   the ticket, no opaque `worktree-agent-<hash>` refs on the remote. **GC:** delete `origin/land/<id>`
   on a successful land *or* a bounce (a rebuild gets a fresh `land/<new-id>`); keep it for an

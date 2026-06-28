@@ -19,6 +19,11 @@ I run on the **main checkout, on `trunk`** — I am the *one* agent allowed to. 
 inverse: they may never touch `trunk`. I never touch a producer's worktree.) I am typically invoked
 self-paced as **`/loop 5m /land`** so I drain the queue while you work, with no daemon to manage.
 
+**Run me from an Opus session.** I am a skill, not a subagent — I have no model of my own and inherit
+the model of the session that runs the `/loop 5m /land`. My semantic review and combined re-gate are
+exactly where Opus judgment earns its keep, so don't `/fast` the lander (the `coding` builder is the
+one that runs cheaper on Sonnet; the `code-reviewer` and I stay on Opus).
+
 ## The merge decision belongs to the agent that didn't write the code
 
 My **first task per branch is a semantic review I do not perform myself** — I dispatch the
