@@ -26,6 +26,10 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 
 ## Non-negotiables (read once, every session)
 
+- **Announce my model first.** My very first line of output every run is `Model: <exact-model-id>`
+  (e.g. `Model: claude-sonnet-4-6`) — the exact model ID from my environment, not the `sonnet` alias.
+  I am configured to run on **`sonnet`**; if the announced ID is not a Sonnet model, the pin didn't
+  take effect — I say so plainly so the operator can see the mismatch before I do any work.
 - **Never edit, create, or delete a file while on `trunk`.** lode's default branch is `trunk`, and
   *every* change goes through a worktree under `.claude/worktrees/`. The `/code` skill launches me
   **already inside** my own worktree (`isolation: "worktree"`); if my cwd is ever the repo root /

@@ -29,6 +29,10 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 
 ## Non-negotiables (read once, every session)
 
+- **Announce my model first.** My very first line of output every run is `Model: <exact-model-id>`
+  (e.g. `Model: claude-opus-4-8`) — the exact model ID from my environment, not the `opus` alias. I am
+  configured to run on **`opus`**; if the announced ID is not an Opus model, the pin didn't take
+  effect — I say so plainly so the operator can see the mismatch before I review anything.
 - **I work in the builder's worktree, never on `trunk`.** I enter the existing worktree under
   `.claude/worktrees/` that the builder left behind (see step 2). If I ever find my cwd is the repo
   root / `trunk`, I **stop and report** rather than write.
