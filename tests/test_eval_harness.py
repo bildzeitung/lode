@@ -38,7 +38,9 @@ class _HashEmbedder:
 
     No model, no network -- the same text always yields the same vector, so the
     dense leg (and therefore the whole scorer) is reproducible. The values carry no
-    semantic meaning; the lexical leg does the real retrieval work.
+    semantic meaning; the lexical leg does the real retrieval work.  Both methods
+    hash into the same space so query and passage vectors are directly comparable
+    under the cosine ANN (lode-vhn).
     """
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
@@ -47,6 +49,10 @@ class _HashEmbedder:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
             vectors.append([digest[i] / 255.0 for i in range(DIM)])
         return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        return [digest[i] / 255.0 for i in range(DIM)]
 
 
 @pytest.fixture
