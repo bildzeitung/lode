@@ -66,15 +66,29 @@ are catalogued in [configuration.md](configuration.md).
   `cited_answer.ask` / `qa.answer_question` already expose via their `client` parameter): a fixed
   answerer over a fixed corpus yields a fixed score. Tests inject deterministic stubs and never hit
   the network; production wires the real embedder + a real-client `ask`. **Command + CI wiring —
-  settled (lode-5y8.2):** `lode eval` (`src/lode/cli.py`) runs the scorer against a fresh ephemeral
-  store (in-memory SQLite + a throwaway LanceDB dir — never the user's notes) and prints the three
-  metrics; it sources the *real* seams — the local ONNX embedder (`FastEmbedEmbedder`) and a
-  real-client answerer (`cited_answer.ask`) — so its Q&A leg needs `ANTHROPIC_API_KEY` and the
-  network. Because of that, eval is **not** part of the offline test gate: the noxfile keeps
+  settled (lode-5y8.2), then re-settled (Shape A, lode-5y8.3):** the original wiring shipped eval as
+  a top-level `lode eval` command (`src/lode/cli.py`) that ran the scorer against a fresh ephemeral
+  store and printed the three metrics. **Re-decided (Shape A, supersedes lode-5y8.2):** eval is a
+  maintainer/CI **integration test in a live-like state**, not an end-user feature, so it is **no
+  longer a shipped CLI command**. The `lode eval` subcommand is removed from `src/lode/cli.py` (and
+  from the E10 shipped surface, lode-y42); the live-wiring entry point moves to a `tests/`
+  integration test (`tests/test_eval_live.py`) that `nox -s eval` runs. Rationale: Python extras only
+  gate *dependencies* — `lode[dev]` decides whether fastembed/anthropic/test deps are installed, not
+  which first-party modules ship — so a `lode eval` command would land in the base wheel for every
+  end user regardless of extras. Relocating the live entry point into `tests/` keeps it out of *every*
+  shipped wheel while preserving its value as a real-seam integration check; the `dev` extra carries
+  the deps needed to run it. It still scores against a fresh ephemeral store (in-memory SQLite + a
+  throwaway LanceDB dir — never the user's notes) over the *real* seams — the local ONNX embedder
+  (`FastEmbedEmbedder`) and a real-client answerer (`cited_answer.ask`) — so its Q&A leg needs
+  `ANTHROPIC_API_KEY` and the network, and stays **out** of the offline test gate: the noxfile keeps
   `nox.options.sessions = ["fix", "tests"]` so a bare `nox` and `nox -s tests` stay offline + keyless,
-  and the `nox -s eval` session (which runs `lode eval`) is the explicit, credential-gated CI-style
-  check — it `skip`s itself when `ANTHROPIC_API_KEY` is absent rather than failing or hitting the
-  network. Open sub-question: the exact metric weighting and how the golden set is curated.
+  and the `nox -s eval` session is the explicit, credential-gated CI-style check — it `skip`s itself
+  when `ANTHROPIC_API_KEY` is absent rather than failing or hitting the network. The deterministic
+  offline scorer tests (`tests/test_eval_*.py`, stubbed seams) are unchanged, and
+  `lode.eval.harness.score_golden_set` stays a library function shared by both the offline stub tests
+  and the live integration test. Knock-on: the Phase-A exit gate (lode-6w1 / lode-6w1.1) wording
+  moves from "`lode eval` runs green" to "the `nox -s eval` integration test runs green." Open
+  sub-question: the exact metric weighting and how the golden set is curated.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
