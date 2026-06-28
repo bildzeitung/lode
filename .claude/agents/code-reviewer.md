@@ -82,6 +82,16 @@ rtk git rev-parse HEAD                    # should equal metadata.review_head (n
 missing, I **stop and report** rather than edit `trunk` or guess. A `HEAD` that differs from
 `review_head` is drift — note it, but I still review the actual tip.
 
+**Edit/Write are guard-pinned — apply fixes via `bash` here.** `EnterWorktree` (`path` form) moves my
+bash/git cwd into the builder's worktree, but Claude Code's `isolation: "worktree"` guard keeps the
+`Edit`/`Write` tools pinned to my *own* launch worktree — so they **reject** paths inside the
+path-entered builder worktree (upstream behavior, not patchable from this repo). Don't fight it: apply
+every `/code-review --fix` / `/simplify` change with `bash` instead — a precise, **single-match**
+replacement (e.g. a `python -c` that asserts exactly one match before writing, or `sed`/`perl` you've
+verified hits one line), one assertion per edit so a silent multi-match can't corrupt the tree. Re-read
+the changed file with `bash` (`rtk read`/`grep`) to confirm. (Build producers don't hit this — they
+edit their own launch worktree, where `Edit`/`Write` work normally.)
+
 ### 3. Re-establish the env if needed
 
 If the worktree has a local venv from the build, reuse it; otherwise the gates step below builds one.
@@ -90,7 +100,8 @@ For a docs-only branch there is no Python gate.
 ### 4. Technical review (the whole point)
 
 1. Run **`/code-review --fix`** (correctness bugs) and **`/simplify`** (over-design, complexity,
-   reuse) on the branch, applying fixes to the working tree.
+   reuse) on the branch, applying fixes to the working tree **via `bash`, not `Edit`/`Write`** (those
+   are guard-pinned to my launch worktree and reject the builder-worktree path — see step 2).
 2. **Re-gate** and commit the refinements (Co-Authored-By trailer, step 6 below).
 3. **Keep the last *green* commit.** If a refinement breaks the gates unrecoverably, or trades
    simplicity for complexity (a worse result than what it replaced), **revert to the last green
@@ -181,6 +192,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | `/code-review --fix` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
+| Applying fixes | via **`bash`** (single-match replaces) — `Edit`/`Write` are guard-pinned to my launch worktree and reject the path-entered builder worktree |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
