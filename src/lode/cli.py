@@ -10,6 +10,7 @@ loop (retrieve → synthesize → faithfulness gate → cite or abstain). ``eval
 """
 
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -172,15 +173,27 @@ def ask(
     no_egress material that matched is surfaced as "present, withheld from cloud
     synthesis" rather than silently dropped.
     """
-    # Imported here, not at module scope: cited_answer pulls in the Anthropic SDK,
-    # which the instant capture path (``add``) must never load.
+    # Imported here, not at module scope: cited_answer / auth pull in the Anthropic
+    # SDK, which the instant capture path (``add``) must never load.
     from lode import cited_answer
+    from lode.auth import AuthError
 
     db_path = db or default_db_path()
     conn = _open_db(db_path)
     try:
         context = _retrieve(conn, question, lance_dir=lance_dir(db_path))
         answer = cited_answer.ask(conn, question, context, think_harder=think_harder)
+    except AuthError as err:
+        # Fail gracefully on missing credentials: a clean, actionable line to the
+        # user (no traceback) and the underlying cause to the log for debugging.
+        # No exc_info -- the root logger mirrors to stderr, so dumping frames there
+        # would re-introduce the very traceback we're suppressing for the user.
+        logging.getLogger(__name__).error(
+            "ask aborted — could not resolve Anthropic credentials: %s",
+            err.__cause__ or err,
+        )
+        typer.echo(str(err), err=True)
+        raise typer.Exit(code=1) from None
     finally:
         conn.close()
     for line in _format_cited_answer(answer):

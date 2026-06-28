@@ -102,8 +102,12 @@ the simpler fallback-down) without touching the core.
 always going to be a separate runtime decision regardless of using Claude for the LLM work. Going
 local resolves it in favor of the privacy principle; LanceDB just stores the resulting vectors.
 
-**Auth:** no hardcoded `ANTHROPIC_API_KEY` — resolve from env or an `ant auth login` profile, same
-as the harness.
+**Auth:** no hardcoded `ANTHROPIC_API_KEY`. Resolve via the SDK chain first (env var, then an
+`ant auth login` profile, then workload-identity federation), same as the harness; if that resolves
+nothing, fall back to the **Claude Code login** — the OAuth token at `~/.claude/.credentials.json`,
+sent as a Bearer `auth_token` with the OAuth beta header — so a box already signed into Claude Code
+works with no extra setup. If neither resolves a credential, fail gracefully with an actionable
+message (no traceback) and log the detail.
 
 **Model-tier split mirrors the harness:** cheap/deterministic high-volume work on Haiku;
 judgment-sensitive synthesis on Sonnet/Opus.
