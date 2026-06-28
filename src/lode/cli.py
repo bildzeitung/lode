@@ -221,10 +221,19 @@ def ask(
     from lode.auth import AuthError
 
     db_path = db or default_db_path()
+    # Resolve settings once so gate-tuning knobs (entailment_threshold, etc.) come
+    # from a single configured object, not from per-call Settings() defaults buried
+    # inside _retrieve and cited_answer.ask.  The eval path already does this;
+    # mirroring it here closes the gap so the interactive ask path honours config.
+    settings = Settings()
     conn = _open_db(db_path)
     try:
-        context = _retrieve(conn, question, lance_dir=lance_dir(db_path))
-        answer = cited_answer.ask(conn, question, context, think_harder=think_harder)
+        context = _retrieve(
+            conn, question, lance_dir=lance_dir(db_path), settings=settings
+        )
+        answer = cited_answer.ask(
+            conn, question, context, think_harder=think_harder, settings=settings
+        )
     except AuthError as err:
         # Fail gracefully on missing credentials: a clean, actionable line to the
         # user (no traceback) and the underlying cause to the log for debugging.

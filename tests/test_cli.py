@@ -593,6 +593,70 @@ def test_ask_requires_a_question() -> None:
     assert result.exit_code != 0  # missing required argument
 
 
+def test_ask_cli_threads_settings_to_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The configured entailment_threshold reaches the gate via 'lode ask' (lode-xdr).
+
+    Mirrors test_ask_honors_configured_entailment_threshold (test_cited_answer.py)
+    but exercises the CLI entry point rather than cited_answer.ask directly, proving
+    that cli.ask constructs and threads a Settings through to the faithfulness gate.
+
+    A synthesis claim (span verbatim-present but not extractively coupled, so it
+    reaches step 3) scoring 0.5 from the stub scorer survives under a lax threshold
+    and is dropped under a strict one — proving the threaded Settings, not a buried
+    Settings() default, decides the gate outcome.
+    """
+    db_path = tmp_path / "lode.db"
+    # Span "rerank OFF" is verbatim in the body; claim text "rerank is on" is not
+    # extractively coupled with it (payload {rerank, on} is not a subset of span
+    # tokens {rerank, off}), so the claim reaches NLI step 3.
+    body = "lode ships rerank OFF in the walking skeleton; deepen it later."
+    _seed_corpus(db_path, note_id="n1", version_id="v1", body=body, passage_id="p1")
+    _offline_embedder(monkeypatch)
+    _mock_qa(
+        monkeypatch,
+        [
+            Claim(
+                text="rerank is on",
+                support=[Support(version_id="v1", quoted_span="rerank OFF")],
+            )
+        ],
+    )
+
+    # Stub the NLI scorer so step 3 stays offline and returns a fixed score (0.5).
+    # Matches FastEmbedEntailmentScorer's __init__ signature: takes settings.
+    class _ConstantScorer:
+        def __init__(self, settings: object) -> None:
+            pass
+
+        def entailment(self, premise: str, hypothesis: str) -> float:
+            return 0.5
+
+    monkeypatch.setattr("lode.gate.FastEmbedEntailmentScorer", _ConstantScorer)
+
+    # Use a question containing "rerank" so the FTS leg surfaces the seeded passage
+    # and bodies is populated from the store — the verbatim-span check can then run.
+    question = "rerank behavior"
+
+    # Strict threshold (0.8 > 0.5): the configured Settings is threaded to the gate,
+    # which drops the claim → abstain.
+    monkeypatch.setattr(
+        "lode.cli.Settings", lambda: load_settings(entailment_threshold=0.8)
+    )
+    strict = runner.invoke(app, ["ask", question, "--db", str(db_path)])
+    assert strict.exit_code == 0
+    assert cli._ABSTAIN_LINE in strict.stdout
+
+    # Lax threshold (0.4 < 0.5): same claim, same scorer, the gate survives it.
+    monkeypatch.setattr(
+        "lode.cli.Settings", lambda: load_settings(entailment_threshold=0.4)
+    )
+    lax = runner.invoke(app, ["ask", question, "--db", str(db_path)])
+    assert lax.exit_code == 0
+    assert "rerank is on" in lax.stdout
+
+
 def test_format_cited_answer_renders_claim_with_citation() -> None:
     answer = CitedAnswer(
         claims=(
