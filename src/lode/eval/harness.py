@@ -188,17 +188,16 @@ def _retrieve(
     the trust gradient (:func:`~lode.retrieval.trust_rank`). Deterministic for a
     fixed corpus + embedder.
 
-    The query is embedded through the same ``embedder.embed_passages`` seam the
-    documents use. With the production model (nomic-embed-text-v1.5) that applies
-    the ``search_document:`` prefix to the query too, where the model expects
-    ``search_query:`` for the asymmetric pair -- a dense-leg bias tracked in
-    lode-7yw (the ``Embedder`` seam exposes no query side yet). Recall@k stays
-    sound because the model-free lexical leg carries it; the bias only softens the
-    dense leg's contribution.
+    The query is embedded via ``embedder.embed_query`` (the asymmetric
+    ``search_query:`` prefix the pinned nomic model expects), while passages in
+    the store were indexed with ``embed_passages`` (``search_document:`` prefix).
+    Using the correct prefix pair keeps the query and document vectors in their
+    intended sub-spaces and avoids the dense-leg bias that arises when the query
+    is embedded with the document prefix (lode-vhn / lode-7yw).
     """
     match = _fts_query(question)
     lexical = lexical_search(conn, match, k=k) if match else []
-    query_vector = embedder.embed_passages([question])[0]
+    query_vector = embedder.embed_query(question)
     vector = vector_search(store, conn, query_vector, k=k)
     fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)[:k]
     expanded = expand_parents(conn, fused)

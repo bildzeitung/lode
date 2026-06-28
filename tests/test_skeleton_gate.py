@@ -101,7 +101,8 @@ class _HashEmbedder:
 
     Used for the golden-set eval (Gate 3) where the scoring harness exercises
     the metric plumbing, not retrieval quality.  Recall is carried by the
-    model-free FTS5 leg.
+    model-free FTS5 leg.  Both methods hash into the same space so query and
+    passage vectors are directly comparable under the cosine ANN.
     """
 
     DIM = 8
@@ -112,6 +113,10 @@ class _HashEmbedder:
             digest = hashlib.sha256(text.encode()).digest()
             vectors.append([digest[i] / 255.0 for i in range(self.DIM)])
         return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode()).digest()
+        return [digest[i] / 255.0 for i in range(self.DIM)]
 
 
 class _FakeMessages:
