@@ -34,8 +34,18 @@ from lode.versions import save
 runner = CliRunner()
 
 # Every subcommand is real: `add` (lode-y42.1), `ask` (lode-y42.2), `status` /
-# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `eval` (lode-5y8.2).
-ALL_SUBCOMMANDS = ["add", "ask", "purge", "status", "jobs", "egress", "eval"]
+# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `eval` (lode-5y8.2),
+# `config` (lode-ftc).
+ALL_SUBCOMMANDS = [
+    "add",
+    "ask",
+    "purge",
+    "status",
+    "jobs",
+    "egress",
+    "eval",
+    "config",
+]
 
 
 def test_version_command_prints_version() -> None:
@@ -660,3 +670,65 @@ def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
 
     assert lines[0] == cli._ABSTAIN_LINE
     assert any("v-secret" in line and "withheld" in line for line in lines)
+
+
+# --- lode config (resolved paths read-out, lode-ftc) ------------------------
+
+
+def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> None:
+    # Acceptance: $LODE_HOME root, DB, vector store, log dir, and config file path
+    # are all displayed, resolved under the single root (docs/configuration.md).
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    out = result.stdout
+    assert str(home) in out  # the resolved root
+    assert str(home / "lode.db") in out
+    assert str(home / "lode.db.lock") in out
+    assert str(home / "lancedb") in out
+    assert str(home / "logs") in out
+    assert str(home / "config.toml") in out
+
+
+def test_config_reports_config_file_present_or_absent(tmp_path: Path) -> None:
+    # The optional config.toml is shown absent by default, present once it exists.
+    home = tmp_path / "home"
+    home.mkdir()
+    absent = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert absent.exit_code == 0
+    assert "config.toml  (absent)" in absent.stdout
+
+    (home / "config.toml").write_text("", encoding="utf-8")
+    present = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert "config.toml  (present)" in present.stdout
+
+
+def test_config_flags_env_override_vs_default(tmp_path: Path) -> None:
+    # The effective source of the root is surfaced: env override when set, else
+    # the ~/.lode default (docs design: "show the effective env-var override").
+    home = tmp_path / "home"
+    overridden = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert "($LODE_HOME)" in overridden.stdout
+
+    default = runner.invoke(app, ["config"], env={"LODE_HOME": ""})
+    assert "(default)" in default.stdout
+
+
+def test_config_db_override_shifts_displayed_db_and_vector_store(
+    tmp_path: Path,
+) -> None:
+    # A per-invocation --db override moves the displayed DB, its lock, and the
+    # co-located vector store; the root/logs/config still come from $LODE_HOME.
+    home = tmp_path / "home"
+    custom_db = tmp_path / "elsewhere" / "custom.db"
+    result = runner.invoke(
+        app, ["config", "--db", str(custom_db)], env={"LODE_HOME": str(home)}
+    )
+    assert result.exit_code == 0
+    out = result.stdout
+    assert str(custom_db) in out
+    assert str(tmp_path / "elsewhere" / "custom.db.lock") in out
+    assert str(tmp_path / "elsewhere" / "lancedb") in out
+    # logs and config stay under the root, not beside the overridden DB.
+    assert str(home / "logs") in out
+    assert str(home / "config.toml") in out

@@ -338,3 +338,14 @@ def lance_dir(db_path: Path) -> Path:
 def log_dir() -> Path:
     """The application log directory under the root: ``$LODE_HOME/logs/``."""
     return lode_home() / "logs"
+
+
+def config_path() -> Path:
+    """The optional user config file under the root: ``$LODE_HOME/config.toml``.
+
+    **Optional** — if absent, every knob uses its documented default; no config
+    file is a valid, fully-working state (``docs/configuration.md``). Resolved
+    here so the CLI/TUI surface (lode-ftc) reads the layout rather than
+    re-deriving it.
+    """
+    return lode_home() / "config.toml"
