@@ -18,6 +18,7 @@ import pytest
 
 from lode.answer import Answer, Claim, Support
 from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
+from lode.config import Settings
 from lode.egress import WITHHELD_CITATION
 from lode.qa import QaResult, SONNET_MODEL
 from lode.retrieval import ContextItem, TrustTier
@@ -41,6 +42,20 @@ class _FakeClient:
 
     def __init__(self, claims: list[Claim]) -> None:
         self.messages = _FakeMessages(claims)
+
+
+class _StubScorer:
+    """Offline stub EntailmentScorer: returns a fixed entailment score.
+
+    Keeps the step-3 NLI gate offline (no model download) so the ask path can be
+    exercised with a known score against a configured ``entailment_threshold``.
+    """
+
+    def __init__(self, score: float) -> None:
+        self._score = score
+
+    def entailment(self, premise: str, hypothesis: str) -> float:
+        return self._score
 
 
 def _user_prompt(client: _FakeClient) -> str:
@@ -286,3 +301,35 @@ def test_gate_cited_answer_abstains_when_nothing_survives() -> None:
 
     assert cited.abstained
     assert cited.claims == ()
+
+
+def test_ask_honors_configured_entailment_threshold(conn) -> None:
+    # The configured entailment_threshold reaches the step-3 gate on the ask path:
+    # a synthesis claim (span present, but not extractively coupled, so it reaches
+    # NLI) scoring 0.5 survives under a laxer threshold and is dropped under a
+    # stricter one -- proving the threaded Settings, not the Settings() default,
+    # decides the gate. The stub scorer keeps step 3 offline.
+    body = "lode ships rerank OFF in the walking skeleton; deepen it later."
+    _insert_note(conn, note_id="n1", version_id="v1", body=body)
+    claim = _note_claim("rerank is on", "rerank OFF", "v1")  # not coupled -> step 3
+
+    strict = ask(
+        conn,
+        "q",
+        [_note_context("v1", body)],
+        client=_FakeClient([claim]),
+        scorer=_StubScorer(0.5),
+        settings=Settings(entailment_threshold=0.8),
+    )
+    assert strict.abstained
+
+    lax = ask(
+        conn,
+        "q",
+        [_note_context("v1", body)],
+        client=_FakeClient([claim]),
+        scorer=_StubScorer(0.5),
+        settings=Settings(entailment_threshold=0.4),
+    )
+    assert not lax.abstained
+    assert lax.claims[0].text == "rerank is on"

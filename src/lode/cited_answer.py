@@ -52,6 +52,7 @@ import anthropic
 from lode.answer import Claim
 from lode.config import Settings
 from lode.egress import WithheldCitation
+from lode.faithfulness import EntailmentScorer
 from lode.gate import apply_gate
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
@@ -85,7 +86,13 @@ class CitedAnswer:
         return not self.claims
 
 
-def gate_cited_answer(result: QaResult, bodies: Mapping[str, str]) -> CitedAnswer:
+def gate_cited_answer(
+    result: QaResult,
+    bodies: Mapping[str, str],
+    *,
+    scorer: EntailmentScorer | None = None,
+    settings: Settings | None = None,
+) -> CitedAnswer:
     """Run the faithfulness gate over a Q&A result, before display.
 
     Drops every claim whose cited spans are not verbatim-present in ``bodies``
@@ -94,8 +101,14 @@ def gate_cited_answer(result: QaResult, bodies: Mapping[str, str]) -> CitedAnswe
     present-but-withheld citations. ``bodies`` maps each cited ``target_id`` to its
     resolved body text (the caller's job; :func:`ask` resolves it from the store).
     When nothing survives, :attr:`CitedAnswer.abstained` is true.
+
+    ``settings`` and the optional ``scorer`` are the gate-tuning seam threaded
+    through to :func:`lode.gate.apply_gate`, so the configured
+    ``entailment_threshold`` (step 3) is honored on the ask path rather than
+    silently falling back to the :class:`Settings` default; both default to
+    :func:`apply_gate`'s own defaults when not passed.
     """
-    gate = apply_gate(result.answer, bodies)
+    gate = apply_gate(result.answer, bodies, scorer=scorer, settings=settings)
     return CitedAnswer(
         claims=gate.surviving_claims,
         withheld_citations=result.withheld_citations,
@@ -109,6 +122,7 @@ def ask(
     *,
     think_harder: bool = False,
     client: anthropic.Anthropic | None = None,
+    scorer: EntailmentScorer | None = None,
     settings: Settings | None = None,
 ) -> CitedAnswer:
     """Answer ``question`` over the trust-ranked ``context``, gated before display.
@@ -127,6 +141,10 @@ def ask(
 
     ``client`` defaults to a credential-resolved SDK client inside
     :func:`lode.qa.answer_question`; tests pass a mock so the loop stays offline.
+    ``settings`` is threaded into both the synthesis send and the gate, so the
+    configured ``entailment_threshold`` is honored at step 3; ``scorer`` is the
+    same step-3 entailment seam :func:`lode.gate.apply_gate` exposes, which tests
+    inject to keep the gate offline.
     """
     passages: list[QaPassage] = []
     # Verify spans only against bodies the model was eligible to see: a no_egress
@@ -156,7 +174,7 @@ def ask(
         client=client,
         settings=settings,
     )
-    return gate_cited_answer(result, bodies)
+    return gate_cited_answer(result, bodies, scorer=scorer, settings=settings)
 
 
 def _resolve_target(
