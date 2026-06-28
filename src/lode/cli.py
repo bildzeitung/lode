@@ -101,6 +101,37 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+def _embed_inline(
+    conn: sqlite3.Connection,
+    version_id: str,
+    body: str,
+    db_path: Path,
+) -> None:
+    """Run chunk+embed+FTS inline after capture (skeleton stand-in for the E2 worker).
+
+    Makes the just-captured note immediately findable by both the vector leg
+    (LanceDB cosine ANN) and the lexical leg (FTS5 BM25), so a ``lode ask``
+    immediately after ``lode add`` retrieves it. This is the lode-x6r.2 intent
+    — synchronous inline embed on save — for the Phase-A walking skeleton. The
+    async move to the E2 work queue is the follow-up (lode-x6r.5, after the
+    async worker lode-i05.3 lands). The durable ``embed`` job enqueued by
+    :func:`lode.jobs.enqueue_derive_jobs` remains as the E2 seam.
+
+    Imports are deferred to avoid paying the vector-stack cost (pyarrow, fastembed)
+    on CLI commands that never embed.
+    """
+    from lode.chunking import chunk
+    from lode.embedding import embed
+    from lode.lexical import LexicalIndex
+
+    settings = Settings()
+    # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
+    embed(conn, version_id, lance_dir=lance_dir(db_path), settings=settings)
+    # Lexical leg: populate passages_fts so BM25 keyword search finds the note.
+    passages = chunk(body, version_id, settings=settings)
+    LexicalIndex(conn).replace_passages(version_id, passages)
+
+
 @app.command()
 def add(
     text: str | None = typer.Argument(
@@ -110,10 +141,14 @@ def add(
 ) -> None:
     """Capture a note into lode and enqueue its derive jobs.
 
-    Instant by design: this writes the version (``versions.save``) and enqueues
-    the embed/enrich derive jobs, with **no AI in the capture path** (the save
-    path, ``docs/design.md``). The body comes from the ``TEXT`` argument or, if
-    omitted, verbatim from stdin; an empty / whitespace-only body is refused.
+    The save path (``docs/design.md``): writes the version (``versions.save``),
+    enqueues the embed/enrich derive jobs for the E2 async worker (lode-i05.3),
+    and — for the Phase-A walking skeleton — also runs chunk+embed+FTS inline
+    so ``lode ask`` can find the note immediately (lode-x6r.2 intent; the
+    inline→async move is deferred to lode-x6r.5). **No AI in the capture path**
+    — the embedder is a local ONNX model, no network. The body comes from the
+    ``TEXT`` argument or, if omitted, verbatim from stdin; an empty /
+    whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -137,6 +172,10 @@ def add(
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
         jobs.enqueue_derive_jobs(conn, result.version_id)
+        # Skeleton: run embed inline so the note is findable immediately.
+        # The async worker (E2, lode-i05.3) will drain these jobs later; the
+        # inline step here is the skeleton stand-in until then (lode-x6r.5).
+        _embed_inline(conn, result.version_id, body, db_path)
     finally:
         conn.close()
     typer.echo(note_id)
