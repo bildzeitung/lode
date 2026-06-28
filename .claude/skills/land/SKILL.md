@@ -1,6 +1,6 @@
 ---
 name: land
-description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: semantic-review each `ready-for-land` branch (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, `bd dolt push`, and GC the merged `land/<id>` branches. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
+description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: semantic-review each `ready-for-land` branch (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
 ---
 
 # land
@@ -181,7 +181,7 @@ rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, co
 
 Only now — combined `trunk` is green — do I write the world. Order matters (see
 [bd-sync discipline](#bd-sync-discipline-non-negotiable)): push `trunk` first, then close, then
-publish bd state, then GC branches.
+publish bd state, then GC branches **and the local builder worktrees**.
 
 ```bash
 rtk git add -A -- ':!.beads' && rtk git commit -q -m "style: nox -t fix on merged trunk" || true   # commit any re-gate reformat (skip if clean); the ':!.beads' pathspec keeps the passive jsonl export OUT of the commit
@@ -195,12 +195,30 @@ done
 rtk bd dolt push               # publish the closes (and any bounce tickets) over refs/dolt/data — durable, cross-machine
 
 for id in $LANDED; do
-  rtk git push origin --delete "land/$id"   # GC the merged branch
+  rtk git push origin --delete "land/$id"   # GC the merged remote branch
+
+  # GC the local builder worktree (best-effort — only on the machine that built it).
+  # The builder records review_worktree/review_branch; once the work is on trunk the
+  # worktree and its branch are dead weight (this is the accumulation cleanup).
+  WT=$(rtk bd show "$id" --json | jq -r '.metadata.review_worktree // empty')
+  if [ -n "$WT" ] && rtk git worktree list --porcelain | grep -qxF "worktree $WT"; then
+    BR=$(rtk bd show "$id" --json | jq -r '.metadata.review_branch // empty')
+    rtk git worktree remove --force "$WT"            # the build artifact is on trunk now — force is safe
+    [ -n "$BR" ] && rtk git branch -D "$BR" 2>/dev/null || true
+  fi
 done
+rtk git worktree prune          # drop any now-stale worktree admin entries
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
 ticket frees the next layer of `bd ready`. Closing is mine because the merge decision is mine.
+
+The worktree GC is **best-effort and machine-local**: builds can happen on several machines, but
+`review_worktree` is an absolute path on the *build* machine, so the `git worktree list` guard simply
+skips any ticket whose worktree isn't registered here — the lander never errors on a worktree it can't
+see, and the build machine's own `/land` (or a later sweep there) reclaims it. I GC a worktree only on
+a clean **land**; a **bounce** drops the branch but the rebuild ticket may still want the tree, and an
+**escalate** keeps everything until the human resolves it.
 
 ---
 

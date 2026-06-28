@@ -178,8 +178,8 @@ commit the passive jsonl export, never touch the main checkout, never merge, nev
 
 **I must NOT remove my worktree.** The reviewer enters *this* worktree by path, so it has to survive
 my exit (a worktree with commits is not auto-removed). I just **stop and leave it in place** — no
-`git worktree remove`, no `ExitWorktree --remove`. (Worktree cleanup after a successful land is a
-separate hygiene task, not mine.)
+`git worktree remove`, no `ExitWorktree --remove`. (The **lander** removes the worktree after a
+successful land, keyed off the `review_worktree` metadata I record; reclaiming it is never mine.)
 
 Then I **stop** and report: which ticket, that the gates are green, the `land/<id>` branch and head
 SHA, the **worktree path** I left for the reviewer, and a one-line summary of what I built — or, on a

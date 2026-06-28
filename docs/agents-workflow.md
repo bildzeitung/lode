@@ -391,6 +391,9 @@ flowchart TD
   the ticket, no opaque `worktree-agent-<hash>` refs on the remote. **GC:** delete `origin/land/<id>`
   on a successful land *or* a bounce (a rebuild gets a fresh `land/<new-id>`); keep it for an
   *escalated* ticket until the human resolves it (a stale-escalation sweep is a later hygiene task).
+  On a clean land the lander **also removes the builder's local worktree** (and its branch), keyed off
+  the `review_worktree` metadata — best-effort and machine-local: the `git worktree list` guard skips a
+  worktree that lives on another machine, so the build machine reclaims its own.
 - **Single-lander lock (v1): a local "skip if already running" guard + the convention that the
   `/land` loop runs on one machine.** The guard stops a `/loop 5m /land` tick from overlapping a
   still-running land on the same machine; the one-machine convention covers cross-machine. A

@@ -139,8 +139,8 @@ rtk bd dolt push        # publish the label swap over refs/dolt/data — durable
 Then I **stop** and report: which ticket, that the technical review + gates are green, the `land/<id>`
 branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes.
 I do **not** `git worktree remove` or `ExitWorktree --remove` the builder's worktree (a path-entered
-worktree isn't mine to delete); the lander GCs the branch on land, and worktree cleanup is a separate
-hygiene task.
+worktree isn't mine to delete); the lander GCs both the branch **and** the local worktree on a clean
+land (keyed off the `review_worktree` metadata).
 
 ### Escalation rule — the only thing that pulls a human in
 
