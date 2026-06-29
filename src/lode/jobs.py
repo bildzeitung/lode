@@ -32,8 +32,13 @@ import sqlite3
 DERIVE_JOB_TYPES = ("embed", "enrich")
 
 
-def enqueue_derive_jobs(conn: sqlite3.Connection, target_version: str) -> None:
-    """Insert one pending job per derive type for ``target_version`` on ``conn``.
+def enqueue_derive_jobs(
+    conn: sqlite3.Connection,
+    target_version: str,
+    *,
+    types: tuple[str, ...] = DERIVE_JOB_TYPES,
+) -> None:
+    """Insert one pending job per type in ``types`` for ``target_version`` on ``conn``.
 
     Each row lands with the schema defaults (``status='pending'``, ``attempts=0``);
     ``prompt_ver`` is left NULL for the worker/reconciliation pass to stamp.
@@ -48,8 +53,13 @@ def enqueue_derive_jobs(conn: sqlite3.Connection, target_version: str) -> None:
     no-op. Re-enqueue after the prior job is ``done``/``dead`` IS allowed because
     the index is scoped to live statuses only (``docs/storage.md`` §E2 idempotency
     key decisions, pinned 2026-06-28).
+
+    ``types`` defaults to :data:`DERIVE_JOB_TYPES` (the full set — ``embed`` +
+    ``enrich``). Callers that want a targeted single-type enqueue (e.g. the
+    reconciliation scan's embed-gap step) pass an explicit subset; the underlying
+    INSERT is the same in both cases.
     """
     conn.executemany(
         "INSERT INTO jobs (type, target_version) VALUES (?, ?) ON CONFLICT DO NOTHING",
-        [(job_type, target_version) for job_type in DERIVE_JOB_TYPES],
+        [(job_type, target_version) for job_type in types],
     )

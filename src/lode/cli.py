@@ -623,6 +623,7 @@ def work(
     accumulate harmlessly until their handlers arrive (lode-i05.3 scope
     fence).  A second ``lode work`` while one is already running is refused.
     """
+    from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
     db_path = db or default_db_path()
@@ -633,6 +634,13 @@ def work(
             with WorkerLock(db_path):
                 try:
                     while True:
+                        # Reconciliation scan runs at startup (first pass) and
+                        # periodically (each poll tick in --loop mode). Re-enqueues
+                        # any head versions missing a fresh embed; idempotent by
+                        # the live-job partial unique index (lode-i05.4).
+                        gap = _reconcile(conn)
+                        if gap:
+                            typer.echo(f"reconciled {gap} gap version(s)")
                         n = _drain(conn, db_path)
                         typer.echo(f"drained {n} job(s)")
                         if not loop:
