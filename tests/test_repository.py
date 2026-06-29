@@ -319,3 +319,76 @@ def test_purge_clears_the_secret_from_the_real_lexical_index(conn):
     # The head is re-derived to the marker, so the purged note stays findable.
     assert index.search("purged", k=10)
     assert result.head_op == "update"
+
+
+# --- enqueue ownership + atomicity (lode-i05.1) --------------------------------
+#
+# Repository.save is the SOLE enqueue site: it wraps the version-write and the
+# job enqueue in one WITH conn transaction.  These tests verify:
+# - a successful save enqueues exactly the DERIVE_JOB_TYPES pending jobs;
+# - a deduped save (identical body) enqueues nothing;
+# - a failure during enqueue rolls back the version-write too (atomicity).
+
+
+def test_save_enqueues_derive_jobs(conn):
+    """repo.save enqueues the embed + enrich pending jobs for the new version."""
+    from lode.jobs import DERIVE_JOB_TYPES
+
+    repo = Repository(conn)
+    result = repo.save("note-1", "hello")
+    rows = conn.execute(
+        "SELECT type, target_version, status FROM jobs ORDER BY type"
+    ).fetchall()
+    assert rows == [
+        (job_type, result.version_id, "pending")
+        for job_type in sorted(DERIVE_JOB_TYPES)
+    ]
+
+
+def test_save_dedup_enqueues_nothing(conn):
+    """A no-op dedup save (identical body) does not enqueue any jobs."""
+    repo = Repository(conn)
+    root = repo.save("note-1", "same").version_id
+    # Advance the head so the dedup is against the live body.
+    result = repo.save("note-1", "same", parent=root)
+    assert result.deduped
+    # Still only the two jobs from the first (create) save.
+    (n,) = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()
+    from lode.jobs import DERIVE_JOB_TYPES
+
+    assert n == len(DERIVE_JOB_TYPES)
+
+
+def test_save_version_and_enqueue_are_atomic(tmp_path, monkeypatch):
+    """An injected failure in enqueue rolls back the version-write too (atomicity).
+
+    Verifies the lode-i05.1 acceptance criterion: "an injected failure between
+    the version-write and the enqueue (or in the enqueue) rolls back BOTH — no
+    version without its jobs, no jobs without the version."
+    """
+    import lode.jobs as jobs_mod
+    from lode.storage import init_db as real_init_db
+
+    db_path = tmp_path / "lode.db"
+    conn = real_init_db(db_path)
+    try:
+        # Patch enqueue_derive_jobs to raise after the version row is written
+        # but before anything is committed.
+        def _boom(c, v):
+            raise RuntimeError("injected enqueue failure")
+
+        monkeypatch.setattr(jobs_mod, "enqueue_derive_jobs", _boom)
+
+        repo = Repository(conn)
+        with pytest.raises(RuntimeError, match="injected enqueue failure"):
+            repo.save("note-1", "body")
+
+        # The version-write rolled back: neither the version nor the note row exist.
+        (n_versions,) = conn.execute("SELECT COUNT(*) FROM versions").fetchone()
+        (n_notes,) = conn.execute("SELECT COUNT(*) FROM notes").fetchone()
+        (n_jobs,) = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()
+        assert n_versions == 0, "version row must roll back with the enqueue failure"
+        assert n_notes == 0, "note row must roll back with the enqueue failure"
+        assert n_jobs == 0, "no jobs should exist after a rolled-back save"
+    finally:
+        conn.close()

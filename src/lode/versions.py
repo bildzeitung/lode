@@ -212,6 +212,59 @@ def _cas_head(
         )
 
 
+def _save_core(
+    conn: sqlite3.Connection,
+    note_id: str,
+    body: str,
+    *,
+    parent: str = NO_PARENT,
+    settings: Settings,
+) -> SaveResult:
+    """Create or update ``note_id`` to ``body`` on ``conn`` — no transaction boundary.
+
+    The raw save logic (CAS-guarded head read, version insert, head pointer update)
+    without any ``with conn:`` wrapper so a caller can fold this into a larger
+    transaction.  All semantics are identical to :func:`save`; the only difference
+    is **who owns the transaction**: here it is the caller, not this function.
+
+    :func:`lode.repository.Repository.save` calls this inside its own ``with
+    conn:`` so that the version-write and the derive-job enqueue commit atomically.
+    :func:`save` (below) wraps this in ``with conn:`` for direct, standalone use.
+    """
+    head, head_body = _head(conn, note_id)
+
+    if head is None:
+        # Create: a root version. A non-empty parent on an absent note, or a
+        # note that already exists, is a conflict (you cannot re-root).
+        if parent != NO_PARENT:
+            raise HeadConflictError(note_id, parent, None, rejected_buffer=body)
+        version_id = content_version_id(note_id, NO_PARENT, body, settings)
+        # Note row first: its head points at the not-yet-written version (the
+        # deferred FK permits this), satisfying the version's note_id FK.
+        conn.execute(
+            "INSERT INTO notes (note_id, head_version_id) VALUES (?, ?)",
+            (note_id, version_id),
+        )
+        _write_version(conn, version_id, note_id, NO_PARENT, body, "create")
+        return SaveResult(note_id, version_id, "create")
+
+    # Update: CAS against the live head.
+    if parent != head:
+        raise HeadConflictError(
+            note_id,
+            parent,
+            head,
+            actual_head_body=head_body,
+            rejected_buffer=body,
+        )
+    if body == head_body:
+        return SaveResult(note_id, head, "update", deduped=True)
+    version_id = content_version_id(note_id, head, body, settings)
+    _write_version(conn, version_id, note_id, head, body, "update")
+    _cas_head(conn, note_id, version_id, head, body)
+    return SaveResult(note_id, version_id, "update")
+
+
 def save(
     conn: sqlite3.Connection,
     note_id: str,
@@ -235,41 +288,15 @@ def save(
 
     Concurrency safety comes from the CAS plus SQLite serializing writes, not from
     there being one process (``docs/storage.md``).
+
+    The transaction is owned by this function (``with conn:`` commits or rolls back
+    on return). Callers that need to fold the version-write into a larger transaction
+    — specifically :class:`lode.repository.Repository`, which wraps the write and
+    the derive-job enqueue atomically — use :func:`_save_core` directly.
     """
     settings = settings or Settings()
     with conn:
-        head, head_body = _head(conn, note_id)
-
-        if head is None:
-            # Create: a root version. A non-empty parent on an absent note, or a
-            # note that already exists, is a conflict (you cannot re-root).
-            if parent != NO_PARENT:
-                raise HeadConflictError(note_id, parent, None, rejected_buffer=body)
-            version_id = content_version_id(note_id, NO_PARENT, body, settings)
-            # Note row first: its head points at the not-yet-written version (the
-            # deferred FK permits this), satisfying the version's note_id FK.
-            conn.execute(
-                "INSERT INTO notes (note_id, head_version_id) VALUES (?, ?)",
-                (note_id, version_id),
-            )
-            _write_version(conn, version_id, note_id, NO_PARENT, body, "create")
-            return SaveResult(note_id, version_id, "create")
-
-        # Update: CAS against the live head.
-        if parent != head:
-            raise HeadConflictError(
-                note_id,
-                parent,
-                head,
-                actual_head_body=head_body,
-                rejected_buffer=body,
-            )
-        if body == head_body:
-            return SaveResult(note_id, head, "update", deduped=True)
-        version_id = content_version_id(note_id, head, body, settings)
-        _write_version(conn, version_id, note_id, head, body, "update")
-        _cas_head(conn, note_id, version_id, head, body)
-        return SaveResult(note_id, version_id, "update")
+        return _save_core(conn, note_id, body, parent=parent, settings=settings)
 
 
 def delete(

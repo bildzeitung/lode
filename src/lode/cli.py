@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from lode import __version__, jobs, versions
+from lode import __version__, versions
 from lode.config import (
     LODE_HOME_ENV,
     Settings,
@@ -145,14 +145,14 @@ def add(
 ) -> None:
     """Capture a note into lode and enqueue its derive jobs.
 
-    The save path (``docs/design.md``): writes the version (``versions.save``),
-    enqueues the embed/enrich derive jobs for the E2 async worker (lode-i05.3),
-    and — for the Phase-A walking skeleton — also runs chunk+embed+FTS inline
-    so ``lode ask`` can find the note immediately (lode-x6r.2 intent; the
-    inline→async move is deferred to lode-x6r.5). **No AI in the capture path**
-    — the embedder is a local ONNX model, no network. The body comes from the
-    ``TEXT`` argument or, if omitted, verbatim from stdin; an empty /
-    whitespace-only body is refused.
+    The save path (``docs/design.md``): ``Repository.save`` writes the version and
+    enqueues the embed/enrich derive jobs for the E2 async worker (lode-i05.3) in
+    one atomic transaction. For the Phase-A walking skeleton it also runs
+    chunk+embed+FTS inline so ``lode ask`` can find the note immediately
+    (lode-x6r.2 intent; the inline→async move is deferred to lode-x6r.5). **No AI
+    in the capture path** — the embedder is a local ONNX model, no network. The
+    body comes from the ``TEXT`` argument or, if omitted, verbatim from stdin; an
+    empty / whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -166,8 +166,9 @@ def add(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
     try:
+        repo = Repository(conn)
         try:
-            result = versions.save(conn, note_id, body)
+            result = repo.save(note_id, body)
         except versions.HeadConflictError:
             # A create against an already-present note: never clobber or
             # auto-merge — preserve the buffer as a draft and bail (the
@@ -175,7 +176,6 @@ def add(
             draft = _write_draft(db_path, note_id, body)
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
-        jobs.enqueue_derive_jobs(conn, result.version_id)
         # Skeleton: run embed inline so the note is findable immediately.
         # The async worker (E2, lode-i05.3) will drain these jobs later; the
         # inline step here is the skeleton stand-in until then (lode-x6r.5).

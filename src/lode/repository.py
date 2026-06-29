@@ -26,7 +26,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
-from lode import versions
+from lode import jobs, versions
 from lode.config import Settings
 from lode.hashing import NO_PARENT
 from lode.versions import SaveResult
@@ -120,6 +120,14 @@ class Repository:
     The cache is touched only after the irreplaceable write has committed, so a
     cache-engine failure can never corrupt the owned data — the cache is
     regenerable, the source rows are not.
+
+    **Enqueue ownership (lode-i05.1):** :meth:`save` is the **sole enqueue site**
+    for derive jobs. It wraps the version-write (:func:`~lode.versions._save_core`)
+    and the enqueue (:func:`~lode.jobs.enqueue_derive_jobs`) in a single ``with
+    conn:`` so both commit atomically — no version without its jobs, no jobs without
+    the version. A deduped save writes no row and enqueues nothing. Direct callers
+    (e.g. the CLI) must go through :meth:`save`, never call
+    :func:`lode.jobs.enqueue_derive_jobs` separately.
     """
 
     def __init__(
@@ -136,10 +144,28 @@ class Repository:
         parent: str = NO_PARENT,
         settings: Settings | None = None,
     ) -> SaveResult:
-        """Create/update ``note_id`` (see :func:`lode.versions.save`), then index it."""
-        result = versions.save(
-            self.conn, note_id, body, parent=parent, settings=settings
-        )
+        """Create/update ``note_id`` and enqueue its derive jobs, atomically.
+
+        Wraps :func:`~lode.versions._save_core` (the CAS-guarded version-write)
+        and :func:`~lode.jobs.enqueue_derive_jobs` in a single ``with conn:``
+        transaction, so "write version row + enqueue its derive jobs" either commits
+        together or rolls back together (``docs/storage.md`` §E2, pinned 2026-06-28,
+        lode-i05.1). A deduped save (identical body → no-op) enqueues nothing and
+        leaves the cache untouched.
+
+        After a successful commit, the cache backend is driven:
+        - non-dedup save → :meth:`CacheBackend.index`;
+        - cache is not touched on a dedup.
+        """
+        settings = settings or Settings()
+        with self.conn:
+            result = versions._save_core(
+                self.conn, note_id, body, parent=parent, settings=settings
+            )
+            if not result.deduped:
+                jobs.enqueue_derive_jobs(self.conn, result.version_id)
+        # Cache is driven AFTER the txn commits so a cache failure never rolls
+        # back the irreplaceable write (cache is regenerable, the source rows are not).
         if not result.deduped:
             self.cache.index(note_id, result.version_id, body)
         return result
