@@ -1,11 +1,11 @@
-"""Tests for lode.jobs — the derive-job enqueue seam (lode-y42.1, lode-i05.6).
+"""Tests for lode.jobs — the derive-job enqueue seam (lode-y42.1, lode-i05.1, lode-i05.6).
 
 Covers: a capture enqueues exactly the embed + enrich derive jobs as pending
 rows targeting the version (schema defaults applied, prompt_ver left NULL); the
-enqueue is its own transaction (committed when it returns); and idempotency
-constraints from lode-i05.6 — duplicate enqueue of a live (pending/running) job
-is a no-op (ON CONFLICT DO NOTHING against idx_jobs_live), while re-enqueue
-after done/dead IS allowed.
+enqueue runs on the caller's connection inside the caller's transaction (lode-i05.1
+— no longer its own transaction); and idempotency constraints from lode-i05.6 —
+duplicate enqueue of a live (pending/running) job is a no-op (ON CONFLICT DO
+NOTHING against idx_jobs_live), while re-enqueue after done/dead IS allowed.
 """
 
 from pathlib import Path
@@ -49,14 +49,21 @@ def test_priority_order_embed_before_enrich() -> None:
     assert DERIVE_JOB_TYPES == ("embed", "enrich")
 
 
-def test_enqueue_is_committed_when_it_returns(tmp_path: Path) -> None:
+def test_enqueue_runs_within_callers_txn(tmp_path: Path) -> None:
+    """enqueue_derive_jobs is a plain INSERT — the CALLER commits (lode-i05.1).
+
+    The function runs on the caller's open connection without opening or
+    committing its own transaction. The rows are visible to a separate reader
+    only after the caller issues the commit (via ``with conn:``).
+    """
     db_path = tmp_path / "lode.db"
     writer = init_db(db_path)
     try:
-        enqueue_derive_jobs(writer, "ver-1")
+        with writer:
+            enqueue_derive_jobs(writer, "ver-1")
     finally:
         writer.close()
-    # A separate connection sees the rows -> the enqueue txn committed.
+    # A separate connection sees the rows -> the caller's txn committed.
     reader = init_db(db_path)
     try:
         (n,) = reader.execute("SELECT COUNT(*) FROM jobs").fetchone()

@@ -281,6 +281,41 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
 - **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
   correct with no distributed locking.
 
+### Enqueue ownership, atomicity, and layering — pinned 2026-06-28 (lode-i05.1)
+
+**Ownership:** `Repository.save` is the **sole enqueue site** for derive jobs. It
+already owns the irreplaceable version-write + cache index/evict seam; enqueueing a
+head version's derive jobs is the third thing that must happen on a head change.
+Jobs are operational/irreplaceable rows, so enqueue belongs at the Repository seam,
+**not in the CLI and not buried in `versions.py`**.
+
+**Atomicity / seam:** `Repository.save` wraps `lode.versions._save_core` (the
+CAS-guarded version-write, which does not open its own transaction) and
+`lode.jobs.enqueue_derive_jobs` (a plain `INSERT … ON CONFLICT DO NOTHING` on the
+caller's connection) in a **single `with conn:`** context, so "write version row +
+enqueue its derive jobs" commits atomically. A crash at any point in that block
+rolls back both — no version without its jobs, no jobs without the version.
+
+**Layering contract:**
+- `lode.versions._save_core` — raw CAS write, **no transaction boundary** (caller
+  owns the txn).
+- `lode.versions.save` — convenience wrapper: `_save_core` inside its own `with
+  conn:` for direct standalone callers (tests, etc.).
+- `lode.jobs.enqueue_derive_jobs` — plain `executemany` INSERT, **no transaction
+  boundary** (caller owns the txn).
+- `lode.repository.Repository.save` — the authoritative save+enqueue entry point:
+  calls `_save_core` + `enqueue_derive_jobs` in one `with conn:`, then drives the
+  cache backend after the commit. **Direct callers (e.g. the CLI) must go through
+  `Repository.save`, never call `enqueue_derive_jobs` separately.**
+
+**Deduped no-op:** a save whose body equals the live head returns without writing
+any row and without enqueuing anything — the version chain and the job queue are
+both unchanged.
+
+**Builds on lode-i05.6:** enqueue uses `ON CONFLICT DO NOTHING` against the
+`idx_jobs_live` partial unique index (below), so a duplicate or reconcile
+re-enqueue of a live job is silently dropped.
+
 ### Schema decisions — pinned 2026-06-28 (lode-i05.6)
 
 **Idempotency key — partial UNIQUE index with COALESCE.**
