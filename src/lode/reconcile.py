@@ -19,8 +19,11 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   status is the reliable proxy for "vector leg completed."
   Excludes soft-deleted (``op='delete'``) and purged (``purged_at IS NOT NULL``)
   heads.
-- *enrich-gap step* — **not registered here**; E7 appends it once the
-  enrichment tables and ``prompt_ver`` semantics exist. The seam is open.
+- ``enrich_gap`` — registered (E7, lode-npx.1). Finds head versions missing a
+  live (non-dead) enrich job — i.e. Haiku extraction never ran, was
+  dead-lettered, or otherwise lost its job row — and re-enqueues an ``enrich``
+  job for each.  Excludes tombstones, purged versions, and ``no_egress`` notes
+  (content that must never be sent to Haiku).
 
 **Idempotency** — each step re-enqueues via :func:`lode.jobs.enqueue_derive_jobs`,
 which uses ``INSERT … ON CONFLICT DO NOTHING`` against the ``idx_jobs_live``
@@ -161,3 +164,62 @@ def _embed_gap_step(conn: sqlite3.Connection) -> int:
 
 # Register the embed-gap step on module load.
 register_step("embed_gap", _embed_gap_step)
+
+
+# ---------------------------------------------------------------------------
+# Enrich-gap step (registered at module load — lode-npx.1)
+# ---------------------------------------------------------------------------
+
+
+def _enrich_gap_step(conn: sqlite3.Connection) -> int:
+    """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
+
+    **Gap signal:** a non-tombstone, non-purged, non-``no_egress`` head version
+    with no live (non-dead) enrich job.  A ``dead`` job (max-retries exhausted) or
+    the total absence of a job means enrichment is missing; a ``pending``,
+    ``running``, ``done``, or ``failed`` job means enrichment is in-flight or
+    already complete.
+
+    **Gap query:** live head versions — ``notes.head_version_id`` joined to
+    ``versions``, filtered to non-tombstone (``op != 'delete'``), non-purged
+    (``purged_at IS NULL``), non-no_egress (``no_egress = 0``) — with no enrich
+    job in status ``pending``, ``running``, ``done``, or ``failed``.  Each such
+    version is re-enqueued via :func:`lode.jobs.enqueue_derive_jobs`.
+
+    **Enqueue:** ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live`` ensures a
+    version whose enrich job is already pending or running produces no duplicate
+    row.  Re-enqueue after ``done``/``dead`` IS allowed (the index is scoped to
+    live statuses only).
+
+    Returns the count of gap versions found (each triggered one enqueue call).
+    """
+    gap_versions = conn.execute(
+        """
+        SELECT n.head_version_id
+        FROM notes n
+        JOIN versions v ON v.version_id = n.head_version_id
+        WHERE n.head_version_id IS NOT NULL
+          AND v.op != 'delete'
+          AND v.purged_at IS NULL
+          AND n.no_egress = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'enrich'
+                AND j.target_version = n.head_version_id
+                AND j.status != 'dead'
+          )
+        """
+    ).fetchall()
+
+    if not gap_versions:
+        return 0
+
+    with conn:
+        for (version_id,) in gap_versions:
+            jobs.enqueue_derive_jobs(conn, version_id, types=("enrich",))
+
+    return len(gap_versions)
+
+
+# Register the enrich-gap step on module load.
+register_step("enrich_gap", _enrich_gap_step)

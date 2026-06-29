@@ -13,10 +13,13 @@ retries, then claim+run ready pending jobs until none remain and exit.
   :class:`~lode.lexical.LexicalCacheBackend` in ``cli.py add`` writes
   ``passages`` + ``passages_fts`` right after the version commits.  Idempotent:
   the same head version can be re-embedded and converges to the same state.
-- ``enrich`` / ``refresh`` — *no handler*; jobs of unregistered types are
-  left pending and **never claimed, never dead-lettered** until their handlers
-  arrive. The claim query filters to registered types, so they accumulate
-  harmlessly (lode-i05.3 scope fence).
+- ``enrich`` — registered (lode-npx.1); runs the **Haiku structured-extraction**
+  path (:func:`lode.enrich.enrich_version`: tags + entities + inferred edges +
+  provenance). Deferred import so Haiku / Anthropic SDK cost is paid only when
+  an enrich job is actually dispatched.  Idempotent: re-enriching a version
+  replaces existing ``source='ai'`` annotations/edges for that version.
+- ``refresh`` — *no handler*; accumulates harmlessly until the connectors step
+  arrives (lode-i05.3 scope fence).
 
 **Claim** (``_claim_one``): selects one job with
 ``status='pending' AND next_attempt_at <= now AND type IN (<registered>)``,
@@ -335,3 +338,37 @@ def _embed_handler(
 
 # Register the embed handler on module load.
 register("embed", _embed_handler)
+
+
+# ---------------------------------------------------------------------------
+# Enrich handler (registered at module load — lode-npx.1)
+# ---------------------------------------------------------------------------
+
+
+def _enrich_handler(
+    conn: sqlite3.Connection,
+    target_version: str,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """Enrich handler: Haiku structured extraction of tags/entities/edges.
+
+    Dispatches to :func:`lode.enrich.enrich_version` which:
+    - gates on ``no_egress`` / tombstone / purged (returns without error),
+    - redacts secrets before egress,
+    - calls Claude Haiku with structured outputs (tool-use + Pydantic),
+    - writes tags/entities to ``annotations`` and inferred edges to ``edges``
+      (all ``source='ai'``), and
+    - audits the egress in ``egress_log``.
+
+    Deferred import keeps the Haiku / Anthropic SDK cost off code paths that
+    never enrich.  The ``db_path`` parameter is accepted but unused: enrichment
+    writes only to the SQLite DB, not to the LanceDB vector store.
+    """
+    from lode.enrich import enrich_version
+
+    enrich_version(conn, target_version, settings)
+
+
+# Register the enrich handler on module load.
+register("enrich", _enrich_handler)

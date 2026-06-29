@@ -427,10 +427,15 @@ def test_embed_is_registered_by_default() -> None:
     assert "embed" in registered_types()
 
 
-def test_enrich_and_refresh_not_registered() -> None:
-    """enrich and refresh must NOT be in the default registry (no handler yet)."""
+def test_enrich_is_registered_by_default() -> None:
+    """The enrich handler is registered at import time (lode-npx.1)."""
     from lode.worker import registered_types
 
-    types = registered_types()
-    assert "enrich" not in types
-    assert "refresh" not in types
+    assert "enrich" in registered_types()
+
+
+def test_refresh_not_registered() -> None:
+    """refresh must NOT be in the default registry (no connector handler yet)."""
+    from lode.worker import registered_types
+
+    assert "refresh" not in registered_types()
