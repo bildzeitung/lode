@@ -1,7 +1,9 @@
 """lode command-line entry point.
 
 A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
-subcommand surface). ``add`` (capture + save, lode-y42.1), the operational
+subcommand surface). ``add`` (capture + save, lode-y42.1) saves a note and
+enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
+(chunk + embed + FTS via the registered ``embed`` handler); the operational
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
 :meth:`lode.repository.Repository.purge`; ``ask`` (lode-y42.2) runs the cited Q&A
@@ -106,37 +108,6 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
-def _embed_inline(
-    conn: sqlite3.Connection,
-    version_id: str,
-    body: str,
-    db_path: Path,
-) -> None:
-    """Run chunk+embed+FTS inline after capture (skeleton stand-in for the E2 worker).
-
-    Makes the just-captured note immediately findable by both the vector leg
-    (LanceDB cosine ANN) and the lexical leg (FTS5 BM25), so a ``lode ask``
-    immediately after ``lode add`` retrieves it. This is the lode-x6r.2 intent
-    — synchronous inline embed on save — for the Phase-A walking skeleton. The
-    async move to the E2 work queue is the follow-up (lode-x6r.5, after the
-    async worker lode-i05.3 lands). The durable ``embed`` job enqueued by
-    :func:`lode.jobs.enqueue_derive_jobs` remains as the E2 seam.
-
-    Imports are deferred to avoid paying the vector-stack cost (pyarrow, fastembed)
-    on CLI commands that never embed.
-    """
-    from lode.chunking import chunk
-    from lode.embedding import embed
-    from lode.lexical import LexicalIndex
-
-    settings = Settings()
-    # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
-    embed(conn, version_id, lance_dir=lance_dir(db_path), settings=settings)
-    # Lexical leg: populate passages_fts so BM25 keyword search finds the note.
-    passages = chunk(body, version_id, settings=settings)
-    LexicalIndex(conn).replace_passages(version_id, passages)
-
-
 @app.command()
 def add(
     text: str | None = typer.Argument(
@@ -147,13 +118,10 @@ def add(
     """Capture a note into lode and enqueue its derive jobs.
 
     The save path (``docs/design.md``): ``Repository.save`` writes the version and
-    enqueues the embed/enrich derive jobs for the E2 async worker (lode-i05.3) in
-    one atomic transaction. For the Phase-A walking skeleton it also runs
-    chunk+embed+FTS inline so ``lode ask`` can find the note immediately
-    (lode-x6r.2 intent; the inline→async move is deferred to lode-x6r.5). **No AI
-    in the capture path** — the embedder is a local ONNX model, no network. The
-    body comes from the ``TEXT`` argument or, if omitted, verbatim from stdin; an
-    empty / whitespace-only body is refused.
+    enqueues the embed/enrich derive jobs for the E2 async worker in one atomic
+    transaction. **No AI in the capture path** — embedding runs asynchronously
+    via ``lode work`` (lode-x6r.5). The body comes from the ``TEXT`` argument or,
+    if omitted, verbatim from stdin; an empty / whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -169,7 +137,7 @@ def add(
     try:
         repo = Repository(conn)
         try:
-            result = repo.save(note_id, body)
+            repo.save(note_id, body)
         except versions.HeadConflictError:
             # A create against an already-present note: never clobber or
             # auto-merge — preserve the buffer as a draft and bail (the
@@ -177,10 +145,6 @@ def add(
             draft = _write_draft(db_path, note_id, body)
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
-        # Skeleton: run embed inline so the note is findable immediately.
-        # The async worker (E2, lode-i05.3) will drain these jobs later; the
-        # inline step here is the skeleton stand-in until then (lode-x6r.5).
-        _embed_inline(conn, result.version_id, body, db_path)
     finally:
         conn.close()
     typer.echo(note_id)

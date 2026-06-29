@@ -306,9 +306,9 @@ def _embed_handler(
 ) -> None:
     """Embed handler: chunk+embed (vector leg) + FTS (lexical leg).
 
-    Mirrors the Phase-A skeleton :func:`lode.cli._embed_inline` path so the
-    same chunk+embed+FTS work runs whether triggered inline (capture) or via
-    the worker queue.  Deferred imports avoid paying the fastembed / LanceDB
+    The sole path for embedding after capture (lode-x6r.5): capture enqueues
+    the ``embed`` derive job via :func:`~lode.jobs.enqueue_derive_jobs`; this
+    handler drains it.  Deferred imports avoid paying the fastembed / LanceDB
     cost on commands that never embed.
 
     :func:`lode.embedding.embed` chunks the body, upserts the ``passages``
