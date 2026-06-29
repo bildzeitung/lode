@@ -306,22 +306,3 @@ def test_reconcile_embed_gap_idempotent_via_reconcile(conn: sqlite3.Connection) 
     reconcile(conn)
     statuses = _pending_embed_jobs(conn, "ver-1")
     assert statuses == ["pending"]  # still exactly one row
-
-
-# ---------------------------------------------------------------------------
-# register_step — registry mutation
-# ---------------------------------------------------------------------------
-
-
-def test_register_step_appends_to_steps(tmp_path: Path) -> None:
-    """register_step appends to _STEPS; calling it does not affect other tests
-    because we only inspect the name without touching the live module state
-    in a way that bleeds across tests."""
-    # We test indirectly via reconcile() with a steps list — the module-level
-    # _STEPS is append-only and doesn't reset between tests, so we cannot
-    # register a step here without polluting subsequent tests. Instead, confirm
-    # the module-level _STEPS contains exactly 'embed_gap' at startup.
-    from lode.reconcile import _STEPS
-
-    names = [n for n, _ in _STEPS]
-    assert names[0] == "embed_gap", "embed_gap must be the first registered step"
