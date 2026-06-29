@@ -1,4 +1,4 @@
-"""Phase-A exit gate (lode-6w1.1 / lode-x6r.5): add → work → ask → cited claim / abstain → eval green.
+"""Phase-A exit gate (lode-6w1.1 / lode-x6r.5 / lode-xyb): add → (work) → ask → cited claim / abstain → eval green.
 
 Verification gate for the walking skeleton end-to-end. Three sub-gates together
 close Phase A and unblock the deepening tasks:
@@ -53,6 +53,10 @@ from lode.eval.golden import golden_set
 from lode.eval.harness import score_golden_set
 from lode.faithfulness import span_occurs
 from lode.storage import init_db
+
+#: FTS5 keyword that appears in _NOTE_BODY — used in Gate 4 to verify
+#: the lexical leg can find the note by keyword without any async work.
+_FTS_KEYWORD = "exponential"
 
 runner = CliRunner()
 
@@ -342,3 +346,141 @@ def test_gate3_eval_scorer_reports_green_on_golden_fixture(tmp_path: Path) -> No
         f"abstention = {score.abstention_accuracy:.3f}; expected 1.0"
     )
     assert score.k == settings.retrieval_top_k
+
+
+# ---------------------------------------------------------------------------
+# Gate 4: lode add → lode ask (NO work) → keyword finds the note (lode-xyb)
+# ---------------------------------------------------------------------------
+
+
+def test_gate4_fts_findable_before_lode_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode add + lode ask (no lode work) → keyword finds note via FTS.
+
+    The acceptance criterion (lode-xyb / x6r.4's real AC): the lexical leg
+    (FTS5) is synchronous and model-free, so a just-saved note is
+    keyword-findable BEFORE any async embedding runs.  This is the regression
+    that x6r.5 introduced: it removed ``_embed_inline`` which was the only FTS
+    write, and cli.py add was building ``Repository(conn)`` with NullCache, so
+    ``cache.index()`` was a no-op and the note was never indexed synchronously.
+
+    After lode-xyb: cli.py add injects
+    ``CompositeCache([LexicalCacheBackend(conn)])`` so ``Repository.save``
+    calls ``LexicalCacheBackend.index()`` right after the version commits —
+    writing ``passages`` + ``passages_fts`` without any model — and ``lode ask``
+    can retrieve the note via FTS immediately.
+
+    Step by step:
+    1. Stub ``lode.embedding.FastEmbedEmbedder`` with ``_ConstantEmbedder``
+       (the dense leg embeds the query, but has no indexed vectors to hit).
+    2. ``lode add`` saves the note and synchronously writes passages + FTS5 rows
+       via the injected cache.  The embed job is enqueued but NOT drained.
+    3. ``lode ask`` with a keyword from the note's body:
+       - Lexical leg (FTS5): hits the note ✓ (synchronous, written on save).
+       - Dense leg (LanceDB): empty (embed never ran, no vectors).
+       - RRF fuses the one lexical hit alone — still surfaces it.
+       - ``expand_parents`` reads the ``passages`` row (written synchronously) → context OK.
+       - Fake client returns a claim; faithfulness gate verifies the span.
+    4. Assert the cited claim is present (not abstained) and the span is in output.
+    """
+    db_path = tmp_path / "lode.db"
+
+    # Stub the embedder — only the query-embedding side is called here; there
+    # are no indexed vectors, so the dense leg returns empty.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Step 1: add the note.  No lode work runs.
+    add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
+    assert add_result.exit_code == 0, add_result.output
+    note_id = add_result.stdout.strip()
+    assert note_id, "lode add should print the note_id"
+
+    # Step 2: get the version_id for the fake client's citation support.
+    version_id = _get_head_version_id(db_path, note_id)
+
+    # Step 3: ask via the CLI with the fake Q&A client.  No lode work has run.
+    fake_client = _FakeClient(
+        [
+            Claim(
+                text="Use exponential backoff.",
+                support=[Support(version_id=version_id, quoted_span=_QUOTED_SPAN)],
+            )
+        ]
+    )
+    monkeypatch.setattr("lode.qa.build_client", lambda: fake_client)
+
+    # Ask with a keyword from the note body — this exercises the lexical leg.
+    ask_result = runner.invoke(app, ["ask", _FTS_KEYWORD, "--db", str(db_path)])
+    assert ask_result.exit_code == 0, ask_result.output
+
+    # Step 4: the claim survived — the note was found via FTS before any work ran.
+    output = ask_result.stdout
+    assert cli._ABSTAIN_LINE not in output, (
+        f"expected cited claim via FTS, but got abstention — "
+        f"FTS5 was not indexed synchronously on save (lode-xyb regression).\n"
+        f"output: {output!r}"
+    )
+    assert _QUOTED_SPAN in output, f"quoted_span not in ask output: {output!r}"
+
+
+# ---------------------------------------------------------------------------
+# Gate 5: lode work does NOT double-index FTS (lode-xyb)
+# ---------------------------------------------------------------------------
+
+
+def test_gate5_worker_does_not_double_index_fts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode work does not write FTS5 rows; the synchronous save already did.
+
+    The acceptance criterion (lode-xyb): the worker's ``_embed_handler`` is
+    vector-only after lode-xyb.  Running ``lode work`` after ``lode add`` must
+    not change the ``passages_fts`` row count — it should remain exactly what
+    the synchronous save wrote.
+
+    Step by step:
+    1. ``lode add`` writes passages + passages_fts synchronously.
+    2. Count passages_fts rows.
+    3. ``lode work`` drains the embed job (vector leg only).
+    4. Count passages_fts rows again.
+    5. Assert the count is unchanged — no double-index.
+    """
+    db_path = tmp_path / "lode.db"
+
+    # Stub the embedder for the worker's vector leg.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Add a note — synchronous cache writes passages + passages_fts.
+    add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
+    assert add_result.exit_code == 0, add_result.output
+
+    # Count FTS rows right after add (before any async work).
+    conn = sqlite3.connect(db_path)
+    try:
+        fts_count_before = conn.execute("SELECT COUNT(*) FROM passages_fts").fetchone()[
+            0
+        ]
+        assert fts_count_before > 0, (
+            "passages_fts should have rows after lode add (synchronous FTS write)"
+        )
+    finally:
+        conn.close()
+
+    # Drain the embed job (vector leg only under lode-xyb).
+    work_result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert work_result.exit_code == 0, work_result.output
+
+    # Count FTS rows after work — must be unchanged.
+    conn = sqlite3.connect(db_path)
+    try:
+        fts_count_after = conn.execute("SELECT COUNT(*) FROM passages_fts").fetchone()[
+            0
+        ]
+    finally:
+        conn.close()
+
+    assert fts_count_after == fts_count_before, (
+        f"FTS row count changed after lode work: {fts_count_before} → "
+        f"{fts_count_after}.  The worker double-indexed FTS (lode-xyb regression)."
+    )

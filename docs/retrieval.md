@@ -26,8 +26,10 @@ that gets embedded, lexically indexed, fused, and reranked.** Both retrieval leg
 - **Structure-aware, with a token fallback.** Split on the note's own structure — markdown
   headings, paragraphs, list items (meeting notes have sections; runbooks have numbered steps) —
   then **sub-split any block over N tokens** with slight overlap so passage size stays bounded.
-  Deterministic and local — no LLM in the chunker (consistent with the capture-path and privacy
-  stances); it rides the async embedding leg ([design.md](design.md) §1), so capture stays instant.
+  Deterministic and local — no LLM, no model, no network in the chunker. The passage *structure*
+  (`passages` rows + FTS5 index) is written **synchronously on save** by the model-free
+  `LexicalCacheBackend` (settled lode-xyb), so a just-captured note is keyword-findable
+  immediately; only the *embedding step* (LanceDB vectors) is async via the worker.
 - **Small-to-big retrieval.** Match on the small passage (precision), but expand each hit to its
   **parent block** (`parent_block` in [storage.md](storage.md#data-shape-sketch)) so the Q&A LLM
   gets enough surrounding context to synthesize — while the **citation still points to the precise

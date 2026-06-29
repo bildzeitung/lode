@@ -134,7 +134,7 @@ class LexicalIndex:
 
 
 class LexicalCacheBackend:
-    """The FTS5 lexical leg behind the Repository cache seam (lode-x6r.4).
+    """The FTS5 lexical leg behind the Repository cache seam (lode-x6r.4, lode-xyb).
 
     Wraps :class:`LexicalIndex` as a :class:`lode.repository.CacheBackend` so the
     lexical index is reached *through the Repository*, on the same two-method seam
@@ -144,10 +144,13 @@ class LexicalCacheBackend:
     "The cache slot holds one engine that may be many"). It is **synchronous and
     model-free**, so the seam's ``index`` runs inline on save with no async stage.
 
-    - :meth:`index` → chunk the head's body (deterministic, no model) and replace
-      this version's per-passage FTS rows, so the note is keyword-findable the
-      moment the save returns.
-    - :meth:`evict` → drop *this version's* FTS rows (replace with none). A
+    - :meth:`index` → chunk the head's body (deterministic, no model), persist
+      the passage structure to the ``passages`` table (needed by
+      :func:`lode.retrieval.expand_parents` to build Q&A context and for the
+      embed-gap reconcile signal), and replace this version's per-passage FTS rows
+      — so the note is keyword-findable and context-expandable the moment the save
+      returns, before any async embedding runs (lode-xyb).
+    - :meth:`evict` → clear *this version's* ``passages`` rows and FTS rows.  A
       soft-delete tombstone has no passages of its own, so this is the symmetric
       "clear this version" of :meth:`index`; like the vector leg it deliberately
       does **not** sweep the note's prior content rows — soft-delete is reversible
@@ -158,12 +161,43 @@ class LexicalCacheBackend:
     def __init__(
         self, conn: sqlite3.Connection, *, settings: Settings | None = None
     ) -> None:
+        self._conn = conn
         self._index = LexicalIndex(conn)
         self._settings = settings or Settings()
 
     def index(self, note_id: str, version_id: str, body: str) -> None:
         passages = chunk(body, version_id, settings=self._settings)
+        # Persist the passage structure to the regenerable ``passages`` table.
+        # Chunking is model-free so this is safe on the synchronous capture path.
+        # INSERT OR REPLACE is idempotent: the embed worker re-writes the same rows
+        # later (same deterministic passage_ids) — no conflict, no duplication.
+        if passages:
+            with self._conn:
+                self._conn.executemany(
+                    "INSERT OR REPLACE INTO passages "
+                    "(passage_id, target_version, ord, char_range, text, parent_block) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            p.passage_id,
+                            p.target_version,
+                            p.ord,
+                            p.char_range,
+                            p.text,
+                            p.parent_block,
+                        )
+                        for p in passages
+                    ],
+                )
+        # Populate passages_fts for BM25 keyword search (delete-then-insert,
+        # idempotent per target_version).
         self._index.replace_passages(version_id, passages)
 
     def evict(self, note_id: str, version_id: str) -> None:
+        # Clear the passages rows for this version (tombstone has none; no-op in
+        # practice, but symmetric with index and needed for cache correctness).
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM passages WHERE target_version = ?", (version_id,)
+            )
         self._index.replace_passages(version_id, [])
