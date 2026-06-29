@@ -38,9 +38,17 @@ def enqueue_derive_jobs(conn: sqlite3.Connection, target_version: str) -> None:
     ``prompt_ver`` is left NULL for the worker/reconciliation pass to stamp. The
     ``with conn:`` wraps both inserts so a captured version never gets a partial
     set of derive jobs.
+
+    The INSERT uses ``ON CONFLICT DO NOTHING`` against the partial unique index
+    ``idx_jobs_live`` (``src/lode/schema.sql``): a duplicate enqueue of the same
+    live (pending/running) ``(type, target_version[, prompt_ver])`` job is a
+    no-op. Re-enqueue after the prior job is ``done``/``dead`` IS allowed because
+    the index is scoped to live statuses only (``docs/storage.md`` §E2 idempotency
+    key decisions, pinned 2026-06-28).
     """
     with conn:
         conn.executemany(
-            "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+            "INSERT INTO jobs (type, target_version) VALUES (?, ?)"
+            " ON CONFLICT DO NOTHING",
             [(job_type, target_version) for job_type in DERIVE_JOB_TYPES],
         )

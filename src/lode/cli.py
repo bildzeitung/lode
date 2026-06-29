@@ -363,12 +363,19 @@ def purge(
 
 
 class JobStatus(str, Enum):
-    """The ``jobs.status`` enum from ``schema.sql`` — accepted by ``--status``."""
+    """The ``jobs.status`` enum from ``schema.sql`` — accepted by ``--status``.
+
+    Lifecycle: ``pending -> running -> done`` (success); ``running -> failed``
+    (transient error; worker resets to ``pending`` for retry); ``failed -> dead``
+    (terminal: max-attempts gate). ``dead`` is the dead-letter terminal surfaced
+    by ``lode status``; ``failed`` is the transient last-error state.
+    """
 
     pending = "pending"
     running = "running"
     done = "done"
     failed = "failed"
+    dead = "dead"
 
 
 class EgressPurpose(str, Enum):
@@ -408,8 +415,12 @@ def status(
     """Show work-queue health: job counts, dead-letters, and an egress summary.
 
     Reads the ``jobs`` and ``egress_log`` tables (``docs/storage.md`` §8): the
-    pending/running/done/failed job counts, the dead-letter (failed) jobs with
-    their last error, and how much content has left the box, by purpose.
+    pending/running/done/failed/dead job counts, the dead-letter (``dead``) jobs
+    with their last error, and how much content has left the box, by purpose.
+
+    Status lifecycle: ``pending -> running -> done`` (success);
+    ``running -> failed`` (transient error, retried); ``failed -> dead``
+    (terminal dead-letter at max-attempts gate).
     """
     conn = _open_db(db)
     try:
@@ -418,7 +429,7 @@ def status(
         )
         dead_letters = conn.execute(
             "SELECT id, type, target_version, last_error FROM jobs "
-            "WHERE status = 'failed' ORDER BY id"
+            "WHERE status = 'dead' ORDER BY id"
         ).fetchall()
         egress_counts = conn.execute(
             "SELECT purpose, COUNT(*) FROM egress_log GROUP BY purpose ORDER BY purpose"
@@ -431,14 +442,15 @@ def status(
         f"{job_counts.get('pending', 0)} pending, "
         f"{job_counts.get('running', 0)} running, "
         f"{job_counts.get('done', 0)} done, "
-        f"{job_counts.get('failed', 0)} failed"
+        f"{job_counts.get('failed', 0)} failed, "
+        f"{job_counts.get('dead', 0)} dead"
     )
 
     total_egress = sum(n for _, n in egress_counts)
     by_purpose = ", ".join(f"{purpose}: {n}" for purpose, n in egress_counts) or "none"
     typer.echo(f"egress: {total_egress} sends ({by_purpose})")
 
-    typer.echo(f"dead-letters (failed jobs): {len(dead_letters)}")
+    typer.echo(f"dead-letters (dead jobs): {len(dead_letters)}")
     for job_id, job_type, target_version, last_error in dead_letters:
         typer.echo(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "

@@ -165,20 +165,50 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- Single-owner SQLite queue, idempotent by key; every job is re-runnable. The
 -- one non-reconstructable bit of state is an in-flight batch_handle (a submitted
 -- Claude Batch a reconciliation scan can't see, so it must survive a restart).
+--
+-- Idempotency key (PINNED 2026-06-28, lode-i05.6): identity is
+--   (type, target_version) for embed  (prompt_ver is always NULL)
+--   (type, target_version, prompt_ver) for enrich
+-- NULL prompt_ver would be DISTINCT in a naive UNIQUE, so embed rows cannot be
+-- deduped that way. Instead, a partial UNIQUE index over COALESCE(prompt_ver, '')
+-- scoped to live (pending/running) jobs enforces deduplication; enqueue uses
+-- INSERT ... ON CONFLICT DO NOTHING. Scoping to pending/running is load-bearing:
+-- it dedupes in-flight work but STILL ALLOWS a re-enqueue after done/dead (a
+-- prompt_ver bump or re-derive must be able to enqueue again).
+--
+-- Backoff scheduling (PINNED 2026-06-28, lode-i05.6): next_attempt_at (ISO-8601
+-- UTC) lets the worker durably schedule a retry; claim selects WHERE
+-- next_attempt_at <= now. Without it a restart mid-backoff retries immediately.
+--
+-- Status lifecycle (PINNED 2026-06-28, lode-i05.6):
+--   pending -> running -> done            (success)
+--                      -> failed          (transient error; worker resets to pending)
+--              failed  -> pending         (retry)
+--                      -> dead            (terminal: max-attempts gate)
+-- 'dead' is the poison terminal; 'failed' is the transient last-error state
+-- retries reset from. They are DISTINCT so the worker can distinguish "retry me"
+-- from "give up". The UI surfaces 'dead' rows as dead-letters.
 CREATE TABLE IF NOT EXISTS jobs (
-    id             INTEGER PRIMARY KEY,
-    type           TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
-    target_version TEXT NOT NULL,
-    prompt_ver     TEXT,
-    status         TEXT NOT NULL DEFAULT 'pending'
-                       CHECK (status IN ('pending', 'running', 'done', 'failed')),
-    attempts       INTEGER NOT NULL DEFAULT 0,
-    last_error     TEXT,
-    batch_handle   TEXT,
-    created        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    id              INTEGER PRIMARY KEY,
+    type            TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
+    target_version  TEXT NOT NULL,
+    prompt_ver      TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT,
+    batch_handle    TEXT,
+    next_attempt_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    created         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
+
+-- Partial unique index for live-job idempotency (see notes above). Scoped to
+-- status IN ('pending','running') so done/dead rows do not block re-enqueue.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_live ON jobs (
+    type, target_version, COALESCE(prompt_ver, '')
+) WHERE status IN ('pending', 'running');
 
 -- egress_log — cloud-egress audit trail (docs/storage.md §8, externals.md
 -- privacy). One row per time content leaves the box, so exposure is auditable.

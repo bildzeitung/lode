@@ -261,8 +261,9 @@ arbitrarily without corrupting anything.** A job that finishes late just writes 
 annotation, which the head-pointer comparison flags for re-derivation. So:
 
 - the queue needs **no locking against edits**, and
-- **every job is idempotent by key** (`version_id`, or `version_id + prompt_ver`) — re-running
-  overwrites or no-ops. The safe default on any failure is simply *do it again*.
+- **every job is idempotent by key** (`type + target_version` for embed, or
+  `type + target_version + prompt_ver` for enrich) — re-running overwrites or
+  no-ops. The safe default on any failure is simply *do it again*.
 
 ### Shape: a durable `jobs` table + a reconciliation safety net
 
@@ -279,6 +280,43 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   makes running it anytime safe.
 - **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
   correct with no distributed locking.
+
+### Schema decisions — pinned 2026-06-28 (lode-i05.6)
+
+**Idempotency key — partial UNIQUE index with COALESCE.**
+Job identity is `(type, target_version)` for `embed` (prompt_ver always NULL) and
+`(type, target_version, prompt_ver)` for `enrich`. A naive `UNIQUE(type,
+target_version, prompt_ver)` would not dedupe embed jobs because SQLite treats
+NULLs as distinct in UNIQUE constraints. Instead the schema uses a partial unique
+index over a COALESCE expression, scoped to live (pending/running) jobs only:
+
+```sql
+CREATE UNIQUE INDEX idx_jobs_live ON jobs(type, target_version, COALESCE(prompt_ver, ''))
+    WHERE status IN ('pending', 'running');
+```
+
+Scoping to `pending`/`running` is load-bearing: it dedupes in-flight work but
+**still allows** a re-enqueue after the prior job reached `done`/`dead` (a
+`prompt_ver` bump or re-derive must be able to enqueue again — the reconciliation
+scan depends on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
+
+**Backoff scheduling — `next_attempt_at`.**
+The `next_attempt_at TEXT NOT NULL DEFAULT (strftime(...'now'))` column (ISO-8601
+UTC) lets the worker durably schedule a retry: claim selects `WHERE status =
+'pending' AND next_attempt_at <= now`. Without this column a restart mid-backoff
+retries immediately.
+
+**Dead-letter terminal — distinct `dead` status.**
+The status lifecycle is:
+```
+pending -> running -> done                    (success)
+           running -> failed -> pending       (transient error; worker resets for retry)
+                      failed -> dead          (terminal: max-attempts gate)
+```
+`dead` is the poison terminal reached at the max-attempts gate. `failed` is the
+*transient* last-error state that retries reset from. They are distinct so the
+worker can distinguish "retry me" from "give up", and the UI surfaces `dead` rows
+as dead-letters (not `failed` rows).
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
@@ -339,8 +377,10 @@ embeddings   passage_id, vector, model                                 # derived
 edges        from, to, source(ai|user), reason, confidence,            # the knowledge graph
              source_version, status
 jobs         id, type(embed|enrich|refresh), target_version,           # async work queue
-             prompt_ver?, status(pending|running|done|failed),
-             attempts, last_error?, batch_handle?, created             #   durable, single-owner
+             prompt_ver?, status(pending|running|done|failed|dead),    #   durable, single-owner
+             attempts, last_error?, batch_handle?,                     #   lifecycle: pending->
+             next_attempt_at, created                                  #   running->{done|failed->
+                                                                       #   pending|dead}
 egress_log   id, ts, purpose(enrich|qa), model,                        # cloud-egress audit trail
              sent_targets(version_id|passage_id …), redactions
 ```
