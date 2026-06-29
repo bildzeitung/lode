@@ -79,12 +79,31 @@ def _insert_passage(
     target_version: str = "ver-1",
     passage_id: str = "p-1",
 ) -> None:
-    """Insert a minimal passages row (signals that embed ran for target_version)."""
+    """Insert a minimal passages row.
+
+    Note (lode-xyb): passages are now written synchronously on save by
+    :class:`~lode.lexical.LexicalCacheBackend`, so their presence does NOT
+    imply embedding is complete.  The embed-gap signal is the embed job status.
+    This helper is kept for tests that set up passage state independently.
+    """
     with conn:
         conn.execute(
             "INSERT INTO passages (passage_id, target_version, ord, text) "
             "VALUES (?, ?, ?, ?)",
             (passage_id, target_version, 0, "chunk text"),
+        )
+
+
+def _insert_embed_job(
+    conn: sqlite3.Connection,
+    target_version: str = "ver-1",
+    status: str = "done",
+) -> None:
+    """Insert a minimal embed job row with the given status."""
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', ?, ?)",
+            (target_version, status),
         )
 
 
@@ -112,10 +131,15 @@ def _all_jobs_for_version(conn: sqlite3.Connection, version_id: str) -> list[tup
 # ---------------------------------------------------------------------------
 
 
-def test_embed_gap_enqueues_embed_for_missing_passages(
+def test_embed_gap_enqueues_embed_for_missing_job(
     conn: sqlite3.Connection,
 ) -> None:
-    """A live head version with no passages row gets an embed job enqueued."""
+    """A live head version with no embed job at all gets an embed job enqueued.
+
+    The embed-gap signal (lode-xyb): a missing job (or all-dead jobs) means
+    the vector leg has not run.  Passages may or may not exist — their presence
+    is no longer the signal since they are written synchronously on save.
+    """
     _insert_note_with_version(conn, "note-1", "ver-1")
     count = _embed_gap_step(conn)
     assert count == 1
@@ -129,14 +153,37 @@ def test_embed_gap_returns_zero_when_no_notes(conn: sqlite3.Connection) -> None:
     assert count == 0
 
 
-def test_embed_gap_returns_zero_when_passages_exist(conn: sqlite3.Connection) -> None:
-    """A head version that already has passages is not in the gap."""
+def test_embed_gap_returns_zero_when_embed_job_done(conn: sqlite3.Connection) -> None:
+    """A head version with a done embed job is not in the gap.
+
+    Signal (lode-xyb): a non-dead embed job means the vector leg ran (or will run).
+    A done job covers the version regardless of whether passages exist.
+    """
     _insert_note_with_version(conn, "note-1", "ver-1")
-    _insert_passage(conn, "ver-1", "p-1")
+    _insert_embed_job(conn, "ver-1", status="done")
     count = _embed_gap_step(conn)
     assert count == 0
-    # No embed job should be enqueued.
-    assert _pending_embed_jobs(conn, "ver-1") == []
+    # No additional embed job should be enqueued (done job covers the version).
+    all_jobs = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'ver-1'"
+    ).fetchall()
+    assert all_jobs == [("done",)]
+
+
+def test_embed_gap_passages_alone_do_not_cover(conn: sqlite3.Connection) -> None:
+    """Having passages but no embed job IS still a gap (lode-xyb).
+
+    Before lode-xyb, passages were only written by the embed worker, so their
+    presence signalled "embed ran."  After lode-xyb, passages are written
+    synchronously on save — so passages exist before any embedding — and the
+    gap signal is the embed job status, not passages.
+    """
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_passage(conn, "ver-1", "p-1")
+    # Passages exist, but no embed job → the vector leg has not run.
+    count = _embed_gap_step(conn)
+    assert count == 1
+    assert _pending_embed_jobs(conn, "ver-1") == ["pending"]
 
 
 def test_embed_gap_excludes_soft_deleted_head(conn: sqlite3.Connection) -> None:
@@ -167,7 +214,7 @@ def test_embed_gap_enqueues_only_embed_not_enrich(conn: sqlite3.Connection) -> N
 
 
 def test_embed_gap_multiple_gap_versions(conn: sqlite3.Connection) -> None:
-    """Multiple notes with missing passages all get an embed job enqueued."""
+    """Multiple notes with no embed jobs all get an embed job enqueued."""
     _insert_note_with_version(conn, "note-1", "ver-1")
     _insert_note_with_version(conn, "note-2", "ver-2")
     _insert_note_with_version(conn, "note-3", "ver-3")
@@ -178,14 +225,19 @@ def test_embed_gap_multiple_gap_versions(conn: sqlite3.Connection) -> None:
 
 
 def test_embed_gap_mixed_gap_and_covered(conn: sqlite3.Connection) -> None:
-    """Only the version missing passages appears in the gap; the covered one doesn't."""
-    _insert_note_with_version(conn, "note-1", "ver-1")  # gap
-    _insert_note_with_version(conn, "note-2", "ver-2")  # covered
-    _insert_passage(conn, "ver-2", "p-2")
+    """Only the version with no non-dead embed job appears in the gap.
+
+    Signal (lode-xyb): "covered" means a non-dead embed job exists, not that
+    passages exist.
+    """
+    _insert_note_with_version(conn, "note-1", "ver-1")  # gap: no embed job
+    _insert_note_with_version(conn, "note-2", "ver-2")  # covered: done embed job
+    _insert_embed_job(conn, "ver-2", status="done")
     count = _embed_gap_step(conn)
     assert count == 1
     assert _pending_embed_jobs(conn, "ver-1") == ["pending"]
-    assert _pending_embed_jobs(conn, "ver-2") == []
+    # ver-2's done job is not touched (no new pending job created).
+    assert _pending_embed_jobs(conn, "ver-2") == ["done"]
 
 
 # ---------------------------------------------------------------------------
@@ -202,57 +254,58 @@ def test_embed_gap_idempotent_repeated_calls(conn: sqlite3.Connection) -> None:
     assert statuses == ["pending"]  # still one row, not two
 
 
-def test_embed_gap_idempotent_with_inflight_job(conn: sqlite3.Connection) -> None:
-    """Re-enqueueing a version with an in-flight embed job is a no-op."""
+def test_embed_gap_no_gap_when_job_pending(conn: sqlite3.Connection) -> None:
+    """A pending embed job (in-flight or just enqueued) means no gap."""
     _insert_note_with_version(conn, "note-1", "ver-1")
-    # Pre-insert a running embed job (simulating in-flight).
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', 'ver-1', 'running')"
-        )
-    # No passages yet — still a gap, but the job is in-flight.
+    _insert_embed_job(conn, "ver-1", status="pending")
     count = _embed_gap_step(conn)
-    assert count == 1  # gap was found (no passages)
-    # Still only one embed job (the running one); no duplicate pending inserted.
+    assert count == 0  # pending job → not a gap
+    # ON CONFLICT DO NOTHING would have prevented a duplicate anyway, but the
+    # scan should not even detect a gap.
     all_embed = conn.execute(
         "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'ver-1'"
     ).fetchall()
-    assert len(all_embed) == 1
-    assert all_embed[0][0] == "running"
+    assert all_embed == [("pending",)]
 
 
-def test_embed_gap_allows_reenqueue_after_done(conn: sqlite3.Connection) -> None:
-    """After a done embed job, if passages are removed, the gap is re-enqueued.
+def test_embed_gap_no_gap_when_job_running(conn: sqlite3.Connection) -> None:
+    """A running embed job (in-flight) means no gap — do not duplicate."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_embed_job(conn, "ver-1", status="running")
+    count = _embed_gap_step(conn)
+    assert count == 0  # running job → not a gap
+    all_embed = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'ver-1'"
+    ).fetchall()
+    assert all_embed == [("running",)]
 
-    A 'done' job is outside the live-job partial unique index scope, so
-    re-enqueue after it completes IS allowed (the scan can legitimately
-    re-derive). Simulated by moving the job to 'done' and removing passages.
+
+def test_embed_gap_no_gap_when_job_failed(conn: sqlite3.Connection) -> None:
+    """A failed (but not dead) embed job means no gap — _reset_retryable will retry it."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_embed_job(conn, "ver-1", status="failed")
+    count = _embed_gap_step(conn)
+    assert count == 0  # failed job will be reset to pending by _reset_retryable
+
+
+def test_embed_gap_reenqueues_when_all_jobs_dead(conn: sqlite3.Connection) -> None:
+    """A dead-lettered embed job (max retries exhausted) is treated as a gap.
+
+    Signal (lode-xyb): only 'dead' jobs mean the vector leg is stuck and needs
+    a fresh re-enqueue.  A dead job is terminal — the worker won't retry it —
+    so the reconcile scan must detect it as a gap and kick off a new job.
     """
     _insert_note_with_version(conn, "note-1", "ver-1")
-    # Simulate: embed ran (passages exist, job done).
-    _insert_passage(conn, "ver-1", "p-1")
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', 'ver-1', 'done')"
-        )
-    # Passages exist → not a gap → no enqueue.
-    count = _embed_gap_step(conn)
-    assert count == 0
-
-    # Now remove passages (simulating a cache wipe).
-    with conn:
-        conn.execute("DELETE FROM passages WHERE target_version = 'ver-1'")
-
-    # Gap re-appears → scan should enqueue a new embed job.
+    _insert_embed_job(conn, "ver-1", status="dead")
     count = _embed_gap_step(conn)
     assert count == 1
-    pending = [
-        r[0]
-        for r in conn.execute(
-            "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'ver-1'"
-        ).fetchall()
-    ]
-    assert "pending" in pending
+    statuses = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'ver-1'"
+        " ORDER BY id"
+    ).fetchall()
+    # The dead job stays; a new pending job was added.
+    assert ("dead",) in statuses
+    assert ("pending",) in statuses
 
 
 # ---------------------------------------------------------------------------

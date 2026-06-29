@@ -12,9 +12,13 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
 **Step registry** — mirrors :mod:`lode.worker`'s handler-registry shape:
 
 - ``embed_gap`` — registered now (Phase A). Finds head versions missing a
-  ``passages`` row for their ``head_version_id`` (i.e. embed never ran or was
-  lost) and re-enqueues an ``embed`` job for each. Excludes soft-deleted
-  (``op='delete'``) and purged (``purged_at IS NOT NULL``) heads.
+  live (non-dead) embed job — i.e. the vector leg never ran, was dead-lettered,
+  or somehow lost its job row — and re-enqueues an ``embed`` job for each.
+  Signal re-keyed in lode-xyb: ``passages`` rows are now written synchronously
+  on save, so their presence no longer implies vectors exist; the embed job
+  status is the reliable proxy for "vector leg completed."
+  Excludes soft-deleted (``op='delete'``) and purged (``purged_at IS NOT NULL``)
+  heads.
 - *enrich-gap step* — **not registered here**; E7 appends it once the
   enrichment tables and ``prompt_ver`` semantics exist. The seam is open.
 
@@ -99,13 +103,23 @@ def reconcile(
 
 
 def _embed_gap_step(conn: sqlite3.Connection) -> int:
-    """Embed gap: re-enqueue embed jobs for head versions with no passages row.
+    """Embed gap: re-enqueue embed jobs for head versions missing a live embed job.
+
+    **Gap signal (lode-xyb):** since ``passages`` + ``passages_fts`` are now
+    written synchronously on save by :class:`~lode.lexical.LexicalCacheBackend`,
+    a ``passages`` row existing no longer means "embed ran" — it just means "save
+    ran."  The reliable signal for "embedding completed (vectors in LanceDB)" is a
+    non-dead embed job: a ``pending``/``running``/``done``/``failed`` embed job for
+    the version means the vector work is either in-flight or completed; a ``dead``
+    (max-retries exhausted) job or the total absence of a job means the vector leg
+    is missing.
 
     **Gap query:** live head versions — ``notes.head_version_id`` joined to
     ``versions``, where the head op is not ``'delete'`` (not a soft-delete
     tombstone) and ``purged_at IS NULL`` (not hard-deleted/purged) — with no
-    ``passages`` row for that ``head_version_id``.  Each such version is missing
-    its embed (the embed either never ran or was lost).
+    embed job in status ``pending``, ``running``, ``done``, or ``failed``.  That
+    is: no job at all, or all existing embed jobs are ``dead``.  Each such version
+    is re-enqueued.
 
     **Enqueue:** calls :func:`lode.jobs.enqueue_derive_jobs` with
     ``types=("embed",)`` inside a single ``with conn:`` transaction.  The INSERT
@@ -125,7 +139,10 @@ def _embed_gap_step(conn: sqlite3.Connection) -> int:
           AND v.op != 'delete'
           AND v.purged_at IS NULL
           AND NOT EXISTS (
-              SELECT 1 FROM passages p WHERE p.target_version = n.head_version_id
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'embed'
+                AND j.target_version = n.head_version_id
+                AND j.status != 'dead'
           )
         """
     ).fetchall()

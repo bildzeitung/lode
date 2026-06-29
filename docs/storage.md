@@ -461,6 +461,17 @@ is appending one engine to the composite at the wiring point, and every engine �
 its own. Fan-out runs only after the irreplaceable write commits, so a failing engine costs a
 rebuild, never data (lode-1f9).
 
+**Capture-path cache composition (settled lode-xyb):** the `CompositeCache` wired into `cli.py add`
+contains **only the `LexicalCacheBackend`** — the model-free FTS leg. `LexicalCacheBackend.index()`
+calls `chunk()` (deterministic, no model) and writes both the `passages` rows (structure, char_range,
+parent_block — needed by `expand_parents` on the read side) and the `passages_fts` FTS5 rows
+synchronously after the version commit, so a just-saved note is keyword-findable and
+context-expandable before any async work runs. The `EmbeddingCacheBackend` (vector leg) is **not** in
+the capture-path composite — embedding stays async: only the `lode work` worker calls `embed()` to
+produce LanceDB vectors. The reconciliation embed-gap signal is the embed job status (non-dead =
+vector work is tracked or done; all-dead/missing = re-enqueue), because `passages` rows now exist
+right after save and can no longer distinguish "embed ran" from "save ran."
+
 The `jobs` table is **operational state** in SQLite: mostly regenerable (the reconciliation scan
 rebuilds the backlog from the content↔derived diff), with **one durable exception — in-flight
 `batch_handle`s**, which a scan can't reconstruct without double-spending. So it doesn't fit cleanly

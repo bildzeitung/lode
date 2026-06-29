@@ -40,7 +40,8 @@ from lode.config import (
 )
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
-from lode.repository import Repository
+from lode.lexical import LexicalCacheBackend
+from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 
 if TYPE_CHECKING:
@@ -135,7 +136,11 @@ def add(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
     try:
-        repo = Repository(conn)
+        # Inject the synchronous model-free cache: LexicalCacheBackend chunks the
+        # body and writes passages + passages_fts right after the version commits,
+        # so the note is keyword-findable BEFORE any async embedding runs
+        # (lode-xyb; embedding stays async via the worker).
+        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
             repo.save(note_id, body)
         except versions.HeadConflictError:

@@ -7,10 +7,12 @@ retries, then claim+run ready pending jobs until none remain and exit.
 
 **Handler registry** dispatches on ``jobs.type``:
 
-- ``embed`` — registered now; runs the existing chunk+embed+FTS path
-  (:func:`lode.embedding.embed` for the vector leg,
-  :class:`lode.lexical.LexicalIndex` for the BM25 leg). Idempotent: the same
-  head version can be re-embedded and converges to the same state.
+- ``embed`` — registered now; runs the **vector-only** path
+  (:func:`lode.embedding.embed`: chunk + embed + LanceDB vectors). The FTS
+  lexical leg is **not here** (lode-xyb): the synchronous
+  :class:`~lode.lexical.LexicalCacheBackend` in ``cli.py add`` writes
+  ``passages`` + ``passages_fts`` right after the version commits.  Idempotent:
+  the same head version can be re-embedded and converges to the same state.
 - ``enrich`` / ``refresh`` — *no handler*; jobs of unregistered types are
   left pending and **never claimed, never dead-lettered** until their handlers
   arrive. The claim query filters to registered types, so they accumulate
@@ -307,33 +309,28 @@ def _embed_handler(
     db_path: Path,
     settings: Settings,
 ) -> None:
-    """Embed handler: chunk+embed (vector leg) + FTS (lexical leg).
+    """Embed handler: vector leg only (lode-x6r.5, lode-xyb).
 
-    The sole path for embedding after capture (lode-x6r.5): capture enqueues
-    the ``embed`` derive job via :func:`~lode.jobs.enqueue_derive_jobs`; this
+    The sole path for async embedding after capture: capture enqueues the
+    ``embed`` derive job via :func:`~lode.jobs.enqueue_derive_jobs`; this
     handler drains it.  Deferred imports avoid paying the fastembed / LanceDB
     cost on commands that never embed.
 
     :func:`lode.embedding.embed` chunks the body, upserts the ``passages``
     rows, embeds each passage via the pinned local ONNX model, and replaces
-    the version's vectors in LanceDB.  ``chunk`` is called a second time for
-    the FTS leg — deterministic chunking produces the same passages, so this
-    is idempotent.
+    the version's vectors in LanceDB.
+
+    The FTS leg is **not here** (lode-xyb): the synchronous
+    :class:`~lode.lexical.LexicalCacheBackend` injected into ``cli.py add``
+    writes ``passages`` + ``passages_fts`` right after the version commits, so
+    the note is keyword-findable before this handler runs.  The handler running
+    again would just re-write identical FTS rows (idempotent), but dropping it
+    is cleaner and keeps this handler model-bearing-only.
     """
-    from lode.chunking import chunk
     from lode.embedding import embed
-    from lode.lexical import LexicalIndex
 
     # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
     embed(conn, target_version, lance_dir=_lance_dir(db_path), settings=settings)
-
-    # Lexical leg: populate passages_fts for BM25 keyword search.
-    row = conn.execute(
-        "SELECT body FROM versions WHERE version_id = ?", (target_version,)
-    ).fetchone()
-    if row is not None:
-        passages = chunk(row[0], target_version, settings=settings)
-        LexicalIndex(conn).replace_passages(target_version, passages)
 
 
 # Register the embed handler on module load.
