@@ -34,8 +34,11 @@ belt-and-suspenders behind the single-owner advisory lock.
 - max-attempts gate → ``status='dead'`` (terminal poison)
 
 **Crash recovery note**: if the worker crashes mid-run a job can be left in
-``status='running'``. The reconciliation scan (i05.4, not yet landed) will
-reset such orphaned running jobs; until then they remain stuck.
+``status='running'``. The reconciliation scan (i05.4) re-enqueues head versions
+missing a fresh embed on worker startup, but does not explicitly reset orphaned
+``running`` rows — those are covered by the embed-gap query only if the embed
+result (``passages`` row) is also missing. A future hardening pass may add an
+explicit orphan-reset step to the reconciliation scan.
 """
 
 import logging

@@ -277,7 +277,11 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
 - **Reconciliation scan on startup + periodically** re-enqueues any head version missing a fresh
   embedding/enrichment. This is the self-healing net for crashes, dropped jobs, and `prompt_ver`
   bumps (a bump makes every note's enrichment stale → the scan re-enqueues the corpus). Idempotency
-  makes running it anytime safe.
+  makes running it anytime safe. Implemented in `lode.reconcile` (lode-i05.4): a step registry
+  mirrors the worker handler-registry shape; the Phase-A ``embed_gap`` step is registered at module
+  load; E7 appends the enrich-gap step. Each step uses `enqueue_derive_jobs` with `ON CONFLICT DO
+  NOTHING` (the ``idx_jobs_live`` live-job index), so running it repeatedly enqueues no
+  duplicates. Runs at the start of each `lode work` drain pass (startup + every ``--loop`` tick).
 - **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
   correct with no distributed locking.
 
