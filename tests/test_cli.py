@@ -192,7 +192,12 @@ def test_add_cas_reject_writes_draft_and_does_not_clobber(
 
 
 def _seed_jobs(db_path: Path) -> None:
-    """Seed a spread of job rows + egress_log rows to read back via status/jobs."""
+    """Seed a spread of job rows + egress_log rows to read back via status/jobs.
+
+    Uses 'dead' (not 'failed') as the dead-letter terminal row — 'failed' is the
+    transient last-error state retried by the worker; 'dead' is the terminal
+    poison state at max-attempts (lode-i05.6).
+    """
     conn = init_db(db_path)
     try:
         with conn:
@@ -203,7 +208,7 @@ def _seed_jobs(db_path: Path) -> None:
                     ("embed", "ver-aaaaaaaaaaaaaaaa", "pending", 0, None),
                     ("enrich", "ver-aaaaaaaaaaaaaaaa", "running", 1, None),
                     ("embed", "ver-bbbbbbbbbbbbbbbb", "done", 1, None),
-                    ("enrich", "ver-bbbbbbbbbbbbbbbb", "failed", 3, "RateLimitError"),
+                    ("enrich", "ver-bbbbbbbbbbbbbbbb", "dead", 3, "RateLimitError"),
                 ],
             )
             conn.executemany(
@@ -223,9 +228,9 @@ def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    assert "jobs: 0 pending, 0 running, 0 done, 0 failed" in result.stdout
+    assert "jobs: 0 pending, 0 running, 0 done, 0 failed, 0 dead" in result.stdout
     assert "egress: 0 sends (none)" in result.stdout
-    assert "dead-letters (failed jobs): 0" in result.stdout
+    assert "dead-letters (dead jobs): 0" in result.stdout
 
 
 def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
@@ -233,11 +238,12 @@ def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
     _seed_jobs(db_path)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    assert "jobs: 1 pending, 1 running, 1 done, 1 failed" in result.stdout
+    # Seed has: 1 pending, 1 running, 1 done, 0 failed, 1 dead.
+    assert "jobs: 1 pending, 1 running, 1 done, 0 failed, 1 dead" in result.stdout
     # Egress summary totals across purposes and breaks them out.
     assert "egress: 3 sends (enrich: 1, qa: 2)" in result.stdout
-    # The single failed job surfaces as a dead-letter with its last error.
-    assert "dead-letters (failed jobs): 1" in result.stdout
+    # The single dead job surfaces as a dead-letter with its last error.
+    assert "dead-letters (dead jobs): 1" in result.stdout
     assert "(enrich) target=ver-bbbbbbbb…: RateLimitError" in result.stdout
 
 
@@ -264,11 +270,12 @@ def test_jobs_lists_every_job(tmp_path: Path) -> None:
 def test_jobs_status_filter_narrows_to_one_state(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_jobs(db_path)
-    result = runner.invoke(app, ["jobs", "--status", "failed", "--db", str(db_path)])
+    # Filter on 'dead' (the dead-letter terminal; 'failed' is the transient state).
+    result = runner.invoke(app, ["jobs", "--status", "dead", "--db", str(db_path)])
     assert result.exit_code == 0
     lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1
-    assert "failed" in lines[0]
+    assert "dead" in lines[0]
     assert "! RateLimitError" in lines[0]
 
 
