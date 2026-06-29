@@ -18,6 +18,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -35,7 +36,7 @@ from lode.config import (
     lode_home,
     log_dir,
 )
-from lode.lock import lock_path
+from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.repository import Repository
 from lode.storage import init_db
@@ -593,6 +594,57 @@ def config(
 def version() -> None:
     """Print the installed lode version."""
     typer.echo(__version__)
+
+
+@app.command()
+def work(
+    db: Path | None = _DB_OPTION,
+    loop: bool = typer.Option(
+        False,
+        "--loop",
+        "--watch",
+        help="Poll continuously (same as --watch); sleep --interval seconds between passes.",
+    ),
+    interval: float = typer.Option(
+        5.0,
+        "--interval",
+        help="Polling interval in seconds (--loop / --watch only).",
+        min=0.1,
+    ),
+) -> None:
+    """Drain the async work queue: claim → run → retry/dead-letter.
+
+    ONE-SHOT by default: acquires the single-instance advisory lock
+    (lode-i05.2), resets overdue failed jobs, then claims and runs ready
+    pending jobs until none remain and exits.  ``--loop`` / ``--watch`` keeps
+    the loop alive, sleeping ``--interval`` seconds between passes.
+
+    Only ``embed`` jobs have a handler now; ``enrich`` / ``refresh`` jobs
+    accumulate harmlessly until their handlers arrive (lode-i05.3 scope
+    fence).  A second ``lode work`` while one is already running is refused.
+    """
+    from lode.worker import drain as _drain
+
+    db_path = db or default_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = init_db(db_path)
+    try:
+        try:
+            with WorkerLock(db_path):
+                try:
+                    while True:
+                        n = _drain(conn, db_path)
+                        typer.echo(f"drained {n} job(s)")
+                        if not loop:
+                            break
+                        time.sleep(interval)
+                except KeyboardInterrupt:
+                    typer.echo("worker interrupted", err=True)
+        except LockHeld as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from None
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":  # pragma: no cover
