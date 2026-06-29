@@ -28,13 +28,15 @@ from lode.config import load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
 from lode.hashing import NO_PARENT, content_version_id
+from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
 from lode.versions import save
 
 runner = CliRunner()
 
 # Every subcommand is real: `add` (lode-y42.1), `ask` (lode-y42.2), `status` /
-# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `config` (lode-ftc).
+# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `config` (lode-ftc),
+# `work` (lode-i05.3: async work queue drain).
 # `eval` is NOT a shipped command — it is a maintainer/CI integration test run via
 # `nox -s eval` (see docs/decisions.md, Shape A, lode-5y8.5).
 ALL_SUBCOMMANDS = [
@@ -45,6 +47,7 @@ ALL_SUBCOMMANDS = [
     "jobs",
     "egress",
     "config",
+    "work",
 ]
 
 
@@ -767,3 +770,109 @@ def test_config_db_override_shifts_displayed_db_and_vector_store(
     # logs and config stay under the root, not beside the overridden DB.
     assert str(home / "logs") in out
     assert str(home / "config.toml") in out
+
+
+# --- lode work (async worker drain, lode-i05.3) ----------------------------
+
+
+def _noop_embed_registry() -> dict:
+    """A stub registry with a no-op embed handler for offline CLI tests."""
+    return {"embed": lambda conn, tv, db, s: None}
+
+
+def test_work_drains_pending_embed_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' drains all ready pending embed jobs and exits 0.
+
+    Acceptance: a claimed embed job runs once and lands (status='done');
+    'lode work' drains all runnable jobs then exits.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            # Insert three embed jobs directly (no version row needed for noop handler).
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                    ("embed", f"ver-{i}"),
+                )
+    finally:
+        conn.close()
+
+    # Patch the module-level registry so the handler runs offline (no model).
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "drained 3 job(s)" in result.stdout
+
+    # All embed jobs are done.
+    reader = sqlite3.connect(db_path)
+    try:
+        statuses = {
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'embed'"
+            ).fetchall()
+        }
+    finally:
+        reader.close()
+    assert statuses == {"done"}
+
+
+def test_work_leaves_enrich_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' must not claim or dead-letter enrich jobs (no handler yet).
+
+    Acceptance: an enrich job with no registered handler is left pending,
+    never dead-lettered.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            enqueue_derive_jobs(conn, "ver-1")  # embed + enrich
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (enrich_status,) = reader.execute(
+            "SELECT status FROM jobs WHERE type = 'enrich'"
+        ).fetchone()
+    finally:
+        reader.close()
+    assert enrich_status == "pending"
+
+
+def test_work_refuses_when_lock_held(tmp_path: Path) -> None:
+    """A second 'lode work' must refuse when the lockfile holds a live PID.
+
+    Acceptance: the loop runs under the advisory lock (a second 'lode work'
+    refuses).
+    """
+    import os
+
+    from lode.lock import lock_path
+
+    db_path = tmp_path / "lode.db"
+    # Write the current process's PID into the lockfile — we are live.
+    lf = lock_path(db_path)
+    lf.parent.mkdir(parents=True, exist_ok=True)
+    lf.write_text(str(os.getpid()))
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "lode worker" in result.stderr or "pid" in result.stderr
