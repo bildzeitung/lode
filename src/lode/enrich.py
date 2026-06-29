@@ -182,25 +182,26 @@ def _write_enrichment(
             (version_id,),
         )
 
-        # Tag annotations -- whole-note items carry no per-item confidence.
-        for tag in result.tags:
-            conn.execute(
-                "INSERT INTO annotations "
-                "(target, source_version, kind, payload, source, status, "
-                "model, prompt_ver, created) "
-                "VALUES (?, ?, 'tag', ?, 'ai', 'fresh', ?, ?, ?)",
-                (note_id, version_id, json.dumps(tag), model, ENRICH_PROMPT_VER, ts),
-            )
-
-        # Entity annotations.
-        for entity in result.entities:
-            conn.execute(
-                "INSERT INTO annotations "
-                "(target, source_version, kind, payload, source, status, "
-                "model, prompt_ver, created) "
-                "VALUES (?, ?, 'entity', ?, 'ai', 'fresh', ?, ?, ?)",
-                (note_id, version_id, json.dumps(entity), model, ENRICH_PROMPT_VER, ts),
-            )
+        # Tag + entity annotations -- whole-note items carry no per-item
+        # confidence. Both kinds share one row shape; only `kind` and the
+        # source list differ.
+        for kind, values in (("tag", result.tags), ("entity", result.entities)):
+            for value in values:
+                conn.execute(
+                    "INSERT INTO annotations "
+                    "(target, source_version, kind, payload, source, status, "
+                    "model, prompt_ver, created) "
+                    "VALUES (?, ?, ?, ?, 'ai', 'fresh', ?, ?, ?)",
+                    (
+                        note_id,
+                        version_id,
+                        kind,
+                        json.dumps(value),
+                        model,
+                        ENRICH_PROMPT_VER,
+                        ts,
+                    ),
+                )
 
         # Inferred edges -- AI suggestions with confidence; stored source='ai',
         # never as asserted facts.
