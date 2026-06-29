@@ -336,18 +336,25 @@ def test_reconcile_returns_zero_for_no_steps(conn: sqlite3.Connection) -> None:
 
 
 def test_reconcile_uses_module_level_steps_by_default(conn: sqlite3.Connection) -> None:
-    """reconcile() with no ``steps`` arg uses _STEPS (embed_gap registered)."""
+    """reconcile() with no ``steps`` arg uses _STEPS (embed_gap + enrich_gap registered)."""
     from lode.reconcile import _STEPS
 
-    # Verify the embed_gap step is registered at module load.
+    # Verify both steps are registered at module load.
     names = [name for name, _ in _STEPS]
     assert "embed_gap" in names
+    assert "enrich_gap" in names  # added in lode-npx.1
 
 
 def test_reconcile_embed_gap_end_to_end(conn: sqlite3.Connection) -> None:
-    """End-to-end: reconcile() with default steps finds and enqueues the gap."""
+    """End-to-end: reconcile() with the embed_gap step finds and enqueues the gap.
+
+    Uses an injected step list so the assertion stays focused on the embed_gap
+    step count regardless of how many steps the module-level _STEPS contains.
+    """
+    from lode.reconcile import _embed_gap_step
+
     _insert_note_with_version(conn, "note-1", "ver-1")
-    total = reconcile(conn)
+    total = reconcile(conn, steps=[("embed_gap", _embed_gap_step)])
     assert total == 1
     assert _pending_embed_jobs(conn, "ver-1") == ["pending"]
 
