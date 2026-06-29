@@ -35,6 +35,7 @@ from lode.config import (
     lode_home,
     log_dir,
 )
+from lode.lock import lock_path
 from lode.logconfig import configure_logging
 from lode.repository import Repository
 from lode.storage import init_db
@@ -555,14 +556,14 @@ def _config_lines(db: Path | None) -> list[str]:
     whether the optional ``config.toml`` is present are surfaced inline.
     """
     db_path = db or default_db_path()
-    lock_path = db_path.with_name(db_path.name + ".lock")
+    lock_file = lock_path(db_path)
     cfg = config_path()
     home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
     config_state = "present" if cfg.exists() else "absent"
     rows = [
         ("LODE_HOME", f"{lode_home()}  ({home_source})"),
         ("database", str(db_path)),
-        ("db lock", str(lock_path)),
+        ("db lock", str(lock_file)),
         ("vector store", str(lance_dir(db_path))),
         ("logs", str(log_dir())),
         ("config", f"{cfg}  ({config_state})"),
