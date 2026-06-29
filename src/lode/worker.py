@@ -79,14 +79,19 @@ def registered_types() -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _now_iso() -> str:
-    """Return the current UTC time in the ISO-8601 format SQLite uses.
+def _iso(dt: datetime) -> str:
+    """Format ``dt`` as the schema's ISO-8601 millisecond-``Z`` timestamp.
 
-    ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` gives millisecond precision
-    (e.g. ``2026-06-28T12:34:56.789Z``); this matches so string comparisons
-    in ``next_attempt_at <= ?`` clauses are chronologically correct.
+    Matches SQLite's ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` (millisecond
+    precision, e.g. ``2026-06-28T12:34:56.789Z``) so string comparisons in
+    ``next_attempt_at <= ?`` clauses are chronologically correct.
     """
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _now_iso() -> str:
+    """Return the current UTC time in the schema's ISO-8601 format."""
+    return _iso(datetime.now(UTC))
 
 
 def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
@@ -103,9 +108,7 @@ def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
         settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
         settings.retry_backoff_cap_s,
     )
-    return (datetime.now(UTC) + timedelta(seconds=delay)).strftime(
-        "%Y-%m-%dT%H:%M:%S.%f"
-    )[:-3] + "Z"
+    return _iso(datetime.now(UTC) + timedelta(seconds=delay))
 
 
 def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
