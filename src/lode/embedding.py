@@ -16,14 +16,14 @@ constants** pinned in :mod:`lode.config` (``embedding_model`` /
 implies a full re-embed, so they are read from config, never taken as a runtime
 knob (lode-txh.6).
 
-:func:`embed` is the handler the ``embed`` derive job (enqueued on capture by
-:mod:`lode.jobs`, lode-y42.1) calls. For the phase-a walking skeleton it runs
-**synchronously inline on save** (no worker yet); moving it onto the E2 async
-work queue is the follow-up (lode-x6r.5). It is **idempotent** by construction:
-passage ids are deterministic (``chunk`` derives them from the content-addressed
-``target_version``), passages are upserted on their primary key, and the vector
-rows for a ``target_version`` are replaced wholesale on each run — so re-embedding
-the same head version converges to the same state instead of duplicating.
+:func:`embed` is the function the ``embed`` derive job calls (dispatched by
+:func:`lode.worker._embed_handler`, lode-x6r.5). Capture enqueues the job via
+:mod:`lode.jobs`; the async worker drains it — capture never embeds inline. It
+is **idempotent** by construction: passage ids are deterministic (``chunk``
+derives them from the content-addressed ``target_version``), passages are
+upserted on their primary key, and the vector rows for a ``target_version`` are
+replaced wholesale on each run — so re-embedding the same head version converges
+to the same state instead of duplicating.
 
 The embedder is injected (:class:`Embedder`) so the model is constructed lazily
 and only in production: the default loads ``fastembed`` on first use, while tests

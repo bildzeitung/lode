@@ -1,15 +1,15 @@
-"""Phase-A exit gate (lode-6w1.1 / lode-6w1.2): add → embed → ask → cited claim / abstain → eval green.
+"""Phase-A exit gate (lode-6w1.1 / lode-x6r.5): add → work → ask → cited claim / abstain → eval green.
 
 Verification gate for the walking skeleton end-to-end. Three sub-gates together
 close Phase A and unblock the deepening tasks:
 
-1. ``lode add`` saves a note **and runs chunk+embed+FTS inline** (lode-x6r.2
-   intent, lode-6w1.2 fix) so the note is immediately keyword- and
-   vector-findable; ``lode ask`` retrieves it, sends the context to the Q&A
-   step, and the faithfulness gate verifies the claimed ``quoted_span`` is
-   verbatim in the cited version's stored body — the cited claim survives and
-   renders. No in-test derive-job stand-in: the real CLI ``add`` command
-   performs the embed.
+1. ``lode add`` saves a note and enqueues the ``embed`` derive job; ``lode work``
+   drains that job (chunk+embed+FTS via the async worker, lode-x6r.5) so the
+   note is vector- and keyword-findable; ``lode ask`` retrieves it, sends the
+   context to the Q&A step, and the faithfulness gate verifies the claimed
+   ``quoted_span`` is verbatim in the cited version's stored body — the cited
+   claim survives and renders. No in-test derive-job stand-in: the real CLI
+   ``work`` command performs the embed.
 
 2. An out-of-corpus question against the same corpus ends in honest abstention
    when the Q&A step asserts nothing: the gate finds no surviving claim and the
@@ -27,7 +27,7 @@ replaced:
   that produces dim-768 vectors (the LanceDB table width the embed job creates
   under the default ``Settings``).  No fastembed model download.  Injected via
   ``monkeypatch`` into ``lode.embedding.FastEmbedEmbedder`` so it is used by
-  both ``lode add`` (inline embed) and ``lode ask`` (query embedding).
+  both ``lode work`` (the async embed handler) and ``lode ask`` (query embedding).
 - **Q&A client**: ``_FakeClient`` — returns known claims for the in-corpus question
   and no claims for the out-of-corpus question.  No Anthropic API call.
 
@@ -173,45 +173,54 @@ def _oracle_answerer(question, context):
 
 
 # ---------------------------------------------------------------------------
-# Gate 1: lode add → (inline embed) → lode ask → verbatim-grounded cited claim
+# Gate 1: lode add → lode work → lode ask → verbatim-grounded cited claim
 # ---------------------------------------------------------------------------
 
 
 def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """lode add (inline embed) + lode ask → cited claim; quoted_span is verbatim in body.
+    """lode add + lode work (async embed) + lode ask → cited claim; span is verbatim.
 
-    The acceptance criterion (lode-6w1.1 / lode-6w1.2): a scripted ``lode add``
-    of a known note followed by ``lode ask`` returns a cited claim whose
-    ``quoted_span`` occurs verbatim in the cited version's stored body. No
-    in-test derive-job stand-in — the real ``add`` command runs embed inline.
+    The acceptance criterion (lode-6w1.1 / lode-x6r.5): a scripted ``lode add``
+    of a known note, followed by ``lode work`` to drain the async embed job,
+    followed by ``lode ask``, returns a cited claim whose ``quoted_span`` occurs
+    verbatim in the cited version's stored body. No in-test derive-job stand-in
+    — the real ``work`` command performs the embed via the async handler.
 
     Step by step:
-    1. Stub ``lode.embedding.FastEmbedEmbedder`` (before ``add`` runs, since the
-       CLI now embeds inline on capture) with ``_ConstantEmbedder`` — deterministic,
-       no model download, same dim-768 space for both document and query vectors.
-    2. ``lode add`` saves the note, enqueues the derive jobs, and runs chunk+embed
-       +FTS inline — no separate worker step, no in-test ``_run_derive_job``.
-    3. ``lode ask`` retrieves the indexed note (both legs), sends the context to the
+    1. Stub ``lode.embedding.FastEmbedEmbedder`` with ``_ConstantEmbedder`` —
+       deterministic, no model download, same dim-768 space for both document and
+       query vectors.  The stub is used by ``lode work`` (the async embed handler)
+       and by ``lode ask`` (query-side embedding).
+    2. ``lode add`` saves the note and enqueues the ``embed`` + ``enrich`` derive
+       jobs atomically — no embedding happens here.
+    3. ``lode work`` drains the ``embed`` job: chunk+embed+FTS runs via the worker
+       (lode-x6r.5), using the stubbed embedder — no real model download.
+    4. ``lode ask`` retrieves the indexed note (both legs), sends the context to the
        Q&A step (fake client returning a known claim), the faithfulness gate verifies
        the span, and the surviving cited claim is printed.
-    4. We assert the span is present in the output AND verbatim in the body using
+    5. We assert the span is present in the output AND verbatim in the body using
        the same ``span_occurs`` predicate the gate uses.
     """
     db_path = tmp_path / "lode.db"
 
-    # Stub the embedder BEFORE ``lode add`` runs — the CLI now embeds inline on
-    # capture, so the stub must be in place when add is invoked.  The same stub
-    # is used by ``lode ask``'s query-embedding step (FastEmbedEmbedder is patched
-    # in lode.embedding, so both the add and ask code paths see it).
+    # Stub the embedder before the worker runs — the async embed handler
+    # (lode.worker._embed_handler) calls lode.embedding.embed which defaults to
+    # FastEmbedEmbedder; patching it here makes the worker use the stub instead
+    # of downloading the real model.  The same stub is used by lode ask's
+    # query-embedding step.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
 
-    # Step 1+2: add the note via the real CLI (embed runs inline — no stand-in).
+    # Step 1: add the note; embed job is enqueued, nothing embedded yet.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0, add_result.output
     note_id = add_result.stdout.strip()
     assert note_id, "lode add should print the note_id"
+
+    # Step 2: drain the embed job via lode work (async, lode-x6r.5).
+    work_result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert work_result.exit_code == 0, work_result.output
 
     # Step 3: get the version_id for the fake client's citation support.
     version_id = _get_head_version_id(db_path, note_id)
@@ -255,20 +264,24 @@ def test_gate2_out_of_corpus_question_abstains(
 ) -> None:
     """An out-of-corpus question against the corpus returns honest abstention.
 
-    The acceptance criterion (lode-6w1.1 / lode-6w1.2): an out-of-corpus
-    question abstains.  The embedder stub is injected before ``lode add`` so the
-    inline embed uses it; the fake Q&A asserts nothing (empty claims) — which is
-    the correct behaviour when the sources don't support an answer.  The gate
-    finds no surviving claim and the abstention line is printed.
+    The acceptance criterion (lode-6w1.1 / lode-x6r.5): an out-of-corpus
+    question abstains.  The embedder stub is injected before ``lode work`` so
+    the async embed handler uses it; the fake Q&A asserts nothing (empty claims)
+    — which is the correct behaviour when the sources don't support an answer.
+    The gate finds no surviving claim and the abstention line is printed.
     """
     db_path = tmp_path / "lode.db"
 
-    # Stub the embedder before ``lode add`` — the CLI now embeds inline on capture.
+    # Stub the embedder before lode work runs.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
 
-    # Add and index the note via the real CLI (embed runs inline — no stand-in).
+    # Add the note; embed job is enqueued but not yet run.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0
+
+    # Drain the embed job via the async worker (lode-x6r.5).
+    work_result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert work_result.exit_code == 0, work_result.output
 
     # The fake client returns no claims for the out-of-corpus question — the Q&A
     # step can't assert anything grounded, so the gate abstains.
