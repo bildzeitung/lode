@@ -48,25 +48,24 @@ def _classify(
     anchor_value: str,
     quoted_text: str | None,
     new_body: str,
-) -> tuple[str, bool]:
-    """Classify a single row against ``new_body``.
+) -> str:
+    """Classify a single row against ``new_body``, returning its new status.
 
-    Returns ``(status, advance_source_version)``:
-
-    - ``("fresh", True)``     — verbatim match, or no ``quoted_text`` and anchor found.
-    - ``("stale", False)``    — ``quoted_text`` gone but anchor value present.
-    - ``("orphaned", False)`` — both absent, or no ``quoted_text`` and anchor absent.
+    - ``"fresh"``    — verbatim ``quoted_text`` match, or no ``quoted_text`` and
+      anchor value found.  Fresh rows advance ``source_version`` to the new head.
+    - ``"stale"``    — ``quoted_text`` gone but anchor value still present.
+    - ``"orphaned"`` — both absent, or no ``quoted_text`` and anchor absent.
     """
     if quoted_text is not None:
         if quoted_text in new_body:
-            return "fresh", True
+            return "fresh"
         if anchor_value in new_body:
-            return "stale", False
-        return "orphaned", False
+            return "stale"
+        return "orphaned"
     # No quoted_text: fall back to anchor value only (fresh or orphaned, no stale).
     if anchor_value in new_body:
-        return "fresh", True
-    return "orphaned", False
+        return "fresh"
+    return "orphaned"
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +106,8 @@ def reanchor_annotations(
     with conn:
         for row_id, payload_json, quoted_text in rows:
             anchor_value = str(json.loads(payload_json))
-            new_status, advance = _classify(anchor_value, quoted_text, new_body)
-            if advance:
+            new_status = _classify(anchor_value, quoted_text, new_body)
+            if new_status == "fresh":
                 conn.execute(
                     "UPDATE annotations SET status = ?, source_version = ? WHERE id = ?",
                     (new_status, new_version_id, row_id),
@@ -162,8 +161,8 @@ def reanchor_edges(
 
     with conn:
         for row_id, to_id, quoted_text in rows:
-            new_status, advance = _classify(to_id, quoted_text, new_body)
-            if advance:
+            new_status = _classify(to_id, quoted_text, new_body)
+            if new_status == "fresh":
                 conn.execute(
                     "UPDATE edges SET status = ?, source_version = ? WHERE id = ?",
                     (new_status, new_version_id, row_id),
