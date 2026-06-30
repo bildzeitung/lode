@@ -197,8 +197,8 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
        deterministic, no model download, same dim-768 space for both document and
        query vectors.  The stub is used by ``lode work`` (the async embed handler)
        and by ``lode ask`` (query-side embedding).
-    2. ``lode add`` saves the note and enqueues the ``embed`` + ``enrich`` derive
-       jobs atomically — no embedding happens here.
+    2. ``lode add`` saves the note, enqueues the ``embed`` derive job, and calls
+       Haiku immediately for enrichment (lode-npx.2) — no embedding happens here.
     3. ``lode work`` drains the ``embed`` job: chunk+embed+FTS runs via the worker
        (lode-x6r.5), using the stubbed embedder — no real model download.
     4. ``lode ask`` retrieves the indexed note (both legs), sends the context to the

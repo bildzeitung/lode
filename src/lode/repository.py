@@ -129,6 +129,13 @@ class Repository:
     (e.g. the CLI) must go through :meth:`save`, never call
     :func:`lode.jobs.enqueue_derive_jobs` separately.
 
+    **Enqueue scope (lode-npx.2):** only the ``embed`` job is enqueued here. The
+    ``enrich`` job is NOT enqueued from the capture path — the CLI calls
+    :func:`lode.enrich.enrich_version` immediately after :meth:`save` for the
+    interactive one-shot (seconds, full Haiku price). Bulk / backfill enrich jobs
+    are enqueued by the reconciliation scan (``enrich_gap`` step in
+    :mod:`lode.reconcile`) and submitted to the Batches API by the worker.
+
     **Re-anchor ownership (lode-atv):** an ``update`` save also re-anchors the
     prior head's AI annotations/edges against the new body, in the same ``with
     conn:`` transaction — :func:`~lode.staleness.reanchor_annotations` and
@@ -175,7 +182,10 @@ class Repository:
                 self.conn, note_id, body, parent=parent, settings=settings
             )
             if not result.deduped:
-                jobs.enqueue_derive_jobs(self.conn, result.version_id)
+                # Enqueue only the embed job here; enrich is handled by the CLI's
+                # immediate Haiku call on the capture path, and by the worker's
+                # batch-submit step for bulk / backfill (lode-npx.2).
+                jobs.enqueue_derive_jobs(self.conn, result.version_id, types=("embed",))
                 if result.op == "update":
                     staleness.reanchor_annotations(
                         self.conn, note_id, result.version_id, body

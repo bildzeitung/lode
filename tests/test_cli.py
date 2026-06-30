@@ -81,7 +81,13 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         conn.close()
 
 
-def test_add_captures_note_and_enqueues_derive_jobs(tmp_path: Path) -> None:
+def test_add_captures_note_and_enqueues_embed_job(tmp_path: Path) -> None:
+    """lode add persists the note and enqueues the embed job only (lode-npx.2).
+
+    The enrich job is NOT enqueued here — the capture path calls
+    _enrich_immediately() directly (immediate Haiku call), and bulk/backfill
+    enrich jobs come from the reconciliation scan's enrich_gap step.
+    """
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["add", "hello world", "--db", str(db_path)])
     assert result.exit_code == 0
@@ -92,7 +98,7 @@ def test_add_captures_note_and_enqueues_derive_jobs(tmp_path: Path) -> None:
         db_path, "SELECT note_id, body, op FROM versions WHERE note_id = ?", (note_id,)
     ) == [(note_id, "hello world", "create")]
 
-    # Exactly the embed + enrich derive jobs, pending, targeting the new version.
+    # Exactly one embed job (pending) — no enrich job enqueued from capture path.
     (version_id,) = _rows(
         db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
     )[0]
@@ -101,7 +107,73 @@ def test_add_captures_note_and_enqueues_derive_jobs(tmp_path: Path) -> None:
         "SELECT type, status, prompt_ver FROM jobs WHERE target_version = ? "
         "ORDER BY type",
         (version_id,),
-    ) == [("embed", "pending", None), ("enrich", "pending", None)]
+    ) == [("embed", "pending", None)]
+
+
+def test_add_calls_enrich_immediately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode add calls enrich_version immediately after saving (lode-npx.2).
+
+    The capture path enriches the fresh note via a direct Haiku call so
+    tags/entities/edges appear without waiting for the async worker.
+    """
+
+    calls: list[str] = []
+
+    def _fake_enrich(conn, version_id, settings, *, client=None):
+        calls.append(version_id)
+
+    monkeypatch.setattr("lode.cli.enrich_version", _fake_enrich, raising=False)
+    # Patch via the _enrich_immediately import path.
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "hello world", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    # enrich_version must have been called exactly once for the new version.
+    assert len(calls) == 1
+
+
+def test_add_enrich_failure_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Immediate enrichment failure does not abort the capture (lode-npx.2).
+
+    The embed job still lands and the note is saved even if Haiku is unreachable.
+    The reconciliation scan will re-enqueue enrichment on the next worker pass.
+    """
+    import lode.enrich as enrich_mod
+
+    def _boom(conn, version_id, settings, *, client=None):
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _boom)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "note body", "--db", str(db_path)])
+    # Capture must succeed despite enrichment failure.
+    assert result.exit_code == 0
+    note_id = result.stdout.strip()
+    assert note_id
+
+    # The embed job is enqueued; no enrich job (not enqueued from capture path).
+    (version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    job_types = {
+        r[0]
+        for r in _rows(
+            db_path,
+            "SELECT type FROM jobs WHERE target_version = ?",
+            (version_id,),
+        )
+    }
+    assert "embed" in job_types
+    assert "enrich" not in job_types
 
 
 def test_add_reads_body_from_stdin_verbatim(tmp_path: Path) -> None:
@@ -824,13 +896,15 @@ def test_work_drains_pending_embed_jobs(
     assert statuses == {"done"}
 
 
-def test_work_leaves_enrich_pending(
+def test_work_never_dead_letters_enrich(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """'lode work' must not claim or dead-letter enrich jobs (no handler yet).
+    """'lode work' must never dead-letter an enrich job (lode-npx.2 batch path).
 
-    Acceptance: an enrich job with no registered handler is left pending,
-    never dead-lettered.
+    After lode-npx.2 the batch pre-step handles pending enrich jobs via the
+    Batches API.  When the version being enriched is not found in the DB (a
+    synthetic test case), submit_enrich_batch marks the job 'done' immediately
+    (same skip logic as enrich_version).  The job must never become 'dead'.
     """
     import lode.worker as worker_mod
 
@@ -838,7 +912,7 @@ def test_work_leaves_enrich_pending(
     conn = init_db(db_path)
     try:
         with conn:
-            enqueue_derive_jobs(conn, "ver-1")  # embed + enrich
+            enqueue_derive_jobs(conn, "ver-1")  # embed + enrich (no version row)
     finally:
         conn.close()
 
@@ -854,7 +928,9 @@ def test_work_leaves_enrich_pending(
         ).fetchone()
     finally:
         reader.close()
-    assert enrich_status == "pending"
+    # The version is absent → submit_enrich_batch marks the job 'done' (skip path).
+    # It must never be 'dead' (dead-lettered).
+    assert enrich_status != "dead"
 
 
 def test_work_refuses_when_lock_held(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Haiku structured-output enrichment + provenance (lode-npx.1).
+"""Haiku structured-output enrichment + provenance (lode-npx.1 / lode-npx.2).
 
 Extracts tags, entities, and inferred note-to-concept edges from a note version
 via Claude Haiku structured outputs (tool-use) + Pydantic validation. Records
@@ -27,15 +27,27 @@ Architecture (docs/storage.md):
   ``delete_edge``), the AI duplicate is skipped. This is what makes a
   user-deleted link stay deleted across re-enrichment.
 
-The ``enrich`` job type is claimed by the worker (lode-i05.3 handler registry, wired
-in :mod:`lode.worker`); the reconciliation scan (lode-i05.4 ``enrich_gap`` step, wired
-in :mod:`lode.reconcile`) re-enqueues any head version missing a live enrich job.
+Two enrichment routes (lode-npx.2, docs/storage.md §"Enrichment latency"):
+
+- **Immediate** (:func:`enrich_version`): fresh note on the capture path — one
+  direct Haiku call, results land before the CLI returns.
+- **Batch** (:func:`submit_enrich_batch` + :func:`collect_enrich_batch`): bulk /
+  backfill / re-enrichment via the 50%-off Anthropic Batches API. The worker's
+  drain loop pre-submits pending ``enrich`` jobs as a single Batch, persists the
+  ``batch_handle`` on each job row, and collects results on the next pass (or
+  after restart — lode-i05.5 durability). Either way the embedding lands in the
+  async worker, regardless of enrichment latency.
+
+The ``enrich`` job type (now used only for bulk / backfill) is claimed by the
+worker batch-submit step; the reconciliation scan (lode-i05.4 ``enrich_gap`` step,
+wired in :mod:`lode.reconcile`) re-enqueues any head version missing a live enrich
+job so gaps are self-healing.
 """
 
 import json
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import anthropic
 from pydantic import BaseModel, Field
@@ -311,3 +323,357 @@ def enrich_version(
     )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Batch API helpers (lode-npx.2)
+# ---------------------------------------------------------------------------
+
+
+def _build_batch_request(
+    version_id: str,
+    body: str,
+    settings: Settings,
+) -> dict:
+    """Build one Batches API request dict for ``version_id`` using ``body``.
+
+    The ``custom_id`` is set to ``version_id`` so results can be mapped back to
+    the originating job row without a secondary lookup. ``params`` mirrors what
+    :func:`_call_haiku` passes to ``messages.create`` — same tool, same prompt
+    template, same extraction schema.
+    """
+    prompt = _PROMPT_TMPL.format(body=body)
+    return {
+        "custom_id": version_id,
+        "params": {
+            "model": settings.enrichment_llm,
+            "max_tokens": 1024,
+            "system": _SYSTEM,
+            "tools": [
+                {
+                    "name": _TOOL_NAME,
+                    "description": "Extract structured enrichment from a note body.",
+                    "input_schema": EnrichmentResult.model_json_schema(),
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": _TOOL_NAME},
+            "messages": [{"role": "user", "content": prompt}],
+        },
+    }
+
+
+def submit_enrich_batch(
+    conn: sqlite3.Connection,
+    job_rows: list[tuple[int, str]],
+    settings: Settings,
+    *,
+    client: anthropic.Anthropic | None = None,
+) -> str | None:
+    """Submit a batch of enrich jobs to the Anthropic Batches API (50% off).
+
+    ``job_rows`` is a list of ``(job_id, target_version)`` drawn from the
+    ``jobs`` table (status ``pending`` or ``running``).
+
+    Behaviour:
+
+    - Each version is gated: ``no_egress``, tombstone (``op='delete'``), and
+      purged (``purged_at IS NOT NULL``) versions are marked ``done`` immediately
+      without an API call — exactly the same skip logic as :func:`enrich_version`.
+    - Valid versions are redacted (:func:`lode.redact.redact_before_egress_counting`)
+      then included as Batches API request objects (``custom_id = version_id``).
+    - The batch is submitted to ``client.beta.messages.batches.create``.
+    - Each submitted job row is updated to ``status='running'`` with
+      ``batch_handle = batch_id`` so the handle survives a restart (lode-i05.5).
+    - A single ``egress_log`` row is written for all submitted version IDs.
+
+    Returns the batch ID on success, or ``None`` when ``job_rows`` is empty or
+    every version was gated out (all skipped, nothing submitted).
+
+    Raises on Batches API errors — the caller is responsible for handling
+    failures and reverting job rows to ``failed`` / ``pending`` as appropriate.
+
+    :param conn: Open SQLite connection.
+    :param job_rows: ``(job_id, target_version)`` pairs to submit.
+    :param settings: Resolved settings (model, redaction patterns, …).
+    :param client: Optional Anthropic client; created fresh if omitted.
+    """
+    if not job_rows:
+        return None
+
+    if client is None:
+        client = anthropic.Anthropic()
+
+    # Gate each version; build batch requests only for valid ones.
+    requests: list[dict] = []
+    skip_ids: list[int] = []  # job_ids whose versions are skipped (gate out)
+    submitted_job_ids: list[int] = []  # job_ids included in the batch
+    submitted_version_ids: list[str] = []
+    redactions: dict[str, int] = {}
+
+    for job_id, version_id in job_rows:
+        row = conn.execute(
+            """
+            SELECT v.body, v.op, v.purged_at, n.no_egress
+            FROM versions v
+            JOIN notes n ON n.note_id = v.note_id
+            WHERE v.version_id = ?
+            """,
+            (version_id,),
+        ).fetchone()
+
+        if row is None:
+            log.warning(
+                "submit_enrich_batch: version %s not found — marking done",
+                version_id[:12],
+            )
+            skip_ids.append(job_id)
+            continue
+
+        body, op, purged_at, no_egress = row
+
+        if op == "delete" or purged_at is not None or no_egress:
+            log.debug(
+                "submit_enrich_batch: skip version=%s (op=%s purged=%s no_egress=%s)",
+                version_id[:12],
+                op,
+                purged_at is not None,
+                bool(no_egress),
+            )
+            skip_ids.append(job_id)
+            continue
+
+        redacted_body, redaction_count = redact_before_egress_counting(body, settings)
+        if redaction_count:
+            redactions[version_id] = redaction_count
+
+        requests.append(_build_batch_request(version_id, redacted_body, settings))
+        submitted_job_ids.append(job_id)
+        submitted_version_ids.append(version_id)
+
+    # Mark gated-out jobs done immediately (same outcome as enrich_version skip).
+    if skip_ids:
+        with conn:
+            conn.executemany(
+                "UPDATE jobs SET status = 'done' WHERE id = ?",
+                [(jid,) for jid in skip_ids],
+            )
+
+    if not requests:
+        return None
+
+    # Submit the batch — this is the network call that commits the spend.
+    batch = client.beta.messages.batches.create(requests=requests)
+    batch_id = batch.id
+
+    # Persist the handle + flip to running so the collect step (and a restart)
+    # can find these jobs (lode-i05.5).
+    with conn:
+        conn.executemany(
+            "UPDATE jobs SET status = 'running', batch_handle = ? WHERE id = ?",
+            [(batch_id, jid) for jid in submitted_job_ids],
+        )
+
+    # Audit: one egress_log row per batch submission.
+    log_egress(
+        conn,
+        "enrich",
+        settings.enrichment_llm,
+        submitted_version_ids,
+        redactions or None,
+    )
+
+    log.info(
+        "submit_enrich_batch: batch=%s submitted %d version(s)",
+        batch_id,
+        len(submitted_version_ids),
+    )
+    return batch_id
+
+
+def collect_enrich_batch(
+    conn: sqlite3.Connection,
+    batch_id: str,
+    settings: Settings,
+    *,
+    client: anthropic.Anthropic | None = None,
+) -> bool:
+    """Poll a submitted batch and process results if it has ended.
+
+    Retrieves the batch status via ``client.beta.messages.batches.retrieve``.
+    If ``processing_status == 'ended'``, iterates results:
+
+    - **succeeded**: validates the tool-use block, writes enrichment to DB
+      via :func:`_write_enrichment`, marks the job ``done``.
+    - **errored / expired / canceled**: marks the job ``failed`` with backoff
+      (using :data:`~lode.config.Settings.retry_backoff_base_s`); at
+      :data:`~lode.config.Settings.retry_max_attempts` the job is
+      dead-lettered.
+
+    Only jobs with ``type='enrich'``, ``status='running'``,
+    ``batch_handle=batch_id`` are touched — in-flight jobs from other batches
+    are left alone.
+
+    Returns ``True`` when the batch has ended (results processed), ``False``
+    when the batch is still in progress (caller should retry later).
+
+    :param conn: Open SQLite connection.
+    :param batch_id: The Batches API handle recorded by :func:`submit_enrich_batch`.
+    :param settings: Resolved settings (model, retry knobs, …).
+    :param client: Optional Anthropic client; created fresh if omitted.
+    """
+    if client is None:
+        client = anthropic.Anthropic()
+
+    batch = client.beta.messages.batches.retrieve(batch_id)
+    if batch.processing_status != "ended":
+        log.debug(
+            "collect_enrich_batch: batch=%s still %s",
+            batch_id,
+            batch.processing_status,
+        )
+        return False
+
+    # Map custom_id (version_id) → job_id for the in-flight set.
+    rows = conn.execute(
+        "SELECT id, target_version FROM jobs "
+        "WHERE type = 'enrich' AND status = 'running' AND batch_handle = ?",
+        (batch_id,),
+    ).fetchall()
+    job_map: dict[str, int] = {version_id: job_id for job_id, version_id in rows}
+
+    if not job_map:
+        log.debug(
+            "collect_enrich_batch: batch=%s ended but no running jobs found",
+            batch_id,
+        )
+        return True
+
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    for result in client.beta.messages.batches.results(batch_id):
+        version_id = result.custom_id
+        job_id = job_map.get(version_id)
+        if job_id is None:
+            log.warning(
+                "collect_enrich_batch: batch=%s result custom_id=%s has no running job",
+                batch_id,
+                version_id[:12] if len(version_id) >= 12 else version_id,
+            )
+            continue
+
+        if result.result.type == "succeeded":
+            try:
+                tool_block = next(
+                    b for b in result.result.message.content if b.type == "tool_use"
+                )
+                enrichment = EnrichmentResult.model_validate(tool_block.input)
+            except Exception as exc:
+                _mark_job_failed(conn, job_id, f"parse error: {exc}", settings)
+                log.warning(
+                    "collect_enrich_batch: batch=%s version=%s parse error: %s",
+                    batch_id,
+                    version_id[:12],
+                    exc,
+                )
+                continue
+
+            note_row = conn.execute(
+                "SELECT note_id FROM versions WHERE version_id = ?", (version_id,)
+            ).fetchone()
+            if note_row is None:
+                log.warning(
+                    "collect_enrich_batch: version %s disappeared after batch ended",
+                    version_id[:12],
+                )
+                with conn:
+                    conn.execute(
+                        "UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,)
+                    )
+                continue
+
+            _write_enrichment(
+                conn,
+                note_row[0],
+                version_id,
+                enrichment,
+                settings.enrichment_llm,
+                ts,
+            )
+            with conn:
+                conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
+            log.info(
+                "collect_enrich_batch: batch=%s version=%s done "
+                "(tags=%d entities=%d edges=%d)",
+                batch_id,
+                version_id[:12],
+                len(enrichment.tags),
+                len(enrichment.entities),
+                len(enrichment.inferred_edges),
+            )
+
+        else:
+            # errored, expired, canceled — treat as a transient failure.
+            error_type = result.result.type
+            error_msg = (
+                f"batch result={error_type}"
+                if not hasattr(result.result, "error")
+                else f"batch error: {result.result.error}"
+            )
+            _mark_job_failed(conn, job_id, error_msg, settings)
+            log.warning(
+                "collect_enrich_batch: batch=%s version=%s %s",
+                batch_id,
+                version_id[:12],
+                error_msg,
+            )
+
+    log.info(
+        "collect_enrich_batch: batch=%s ended, processed %d job(s)",
+        batch_id,
+        len(job_map),
+    )
+    return True
+
+
+def _mark_job_failed(
+    conn: sqlite3.Connection,
+    job_id: int,
+    error_msg: str,
+    settings: Settings,
+) -> None:
+    """Apply the retry/dead-letter state transition for a failed batch result.
+
+    Mirrors the logic in :func:`lode.worker.run_one` for transient failures:
+    increments ``attempts``, applies exponential backoff on ``next_attempt_at``,
+    and dead-letters at ``retry_max_attempts``.
+    """
+    row = conn.execute("SELECT attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    current_attempts = row[0] if row else 0
+    new_attempts = current_attempts + 1
+
+    if new_attempts >= settings.retry_max_attempts:
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
+                "WHERE id = ?",
+                (new_attempts, error_msg, job_id),
+            )
+        log.error(
+            "_mark_job_failed: job %d dead-lettered after %d attempt(s)",
+            job_id,
+            new_attempts,
+        )
+    else:
+        delay = min(
+            settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
+            settings.retry_backoff_cap_s,
+        )
+        next_at = (datetime.now(UTC) + timedelta(seconds=delay)).strftime(
+            "%Y-%m-%dT%H:%M:%S.%f"
+        )[:-3] + "Z"
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'failed', attempts = ?, "
+                "last_error = ?, next_attempt_at = ? WHERE id = ?",
+                (new_attempts, error_msg, next_at, job_id),
+            )

@@ -109,6 +109,25 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+def _enrich_immediately(conn: sqlite3.Connection, version_id: str) -> None:
+    """Call Haiku immediately to enrich ``version_id`` on the capture path.
+
+    Deferred import keeps the Anthropic SDK off every code path that never
+    enriches.  Failure is logged at WARNING but never re-raised: the embed job
+    has already been enqueued and the reconciliation scan (``enrich_gap``) will
+    re-enqueue enrichment on the next worker pass (lode-npx.2).
+    """
+    try:
+        from lode.enrich import enrich_version
+
+        enrich_version(conn, version_id, Settings())
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "immediate enrichment failed for version %s — will retry via worker",
+            version_id[:12],
+        )
+
+
 @app.command()
 def add(
     text: str | None = typer.Argument(
@@ -116,13 +135,23 @@ def add(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Capture a note into lode and enqueue its derive jobs.
+    """Capture a note and enrich it immediately, then enqueue embedding.
 
-    The save path (``docs/design.md``): ``Repository.save`` writes the version and
-    enqueues the embed/enrich derive jobs for the E2 async worker in one atomic
-    transaction. **No AI in the capture path** — embedding runs asynchronously
-    via ``lode work`` (lode-x6r.5). The body comes from the ``TEXT`` argument or,
-    if omitted, verbatim from stdin; an empty / whitespace-only body is refused.
+    The save path (``docs/design.md`` / lode-npx.2):
+
+    1. ``Repository.save`` writes the version and enqueues the ``embed`` derive
+       job atomically — the note is keyword-findable the moment the transaction
+       commits (synchronous FTS5, lode-xyb).
+    2. :func:`lode.enrich.enrich_version` is called immediately so the fresh
+       note's tags / entities / inferred edges appear without waiting for the
+       async worker (lode-npx.2 "interactive now" path). Enrichment failure is
+       non-fatal: the embed job still lands and the reconciliation scan
+       (``enrich_gap``) re-enqueues enrichment on the next worker pass.
+    3. Embedding runs asynchronously via ``lode work`` (lode-x6r.5) so the CLI
+       returns quickly regardless of enrichment latency.
+
+    The body comes from the ``TEXT`` argument or, if omitted, verbatim from
+    stdin; an empty / whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -142,7 +171,7 @@ def add(
         # (lode-xyb; embedding stays async via the worker).
         repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
-            repo.save(note_id, body)
+            result = repo.save(note_id, body)
         except versions.HeadConflictError:
             # A create against an already-present note: never clobber or
             # auto-merge — preserve the buffer as a draft and bail (the
@@ -150,6 +179,13 @@ def add(
             draft = _write_draft(db_path, note_id, body)
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
+
+        # Immediate Haiku enrichment — one direct call so tags/entities/edges
+        # appear right away (lode-npx.2 "interactive now" path).  Failure is
+        # non-fatal: the embed job already landed and the reconcile scan
+        # (enrich_gap) re-enqueues enrichment on the next worker pass.
+        if not result.deduped:
+            _enrich_immediately(conn, result.version_id)
     finally:
         conn.close()
     typer.echo(note_id)

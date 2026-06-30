@@ -1,4 +1,4 @@
-"""Tests for lode.worker — the async work queue loop (lode-i05.3).
+"""Tests for lode.worker — the async work queue loop (lode-i05.3 / lode-npx.2).
 
 Acceptance criteria (bd show lode-i05.3):
 
@@ -12,12 +12,20 @@ Acceptance criteria (bd show lode-i05.3):
 - The drain loop runs under the advisory lock (tested via CLI tests; here we
   verify the claim query respects the registry filter).
 
+Acceptance criteria (bd show lode-npx.2 — batch pre-steps):
+
+- _batch_collect_enrich: polls in-flight batches, processes results when ended.
+- _batch_submit_enrich: claims pending enrich jobs and submits to Batches API.
+- drain() runs batch pre-steps before the main claim-run loop.
+
 Strategy: all tests inject a stub registry (``_registry`` parameter) so they
 run offline with no real embedder, LanceDB, or fastembed model.  The module-
-level ``_REGISTRY`` (with the real embed handler) is not touched.
+level ``_REGISTRY`` (with the real embed handler) is not touched.  Batch pre-step
+tests inject ``_batch_client`` (a MagicMock) so no real Anthropic calls are made.
 """
 
 import sqlite3
+import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -28,6 +36,8 @@ from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
 from lode.worker import (
     HandlerFn,
+    _batch_collect_enrich,
+    _batch_submit_enrich,
     _claim_one,
     _now_iso,
     _reset_retryable,
@@ -342,29 +352,64 @@ def test_drain_processes_pending_embed_jobs(
     assert all(s == "done" for s in statuses)
 
 
-def test_drain_leaves_enrich_pending(
+def test_drain_main_loop_skips_enrich_batch_in_flight(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
-    """drain() with only embed in registry must leave enrich jobs pending."""
-    enqueue_derive_jobs(conn, "ver-1")
-    n = drain(conn, db_path, settings, _registry=_noop_registry())
-    assert n == 1  # only the embed job was processed
+    """The main claim-run loop does not process enrich jobs claimed by the batch step.
 
+    After lode-npx.2 the batch pre-step in drain() handles pending enrich jobs
+    (submits them to the Batches API and marks them 'running').  The main claim-run
+    loop only processes jobs in 'pending' status, so it never touches an enrich job
+    that the batch step has already claimed.  n == 1 because only the embed job is
+    claimed by the main loop.
+    """
+    # Insert a real note/version so submit_enrich_batch can load the body and
+    # actually submit the job (rather than marking it done as "not found").
+    _insert_note_worker(conn)
+    # Enqueue both embed and enrich jobs for that version.
+    enqueue_derive_jobs(conn, "ver-1")
+
+    # Provide a no-op batch client: create() 'succeeds' (returns a batch handle),
+    # retrieve() shows the batch still in_progress (so collect does nothing).
+    batch_obj = mock.MagicMock()
+    batch_obj.id = "batch-noop"
+    status_obj = mock.MagicMock()
+    status_obj.processing_status = "in_progress"
+    fake_batch = mock.MagicMock()
+    fake_batch.beta.messages.batches.create.return_value = batch_obj
+    fake_batch.beta.messages.batches.retrieve.return_value = status_obj
+
+    n = drain(
+        conn, db_path, settings, _registry=_noop_registry(), _batch_client=fake_batch
+    )
+    assert n == 1  # only the embed job processed by the main loop
+
+    # Enrich is 'running' — claimed by the batch step, not the main loop.
     (status,) = conn.execute("SELECT status FROM jobs WHERE type = 'enrich'").fetchone()
-    assert status == "pending"
+    assert status == "running"
 
 
 def test_drain_enrich_never_dead_lettered(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
-    """An enrich job must never become dead even when the registry has no handler."""
+    """An enrich job is never dead-lettered even across many failing drain passes.
+
+    The batch pre-step reverts a failed batch submission to 'failed' (with backoff)
+    without incrementing ``attempts``, so no drain pass can push an enrich job to
+    ``status='dead'`` via the batch-submit failure path.  Dead-letter only happens
+    inside collect_enrich_batch when the Batches API itself returns an error result
+    after retry_max_attempts.
+    """
     enqueue_derive_jobs(conn, "ver-1")
-    # Run drain many times — enrich stays pending, never dead.
+    # Run drain many times with no batch client — the batch step fails gracefully
+    # (no API key), reverts to 'failed', never reaches 'dead'.
     for _ in range(5):
         drain(conn, db_path, settings, _registry=_noop_registry())
 
     (status,) = conn.execute("SELECT status FROM jobs WHERE type = 'enrich'").fetchone()
-    assert status == "pending"
+    # Status may be 'pending' (if reset by _reset_retryable) or 'failed' (backoff
+    # still active) — but must never be 'dead'.
+    assert status != "dead"
 
 
 def test_drain_returns_count_including_failures(
@@ -439,3 +484,175 @@ def test_refresh_not_registered() -> None:
     from lode.worker import registered_types
 
     assert "refresh" not in registered_types()
+
+
+# ---------------------------------------------------------------------------
+# Batch pre-steps — _batch_submit_enrich / _batch_collect_enrich (lode-npx.2)
+# ---------------------------------------------------------------------------
+
+
+def _fake_batch_client_worker(
+    batch_id: str = "wbatch-abc",
+    results: list | None = None,
+    processing_status: str = "ended",
+) -> mock.MagicMock:
+    """Mock Anthropic client for worker batch tests."""
+    client = mock.MagicMock()
+    batch = mock.MagicMock()
+    batch.id = batch_id
+    client.beta.messages.batches.create.return_value = batch
+    status_obj = mock.MagicMock()
+    status_obj.processing_status = processing_status
+    client.beta.messages.batches.retrieve.return_value = status_obj
+    client.beta.messages.batches.results.return_value = iter(results or [])
+    return client
+
+
+def _insert_enrich_job_worker(
+    conn: sqlite3.Connection,
+    version_id: str = "ver-1",
+    status: str = "pending",
+    batch_handle: str | None = None,
+) -> int:
+    """Insert an enrich job; return job id."""
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, target_version, status, batch_handle) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (version_id, status, batch_handle),
+        )
+    return cur.lastrowid
+
+
+def _insert_note_worker(
+    conn: sqlite3.Connection,
+    note_id: str = "note-1",
+    version_id: str = "ver-1",
+    body: str = "test body",
+) -> None:
+    """Insert a note+version pair for worker batch tests."""
+    with conn:
+        conn.execute("INSERT INTO notes (note_id) VALUES (?)", (note_id,))
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) VALUES (?, ?, ?, 'create')",
+            (version_id, note_id, body),
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = ? WHERE note_id = ?",
+            (version_id, note_id),
+        )
+
+
+def test_batch_submit_claims_pending_enrich_jobs(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_submit_enrich claims pending enrich jobs and marks them running."""
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+
+    client = _fake_batch_client_worker(batch_id="test-batch")
+    submitted = _batch_submit_enrich(conn, settings, _client=client)
+
+    assert submitted == 1
+    row = _job(conn, job_id)
+    assert row["status"] == "running"
+
+
+def test_batch_submit_no_op_when_no_pending_enrich(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_submit_enrich returns 0 when there are no pending enrich jobs."""
+    client = _fake_batch_client_worker()
+    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    assert submitted == 0
+    client.beta.messages.batches.create.assert_not_called()
+
+
+def test_batch_submit_reverts_on_api_failure(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_submit_enrich reverts jobs to 'failed' if the API call raises."""
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+
+    # Client that raises on create.
+    client = mock.MagicMock()
+    client.beta.messages.batches.create.side_effect = RuntimeError("api down")
+
+    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    assert submitted == 0
+
+    # Job reverted to 'failed' (not 'dead') — will be retried.
+    row = _job(conn, job_id)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 0  # attempts NOT incremented by batch-submit failure
+
+
+def test_batch_collect_returns_false_when_in_progress(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_collect_enrich returns 0 for in-progress batches."""
+    _insert_note_worker(conn)
+    _insert_enrich_job_worker(conn, status="running", batch_handle="in-flight-batch")
+
+    client = _fake_batch_client_worker(
+        batch_id="in-flight-batch", processing_status="in_progress"
+    )
+    ended = _batch_collect_enrich(conn, settings, _client=client)
+    assert ended == 0  # batch not ended, nothing processed
+
+
+def test_batch_collect_returns_count_of_ended_batches(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_collect_enrich returns count of batches that ended this pass."""
+    from lode.enrich import EnrichmentResult
+
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="done-batch"
+    )
+
+    # Build a succeeded result.
+    enrichment = EnrichmentResult(tags=["test"])
+    tool_block = mock.MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.input = enrichment.model_dump()
+    result_obj = mock.MagicMock()
+    result_obj.custom_id = "ver-1"
+    result_obj.result.type = "succeeded"
+    result_obj.result.message.content = [tool_block]
+
+    client = _fake_batch_client_worker(
+        batch_id="done-batch", results=[result_obj], processing_status="ended"
+    )
+    ended = _batch_collect_enrich(conn, settings, _client=client)
+    assert ended == 1  # one batch ended
+
+    # Job marked done.
+    row = _job(conn, job_id)
+    assert row["status"] == "done"
+
+
+def test_drain_batch_steps_run_before_main_loop(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """drain() runs batch pre-steps before the main claim-run loop.
+
+    With a batch client that 'submits' successfully: pending enrich jobs are
+    moved to 'running' by the batch step; the main loop only processes embed.
+    """
+    _insert_note_worker(conn)
+    enqueue_derive_jobs(conn, "ver-1")  # embed + enrich pending
+
+    client = _fake_batch_client_worker(
+        batch_id="pre-batch", processing_status="in_progress"
+    )
+    n = drain(conn, db_path, settings, _registry=_noop_registry(), _batch_client=client)
+
+    assert n == 1  # only embed processed by main loop
+    (enrich_status,) = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'enrich'"
+    ).fetchone()
+    # Enrich was claimed by the batch step — 'running', not 'pending' or 'dead'.
+    assert enrich_status == "running"
