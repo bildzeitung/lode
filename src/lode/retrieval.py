@@ -40,6 +40,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Protocol
 
+import networkx as nx
+
 from lode.config import Settings
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
@@ -308,6 +310,14 @@ class ExpandedHit:
     expand to its parent block for context, cite the precise span). ``score`` is
     carried straight from the fused hit so the expansion preserves the upstream
     ranking.
+
+    ``edge_source`` is ``None`` for direct retrieval hits (the passage units the
+    lexical/dense/rerank pipeline produces). :func:`graph_expand` sets it to
+    ``'user'`` or ``'ai'`` for hits added via graph traversal; :func:`trust_rank`
+    uses this to assign :data:`TrustTier.USER_ANNOTATION` or
+    :data:`TrustTier.AI_EDGE` to those hits, bypassing the version-table lookup
+    used for direct hits. Defaults to ``None`` so existing callers that never set
+    it are unaffected.
     """
 
     passage_id: str
@@ -316,6 +326,7 @@ class ExpandedHit:
     passage_text: str
     parent_block: str
     score: float
+    edge_source: str | None = None
 
 
 def expand_parents(conn: sqlite3.Connection, hits: list[FusedHit]) -> list[ExpandedHit]:
@@ -363,6 +374,166 @@ def expand_parents(conn: sqlite3.Connection, hits: list[FusedHit]) -> list[Expan
     return expanded
 
 
+def graph_expand(
+    conn: sqlite3.Connection,
+    hits: list[ExpandedHit],
+    *,
+    settings: Settings | None = None,
+) -> list[ExpandedHit]:
+    """Traverse edges from seed notes in-memory via networkx (GraphRAG stage).
+
+    The ``graph_expand`` step of the read pipeline (``docs/retrieval.md``): for each
+    seed note whose passages appear in ``hits``, traverse the in-memory knowledge
+    graph — a networkx :class:`~networkx.DiGraph` built from the ``edges`` table
+    (``schema.sql``) — up to ``Settings.drawdown_hop_limit`` hops
+    (``docs/configuration.md``, "Draw-down hop limit", default 1). For each reached
+    node that resolves to a live note in the ``notes`` table, its current head
+    passages are appended as new :class:`ExpandedHit` entries with ``edge_source``
+    set to the edge type that led there (``'user'`` or ``'ai'``).
+
+    **No-op when no edges exist.** If the ``edges`` table has no ``fresh`` rows,
+    the input is returned unchanged — the expected state before enrichment infers
+    note-to-note edges (lode-npx.1). A passage already present in ``hits`` as a
+    direct retrieval hit is never duplicated; the higher-trust direct hit is kept and
+    the graph-sourced copy is dropped.
+
+    ``edge_source`` on the new hits feeds :func:`trust_rank`:
+
+    - ``'user'`` → :data:`TrustTier.USER_ANNOTATION` (tier 2)
+    - ``'ai'``  → :data:`TrustTier.AI_EDGE` (tier 5)
+
+    When multiple paths reach the same node, the most-trusted edge type wins
+    (``'user'`` beats ``'ai'``). Seeds (notes already providing direct hits) are
+    excluded from graph-expanded results; their passages are already in ``hits``.
+    """
+    if not hits:
+        return hits
+
+    settings = settings or Settings()
+    max_hops = settings.drawdown_hop_limit
+    if max_hops == 0:
+        return hits
+
+    # Load all fresh edges and build the in-memory DiGraph. When two edges share
+    # the same (from_id, to_id), the more-trusted source ('user' beats 'ai') wins.
+    edge_rows = conn.execute(
+        "SELECT from_id, to_id, source FROM edges WHERE status = 'fresh'"
+    ).fetchall()
+    if not edge_rows:
+        return hits  # no-op: no edges in the knowledge graph yet
+
+    G: nx.DiGraph = nx.DiGraph()
+    for from_id, to_id, source in edge_rows:
+        if G.has_edge(from_id, to_id):
+            if source == "user":
+                G[from_id][to_id]["source"] = "user"
+        else:
+            G.add_edge(from_id, to_id, source=source)
+
+    # Resolve seed passage target_versions to note_ids (direct hits only).
+    seed_versions = [h.target_version for h in hits if h.edge_source is None]
+    if not seed_versions:
+        return hits
+
+    placeholders = ", ".join("?" for _ in seed_versions)
+    seed_note_ids: set[str] = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT note_id FROM versions WHERE version_id IN ({placeholders})",
+            seed_versions,
+        )
+    }
+    if not seed_note_ids:
+        return hits
+
+    # BFS from each seed note up to max_hops hops.
+    # reached[node] = best edge_source ('user' beats 'ai').
+    reached: dict[str, str] = {}
+    visited: set[str] = set(seed_note_ids)
+    frontier: set[str] = set(seed_note_ids)
+
+    for _ in range(max_hops):
+        next_frontier: set[str] = set()
+        for node in frontier:
+            if node not in G:
+                continue
+            for _, neighbor, data in G.out_edges(node, data=True):
+                edge_src: str = data.get("source", "ai")
+                existing = reached.get(neighbor)
+                # Track most-trusted path to this neighbor.
+                if existing is None or (existing == "ai" and edge_src == "user"):
+                    reached[neighbor] = edge_src
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.add(neighbor)
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    # Remove seeds — their passages are already in hits.
+    for seed in seed_note_ids:
+        reached.pop(seed, None)
+
+    if not reached:
+        return hits
+
+    # Keep only reached node IDs that are actual live notes in the DB.
+    reached_ids = list(reached)
+    placeholders = ", ".join("?" for _ in reached_ids)
+    reached_notes: dict[str, str] = {
+        row[0]: row[1]  # note_id -> head_version_id
+        for row in conn.execute(
+            "SELECT n.note_id, n.head_version_id "
+            "FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            f"WHERE n.note_id IN ({placeholders}) "
+            "AND n.head_version_id IS NOT NULL "
+            "AND v.op != 'delete'",
+            reached_ids,
+        )
+    }
+    if not reached_notes:
+        return hits
+
+    # Fetch passages for the head versions of reached notes.
+    head_versions = list(reached_notes.values())
+    placeholders = ", ".join("?" for _ in head_versions)
+    passage_rows = conn.execute(
+        f"SELECT passage_id, target_version, char_range, text, parent_block "
+        f"FROM passages WHERE target_version IN ({placeholders})",
+        head_versions,
+    ).fetchall()
+    if not passage_rows:
+        return hits
+
+    # Reverse map: head_version_id -> note_id (for edge_source lookup).
+    version_to_note_id = {v: k for k, v in reached_notes.items()}
+
+    # Passage ids already in hits — never duplicated (direct hit wins).
+    existing_passage_ids = {h.passage_id for h in hits}
+
+    new_hits: list[ExpandedHit] = []
+    for passage_id, target_version, char_range, text, parent_block in passage_rows:
+        if passage_id in existing_passage_ids:
+            continue  # already a direct retrieval hit; keep its higher-trust tier
+        note_id = version_to_note_id.get(target_version)
+        if note_id is None:
+            continue
+        new_hits.append(
+            ExpandedHit(
+                passage_id=passage_id,
+                target_version=target_version,
+                char_range=char_range,
+                passage_text=text,
+                parent_block=parent_block,
+                score=0.0,
+                edge_source=reached[note_id],
+            )
+        )
+
+    return hits + new_hits
+
+
 class TrustTier(IntEnum):
     """The documented trust gradient that orders the final Q&A context.
 
@@ -373,12 +544,12 @@ class TrustTier(IntEnum):
     override. The integer value *is* that rank, so **lower sorts earlier** (higher
     trust) in the context handed to the Q&A LLM.
 
-    Only :data:`OWNED_NOTE`, :data:`CURRENT_EXTERNAL`, and :data:`STALE_EXTERNAL`
-    are reachable from an :class:`ExpandedHit` today — those are the passage units
-    the read side produces. :data:`USER_ANNOTATION` and :data:`AI_EDGE` are the
-    graph-expansion tiers (annotations / inferred edges, ``docs/externals.md``);
-    they slot in at their documented rank once ``graph_expand`` lands and feeds
-    this step, without renumbering the gradient.
+    :data:`OWNED_NOTE`, :data:`CURRENT_EXTERNAL`, and :data:`STALE_EXTERNAL` come
+    from direct retrieval hits (lexical/dense/rerank pipeline). :data:`USER_ANNOTATION`
+    and :data:`AI_EDGE` come from graph-expanded hits produced by :func:`graph_expand`
+    (``lode-72m.5``): user-curated edges yield ``USER_ANNOTATION`` (tier 2) and
+    AI-inferred edges yield ``AI_EDGE`` (tier 5). The integer values are stable —
+    no renumbering was needed when graph_expand landed.
     """
 
     OWNED_NOTE = 1
@@ -447,51 +618,76 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
 
     The final ``trust_rank`` step of the read pipeline (``docs/retrieval.md``): the
     expanded hits are reordered by the **trust gradient** (``docs/externals.md`` —
-    your note > current external snapshot > stale external snapshot), carrying each
-    hit's citation (version/snapshot id + span) straight through to the
-    :class:`ContextItem`. Each hit's polymorphic ``target_version`` is classified
-    by a single lookup against ``versions`` and ``snapshots``:
+    your note > your annotation > current external snapshot > stale external snapshot
+    > AI-inferred edge), carrying each hit's citation straight through to
+    :class:`ContextItem`.
 
-    - present in ``versions`` → an owned note (:data:`TrustTier.OWNED_NOTE`);
-    - present in ``snapshots`` → an external, **current** if it is its external's
-      ``head_snapshot_id`` else **stale** (:data:`TrustTier.CURRENT_EXTERNAL` /
-      :data:`TrustTier.STALE_EXTERNAL`).
+    **Direct hits** (``edge_source is None``) are classified by a lookup against
+    ``versions`` and ``snapshots``:
+
+    - present in ``versions`` → :data:`TrustTier.OWNED_NOTE` (tier 1);
+    - present in ``snapshots``, current head → :data:`TrustTier.CURRENT_EXTERNAL` (tier 3);
+    - present in ``snapshots``, not current head → :data:`TrustTier.STALE_EXTERNAL` (tier 4).
+
+    **Graph-expanded hits** (``edge_source in {'user', 'ai'}`` — produced by
+    :func:`graph_expand`) are classified directly from their ``edge_source``,
+    bypassing the version-table lookup:
+
+    - ``edge_source == 'user'`` → :data:`TrustTier.USER_ANNOTATION` (tier 2);
+    - ``edge_source == 'ai'``  → :data:`TrustTier.AI_EDGE` (tier 5).
 
     The sort is stable, so within a tier the upstream best-first (RRF) order is
-    preserved. A hit whose ``target_version`` matches neither table cannot be
-    placed on the gradient (nor cited); rather than drop it silently it is returned
-    in ``withheld`` (acceptance: **withholds nothing silently**). The annotation /
-    inferred-edge tiers attach when ``graph_expand`` feeds this step.
+    preserved. A direct hit whose ``target_version`` matches neither ``versions``
+    nor ``snapshots`` cannot be placed on the gradient (nor cited); rather than
+    drop it silently it is returned in ``withheld`` (acceptance: **withholds
+    nothing silently**). Graph-expanded hits always have a tier and are never
+    withheld.
     """
     if not hits:
         return TrustRankedContext(context=[], withheld=[])
 
-    targets = {hit.target_version for hit in hits}
-    placeholders = ", ".join("?" for _ in targets)
-    target_list = list(targets)
+    # Only look up direct hits in the DB; graph-expanded hits carry their tier
+    # via edge_source.
+    direct_targets = {h.target_version for h in hits if h.edge_source is None}
 
-    owned = {
-        row[0]
-        for row in conn.execute(
-            f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
-            target_list,
-        )
-    }
-    # snapshot_id -> is it its external's current head? (current vs stale external)
-    snapshots = {
-        row[0]: row[0] == row[1]
-        for row in conn.execute(
-            f"SELECT s.snapshot_id, e.head_snapshot_id "
-            f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-            f"WHERE s.snapshot_id IN ({placeholders})",
-            target_list,
-        )
-    }
+    if direct_targets:
+        target_list = list(direct_targets)
+        placeholders = ", ".join("?" for _ in target_list)
+
+        owned: set[str] = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
+                target_list,
+            )
+        }
+        # snapshot_id -> is it its external's current head? (current vs stale)
+        snapshots: dict[str, bool] = {
+            row[0]: row[0] == row[1]
+            for row in conn.execute(
+                f"SELECT s.snapshot_id, e.head_snapshot_id "
+                f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+                f"WHERE s.snapshot_id IN ({placeholders})",
+                target_list,
+            )
+        }
+    else:
+        owned = set()
+        snapshots = {}
 
     context: list[ContextItem] = []
     withheld: list[WithheldHit] = []
     for hit in hits:
-        tier = _classify(hit.target_version, owned, snapshots)
+        if hit.edge_source is not None:
+            # Graph-expanded hit: tier comes from the edge type, not DB lookup.
+            tier: TrustTier | None = (
+                TrustTier.USER_ANNOTATION
+                if hit.edge_source == "user"
+                else TrustTier.AI_EDGE
+            )
+        else:
+            tier = _classify(hit.target_version, owned, snapshots)
+
         if tier is None:
             withheld.append(
                 WithheldHit(

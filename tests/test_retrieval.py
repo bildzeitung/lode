@@ -28,6 +28,7 @@ from lode.retrieval import (
     TrustTier,
     build_match_query,
     expand_parents,
+    graph_expand,
     lexical_search,
     live_head_versions,
     reciprocal_rank_fusion,
@@ -599,3 +600,392 @@ def test_build_match_query_result_is_a_valid_fts5_match(conn) -> None:
         "SELECT passage_id FROM passages_fts WHERE passages_fts MATCH ?", (match,)
     ).fetchall()
     assert rows == [("p1",)]
+
+
+# --- graph_expand: GraphRAG edge traversal via networkx (lode-72m.5) -----------
+
+
+def _insert_edge(
+    conn, *, from_id: str, to_id: str, source: str = "ai", status: str = "fresh"
+) -> None:
+    """Insert one edge into the edges table."""
+    conn.execute(
+        "INSERT INTO edges (from_id, to_id, source, status) VALUES (?, ?, ?, ?)",
+        (from_id, to_id, source, status),
+    )
+    conn.commit()
+
+
+def test_graph_expand_noop_when_no_edges(repo, conn) -> None:
+    """Acceptance: no-op pass-through when the edges table is empty."""
+    repo.save("note-a", "alpha")
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    hits = expand_parents(conn, fused)
+    assert hits
+
+    result = graph_expand(conn, hits)
+
+    assert result == hits  # unchanged: no edges means no-op
+
+
+def test_graph_expand_noop_when_hits_empty(conn) -> None:
+    """No edges to traverse when the input list is empty."""
+    assert graph_expand(conn, []) == []
+
+
+def test_graph_expand_noop_when_max_hops_zero(repo, conn) -> None:
+    """drawdown_hop_limit=0 disables traversal entirely."""
+    va = repo.save("note-a", "alpha").version_id
+    v_linked = repo.save("note-b", "beta").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (v_linked,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, hits, settings=load_settings(drawdown_hop_limit=0))
+
+    assert result == hits  # max_hops=0 bypasses traversal
+
+
+def test_graph_expand_traverses_ai_edge_and_appends_linked_passages(repo, conn) -> None:
+    """Acceptance: graph_expand finds linked-note passages via an AI edge and
+    appends them with edge_source='ai'."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")  # the linked note
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+    assert direct_hits
+
+    result = graph_expand(conn, direct_hits)
+
+    # Direct hits are preserved unchanged at the front.
+    assert result[: len(direct_hits)] == direct_hits
+    # New graph-expanded hits are appended.
+    new = result[len(direct_hits) :]
+    assert new, "should have appended passages from the linked note"
+    assert all(h.edge_source == "ai" for h in new)
+    # The graph-expanded passages come from note-b's head version.
+    note_b_head = conn.execute(
+        "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id_b,)
+    ).fetchone()[0]
+    assert all(h.target_version == note_b_head for h in new)
+
+
+def test_graph_expand_traverses_user_edge_and_marks_user_annotation(repo, conn) -> None:
+    """A user-curated edge yields edge_source='user' (USER_ANNOTATION tier)."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="user")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    new = result[len(direct_hits) :]
+    assert new
+    assert all(h.edge_source == "user" for h in new)
+
+
+def test_graph_expand_user_edge_beats_ai_edge_to_same_node(repo, conn) -> None:
+    """When a node is reachable via both user and AI edges, user wins."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchone()[0]
+    # Two edges to the same target: one ai, one user.
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="user")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    new = result[len(direct_hits) :]
+    assert new
+    # user edge wins
+    assert all(h.edge_source == "user" for h in new)
+
+
+def test_graph_expand_skips_concept_label_to_ids_not_in_notes(repo, conn) -> None:
+    """AI-inferred edges to concept labels (not existing note_ids) are silently
+    skipped — no note exists for them, so nothing to expand."""
+    va = repo.save("note-a", "alpha").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    # Edge to a concept label, not a real note_id.
+    _insert_edge(conn, from_id=note_id_a, to_id="python", source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    # No new hits: the concept label doesn't match any note in the DB.
+    assert result == direct_hits
+
+
+def test_graph_expand_does_not_duplicate_direct_hit_passages(repo, conn) -> None:
+    """A passage already in hits as a direct hit is never added again as a
+    graph-expanded hit — the direct hit keeps its higher-trust tier."""
+    va = repo.save("note-a", "alpha").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    # Edge from note-a to itself (degenerate self-loop via a separate 'note_id').
+    # More realistic: two notes both matching "alpha" so note-b's passages are
+    # already in direct hits.
+    vb = repo.save("note-b", "alpha beta").version_id
+    note_id_b = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (vb,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+
+    # Both notes match "alpha", so note-b's passages are in direct hits.
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+    direct_passage_ids = {h.passage_id for h in direct_hits}
+
+    result = graph_expand(conn, direct_hits)
+
+    # New graph-expanded hits must not repeat any direct passage.
+    new = result[len(direct_hits) :]
+    assert not any(h.passage_id in direct_passage_ids for h in new)
+
+
+def test_graph_expand_skips_stale_edges(repo, conn) -> None:
+    """Only 'fresh' edges are traversed; 'stale' edges are ignored."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai", status="stale")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    assert result == direct_hits  # stale edge ignored
+
+
+def test_graph_expand_skips_deleted_linked_notes(repo, conn) -> None:
+    """graph_expand does not expand to deleted notes (soft-deleted head)."""
+    va = repo.save("note-a", "alpha").version_id
+    vb1 = repo.save("note-b", "beta").version_id
+    repo.delete("note-b", parent=vb1)  # soft-delete note-b
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (vb1,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    assert result == direct_hits  # soft-deleted note not expanded
+
+
+def test_graph_expand_two_hop_traversal(repo, conn) -> None:
+    """With max_hops=2, graph_expand reaches notes two hops away."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")
+    repo.save("note-c", "gamma")
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    rows = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchall()
+    note_id_b, note_id_c = rows[0][0], rows[1][0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+    _insert_edge(conn, from_id=note_id_b, to_id=note_id_c, source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result_1hop = graph_expand(
+        conn, direct_hits, settings=load_settings(drawdown_hop_limit=1)
+    )
+    result_2hop = graph_expand(
+        conn, direct_hits, settings=load_settings(drawdown_hop_limit=2)
+    )
+
+    # 1-hop reaches note-b; 2-hop additionally reaches note-c.
+    new_1 = result_1hop[len(direct_hits) :]
+    new_2 = result_2hop[len(direct_hits) :]
+    note_c_head = conn.execute(
+        "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id_c,)
+    ).fetchone()[0]
+    assert not any(h.target_version == note_c_head for h in new_1), (
+        "1-hop should not reach note-c"
+    )
+    assert any(h.target_version == note_c_head for h in new_2), (
+        "2-hop should reach note-c"
+    )
+
+
+# --- trust_rank with graph-expanded tiers (lode-72m.5) -------------------------
+
+
+def test_trust_rank_ai_edge_is_lowest_trust_tier(repo, conn) -> None:
+    """A graph-expanded hit with edge_source='ai' is placed at AI_EDGE (tier 5)."""
+    v = repo.save("note-a", "alpha").version_id
+    hit = ExpandedHit(
+        passage_id="p-ai",
+        target_version=v,
+        char_range="0:5",
+        passage_text="ai-edge text",
+        parent_block="block",
+        score=0.0,
+        edge_source="ai",
+    )
+
+    ranked = trust_rank(conn, [hit])
+
+    assert ranked.withheld == []
+    assert len(ranked.context) == 1
+    assert ranked.context[0].tier is TrustTier.AI_EDGE
+    assert ranked.context[0].passage_id == "p-ai"
+
+
+def test_trust_rank_user_annotation_is_tier_2(repo, conn) -> None:
+    """A graph-expanded hit with edge_source='user' is placed at USER_ANNOTATION
+    (tier 2), between OWNED_NOTE and CURRENT_EXTERNAL."""
+    v = repo.save("note-a", "alpha").version_id
+    hit = ExpandedHit(
+        passage_id="p-user",
+        target_version=v,
+        char_range="0:5",
+        passage_text="user-edge text",
+        parent_block="block",
+        score=0.0,
+        edge_source="user",
+    )
+
+    ranked = trust_rank(conn, [hit])
+
+    assert ranked.withheld == []
+    assert len(ranked.context) == 1
+    assert ranked.context[0].tier is TrustTier.USER_ANNOTATION
+
+
+def test_trust_rank_full_gradient_with_graph_expanded_tiers(repo, conn) -> None:
+    """Acceptance: the full trust gradient including graph-expanded tiers is respected.
+
+    Order: OWNED_NOTE (1) > USER_ANNOTATION (2) > CURRENT_EXTERNAL (3) >
+           STALE_EXTERNAL (4) > AI_EDGE (5).
+    """
+    v_owned = repo.save("note-owned", "alpha").version_id
+    current_snap = _insert_external_snapshot(
+        conn, external_id="EXT-1", snapshot_id="snap-current", is_head=True
+    )
+    stale_snap = _insert_external_snapshot(
+        conn, external_id="EXT-2", snapshot_id="snap-stale", is_head=False
+    )
+
+    # All five tiers fed in reverse-trust order so the ranker must reorder them.
+    hits = [
+        ExpandedHit("p-ai", v_owned, "0:5", "ai text", "block", 0.0, edge_source="ai"),
+        ExpandedHit("p-stale", stale_snap, "0:5", "stale text", "block", 0.9),
+        ExpandedHit(
+            "p-user", v_owned, "1:6", "user text", "block", 0.0, edge_source="user"
+        ),
+        ExpandedHit("p-current", current_snap, "0:5", "current text", "block", 0.8),
+        ExpandedHit("p-owned", v_owned, "2:7", "owned text", "block", 0.7),
+    ]
+
+    ranked = trust_rank(conn, hits)
+
+    assert ranked.withheld == []
+    tiers = [item.tier for item in ranked.context]
+    assert tiers == [
+        TrustTier.OWNED_NOTE,
+        TrustTier.USER_ANNOTATION,
+        TrustTier.CURRENT_EXTERNAL,
+        TrustTier.STALE_EXTERNAL,
+        TrustTier.AI_EDGE,
+    ]
+
+
+def test_trust_rank_graph_expanded_hits_are_never_withheld(repo, conn) -> None:
+    """Graph-expanded hits always resolve to a tier and are never withheld."""
+    v = repo.save("note-a", "alpha").version_id
+    hits = [
+        ExpandedHit("p-ai", v, "0:5", "text", "block", 0.0, edge_source="ai"),
+        ExpandedHit("p-user", v, "1:6", "text", "block", 0.0, edge_source="user"),
+    ]
+
+    ranked = trust_rank(conn, hits)
+
+    assert ranked.withheld == []
+    assert {item.tier for item in ranked.context} == {
+        TrustTier.AI_EDGE,
+        TrustTier.USER_ANNOTATION,
+    }
+
+
+def test_graph_expand_then_trust_rank_end_to_end(repo, conn) -> None:
+    """End-to-end acceptance: graph_expand feeds trust_rank; the full gradient
+    is applied with the linked note at AI_EDGE after the seed note at OWNED_NOTE."""
+    va = repo.save("note-a", "alpha").version_id
+    repo.save("note-b", "beta")
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    note_id_b = conn.execute(
+        "SELECT note_id FROM notes WHERE note_id != ?", (note_id_a,)
+    ).fetchone()[0]
+    _insert_edge(conn, from_id=note_id_a, to_id=note_id_b, source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    big = expand_parents(conn, fused)
+    ctx = graph_expand(conn, big)
+    ranked = trust_rank(conn, ctx)
+
+    # Owned note is highest trust; AI-edge note is lowest.
+    tiers = [item.tier for item in ranked.context]
+    assert TrustTier.OWNED_NOTE in tiers
+    assert TrustTier.AI_EDGE in tiers
+    # OWNED_NOTE precedes AI_EDGE in the ordered context.
+    owned_idx = next(
+        i for i, item in enumerate(ranked.context) if item.tier is TrustTier.OWNED_NOTE
+    )
+    ai_idx = next(
+        i for i, item in enumerate(ranked.context) if item.tier is TrustTier.AI_EDGE
+    )
+    assert owned_idx < ai_idx
