@@ -160,6 +160,8 @@ def _claim_one(
     conn: sqlite3.Connection,
     types: tuple[str, ...],
     now: str,
+    *,
+    target_version: str | None = None,
 ) -> int | None:
     """Atomically claim one ready pending job of a registered type.
 
@@ -168,19 +170,31 @@ def _claim_one(
     (``embed`` before ``enrich``) then ``created``, and flips it to
     ``'running'`` with an asserted CAS update.  Returns the job ``id`` or
     ``None`` if nothing is ready.
+
+    ``target_version``, if given, restricts the candidate SELECT to jobs for
+    that version — this is what lets a caller claim *the specific job it just
+    enqueued* rather than whatever is oldest-pending across the whole queue
+    (lode-a3x). The normal worker ``drain`` loop omits it and claims across
+    all live jobs, as before.
     """
     if not types:
         return None
     placeholders = ", ".join("?" for _ in types)
+    params: list[object] = [now, *types]
+    version_clause = ""
+    if target_version is not None:
+        version_clause = "AND target_version = ? "
+        params.append(target_version)
     row = conn.execute(
         f"SELECT id FROM jobs "
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
         f"AND type IN ({placeholders}) "
+        f"{version_clause}"
         f"ORDER BY "
         f"CASE type WHEN 'embed' THEN 0 WHEN 'enrich' THEN 1 ELSE 2 END, "
         f"created "
         f"LIMIT 1",
-        (now, *types),
+        params,
     ).fetchone()
     if row is None:
         return None
@@ -285,6 +299,8 @@ def claim_and_run_one(
     settings: Settings,
     types: tuple[str, ...],
     _registry: dict[str, HandlerFn] | None = None,
+    *,
+    target_version: str | None = None,
 ) -> bool:
     """Atomically claim and run one ready pending job of ``types``, if any.
 
@@ -294,9 +310,17 @@ def claim_and_run_one(
     opportunistically fast-track a job it just enqueued, with identical
     claim / backoff / dead-letter semantics and no duplicated retry logic.
 
+    ``target_version``, if given, is passed through to :func:`_claim_one` so
+    the claim is scoped to that version's job rather than the oldest pending
+    job of ``types`` across the whole queue (lode-a3x) — required for a caller
+    that wants to fast-track the *specific* job it just enqueued, not an
+    arbitrary backlog job of the same type. The plain ``lode work`` drain loop
+    omits it.
+
     Returns ``True`` if a job was claimed and run (regardless of whether it
     then succeeded or failed), ``False`` if there was nothing ready to claim —
-    e.g. a concurrent ``lode work`` already won the claim race. A caller
+    e.g. a concurrent ``lode work`` already won the claim race, or (when
+    ``target_version`` is given) no live job matches that version. A caller
     should treat ``False`` as a harmless no-op: the job stays live for the
     normal worker path to pick up.
 
@@ -304,7 +328,7 @@ def claim_and_run_one(
     callers omit it and the module-level :data:`_REGISTRY` is used.
     """
     registry = _registry if _registry is not None else _REGISTRY
-    job_id = _claim_one(conn, types, _now_iso())
+    job_id = _claim_one(conn, types, _now_iso(), target_version=target_version)
     if job_id is None:
         return False
     run_one(conn, job_id, db_path, settings, registry)

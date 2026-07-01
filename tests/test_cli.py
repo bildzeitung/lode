@@ -147,6 +147,74 @@ def test_add_calls_enrich_immediately(
     assert len(calls) == 1
 
 
+def test_add_claims_own_job_not_backlog_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Immediate-enrich claims THIS note's job, not an older backlog job (lode-a3x).
+
+    Regression test for the bug that got lode-npx.2 bounced by /land's semantic
+    review: ``_enrich_immediately`` took a ``version_id`` parameter but never
+    used it -- it called ``claim_and_run_one`` with no version filter, which
+    claims the OLDEST PENDING job of that type (FIFO via ``_claim_one``), not
+    the job just enqueued for the note being saved. Under any backlog (a burst
+    of prior adds, an idle worker), a fresh ``lode add`` could immediately
+    enrich an unrelated older note instead of the one just saved. Every other
+    test in this module starts from an empty DB, so the just-enqueued job was
+    always coincidentally the only pending one -- this test seeds an unrelated
+    pending enrich job first, backdated so it would win a naive FIFO claim, and
+    asserts the NEW note's job -- not the backlog one -- is the one claimed and
+    run.
+    """
+    import lode.enrich as enrich_mod
+
+    seen_versions: list[str] = []
+
+    def _fake_enrich(conn, version_id, settings, *, client=None):
+        seen_versions.append(version_id)
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
+
+    db_path = tmp_path / "lode.db"
+    backlog_version = "backlog-version-id"
+    conn = init_db(db_path)
+    try:
+        enqueue_derive_jobs(conn, backlog_version, types=("enrich",))
+        # Backdate so this job would win an oldest-pending / FIFO claim if the
+        # immediate-enrich claim were not scoped to the new note's version.
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET created = '2020-01-01T00:00:00.000Z' "
+                "WHERE target_version = ?",
+                (backlog_version,),
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["add", "hello world", "--db", str(db_path)])
+    assert result.exit_code == 0
+    note_id = result.stdout.strip()
+
+    (version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    assert version_id != backlog_version
+
+    # enrich_version ran exactly once, for the NEW note's version -- never for
+    # the backlog job.
+    assert seen_versions == [version_id]
+
+    # The new note's enrich job was claimed + run to 'done'; the backlog job is
+    # untouched, still 'pending' for the async worker to pick up later.
+    assert _rows(
+        db_path,
+        "SELECT type, status FROM jobs WHERE target_version = ? ORDER BY type",
+        (version_id,),
+    ) == [("embed", "pending"), ("enrich", "done")]
+    assert _rows(
+        db_path, "SELECT status FROM jobs WHERE target_version = ?", (backlog_version,)
+    ) == [("pending",)]
+
+
 def test_add_enrich_failure_is_non_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

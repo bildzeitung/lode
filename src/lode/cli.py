@@ -117,10 +117,13 @@ def _enrich_immediately(
     ``Repository.save`` enqueues the ``enrich`` job atomically with the version
     write (same as ``embed``), so it exists as ``pending`` the instant the
     version is visible — there is no gap for reconcile's ``enrich_gap`` step to
-    misdetect. This claims that specific job via
-    :func:`lode.worker.claim_and_run_one` — the exact claim/run primitives
-    ``lode work`` uses — and runs it inline so tags/entities/edges appear
-    without waiting for the async worker (lode-npx.2 "interactive now" path).
+    misdetect. This claims that specific job — scoped to ``version_id`` via
+    :func:`lode.worker.claim_and_run_one`'s ``target_version`` filter, so a
+    backlog of other pending enrich jobs (a burst of prior adds, an idle
+    worker) can never cause this note's own job to be skipped in favor of an
+    older one (lode-a3x) — using the exact claim/run primitives ``lode work``
+    uses, and runs it inline so tags/entities/edges appear without waiting for
+    the async worker (lode-npx.2 "interactive now" path).
 
     If a concurrent ``lode work`` wins the claim race instead, this is a
     harmless no-op: the note is enriched a moment later via the normal worker
@@ -130,7 +133,9 @@ def _enrich_immediately(
     """
     from lode.worker import claim_and_run_one
 
-    claim_and_run_one(conn, db_path, Settings(), types=("enrich",))
+    claim_and_run_one(
+        conn, db_path, Settings(), types=("enrich",), target_version=version_id
+    )
 
 
 @app.command()

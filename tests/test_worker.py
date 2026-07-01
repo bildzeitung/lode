@@ -207,6 +207,36 @@ def test_claim_priority_embed_before_enrich(
     assert _job(conn, claimed_id)["type"] == "embed"
 
 
+def test_claim_with_target_version_ignores_other_pending_jobs_of_same_type(
+    conn: sqlite3.Connection, db_path: Path
+) -> None:
+    """``target_version`` scopes the claim to that version's job (lode-a3x).
+
+    Without the filter, ``_claim_one`` claims the oldest pending job of the
+    requested type(s) regardless of version -- the bug that got lode-npx.2
+    bounced. Seed an older backlog job first, then claim scoped to a newer
+    version's job and assert the backlog job is left untouched.
+    """
+    backlog_id = _insert_job(conn, "enrich", "ver-backlog")
+    target_id = _insert_job(conn, "enrich", "ver-target")
+
+    claimed = _claim_one(conn, ("enrich",), _now_iso(), target_version="ver-target")
+
+    assert claimed == target_id
+    assert _job(conn, target_id)["status"] == "running"
+    assert _job(conn, backlog_id)["status"] == "pending"
+
+
+def test_claim_with_target_version_returns_none_when_no_match(
+    conn: sqlite3.Connection, db_path: Path
+) -> None:
+    """A pending job exists, but not for the requested version — no claim."""
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    claimed = _claim_one(conn, ("enrich",), _now_iso(), target_version="ver-other")
+    assert claimed is None
+    assert _job(conn, job_id)["status"] == "pending"
+
+
 # ---------------------------------------------------------------------------
 # run_one — execution and state transitions
 # ---------------------------------------------------------------------------
@@ -364,6 +394,34 @@ def test_claim_and_run_one_defaults_to_module_registry(
     assert ran is True
     assert calls == ["ver-1"]
     assert _job(conn, job_id)["status"] == "done"
+
+
+def test_claim_and_run_one_with_target_version_ignores_backlog_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """``target_version`` makes claim_and_run_one claim only the caller's own job (lode-a3x).
+
+    Regression test at the worker-primitive level for the bug that got
+    lode-npx.2 bounced: the CLI's interactive immediate-enrich must claim the
+    specific job it just enqueued, not an arbitrary older pending job of the
+    same type.
+    """
+    backlog_id = _insert_job(conn, "enrich", "ver-backlog")
+    target_id = _insert_job(conn, "enrich", "ver-target")
+    enrich_registry: dict[str, HandlerFn] = {"enrich": lambda conn, tv, db, s: None}
+
+    ran = claim_and_run_one(
+        conn,
+        db_path,
+        settings,
+        ("enrich",),
+        _registry=enrich_registry,
+        target_version="ver-target",
+    )
+
+    assert ran is True
+    assert _job(conn, target_id)["status"] == "done"
+    assert _job(conn, backlog_id)["status"] == "pending"
 
 
 # ---------------------------------------------------------------------------
