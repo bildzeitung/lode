@@ -109,6 +109,35 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+def _enrich_immediately(
+    conn: sqlite3.Connection, db_path: Path, version_id: str
+) -> None:
+    """Opportunistically claim + run the enrich job just enqueued for ``version_id``.
+
+    ``Repository.save`` enqueues the ``enrich`` job atomically with the version
+    write (same as ``embed``), so it exists as ``pending`` the instant the
+    version is visible — there is no gap for reconcile's ``enrich_gap`` step to
+    misdetect. This claims that specific job — scoped to ``version_id`` via
+    :func:`lode.worker.claim_and_run_one`'s ``target_version`` filter, so a
+    backlog of other pending enrich jobs (a burst of prior adds, an idle
+    worker) can never cause this note's own job to be skipped in favor of an
+    older one (lode-a3x) — using the exact claim/run primitives ``lode work``
+    uses, and runs it inline so tags/entities/edges appear without waiting for
+    the async worker (lode-npx.2 "interactive now" path).
+
+    If a concurrent ``lode work`` wins the claim race instead, this is a
+    harmless no-op: the note is enriched a moment later via the normal worker
+    path.  A run that raises is handled entirely by :func:`~lode.worker.run_one`'s
+    own attempts/backoff/dead-letter accounting — never re-raised here, and
+    never hand-rolled a second time in this module.
+    """
+    from lode.worker import claim_and_run_one
+
+    claim_and_run_one(
+        conn, db_path, Settings(), types=("enrich",), target_version=version_id
+    )
+
+
 @app.command()
 def add(
     text: str | None = typer.Argument(
@@ -116,13 +145,27 @@ def add(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Capture a note into lode and enqueue its derive jobs.
+    """Capture a note, enqueue its derive jobs, and fast-track enrichment.
 
-    The save path (``docs/design.md``): ``Repository.save`` writes the version and
-    enqueues the embed/enrich derive jobs for the E2 async worker in one atomic
-    transaction. **No AI in the capture path** — embedding runs asynchronously
-    via ``lode work`` (lode-x6r.5). The body comes from the ``TEXT`` argument or,
-    if omitted, verbatim from stdin; an empty / whitespace-only body is refused.
+    The save path (``docs/design.md`` / lode-npx.2):
+
+    1. ``Repository.save`` writes the version and enqueues **both** the
+       ``embed`` and ``enrich`` derive jobs atomically — the note is
+       keyword-findable the moment the transaction commits (synchronous FTS5,
+       lode-xyb), and the enrich job exists as ``pending`` from that same
+       instant (no gap for reconcile's ``enrich_gap`` step to misdetect).
+    2. :func:`_enrich_immediately` opportunistically claims and runs that
+       enrich job inline (:func:`lode.worker.claim_and_run_one`) so the fresh
+       note's tags / entities / inferred edges appear without waiting for the
+       async worker (lode-npx.2 "interactive now" path). If it loses the claim
+       race to a concurrent ``lode work``, or the run fails, the job's normal
+       attempts/backoff/dead-letter accounting (:func:`lode.worker.run_one`)
+       takes over — no separate re-enqueue path needed.
+    3. Embedding runs asynchronously via ``lode work`` (lode-x6r.5) so the CLI
+       returns quickly regardless of enrichment latency.
+
+    The body comes from the ``TEXT`` argument or, if omitted, verbatim from
+    stdin; an empty / whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -142,7 +185,7 @@ def add(
         # (lode-xyb; embedding stays async via the worker).
         repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
-            repo.save(note_id, body)
+            result = repo.save(note_id, body)
         except versions.HeadConflictError:
             # A create against an already-present note: never clobber or
             # auto-merge — preserve the buffer as a draft and bail (the
@@ -150,6 +193,14 @@ def add(
             draft = _write_draft(db_path, note_id, body)
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
+
+        # Opportunistic immediate enrichment — claim + run the enrich job
+        # save() just enqueued so tags/entities/edges appear right away
+        # (lode-npx.2 "interactive now" path). A lost claim race or a run
+        # failure is handled by the job's own retry/backoff/dead-letter
+        # accounting, not here.
+        if not result.deduped:
+            _enrich_immediately(conn, db_path, result.version_id)
     finally:
         conn.close()
     typer.echo(note_id)

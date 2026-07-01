@@ -129,6 +129,19 @@ class Repository:
     (e.g. the CLI) must go through :meth:`save`, never call
     :func:`lode.jobs.enqueue_derive_jobs` separately.
 
+    **Enqueue scope (lode-npx.2):** both ``embed`` and ``enrich`` jobs are
+    enqueued here, atomically with the version write — same as any other
+    derive job, no special case. The CLI opportunistically claims and runs the
+    ``enrich`` job inline right after :meth:`save` returns
+    (:func:`lode.worker.claim_and_run_one`) for the interactive one-shot
+    (seconds, full Haiku price), using the same claim primitive
+    ``lode work`` does — so there is never a window where the version is live
+    but no enrich job exists for reconcile's ``enrich_gap`` step to miss. If
+    nothing claims it inline (a concurrent worker won the race, or the process
+    never gets that far), the job stays ``pending`` for the normal worker path:
+    ``enrich_gap`` requires no special-casing since a live job already exists
+    from the moment this transaction commits.
+
     **Re-anchor ownership (lode-atv):** an ``update`` save also re-anchors the
     prior head's AI annotations/edges against the new body, in the same ``with
     conn:`` transaction — :func:`~lode.staleness.reanchor_annotations` and
@@ -175,6 +188,11 @@ class Repository:
                 self.conn, note_id, body, parent=parent, settings=settings
             )
             if not result.deduped:
+                # Enqueue both embed and enrich atomically with the version
+                # write (lode-npx.2): the enrich job exists as 'pending' the
+                # instant this commits, so the CLI's post-save immediate claim
+                # has nothing to race against, and enrich_gap needs no
+                # special-casing for the capture path.
                 jobs.enqueue_derive_jobs(self.conn, result.version_id)
                 if result.op == "update":
                     staleness.reanchor_annotations(

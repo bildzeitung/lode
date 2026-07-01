@@ -400,6 +400,21 @@ per note) so its tags/entities/edges appear promptly. Only **bulk / backfill / r
 through the 50%-off **Batches API** (≤24h, non-interactive). Either way the **embedding lands in
 seconds**, so the note is retrievable immediately regardless.
 
+**How the immediate path stays a fast path, not a second job system (lode-npx.2, lode-a3x).**
+`save()` enqueues the `enrich` job exactly like `embed` — no special case — so a `pending` row
+exists the instant the version write commits. The capture path then opportunistically **claims and
+runs that specific job inline** — the claim is scoped to the just-saved `target_version`, not just
+the job's type, so a backlog of other pending enrich jobs (a burst of prior adds, an idle worker)
+can never cause an unrelated older note to be claimed and enriched instead of the one just saved.
+It reuses the identical claim primitive `lode work` uses (a single atomic
+`UPDATE ... WHERE status = 'pending'`), narrowed with an `AND target_version = ?` clause, so it
+never races the reconciliation scan: there is no window where the version is live but no enrich job
+exists for `enrich_gap` to misdetect as missing and re-enqueue. If a concurrent `lode work` wins
+that claim instead, the capture path simply does nothing further — the note is enriched a moment
+later via the normal worker path rather than instantly. A failed immediate run is handled by the
+job's own attempts/backoff/dead-letter accounting (the same state machine any worker-claimed job
+uses), not by a bespoke retry in the CLI.
+
 ```mermaid
 flowchart LR
     SAVE["save (txn)"] --> Q[("jobs<br>(SQLite, durable)")]

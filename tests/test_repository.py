@@ -322,27 +322,29 @@ def test_purge_clears_the_secret_from_the_real_lexical_index(conn):
     assert result.head_op == "update"
 
 
-# --- enqueue ownership + atomicity (lode-i05.1) --------------------------------
+# --- enqueue ownership + atomicity (lode-i05.1 / lode-npx.2) ------------------
 #
-# Repository.save is the SOLE enqueue site: it wraps the version-write and the
-# job enqueue in one WITH conn transaction.  These tests verify:
-# - a successful save enqueues exactly the DERIVE_JOB_TYPES pending jobs;
+# Repository.save is the SOLE enqueue site for derive jobs. After lode-npx.2 it
+# enqueues BOTH embed and enrich atomically with the version write — no special
+# case for enrich — so a pending enrich job exists from the instant the
+# transaction commits. The CLI opportunistically claims + runs that job inline
+# right after save() returns (worker.claim_and_run_one); if it loses that race
+# or never runs, the job stays live for the normal worker path. These tests:
+# - a successful save enqueues exactly the embed + enrich jobs;
 # - a deduped save (identical body) enqueues nothing;
 # - a failure during enqueue rolls back the version-write too (atomicity).
 
 
-def test_save_enqueues_derive_jobs(conn):
-    """repo.save enqueues the embed + enrich pending jobs for the new version."""
-    from lode.jobs import DERIVE_JOB_TYPES
-
+def test_save_enqueues_embed_and_enrich_jobs(conn):
+    """repo.save enqueues both embed and enrich atomically (lode-npx.2)."""
     repo = Repository(conn)
     result = repo.save("note-1", "hello")
     rows = conn.execute(
         "SELECT type, target_version, status FROM jobs ORDER BY type"
     ).fetchall()
     assert rows == [
-        (job_type, result.version_id, "pending")
-        for job_type in sorted(DERIVE_JOB_TYPES)
+        ("embed", result.version_id, "pending"),
+        ("enrich", result.version_id, "pending"),
     ]
 
 
@@ -353,11 +355,11 @@ def test_save_dedup_enqueues_nothing(conn):
     # Advance the head so the dedup is against the live body.
     result = repo.save("note-1", "same", parent=root)
     assert result.deduped
-    # Still only the two jobs from the first (create) save.
+    # Still only the embed + enrich jobs from the first (create) save.
     (n,) = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()
-    from lode.jobs import DERIVE_JOB_TYPES
-
-    assert n == len(DERIVE_JOB_TYPES)
+    assert (
+        n == 2
+    )  # embed + enrich from the first (create) save, none added by the dedup
 
 
 def test_save_version_and_enqueue_are_atomic(tmp_path, monkeypatch):
@@ -375,7 +377,7 @@ def test_save_version_and_enqueue_are_atomic(tmp_path, monkeypatch):
     try:
         # Patch enqueue_derive_jobs to raise after the version row is written
         # but before anything is committed.
-        def _boom(c, v):
+        def _boom(c, v, **kwargs):
             raise RuntimeError("injected enqueue failure")
 
         monkeypatch.setattr(jobs_mod, "enqueue_derive_jobs", _boom)

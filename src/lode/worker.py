@@ -13,13 +13,31 @@ retries, then claim+run ready pending jobs until none remain and exit.
   :class:`~lode.lexical.LexicalCacheBackend` in ``cli.py add`` writes
   ``passages`` + ``passages_fts`` right after the version commits.  Idempotent:
   the same head version can be re-embedded and converges to the same state.
-- ``enrich`` — registered (lode-npx.1); runs the **Haiku structured-extraction**
-  path (:func:`lode.enrich.enrich_version`: tags + entities + inferred edges +
-  provenance). Deferred import so Haiku / Anthropic SDK cost is paid only when
-  an enrich job is actually dispatched.  Idempotent: re-enriching a version
-  replaces existing ``source='ai'`` annotations/edges for that version.
+- ``enrich`` — registered (lode-npx.1); the **fallback** handler for any
+  ``enrich`` job not handled by the batch-submit pre-step. Runs
+  :func:`lode.enrich.enrich_version` directly (immediate single-version Haiku
+  call). In normal operation the batch pre-step claims all pending ``enrich``
+  jobs before the main claim-run loop, so this handler fires only for jobs that
+  escaped the batch step (e.g. a unit test injecting enrich jobs into a registry
+  that skips the batch steps).
 - ``refresh`` — *no handler*; accumulates harmlessly until the connectors step
   arrives (lode-i05.3 scope fence).
+
+**Batch pre-steps (lode-npx.2)** run at the top of every :func:`drain` pass,
+before the main claim-run loop:
+
+1. :func:`_batch_collect_enrich` — find ``running`` enrich jobs that have a
+   ``batch_handle``, poll each unique batch, and process results when the batch
+   ends (``processing_status == 'ended'``). Succeeded results write enrichment
+   to the DB and mark jobs ``done``; errored results apply backoff or
+   dead-letter. Returns False for in-progress batches (tried again on next
+   drain tick).
+2. :func:`_batch_submit_enrich` — find **pending** enrich jobs (up to
+   ``settings.enrichment_batch_flush_size``), gate out no_egress / tombstone /
+   purged versions, and submit the rest to ``client.beta.messages.batches.create``
+   (50%-off Batches API). Each submitted job row is updated to ``status='running'``
+   with ``batch_handle`` set. On success returns the count submitted; on API
+   failure marks all newly-claimed jobs ``failed`` and re-raises.
 
 **Claim** (``_claim_one``): selects one job with
 ``status='pending' AND next_attempt_at <= now AND type IN (<registered>)``,
@@ -39,11 +57,10 @@ belt-and-suspenders behind the single-owner advisory lock.
 - max-attempts gate → ``status='dead'`` (terminal poison)
 
 **Crash recovery note**: if the worker crashes mid-run a job can be left in
-``status='running'``. The reconciliation scan (i05.4) re-enqueues head versions
-missing a fresh embed on worker startup, but does not explicitly reset orphaned
-``running`` rows — those are covered by the embed-gap query only if the embed
-result (``passages`` row) is also missing. A future hardening pass may add an
-explicit orphan-reset step to the reconciliation scan.
+``status='running'``. Batch-submitted enrich jobs stay ``running`` until their
+batch ends (this is intentional — the batch_handle survives in the DB for
+lode-i05.5 restart-resume). Regular embed jobs left ``running`` by a crash are
+covered by the embed-gap reconciliation query if the embed result is also missing.
 """
 
 import logging
@@ -143,6 +160,8 @@ def _claim_one(
     conn: sqlite3.Connection,
     types: tuple[str, ...],
     now: str,
+    *,
+    target_version: str | None = None,
 ) -> int | None:
     """Atomically claim one ready pending job of a registered type.
 
@@ -151,19 +170,31 @@ def _claim_one(
     (``embed`` before ``enrich``) then ``created``, and flips it to
     ``'running'`` with an asserted CAS update.  Returns the job ``id`` or
     ``None`` if nothing is ready.
+
+    ``target_version``, if given, restricts the candidate SELECT to jobs for
+    that version — this is what lets a caller claim *the specific job it just
+    enqueued* rather than whatever is oldest-pending across the whole queue
+    (lode-a3x). The normal worker ``drain`` loop omits it and claims across
+    all live jobs, as before.
     """
     if not types:
         return None
     placeholders = ", ".join("?" for _ in types)
+    params: list[object] = [now, *types]
+    version_clause = ""
+    if target_version is not None:
+        version_clause = "AND target_version = ? "
+        params.append(target_version)
     row = conn.execute(
         f"SELECT id FROM jobs "
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
         f"AND type IN ({placeholders}) "
+        f"{version_clause}"
         f"ORDER BY "
         f"CASE type WHEN 'embed' THEN 0 WHEN 'enrich' THEN 1 ELSE 2 END, "
         f"created "
         f"LIMIT 1",
-        (now, *types),
+        params,
     ).fetchone()
     if row is None:
         return None
@@ -262,27 +293,234 @@ def run_one(
         return False
 
 
+def claim_and_run_one(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    types: tuple[str, ...],
+    _registry: dict[str, HandlerFn] | None = None,
+    *,
+    target_version: str | None = None,
+) -> bool:
+    """Atomically claim and run one ready pending job of ``types``, if any.
+
+    Reuses the exact same claim (:func:`_claim_one`) and run (:func:`run_one`)
+    primitives the ``drain`` loop uses. This lets a caller outside the worker
+    loop — the CLI's interactive immediate-enrich fast path (lode-npx.2) —
+    opportunistically fast-track a job it just enqueued, with identical
+    claim / backoff / dead-letter semantics and no duplicated retry logic.
+
+    ``target_version``, if given, is passed through to :func:`_claim_one` so
+    the claim is scoped to that version's job rather than the oldest pending
+    job of ``types`` across the whole queue (lode-a3x) — required for a caller
+    that wants to fast-track the *specific* job it just enqueued, not an
+    arbitrary backlog job of the same type. The plain ``lode work`` drain loop
+    omits it.
+
+    Returns ``True`` if a job was claimed and run (regardless of whether it
+    then succeeded or failed), ``False`` if there was nothing ready to claim —
+    e.g. a concurrent ``lode work`` already won the claim race, or (when
+    ``target_version`` is given) no live job matches that version. A caller
+    should treat ``False`` as a harmless no-op: the job stays live for the
+    normal worker path to pick up.
+
+    ``_registry`` is injectable for tests (mirrors :func:`drain`); production
+    callers omit it and the module-level :data:`_REGISTRY` is used.
+    """
+    registry = _registry if _registry is not None else _REGISTRY
+    job_id = _claim_one(conn, types, _now_iso(), target_version=target_version)
+    if job_id is None:
+        return False
+    run_one(conn, job_id, db_path, settings, registry)
+    return True
+
+
+def _batch_collect_enrich(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    _client: object | None = None,
+) -> int:
+    """Poll in-flight Batches API requests and process any that have ended.
+
+    Finds all distinct ``batch_handle`` values on running enrich jobs, calls
+    :func:`lode.enrich.collect_enrich_batch` for each, and returns the total
+    count of jobs whose batch ended (results processed this pass — not all may
+    have been individually ``done``, some may be ``failed`` / ``dead``).
+
+    Batches still in progress are left untouched; they will be checked again on
+    the next drain tick. This is the "resume" half of the durable-handle pattern
+    (lode-i05.5 adds explicit crash-recovery hardening on top).
+
+    ``_client`` is injectable for tests.
+    """
+    from lode.enrich import collect_enrich_batch
+
+    batch_ids: list[str] = [
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT batch_handle FROM jobs "
+            "WHERE type = 'enrich' AND status = 'running' AND batch_handle IS NOT NULL"
+        ).fetchall()
+    ]
+
+    if not batch_ids:
+        return 0
+
+    kwargs: dict = {}
+    if _client is not None:
+        kwargs["client"] = _client
+
+    ended = 0
+    for batch_id in batch_ids:
+        if collect_enrich_batch(conn, batch_id, settings, **kwargs):
+            ended += 1
+
+    return ended
+
+
+def _batch_submit_enrich(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    *,
+    _client: object | None = None,
+) -> int:
+    """Claim pending enrich jobs and submit them to the Batches API (50% off).
+
+    Finds up to ``settings.enrichment_batch_flush_size`` pending enrich jobs,
+    claims each with an asserted CAS (``UPDATE ... WHERE status='pending'``,
+    rowcount == 1) so a job the interactive immediate-enrich already grabbed is
+    dropped rather than double-submitted, then calls
+    :func:`lode.enrich.submit_enrich_batch` with only the jobs actually claimed.
+
+    On API success: the batch handle is stored on each submitted job row (by
+    :func:`lode.enrich.submit_enrich_batch`); gated-out jobs are marked ``done``;
+    count of submitted requests is returned.
+
+    On API failure: all newly-claimed jobs are reverted to ``failed`` with a
+    short backoff so they are retried on the next drain tick, then the exception
+    is re-raised (logged at WARNING — the embed drain continues).
+
+    Returns the number of jobs included in the submitted batch (0 if no pending
+    enrich jobs or all gated out).
+
+    ``_client`` is injectable for tests.
+    """
+    from lode.enrich import submit_enrich_batch
+
+    flush_size = settings.enrichment_batch_flush_size
+    rows = conn.execute(
+        "SELECT id, target_version FROM jobs "
+        "WHERE type = 'enrich' AND status = 'pending' AND next_attempt_at <= ? "
+        "ORDER BY created "
+        "LIMIT ?",
+        (_now_iso(), flush_size),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
+    # _claim_one does, and submit ONLY the jobs this step actually won. The
+    # interactive `lode add` immediate-enrich (claim_and_run_one) runs without
+    # the worker lock and can flip one of these rows 'pending' -> 'running'
+    # between the SELECT above and here; passing the raw SELECT to
+    # submit_enrich_batch would then submit a job already claimed (and possibly
+    # already run) elsewhere -- a double API spend. A lost CAS (rowcount 0)
+    # means someone else owns it, so we drop it from this batch.
+    claimed_rows: list[tuple[int, str]] = []
+    with conn:
+        for job_id, version_id in rows:
+            cur = conn.execute(
+                "UPDATE jobs SET status = 'running' "
+                "WHERE id = ? AND status = 'pending'",
+                (job_id,),
+            )
+            if cur.rowcount == 1:
+                claimed_rows.append((job_id, version_id))
+
+    if not claimed_rows:
+        return 0
+
+    # submit_enrich_batch persists batch_handle on these rows; on failure we
+    # revert exactly the jobs we claimed here (not a concurrent claimer's).
+    job_ids = [jid for jid, _ in claimed_rows]
+
+    kwargs: dict = {}
+    if _client is not None:
+        kwargs["client"] = _client
+
+    try:
+        batch_id = submit_enrich_batch(conn, claimed_rows, settings, **kwargs)
+        submitted = sum(
+            1
+            for row in conn.execute(
+                "SELECT id FROM jobs WHERE id IN ({}) AND batch_handle IS NOT NULL".format(
+                    ",".join("?" * len(job_ids))
+                ),
+                job_ids,
+            ).fetchall()
+        )
+        if batch_id:
+            log.info(
+                "_batch_submit_enrich: submitted %d job(s) as batch=%s",
+                submitted,
+                batch_id,
+            )
+        return submitted
+
+    except Exception as exc:
+        log.warning("_batch_submit_enrich: API call failed: %s — reverting jobs", exc)
+        # Revert all pre-claimed jobs to 'failed' with a short backoff so they
+        # are retried on the next pass (not immediately — avoids hammering the API).
+        delay = min(settings.retry_backoff_base_s, settings.retry_backoff_cap_s)
+        next_at = _iso(datetime.now(UTC) + timedelta(seconds=delay))
+        with conn:
+            conn.executemany(
+                "UPDATE jobs SET status = 'failed', last_error = ?, "
+                "next_attempt_at = ? WHERE id = ? AND status = 'running'",
+                [(str(exc), next_at, jid) for jid in job_ids],
+            )
+        return 0
+
+
 def drain(
     conn: sqlite3.Connection,
     db_path: Path,
     settings: Settings | None = None,
     _registry: dict[str, HandlerFn] | None = None,
+    *,
+    _batch_client: object | None = None,
 ) -> int:
     """Claim+run all ready pending jobs until none remain.
 
-    Calls :func:`_reset_retryable` once at the start to pick up overdue
-    retries (``status='failed' AND next_attempt_at <= now``), then loops
-    :func:`_claim_one` → :func:`run_one` until nothing is claimable.
+    **Batch pre-steps** (lode-npx.2) run before the main claim-run loop:
 
-    Returns the total number of jobs claimed and run (including failures and
-    dead-letters, not just successful completions).
+    1. :func:`_batch_collect_enrich` — poll any in-flight Batches API requests
+       and process results for batches that have ended.
+    2. :func:`_batch_submit_enrich` — find pending ``enrich`` jobs and submit
+       them to the Batches API (up to ``settings.enrichment_batch_flush_size``).
+
+    Then: calls :func:`_reset_retryable` once to pick up overdue retries
+    (``status='failed' AND next_attempt_at <= now``), and loops
+    :func:`_claim_one` → :func:`run_one` until nothing is claimable (``embed``
+    and any residual ``enrich`` jobs not claimed by the batch step).
+
+    Returns the total number of jobs claimed and run by the **main loop**
+    (including failures and dead-letters). Batch pre-step activity is logged but
+    not included in the return count.
 
     ``_registry`` is injectable for tests; production callers omit it and the
-    module-level :data:`_REGISTRY` is used.
+    module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
+    tests (passed through to the batch pre-steps).
     """
     settings = settings or Settings()
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
+
+    # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
+    _batch_collect_enrich(conn, settings, _client=_batch_client)
+    _batch_submit_enrich(conn, settings, _client=_batch_client)
 
     now = _now_iso()
     reset = _reset_retryable(conn, now)
