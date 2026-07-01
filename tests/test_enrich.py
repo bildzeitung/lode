@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from lode.config import Settings
+from lode.curation import delete_annotation, delete_edge
 from lode.enrich import (
     ENRICH_PROMPT_VER,
     EnrichmentResult,
@@ -77,6 +78,27 @@ def _insert_note(
             "INSERT INTO versions (version_id, note_id, body, op, purged_at) "
             "VALUES (?, ?, ?, ?, ?)",
             (version_id, note_id, body, op, purged_at),
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = ? WHERE note_id = ?",
+            (version_id, note_id),
+        )
+
+
+def _update_note(
+    conn: sqlite3.Connection,
+    *,
+    note_id: str = "note-1",
+    version_id: str,
+    parent_version_id: str,
+    body: str,
+) -> None:
+    """Append a new head version to an existing note (an 'update', not a create)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, parent_version_id, body, op) "
+            "VALUES (?, ?, ?, ?, 'update')",
+            (version_id, note_id, parent_version_id, body),
         )
         conn.execute(
             "UPDATE notes SET head_version_id = ? WHERE note_id = ?",
@@ -454,6 +476,78 @@ def test_enrich_version_user_annotations_preserved(
     ).fetchall()
     assert len(user_rows) == 1
     assert json.loads(user_rows[0][0]) == "pinned"
+
+
+# ---------------------------------------------------------------------------
+# User pinning: a deleted tag/link is not re-added (lode-npx.4)
+# ---------------------------------------------------------------------------
+
+
+def test_deleted_tag_is_not_re_added_on_re_enrichment(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A tag the user deletes stays deleted across re-enrichment.
+
+    lode.curation.delete_annotation converts the row to a source='user'
+    tombstone; _write_enrichment must see that tombstone and skip
+    re-inserting a matching AI suggestion, even though Haiku keeps proposing
+    the same tag.
+    """
+    _insert_note(conn)
+    result = EnrichmentResult(tags=["python", "auth"], entities=[], inferred_edges=[])
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    # User deletes the "python" tag.
+    (row_id,) = conn.execute(
+        "SELECT id FROM annotations WHERE kind = 'tag' AND payload = '\"python\"'"
+    ).fetchone()
+    delete_annotation(conn, row_id)
+
+    # Note is edited and re-enriched; Haiku proposes the same tags again.
+    _update_note(
+        conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
+    )
+    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+
+    tag_payloads = {
+        json.loads(p)
+        for (p,) in conn.execute(
+            "SELECT payload FROM annotations WHERE kind = 'tag' AND source = 'ai'"
+        ).fetchall()
+    }
+    assert "python" not in tag_payloads
+    assert "auth" in tag_payloads
+
+
+def test_deleted_edge_is_not_re_added_on_re_enrichment(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """An inferred edge (link) the user deletes stays deleted across re-enrichment."""
+    _insert_note(conn)
+    result = EnrichmentResult(
+        tags=[],
+        entities=[],
+        inferred_edges=[
+            InferredEdge(to_id="jwt-topic", reason="mentions JWT", confidence=0.7)
+        ],
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    (row_id,) = conn.execute(
+        "SELECT id FROM edges WHERE to_id = 'jwt-topic'"
+    ).fetchone()
+    delete_edge(conn, row_id)
+
+    _update_note(
+        conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
+    )
+    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+
+    ai_edge_to_ids = {
+        r[0]
+        for r in conn.execute("SELECT to_id FROM edges WHERE source = 'ai'").fetchall()
+    }
+    assert "jwt-topic" not in ai_edge_to_ids
 
 
 # ---------------------------------------------------------------------------

@@ -201,13 +201,21 @@ annotations forward by rule:
   character offsets (offsets shatter on any edit above them). On edit, fuzzy-match the quote to
   re-anchor; if no match, mark orphaned rather than guess.
 
-### Stale-display policy (decided)
+### Stale-display policy (decided, implemented lode-npx.4)
 
 - **Tags / links:** show, but flagged stale (avoids UI flicker on every typo fix).
 - **Assertive items (extracted action items, etc.):** hide until re-enrichment is fresh — the
   cost of a wrong action item is higher than a wrong tag.
 
 Stale annotations are never treated as ground truth.
+
+`lode.display` is the single place this policy is applied: `classify_annotation_display(kind,
+source, status)` / `classify_edge_display(source, status)` return a `(visible, stale)` decision so
+every consumer (CLI, later the TUI, E11) renders the same rule instead of re-deriving it.
+`ASSERTIVE_KINDS` (a build constant, [configuration.md](configuration.md)) names the kinds that hide
+rather than flag; no extractor emits one yet (lode-npx.1 only produces `tag`/`entity` annotations and
+inferred edges, all show-flagged), so this is a forward-compatible hook for action-item extraction.
+`display_annotations`/`display_edges` are the DB-reading convenience wrappers.
 
 ### Provenance & user override
 
@@ -219,6 +227,26 @@ Stale annotations are never treated as ground truth.
   - **AI annotations are version-scoped** — regenerable, allowed to go stale, re-derived per head.
   - **User annotations attach to `note_id`** (the logical identity) — they ride across every
     version automatically, so re-enrichment never re-adds a link the user just removed.
+
+**Deletion mechanism (implemented lode-npx.4): a user delete is a pin, not a physical `DELETE`.**
+`lode.curation.delete_annotation`/`delete_edge` convert the row *in place* to a **suppression
+tombstone** — `source='user', status='orphaned'`, `source_version` cleared — keeping the same
+`target`/`kind`/`payload` (or `from_id`/`to_id`) so it stays matchable. Two things fall out of the
+row staying present rather than vanishing:
+- **Never re-anchored:** `lode.staleness` only touches `source='ai'` rows, so a tombstone is inert
+  under structural re-anchoring forever.
+- **Never re-added:** before inserting a suggestion, `lode.enrich._write_enrichment` calls
+  `lode.curation.is_annotation_suppressed`/`is_edge_suppressed`, which checks for *any*
+  `source='user'` row on the same `(target, kind, payload)` (or `(from_id, to_id)`) — tombstone or a
+  user-authored row the user chose to keep, either way the AI duplicate is skipped. This is what
+  makes "re-enrichment never re-adds a link the user just removed" true rather than aspirational:
+  without it, a fresh Haiku call on the next version would simply re-suggest the same tag/edge and
+  the deletion wouldn't stick.
+- `status='orphaned'` here does not mean *structurally gone* (the §5 re-anchor meaning) — for
+  `source='user'` rows the column instead flags "this is a suppression tombstone, not an active
+  annotation," which `lode.display` reads to keep it hidden. Re-anchor and display are the only two
+  readers of `status`, and re-anchor never looks at `source='user'` rows at all, so the two meanings
+  never collide in practice.
 
 ### Purge: the note-wide hard cascade (decided)
 

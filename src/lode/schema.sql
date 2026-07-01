@@ -85,6 +85,12 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_external ON snapshots (external_id);
 -- and may go stale; user corrections (source='user') attach to the logical
 -- note_id and ride every version (docs/storage.md "Provenance & user override").
 -- Staleness is structural — read off the head-pointer comparison, not a flag.
+-- quoted_text is the verbatim text span that anchors the annotation to the note
+-- body (lode-npx.3); NULL for whole-note items that have no per-span anchor.
+-- Re-anchor logic (staleness.py): if quoted_text is set, a verbatim match in
+-- the new body → fresh; quote absent but payload value present → stale; both
+-- absent → orphaned.  Without quoted_text, payload value presence → fresh vs
+-- orphaned (no stale state).
 CREATE TABLE IF NOT EXISTS annotations (
     id             INTEGER PRIMARY KEY,
     target         TEXT NOT NULL,
@@ -96,6 +102,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     model          TEXT,
     prompt_ver     TEXT,
     confidence     REAL,
+    quoted_text    TEXT,
     created        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -147,6 +154,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
 -- in-memory via networkx over these rows (docs/stack.md). `from_id`/`to_id` are
 -- the doc's `from`/`to` (renamed to avoid the SQL reserved words). source='user'
 -- edges are user curation (irreplaceable); source='ai' edges are regenerable.
+-- quoted_text is the verbatim text span in the source note body that triggered
+-- the inferred edge (lode-npx.3). Re-anchor logic mirrors annotations: verbatim
+-- match → fresh; quote absent but to_id value present → stale; both absent →
+-- orphaned.  Without quoted_text, to_id presence in body → fresh vs orphaned.
 CREATE TABLE IF NOT EXISTS edges (
     id             INTEGER PRIMARY KEY,
     from_id        TEXT NOT NULL,
@@ -155,6 +166,7 @@ CREATE TABLE IF NOT EXISTS edges (
     reason         TEXT,
     confidence     REAL,
     source_version TEXT,
+    quoted_text    TEXT,
     status         TEXT NOT NULL CHECK (status IN ('fresh', 'stale', 'orphaned'))
 );
 
