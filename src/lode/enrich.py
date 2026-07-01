@@ -20,6 +20,12 @@ Architecture (docs/storage.md):
 - Idempotent: deletes existing ``source='ai'`` rows keyed to the enriched
   ``source_version`` before writing new results, so re-running on the same version
   converges cleanly.
+- **User pinning (lode-npx.4):** before inserting a suggestion, checks
+  :func:`lode.curation.is_annotation_suppressed` / ``is_edge_suppressed`` --
+  if a ``source='user'`` row already exists for the exact same item (a prior
+  user edit, or a tombstone left by :func:`lode.curation.delete_annotation` /
+  ``delete_edge``), the AI duplicate is skipped. This is what makes a
+  user-deleted link stay deleted across re-enrichment.
 
 The ``enrich`` job type is claimed by the worker (lode-i05.3 handler registry, wired
 in :mod:`lode.worker`); the reconciliation scan (lode-i05.4 ``enrich_gap`` step, wired
@@ -35,6 +41,7 @@ import anthropic
 from pydantic import BaseModel, Field
 
 from lode.config import Settings
+from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
 from lode.redact import redact_before_egress_counting
 
@@ -170,6 +177,12 @@ def _write_enrichment(
     Tags + entities go to ``annotations`` (``kind='tag'``/``'entity'``,
     ``target = note_id``). Inferred edges go to ``edges`` (``from_id = note_id``,
     ``source='ai'``, ``status='fresh'``).
+
+    User pinning (lode-npx.4): a suggestion whose ``(target, kind, payload)``
+    (or ``(from_id, to_id)`` for edges) already has a ``source='user'`` row is
+    skipped -- the user already decided about this exact item, whether that
+    means they added it themselves or explicitly deleted an earlier AI
+    suggestion (:mod:`lode.curation`).
     """
     with conn:
         # Clear existing AI-derived rows for this source_version (idempotency).
@@ -187,6 +200,9 @@ def _write_enrichment(
         # source list differ.
         for kind, values in (("tag", result.tags), ("entity", result.entities)):
             for value in values:
+                payload = json.dumps(value)
+                if is_annotation_suppressed(conn, note_id, kind, payload):
+                    continue
                 conn.execute(
                     "INSERT INTO annotations "
                     "(target, source_version, kind, payload, source, status, "
@@ -196,7 +212,7 @@ def _write_enrichment(
                         note_id,
                         version_id,
                         kind,
-                        json.dumps(value),
+                        payload,
                         model,
                         ENRICH_PROMPT_VER,
                         ts,
@@ -206,6 +222,8 @@ def _write_enrichment(
         # Inferred edges -- AI suggestions with confidence; stored source='ai',
         # never as asserted facts.
         for edge in result.inferred_edges:
+            if is_edge_suppressed(conn, note_id, edge.to_id):
+                continue
             conn.execute(
                 "INSERT INTO edges "
                 "(from_id, to_id, source, reason, confidence, source_version, status) "

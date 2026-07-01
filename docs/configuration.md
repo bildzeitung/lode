@@ -104,3 +104,4 @@ These local ids/dim were pinned and **verified to load** on the `fastembed` ONNX
 |---|---|---|---|
 | Content-address hash `H` | build | non-crypto 128-bit (xxh3-128) | Single-user/no-sync needs only low accidental-collision probability, not crypto resistance; length-prefixed framing. Changing `H` re-keys every node. blake2b-128 (stdlib) is the no-dep fallback. ([storage.md](storage.md#identity-vs-version)) |
 | Single-instance advisory lock | build | on | Lockfile/PID beside the DB; required so async workers have a single owner. ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)) |
+| `ASSERTIVE_KINDS` (`lode.display`) | build | `{"action_item"}` | Annotation kinds the [stale-display policy](storage.md#stale-display-policy-decided-implemented-lode-npx4) hides (rather than shows-flagged) once not fresh. No extractor emits one yet — a forward-compatible hook for action-item extraction. |
