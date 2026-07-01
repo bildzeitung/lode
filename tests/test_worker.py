@@ -864,6 +864,123 @@ def test_batch_collect_returns_count_of_ended_batches(
     assert row["status"] == "done"
 
 
+# ---------------------------------------------------------------------------
+# Durable batch-handle persistence + resume-on-restart (lode-i05.5)
+# ---------------------------------------------------------------------------
+
+
+def test_batch_collect_resumes_after_restart_without_resubmit(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A batch_handle persisted by a prior process is re-polled and ingested on
+    restart, with no resubmission (lode-i05.5).
+
+    The job row (status='running', batch_handle set) is the only trace of the
+    submitted batch -- nothing lives in memory across a restart. A fresh
+    ``_batch_collect_enrich`` call, exactly as ``drain()`` runs it at worker
+    startup, must find it via the DB, poll, ingest the result, and mark it
+    done -- and must never call ``batches.create`` (that would double-spend).
+    """
+    from lode.enrich import EnrichmentResult
+
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="restart-batch"
+    )
+
+    enrichment = EnrichmentResult(tags=["resumed"])
+    tool_block = mock.MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.input = enrichment.model_dump()
+    result_obj = mock.MagicMock()
+    result_obj.custom_id = "ver-1"
+    result_obj.result.type = "succeeded"
+    result_obj.result.message.content = [tool_block]
+
+    client = _fake_batch_client_worker(
+        batch_id="restart-batch", results=[result_obj], processing_status="ended"
+    )
+
+    ended = _batch_collect_enrich(conn, settings, _client=client)
+
+    assert ended == 1
+    client.beta.messages.batches.create.assert_not_called()
+    assert _job(conn, job_id)["status"] == "done"
+
+
+def test_batch_collect_in_flight_handle_survives_restart_no_resubmit(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """An in-flight batch handle is polled but never resubmitted, across
+    repeated 'restart' passes, until the Batch actually ends (lode-i05.5).
+    """
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(
+        conn, status="running", batch_handle="slow-batch"
+    )
+
+    client = _fake_batch_client_worker(
+        batch_id="slow-batch", processing_status="in_progress"
+    )
+
+    # Simulate several worker-startup passes while the batch is still running.
+    for _ in range(3):
+        ended = _batch_collect_enrich(conn, settings, _client=client)
+        assert ended == 0
+
+    client.beta.messages.batches.create.assert_not_called()
+    row = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("running", "slow-batch")
+
+
+def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """End-to-end restart simulation (lode-i05.5).
+
+    Mirrors the exact sequence ``lode work`` runs at startup (``cli.py``):
+    ``reconcile()`` first, then ``drain()``. A persisted batch handle from a
+    prior (crashed/restarted) process must be resumed -- ingested and marked
+    done -- with no resubmission, AND the enrich-gap reconcile step must not
+    treat the in-flight ('running' + handle) job as a gap and re-enqueue a
+    duplicate. Isolates the enrich_gap step so the unrelated embed_gap step
+    (this fixture has no embed job) doesn't add noise to the assertion.
+    """
+    from lode.enrich import EnrichmentResult
+    from lode.reconcile import _enrich_gap_step
+    from lode.reconcile import reconcile as _reconcile
+
+    _insert_note_worker(conn)
+    _insert_enrich_job_worker(conn, status="running", batch_handle="resume-batch")
+
+    enrichment = EnrichmentResult(tags=["resumed"])
+    tool_block = mock.MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.input = enrichment.model_dump()
+    result_obj = mock.MagicMock()
+    result_obj.custom_id = "ver-1"
+    result_obj.result.type = "succeeded"
+    result_obj.result.message.content = [tool_block]
+
+    client = _fake_batch_client_worker(
+        batch_id="resume-batch", results=[result_obj], processing_status="ended"
+    )
+
+    gap = _reconcile(conn, steps=[("enrich_gap", _enrich_gap_step)])
+    drain(conn, db_path, settings, _registry=_noop_registry(), _batch_client=client)
+
+    assert gap == 0  # in-flight batch job (running + handle) is not a gap
+    client.beta.messages.batches.create.assert_not_called()  # never resubmitted
+    (status,) = conn.execute("SELECT status FROM jobs WHERE type = 'enrich'").fetchone()
+    assert status == "done"
+    (count,) = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE type = 'enrich'"
+    ).fetchone()
+    assert count == 1  # no duplicate enqueued by the reconcile scan
+
+
 def test_drain_batch_steps_run_before_main_loop(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
