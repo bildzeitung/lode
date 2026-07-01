@@ -35,12 +35,14 @@ from lode.config import Settings
 from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
 from lode.worker import (
+    _REGISTRY,
     HandlerFn,
     _batch_collect_enrich,
     _batch_submit_enrich,
     _claim_one,
     _now_iso,
     _reset_retryable,
+    claim_and_run_one,
     drain,
     run_one,
 )
@@ -287,6 +289,81 @@ def test_run_dead_does_not_overwrite_with_backoff(
     assert row["status"] == "dead"
     # next_attempt_at is unchanged — dead jobs don't get scheduled for retry.
     assert row["next_attempt_at"] == original_next_at
+
+
+# ---------------------------------------------------------------------------
+# claim_and_run_one — CLI immediate-enrich fast path (lode-npx.2)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_and_run_one_runs_the_pending_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A ready pending job is claimed and run; returns True."""
+    job_id = _insert_job(conn, "embed", "ver-1")
+    ran = claim_and_run_one(
+        conn, db_path, settings, ("embed",), _registry=_noop_registry()
+    )
+    assert ran is True
+    assert _job(conn, job_id)["status"] == "done"
+
+
+def test_claim_and_run_one_returns_false_when_nothing_pending(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """No ready job of the requested type(s) — a harmless no-op."""
+    ran = claim_and_run_one(
+        conn, db_path, settings, ("enrich",), _registry=_noop_registry()
+    )
+    assert ran is False
+
+
+def test_claim_and_run_one_returns_false_when_already_claimed(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Losing the claim race (e.g. to a concurrent `lode work`) is a no-op, not an error."""
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    # Simulate a concurrent worker winning the claim first.
+    _claim_one(conn, ("enrich",), _now_iso())
+    ran = claim_and_run_one(
+        conn, db_path, settings, ("enrich",), _registry=_noop_registry()
+    )
+    assert ran is False
+    # The job is untouched by claim_and_run_one — still 'running' from the
+    # earlier claim, not re-claimed or re-run.
+    assert _job(conn, job_id)["status"] == "running"
+
+
+def test_claim_and_run_one_failure_uses_normal_backoff_accounting(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A handler failure goes through run_one's own attempts/backoff — no hand-rolled retry."""
+    job_id = _insert_job(conn, "embed", "ver-1")
+    ran = claim_and_run_one(
+        conn, db_path, settings, ("embed",), _registry=_failing_registry("boom")
+    )
+    assert ran is True
+    row = _job(conn, job_id)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    assert "boom" in row["last_error"]
+
+
+def test_claim_and_run_one_defaults_to_module_registry(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Omitting _registry dispatches through the real module-level registry."""
+    job_id = _insert_job(conn, "embed", "ver-1")
+    calls: list[str] = []
+    original = _REGISTRY["embed"]
+    _REGISTRY["embed"] = lambda conn, tv, db, s: calls.append(tv)
+    try:
+        ran = claim_and_run_one(conn, db_path, settings, ("embed",))
+    finally:
+        _REGISTRY["embed"] = original
+    assert ran is True
+    assert calls == ["ver-1"]
+    assert _job(conn, job_id)["status"] == "done"
 
 
 # ---------------------------------------------------------------------------

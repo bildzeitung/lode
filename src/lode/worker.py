@@ -279,6 +279,38 @@ def run_one(
         return False
 
 
+def claim_and_run_one(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    types: tuple[str, ...],
+    _registry: dict[str, HandlerFn] | None = None,
+) -> bool:
+    """Atomically claim and run one ready pending job of ``types``, if any.
+
+    Reuses the exact same claim (:func:`_claim_one`) and run (:func:`run_one`)
+    primitives the ``drain`` loop uses. This lets a caller outside the worker
+    loop — the CLI's interactive immediate-enrich fast path (lode-npx.2) —
+    opportunistically fast-track a job it just enqueued, with identical
+    claim / backoff / dead-letter semantics and no duplicated retry logic.
+
+    Returns ``True`` if a job was claimed and run (regardless of whether it
+    then succeeded or failed), ``False`` if there was nothing ready to claim —
+    e.g. a concurrent ``lode work`` already won the claim race. A caller
+    should treat ``False`` as a harmless no-op: the job stays live for the
+    normal worker path to pick up.
+
+    ``_registry`` is injectable for tests (mirrors :func:`drain`); production
+    callers omit it and the module-level :data:`_REGISTRY` is used.
+    """
+    registry = _registry if _registry is not None else _REGISTRY
+    job_id = _claim_one(conn, types, _now_iso())
+    if job_id is None:
+        return False
+    run_one(conn, job_id, db_path, settings, registry)
+    return True
+
+
 def _batch_collect_enrich(
     conn: sqlite3.Connection,
     settings: Settings,

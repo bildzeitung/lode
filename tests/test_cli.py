@@ -81,13 +81,22 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         conn.close()
 
 
-def test_add_captures_note_and_enqueues_embed_job(tmp_path: Path) -> None:
-    """lode add persists the note and enqueues the embed job only (lode-npx.2).
+def test_add_captures_note_and_enqueues_embed_and_enrich_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode add persists the note and enqueues both derive jobs (lode-npx.2).
 
-    The enrich job is NOT enqueued here — the capture path calls
-    _enrich_immediately() directly (immediate Haiku call), and bulk/backfill
-    enrich jobs come from the reconciliation scan's enrich_gap step.
+    save() enqueues embed + enrich atomically; the capture path then
+    opportunistically claims + runs the enrich job inline, so a successful
+    immediate enrichment leaves it 'done' rather than 'pending'.
     """
+    import lode.enrich as enrich_mod
+
+    def _fake_enrich(conn, version_id, settings, *, client=None):
+        pass
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
+
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["add", "hello world", "--db", str(db_path)])
     assert result.exit_code == 0
@@ -98,7 +107,7 @@ def test_add_captures_note_and_enqueues_embed_job(tmp_path: Path) -> None:
         db_path, "SELECT note_id, body, op FROM versions WHERE note_id = ?", (note_id,)
     ) == [(note_id, "hello world", "create")]
 
-    # Exactly one embed job (pending) — no enrich job enqueued from capture path.
+    # embed stays pending for the async worker; enrich was claimed + run inline.
     (version_id,) = _rows(
         db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
     )[0]
@@ -107,13 +116,13 @@ def test_add_captures_note_and_enqueues_embed_job(tmp_path: Path) -> None:
         "SELECT type, status, prompt_ver FROM jobs WHERE target_version = ? "
         "ORDER BY type",
         (version_id,),
-    ) == [("embed", "pending", None)]
+    ) == [("embed", "pending", None), ("enrich", "done", None)]
 
 
 def test_add_calls_enrich_immediately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """lode add calls enrich_version immediately after saving (lode-npx.2).
+    """lode add claims + runs the enrich job immediately after saving (lode-npx.2).
 
     The capture path enriches the fresh note via a direct Haiku call so
     tags/entities/edges appear without waiting for the async worker.
@@ -125,7 +134,7 @@ def test_add_calls_enrich_immediately(
         calls.append(version_id)
 
     monkeypatch.setattr("lode.cli.enrich_version", _fake_enrich, raising=False)
-    # Patch via the _enrich_immediately import path.
+    # Patch via the worker's deferred enrich-handler import path.
     import lode.enrich as enrich_mod
 
     monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
@@ -143,8 +152,9 @@ def test_add_enrich_failure_is_non_fatal(
 ) -> None:
     """Immediate enrichment failure does not abort the capture (lode-npx.2).
 
-    The embed job still lands and the note is saved even if Haiku is unreachable.
-    The reconciliation scan will re-enqueue enrichment on the next worker pass.
+    The embed job still lands and the note is saved even if Haiku is
+    unreachable; the failed enrich job's own backoff/dead-letter accounting
+    (worker.run_one) takes over — no separate re-enqueue path needed.
     """
     import lode.enrich as enrich_mod
 
@@ -160,20 +170,21 @@ def test_add_enrich_failure_is_non_fatal(
     note_id = result.stdout.strip()
     assert note_id
 
-    # The embed job is enqueued; no enrich job (not enqueued from capture path).
+    # Both jobs were enqueued; the claimed-and-run enrich job is now 'failed'
+    # (attempt 1 of retry_max_attempts) rather than 'pending' or 'done'.
     (version_id,) = _rows(
         db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
     )[0]
-    job_types = {
-        r[0]
+    jobs_by_type = {
+        r[0]: (r[1], r[2])
         for r in _rows(
             db_path,
-            "SELECT type FROM jobs WHERE target_version = ?",
+            "SELECT type, status, attempts FROM jobs WHERE target_version = ?",
             (version_id,),
         )
     }
-    assert "embed" in job_types
-    assert "enrich" not in job_types
+    assert jobs_by_type["embed"] == ("pending", 0)
+    assert jobs_by_type["enrich"] == ("failed", 1)
 
 
 def test_add_reads_body_from_stdin_verbatim(tmp_path: Path) -> None:

@@ -109,23 +109,28 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
-def _enrich_immediately(conn: sqlite3.Connection, version_id: str) -> None:
-    """Call Haiku immediately to enrich ``version_id`` on the capture path.
+def _enrich_immediately(
+    conn: sqlite3.Connection, db_path: Path, version_id: str
+) -> None:
+    """Opportunistically claim + run the enrich job just enqueued for ``version_id``.
 
-    Deferred import keeps the Anthropic SDK off every code path that never
-    enriches.  Failure is logged at WARNING but never re-raised: the embed job
-    has already been enqueued and the reconciliation scan (``enrich_gap``) will
-    re-enqueue enrichment on the next worker pass (lode-npx.2).
+    ``Repository.save`` enqueues the ``enrich`` job atomically with the version
+    write (same as ``embed``), so it exists as ``pending`` the instant the
+    version is visible — there is no gap for reconcile's ``enrich_gap`` step to
+    misdetect. This claims that specific job via
+    :func:`lode.worker.claim_and_run_one` — the exact claim/run primitives
+    ``lode work`` uses — and runs it inline so tags/entities/edges appear
+    without waiting for the async worker (lode-npx.2 "interactive now" path).
+
+    If a concurrent ``lode work`` wins the claim race instead, this is a
+    harmless no-op: the note is enriched a moment later via the normal worker
+    path.  A run that raises is handled entirely by :func:`~lode.worker.run_one`'s
+    own attempts/backoff/dead-letter accounting — never re-raised here, and
+    never hand-rolled a second time in this module.
     """
-    try:
-        from lode.enrich import enrich_version
+    from lode.worker import claim_and_run_one
 
-        enrich_version(conn, version_id, Settings())
-    except Exception:
-        logging.getLogger(__name__).warning(
-            "immediate enrichment failed for version %s — will retry via worker",
-            version_id[:12],
-        )
+    claim_and_run_one(conn, db_path, Settings(), types=("enrich",))
 
 
 @app.command()
@@ -135,18 +140,22 @@ def add(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Capture a note and enrich it immediately, then enqueue embedding.
+    """Capture a note, enqueue its derive jobs, and fast-track enrichment.
 
     The save path (``docs/design.md`` / lode-npx.2):
 
-    1. ``Repository.save`` writes the version and enqueues the ``embed`` derive
-       job atomically — the note is keyword-findable the moment the transaction
-       commits (synchronous FTS5, lode-xyb).
-    2. :func:`lode.enrich.enrich_version` is called immediately so the fresh
+    1. ``Repository.save`` writes the version and enqueues **both** the
+       ``embed`` and ``enrich`` derive jobs atomically — the note is
+       keyword-findable the moment the transaction commits (synchronous FTS5,
+       lode-xyb), and the enrich job exists as ``pending`` from that same
+       instant (no gap for reconcile's ``enrich_gap`` step to misdetect).
+    2. :func:`_enrich_immediately` opportunistically claims and runs that
+       enrich job inline (:func:`lode.worker.claim_and_run_one`) so the fresh
        note's tags / entities / inferred edges appear without waiting for the
-       async worker (lode-npx.2 "interactive now" path). Enrichment failure is
-       non-fatal: the embed job still lands and the reconciliation scan
-       (``enrich_gap``) re-enqueues enrichment on the next worker pass.
+       async worker (lode-npx.2 "interactive now" path). If it loses the claim
+       race to a concurrent ``lode work``, or the run fails, the job's normal
+       attempts/backoff/dead-letter accounting (:func:`lode.worker.run_one`)
+       takes over — no separate re-enqueue path needed.
     3. Embedding runs asynchronously via ``lode work`` (lode-x6r.5) so the CLI
        returns quickly regardless of enrichment latency.
 
@@ -180,12 +189,13 @@ def add(
             typer.echo(f"note changed since opened; draft saved to {draft}", err=True)
             raise typer.Exit(code=1) from None
 
-        # Immediate Haiku enrichment — one direct call so tags/entities/edges
-        # appear right away (lode-npx.2 "interactive now" path).  Failure is
-        # non-fatal: the embed job already landed and the reconcile scan
-        # (enrich_gap) re-enqueues enrichment on the next worker pass.
+        # Opportunistic immediate enrichment — claim + run the enrich job
+        # save() just enqueued so tags/entities/edges appear right away
+        # (lode-npx.2 "interactive now" path). A lost claim race or a run
+        # failure is handled by the job's own retry/backoff/dead-letter
+        # accounting, not here.
         if not result.deduped:
-            _enrich_immediately(conn, result.version_id)
+            _enrich_immediately(conn, db_path, result.version_id)
     finally:
         conn.close()
     typer.echo(note_id)
