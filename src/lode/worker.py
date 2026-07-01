@@ -364,8 +364,10 @@ def _batch_submit_enrich(
     """Claim pending enrich jobs and submit them to the Batches API (50% off).
 
     Finds up to ``settings.enrichment_batch_flush_size`` pending enrich jobs,
-    temporarily marks them ``running`` (to prevent the main claim-run loop from
-    grabbing them), then calls :func:`lode.enrich.submit_enrich_batch`.
+    claims each with an asserted CAS (``UPDATE ... WHERE status='pending'``,
+    rowcount == 1) so a job the interactive immediate-enrich already grabbed is
+    dropped rather than double-submitted, then calls
+    :func:`lode.enrich.submit_enrich_batch` with only the jobs actually claimed.
 
     On API success: the batch handle is stored on each submitted job row (by
     :func:`lode.enrich.submit_enrich_batch`); gated-out jobs are marked ``done``;
@@ -394,22 +396,38 @@ def _batch_submit_enrich(
     if not rows:
         return 0
 
-    # Pre-claim: flip to 'running' so the main claim-run loop won't grab them.
-    # submit_enrich_batch will update batch_handle on these rows; on failure
-    # we revert them to 'failed'.
-    job_ids = [r[0] for r in rows]
+    # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
+    # _claim_one does, and submit ONLY the jobs this step actually won. The
+    # interactive `lode add` immediate-enrich (claim_and_run_one) runs without
+    # the worker lock and can flip one of these rows 'pending' -> 'running'
+    # between the SELECT above and here; passing the raw SELECT to
+    # submit_enrich_batch would then submit a job already claimed (and possibly
+    # already run) elsewhere -- a double API spend. A lost CAS (rowcount 0)
+    # means someone else owns it, so we drop it from this batch.
+    claimed_rows: list[tuple[int, str]] = []
     with conn:
-        conn.executemany(
-            "UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'pending'",
-            [(jid,) for jid in job_ids],
-        )
+        for job_id, version_id in rows:
+            cur = conn.execute(
+                "UPDATE jobs SET status = 'running' "
+                "WHERE id = ? AND status = 'pending'",
+                (job_id,),
+            )
+            if cur.rowcount == 1:
+                claimed_rows.append((job_id, version_id))
+
+    if not claimed_rows:
+        return 0
+
+    # submit_enrich_batch persists batch_handle on these rows; on failure we
+    # revert exactly the jobs we claimed here (not a concurrent claimer's).
+    job_ids = [jid for jid, _ in claimed_rows]
 
     kwargs: dict = {}
     if _client is not None:
         kwargs["client"] = _client
 
     try:
-        batch_id = submit_enrich_batch(conn, list(rows), settings, **kwargs)
+        batch_id = submit_enrich_batch(conn, claimed_rows, settings, **kwargs)
         submitted = sum(
             1
             for row in conn.execute(

@@ -665,6 +665,101 @@ def test_batch_submit_reverts_on_api_failure(
     assert row["attempts"] == 0  # attempts NOT incremented by batch-submit failure
 
 
+class _FrozenCursor:
+    """Cursor stand-in whose ``fetchall`` yields a pre-captured row list."""
+
+    def __init__(self, rows: list) -> None:
+        self._rows = rows
+
+    def fetchall(self) -> list:
+        return self._rows
+
+
+class _RacingSelectConn:
+    """Wrap a real connection to simulate a concurrent immediate-enrich claim.
+
+    Right after ``_batch_submit_enrich``'s candidate SELECT returns the pending
+    enrich jobs, an external claimer (an interactive ``lode add`` running
+    ``claim_and_run_one`` without the worker lock) flips one of them
+    ``pending`` -> ``running``. This is the TOCTOU the per-row CAS in
+    ``_batch_submit_enrich`` guards against (lode-npx.2): the raced job must be
+    dropped from the batch, never double-submitted.
+    """
+
+    def __init__(self, real: sqlite3.Connection, race_job_id: int) -> None:
+        self._real = real
+        self._race_job_id = race_job_id
+        self._raced = False
+
+    def execute(self, sql: str, *args):
+        if (
+            not self._raced
+            and "FROM jobs" in sql
+            and "status = 'pending'" in sql
+            and "ORDER BY created" in sql
+        ):
+            rows = self._real.execute(sql, *args).fetchall()
+            self._raced = True
+            with self._real:
+                self._real.execute(
+                    "UPDATE jobs SET status = 'running' WHERE id = ?",
+                    (self._race_job_id,),
+                )
+            return _FrozenCursor(rows)
+        return self._real.execute(sql, *args)
+
+    def executemany(self, sql: str, seq):
+        return self._real.executemany(sql, seq)
+
+    def __enter__(self):
+        return self._real.__enter__()
+
+    def __exit__(self, *exc):
+        return self._real.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A job an interactive immediate-enrich claims mid-flight is not double-submitted.
+
+    Regression for the immediate-vs-batch double-spend TOCTOU (lode-npx.2): the
+    batch step's SELECT sees two pending enrich jobs, then a concurrent claimer
+    flips one to 'running' before the per-row CAS runs. Only the job the batch
+    step actually wins (rowcount == 1) is submitted; the raced job is left for
+    its concurrent claimer, so it never reaches the (paid) Batches API.
+    """
+    _insert_note_worker(conn, note_id="note-a", version_id="ver-a")
+    _insert_note_worker(conn, note_id="note-b", version_id="ver-b")
+    raced_job = _insert_enrich_job_worker(conn, version_id="ver-a")
+    won_job = _insert_enrich_job_worker(conn, version_id="ver-b")
+
+    client = _fake_batch_client_worker(batch_id="race-batch")
+    racing = _RacingSelectConn(conn, race_job_id=raced_job)
+    submitted = _batch_submit_enrich(racing, settings, _client=client)
+
+    # Only the job the batch step won (ver-b) is submitted.
+    assert submitted == 1
+    requests = client.beta.messages.batches.create.call_args.kwargs["requests"]
+    assert [r["custom_id"] for r in requests] == ["ver-b"]
+
+    # The raced job stays running with NO batch handle — claimed by the
+    # concurrent immediate-enrich, never submitted to the paid Batches API.
+    raced = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE id = ?", (raced_job,)
+    ).fetchone()
+    assert raced == ("running", None)
+
+    # The won job carries the batch handle.
+    won = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE id = ?", (won_job,)
+    ).fetchone()
+    assert won == ("running", "race-batch")
+
+
 def test_batch_collect_returns_false_when_in_progress(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
