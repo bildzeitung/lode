@@ -281,17 +281,21 @@ def _retrieve(
     embedder: "Embedder | None" = None,
     settings: Settings | None = None,
 ) -> "list[ContextItem]":
-    """Build the trust-ranked Q&A context for ``question`` — both legs fused (E4).
+    """Build the trust-ranked Q&A context for ``question`` — the full read pipeline (E4).
 
-    The full read side: lexical search (FTS5/BM25, heads only) and the dense leg
-    (cosine ANN over the LanceDB store under ``lance_dir``, the question embedded
-    query-side via ``embedder.embed_query``) each capped at ``retrieval_top_k``,
-    fused app-side (:func:`~lode.retrieval.reciprocal_rank_fusion`), the top fused
-    passages expanded small-to-big (:func:`~lode.retrieval.expand_parents`) and
-    ordered by the trust gradient (:func:`~lode.retrieval.trust_rank`). RRF scores
-    a passage present in one leg from that leg alone, so a passage matched only by
-    the dense leg still reaches the Q&A context (lode-bkc). A question with no word
-    tokens skips the lexical leg, but the dense leg still runs.
+    The full read side (``docs/retrieval.md`` "The v1 retrieval pipeline"): lexical
+    search (FTS5/BM25, heads only) and the dense leg (cosine ANN over the LanceDB
+    store under ``lance_dir``, the question embedded query-side via
+    ``embedder.embed_query``) each capped at ``retrieval_top_k``, fused app-side
+    (:func:`~lode.retrieval.reciprocal_rank_fusion`), re-scored by the toggleable
+    cross-encoder stage (:func:`~lode.retrieval.rerank`, gated on
+    ``Settings.rerank_enabled``), expanded small-to-big to each hit's parent block
+    (:func:`~lode.retrieval.expand_parents`), traversed one graph hop from each seed
+    note (:func:`~lode.retrieval.graph_expand`, GraphRAG), and finally ordered by the
+    trust gradient (:func:`~lode.retrieval.trust_rank`). RRF scores a passage present
+    in one leg from that leg alone, so a passage matched only by the dense leg still
+    reaches the Q&A context (lode-bkc). A question with no word tokens skips the
+    lexical leg, but the dense leg still runs.
 
     ``embedder`` defaults to the pinned local ONNX model
     (:class:`lode.embedding.FastEmbedEmbedder`); tests inject a stub so the gate
@@ -304,8 +308,10 @@ def _retrieve(
     from lode.retrieval import (
         build_match_query,
         expand_parents,
+        graph_expand,
         lexical_search,
         reciprocal_rank_fusion,
+        rerank,
         trust_rank,
         vector_search,
     )
@@ -321,8 +327,10 @@ def _retrieve(
     vector = vector_search(store, conn, query_vector, k=settings.retrieval_top_k)
 
     fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)
-    expanded = expand_parents(conn, fused[: settings.retrieval_top_k])
-    return trust_rank(conn, expanded).context
+    top = rerank(conn, question, fused, settings=settings)
+    expanded = expand_parents(conn, top)
+    graphed = graph_expand(conn, expanded, settings=settings)
+    return trust_rank(conn, graphed).context
 
 
 def _format_cited_answer(answer: "CitedAnswer") -> list[str]:

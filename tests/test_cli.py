@@ -749,6 +749,234 @@ def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None
         conn.close()
 
 
+class _OneDirEmbedder:
+    """Offline stub: every text embeds to a single fixed direction ([1.0, 0.0, ...])."""
+
+    def __init__(self, settings) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def _vector(self) -> list[float]:
+        return [1.0] + [0.0] * (self._dim - 1)
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector() for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector()
+
+
+class _TwoDirEmbedder:
+    """Offline stub: passages mentioning 'first' get one direction, others another.
+
+    Query embeds identically to the 'first' direction, so the dense leg (and
+    therefore RRF, since the lexical leg finds nothing — no ``passages_fts`` rows
+    exist for versions saved via ``versions.save`` directly) ranks the 'first'
+    passage ahead of the 'second' one, deterministically.
+    """
+
+    def __init__(self, settings) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def _vector(self, first: bool) -> list[float]:
+        v = [0.0] * self._dim
+        v[0 if first else 1] = 1.0
+        return v
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self._vector("first" in text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._vector(first=True)
+
+
+def test_retrieve_wires_rerank_and_reorders_by_cross_encoder_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cli._retrieve calls rerank() between RRF and expand_parents (lode-vtf).
+
+    Two notes are indexed through the dense leg with orthogonal vectors so RRF
+    ranks the 'first' passage ahead of the 'second' one by construction (see
+    ``_TwoDirEmbedder``). A stubbed cross-encoder — injected via
+    ``lode.retrieval.FastEmbedCrossEncoder``, the seam ``rerank()`` falls back to
+    when no scorer is passed — scores the 'second' passage higher. Asserting the
+    live ``_retrieve`` path (not just ``lode.retrieval``'s own unit tests) returns
+    'second' ahead of 'first' proves rerank actually fires from cli.py.
+    """
+    settings = load_settings(embedding_vector_dim=2)
+    db_path = tmp_path / "lode.db"
+    lance_dir = config.lance_dir(db_path)
+    conn = init_db(db_path)
+    try:
+        v_first = save(
+            conn, "n-first", "first passage body", settings=settings
+        ).version_id
+        v_second = save(
+            conn, "n-second", "second passage body", settings=settings
+        ).version_id
+
+        embedder = _TwoDirEmbedder(settings)
+        for version in (v_first, v_second):
+            assert (
+                embed(
+                    conn,
+                    version,
+                    lance_dir=lance_dir,
+                    embedder=embedder,
+                    settings=settings,
+                )
+                > 0
+            )
+
+        class _InvertingCrossEncoder:
+            def __init__(self, settings: object) -> None:
+                pass
+
+            def rerank(self, query: str, documents: list[str]) -> list[float]:
+                # Prefer whichever document mentions 'second' -- the opposite of
+                # the dense-leg/RRF order established above.
+                return [1.0 if "second" in doc else 0.0 for doc in documents]
+
+        monkeypatch.setattr(
+            "lode.retrieval.FastEmbedCrossEncoder", _InvertingCrossEncoder
+        )
+
+        # Lexically disjoint from both bodies: no passages_fts rows exist anyway
+        # (versions.save bypasses the LexicalCacheBackend), so only the dense leg
+        # — and then rerank — determines the order.
+        context = cli._retrieve(
+            conn,
+            "unrelated wording entirely",
+            lance_dir=lance_dir,
+            embedder=embedder,
+            settings=settings,
+        )
+    finally:
+        conn.close()
+
+    assert [item.target_version for item in context] == [v_second, v_first]
+
+
+def test_retrieve_respects_rerank_disabled_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Settings.rerank_enabled=False fully bypasses the rerank stage (lode-vtf).
+
+    Mirrors ``lode.retrieval.rerank``'s own "fully bypassed" contract, but proves
+    it holds through the live ``_retrieve`` path: the cross-encoder class is
+    stubbed to explode if constructed, and the dense-leg order established by
+    ``_TwoDirEmbedder`` (first ahead of second) survives unchanged.
+    """
+
+    class _ExplodingCrossEncoder:
+        def __init__(self, settings: object) -> None:
+            raise AssertionError(
+                "cross-encoder must not be constructed when rerank_enabled=False"
+            )
+
+    monkeypatch.setattr("lode.retrieval.FastEmbedCrossEncoder", _ExplodingCrossEncoder)
+
+    settings = load_settings(embedding_vector_dim=2, rerank_enabled=False)
+    db_path = tmp_path / "lode.db"
+    lance_dir = config.lance_dir(db_path)
+    conn = init_db(db_path)
+    try:
+        v_first = save(
+            conn, "n-first", "first passage body", settings=settings
+        ).version_id
+        v_second = save(
+            conn, "n-second", "second passage body", settings=settings
+        ).version_id
+
+        embedder = _TwoDirEmbedder(settings)
+        for version in (v_first, v_second):
+            assert (
+                embed(
+                    conn,
+                    version,
+                    lance_dir=lance_dir,
+                    embedder=embedder,
+                    settings=settings,
+                )
+                > 0
+            )
+
+        context = cli._retrieve(
+            conn,
+            "unrelated wording entirely",
+            lance_dir=lance_dir,
+            embedder=embedder,
+            settings=settings,
+        )
+    finally:
+        conn.close()
+
+    assert [item.target_version for item in context] == [v_first, v_second]
+
+
+def test_retrieve_wires_graph_expand_and_includes_linked_note(
+    tmp_path: Path,
+) -> None:
+    """cli._retrieve calls graph_expand() after expand_parents (lode-vtf).
+
+    note-a is the only note directly retrievable (dense leg); note-b is reachable
+    only via an AI-inferred edge from note-a and is deliberately never indexed
+    into LanceDB, so the only way its passage can reach the Q&A context is
+    through graph_expand's edge traversal — proving the live ``_retrieve`` path
+    wires it in, not just ``lode.retrieval``'s own unit tests. rerank is disabled
+    here to keep this test focused on graph_expand (rerank's own wiring is
+    covered by the dedicated rerank tests above) and offline (no model load).
+    """
+    settings = load_settings(embedding_vector_dim=2, rerank_enabled=False)
+    db_path = tmp_path / "lode.db"
+    lance_dir = config.lance_dir(db_path)
+    conn = init_db(db_path)
+    try:
+        v_a = save(conn, "note-a", "seed note body", settings=settings).version_id
+        v_b = save(conn, "note-b", "linked note body", settings=settings).version_id
+
+        embedder = _OneDirEmbedder(settings)
+        # Only note-a is indexed into the dense store; note-b's passage exists
+        # only in SQLite (never embedded), so it can never surface as a direct
+        # hit -- graph_expand is the only path it can reach the context through.
+        assert (
+            embed(conn, v_a, lance_dir=lance_dir, embedder=embedder, settings=settings)
+            > 0
+        )
+        conn.execute(
+            "INSERT INTO passages "
+            "(passage_id, target_version, ord, char_range, text, parent_block) "
+            "VALUES ('p-b', ?, 0, '0:16', 'linked note body', 'linked note body')",
+            (v_b,),
+        )
+
+        note_a_id = conn.execute(
+            "SELECT note_id FROM versions WHERE version_id = ?", (v_a,)
+        ).fetchone()[0]
+        note_b_id = conn.execute(
+            "SELECT note_id FROM versions WHERE version_id = ?", (v_b,)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, status) "
+            "VALUES (?, ?, 'ai', 'fresh')",
+            (note_a_id, note_b_id),
+        )
+        conn.commit()
+
+        context = cli._retrieve(
+            conn,
+            "unrelated wording entirely",
+            lance_dir=lance_dir,
+            embedder=embedder,
+            settings=settings,
+        )
+    finally:
+        conn.close()
+
+    target_versions = {item.target_version for item in context}
+    assert v_a in target_versions
+    assert v_b in target_versions  # only reachable via graph_expand
+
+
 def test_ask_requires_a_question() -> None:
     result = runner.invoke(app, ["ask"])
     assert result.exit_code != 0  # missing required argument
