@@ -327,7 +327,7 @@ def _retrieve(
     vector = vector_search(store, conn, query_vector, k=settings.retrieval_top_k)
 
     fused = reciprocal_rank_fusion(lexical, vector, k=settings.rrf_k)
-    top = rerank(conn, question, fused, settings=settings)
+    top = rerank(conn, question, fused[: settings.retrieval_top_k], settings=settings)
     expanded = expand_parents(conn, top)
     graphed = graph_expand(conn, expanded, settings=settings)
     return trust_rank(conn, graphed).context
