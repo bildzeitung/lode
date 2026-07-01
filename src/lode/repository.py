@@ -26,7 +26,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
-from lode import jobs, versions
+from lode import jobs, staleness, versions
 from lode.config import Settings
 from lode.hashing import NO_PARENT
 from lode.versions import SaveResult
@@ -128,6 +128,13 @@ class Repository:
     the version. A deduped save writes no row and enqueues nothing. Direct callers
     (e.g. the CLI) must go through :meth:`save`, never call
     :func:`lode.jobs.enqueue_derive_jobs` separately.
+
+    **Re-anchor ownership (lode-atv):** an ``update`` save also re-anchors the
+    prior head's AI annotations/edges against the new body, in the same ``with
+    conn:`` transaction — :func:`~lode.staleness.reanchor_annotations` and
+    :func:`~lode.staleness.reanchor_edges`. This only runs for ``op == "update"``
+    (a ``create`` has no prior AI-derived layer to re-anchor yet) and only on a
+    non-dedup save (a deduped save changed no body, so nothing needs reclassifying).
     """
 
     def __init__(
@@ -156,6 +163,11 @@ class Repository:
         After a successful commit, the cache backend is driven:
         - non-dedup save → :meth:`CacheBackend.index`;
         - cache is not touched on a dedup.
+
+        An ``update`` (non-dedup) save also re-anchors ``note_id``'s AI
+        annotations/edges against the new body in the same transaction
+        (lode-atv) — ``create`` has no prior AI-derived layer yet, and a dedup
+        changed no body, so both are skipped.
         """
         settings = settings or Settings()
         with self.conn:
@@ -164,6 +176,13 @@ class Repository:
             )
             if not result.deduped:
                 jobs.enqueue_derive_jobs(self.conn, result.version_id)
+                if result.op == "update":
+                    staleness.reanchor_annotations(
+                        self.conn, note_id, result.version_id, body
+                    )
+                    staleness.reanchor_edges(
+                        self.conn, note_id, result.version_id, body
+                    )
         # Cache is driven AFTER the txn commits so a cache failure never rolls
         # back the irreplaceable write (cache is regenerable, the source rows are not).
         if not result.deduped:

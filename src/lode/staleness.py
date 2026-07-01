@@ -83,8 +83,13 @@ def reanchor_annotations(
 
     Reads every ``source='ai'`` annotation targeting ``note_id``, applies
     re-anchor classification against ``new_body``, and writes the new ``status``
-    (and ``source_version`` when the row is fresh) back in a single transaction.
-    ``source='user'`` annotations are never touched.
+    (and ``source_version`` when the row is fresh) back. ``source='user'``
+    annotations are never touched.
+
+    Does **not** commit — the caller owns the transaction boundary, so this can
+    be composed into a larger atomic write (e.g. :meth:`lode.repository.
+    Repository.save`, which runs this inside its own ``with conn:``). A caller
+    invoking this standalone is responsible for committing afterward.
 
     :param conn: Open SQLite connection.
     :param note_id: The note whose AI annotations should be re-anchored.
@@ -103,21 +108,20 @@ def reanchor_annotations(
     if not rows:
         return counts
 
-    with conn:
-        for row_id, payload_json, quoted_text in rows:
-            anchor_value = str(json.loads(payload_json))
-            new_status = _classify(anchor_value, quoted_text, new_body)
-            if new_status == "fresh":
-                conn.execute(
-                    "UPDATE annotations SET status = ?, source_version = ? WHERE id = ?",
-                    (new_status, new_version_id, row_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE annotations SET status = ? WHERE id = ?",
-                    (new_status, row_id),
-                )
-            counts[new_status] += 1
+    for row_id, payload_json, quoted_text in rows:
+        anchor_value = str(json.loads(payload_json))
+        new_status = _classify(anchor_value, quoted_text, new_body)
+        if new_status == "fresh":
+            conn.execute(
+                "UPDATE annotations SET status = ?, source_version = ? WHERE id = ?",
+                (new_status, new_version_id, row_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE annotations SET status = ? WHERE id = ?",
+                (new_status, row_id),
+            )
+        counts[new_status] += 1
 
     log.debug(
         "reanchor_annotations: note=%s new_ver=%s fresh=%d stale=%d orphaned=%d",
@@ -140,8 +144,13 @@ def reanchor_edges(
 
     Reads every ``source='ai'`` edge where ``from_id = note_id``, applies
     re-anchor classification against ``new_body`` using ``to_id`` as the anchor
-    value, and writes the new ``status`` (and ``source_version`` when fresh) back
-    in a single transaction.  ``source='user'`` edges are never touched.
+    value, and writes the new ``status`` (and ``source_version`` when fresh)
+    back. ``source='user'`` edges are never touched.
+
+    Does **not** commit — the caller owns the transaction boundary, so this can
+    be composed into a larger atomic write (e.g. :meth:`lode.repository.
+    Repository.save`, which runs this inside its own ``with conn:``). A caller
+    invoking this standalone is responsible for committing afterward.
 
     :param conn: Open SQLite connection.
     :param note_id: The note whose AI edges should be re-anchored.
@@ -159,20 +168,19 @@ def reanchor_edges(
     if not rows:
         return counts
 
-    with conn:
-        for row_id, to_id, quoted_text in rows:
-            new_status = _classify(to_id, quoted_text, new_body)
-            if new_status == "fresh":
-                conn.execute(
-                    "UPDATE edges SET status = ?, source_version = ? WHERE id = ?",
-                    (new_status, new_version_id, row_id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE edges SET status = ? WHERE id = ?",
-                    (new_status, row_id),
-                )
-            counts[new_status] += 1
+    for row_id, to_id, quoted_text in rows:
+        new_status = _classify(to_id, quoted_text, new_body)
+        if new_status == "fresh":
+            conn.execute(
+                "UPDATE edges SET status = ?, source_version = ? WHERE id = ?",
+                (new_status, new_version_id, row_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE edges SET status = ? WHERE id = ?",
+                (new_status, row_id),
+            )
+        counts[new_status] += 1
 
     log.debug(
         "reanchor_edges: note=%s new_ver=%s fresh=%d stale=%d orphaned=%d",

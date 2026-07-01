@@ -12,6 +12,7 @@ acceptance, made executable. A second group asserts the seam actually fires
 (index on create/update/recover, skipped on dedup, evict on delete).
 """
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -392,3 +393,211 @@ def test_save_version_and_enqueue_are_atomic(tmp_path, monkeypatch):
         assert n_jobs == 0, "no jobs should exist after a rolled-back save"
     finally:
         conn.close()
+
+
+# --- re-anchor wiring on the real update path (lode-atv) -----------------------
+#
+# lode-npx.3 built lode.staleness (reanchor_annotations/reanchor_edges) and unit-
+# tested it directly, but nothing in src/ ever called it — a real note update via
+# Repository.save never re-anchored anything. These tests exercise the wiring
+# through the PUBLIC save path (not staleness.py directly), proving the ticket's
+# literal acceptance criteria happens in the live system: on update, an unchanged
+# quote stays fresh, a changed quote goes stale, a missing quote is orphaned.
+
+
+def _insert_ai_annotation(
+    conn,
+    *,
+    target: str,
+    source_version: str,
+    payload_value: str = "python",
+    quoted_text: str | None = None,
+    status: str = "fresh",
+) -> int:
+    """Insert one source='ai' annotation row directly (bypassing enrichment)."""
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status, quoted_text) "
+            "VALUES (?, ?, 'tag', ?, 'ai', ?, ?)",
+            (target, source_version, json.dumps(payload_value), status, quoted_text),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def _insert_ai_edge(
+    conn,
+    *,
+    from_id: str,
+    to_id: str,
+    source_version: str,
+    quoted_text: str | None = None,
+    status: str = "fresh",
+) -> int:
+    """Insert one source='ai' edge row directly (bypassing enrichment)."""
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO edges "
+            "(from_id, to_id, source, reason, confidence, source_version, "
+            "status, quoted_text) "
+            "VALUES (?, ?, 'ai', 'test reason', 0.8, ?, ?, ?)",
+            (from_id, to_id, source_version, status, quoted_text),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+def _annotation_status(conn, row_id: int) -> tuple[str, str]:
+    row = conn.execute(
+        "SELECT status, source_version FROM annotations WHERE id = ?", (row_id,)
+    ).fetchone()
+    return (row[0], row[1])
+
+
+def _edge_status(conn, row_id: int) -> tuple[str, str]:
+    row = conn.execute(
+        "SELECT status, source_version FROM edges WHERE id = ?", (row_id,)
+    ).fetchone()
+    return (row[0], row[1])
+
+
+def test_save_update_reanchors_annotations_fresh_stale_orphaned(conn) -> None:
+    """Repository.save on update re-anchors AI annotations per the documented rules.
+
+    Three annotations anchored at the root version: one whose quote survives
+    verbatim in the new body (fresh, source_version advances), one whose quote
+    is gone but the underlying concept is still mentioned (stale, source_version
+    unchanged), and one whose subject is gone entirely (orphaned).
+    """
+    repo = Repository(conn)
+    root = repo.save(
+        "note-1", "python auth tutorial and rust programming notes"
+    ).version_id
+
+    fresh_id = _insert_ai_annotation(
+        conn,
+        target="note-1",
+        source_version=root,
+        payload_value="python",
+        quoted_text="python auth tutorial",
+    )
+    stale_id = _insert_ai_annotation(
+        conn,
+        target="note-1",
+        source_version=root,
+        payload_value="rust",
+        quoted_text="rust programming notes",
+    )
+    orphaned_id = _insert_ai_annotation(
+        conn,
+        target="note-1",
+        source_version=root,
+        payload_value="golang",
+        quoted_text="golang concurrency patterns",
+    )
+
+    result = repo.save(
+        "note-1",
+        # "python auth tutorial" survives verbatim; "rust programming notes" is
+        # gone but "rust" is still mentioned; "golang" is gone entirely.
+        "python auth tutorial, now covering rust and some new java notes",
+        parent=root,
+    )
+    assert result.op == "update"
+
+    assert _annotation_status(conn, fresh_id) == ("fresh", result.version_id)
+    assert _annotation_status(conn, stale_id) == ("stale", root)
+    assert _annotation_status(conn, orphaned_id) == ("orphaned", root)
+
+
+def test_save_update_reanchors_edges_fresh_stale_orphaned(conn) -> None:
+    """Repository.save on update re-anchors AI edges per the same rules."""
+    repo = Repository(conn)
+    root = repo.save("note-1", "see jwt-topic for the full auth guide").version_id
+
+    fresh_id = _insert_ai_edge(
+        conn,
+        from_id="note-1",
+        to_id="jwt-topic",
+        source_version=root,
+        quoted_text="see jwt-topic for the full auth guide",
+    )
+    stale_id = _insert_ai_edge(
+        conn,
+        from_id="note-1",
+        to_id="oauth-topic",
+        source_version=root,
+        quoted_text="oauth-topic is discussed at length here",
+    )
+    orphaned_id = _insert_ai_edge(
+        conn,
+        from_id="note-1",
+        to_id="saml-topic",
+        source_version=root,
+        quoted_text="also mentions saml-topic briefly",
+    )
+
+    result = repo.save(
+        "note-1",
+        "see jwt-topic for the full auth guide; oauth-topic comes up too",
+        parent=root,
+    )
+    assert result.op == "update"
+
+    assert _edge_status(conn, fresh_id) == ("fresh", result.version_id)
+    assert _edge_status(conn, stale_id) == ("stale", root)
+    assert _edge_status(conn, orphaned_id) == ("orphaned", root)
+
+
+def test_save_dedup_does_not_reanchor(conn) -> None:
+    """A no-op dedup save (identical body) leaves AI annotations untouched."""
+    repo = Repository(conn)
+    root = repo.save("note-1", "same body").version_id
+    ann_id = _insert_ai_annotation(
+        conn,
+        target="note-1",
+        source_version=root,
+        payload_value="whatever",
+        quoted_text="same body",
+    )
+
+    result = repo.save("note-1", "same body", parent=root)
+    assert result.deduped
+
+    # Untouched: still fresh at the original source_version (root), even though
+    # its quote is verbatim in the (identical) body — the dedup path never runs
+    # re-anchor at all.
+    assert _annotation_status(conn, ann_id) == ("fresh", root)
+
+
+def test_save_create_does_not_error_with_no_prior_annotations(conn) -> None:
+    """A create save has no prior AI-derived layer; re-anchor is simply skipped."""
+    repo = Repository(conn)
+    result = repo.save("note-1", "brand new note")
+    assert result.op == "create"
+    # No annotations/edges exist yet, and save must not error attempting to
+    # re-anchor a nonexistent layer.
+    (n,) = conn.execute("SELECT COUNT(*) FROM annotations").fetchone()
+    assert n == 0
+
+
+def test_save_update_does_not_touch_user_annotations(conn) -> None:
+    """source='user' annotations are never re-anchored, even through save."""
+    repo = Repository(conn)
+    root = repo.save("note-1", "original body").version_id
+    user_id = _insert_ai_annotation(
+        conn,
+        target="note-1",
+        source_version=root,
+        payload_value="note",
+        quoted_text="totally different quote",
+        status="fresh",
+    )
+    # Flip it to source='user' after insert (helper only writes 'ai').
+    with conn:
+        conn.execute("UPDATE annotations SET source = 'user' WHERE id = ?", (user_id,))
+
+    repo.save("note-1", "completely rewritten content", parent=root)
+
+    # Untouched: still fresh at the original source_version despite the quote
+    # being long gone from the new body.
+    assert _annotation_status(conn, user_id) == ("fresh", root)
