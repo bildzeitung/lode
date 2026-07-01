@@ -349,8 +349,15 @@ def _batch_collect_enrich(
     have been individually ``done``, some may be ``failed`` / ``dead``).
 
     Batches still in progress are left untouched; they will be checked again on
-    the next drain tick. This is the "resume" half of the durable-handle pattern
-    (lode-i05.5 adds explicit crash-recovery hardening on top).
+    the next drain tick. This IS the resume-on-restart mechanism (lode-i05.5):
+    every ``drain()`` call — including the one at worker startup, before
+    :mod:`lode.cli`'s ``work`` command enters its loop — starts by re-polling
+    every persisted ``batch_handle`` found in the DB, regardless of which
+    process submitted it or whether that process is still running. No
+    in-memory state is required to resume: the job row's ``running`` status
+    plus its ``batch_handle`` is the only durable record needed, and this step
+    never calls ``batches.create`` — only ``retrieve``/``results`` — so a
+    restart can never resubmit.
 
     ``_client`` is injectable for tests.
     """

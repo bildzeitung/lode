@@ -620,6 +620,29 @@ def test_enrich_gap_skips_live_job(conn: sqlite3.Connection) -> None:
     assert _enrich_gap_step(conn) == 0
 
 
+def test_enrich_gap_skips_in_flight_batch_job(conn: sqlite3.Connection) -> None:
+    """A running enrich job WITH a batch_handle is not a gap (lode-i05.5).
+
+    This is the double-spend guard the design calls out explicitly: once a
+    Batch is submitted the member job is 'running' with batch_handle set (not
+    'pending'), so the enrich-gap scan's "not yet enriched" query must treat
+    it as live and skip it -- re-enqueueing here would mean a second Haiku
+    call for a note already covered by money-in-flight.
+    """
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, batch_handle) "
+            "VALUES ('enrich', 'ver-1', 'running', 'batch-abc123')"
+        )
+    assert _enrich_gap_step(conn) == 0
+    # Still exactly the one in-flight job -- no duplicate pending row.
+    rows = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE type = 'enrich'"
+    ).fetchall()
+    assert rows == [("running", "batch-abc123")]
+
+
 def test_enrich_gap_reenqueues_dead_job(conn: sqlite3.Connection) -> None:
     """A dead-lettered enrich job is treated as a gap and re-enqueued."""
     _insert_note(conn)
