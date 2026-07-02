@@ -29,6 +29,7 @@ from typing import Protocol, runtime_checkable
 from lode import jobs, staleness, versions
 from lode.config import Settings
 from lode.hashing import NO_PARENT
+from lode.redact import redact_before_index
 from lode.versions import SaveResult
 
 
@@ -181,6 +182,20 @@ class Repository:
         annotations/edges against the new body in the same transaction
         (lode-atv) — ``create`` has no prior AI-derived layer yet, and a dedup
         changed no body, so both are skipped.
+
+        **redact-before-index (lode-n60):** the body handed to
+        :meth:`CacheBackend.index` is passed through
+        :func:`lode.redact.redact_before_index` first, so every cache engine
+        fanned out to by :class:`CompositeCache` (today, the synchronous FTS5
+        leg — :class:`~lode.lexical.LexicalCacheBackend`) sees the same
+        secret-scrubbed text instead of the raw body. The *irreplaceable*
+        write above (``versions._save_core``) and the re-anchor calls still
+        use the raw ``body`` — ``versions.body`` keeps the durable secret
+        until ``purge`` (``docs/externals.md`` "Two redactions, aimed at the
+        right legs"); only the copy handed to the cache is redacted. The
+        async vector leg (:func:`lode.embedding.embed`) is not reached from
+        here at all — it independently redacts what it reads (see its
+        docstring) since it runs off the enqueued ``target_version`` alone.
         """
         settings = settings or Settings()
         with self.conn:
@@ -204,7 +219,9 @@ class Repository:
         # Cache is driven AFTER the txn commits so a cache failure never rolls
         # back the irreplaceable write (cache is regenerable, the source rows are not).
         if not result.deduped:
-            self.cache.index(note_id, result.version_id, body)
+            self.cache.index(
+                note_id, result.version_id, redact_before_index(body, settings)
+            )
         return result
 
     def delete(

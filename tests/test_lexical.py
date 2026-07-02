@@ -187,3 +187,62 @@ def test_composes_with_the_vector_leg_on_one_seam(conn, tmp_path: Path) -> None:
     repo.save("note-1", "lexical and vector legs share the seam")
 
     assert LexicalIndex(conn).search("lexical", k=5), "lexical leg indexed on save"
+
+
+def test_composed_save_redacts_seeded_secret_from_both_legs(
+    conn, tmp_path: Path
+) -> None:
+    """lode-n60: a pasted secret must not reach EITHER indexing leg.
+
+    Regression for the redact-before-index wiring gap (lode-n60): before this
+    fix, ``redact_before_index`` had zero callers, so ``Repository.save`` fed
+    the raw body straight to :class:`LexicalCacheBackend` (keyword-findable)
+    and :func:`~lode.embedding.embed` re-read the raw body straight off
+    ``versions.body`` (embedder-visible) — a pasted secret was locally
+    retrievable via either leg. Asserts: FTS returns no hit for the raw
+    secret, the embedder is never shown the raw secret text, and the
+    irreplaceable ``versions.body`` copy is untouched (only ``purge`` clears
+    that durable copy — ``docs/externals.md`` "Two redactions").
+    """
+
+    class _RecordingEmbedder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def embed_passages(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(list(texts))
+            return [[0.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    from lode.config import load_settings
+
+    settings = load_settings(embedding_vector_dim=4)
+    embedder = _RecordingEmbedder()
+    repo = Repository(
+        conn,
+        CompositeCache(
+            [
+                LexicalCacheBackend(conn, settings=settings),
+                EmbeddingCacheBackend(
+                    conn,
+                    lance_dir=tmp_path / "vectors",
+                    embedder=embedder,
+                    settings=settings,
+                ),
+            ]
+        ),
+    )
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"key: {secret} done"
+
+    result = repo.save("note-1", body, settings=settings)
+
+    # Keyword leg: the raw secret returns no FTS hits.
+    assert LexicalIndex(conn).search(secret, k=5) == []
+    # Vector leg: the embedder is never shown the raw secret text.
+    assert not any(secret in text for texts in embedder.calls for text in texts)
+    # The irreplaceable store still carries the raw secret — only `purge`
+    # clears that durable copy.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM versions WHERE version_id = ?", (result.version_id,)
+    ).fetchone()
+    assert secret in stored_body

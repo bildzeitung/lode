@@ -263,6 +263,49 @@ def test_repository_dedup_save_does_not_re_embed(tmp_path: Path) -> None:
         conn.close()
 
 
+# --- redact-before-index (lode-n60): the vector leg is async, driven off ------
+# target_version alone (no body travels through the enqueue), so embed() must
+# independently redact what it reads from versions.body rather than relying on
+# a caller having already redacted it.
+
+
+def test_embed_redacts_seeded_secret_before_chunk_and_embed(tmp_path: Path) -> None:
+    """A pasted secret is stripped before it reaches the embedder or LanceDB.
+
+    Regression for lode-n60: before this fix, embed() read versions.body raw
+    and chunked/embedded it unredacted — a pasted secret was locally
+    retrievable via vector search. Fixed by applying redact_before_index()
+    right after the versions.body read, before chunk().
+    """
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+        body = f"# Notes\ncreds: {secret} keep private\n\nOther prose stays intact.\n"
+        version = _save_note(conn, body=body)
+        lance_dir = tmp_path / "vectors"
+        stub = _StubEmbedder(DIM)
+
+        embed(conn, version, lance_dir=lance_dir, embedder=stub, settings=_settings())
+
+        # The embedder never sees the raw secret text.
+        assert not any(secret in text for texts in stub.calls for text in texts)
+        # Nor does the passages table the vector rows (and the lexical leg's
+        # context-expansion) are keyed off.
+        rows = conn.execute(
+            "SELECT text FROM passages WHERE target_version = ?", (version,)
+        ).fetchall()
+        assert rows, "sanity: the body chunked to at least one passage"
+        assert not any(secret in text for (text,) in rows)
+        # versions.body (the irreplaceable store) still carries the raw secret
+        # — only `purge` clears that durable copy (docs/externals.md).
+        (stored_body,) = conn.execute(
+            "SELECT body FROM versions WHERE version_id = ?", (version,)
+        ).fetchone()
+        assert secret in stored_body
+    finally:
+        conn.close()
+
+
 def test_embedding_backend_evict_drops_the_versions_vectors(tmp_path: Path) -> None:
     conn = init_db(tmp_path / "lode.db")
     try:
