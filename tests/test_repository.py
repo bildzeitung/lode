@@ -198,6 +198,39 @@ def test_delete_evicts_the_note(conn):
     assert cache.calls == [CacheCall("evict", "note-1", result.version_id)]
 
 
+# --- redact-before-index (lode-n60): the cache seam sees redacted text --------
+
+
+def test_save_hands_the_cache_seam_a_redacted_body(conn):
+    """Regression for lode-n60: redact_before_index() had zero callers.
+
+    A pasted secret matching the seed pattern set must be stripped from the
+    text handed to CacheBackend.index — every engine fanned out to by
+    CompositeCache (today, LexicalCacheBackend) sees redacted text, never the
+    raw body. versions.body (the irreplaceable store) is untouched — only
+    purge clears that durable copy (docs/externals.md "Two redactions").
+    """
+    from lode.redact import REDACTION_MARKER
+
+    cache = FakeCache()
+    repo = Repository(conn, cache)
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"key: {secret} done"
+
+    result = repo.save("note-1", body)
+
+    assert len(cache.calls) == 1
+    call = cache.calls[0]
+    assert call.op == "index"
+    assert secret not in call.body
+    assert REDACTION_MARKER in call.body
+    # The irreplaceable store still carries the raw secret.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM versions WHERE version_id = ?", (result.version_id,)
+    ).fetchone()
+    assert secret in stored_body
+
+
 def test_recover_reindexes_the_recovered_head(conn):
     cache = FakeCache()
     repo = Repository(conn, cache)

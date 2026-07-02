@@ -37,6 +37,7 @@ from typing import Protocol
 
 from lode.chunking import Passage, chunk
 from lode.config import Settings
+from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
 
 #: Task prefixes nomic-embed-text-v1.5 expects: ``search_document:`` on the
@@ -167,9 +168,18 @@ def embed(
     Idempotent: running twice on the same head version converges to the same
     passages and vectors. Returns the number of passages embedded (0 for a body
     that chunks to nothing). Raises ``KeyError`` if ``target_version`` is unknown.
+
+    **redact-before-index (lode-n60):** the body read from ``versions`` is
+    redacted (:func:`lode.redact.redact_before_index`) before it is chunked —
+    the vector leg is driven by this async job off ``target_version`` alone
+    (no body travels through the enqueue), so it independently strips secrets
+    from what it reads rather than relying on a caller to have redacted first.
+    ``versions.body`` itself is left untouched (only ``purge`` clears that
+    durable copy); only the text handed to :func:`chunk` here is redacted, so
+    LanceDB and the ``passages`` rows this writes never carry the secret.
     """
     settings = settings or Settings()
-    body = _version_body(conn, target_version)
+    body = redact_before_index(_version_body(conn, target_version), settings)
     passages = chunk(body, target_version, settings=settings)
     _persist_passages(conn, passages)
 
