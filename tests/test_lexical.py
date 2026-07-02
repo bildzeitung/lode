@@ -246,3 +246,32 @@ def test_composed_save_redacts_seeded_secret_from_both_legs(
         "SELECT body FROM versions WHERE version_id = ?", (result.version_id,)
     ).fetchone()
     assert secret in stored_body
+
+
+def test_recover_redacts_seeded_secret_from_the_lexical_leg(conn) -> None:
+    """lode-ibv: recovering a secret-bearing version must not resurface it via FTS.
+
+    Regression for the recover-side redact-before-index wiring gap (lode-ibv):
+    ``Repository.recover`` read the target version's raw body via ``_body``
+    and handed it straight to ``CacheBackend.index`` with no redaction — so
+    recovering a version whose body matched a seed pattern pushed the raw
+    secret back into the FTS/lexical leg, keyword-findable again post-recover.
+    Steps to reproduce from the ticket: save a secret-bearing version, delete
+    it (tombstone), then recover it — the raw secret must stay out of FTS.
+    """
+    repo = Repository(conn, LexicalCacheBackend(conn))
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"key: {secret} done"
+
+    root = repo.save("note-1", body).version_id
+    repo.delete("note-1", parent=root)
+    repo.recover("note-1", target_version=root)
+
+    # Keyword leg: the raw secret returns no FTS hits after recover.
+    assert LexicalIndex(conn).search(secret, k=5) == []
+    # The irreplaceable store still carries the raw secret on the recovered
+    # version — only `purge` clears that durable copy.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM versions WHERE version_id = ?", (root,)
+    ).fetchone()
+    assert secret in stored_body

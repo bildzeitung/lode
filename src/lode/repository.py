@@ -116,7 +116,8 @@ class Repository:
     - a non-dedup save → :meth:`CacheBackend.index` (a deduped save changed no
       body, so the cache is already current and is left untouched);
     - a delete → :meth:`CacheBackend.evict` (the head is now a tombstone);
-    - a recover → :meth:`CacheBackend.index` of the repointed head's body.
+    - a recover → :meth:`CacheBackend.index` of the repointed head's body
+      (redacted first, same as save — lode-ibv).
 
     The cache is touched only after the irreplaceable write has committed, so a
     cache-engine failure can never corrupt the owned data — the cache is
@@ -236,10 +237,29 @@ class Repository:
         self.cache.evict(note_id, result.version_id)
         return result
 
-    def recover(self, note_id: str, *, target_version: str) -> SaveResult:
-        """Recover ``note_id`` (see :func:`lode.versions.recover`), then re-index it."""
+    def recover(
+        self,
+        note_id: str,
+        *,
+        target_version: str,
+        settings: Settings | None = None,
+    ) -> SaveResult:
+        """Recover ``note_id`` (see :func:`lode.versions.recover`), then re-index it.
+
+        **redact-before-index (lode-ibv):** same wiring as :meth:`save`
+        (lode-n60) — the recovered head's body is read raw via :meth:`_body`
+        (the irreplaceable store), but the copy handed to
+        :meth:`CacheBackend.index` is passed through
+        :func:`lode.redact.redact_before_index` first, so recovering a
+        secret-bearing version does not make it keyword-findable again via
+        the FTS/lexical leg. ``versions.body`` itself is untouched — only
+        ``purge`` clears that durable copy (``docs/externals.md`` "Two
+        redactions, aimed at the right legs").
+        """
+        settings = settings or Settings()
         result = versions.recover(self.conn, note_id, target_version=target_version)
-        self.cache.index(note_id, result.version_id, self._body(result.version_id))
+        body = redact_before_index(self._body(result.version_id), settings)
+        self.cache.index(note_id, result.version_id, body)
         return result
 
     def purge(self, note_id: str) -> versions.PurgeResult:
