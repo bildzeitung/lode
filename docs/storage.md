@@ -385,6 +385,28 @@ pending -> running -> done                    (success)
 worker can distinguish "retry me" from "give up", and the UI surfaces `dead` rows
 as dead-letters (not `failed` rows).
 
+### Crash reclaim: a job stuck in `running` — pinned (lode-aor)
+
+Neither the claim query (`WHERE status = 'pending'`) nor either reconciliation
+gap query (`WHERE ... status != 'dead'`) will ever pick a `'running'` row back
+up — so a worker (or the CLI's inline immediate-enrich fast path, lode-npx.2)
+that crashes or is killed between claiming a job and completing it leaves that
+row **stuck forever** with no self-healing net, unless something explicitly
+watches for it.
+
+That something is `claimed_at` (set only by the claim `UPDATE`, ISO-8601 UTC)
+plus a dedicated step, `lode.worker._reclaim_stale_running`, run at the top of
+every `drain()` pass (before `_reset_retryable`): any job still `'running'`
+with `claimed_at` older than `settings.stale_running_timeout_s` (default 15
+minutes, `runtime`) is put through the *same* attempts/backoff/dead-letter
+accounting `run_one` uses for a transient handler failure — no parallel retry
+policy. Applies uniformly to `embed`, `enrich`, and `refresh`.
+
+**Batch-backed enrich jobs are excluded** (`batch_handle IS NOT NULL`) — their
+long-lived `'running'` status is intentional (the prior section's
+resume-on-restart contract, lode-i05.5); reclaiming one here would risk
+resubmitting a Batches API request still in flight.
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
@@ -460,7 +482,7 @@ edges        from, to, source(ai|user), reason, confidence,            # the kno
              source_version, status
 jobs         id, type(embed|enrich|refresh), target_version,           # async work queue
              prompt_ver?, status(pending|running|done|failed|dead),    #   durable, single-owner
-             attempts, last_error?, batch_handle?,                     #   lifecycle: pending->
+             attempts, last_error?, batch_handle?, claimed_at?,        #   lifecycle: pending->
              next_attempt_at, created                                  #   running->{done|failed->
                                                                        #   pending|dead}
 egress_log   id, ts, purpose(enrich|qa), model,                        # cloud-egress audit trail

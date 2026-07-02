@@ -66,6 +66,7 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 |---|---|---|---|
 | Reconciliation scan interval | runtime | periodic | How often the self-healing scan re-enqueues missing derived work. ([storage.md](storage.md#the-async-work-queue)) |
 | Retry backoff + max attempts | runtime | exp backoff, capped | Transient-failure retry before dead-lettering a job. |
+| Stale-running reclaim timeout | runtime | `900s` (15 min) | A job stuck in `status='running'` this long (no claim update, e.g. a worker crash) is reclaimed — same retry/dead-letter accounting as a handler failure. Excludes batch-backed enrich jobs. ([storage.md](storage.md#crash-reclaim-a-job-stuck-in-running--pinned-lode-aor)) |
 | Enrichment batch flush policy | runtime | size/time | When accumulated `enrich` jobs are submitted as a Claude Batch. |
 
 ## Externals (with connectors)

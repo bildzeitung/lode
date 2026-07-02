@@ -163,6 +163,15 @@ class Settings(BaseModel):
     retry_max_attempts: int = _knob(
         5, Kind.RUNTIME, "Max attempts before dead-lettering a job.", ge=1
     )
+    stale_running_timeout_s: int = _knob(
+        900,
+        Kind.RUNTIME,
+        "A job stuck in status='running' this long (no claim update) is "
+        "reclaimed as a crash -- same attempts/backoff/dead-letter accounting "
+        "as a transient handler failure. Excludes batch-backed enrich jobs "
+        "(batch_handle set), which own their own long-lived 'running' state.",
+        gt=0,
+    )
     retry_backoff_base_s: float = _knob(
         1.0, Kind.RUNTIME, "Base delay for exponential retry backoff.", gt=0.0
     )

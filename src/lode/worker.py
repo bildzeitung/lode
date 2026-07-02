@@ -56,11 +56,19 @@ belt-and-suspenders behind the single-owner advisory lock.
   picked up without a separate scheduler
 - max-attempts gate → ``status='dead'`` (terminal poison)
 
-**Crash recovery note**: if the worker crashes mid-run a job can be left in
-``status='running'``. Batch-submitted enrich jobs stay ``running`` until their
-batch ends (this is intentional — the batch_handle survives in the DB for
-lode-i05.5 restart-resume). Regular embed jobs left ``running`` by a crash are
-covered by the embed-gap reconciliation query if the embed result is also missing.
+**Crash recovery** (lode-aor): if the worker (or the CLI's inline
+immediate-enrich fast path) crashes mid-run, a job can be left in
+``status='running'`` forever — no claim query selects ``'running'`` rows, and
+reconcile's gap queries treat any non-``'dead'`` status as "not a gap", so
+nothing would otherwise pick it back up. :func:`_reclaim_stale_running` closes
+that gap: every :func:`drain` pass reclaims any job whose ``claimed_at`` is
+older than ``settings.stale_running_timeout_s``, running it through the same
+attempts/backoff/dead-letter accounting :func:`run_one` uses for a handler
+failure. Applies uniformly to ``embed``, ``enrich``, and ``refresh``.
+Batch-submitted enrich jobs (``batch_handle`` set) are excluded — they stay
+``running`` until their batch ends by design (the batch_handle survives in the
+DB for lode-i05.5 restart-resume), and reclaiming one here would risk
+resubmitting a request already in flight.
 """
 
 import logging
@@ -156,6 +164,82 @@ def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
     return cur.rowcount
 
 
+def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
+    """Reclaim jobs stuck in ``status='running'`` past the staleness timeout (lode-aor).
+
+    A worker (or the CLI's inline immediate-enrich fast path) that crashes or is
+    killed between claiming a job (:func:`_claim_one`'s ``UPDATE ... SET
+    status='running'``) and completing it (:func:`run_one`'s terminal ``UPDATE``)
+    leaves that row permanently stuck: ``_claim_one`` only ever selects
+    ``status='pending'``, and reconcile's gap queries treat any non-``'dead'``
+    status (including ``'running'``) as "not a gap" — so without this step
+    nothing would ever pick the row back up.
+
+    **Selection:** ``status='running' AND batch_handle IS NULL AND (claimed_at
+    IS NULL OR claimed_at <= now - settings.stale_running_timeout_s)``.
+    Batch-backed enrich jobs (``batch_handle`` set) are excluded — their
+    long-lived ``'running'`` status is intentional (lode-i05.5 owns their
+    resume-on-restart semantics via ``_batch_collect_enrich``; reclaiming one
+    here would abandon a Batches API request still in flight, or worse let it
+    be resubmitted). A ``NULL`` ``claimed_at`` (a ``'running'`` row that
+    predates this column, or one this migration never got a chance to stamp) is
+    treated as indefinitely stale — there's no way to know its true age, and
+    leaving it stuck forever is worse than reclaiming it early.
+
+    **Reclaim:** each selected row is put through exactly the same
+    attempts/backoff/dead-letter accounting :func:`run_one` uses for a
+    transient handler failure — ``attempts += 1``; at ``retry_max_attempts`` →
+    ``status='dead'``; otherwise → ``status='failed'`` with a backoff
+    ``next_attempt_at`` (picked up by :func:`_reset_retryable` once it's due,
+    same as any other retry). Reusing that machinery means a crash-reclaimed
+    job obeys the identical max-attempts gate as one that failed cleanly — no
+    parallel retry policy to keep in sync.
+
+    Applies uniformly to every job ``type`` (``embed``, ``enrich``, ``refresh``)
+    — the staleness signal is the same regardless of what kind of work was
+    interrupted.
+
+    Returns the count of jobs reclaimed.
+    """
+    cutoff = _iso(
+        datetime.now(UTC) - timedelta(seconds=settings.stale_running_timeout_s)
+    )
+    rows = conn.execute(
+        "SELECT id, attempts FROM jobs "
+        "WHERE status = 'running' AND batch_handle IS NULL "
+        "AND (claimed_at IS NULL OR claimed_at <= ?)",
+        (cutoff,),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    reclaimed = 0
+    with conn:
+        for job_id, attempts in rows:
+            new_attempts = attempts + 1
+            err = (
+                "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
+            )
+            if new_attempts >= settings.retry_max_attempts:
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
+                    "WHERE id = ? AND status = 'running'",
+                    (new_attempts, err, job_id),
+                )
+            else:
+                next_at = _backoff_next_attempt_at(new_attempts, settings)
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'failed', attempts = ?, "
+                    "last_error = ?, next_attempt_at = ? "
+                    "WHERE id = ? AND status = 'running'",
+                    (new_attempts, err, next_at, job_id),
+                )
+            reclaimed += cur.rowcount
+
+    return reclaimed
+
+
 def _claim_one(
     conn: sqlite3.Connection,
     types: tuple[str, ...],
@@ -201,8 +285,9 @@ def _claim_one(
     job_id = row[0]
     with conn:
         cur = conn.execute(
-            "UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'pending'",
-            (job_id,),
+            "UPDATE jobs SET status = 'running', claimed_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (now, job_id),
         )
     if cur.rowcount != 1:
         # Belt-and-suspenders: another claimer got it — shouldn't happen under
@@ -508,14 +593,16 @@ def drain(
     2. :func:`_batch_submit_enrich` — find pending ``enrich`` jobs and submit
        them to the Batches API (up to ``settings.enrichment_batch_flush_size``).
 
-    Then: calls :func:`_reset_retryable` once to pick up overdue retries
+    Then: calls :func:`_reclaim_stale_running` (lode-aor) to dead-letter/retry
+    any job left ``'running'`` past ``settings.stale_running_timeout_s`` by a
+    crash, :func:`_reset_retryable` to pick up overdue retries
     (``status='failed' AND next_attempt_at <= now``), and loops
     :func:`_claim_one` → :func:`run_one` until nothing is claimable (``embed``
     and any residual ``enrich`` jobs not claimed by the batch step).
 
     Returns the total number of jobs claimed and run by the **main loop**
-    (including failures and dead-letters). Batch pre-step activity is logged but
-    not included in the return count.
+    (including failures and dead-letters). Batch pre-step and reclaim activity
+    is logged but not included in the return count.
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -528,6 +615,10 @@ def drain(
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
     _batch_collect_enrich(conn, settings, _client=_batch_client)
     _batch_submit_enrich(conn, settings, _client=_batch_client)
+
+    reclaimed = _reclaim_stale_running(conn, settings)
+    if reclaimed:
+        log.warning("reclaimed %d stale 'running' job(s) (possible crash)", reclaimed)
 
     now = _now_iso()
     reset = _reset_retryable(conn, now)

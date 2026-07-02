@@ -41,6 +41,7 @@ from lode.worker import (
     _batch_submit_enrich,
     _claim_one,
     _now_iso,
+    _reclaim_stale_running,
     _reset_retryable,
     claim_and_run_one,
     drain,
@@ -81,7 +82,7 @@ def settings() -> Settings:
 def _job(conn: sqlite3.Connection, job_id: int) -> dict:
     """Fetch one job row as a dict."""
     row = conn.execute(
-        "SELECT id, type, status, attempts, last_error, next_attempt_at "
+        "SELECT id, type, status, attempts, last_error, next_attempt_at, claimed_at "
         "FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
@@ -93,6 +94,7 @@ def _job(conn: sqlite3.Connection, job_id: int) -> dict:
         "attempts": row[3],
         "last_error": row[4],
         "next_attempt_at": row[5],
+        "claimed_at": row[6],
     }
 
 
@@ -103,14 +105,24 @@ def _insert_job(
     status: str = "pending",
     attempts: int = 0,
     next_attempt_at: str | None = None,
+    claimed_at: str | None = None,
+    batch_handle: str | None = None,
 ) -> int:
     """Insert a job row directly; returns the new row id."""
     now = _now_iso()
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, attempts, next_attempt_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (job_type, target_version, status, attempts, next_attempt_at or now),
+            "INSERT INTO jobs (type, target_version, status, attempts, "
+            "next_attempt_at, claimed_at, batch_handle) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                job_type,
+                target_version,
+                status,
+                attempts,
+                next_attempt_at or now,
+                claimed_at,
+                batch_handle,
+            ),
         )
     return cur.lastrowid
 
@@ -161,6 +173,15 @@ def test_claim_flips_status_to_running(conn: sqlite3.Connection, db_path: Path) 
     job_id = _insert_job(conn, "embed", "ver-1")
     _claim_one(conn, ("embed",), _now_iso())
     assert _job(conn, job_id)["status"] == "running"
+
+
+def test_claim_sets_claimed_at(conn: sqlite3.Connection, db_path: Path) -> None:
+    """A claim stamps claimed_at (lode-aor) -- the signal _reclaim_stale_running uses."""
+    job_id = _insert_job(conn, "embed", "ver-1")
+    assert _job(conn, job_id)["claimed_at"] is None
+    now = _now_iso()
+    _claim_one(conn, ("embed",), now)
+    assert _job(conn, job_id)["claimed_at"] == now
 
 
 def test_claim_returns_none_when_no_pending_jobs(
@@ -465,6 +486,219 @@ def test_reset_does_not_touch_pending_or_dead(
     _reset_retryable(conn, _now_iso())
     assert _job(conn, pending_id)["status"] == "pending"
     assert _job(conn, dead_id)["status"] == "dead"
+
+
+# ---------------------------------------------------------------------------
+# _reclaim_stale_running — crash reclaim (lode-aor)
+# ---------------------------------------------------------------------------
+
+
+def test_reclaim_resets_stale_running_to_failed_with_backoff(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A 'running' job past the staleness timeout is reclaimed like a transient failure."""
+    job_id = _insert_job(
+        conn,
+        status="running",
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    row = _job(conn, job_id)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+    assert "reclaimed" in row["last_error"]
+    assert row["next_attempt_at"] > _now_iso()
+
+
+def test_reclaim_leaves_recently_claimed_running_alone(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A 'running' job claimed well within the timeout must not be touched."""
+    job_id = _insert_job(conn, status="running", claimed_at=_now_iso())
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 0
+    row = _job(conn, job_id)
+    assert row["status"] == "running"
+    assert row["attempts"] == 0
+
+
+def test_reclaim_dead_letters_at_max_attempts(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A stale 'running' job at max attempts is dead-lettered, not retried."""
+    job_id = _insert_job(
+        conn,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    row = _job(conn, job_id)
+    assert row["status"] == "dead"
+    assert row["attempts"] == settings.retry_max_attempts
+
+
+def test_reclaim_excludes_batch_backed_enrich_jobs(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A stale 'running' enrich job with a batch_handle is left alone (lode-i05.5 owns it)."""
+    job_id = _insert_job(
+        conn,
+        job_type="enrich",
+        status="running",
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+        batch_handle="batch-abc",
+    )
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 0
+    assert _job(conn, job_id)["status"] == "running"
+
+
+def test_reclaim_treats_null_claimed_at_as_stale(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A 'running' row with no claimed_at (pre-migration crash) is reclaimed, not left forever."""
+    job_id = _insert_job(conn, status="running", claimed_at=None)
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "failed"
+
+
+def test_reclaim_applies_to_every_job_type(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The reclaim step is not embed-specific -- enrich and refresh are covered too."""
+    stale = _past_iso(settings.stale_running_timeout_s + 60)
+    embed_id = _insert_job(conn, job_type="embed", status="running", claimed_at=stale)
+    enrich_id = _insert_job(
+        conn,
+        job_type="enrich",
+        target_version="ver-2",
+        status="running",
+        claimed_at=stale,
+    )
+    refresh_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version="ver-3",
+        status="running",
+        claimed_at=stale,
+    )
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 3
+    for job_id in (embed_id, enrich_id, refresh_id):
+        assert _job(conn, job_id)["status"] == "failed"
+
+
+def test_reclaim_does_not_touch_pending_done_or_dead(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Only 'running' rows are candidates -- other terminal/live statuses are untouched."""
+    stale = _past_iso(settings.stale_running_timeout_s + 60)
+    pending_id = _insert_job(conn, status="pending", claimed_at=stale)
+    done_id = _insert_job(conn, target_version="ver-2", status="done", claimed_at=stale)
+    dead_id = _insert_job(conn, target_version="ver-3", status="dead", claimed_at=stale)
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 0
+    assert _job(conn, pending_id)["status"] == "pending"
+    assert _job(conn, done_id)["status"] == "done"
+    assert _job(conn, dead_id)["status"] == "dead"
+
+
+def test_drain_reclaims_stale_running_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """drain() calls _reclaim_stale_running at the top of every pass.
+
+    The reclaimed job goes to 'failed' with a future backoff, so it is not
+    re-claimed within the same pass -- n reflects only jobs the main loop
+    actually claimed and ran.
+    """
+    stale_id = _insert_job(
+        conn,
+        status="running",
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    n = drain(conn, db_path, settings, _registry=_noop_registry())
+    assert n == 0  # nothing else was pending to claim/run this pass
+    row = _job(conn, stale_id)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 1
+
+
+def test_reclaim_then_reconcile_sees_dead_lettered_job_as_a_gap(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """End-to-end regression for lode-aor's exact bug report.
+
+    A worker crashes between claim and completion, leaving an embed job
+    'running' forever. Before this ticket: neither _claim_one (selects only
+    'pending') nor embed_gap's reconcile query (excludes anything != 'dead')
+    would ever notice -- the row was permanently invisible, requiring manual
+    DB surgery. Now: drain()'s _reclaim_stale_running step dead-letters the
+    stuck row (attempts already exhausted here), which makes it a genuine gap
+    -- so the next reconcile() pass re-enqueues fresh work for the head
+    version with no manual intervention.
+    """
+    from lode.reconcile import _embed_gap_step
+    from lode.reconcile import reconcile as _reconcile
+
+    _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
+    stuck_id = _insert_job(
+        conn,
+        job_type="embed",
+        target_version="ver-1",
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+
+    # Before the fix's mechanism runs: the stuck row is invisible to the gap query.
+    gap_before = _reconcile(conn, steps=[("embed_gap", _embed_gap_step)])
+    assert gap_before == 0
+
+    # drain() reclaims the stale row -> dead-lettered (attempts exhausted).
+    drain(conn, db_path, settings, _registry=_noop_registry())
+    assert _job(conn, stuck_id)["status"] == "dead"
+
+    # Now the gap is visible and self-heals with no manual DB surgery.
+    gap_after = _reconcile(conn, steps=[("embed_gap", _embed_gap_step)])
+    assert gap_after == 1
+    (fresh_status,) = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'embed' AND id != ?", (stuck_id,)
+    ).fetchone()
+    assert fresh_status == "pending"
+
+
+def test_drain_reclaimed_job_is_retried_on_a_later_pass(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A reclaimed job's backoff eventually expires and it runs to completion.
+
+    Once its backoff has elapsed, the next drain() pass's _reset_retryable
+    flips it back to 'pending' and the main loop claims and runs it -- no
+    manual DB surgery needed to unstick it.
+    """
+    job_id = _insert_job(
+        conn,
+        status="running",
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    drain(conn, db_path, settings, _registry=_noop_registry())
+    assert _job(conn, job_id)["status"] == "failed"
+
+    # Force the backoff window to have elapsed (avoid a real-time sleep).
+    conn.execute(
+        "UPDATE jobs SET next_attempt_at = ? WHERE id = ?",
+        (_past_iso(1), job_id),
+    )
+    conn.commit()
+
+    n = drain(conn, db_path, settings, _registry=_noop_registry())
+    assert n == 1
+    assert _job(conn, job_id)["status"] == "done"
 
 
 # ---------------------------------------------------------------------------

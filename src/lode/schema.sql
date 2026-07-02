@@ -200,6 +200,14 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- 'dead' is the poison terminal; 'failed' is the transient last-error state
 -- retries reset from. They are DISTINCT so the worker can distinguish "retry me"
 -- from "give up". The UI surfaces 'dead' rows as dead-letters.
+--
+-- Crash reclaim (lode-aor): claimed_at (ISO-8601 UTC, set only when a claim
+-- flips a row 'pending' -> 'running') is the signal lode.worker's
+-- _reclaim_stale_running step uses to detect a job left 'running' by a crash
+-- (SIGKILL between claim and completion) -- otherwise such a row is invisible
+-- to every claim query (selects 'pending' only) and every reconcile gap query
+-- (excludes anything != 'dead'), so nothing would ever pick it back up.
+-- NULL for jobs never claimed (still 'pending') or that predate this column.
 CREATE TABLE IF NOT EXISTS jobs (
     id              INTEGER PRIMARY KEY,
     type            TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
@@ -210,6 +218,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     attempts        INTEGER NOT NULL DEFAULT 0,
     last_error      TEXT,
     batch_handle    TEXT,
+    claimed_at      TEXT,
     next_attempt_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     created         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
