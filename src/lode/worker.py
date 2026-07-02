@@ -479,9 +479,13 @@ def _batch_submit_enrich(
 
     Finds up to ``settings.enrichment_batch_flush_size`` pending enrich jobs,
     claims each with an asserted CAS (``UPDATE ... WHERE status='pending'``,
-    rowcount == 1) so a job the interactive immediate-enrich already grabbed is
-    dropped rather than double-submitted, then calls
-    :func:`lode.enrich.submit_enrich_batch` with only the jobs actually claimed.
+    rowcount == 1), stamping ``claimed_at`` exactly as :func:`_claim_one` does
+    (lode-uhu) so a crash between the claim and :func:`lode.enrich.submit_enrich_batch`'s
+    ``batch_handle`` persist leaves the row a real staleness window instead of
+    being treated as immediately stale by :func:`_reclaim_stale_running`. A job
+    the interactive immediate-enrich already grabbed is dropped rather than
+    double-submitted, then :func:`lode.enrich.submit_enrich_batch` is called
+    with only the jobs actually claimed.
 
     On API success: the batch handle is stored on each submitted job row (by
     :func:`lode.enrich.submit_enrich_batch`); gated-out jobs are marked ``done``;
@@ -519,12 +523,13 @@ def _batch_submit_enrich(
     # already run) elsewhere -- a double API spend. A lost CAS (rowcount 0)
     # means someone else owns it, so we drop it from this batch.
     claimed_rows: list[tuple[int, str]] = []
+    now = _now_iso()
     with conn:
         for job_id, version_id in rows:
             cur = conn.execute(
-                "UPDATE jobs SET status = 'running' "
+                "UPDATE jobs SET status = 'running', claimed_at = ? "
                 "WHERE id = ? AND status = 'pending'",
-                (job_id,),
+                (now, job_id),
             )
             if cur.rowcount == 1:
                 claimed_rows.append((job_id, version_id))
