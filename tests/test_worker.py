@@ -927,6 +927,62 @@ def test_batch_submit_claims_pending_enrich_jobs(
     assert row["status"] == "running"
 
 
+def test_batch_submit_stamps_claimed_at(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """_batch_submit_enrich stamps claimed_at, exactly as _claim_one does (lode-uhu)."""
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+
+    before = _now_iso()
+    client = _fake_batch_client_worker(batch_id="test-batch")
+    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    after = _now_iso()
+
+    assert submitted == 1
+    row = _job(conn, job_id)
+    assert row["claimed_at"] is not None
+    assert before <= row["claimed_at"] <= after
+
+
+def test_batch_submit_survives_crash_before_batch_handle_persist(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Regression (lode-uhu): a crash between batches.create() returning and
+    submit_enrich_batch's batch_handle persist (enrich.py) used to leave a row
+    (running, batch_handle NULL, claimed_at NULL), which _reclaim_stale_running
+    treats as immediately stale and resubmits -- risking a duplicate Batches
+    API submission.
+
+    Simulate the crash with a BaseException that escapes _batch_submit_enrich's
+    `except Exception` revert handler entirely (mirroring a process kill, not
+    a caught API error) after the pre-claim CAS has already stamped
+    claimed_at but before any batch_handle would be persisted.
+    """
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+
+    with mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit):
+        with pytest.raises(SystemExit):
+            _batch_submit_enrich(conn, settings, _client=_fake_batch_client_worker())
+
+    # The pre-claim CAS ran and stamped claimed_at before the (simulated)
+    # crash; batch_handle never got persisted.
+    row = _job(conn, job_id)
+    assert row["status"] == "running"
+    assert row["claimed_at"] is not None
+    batch_handle = conn.execute(
+        "SELECT batch_handle FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()[0]
+    assert batch_handle is None
+
+    # claimed_at is fresh -- _reclaim_stale_running must NOT treat this row
+    # as immediately stale (which would risk a duplicate submission).
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 0
+    assert _job(conn, job_id)["status"] == "running"
+
+
 def test_batch_submit_no_op_when_no_pending_enrich(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
