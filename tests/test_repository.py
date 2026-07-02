@@ -241,6 +241,39 @@ def test_recover_reindexes_the_recovered_head(conn):
     assert cache.calls == [CacheCall("index", "note-1", root, "body")]
 
 
+def test_recover_hands_the_cache_seam_a_redacted_body(conn):
+    """Regression for lode-ibv: recover() fed cache.index() an unredacted body.
+
+    Same shape as ``test_save_hands_the_cache_seam_a_redacted_body`` (lode-n60):
+    a secret-bearing version, once recovered, must reach CacheBackend.index
+    with the secret stripped — not the raw body read off ``_body``.
+    versions.body (the irreplaceable store) is untouched — only purge clears
+    that durable copy (docs/externals.md "Two redactions").
+    """
+    from lode.redact import REDACTION_MARKER
+
+    cache = FakeCache()
+    repo = Repository(conn, cache)
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"key: {secret} done"
+
+    root = repo.save("note-1", body).version_id
+    repo.delete("note-1", parent=root)
+    cache.calls.clear()
+    repo.recover("note-1", target_version=root)
+
+    assert len(cache.calls) == 1
+    call = cache.calls[0]
+    assert call.op == "index"
+    assert secret not in call.body
+    assert REDACTION_MARKER in call.body
+    # The irreplaceable store still carries the raw secret.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM versions WHERE version_id = ?", (root,)
+    ).fetchone()
+    assert secret in stored_body
+
+
 # --- CompositeCache: one slot fans every head change out to N engines ----------
 #
 # The composition decision lode-1f9 settles: the repository keeps one cache slot,
