@@ -215,12 +215,10 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
         return 0
 
     reclaimed = 0
+    err = "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
     with conn:
         for job_id, attempts in rows:
             new_attempts = attempts + 1
-            err = (
-                "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
-            )
             if new_attempts >= settings.retry_max_attempts:
                 cur = conn.execute(
                     "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
