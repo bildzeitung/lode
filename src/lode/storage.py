@@ -47,6 +47,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # lode-npx.3: span-anchor for re-anchor rules (staleness.py)
         "ALTER TABLE annotations ADD COLUMN quoted_text TEXT",
         "ALTER TABLE edges ADD COLUMN quoted_text TEXT",
+        # lode-aor: crash-reclaim signal for jobs stuck in status='running'
+        "ALTER TABLE jobs ADD COLUMN claimed_at TEXT",
     ]
     for ddl in _migrations:
         try:

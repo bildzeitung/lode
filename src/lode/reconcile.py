@@ -36,6 +36,16 @@ crash or a prompt-ver bump is handled correctly.
 **Single enqueue path** — steps call :func:`lode.jobs.enqueue_derive_jobs`
 (optionally with a ``types`` subset), never a second hand-rolled INSERT. The
 INSERT SQL lives in one place: ``jobs.py``.
+
+**Not this scan's job — a stuck ``'running'`` row (lode-aor):** every gap query
+below excludes any job with status ``!= 'dead'``, including ``'running'``, by
+design — a live claim is not a gap. That means a job left ``'running'`` forever
+by a worker crash (SIGKILL between claim and completion) is invisible here too;
+:func:`lode.worker._reclaim_stale_running` is what detects and reclaims it
+(dead-letters or resets it for retry), run at the top of every
+:func:`lode.worker.drain` pass. Once that step has run, a crash-abandoned job
+is back to ``'dead'`` or ``'pending'`` and these gap queries see it correctly
+without any change of their own.
 """
 
 import logging
