@@ -23,7 +23,12 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   live (non-dead) enrich job — i.e. Haiku extraction never ran, was
   dead-lettered, or otherwise lost its job row — and re-enqueues an ``enrich``
   job for each.  Excludes tombstones, purged versions, and ``no_egress`` notes
-  (content that must never be sent to Haiku).
+  (content that must never be sent to Haiku).  Also catches the
+  **prompt/model-change** case (lode-0wj.9): a head whose enrich job already
+  ran (``done``) but whose ``summary`` annotation is missing or was written
+  under a stale :data:`lode.enrich.ENRICH_PROMPT_VER` is treated as a gap too,
+  so bumping the prompt version triggers corpus-wide re-enrichment on the next
+  scan instead of only covering notes with no enrich history at all.
 
 **Idempotency** — each step re-enqueues via :func:`lode.jobs.enqueue_derive_jobs`,
 which uses ``INSERT … ON CONFLICT DO NOTHING`` against the ``idx_jobs_live``
@@ -53,6 +58,7 @@ import sqlite3
 from collections.abc import Callable
 
 from lode import jobs
+from lode.enrich import ENRICH_PROMPT_VER
 
 log = logging.getLogger(__name__)
 
@@ -184,17 +190,28 @@ register_step("embed_gap", _embed_gap_step)
 def _enrich_gap_step(conn: sqlite3.Connection) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
-    **Gap signal:** a non-tombstone, non-purged, non-``no_egress`` head version
-    with no live (non-dead) enrich job.  A ``dead`` job (max-retries exhausted) or
-    the total absence of a job means enrichment is missing; a ``pending``,
-    ``running``, ``done``, or ``failed`` job means enrichment is in-flight or
-    already complete.
+    **Gap signal, part 1 (job existence):** a non-tombstone, non-purged,
+    non-``no_egress`` head version with no in-flight/retryable enrich job
+    (``pending``, ``running``, or ``failed``).  A ``dead`` job (max-retries
+    exhausted) or the total absence of a job is treated the same as before.
+
+    **Gap signal, part 2 (prompt/model change, lode-0wj.9):** even when a
+    ``done`` enrich job exists for the head, it is still a gap if the head
+    has no ``source='ai'``, ``status='fresh'`` ``summary`` annotation stamped
+    with the *current* :data:`lode.enrich.ENRICH_PROMPT_VER`. A prior run
+    under an older prompt/model produced a summary with a stale
+    ``prompt_ver`` (or produced no summary at all, e.g. it predates the
+    ``summary`` kind); either way the ``done`` status alone no longer proves
+    the head's enrichment reflects the current prompt/model, so a fresh
+    ``enrich`` job is re-enqueued. A ``pending``/``running``/``failed`` job
+    is left alone regardless (in-flight or about to be retried).
 
     **Gap query:** live head versions — ``notes.head_version_id`` joined to
     ``versions``, filtered to non-tombstone (``op != 'delete'``), non-purged
-    (``purged_at IS NULL``), non-no_egress (``no_egress = 0``) — with no enrich
-    job in status ``pending``, ``running``, ``done``, or ``failed``.  Each such
-    version is re-enqueued via :func:`lode.jobs.enqueue_derive_jobs`.
+    (``purged_at IS NULL``), non-no_egress (``no_egress = 0``) — with no
+    pending/running/failed enrich job, AND (no ``done`` enrich job OR no
+    current-prompt-version fresh summary).  Each such version is re-enqueued
+    via :func:`lode.jobs.enqueue_derive_jobs`.
 
     **Enqueue:** ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live`` ensures a
     version whose enrich job is already pending or running produces no duplicate
@@ -216,9 +233,27 @@ def _enrich_gap_step(conn: sqlite3.Connection) -> int:
               SELECT 1 FROM jobs j
               WHERE j.type = 'enrich'
                 AND j.target_version = n.head_version_id
-                AND j.status != 'dead'
+                AND j.status IN ('pending', 'running', 'failed')
           )
-        """
+          AND (
+              NOT EXISTS (
+                  SELECT 1 FROM jobs j
+                  WHERE j.type = 'enrich'
+                    AND j.target_version = n.head_version_id
+                    AND j.status = 'done'
+              )
+              OR NOT EXISTS (
+                  SELECT 1 FROM annotations a
+                  WHERE a.target = n.note_id
+                    AND a.kind = 'summary'
+                    AND a.source = 'ai'
+                    AND a.status = 'fresh'
+                    AND a.source_version = n.head_version_id
+                    AND a.prompt_ver = ?
+              )
+          )
+        """,
+        (ENRICH_PROMPT_VER,),
     ).fetchall()
 
     if not gap_versions:
