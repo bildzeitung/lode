@@ -1,6 +1,6 @@
 ---
 name: land
-description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: semantic-review each `ready-for-land` branch (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
+description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: semantic-review each `ready-for-land` branch (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, flag any epic whose last child this pass closed with `epic-ready-to-audit` (for `/epic-audit`), `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
 ---
 
 # land
@@ -192,7 +192,26 @@ for id in $LANDED; do
   rtk bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
 done
 
-rtk bd dolt push               # publish the closes (and any bounce tickets) over refs/dolt/data — durable, cross-machine
+# Closing the last child of an epic completes it — flag it for the closing-side review.
+# I only NOTICE completion here (I am the one that closed it); the review itself is the
+# separate `/epic-audit` skill. For each just-closed ticket, walk to its parent epic and,
+# if that epic is now fully child-complete and not already flagged/audited, label it.
+for id in $LANDED; do
+  PARENT=$(rtk bd show "$id" --json | jq -r '.[0].dependencies[]? | select(.dependency_type=="parent-child") | .id' | head -1)
+  [ -z "$PARENT" ] && continue
+  READY=$(rtk bd show "$PARENT" --json | jq -r '
+    .[0] as $e |
+    (($e.dependents // []) | map(select(.dependency_type=="parent-child"))) as $kids |
+    ($e.labels // []) as $lbl |
+    if ($e.issue_type=="epic") and ($e.status!="closed")
+       and (($kids|length)>0) and (all($kids[]; .status=="closed"))
+       and (($lbl | index("epic-audited")) | not)
+       and (($lbl | index("epic-ready-to-audit")) | not)
+    then "READY" else "" end')
+  [ "$READY" = "READY" ] && rtk bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
+done
+
+rtk bd dolt push               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
 
 for id in $LANDED; do
   rtk git push origin --delete "land/$id"   # GC the merged remote branch
@@ -308,6 +327,6 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
 
 When the pass ends I release the lock (the `trap`) and report: how many branches I reviewed; which
 **landed** (with the `trunk` merge SHA); which I **bounced** (and the new superseding ticket IDs);
-which I **escalated** (and the decision each owes a human); and anything that **drifted**. On any
+which I **escalated** (and the decision each owes a human); any **epic** I flagged `epic-ready-to-audit` because this pass closed its last child; and anything that **drifted**. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
