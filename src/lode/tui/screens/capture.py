@@ -8,7 +8,10 @@ and two keys. Saving delegates entirely to
 never runs the CLI's opportunistic immediate-enrich call, so no AI call can
 land in this screen's save path. This screen owns no persistence logic of its
 own — it only reads the text area, calls :func:`~lode.tui.capture.save_capture`,
-and reacts to the result.
+and reacts to the result. A CAS reject (see :class:`~lode.tui.capture.CaptureConflict`)
+is handed straight to :class:`~lode.tui.screens.reconcile.ReconcileScreen`
+(lode-mkc.4) rather than handled here — this screen's job ends at "the save
+was rejected," the reconcile screen's job is the diff and the resolution.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, TextArea
 
 from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
+from lode.tui.screens.reconcile import ReconcileScreen
 
 #: The text area's widget id — read back in tests and by this screen alike.
 BODY_ID = "capture-body"
@@ -53,10 +57,7 @@ class CaptureScreen(Screen[None]):
             self.notify("Refusing to save an empty note.", severity="warning")
             return
         if isinstance(result, CaptureConflict):
-            self.notify(
-                f"Note changed since opened; draft saved to {result.draft_path}",
-                severity="error",
-            )
+            self.app.push_screen(ReconcileScreen(result))
             return
         self.app.exit(result.note_id)
 

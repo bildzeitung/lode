@@ -20,22 +20,32 @@ would put a real AI call back in the capture path. Here both jobs are simply
 left ``pending`` for the async ``lode work`` drain to pick up later
 (``docs/design.md`` §1's "async, fast, local" / "async, slow" tiers) — capture
 itself only ever waits on the synchronous version-write + FTS5 tier.
+
+**CAS-reject handling lives in :mod:`lode.tui.reconcile` (lode-mkc.4).** A
+capture-path reject is practically unreachable in normal use — each capture
+mints a fresh ``uuid4`` note id, so there is nothing for the compare-and-swap
+to collide with — but it is handled rather than assumed away, exactly like
+``lode add``'s own fallback, and routed through the same one draft
+store/reconcile flow every TUI save path shares rather than keeping a
+capture-only copy of it.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
-from lode import versions
 from lode.config import Settings
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.versions import SaveResult
+from lode.tui.reconcile import Conflict, conflict_from_error
+from lode.versions import HeadConflictError, SaveResult
+
+#: Alias kept for readability at capture's call sites and for existing
+#: callers/tests: a capture-path CAS reject is a
+#: :class:`lode.tui.reconcile.Conflict` like any other TUI save path's.
+CaptureConflict = Conflict
 
 
 class EmptyCaptureError(Exception):
@@ -46,41 +56,9 @@ class EmptyCaptureError(Exception):
     """
 
 
-@dataclass(frozen=True)
-class CaptureConflict:
-    """A create-path CAS reject, surfaced the same way ``lode add`` does.
-
-    Practically unreachable in normal use — each capture mints a fresh
-    ``uuid4`` note id, so there is nothing for the compare-and-swap to
-    collide with — but handled rather than assumed away, exactly like
-    ``lode add``'s own fallback. The rejected buffer is preserved as a draft
-    beside the DB rather than lost (``docs/storage.md`` "What the user sees
-    when CAS rejects a save").
-    """
-
-    draft_path: Path
-
-
-def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
-    """Persist a CAS-rejected capture buffer beside the DB so it is never lost.
-
-    Mirrors ``lode.cli._write_draft`` (``lode add``'s identical fallback) but
-    is not imported from there: ``docs/storage.md`` is explicit that "the TUI
-    (E11) owns the interactive re-apply/discard store" as its own mechanism,
-    not one shared with the CLI, and this keeps the TUI's capture wiring free
-    of any dependency on the Typer CLI module.
-    """
-    fd, name = tempfile.mkstemp(
-        prefix=f"{note_id}.", suffix=".draft", dir=db_path.parent
-    )
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(body)
-    return Path(name)
-
-
 def save_capture(
     db_path: Path, body: str, *, settings: Settings | None = None
-) -> SaveResult | CaptureConflict:
+) -> SaveResult | Conflict:
     """Persist a captured note instantly — no AI call anywhere in this path.
 
     Mints a fresh ``uuid4`` note id (a capture always creates, never edits an
@@ -88,9 +66,10 @@ def save_capture(
     (:class:`EmptyCaptureError`), then saves through
     :meth:`~lode.repository.Repository.save` behind the same capture-path
     cache composite ``lode add`` uses (:class:`~lode.lexical.LexicalCacheBackend`
-    only — embedding stays async). A CAS reject (see
-    :class:`CaptureConflict`) preserves the buffer as a draft rather than
-    losing it.
+    only — embedding stays async). A CAS reject is handed to
+    :func:`lode.tui.reconcile.conflict_from_error`, which preserves the
+    buffer as a draft and returns the :class:`~lode.tui.reconcile.Conflict`
+    the reconcile screen (lode-mkc.4) diffs and resolves.
     """
     if not body.strip():
         raise EmptyCaptureError("refusing to save an empty note")
@@ -103,7 +82,7 @@ def save_capture(
         repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
             return repo.save(note_id, body, settings=settings)
-        except versions.HeadConflictError:
-            return CaptureConflict(_write_draft(db_path, note_id, body))
+        except HeadConflictError as exc:
+            return conflict_from_error(db_path, exc)
     finally:
         conn.close()

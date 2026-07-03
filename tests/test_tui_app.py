@@ -14,6 +14,7 @@ from pathlib import Path
 
 from lode.tui.app import LodeApp
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
+from lode.tui.screens.reconcile import ReconcileScreen
 
 
 def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
@@ -27,6 +28,12 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
 def test_app_registers_capture_as_the_starting_screen(tmp_path: Path) -> None:
     app = LodeApp(db_path=tmp_path / "lode.db")
     assert app.SCREENS["capture"] is CaptureScreen
+
+
+def test_app_registers_the_reconcile_screen(tmp_path: Path) -> None:
+    """lode-mkc.4: registered via ``SCREENS`` like every other E11 screen."""
+    app = LodeApp(db_path=tmp_path / "lode.db")
+    assert app.SCREENS["reconcile"] is ReconcileScreen
 
 
 # Driven via plain ``asyncio.run`` rather than an async test + pytest-asyncio
