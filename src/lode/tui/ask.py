@@ -38,9 +38,11 @@ if TYPE_CHECKING:
     from lode.answer import Support
     from lode.cited_answer import CitedAnswer
 
-#: The honest failure mode's display line -- mirrors ``lode.cli._ABSTAIN_LINE``
-#: verbatim (not imported: that name is CLI-command-private, and duplicating
-#: one literal string is simpler than reaching into the CLI module for it).
+#: The honest failure mode's display line -- the abstention wording from
+#: ``docs/retrieval.md`` ("the system says 'your notes don't answer this'").
+#: The CLI's own abstention line (``lode.cli._ABSTAIN_LINE``) reads differently
+#: and is command-private; each surface owns its phrasing rather than sharing
+#: one literal.
 ABSTAIN_LINE = "Your notes don't answer this."
 
 
