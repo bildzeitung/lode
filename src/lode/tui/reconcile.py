@@ -97,8 +97,8 @@ def reapply(
     indexed exactly like any other TUI save. On success the now-resolved
     draft is deleted. If the head moved *again* in the meantime, this raises
     no exception — it returns a fresh :class:`Conflict` (a new draft, the
-    newer head) for the caller to show and resolve, same honest-reject
-    contract as the original save.
+    newer head; the superseded draft is dropped) for the caller to show and
+    resolve, same honest-reject contract as the original save.
     """
     settings = settings or Settings()
     conn = init_db(db_path)
@@ -112,7 +112,13 @@ def reapply(
                 settings=settings,
             )
         except HeadConflictError as exc:
-            return conflict_from_error(db_path, exc)
+            # The head moved again while the user was resolving. Supersede the
+            # now-stale draft with the renewed conflict's fresh one (identical
+            # buffer, newer head) so repeated re-applies against a moving head
+            # never accumulate orphaned drafts.
+            renewed = conflict_from_error(db_path, exc)
+            discard(conflict)
+            return renewed
         discard(conflict)
         return result
     finally:

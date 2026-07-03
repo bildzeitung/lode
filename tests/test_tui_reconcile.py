@@ -108,6 +108,9 @@ def test_reapply_returns_fresh_conflict_on_renewed_cas_loss(tmp_path: Path) -> N
     assert result.actual_head_body == "v3"
     assert result.rejected_buffer == "v2 edit"
     assert result.draft_path.read_text(encoding="utf-8") == "v2 edit"
+    # The superseded draft is dropped, not accumulated, on a renewed conflict.
+    assert not draft_path.exists()
+    assert result.draft_path != draft_path
     # The live head is untouched by the failed re-apply attempt — no clobber.
     assert _rows(
         db_path,
