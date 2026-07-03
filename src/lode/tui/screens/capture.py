@@ -20,6 +20,15 @@ a small panel below the text area — "you wrote about this 3 weeks ago". This
 stays out of the save path entirely (it never touches ``save_capture``) and
 runs off the UI thread via a Textual worker, so a slow or in-flight pass never
 blocks typing or Ctrl+S/Escape.
+
+**Confirm-on-unsaved guard for Escape (lode-0wj.1).** Escape used to discard
+silently regardless of buffer state — an easy vi-muscle-memory footgun. Now
+Escape on a non-empty/non-whitespace buffer pops :class:`DiscardConfirmScreen`
+(Save/Discard/Cancel) instead of exiting straight away; an empty/whitespace
+buffer still exits immediately, so the fast "get in, dump, get out" path for a
+genuinely empty capture is untouched. Ctrl+S is unaffected either way. The
+app-level Ctrl+Q confirm-if-dirty is deliberately out of scope here (tracked
+as lode-0wj.8) — it's a global ``App``-priority binding this screen can't see.
 """
 
 from __future__ import annotations
@@ -31,7 +40,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.timer import Timer
 from textual.widgets import Footer, Header, Static, TextArea
 
@@ -51,13 +60,46 @@ BODY_ID = "capture-body"
 #: in tests.
 RELATED_ID = "related-notes"
 
+#: The confirm dialog's message widget id (lode-0wj.1) — read back in tests.
+CONFIRM_MESSAGE_ID = "capture-confirm-message"
+
+
+class DiscardConfirmScreen(ModalScreen[str]):
+    """Save / Discard / Cancel confirm, popped on Escape over a dirty buffer.
+
+    Dismisses with one of ``"save"``, ``"discard"``, ``"cancel"`` — the caller
+    (:meth:`CaptureScreen.action_cancel`) decides what each means; this screen
+    owns only the prompt and the three keys.
+    """
+
+    BINDINGS = [
+        Binding("s", "choose('save')", "Save & quit"),
+        Binding("d", "choose('discard')", "Discard & quit"),
+        Binding("c", "choose('cancel')", "Cancel"),
+        Binding("escape", "choose('cancel')", "Cancel", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(
+                "Unsaved note. (S)ave, (D)iscard, or (C)ancel?",
+                id=CONFIRM_MESSAGE_ID,
+            ),
+            id="capture-confirm-dialog",
+        )
+
+    def action_choose(self, choice: str) -> None:
+        self.dismiss(choice)
+
 
 class CaptureScreen(Screen[None]):
     """One text area plus a passive related-notes panel.
 
-    Ctrl+S saves and exits; Escape discards and exits. The related-notes panel
-    is read-only and non-interactive — it never takes focus or input, so it
-    changes nothing about capture's "get in, dump text, get out" contract.
+    Ctrl+S saves and exits. Escape discards and exits immediately if the
+    buffer is empty/whitespace-only; otherwise it pops a Save/Discard/Cancel
+    confirm (lode-0wj.1) rather than discarding silently. The related-notes
+    panel is read-only and non-interactive — it never takes focus or input, so
+    it changes nothing about capture's "get in, dump text, get out" contract.
     """
 
     BINDINGS = [
@@ -111,8 +153,28 @@ class CaptureScreen(Screen[None]):
         self.app.exit(result.note_id)
 
     def action_cancel(self) -> None:
-        """Discard the buffer and exit without saving."""
-        self.app.exit()
+        """Escape: exit immediately if the buffer is empty, else confirm first.
+
+        An empty/whitespace-only buffer has nothing to lose, so it keeps the
+        old "discard and exit" behaviour unprompted — the fast path a genuine
+        empty capture (opened by mistake, or just backed out of) still wants.
+        A non-empty buffer instead pops :class:`DiscardConfirmScreen`; its
+        answer is handled by :meth:`_on_discard_confirm`.
+        """
+        body = self.query_one(f"#{BODY_ID}", TextArea).text
+        if not body.strip():
+            self.app.exit()
+            return
+        self.app.push_screen(DiscardConfirmScreen(), self._on_discard_confirm)
+
+    def _on_discard_confirm(self, choice: str) -> None:
+        """Act on the confirm dialog's answer: save, discard, or resume editing."""
+        if choice == "save":
+            self.action_save()
+        elif choice == "discard":
+            self.app.exit()
+        # "cancel" (or the dialog dismissing with no answer): stay right here,
+        # buffer untouched.
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Debounce a passive connection-surfacing pass (lode-mkc.3).

@@ -73,7 +73,25 @@ def test_ctrl_s_saves_the_typed_note_and_exits(tmp_path: Path) -> None:
     ) == [("hello from the capture screen", "create")]
 
 
-def test_escape_discards_without_saving(tmp_path: Path) -> None:
+def test_escape_on_empty_buffer_discards_without_saving(tmp_path: Path) -> None:
+    """Empty/whitespace-only buffer: Escape exits immediately, no confirm (lode-0wj.1)."""
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            await pilot.press("escape")
+
+    asyncio.run(_drive())
+
+    assert app.return_value is None
+    assert not db_path.exists()
+
+
+def test_escape_on_dirty_buffer_then_discard_exits_without_saving(
+    tmp_path: Path,
+) -> None:
+    """A non-empty buffer's Escape confirms first; choosing Discard exits (lode-0wj.1)."""
     db_path = tmp_path / "lode.db"
     app = LodeApp(db_path=db_path)
 
@@ -82,6 +100,8 @@ def test_escape_discards_without_saving(tmp_path: Path) -> None:
             text_area = app.screen.query_one(f"#{BODY_ID}")
             text_area.text = "never saved"
             await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("d")
 
     asyncio.run(_drive())
 
