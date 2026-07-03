@@ -19,6 +19,7 @@ from textual.binding import Binding
 
 from lode.config import Settings, default_db_path
 from lode.tui.screens.capture import CaptureScreen
+from lode.tui.screens.config import ConfigScreen
 
 
 class LodeApp(App[str | None]):
@@ -28,7 +29,9 @@ class LodeApp(App[str | None]):
     shared ``db_path`` / ``settings`` once and starts the initial screen.
     ``run()`` returns the exited screen's result (the capture screen exits
     with the saved note id, or ``None`` on discard) via Textual's normal
-    ``App.exit(result)`` / ``App.run()`` return-value contract.
+    ``App.exit(result)`` / ``App.run()`` return-value contract. ``F2`` reaches
+    the read-only config/diagnostics screen (lode-3r4) from anywhere; it pops
+    back to the previous screen on Escape.
     """
 
     TITLE = "lode"
@@ -36,10 +39,11 @@ class LodeApp(App[str | None]):
     #: Registration convention for every E11 screen: name -> Screen subclass,
     #: pushed via ``push_screen("name")``. Extend this dict, not this class,
     #: when a new screen lands.
-    SCREENS = {"capture": CaptureScreen}
+    SCREENS = {"capture": CaptureScreen, "config": ConfigScreen}
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
+        Binding("f2", "show_config", "Config"),
     ]
 
     def __init__(
@@ -54,6 +58,10 @@ class LodeApp(App[str | None]):
 
     def on_mount(self) -> None:
         self.push_screen("capture")
+
+    def action_show_config(self) -> None:
+        """Push the config/diagnostics screen (lode-3r4) on top of the current one."""
+        self.push_screen("config")
 
 
 def run(*, db_path: Path | None = None, settings: Settings | None = None) -> str | None:
