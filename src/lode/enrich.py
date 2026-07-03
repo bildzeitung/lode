@@ -225,10 +225,16 @@ def _write_enrichment(
             (version_id,),
         )
 
-        # Tag + entity annotations -- whole-note items carry no per-item
-        # confidence. Both kinds share one row shape; only `kind` and the
-        # source list differ.
-        for kind, values in (("tag", result.tags), ("entity", result.entities)):
+        # Tag + entity + summary annotations -- whole-note items carry no
+        # per-item confidence and share one row shape; only `kind` and the
+        # source list differ. The summary is a single whole-note value, so it
+        # joins the loop as a 0-or-1-element list -- an empty summary yields no
+        # row, exactly like an empty tag list (lode-0wj.9).
+        for kind, values in (
+            ("tag", result.tags),
+            ("entity", result.entities),
+            ("summary", [result.summary] if result.summary else []),
+        ):
             for value in values:
                 payload = json.dumps(value)
                 if is_annotation_suppressed(conn, note_id, kind, payload):
@@ -242,26 +248,6 @@ def _write_enrichment(
                         note_id,
                         version_id,
                         kind,
-                        payload,
-                        model,
-                        ENRICH_PROMPT_VER,
-                        ts,
-                    ),
-                )
-
-        # Whole-note summary -- a single row, same shape as tag/entity, skipped
-        # entirely when Haiku returned no summary (mirrors an empty tags list).
-        if result.summary:
-            payload = json.dumps(result.summary)
-            if not is_annotation_suppressed(conn, note_id, "summary", payload):
-                conn.execute(
-                    "INSERT INTO annotations "
-                    "(target, source_version, kind, payload, source, status, "
-                    "model, prompt_ver, created) "
-                    "VALUES (?, ?, 'summary', ?, 'ai', 'fresh', ?, ?, ?)",
-                    (
-                        note_id,
-                        version_id,
                         payload,
                         model,
                         ENRICH_PROMPT_VER,
