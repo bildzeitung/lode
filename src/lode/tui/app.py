@@ -8,6 +8,13 @@ connections, CAS-reconcile, config/diagnostics — lode-mkc.2/.3/.4, lode-3r4) i
 one new module under :mod:`lode.tui.screens` plus one entry in ``SCREENS``
 below; no existing screen's file is touched, so those tickets fan out without
 colliding here.
+
+``ReconcileScreen`` (lode-mkc.4) is registered here like every other screen,
+but — unlike ``capture``'s no-arg push — it needs a
+:class:`~lode.tui.reconcile.Conflict` to show, so callers push a constructed
+instance (``push_screen(ReconcileScreen(conflict))``) rather than the bare
+name; ``SCREENS`` still carries the class for discoverability and so
+``app.SCREENS["reconcile"]`` resolves the same way ``"capture"`` does.
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from lode.config import Settings, default_db_path
 from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.config import ConfigScreen
+from lode.tui.screens.reconcile import ReconcileScreen
 
 
 class LodeApp(App[str | None]):
@@ -40,7 +48,12 @@ class LodeApp(App[str | None]):
     #: Registration convention for every E11 screen: name -> Screen subclass,
     #: pushed via ``push_screen("name")``. Extend this dict, not this class,
     #: when a new screen lands.
-    SCREENS = {"capture": CaptureScreen, "config": ConfigScreen, "ask": AskScreen}
+    SCREENS = {
+        "capture": CaptureScreen,
+        "config": ConfigScreen,
+        "ask": AskScreen,
+        "reconcile": ReconcileScreen,
+    }
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
