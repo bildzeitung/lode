@@ -48,6 +48,7 @@ ALL_SUBCOMMANDS = [
     "egress",
     "config",
     "work",
+    "tui",
 ]
 
 

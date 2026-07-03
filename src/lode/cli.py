@@ -7,7 +7,8 @@ enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
 :meth:`lode.repository.Repository.purge`; ``ask`` (lode-y42.2) runs the cited Q&A
-loop (retrieve → synthesize → faithfulness gate → cite or abstain).
+loop (retrieve → synthesize → faithfulness gate → cite or abstain); ``tui``
+(E11, lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -616,6 +617,23 @@ def config(
     """
     for line in _config_lines(db):
         typer.echo(line)
+
+
+@app.command()
+def tui(
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Launch the Textual TUI (E11), starting on the instant capture screen.
+
+    Deferred import — the rest of the CLI never pays Textual's import cost
+    (same "heavy dep behind the command that needs it" convention as ``ask``'s
+    Anthropic/vector imports). The capture screen's own save path
+    (:mod:`lode.tui.capture`) has no AI call in it at all: only the
+    synchronous version-write + FTS5 tier runs before it returns.
+    """
+    from lode.tui.app import run as run_tui
+
+    run_tui(db_path=db or default_db_path())
 
 
 @app.command()
