@@ -18,7 +18,7 @@ throwaway LanceDB dir — so it never touches the user's real notes and leaves
 nothing behind.
 
 **Pass bar (lode-7lp).** Baseline recorded 2026-07-02 against this golden fixture
-(24 answerable items + 8 abstain items, ``k=20``) over two independent live runs,
+(25 answerable items + 8 abstain items, ``k=20``) over two independent live runs,
 both identical:
 
 * recall@20: 1.000
@@ -26,8 +26,8 @@ both identical:
 * abstention correctness: 1.000
 
 Floors are set at ``0.95`` for every metric — one item's worth of tolerance on
-the smallest graded population (24 answerable items: 23/24 = 0.958 clears the
-floor, 22/24 = 0.917 does not; abstention's 32-item population has an even
+the smallest graded population (25 answerable items: 24/25 = 0.960 clears the
+floor, 23/25 = 0.920 does not; abstention's 33-item population has an even
 wider margin). The Q&A leg is a live, temperature-sampled LLM call, so
 byte-for-byte reproducibility isn't guaranteed run to run; pinning the floor at
 the observed 1.000 would make the gate flake on a single incidental miss. 0.95

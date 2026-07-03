@@ -99,8 +99,8 @@ are catalogued in [configuration.md](configuration.md).
   `nox -s eval` to pass. **Baseline (recorded 2026-07-02, two independent live runs against the
   committed golden fixture, `k=20`):** recall@20 = 1.000, faithfulness/citation accuracy = 1.000,
   abstention correctness = 1.000 — all stable across both runs. **Floors: 0.95 per metric**, a
-  one-item margin below the perfect baseline (23/24 = 0.958 clears it, 22/24 = 0.917 does not, on the
-  24-item answerable population; the 32-item abstention population has more headroom still) to absorb
+  one-item margin below the perfect baseline (24/25 = 0.960 clears it, 23/25 = 0.920 does not, on the
+  25-item answerable population; the 33-item abstention population has more headroom still) to absorb
   the live Q&A leg's run-to-run sampling variance without masking a real multi-item regression. Floors
   are recorded as named constants (`RECALL_FLOOR`, `FAITHFULNESS_FLOOR`, `ABSTENTION_FLOOR`) next to
   the assertions in `tests/test_eval_live.py`, not only here, so a future re-baseline finds them
@@ -111,7 +111,7 @@ are catalogued in [configuration.md](configuration.md).
   grows the same way: a new question is added only alongside the seed-corpus note(s) it targets (or as
   a new out-of-corpus item for abstention coverage), and a re-baseline (rerun both `nox -s eval` and
   this entry) follows any change that could move the recorded metrics — a new item, a seed-corpus edit,
-  or a retrieval/answerer knob change. The set intentionally stays small (~20–50 items, current: 24
+  or a retrieval/answerer knob change. The set intentionally stays small (~20–50 items, current: 25
   answerable + 8 abstain) so it remains fully hand-auditable; it is a regression harness for the
   tuning knobs (rerank, entailment threshold, chunk size), not a statistically powered benchmark.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
