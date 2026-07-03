@@ -73,8 +73,9 @@ Same discipline as `debate` §1 — no verdict until I've read all of it:
 - The epic's `description`, `acceptance_criteria`, `design`, and `notes` — this is the **intent** I judge against.
 - **Every** child: `bd show <child> --json`. Read what it actually delivered — its own acceptance, its
   `close_reason` (why `/land` closed it), any supersede/bounce history. A child that closed via `bd supersede`
-  during a land bounce may have handed its real work to an **unlinked rebuild ticket** — if the rebuild isn't
-  a child of this epic, the epic can read "complete" while work is still open. Watch for that.
+  during a land bounce handed its real work to a rebuild ticket — `/land` re-parents that rebuild onto this
+  epic, so it normally shows up as an open child and correctly keeps the epic incomplete. Still worth a glance:
+  if a superseded child's rebuild is *not* a child here, the epic can read "complete" while work is still open.
 - Cross-check against the source of truth in `docs/` (start with `docs/design.md`) — an epic whose delivery
   drifted from a settled decision is a finding.
 

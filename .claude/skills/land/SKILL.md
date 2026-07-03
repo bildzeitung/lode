@@ -258,6 +258,14 @@ REBUILD BRIEF (from land-review):
 <the findings + what the rebuild must satisfy that the bounced branch did not>" \
   --json | jq -r '.id')
 
+# Preserve epic parentage. If the bounced ticket was an epic's child, re-parent the rebuild onto
+# the same epic BEFORE superseding — otherwise supersede closes the child and the epic loses it,
+# reading falsely "complete" while the real work sits in an unlinked ticket. Re-parenting keeps the
+# epic's completion accounting honest: the superseded child closes, but NEW is an open child, so the
+# epic stays incomplete until the rebuild lands (and /epic-audit sees the real work).
+PARENT=$(rtk bd show <id> --json | jq -r '.[0].dependencies[]? | select(.dependency_type=="parent-child") | .id' | head -1)
+[ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
+
 rtk bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> as superseded
 rtk bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
 
