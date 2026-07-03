@@ -18,6 +18,7 @@ from textual.app import App
 from textual.binding import Binding
 
 from lode.config import Settings, default_db_path
+from lode.tui.screens.ask import AskScreen
 from lode.tui.screens.capture import CaptureScreen
 
 
@@ -36,7 +37,7 @@ class LodeApp(App[str | None]):
     #: Registration convention for every E11 screen: name -> Screen subclass,
     #: pushed via ``push_screen("name")``. Extend this dict, not this class,
     #: when a new screen lands.
-    SCREENS = {"capture": CaptureScreen}
+    SCREENS = {"capture": CaptureScreen, "ask": AskScreen}
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
