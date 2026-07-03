@@ -87,8 +87,33 @@ are catalogued in [configuration.md](configuration.md).
   offline scorer tests (`tests/test_eval_*.py`, stubbed seams) are unchanged, and
   `lode.eval.harness.score_golden_set` stays a library function shared by both the offline stub tests
   and the live integration test. Knock-on: the Phase-A exit gate (lode-6w1 / lode-6w1.1) wording
-  moves from "`lode eval` runs green" to "the `nox -s eval` integration test runs green." Open
-  sub-question: the exact metric weighting and how the golden set is curated.
+  moves from "`lode eval` runs green" to "the `nox -s eval` integration test runs green." **Pass bar,
+  metric weighting, and golden-set curation — settled (lode-7lp).** The harness previously shipped
+  with no quality floor (`tests/test_eval_live.py` asserted only that each metric fell in `[0, 1]`, so
+  even 0% recall passed); a live baseline is now recorded and enforced. **Weighting: independent
+  per-metric floors, not a combined score.** Recall@k, faithfulness, and abstention measure distinct
+  failure modes (retrieval missed the note vs. the answer cited the wrong thing vs. the system
+  answered/abstained wrongly) and a single blended score would let a collapse in one metric hide
+  behind headroom in the other two — exactly the silent-regression risk this ticket exists to close.
+  Each of the three metrics in `tests/test_eval_live.py` must independently clear its own floor for
+  `nox -s eval` to pass. **Baseline (recorded 2026-07-02, two independent live runs against the
+  committed golden fixture, `k=20`):** recall@20 = 1.000, faithfulness/citation accuracy = 1.000,
+  abstention correctness = 1.000 — all stable across both runs. **Floors: 0.95 per metric**, a
+  one-item margin below the perfect baseline (23/24 = 0.958 clears it, 22/24 = 0.917 does not, on the
+  24-item answerable population; the 32-item abstention population has more headroom still) to absorb
+  the live Q&A leg's run-to-run sampling variance without masking a real multi-item regression. Floors
+  are recorded as named constants (`RECALL_FLOOR`, `FAITHFULNESS_FLOOR`, `ABSTENTION_FLOOR`) next to
+  the assertions in `tests/test_eval_live.py`, not only here, so a future re-baseline finds them
+  in-context. **Golden-set curation policy:** the set is maintainer-curated, not auto-generated or
+  crowd-sourced — every item is hand-authored against the committed seed corpus (`src/lode/eval/`),
+  with each citation's verbatim span mechanically checked against the cited note's body
+  (`tests/test_eval_golden.py`) so a stale or fabricated quote fails loudly rather than drifting. It
+  grows the same way: a new question is added only alongside the seed-corpus note(s) it targets (or as
+  a new out-of-corpus item for abstention coverage), and a re-baseline (rerun both `nox -s eval` and
+  this entry) follows any change that could move the recorded metrics — a new item, a seed-corpus edit,
+  or a retrieval/answerer knob change. The set intentionally stays small (~20–50 items, current: 24
+  answerable + 8 abstain) so it remains fully hand-auditable; it is a regression harness for the
+  tuning knobs (rerank, entailment threshold, chunk size), not a statistically powered benchmark.
 - **Rerank model + threshold tuning.** The rerank *stage* ships in v1 ([retrieval.md](retrieval.md))
   with a default local cross-encoder behind a toggle; choosing/tuning the model and cutoffs — and
   A/B'ing rerank vs none — waits until there's a real corpus to evaluate against. Don't tune
