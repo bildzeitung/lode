@@ -60,6 +60,16 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 | Entailment acceptance threshold | tune | **conservative** | The one residual-risk knob for synthesis: too loose readmits unsupported synthesis, too tight collapses to extractive-only. Ships fail-closed, untuned. |
 | LLM-judge second pass | runtime | off | Optional "high-assurance" verification; costs a round-trip + $ + off-box egress. |
 
+## TUI — passive connection surfacing (E11)
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| Related-notes debounce | runtime | `500ms` | Idle-typing delay in the capture screen before a passive "you wrote about this" pass runs ([design.md](design.md) §2 "Surfacing connections"); restarted on every keystroke so a burst of typing triggers at most one pass per pause. |
+| Related-notes result count | runtime | `5` | Max related past notes shown per pass. |
+| Related-notes minimum draft length | runtime | `20` chars | Below this (stripped) length, no pass runs at all — no DB connection opened. |
+
+Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus the cross-encoder rerank stage (skipped for latency; the seam stays wired for Q&A), off the UI thread so it never blocks capture.
+
 ## Async work queue
 
 | Knob | Kind | Default | Notes |

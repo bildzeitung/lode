@@ -153,6 +153,28 @@ class Settings(BaseModel):
         "Optional high-assurance LLM-judge second pass (costs egress + $).",
     )
 
+    # --- TUI (passive connection surfacing, E11) ------------------------------
+    related_notes_debounce_ms: int = _knob(
+        500,
+        Kind.RUNTIME,
+        "Idle-typing delay in the capture screen before a passive "
+        "connection-surfacing pass runs, so it never fires on every keystroke.",
+        gt=0,
+    )
+    related_notes_limit: int = _knob(
+        5,
+        Kind.RUNTIME,
+        "Max related past notes shown per passive connection-surfacing pass.",
+        gt=0,
+    )
+    related_notes_min_chars: int = _knob(
+        20,
+        Kind.RUNTIME,
+        "Minimum draft length (stripped) before a passive surfacing pass "
+        "runs; skips near-empty buffers without touching the DB.",
+        ge=0,
+    )
+
     # --- Async work queue -----------------------------------------------------
     reconciliation_scan_interval_s: int = _knob(
         300,
