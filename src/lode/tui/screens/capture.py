@@ -81,7 +81,11 @@ class CaptureScreen(Screen[None]):
         yield Header()
         yield Vertical(
             TextArea(id=BODY_ID, placeholder="What did you learn today?"),
-            Static("", id=RELATED_ID),
+            # markup=False: snippets are verbatim user note text and
+            # commonly contain bracket sequences (list[0], [link](url),
+            # log [ERROR], footnote [1]) that Textual would otherwise parse
+            # as console markup and raise MarkupError on (lode-mkc.3).
+            Static("", id=RELATED_ID, markup=False),
         )
         yield Footer()
 

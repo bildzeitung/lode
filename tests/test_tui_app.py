@@ -158,3 +158,36 @@ def test_typing_surfaces_a_related_past_note(
     asyncio.run(_drive())
 
     assert [note.note_id for note in related] == ["note-a"]
+
+
+def test_related_panel_renders_snippet_with_markup_like_brackets(
+    tmp_path: Path,
+) -> None:
+    """Verbatim note text with bracket sequences must not crash the panel render.
+
+    Work notes routinely contain ``list[0]``, ``[link](url)``, ``[ERROR]`` etc.;
+    the related-notes ``Static`` renders snippets verbatim (``markup=False``), so
+    such a snippet must render as plain text rather than raising ``MarkupError``
+    (lode-mkc.3). Drives ``_render_related`` on the real mounted widget.
+    """
+    from lode.tui.related import RelatedNote
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    app = LodeApp(db_path=db_path, settings=Settings())
+
+    async def _drive() -> None:
+        async with app.run_test():
+            screen = app.screen
+            assert isinstance(screen, CaptureScreen)
+            screen._render_related(
+                [
+                    RelatedNote(
+                        "note-a",
+                        "config uses Dict[str, int] and [ERROR] logs",
+                        "3 weeks ago",
+                    )
+                ]
+            )
+
+    asyncio.run(_drive())  # raised MarkupError before markup=False
