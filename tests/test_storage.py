@@ -111,3 +111,60 @@ def test_check_constraint_rejects_bad_op(tmp_path: Path) -> None:
 def test_schema_sql_is_packaged() -> None:
     # The DDL is loadable as package data (not just a repo file).
     assert "CREATE TABLE IF NOT EXISTS notes" in schema_sql()
+
+
+# ---------------------------------------------------------------------------
+# lode-pig: forward migration for jobs.next_attempt_at
+# ---------------------------------------------------------------------------
+
+
+def test_next_attempt_at_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -> None:
+    """A jobs table created before next_attempt_at landed is migrated and backfilled.
+
+    Reproduces the `lode work` crash (OperationalError: no such column:
+    next_attempt_at): CREATE TABLE IF NOT EXISTS won't add the column to an
+    existing table, so init_db's _apply_migrations must. The backfill sets
+    next_attempt_at = created so the pre-existing job stays due (a NULL would
+    fail the `next_attempt_at <= now` claim predicate and vanish).
+    """
+    db = tmp_path / "lode.db"
+    # The original jobs table (commit 5c8a189): prompt_ver/batch_handle present,
+    # next_attempt_at/claimed_at not yet added. Modelled exactly so init_db's
+    # executescript (which builds the prompt_ver idempotency index) succeeds —
+    # matching the real DBs that hit the crash on the next_attempt_at SELECT.
+    seed = sqlite3.connect(db)
+    seed.execute(
+        "CREATE TABLE jobs ("
+        "  id INTEGER PRIMARY KEY,"
+        "  type TEXT NOT NULL,"
+        "  target_version TEXT NOT NULL,"
+        "  prompt_ver TEXT,"
+        "  status TEXT NOT NULL DEFAULT 'pending',"
+        "  attempts INTEGER NOT NULL DEFAULT 0,"
+        "  last_error TEXT,"
+        "  batch_handle TEXT,"
+        "  created TEXT NOT NULL DEFAULT '2026-01-01T00:00:00.000Z'"
+        ")"
+    )
+    seed.execute("INSERT INTO jobs (type, target_version) VALUES ('enrich', 'ver-1')")
+    seed.commit()
+    seed.close()
+
+    conn = init_db(db)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+        assert "next_attempt_at" in cols, "migration must add jobs.next_attempt_at"
+
+        # The pre-existing row is backfilled (non-NULL) and due now.
+        due = conn.execute(
+            "SELECT count(*) FROM jobs "
+            "WHERE next_attempt_at IS NOT NULL "
+            "AND next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        ).fetchone()[0]
+        assert due == 1, "backfilled job must be visible to the claim predicate"
+    finally:
+        conn.close()
+
+    # Idempotent: re-running init_db on the migrated DB must not raise.
+    conn2 = init_db(db)
+    conn2.close()
