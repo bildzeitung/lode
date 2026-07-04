@@ -266,6 +266,16 @@ REBUILD BRIEF (from land-review):
 PARENT=$(rtk bd show <id> --json | jq -r '.[0].dependencies[]? | select(.dependency_type=="parent-child") | .id' | head -1)
 [ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
 
+# Re-point non-parent dependents. If OTHER tickets depend on <id> via a `blocks` edge (e.g. a
+# diagnosis spike that gates its follow-ups), supersede CLOSES <id> — so bd treats that blocker as
+# satisfied and those dependents unblock PREMATURELY, while the real work still sits unbuilt in NEW.
+# Re-point each dependent onto NEW so the graph stays honest: they remain blocked until the rebuild
+# lands. Same principle as the epic re-parent above — keep the dependency graph accurate across a
+# supersede, not just the parentage.
+for DEP in $(rtk bd show <id> --json | jq -r '.[0].dependents[]? | select(.dependency_type=="blocks") | .id'); do
+  rtk bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
+done
+
 rtk bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> as superseded
 rtk bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
 
