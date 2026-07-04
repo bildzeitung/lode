@@ -19,6 +19,8 @@ Everything lode persists lives under **one user-controllable root**, `$LODE_HOME
 | Database path | build | `$LODE_HOME/lode.db` | The SQLite file (irreplaceable rows + rebuildable cache + `jobs`). The single-instance advisory lock lives beside it as `lode.db.lock` ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)). |
 | Vector store path | build | `$LODE_HOME/lancedb/` | LanceDB passage-vector store (rebuildable cache). A subdir keeps the root readable. |
 | Log directory | runtime | `$LODE_HOME/logs/` | Application logs. |
+| `LODE_LOG_LEVEL` | runtime | `INFO` | lode's own root-logger level. Accepts a case-insensitive level name (`debug`, `info`, `warning`, ...) or a numeric level; an unrecognized name raises rather than silently defaulting. Read when no level is passed explicitly (`src/lode/logconfig.py::resolve_level`). |
+| `ANTHROPIC_LOG` | runtime | unset | Not a lode-specific knob — the Anthropic SDK's own wire-level debug switch. Set to `debug` or `info` and the SDK logs on the `anthropic` logger, which propagates to the root logger and is formatted/routed alongside lode's own logs (`src/lode/logconfig.py`). |
 | Config file path | runtime | `$LODE_HOME/config.toml` | User-editable runtime knobs. **Optional** — if absent, every knob uses its default below; no config file is a valid, fully-working state. |
 
 ```text
