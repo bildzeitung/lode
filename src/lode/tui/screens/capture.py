@@ -50,6 +50,25 @@ keystroke->render latency proxy. All of it is gated behind
 ``INFO`` level, so this changes no behaviour. See
 ``tests/test_capture_lag_diagnosis.py`` for the offline reproduction against
 the lode-5y8.4 seed corpus and the measured verdict.
+
+**Latency fix: reuse one embedder instead of one per pass (lode-0wj.4).** The
+lag-diagnosis spike (lode-0wj.2) found the related-notes pass itself
+non-blocking -- but only tested it with a *pre-warmed* embedder. This screen's
+real wiring never passed one, so :func:`~lode.tui.related.find_related_notes`
+built a *fresh* :class:`~lode.embedding.FastEmbedEmbedder` every debounce fire
+-- and unlike ONNX *inference* (which releases the GIL, per the spike), the
+ONNX model's *construction* does not: measured against the lode-5y8.4 seed
+corpus with the real embedder (the same diagnostic harness the spike used,
+but driving the real screen through Textual's pilot rather than an isolated
+function call), this cost the event loop ~1.5s of stall on *every* pause in
+typing, for the whole session -- exactly the felt "typing blocks" complaint.
+:meth:`_ensure_embedder` now constructs one :class:`~lode.embedding.Embedder`
+and reuses it for this screen's lifetime, so only the *first* pass in a
+session pays the ONNX model's cold-load cost; every pass after it reuses the
+already-loaded model and pays only the single-digit-ms inference cost
+lode-0wj.2's spike measured. (Deliberately not warmed any earlier than that
+first real pass -- see :meth:`_ensure_embedder`'s docstring for why eagerly
+warming at mount time backfired.)
 """
 
 from __future__ import annotations
@@ -72,9 +91,11 @@ from lode.tui.latency_probe import probe_event_loop_lag
 from lode.tui.screens.reconcile import ReconcileScreen
 
 if TYPE_CHECKING:
-    # Type-only; the runtime import lives inside _search_related so this
-    # screen's own import stays free of the vector stack (pyarrow) and the
-    # embedder (fastembed) until a passive-surfacing pass actually runs.
+    # Type-only; the runtime imports live inside _ensure_embedder /
+    # _search_related so this screen's own import stays free of the vector
+    # stack (pyarrow) and the embedder (fastembed) until a passive-surfacing
+    # pass actually runs.
+    from lode.embedding import Embedder
     from lode.tui.related import RelatedNote
 
 log = logging.getLogger(__name__)
@@ -154,6 +175,10 @@ class CaptureScreen(Screen[None]):
         #: Incrementing id for each related-notes pass (lode-0wj.2 instrumentation) --
         #: lets the DEBUG log correlate a pass's start/finish/cancellation lines.
         self._related_pass_seq = 0
+        #: The shared query embedder for the related-notes pass, constructed
+        #: once and reused for this screen's lifetime (lode-0wj.4) rather than
+        #: a fresh instance per pass -- see :meth:`_ensure_embedder`.
+        self._embedder: Embedder | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -183,6 +208,30 @@ class CaptureScreen(Screen[None]):
         exit (:func:`~lode.tui.latency_probe.probe_event_loop_lag` never returns).
         """
         await probe_event_loop_lag()
+
+    def _ensure_embedder(self) -> Embedder:
+        """Return the shared query embedder, constructing the wrapper on first use.
+
+        Cheap and synchronous: :class:`~lode.embedding.FastEmbedEmbedder`'s
+        ``__init__`` only stashes the model name -- the actual (expensive) ONNX
+        model load stays lazy inside it (guarded by a lock there against
+        concurrent callers) until the first :meth:`_search_related` pass
+        actually embeds something (lode-0wj.4). Deliberately **not** warmed
+        eagerly at mount: every ``CaptureScreen`` instantiation (including in
+        plain unit tests that never let the debounce fire) would otherwise pay
+        a real ONNX model load unconditionally, which is exactly the kind of
+        surprise cost :class:`~lode.embedding.FastEmbedEmbedder`'s lazy-by-design
+        docstring exists to avoid -- and, in one test, made a real background
+        load run long enough in wall-clock time for an unrelated debounce timer
+        to fire during a should-be-instant discard. The fix scoped here is
+        reuse across passes, not moving *when* the unavoidable first load
+        happens.
+        """
+        if self._embedder is None:
+            from lode.embedding import FastEmbedEmbedder
+
+            self._embedder = FastEmbedEmbedder(self.app.settings)
+        return self._embedder
 
     def action_save(self) -> None:
         """Save the buffer instantly (no AI call) and exit, or explain why not."""
@@ -276,6 +325,10 @@ class CaptureScreen(Screen[None]):
         takes), and whether it got cancelled by a newer pass before finishing
         (``exclusive=True`` makes true overlap structurally impossible; this just
         makes that supersession visible instead of silent).
+
+        **lode-0wj.4:** passes :meth:`_ensure_embedder`'s shared embedder rather
+        than leaving ``find_related_notes`` build its own -- see the module
+        docstring for why a fresh instance per pass was the real felt-lag source.
         """
         from lode.tui.related import find_related_notes
 
@@ -283,10 +336,15 @@ class CaptureScreen(Screen[None]):
         seq = self._related_pass_seq
         log.debug("related-notes pass #%d: starting (draft_len=%d)", seq, len(body))
         app = self.app
+        embedder = self._ensure_embedder()
         start = time.monotonic()
         try:
             related = await asyncio.to_thread(
-                find_related_notes, app.db_path, body, settings=app.settings
+                find_related_notes,
+                app.db_path,
+                body,
+                settings=app.settings,
+                embedder=embedder,
             )
         except asyncio.CancelledError:
             elapsed_ms = (time.monotonic() - start) * 1000
