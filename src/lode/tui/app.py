@@ -35,6 +35,16 @@ binding, since (unlike Ctrl+Q) no screen needs to intercept it. It lists
 every live note (Date | Version | Summary, newest-first); selecting one
 pushes a read-only view, and Escape steps back one screen at a time (note
 view -> list -> capture) via each screen's own ``pop_screen``.
+
+**App-level stylesheet (lode-1i8.4).** ``CSS_PATH`` loads
+:mod:`lode.tui`'s ``lode.tcss`` — an *external* stylesheet (not
+``DEFAULT_CSS``), resolved relative to this module's file by Textual and
+shipped with the package via ``[tool.setuptools.package-data]``
+(``pyproject.toml``). It is the repo's first TUI stylesheet and the pattern
+future screens' styling should extend; today it sizes and centers
+:class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s dialog box (see
+that module's docstring for why ``ModalScreen``'s built-in dimming already
+covers the rest).
 """
 
 from __future__ import annotations
@@ -68,6 +78,7 @@ class LodeApp(App[str | None]):
     """
 
     TITLE = "lode"
+    CSS_PATH = "lode.tcss"
 
     #: Registration convention for every E11 screen: name -> Screen subclass,
     #: pushed via ``push_screen("name")``. Extend this dict, not this class,

@@ -1,0 +1,33 @@
+/* lode's app-level Textual stylesheet (lode-1i8.4).
+ *
+ * Before this file the repo had no TUI CSS at all -- every screen rendered
+ * with Textual's bare unstyled layout. Most visibly,
+ * :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s Save/Discard/
+ * Cancel prompt had no sizing or centering, so it read as a blank full
+ * screen with a floating line of text rather than a popup dialog.
+ *
+ * :class:`~textual.screen.ModalScreen`'s own ``DEFAULT_CSS`` already dims the
+ * screen underneath (``background: $background 60%``) -- confirmed against
+ * the installed Textual version (8.2.8) before writing this file, per the
+ * ticket's design note -- so the only gap this file closes is sizing and
+ * centering the dialog box itself; the editor stays visible (dimmed) behind
+ * it for free.
+ *
+ * Loaded via ``LodeApp.CSS_PATH`` (:mod:`lode.tui.app`) as an *external*
+ * stylesheet (not ``DEFAULT_CSS``) -- this file is the repo's first, and the
+ * pattern every future screen's styling should extend rather than
+ * duplicate. It ships with the package via
+ * ``[tool.setuptools.package-data]`` in ``pyproject.toml``.
+ */
+
+DiscardConfirmScreen {
+    align: center middle;
+}
+
+#capture-confirm-dialog {
+    width: 50;
+    height: auto;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}

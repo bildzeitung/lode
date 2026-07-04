@@ -9,6 +9,16 @@ of this same confirm flow). This file drives the remaining two legs -- Save
 and Cancel -- plus that the dialog actually appears and leaves the buffer
 untouched, all through the real Textual pilot the same way
 ``tests/test_tui_reconcile_screen.py`` drives the CAS-reject confirm flow.
+
+**Popup-over-the-editor coverage (lode-1i8.4).**
+``test_confirm_dialog_is_an_overlay_over_the_still_mounted_capture_screen``
+pins the "popup, not a blank full screen" acceptance criterion at the level
+these tests can actually check without a real terminal: the dialog is
+pushed (not switched), so :class:`~lode.tui.screens.capture.CaptureScreen`
+stays on the app's screen stack underneath it rather than being torn down.
+The dialog's sizing/centering/border live in ``lode.tcss`` and aren't
+asserted here -- that's a rendered-style concern outside a pilot test's
+normal reach.
 """
 
 import asyncio
@@ -54,6 +64,29 @@ def test_escape_on_dirty_buffer_shows_the_confirm_dialog(tmp_path: Path) -> None
     assert "ancel" in message  # "(C)ancel"
     # The dialog is still up -- nothing exited yet.
     assert still_running
+
+
+def test_confirm_dialog_is_an_overlay_over_the_still_mounted_capture_screen(
+    tmp_path: Path,
+) -> None:
+    """lode-1i8.4: a popup over the editor, not a screen that replaces it."""
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[type]:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "a note in progress"
+            await pilot.press("escape")
+            await pilot.pause()
+            return [type(screen) for screen in app.screen_stack]
+
+    stack_types = asyncio.run(_drive())
+
+    # The dialog is on top, but CaptureScreen is still mounted underneath it
+    # rather than having been popped/replaced -- an overlay, not a navigation.
+    assert stack_types[-1] is DiscardConfirmScreen
+    assert CaptureScreen in stack_types[:-1]
 
 
 def test_escape_on_whitespace_only_buffer_skips_the_confirm(tmp_path: Path) -> None:
