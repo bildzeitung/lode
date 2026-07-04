@@ -64,6 +64,7 @@ Passages are regenerable, so re-chunking with new values is a cheap local rebuil
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
+| Related-notes enabled | runtime | on | Master on/off switch for the passive related-notes pass. Off skips the pass entirely — no FTS5/embedder/LanceDB work runs on the input path. **This is a user preference, not a lag fix**: a lag-diagnosis spike confirmed the pass already runs off the UI thread (fastembed/ONNX releases the GIL), so turning it off does not change keystroke latency. |
 | Related-notes debounce | runtime | `500ms` | Idle-typing delay in the capture screen before a passive "you wrote about this" pass runs ([design.md](design.md) §2 "Surfacing connections"); restarted on every keystroke so a burst of typing triggers at most one pass per pause. |
 | Related-notes result count | runtime | `5` | Max related past notes shown per pass. |
 | Related-notes minimum draft length | runtime | `20` chars | Below this (stripped) length, no pass runs at all — no DB connection opened. |

@@ -82,11 +82,14 @@ def find_related_notes(
     UI thread (see the capture screen's worker), so it cannot share the app's
     connection across threads.
 
-    Returns ``[]`` fast, opening no DB connection at all, when
-    ``draft.strip()`` is shorter than ``settings.related_notes_min_chars`` —
-    an empty or just-started buffer has no useful signal to search on.
-    Otherwise runs the read pipeline described in the module docstring and
-    reduces the trust-ranked context to at most ``settings.related_notes_limit``
+    Returns ``[]`` fast, opening no DB connection and running no embedder/
+    LanceDB work at all, when ``settings.related_notes_enabled`` is ``False``
+    (a plain user preference, not a lag fix — lode-0wj.2 confirmed the pass
+    already runs off the UI thread) or when ``draft.strip()`` is shorter than
+    ``settings.related_notes_min_chars`` — an empty or just-started buffer has
+    no useful signal to search on. Otherwise runs the read pipeline described
+    in the module docstring and reduces the trust-ranked context to at most
+    ``settings.related_notes_limit``
     **distinct notes** (deduped, keeping each note's best-ranked passage as its
     snippet), each carrying a human "N weeks ago"-style age
     (:func:`humanize_age`).
@@ -97,6 +100,8 @@ def find_related_notes(
     not swallowed here so a real bug is not silently hidden.
     """
     settings = settings or Settings()
+    if not settings.related_notes_enabled:
+        return []
     if len(draft.strip()) < settings.related_notes_min_chars:
         return []
 
