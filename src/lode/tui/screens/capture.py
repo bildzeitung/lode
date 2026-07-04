@@ -21,14 +21,20 @@ stays out of the save path entirely (it never touches ``save_capture``) and
 runs off the UI thread via a Textual worker, so a slow or in-flight pass never
 blocks typing or Ctrl+S/Escape.
 
-**Confirm-on-unsaved guard for Escape (lode-0wj.1).** Escape used to discard
-silently regardless of buffer state — an easy vi-muscle-memory footgun. Now
-Escape on a non-empty/non-whitespace buffer pops :class:`DiscardConfirmScreen`
-(Save/Discard/Cancel) instead of exiting straight away; an empty/whitespace
-buffer still exits immediately, so the fast "get in, dump, get out" path for a
-genuinely empty capture is untouched. Ctrl+S is unaffected either way. The
-app-level Ctrl+Q confirm-if-dirty is deliberately out of scope here (tracked
-as lode-0wj.8) — it's a global ``App``-priority binding this screen can't see.
+**Confirm-on-unsaved guard for Escape (lode-0wj.1) and app-level Ctrl+Q
+(lode-0wj.8).** Escape used to discard silently regardless of buffer state —
+an easy vi-muscle-memory footgun. Now Escape on a non-empty/non-whitespace
+buffer pops :class:`DiscardConfirmScreen` (Save/Discard/Cancel) instead of
+exiting straight away; an empty/whitespace buffer still exits immediately, so
+the fast "get in, dump, get out" path for a genuinely empty capture is
+untouched. Ctrl+S is unaffected either way. Ctrl+Q is a *global*
+``App``-priority binding (:mod:`lode.tui.app`) that this screen can't bind
+directly, so it reaches the same guard through :meth:`CaptureScreen.confirm_quit`
+— the dirty-check-then-confirm logic :meth:`action_cancel` uses for Escape,
+pulled out into its own method so ``LodeApp.action_quit`` can call it
+generically without knowing anything about capture's buffer. A screen with
+nothing unsaved simply doesn't define ``confirm_quit``, so the app quits it
+immediately.
 """
 
 from __future__ import annotations
@@ -68,8 +74,9 @@ class DiscardConfirmScreen(ModalScreen[str]):
     """Save / Discard / Cancel confirm, popped on Escape over a dirty buffer.
 
     Dismisses with one of ``"save"``, ``"discard"``, ``"cancel"`` — the caller
-    (:meth:`CaptureScreen.action_cancel`) decides what each means; this screen
-    owns only the prompt and the three keys.
+    (:meth:`CaptureScreen.confirm_quit`, reached from both Escape and the
+    app-level Ctrl+Q) decides what each means; this screen owns only the
+    prompt and the three keys.
     """
 
     BINDINGS = [
@@ -97,9 +104,11 @@ class CaptureScreen(Screen[None]):
 
     Ctrl+S saves and exits. Escape discards and exits immediately if the
     buffer is empty/whitespace-only; otherwise it pops a Save/Discard/Cancel
-    confirm (lode-0wj.1) rather than discarding silently. The related-notes
-    panel is read-only and non-interactive — it never takes focus or input, so
-    it changes nothing about capture's "get in, dump text, get out" contract.
+    confirm (lode-0wj.1) rather than discarding silently. The app-level
+    Ctrl+Q binding (:mod:`lode.tui.app`) applies the same guard via
+    :meth:`confirm_quit` (lode-0wj.8). The related-notes panel is read-only
+    and non-interactive — it never takes focus or input, so it changes
+    nothing about capture's "get in, dump text, get out" contract.
     """
 
     BINDINGS = [
@@ -153,13 +162,21 @@ class CaptureScreen(Screen[None]):
         self.app.exit(result.note_id)
 
     def action_cancel(self) -> None:
-        """Escape: exit immediately if the buffer is empty, else confirm first.
+        """Escape: exit immediately if the buffer is empty, else confirm first."""
+        self.confirm_quit()
 
-        An empty/whitespace-only buffer has nothing to lose, so it keeps the
-        old "discard and exit" behaviour unprompted — the fast path a genuine
-        empty capture (opened by mistake, or just backed out of) still wants.
-        A non-empty buffer instead pops :class:`DiscardConfirmScreen`; its
-        answer is handled by :meth:`_on_discard_confirm`.
+    def confirm_quit(self) -> None:
+        """Exit immediately if the buffer is empty, else confirm first.
+
+        Shared by Escape (:meth:`action_cancel`) and the app-level Ctrl+Q
+        (``LodeApp.action_quit``, lode-0wj.8) — both want the identical
+        "nothing to lose, just go" / "ask first" split, so this is the one
+        place that owns it. An empty/whitespace-only buffer has nothing to
+        lose, so it keeps the old "discard and exit" behaviour unprompted —
+        the fast path a genuine empty capture (opened by mistake, or just
+        backed out of) still wants. A non-empty buffer instead pops
+        :class:`DiscardConfirmScreen`; its answer is handled by
+        :meth:`_on_discard_confirm`.
         """
         body = self.query_one(f"#{BODY_ID}", TextArea).text
         if not body.strip():
