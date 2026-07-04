@@ -40,3 +40,6 @@ where = ["src"]
 # Ship the data-shape DDL (docs/storage.md §8) with the package so
 # lode.storage.init_db can load it via importlib.resources at runtime.
 lode = ["*.sql"]
+# Ship the TUI's external stylesheet (lode-1i8.4) — package-data keys are
+# per-package and non-recursive, so lode.tui needs its own entry.
+"lode.tui" = ["*.tcss"]

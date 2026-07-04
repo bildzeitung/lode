@@ -118,6 +118,17 @@ class DiscardConfirmScreen(ModalScreen[str]):
     (:meth:`CaptureScreen.confirm_quit`, reached from both Escape and the
     app-level Ctrl+Q) decides what each means; this screen owns only the
     prompt and the three keys.
+
+    **Popup styling (lode-1i8.4).** Pushed via ``push_screen`` (not
+    ``switch_screen``), so :class:`CaptureScreen` stays mounted underneath on
+    the app's screen stack rather than being replaced — this dialog is an
+    overlay, not a navigation. :class:`~textual.screen.ModalScreen`'s own
+    ``DEFAULT_CSS`` already dims that screen underneath
+    (``background: $background 60%``); ``lode.tcss`` (:mod:`lode.tui`, loaded
+    via ``LodeApp.CSS_PATH``) adds only what was missing — centering and
+    sizing the ``#capture-confirm-dialog`` box itself — so the prompt reads
+    as a bounded, bordered popup over the still-visible editor instead of a
+    blank full screen.
     """
 
     BINDINGS = [
