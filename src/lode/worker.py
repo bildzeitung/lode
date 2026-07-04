@@ -47,7 +47,16 @@ ordered by type priority (``embed > enrich``, ``docs/storage.md``:274) then
 belt-and-suspenders behind the single-owner advisory lock.
 
 **Run** (``run_one``):
-- ok → ``status='done'``
+- ok → ``status='done'``; for ``type='enrich'`` this also stamps
+  ``prompt_ver`` to the current :data:`lode.enrich.ENRICH_PROMPT_VER` on the
+  same row (lode-q47) — this is the "worker/reconciliation pass" the
+  :func:`lode.jobs.enqueue_derive_jobs` docstring promises would stamp it;
+  before lode-q47 nothing ever did, so a ``done`` enrich job's ``prompt_ver``
+  stayed permanently NULL and :mod:`lode.reconcile`'s enrich-gap step had to
+  fall back to inspecting the ``summary`` annotation instead (a signal that
+  broke for a legitimately empty summary). ``embed`` jobs are unaffected —
+  their ``prompt_ver`` stays NULL per the schema's job-identity design
+  (``docs/storage.md`` §"Schema decisions").
 - transient error → ``attempts += 1``, ``last_error`` set,
   ``status='failed'`` with
   ``next_attempt_at = now + exponential backoff`` (base/cap from
@@ -311,7 +320,13 @@ def run_one(
     Reads the job row, dispatches to the registered handler, and transitions
     the status:
 
-    - Handler succeeds → ``status='done'``
+    - Handler succeeds → ``status='done'``. For ``type='enrich'`` the same
+      UPDATE also stamps ``prompt_ver`` to the current
+      :data:`lode.enrich.ENRICH_PROMPT_VER` (lode-q47) — this is the "job
+      identity" half of the ``(type, target_version, prompt_ver)`` key
+      ``docs/storage.md`` documents; :mod:`lode.reconcile`'s enrich-gap step
+      reads it back to decide whether a ``done`` job is current. ``embed``
+      jobs are untouched — their ``prompt_ver`` stays NULL by design.
     - Handler raises, attempts < max → ``status='failed'``, backoff
       ``next_attempt_at`` set, ``last_error`` recorded
     - Handler raises, attempts == max → ``status='dead'``
@@ -335,7 +350,19 @@ def run_one(
     try:
         handler(conn, target_version, db_path, settings)
         with conn:
-            conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
+            if job_type == "enrich":
+                # Deferred import: only paid when an enrich job actually runs
+                # (mirrors the deferred `from lode.enrich import ...` in
+                # _enrich_handler below), keeping the Anthropic SDK import off
+                # embed-only code paths.
+                from lode.enrich import ENRICH_PROMPT_VER
+
+                conn.execute(
+                    "UPDATE jobs SET status = 'done', prompt_ver = ? WHERE id = ?",
+                    (ENRICH_PROMPT_VER, job_id),
+                )
+            else:
+                conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
         log.info("job %d (%s target=%s) done", job_id, job_type, short)
         return True
 

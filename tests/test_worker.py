@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from lode.config import Settings
+from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
 from lode.worker import (
@@ -82,8 +83,8 @@ def settings() -> Settings:
 def _job(conn: sqlite3.Connection, job_id: int) -> dict:
     """Fetch one job row as a dict."""
     row = conn.execute(
-        "SELECT id, type, status, attempts, last_error, next_attempt_at, claimed_at "
-        "FROM jobs WHERE id = ?",
+        "SELECT id, type, status, attempts, last_error, next_attempt_at, claimed_at, "
+        "prompt_ver FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     assert row is not None, f"job {job_id} not found"
@@ -95,6 +96,7 @@ def _job(conn: sqlite3.Connection, job_id: int) -> dict:
         "last_error": row[4],
         "next_attempt_at": row[5],
         "claimed_at": row[6],
+        "prompt_ver": row[7],
     }
 
 
@@ -270,7 +272,32 @@ def test_run_success_sets_done(
     _claim_one(conn, ("embed",), _now_iso())
     ok = run_one(conn, job_id, db_path, settings, _noop_registry())
     assert ok is True
-    assert _job(conn, job_id)["status"] == "done"
+    row = _job(conn, job_id)
+    assert row["status"] == "done"
+    # embed jobs never carry a prompt_ver (schema's job-identity design).
+    assert row["prompt_ver"] is None
+
+
+def test_run_enrich_success_stamps_prompt_ver(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A successful enrich job stamps prompt_ver=ENRICH_PROMPT_VER on 'done' (lode-q47).
+
+    This is the fix for the enrich-gap thrash bug: before lode-q47 nothing
+    ever stamped a job's own prompt_ver, so lode.reconcile's enrich-gap step
+    had to infer "current" from a summary annotation instead — a signal that
+    broke when Haiku legitimately returned an empty summary.
+    """
+    job_id = _insert_job(conn, "enrich", "ver-1")
+    _claim_one(conn, ("enrich",), _now_iso())
+    noop_enrich_registry: dict[str, HandlerFn] = {
+        "enrich": lambda conn, tv, db, s: None
+    }
+    ok = run_one(conn, job_id, db_path, settings, noop_enrich_registry)
+    assert ok is True
+    row = _job(conn, job_id)
+    assert row["status"] == "done"
+    assert row["prompt_ver"] == ENRICH_PROMPT_VER
 
 
 def test_run_transient_error_sets_failed(
