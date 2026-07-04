@@ -528,7 +528,12 @@ def collect_enrich_batch(
     If ``processing_status == 'ended'``, iterates results:
 
     - **succeeded**: validates the tool-use block, writes enrichment to DB
-      via :func:`_write_enrichment`, marks the job ``done``.
+      via :func:`_write_enrichment`, marks the job ``done`` and stamps its
+      ``prompt_ver`` to the current :data:`ENRICH_PROMPT_VER` (lode-q47) — the
+      Batches API is the primary production route for enrich jobs, so this
+      mirrors the same stamp :func:`lode.worker.run_one` applies on the
+      immediate path; :mod:`lode.reconcile`'s enrich-gap step reads a
+      ``done`` job's own ``prompt_ver`` to decide whether it is current.
     - **errored / expired / canceled**: marks the job ``failed`` with backoff
       (using :data:`~lode.config.Settings.retry_backoff_base_s`); at
       :data:`~lode.config.Settings.retry_max_attempts` the job is
@@ -625,7 +630,10 @@ def collect_enrich_batch(
                 ts,
             )
             with conn:
-                conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
+                conn.execute(
+                    "UPDATE jobs SET status = 'done', prompt_ver = ? WHERE id = ?",
+                    (ENRICH_PROMPT_VER, job_id),
+                )
             log.info(
                 "collect_enrich_batch: batch=%s version=%s done "
                 "(tags=%d entities=%d edges=%d)",

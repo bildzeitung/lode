@@ -89,7 +89,9 @@ def test_add_captures_note_and_enqueues_embed_and_enrich_jobs(
 
     save() enqueues embed + enrich atomically; the capture path then
     opportunistically claims + runs the enrich job inline, so a successful
-    immediate enrichment leaves it 'done' rather than 'pending'.
+    immediate enrichment leaves it 'done' rather than 'pending'. run_one also
+    stamps the done enrich job's own prompt_ver (lode-q47) -- embed's stays
+    NULL by the schema's job-identity design.
     """
     import lode.enrich as enrich_mod
 
@@ -117,7 +119,7 @@ def test_add_captures_note_and_enqueues_embed_and_enrich_jobs(
         "SELECT type, status, prompt_ver FROM jobs WHERE target_version = ? "
         "ORDER BY type",
         (version_id,),
-    ) == [("embed", "pending", None), ("enrich", "done", None)]
+    ) == [("embed", "pending", None), ("enrich", "done", enrich_mod.ENRICH_PROMPT_VER)]
 
 
 def test_add_calls_enrich_immediately(

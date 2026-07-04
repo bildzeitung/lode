@@ -25,10 +25,18 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   job for each.  Excludes tombstones, purged versions, and ``no_egress`` notes
   (content that must never be sent to Haiku).  Also catches the
   **prompt/model-change** case (lode-0wj.9): a head whose enrich job already
-  ran (``done``) but whose ``summary`` annotation is missing or was written
-  under a stale :data:`lode.enrich.ENRICH_PROMPT_VER` is treated as a gap too,
-  so bumping the prompt version triggers corpus-wide re-enrichment on the next
-  scan instead of only covering notes with no enrich history at all.
+  ran (``done``) but whose **job row's own** ``prompt_ver`` is not the current
+  :data:`lode.enrich.ENRICH_PROMPT_VER` is treated as a gap too, so bumping the
+  prompt version triggers corpus-wide re-enrichment on the next scan instead of
+  only covering notes with no enrich history at all. **Job-identity-based, not
+  content-based (lode-q47):** the signal is the ``done`` job's own
+  ``prompt_ver`` column — stamped on completion by
+  :func:`lode.worker.run_one` (immediate path) and
+  :func:`lode.enrich.collect_enrich_batch` (Batches API path) — never whether
+  a ``summary`` annotation exists. A head whose enrichment legitimately
+  produced an empty summary (Haiku returned ``""`` for a content-free note, so
+  no ``summary`` row was written) is therefore correctly seen as
+  current-and-done instead of being re-flagged as a gap on every scan.
 
 **Idempotency** — each step re-enqueues via :func:`lode.jobs.enqueue_derive_jobs`,
 which uses ``INSERT … ON CONFLICT DO NOTHING`` against the ``idx_jobs_live``
@@ -195,23 +203,28 @@ def _enrich_gap_step(conn: sqlite3.Connection) -> int:
     (``pending``, ``running``, or ``failed``).  A ``dead`` job (max-retries
     exhausted) or the total absence of a job is treated the same as before.
 
-    **Gap signal, part 2 (prompt/model change, lode-0wj.9):** even when a
-    ``done`` enrich job exists for the head, it is still a gap if the head
-    has no ``source='ai'``, ``status='fresh'`` ``summary`` annotation stamped
-    with the *current* :data:`lode.enrich.ENRICH_PROMPT_VER`. A prior run
-    under an older prompt/model produced a summary with a stale
-    ``prompt_ver`` (or produced no summary at all, e.g. it predates the
-    ``summary`` kind); either way the ``done`` status alone no longer proves
-    the head's enrichment reflects the current prompt/model, so a fresh
-    ``enrich`` job is re-enqueued. A ``pending``/``running``/``failed`` job
-    is left alone regardless (in-flight or about to be retried).
+    **Gap signal, part 2 (prompt/model change, lode-0wj.9 / lode-q47):** even
+    when a ``done`` enrich job exists for the head, it is still a gap unless
+    that job's own ``prompt_ver`` column equals the *current*
+    :data:`lode.enrich.ENRICH_PROMPT_VER`. ``prompt_ver`` is stamped on the job
+    row itself at completion time (:func:`lode.worker.run_one` for the
+    immediate path, :func:`lode.enrich.collect_enrich_batch` for the Batches
+    API path) — a prior run under an older prompt/model left the job's
+    ``prompt_ver`` stale (or, pre-lode-q47, NULL), so a fresh ``enrich`` job is
+    re-enqueued. This is deliberately **job-identity-based, not
+    content-based**: it does not consult the ``annotations`` table, so a head
+    whose enrichment ran under the current prompt but produced an *empty*
+    summary (no ``summary`` row written — mirrors an empty tag/entity list) is
+    correctly recognized as current, instead of being perpetually re-flagged
+    as a gap (the lode-q47 thrash bug). A ``pending``/``running``/``failed``
+    job is left alone regardless (in-flight or about to be retried).
 
     **Gap query:** live head versions — ``notes.head_version_id`` joined to
     ``versions``, filtered to non-tombstone (``op != 'delete'``), non-purged
     (``purged_at IS NULL``), non-no_egress (``no_egress = 0``) — with no
-    pending/running/failed enrich job, AND (no ``done`` enrich job OR no
-    current-prompt-version fresh summary).  Each such version is re-enqueued
-    via :func:`lode.jobs.enqueue_derive_jobs`.
+    pending/running/failed enrich job, AND no ``done`` enrich job whose own
+    ``prompt_ver`` matches the current prompt version.  Each such version is
+    re-enqueued via :func:`lode.jobs.enqueue_derive_jobs`.
 
     **Enqueue:** ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live`` ensures a
     version whose enrich job is already pending or running produces no duplicate
@@ -235,22 +248,12 @@ def _enrich_gap_step(conn: sqlite3.Connection) -> int:
                 AND j.target_version = n.head_version_id
                 AND j.status IN ('pending', 'running', 'failed')
           )
-          AND (
-              NOT EXISTS (
-                  SELECT 1 FROM jobs j
-                  WHERE j.type = 'enrich'
-                    AND j.target_version = n.head_version_id
-                    AND j.status = 'done'
-              )
-              OR NOT EXISTS (
-                  SELECT 1 FROM annotations a
-                  WHERE a.target = n.note_id
-                    AND a.kind = 'summary'
-                    AND a.source = 'ai'
-                    AND a.status = 'fresh'
-                    AND a.source_version = n.head_version_id
-                    AND a.prompt_ver = ?
-              )
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'enrich'
+                AND j.target_version = n.head_version_id
+                AND j.status = 'done'
+                AND j.prompt_ver = ?
           )
         """,
         (ENRICH_PROMPT_VER,),
