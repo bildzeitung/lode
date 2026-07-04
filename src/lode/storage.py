@@ -49,12 +49,25 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         "ALTER TABLE edges ADD COLUMN quoted_text TEXT",
         # lode-aor: crash-reclaim signal for jobs stuck in status='running'
         "ALTER TABLE jobs ADD COLUMN claimed_at TEXT",
+        # lode-pig: backoff schedule for jobs (2f2379d added it to CREATE TABLE
+        # only). Added nullable — SQLite rejects ADD COLUMN with the schema's
+        # strftime() expression default ("Cannot add a column with non-constant
+        # default"). Backfilled below so pre-existing rows are not left NULL
+        # (NULL fails the ``next_attempt_at <= now`` claim predicate → invisible).
+        "ALTER TABLE jobs ADD COLUMN next_attempt_at TEXT",
     ]
     for ddl in _migrations:
         try:
             conn.execute(ddl)
         except sqlite3.OperationalError:
             pass  # column already present — idempotent
+
+    # Backfill next_attempt_at for rows that predate the column. ``created`` is a
+    # past timestamp, so migrated jobs become immediately due (correct — they
+    # were enqueued before the crash). No-op once every row is non-NULL.
+    conn.execute(
+        "UPDATE jobs SET next_attempt_at = created WHERE next_attempt_at IS NULL"
+    )
 
 
 def init_db(db_path: str | Path) -> sqlite3.Connection:
