@@ -27,6 +27,14 @@ edit flow) must still confirm first, so the guard has to live here instead:
 something to lose, via an optional ``confirm_quit()`` method, rather than
 hardcoding a check against ``CaptureScreen`` — ask/config/reconcile don't
 define it, so they keep quitting immediately.
+
+**Browse screen (lode-0wj.5).** ``F3`` reaches
+:class:`~lode.tui.screens.browse.BrowseScreen` the same "global, reachable
+from anywhere" way ``F2`` reaches config — a plain, non-priority ``App``
+binding, since (unlike Ctrl+Q) no screen needs to intercept it. It lists
+every live note (Date | Version | Summary, newest-first); selecting one
+pushes a read-only view, and Escape steps back one screen at a time (note
+view -> list -> capture) via each screen's own ``pop_screen``.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from textual.binding import Binding
 
 from lode.config import Settings, default_db_path
 from lode.tui.screens.ask import AskScreen
+from lode.tui.screens.browse import BrowseScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.config import ConfigScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -52,8 +61,9 @@ class LodeApp(App[str | None]):
     with the saved note id, or ``None`` on discard) via Textual's normal
     ``App.exit(result)`` / ``App.run()`` return-value contract. ``F2`` reaches
     the read-only config/diagnostics screen (lode-3r4) from anywhere; it pops
-    back to the previous screen on Escape. Ctrl+Q quits immediately unless the
-    current screen has unsaved state to confirm first (lode-0wj.8) — see
+    back to the previous screen on Escape. ``F3`` reaches the browse screen
+    (lode-0wj.5) the same way. Ctrl+Q quits immediately unless the current
+    screen has unsaved state to confirm first (lode-0wj.8) — see
     :meth:`action_quit`.
     """
 
@@ -67,11 +77,13 @@ class LodeApp(App[str | None]):
         "config": ConfigScreen,
         "ask": AskScreen,
         "reconcile": ReconcileScreen,
+        "browse": BrowseScreen,
     }
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("f2", "show_config", "Config"),
+        Binding("f3", "show_browse", "Browse"),
     ]
 
     def __init__(
@@ -90,6 +102,10 @@ class LodeApp(App[str | None]):
     def action_show_config(self) -> None:
         """Push the config/diagnostics screen (lode-3r4) on top of the current one."""
         self.push_screen("config")
+
+    def action_show_browse(self) -> None:
+        """Push the browse screen (lode-0wj.5) on top of the current one."""
+        self.push_screen("browse")
 
     def action_quit(self) -> None:
         """Ctrl+Q: quit immediately, unless the current screen has unsaved state.
