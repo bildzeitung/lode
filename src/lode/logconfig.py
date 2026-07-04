@@ -44,7 +44,10 @@ def resolve_level(level: str | int | None = None) -> int:
 
 
 def configure_logging(
-    level: str | int | None = None, log_dir: Path | None = None
+    level: str | int | None = None,
+    log_dir: Path | None = None,
+    *,
+    console: bool = True,
 ) -> int:
     """Configure the root logger and set its level; return the numeric level.
 
@@ -54,13 +57,32 @@ def configure_logging(
     writing to ``<log_dir>/lode.log`` (the directory is created if absent), so
     lode's logs land under ``$LODE_HOME/logs/`` (docs/configuration.md "Paths &
     locations") while still echoing to stderr.
+
+    ``console=False`` is the TUI's file-only mode (lode-1i8.2): instead of
+    installing a stream handler, any stream/console handler already on the
+    root logger (e.g. one the group callback's earlier ``console=True`` call
+    installed via ``basicConfig``) is removed, so nothing echoes to the
+    terminal and corrupts Textual's alternate-screen display. ``log_dir`` is
+    required in this mode, and the file handler is attached *before* any
+    stream handler is removed, so the root logger is never left
+    handler-less -- which would let Python's ``logging.lastResort`` (WARNING+
+    straight to stderr) fire and reintroduce the very corruption this guards
+    against. Plain CLI commands never pass ``console=False``, so ``ask``/
+    ``add``/etc. keep mirroring to stderr unchanged.
     """
+    if not console and log_dir is None:
+        raise ValueError("configure_logging: log_dir is required when console=False")
     resolved = resolve_level(level)
-    logging.basicConfig(level=resolved, format=_LOG_FORMAT)
     root = logging.getLogger()
+    if console:
+        logging.basicConfig(level=resolved, format=_LOG_FORMAT)
     root.setLevel(resolved)
     if log_dir is not None:
         _attach_file_handler(root, Path(log_dir), resolved)
+    if not console:
+        for handler in list(root.handlers):
+            if not getattr(handler, "_lode_file", False):
+                root.removeHandler(handler)
     return resolved
 
 

@@ -85,3 +85,31 @@ def test_no_file_handler_without_log_dir() -> None:
     configure_logging("INFO")
     new = set(logging.getLogger().handlers) - before
     assert not any(getattr(h, "_lode_file", False) for h in new)
+
+
+def test_console_false_requires_log_dir() -> None:
+    # The TUI's file-only mode must never silently leave the root logger with
+    # no handlers at all (lode-1i8.2) -- log_dir is mandatory, not optional.
+    with pytest.raises(ValueError):
+        configure_logging("INFO", console=False)
+
+
+def test_console_false_removes_stream_handler_keeps_file(tmp_path: Path) -> None:
+    # Simulates the group callback's console=True call (which installs a
+    # stream handler via basicConfig) followed by the TUI's console=False
+    # call: the stream handler must go, the file handler must remain, so the
+    # root logger is never handler-less (lastResort could otherwise fire and
+    # corrupt the TUI's alternate-screen display the same way stderr would).
+    root = logging.getLogger()
+    stream_handler = logging.StreamHandler()
+    root.addHandler(stream_handler)
+    try:
+        configure_logging("INFO", log_dir=tmp_path, console=False)
+        assert stream_handler not in root.handlers
+        assert not any(not getattr(h, "_lode_file", False) for h in root.handlers)
+        assert _lode_file_handlers()
+    finally:
+        root.removeHandler(stream_handler)
+        for handler in _lode_file_handlers():
+            root.removeHandler(handler)
+            handler.close()

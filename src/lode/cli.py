@@ -630,7 +630,17 @@ def tui(
     Anthropic/vector imports). The capture screen's own save path
     (:mod:`lode.tui.capture`) has no AI call in it at all: only the
     synchronous version-write + FTS5 tier runs before it returns.
+
+    Re-configures logging file-only (lode-1i8.2): the group callback already
+    ran ``configure_logging(log_dir=...)`` with its default ``console=True``,
+    which attaches a stderr handler that would otherwise dump log lines onto
+    Textual's alternate-screen display, corrupting it. ``console=False`` here
+    removes that stream handler while keeping the file handler, so records
+    still land in ``$LODE_HOME/logs/lode.log`` for telemetry — plain commands
+    (``ask``/``add``/...) are untouched since only this command passes it.
     """
+    configure_logging(log_dir=log_dir(), console=False)
+
     from lode.tui.app import run as run_tui
 
     run_tui(db_path=db or default_db_path())
