@@ -154,6 +154,15 @@ class Settings(BaseModel):
     )
 
     # --- TUI (passive connection surfacing, E11) ------------------------------
+    related_notes_enabled: bool = _knob(
+        True,
+        Kind.RUNTIME,
+        "Master on/off switch for the passive related-notes pass. Off skips "
+        "find_related_notes entirely, so no FTS5/embedder/LanceDB work runs on "
+        "the input path. This is a user preference, not a lag fix -- lode-0wj.2 "
+        "confirmed the pass already runs off the UI thread (fastembed/ONNX "
+        "releases the GIL), so disabling it does not change keystroke latency.",
+    )
     related_notes_debounce_ms: int = _knob(
         500,
         Kind.RUNTIME,

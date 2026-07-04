@@ -90,6 +90,23 @@ def lexical_only_repo(db_path, settings) -> Repository:
     )
 
 
+# --- the enabled gate: cheap, no DB touched, defaults on -------------------
+
+
+def test_disabled_returns_empty_without_opening_the_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "nonexistent" / "lode.db"
+    settings = load_settings(related_notes_enabled=False, related_notes_min_chars=0)
+
+    result = find_related_notes(db_path, "alpha bravo charlie", settings=settings)
+
+    assert result == []
+    assert not db_path.exists()  # init_db never called
+
+
+def test_enabled_defaults_to_true() -> None:
+    assert load_settings().related_notes_enabled is True
+
+
 # --- the min-chars gate: cheap, no DB touched -----------------------------
 
 
