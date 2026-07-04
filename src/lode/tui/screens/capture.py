@@ -35,11 +35,28 @@ pulled out into its own method so ``LodeApp.action_quit`` can call it
 generically without knowing anything about capture's buffer. A screen with
 nothing unsaved simply doesn't define ``confirm_quit``, so the app quits it
 immediately.
+
+**Lag-diagnosis instrumentation (lode-0wj.2, SPIKE).** Feedback that typing
+feels laggy prompted lightweight, toggleable logging around this screen's
+input path and the passive related-notes pass: when the debounce timer
+(re)starts and fires, each pass's sequence number / duration / result count
+(and whether it was cancelled by a newer pass -- ``exclusive=True`` below
+makes overlap structurally impossible, it just supersedes), and, only while
+DEBUG logging is on, an event-loop-lag heartbeat
+(:func:`lode.tui.latency_probe.probe_event_loop_lag`) that is this spike's
+keystroke->render latency proxy. All of it is gated behind
+``log.isEnabledFor(logging.DEBUG)`` (``LODE_LOG_LEVEL=DEBUG``,
+:mod:`lode.logconfig`) -- zero log calls and no extra worker at the default
+``INFO`` level, so this changes no behaviour. See
+``tests/test_capture_lag_diagnosis.py`` for the offline reproduction against
+the lode-5y8.4 seed corpus and the measured verdict.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from typing import TYPE_CHECKING
 
 from textual import work
@@ -51,6 +68,7 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, Static, TextArea
 
 from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
+from lode.tui.latency_probe import probe_event_loop_lag
 from lode.tui.screens.reconcile import ReconcileScreen
 
 if TYPE_CHECKING:
@@ -58,6 +76,8 @@ if TYPE_CHECKING:
     # screen's own import stays free of the vector stack (pyarrow) and the
     # embedder (fastembed) until a passive-surfacing pass actually runs.
     from lode.tui.related import RelatedNote
+
+log = logging.getLogger(__name__)
 
 #: The text area's widget id — read back in tests and by this screen alike.
 BODY_ID = "capture-body"
@@ -131,6 +151,9 @@ class CaptureScreen(Screen[None]):
         #: assertion surface for tests rather than parsed back out of the
         #: rendered widget.
         self._related: list[RelatedNote] = []
+        #: Incrementing id for each related-notes pass (lode-0wj.2 instrumentation) --
+        #: lets the DEBUG log correlate a pass's start/finish/cancellation lines.
+        self._related_pass_seq = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -146,6 +169,20 @@ class CaptureScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self.query_one(f"#{BODY_ID}", TextArea).focus()
+        # lode-0wj.2: the event-loop-lag heartbeat only ever runs while DEBUG
+        # logging is on -- gating the *start* (not just the log calls inside it)
+        # means the default INFO level spawns no extra worker at all.
+        if log.isEnabledFor(logging.DEBUG):
+            self._probe_loop_lag()
+
+    @work(group="latency-probe")
+    async def _probe_loop_lag(self) -> None:
+        """DEBUG-only: run the event-loop-lag heartbeat for this screen's lifetime.
+
+        Textual cancels a screen's workers on unmount, which is this loop's only
+        exit (:func:`~lode.tui.latency_probe.probe_event_loop_lag` never returns).
+        """
+        await probe_event_loop_lag()
 
     def action_save(self) -> None:
         """Save the buffer instantly (no AI call) and exit, or explain why not."""
@@ -210,10 +247,15 @@ class CaptureScreen(Screen[None]):
         if self._related_timer is not None:
             self._related_timer.stop()
         delay_s = self.app.settings.related_notes_debounce_ms / 1000
+        log.debug(
+            "keystroke: related-notes debounce (re)started, delay=%.0fms",
+            delay_s * 1000,
+        )
         self._related_timer = self.set_timer(delay_s, self._start_related_search)
 
     def _start_related_search(self) -> None:
         """Timer callback: read the current buffer and kick off the search worker."""
+        log.debug("related-notes debounce fired: starting a pass")
         body = self.query_one(f"#{BODY_ID}", TextArea).text
         self._search_related(body)
 
@@ -227,12 +269,39 @@ class CaptureScreen(Screen[None]):
         blocked on it. ``exclusive=True`` (same worker group each call)
         cancels any still-running prior pass before starting this one, so a
         fast typist never sees results arrive out of order.
+
+        **lode-0wj.2 instrumentation:** logs this pass's sequence number, wall-clock
+        duration and result count at DEBUG (how often it fires and how long
+        ``find_related_notes`` -- FTS5 + the ONNX embedder + LanceDB -- actually
+        takes), and whether it got cancelled by a newer pass before finishing
+        (``exclusive=True`` makes true overlap structurally impossible; this just
+        makes that supersession visible instead of silent).
         """
         from lode.tui.related import find_related_notes
 
+        self._related_pass_seq += 1
+        seq = self._related_pass_seq
+        log.debug("related-notes pass #%d: starting (draft_len=%d)", seq, len(body))
         app = self.app
-        related = await asyncio.to_thread(
-            find_related_notes, app.db_path, body, settings=app.settings
+        start = time.monotonic()
+        try:
+            related = await asyncio.to_thread(
+                find_related_notes, app.db_path, body, settings=app.settings
+            )
+        except asyncio.CancelledError:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            log.debug(
+                "related-notes pass #%d: cancelled after %.1fms (superseded)",
+                seq,
+                elapsed_ms,
+            )
+            raise
+        elapsed_ms = (time.monotonic() - start) * 1000
+        log.debug(
+            "related-notes pass #%d: finished in %.1fms, %d related note(s)",
+            seq,
+            elapsed_ms,
+            len(related),
         )
         self._render_related(related)
 
