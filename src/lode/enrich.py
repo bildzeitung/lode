@@ -7,8 +7,11 @@ scores, stored as ``source='ai'`` -- never asserted facts.
 
 Architecture (docs/storage.md):
 
-- Tags + entities → ``annotations`` table, ``source='ai'``,
-  ``kind='tag'`` / ``'entity'``, whole-note scope (``target = note_id``).
+- Tags + entities + a one-line summary → ``annotations`` table, ``source='ai'``,
+  ``kind='tag'`` / ``'entity'`` / ``'summary'``, whole-note scope
+  (``target = note_id``). ``summary`` (lode-0wj.9) is a single Haiku-derived
+  sentence describing the head version -- same row shape, same provenance,
+  same idempotent replace as tag/entity.
 - Inferred edges → ``edges`` table, ``source='ai'``, with ``confidence``,
   ``reason``, and ``source_version``. These are Haiku suggestions; user curation
   (``source='user'``) is separate and irreplaceable (pinned to ``note_id``).
@@ -61,7 +64,8 @@ log = logging.getLogger(__name__)
 
 #: Prompt version -- baked into every enrichment provenance row so a model or
 #: prompt change can trigger corpus-wide re-enrichment via the reconcile scan.
-ENRICH_PROMPT_VER = "npx1-v1"
+#: Bumped to v2 for the ``summary`` field (lode-0wj.9).
+ENRICH_PROMPT_VER = "npx1-v2"
 
 #: Tool name used to force Haiku into structured output via tool-use calling.
 _TOOL_NAME = "extract_enrichment"
@@ -78,7 +82,9 @@ _PROMPT_TMPL = (
     "- inferred_edges: Topics or concepts this note relates to that are not explicitly "
     "stated. Each suggestion needs a to_id (concept/topic label), a reason (why you "
     "inferred this link), and a confidence score (0.0-1.0). "
-    "These are suggestions only -- not asserted facts.\n\n"
+    "These are suggestions only -- not asserted facts.\n"
+    "- summary: One concise plain-English sentence summarizing the note's main point. "
+    "Empty string if the note has no meaningful content.\n\n"
     "Note body:\n---\n{body}\n---"
 )
 
@@ -113,8 +119,9 @@ class InferredEdge(BaseModel):
 class EnrichmentResult(BaseModel):
     """Haiku's structured extraction from a single note version.
 
-    All three fields default to empty lists so a note with no extractable items
-    produces a valid, storable result. Validated by Pydantic before persistence.
+    The three list fields default to empty lists, and ``summary`` defaults to
+    the empty string, so a note with no extractable content still produces a
+    valid, storable result. Validated by Pydantic before persistence.
     """
 
     tags: list[str] = Field(
@@ -128,6 +135,13 @@ class EnrichmentResult(BaseModel):
     inferred_edges: list[InferredEdge] = Field(
         default_factory=list,
         description="Suggested related concepts or topics with reason and confidence.",
+    )
+    summary: str = Field(
+        default="",
+        description=(
+            "One concise plain-English sentence summarizing the note's main "
+            "point. Empty string if the note has no meaningful content."
+        ),
     )
 
 
@@ -180,21 +194,25 @@ def _write_enrichment(
     model: str,
     ts: str,
 ) -> None:
-    """Write tags, entities, and inferred edges to the DB.
+    """Write tags, entities, the whole-note summary, and inferred edges to the DB.
 
     Idempotent: deletes existing ``source='ai'`` annotations and edges keyed by
     ``source_version = version_id`` before inserting new rows. All writes commit
     in a single transaction.
 
-    Tags + entities go to ``annotations`` (``kind='tag'``/``'entity'``,
-    ``target = note_id``). Inferred edges go to ``edges`` (``from_id = note_id``,
-    ``source='ai'``, ``status='fresh'``).
+    Tags + entities + summary go to ``annotations`` (``kind='tag'`` / ``'entity'``
+    / ``'summary'``, ``target = note_id``). Inferred edges go to ``edges``
+    (``from_id = note_id``, ``source='ai'``, ``status='fresh'``).
+
+    The summary (lode-0wj.9) is a single whole-note row, written only when
+    Haiku returned a non-empty ``result.summary`` -- an empty summary produces
+    no row, mirroring how an empty tag/entity list produces no rows.
 
     User pinning (lode-npx.4): a suggestion whose ``(target, kind, payload)``
     (or ``(from_id, to_id)`` for edges) already has a ``source='user'`` row is
     skipped -- the user already decided about this exact item, whether that
     means they added it themselves or explicitly deleted an earlier AI
-    suggestion (:mod:`lode.curation`).
+    suggestion (:mod:`lode.curation`). This applies identically to ``summary``.
     """
     with conn:
         # Clear existing AI-derived rows for this source_version (idempotency).
@@ -207,10 +225,16 @@ def _write_enrichment(
             (version_id,),
         )
 
-        # Tag + entity annotations -- whole-note items carry no per-item
-        # confidence. Both kinds share one row shape; only `kind` and the
-        # source list differ.
-        for kind, values in (("tag", result.tags), ("entity", result.entities)):
+        # Tag + entity + summary annotations -- whole-note items carry no
+        # per-item confidence and share one row shape; only `kind` and the
+        # source list differ. The summary is a single whole-note value, so it
+        # joins the loop as a 0-or-1-element list -- an empty summary yields no
+        # row, exactly like an empty tag list (lode-0wj.9).
+        for kind, values in (
+            ("tag", result.tags),
+            ("entity", result.entities),
+            ("summary", [result.summary] if result.summary else []),
+        ):
             for value in values:
                 payload = json.dumps(value)
                 if is_annotation_suppressed(conn, note_id, kind, payload):
@@ -315,11 +339,12 @@ def enrich_version(
     log_egress(conn, "enrich", settings.enrichment_llm, [version_id], redactions)
 
     log.info(
-        "enrich_version: version=%s tags=%d entities=%d edges=%d",
+        "enrich_version: version=%s tags=%d entities=%d edges=%d summary=%s",
         version_id[:12],
         len(result.tags),
         len(result.entities),
         len(result.inferred_edges),
+        bool(result.summary),
     )
 
     return result

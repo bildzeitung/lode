@@ -257,6 +257,42 @@ def test_enrich_version_writes_entities(
     assert entity_values == {"FastAPI", "Pydantic"}
 
 
+def test_enrich_version_writes_summary(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A non-empty summary is written as exactly one source='ai', kind='summary'
+    whole-note annotation (lode-0wj.9)."""
+    _insert_note(conn)
+    result = EnrichmentResult(
+        tags=[],
+        entities=[],
+        inferred_edges=[],
+        summary="A note about Python authentication.",
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    rows = _annotations(conn)
+    summary_rows = [r for r in rows if r["kind"] == "summary"]
+    assert len(summary_rows) == 1
+    row = summary_rows[0]
+    assert row["payload"] == "A note about Python authentication."
+    assert row["source"] == "ai"
+    assert row["status"] == "fresh"
+    assert row["source_version"] == "ver-1"
+
+
+def test_enrich_version_empty_summary_writes_no_row(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """An empty summary produces no annotation row, mirroring an empty tag list."""
+    _insert_note(conn)
+    result = EnrichmentResult(tags=[], entities=[], inferred_edges=[], summary="")
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    rows = _annotations(conn)
+    assert [r for r in rows if r["kind"] == "summary"] == []
+
+
 def test_enrich_version_inferred_edges_are_source_ai(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
@@ -326,6 +362,24 @@ def test_enrich_version_full_provenance(
         assert row["model"] == settings.enrichment_llm
         assert row["prompt_ver"] == ENRICH_PROMPT_VER
         assert row["source_version"] == "ver-1"
+
+
+def test_enrich_version_summary_full_provenance(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """The summary annotation carries the same full provenance as tag/entity."""
+    _insert_note(conn)
+    result = EnrichmentResult(
+        tags=[], entities=[], inferred_edges=[], summary="A summary sentence."
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    rows = [r for r in _annotations(conn) if r["kind"] == "summary"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["model"] == settings.enrichment_llm
+    assert row["prompt_ver"] == ENRICH_PROMPT_VER
+    assert row["source_version"] == "ver-1"
 
 
 def test_enrich_version_writes_egress_log(
@@ -458,6 +512,32 @@ def test_enrich_version_idempotent_replaces_old_results(
     assert "new-concept" in edge_to_ids
 
 
+def test_enrich_version_summary_idempotent_replace(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """Re-enriching the same version replaces the old summary with the new one.
+
+    Exactly one kind='summary' row must exist after re-enrichment -- the old
+    summary text is gone, the new one is present (source_version-keyed replace,
+    same as tag/entity).
+    """
+    _insert_note(conn)
+
+    first = EnrichmentResult(
+        tags=[], entities=[], inferred_edges=[], summary="Old summary."
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(first))
+
+    second = EnrichmentResult(
+        tags=[], entities=[], inferred_edges=[], summary="New summary."
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(second))
+
+    summary_rows = [r for r in _annotations(conn) if r["kind"] == "summary"]
+    assert len(summary_rows) == 1
+    assert summary_rows[0]["payload"] == "New summary."
+
+
 def test_enrich_version_user_annotations_preserved(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
@@ -525,6 +605,45 @@ def test_deleted_tag_is_not_re_added_on_re_enrichment(
     }
     assert "python" not in tag_payloads
     assert "auth" in tag_payloads
+
+
+def test_deleted_summary_is_not_re_added_on_re_enrichment(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A summary the user deletes (pins away) stays suppressed across re-enrichment.
+
+    Same mechanism as tag/entity (lode-npx.4): delete_annotation converts the
+    row to a source='user' tombstone; _write_enrichment must see that
+    tombstone and skip re-inserting an AI summary with the exact same text.
+    """
+    _insert_note(conn)
+    result = EnrichmentResult(
+        tags=[], entities=[], inferred_edges=[], summary="A note about auth."
+    )
+    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+
+    # User deletes (pins away) the AI summary.
+    (row_id,) = conn.execute(
+        "SELECT id FROM annotations WHERE kind = 'summary'"
+    ).fetchone()
+    delete_annotation(conn, row_id)
+
+    # Note is edited and re-enriched; Haiku proposes the exact same summary text.
+    _update_note(
+        conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
+    )
+    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+
+    ai_summaries = conn.execute(
+        "SELECT payload FROM annotations WHERE kind = 'summary' AND source = 'ai'"
+    ).fetchall()
+    assert ai_summaries == []
+    # The tombstone itself is still there, untouched.
+    user_summaries = conn.execute(
+        "SELECT status, source_version FROM annotations "
+        "WHERE kind = 'summary' AND source = 'user'"
+    ).fetchall()
+    assert user_summaries == [("orphaned", None)]
 
 
 def test_deleted_edge_is_not_re_added_on_re_enrichment(
@@ -672,6 +791,131 @@ def test_enrich_gap_multiple_versions(conn: sqlite3.Connection) -> None:
             (ver,),
         ).fetchall()
         assert rows == [("pending",)]
+
+
+# ---------------------------------------------------------------------------
+# Enrich-gap: prompt/model-change re-enqueue via the summary signal (lode-0wj.9)
+# ---------------------------------------------------------------------------
+
+
+def _insert_summary_annotation(
+    conn: sqlite3.Connection,
+    *,
+    note_id: str = "note-1",
+    source_version: str = "ver-1",
+    prompt_ver: str = ENRICH_PROMPT_VER,
+    source: str = "ai",
+    status: str = "fresh",
+) -> None:
+    """Insert a whole-note kind='summary' annotation row directly."""
+    with conn:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status, prompt_ver) "
+            "VALUES (?, ?, 'summary', '\"a summary\"', ?, ?, ?)",
+            (note_id, source_version, source, status, prompt_ver),
+        )
+
+
+def test_enrich_gap_done_job_missing_summary_is_gap(
+    conn: sqlite3.Connection,
+) -> None:
+    """A 'done' enrich job with no summary annotation at all is still a gap.
+
+    Covers a head enriched before the 'summary' kind existed: the job is
+    'done' but there is nothing to show for the summary column, so reconcile
+    must re-enqueue.
+    """
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', 'ver-1', 'done')"
+        )
+    count = _enrich_gap_step(conn)
+    assert count == 1
+    statuses = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'enrich' AND target_version = 'ver-1'"
+        " ORDER BY id"
+    ).fetchall()
+    assert ("done",) in statuses
+    assert ("pending",) in statuses
+
+
+def test_enrich_gap_done_job_with_current_summary_is_not_a_gap(
+    conn: sqlite3.Connection,
+) -> None:
+    """A 'done' job whose head already has a fresh, current-prompt-ver summary
+    is NOT a gap -- reconcile must not re-enqueue enrichment that is already
+    current."""
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', 'ver-1', 'done')"
+        )
+    _insert_summary_annotation(conn, prompt_ver=ENRICH_PROMPT_VER)
+    assert _enrich_gap_step(conn) == 0
+    # No new job was enqueued.
+    rows = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'enrich' AND target_version = 'ver-1'"
+    ).fetchall()
+    assert rows == [("done",)]
+
+
+def test_enrich_gap_reenqueues_on_stale_prompt_ver(
+    conn: sqlite3.Connection,
+) -> None:
+    """A 'done' job whose summary was written under an OLD prompt_ver is a gap.
+
+    This is the prompt/model-change signal: bumping ENRICH_PROMPT_VER makes
+    every note whose summary predates the bump look like a gap again, so the
+    reconcile scan drives corpus-wide re-enrichment.
+    """
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', 'ver-1', 'done')"
+        )
+    _insert_summary_annotation(conn, prompt_ver="some-older-prompt-ver")
+    count = _enrich_gap_step(conn)
+    assert count == 1
+    statuses = conn.execute(
+        "SELECT status FROM jobs WHERE type = 'enrich' AND target_version = 'ver-1'"
+        " ORDER BY id"
+    ).fetchall()
+    assert ("done",) in statuses
+    assert ("pending",) in statuses
+
+
+def test_enrich_gap_reenqueues_when_summary_not_fresh(
+    conn: sqlite3.Connection,
+) -> None:
+    """A 'done' job whose only summary row is orphaned/stale (not 'fresh') is a gap."""
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', 'ver-1', 'done')"
+        )
+    _insert_summary_annotation(conn, prompt_ver=ENRICH_PROMPT_VER, status="orphaned")
+    assert _enrich_gap_step(conn) == 1
+
+
+def test_enrich_gap_pending_job_not_reenqueued_even_with_stale_summary(
+    conn: sqlite3.Connection,
+) -> None:
+    """An in-flight (pending) job is left alone regardless of summary staleness --
+    it will land soon and correct the summary itself."""
+    _insert_note(conn)
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', 'ver-1', 'pending')"
+        )
+    _insert_summary_annotation(conn, prompt_ver="some-older-prompt-ver")
+    assert _enrich_gap_step(conn) == 0
 
 
 # ---------------------------------------------------------------------------
