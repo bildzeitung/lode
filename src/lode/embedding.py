@@ -31,14 +31,19 @@ pass a stub and stay fast + offline (the real model download is exercised by the
 opt-in smoke test ``tests/test_models_smoke.py``, lode-txh.6).
 
 **Lazy load is thread-safe (lode-0wj.4).** :meth:`FastEmbedEmbedder._load` is
-reached from a worker thread (``asyncio.to_thread``) by both
-:mod:`lode.tui.screens.capture`'s mount-time warmup and its debounced
-related-notes pass, both of which now share *one* instance across the capture
-screen's lifetime (see that module's docstring for why: a fresh instance per
-pass used to reload the ONNX model from scratch every time, a measured ~1.5s
-event-loop stall). Sharing one instance across two concurrently-scheduled
-threads makes the classic lazy-singleton race real (both could see
-``self._model is None`` and construct twice), so the load is guarded by a lock.
+reached from a worker thread (``asyncio.to_thread``) by
+:mod:`lode.tui.screens.capture`'s debounced related-notes pass, which now
+shares *one* instance across the capture screen's lifetime (see that module's
+docstring for why: a fresh instance per pass used to reload the ONNX model from
+scratch every time, a measured ~1.5s event-loop stall). Reuse makes concurrent
+access to a single instance real: ``@work(exclusive=True)`` cancels the
+*asyncio* worker when a newer pass supersedes it, but the ``to_thread`` pool
+thread it already launched keeps running to completion (a running thread can't
+be force-killed), so while the first pass is still ~1.3s into the cold model
+load, every further debounce fire starts another thread that also calls
+``_load`` on the shared instance. Unguarded that is the classic lazy-singleton
+race (each thread sees ``self._model is None`` and constructs its own model),
+so the load is guarded by a lock.
 """
 
 import sqlite3
