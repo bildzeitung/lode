@@ -29,9 +29,20 @@ The embedder is injected (:class:`Embedder`) so the model is constructed lazily
 and only in production: the default loads ``fastembed`` on first use, while tests
 pass a stub and stay fast + offline (the real model download is exercised by the
 opt-in smoke test ``tests/test_models_smoke.py``, lode-txh.6).
+
+**Lazy load is thread-safe (lode-0wj.4).** :meth:`FastEmbedEmbedder._load` is
+reached from a worker thread (``asyncio.to_thread``) by both
+:mod:`lode.tui.screens.capture`'s mount-time warmup and its debounced
+related-notes pass, both of which now share *one* instance across the capture
+screen's lifetime (see that module's docstring for why: a fresh instance per
+pass used to reload the ONNX model from scratch every time, a measured ~1.5s
+event-loop stall). Sharing one instance across two concurrently-scheduled
+threads makes the classic lazy-singleton race real (both could see
+``self._model is None`` and construct twice), so the load is guarded by a lock.
 """
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Protocol
 
@@ -89,12 +100,20 @@ class FastEmbedEmbedder:
     def __init__(self, settings: Settings) -> None:
         self._model_name = settings.embedding_model
         self._model: object | None = None
+        self._load_lock = threading.Lock()
 
     def _load(self) -> object:
+        # Double-checked locking: the fast (already-loaded) path never takes
+        # the lock, and only the very first caller pays construction cost --
+        # this instance may be shared and called from concurrent threads
+        # (lode-0wj.4), which a bare ``if self._model is None`` check would
+        # race under.
         if self._model is None:
-            from fastembed import TextEmbedding
+            with self._load_lock:
+                if self._model is None:
+                    from fastembed import TextEmbedding
 
-            self._model = TextEmbedding(model_name=self._model_name)
+                    self._model = TextEmbedding(model_name=self._model_name)
         return self._model
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:

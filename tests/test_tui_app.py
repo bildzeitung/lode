@@ -162,9 +162,12 @@ def test_typing_surfaces_a_related_past_note(
 
     # No model download in the gate: same "swap the default ONNX embedder"
     # convention tests/test_cli.py's _offline_embedder uses, aimed at the
-    # module that actually holds the reference (lode.tui.related imports it
-    # at module scope, unlike cli._retrieve's per-call import).
-    monkeypatch.setattr("lode.tui.related.FastEmbedEmbedder", _StubEmbedder)
+    # module that actually holds the reference. lode-0wj.4: the capture screen
+    # now constructs its own shared embedder (CaptureScreen._ensure_embedder)
+    # rather than leaving find_related_notes build one internally, so the
+    # patch target is lode.embedding (what _ensure_embedder imports from),
+    # not lode.tui.related.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
     app = LodeApp(db_path=db_path, settings=settings)
@@ -185,6 +188,50 @@ def test_typing_surfaces_a_related_past_note(
     asyncio.run(_drive())
 
     assert [note.note_id for note in related] == ["note-a"]
+
+
+class _CountingStubEmbedder(_StubEmbedder):
+    """Counts constructions, to pin lode-0wj.4's actual fix: one instance, reused.
+
+    Before lode-0wj.4, ``find_related_notes`` built a fresh embedder every
+    debounce fire (the ONNX model's cold *construction* -- not inference,
+    which the lode-0wj.2 spike already cleared -- turned out to hold the GIL,
+    a ~1.5s event-loop stall per pause in typing measured against the real
+    embedder/corpus). This proves the screen now constructs its query embedder
+    at most once for its whole lifetime, however many passes fire.
+    """
+
+    instances = 0
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        type(self).instances += 1
+
+
+def test_embedder_is_constructed_once_and_reused_across_multiple_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-0wj.4's fix, pinned: 3 debounce-fired passes, 1 embedder construction."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    _CountingStubEmbedder.instances = 0
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
+
+    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
+    app = LodeApp(db_path=db_path, settings=settings)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            for draft in ("first pass draft", "second pass draft", "third pass"):
+                text_area.text = draft
+                await pilot.pause(0.1)
+                await app.workers.wait_for_complete()
+
+    asyncio.run(_drive())
+
+    assert _CountingStubEmbedder.instances == 1
 
 
 def test_related_panel_renders_snippet_with_markup_like_brackets(
