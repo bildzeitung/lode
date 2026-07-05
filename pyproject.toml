@@ -28,6 +28,7 @@ dev = [
     "pytest", # tests (run via nox)
     "nox",    # task runner (`nox -t fix` before merging)
     "ruff",   # lint / format
+    "build",  # `python -m build` — canonical wheel/sdist packaging front-end
 ]
 
 [project.scripts]
