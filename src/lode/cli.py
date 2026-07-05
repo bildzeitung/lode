@@ -63,14 +63,36 @@ app = typer.Typer(
 )
 
 
+#: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
+#: DEBUG-gated diagnostic (e.g. ``lode.tui.latency_probe``'s event-loop-lag probe,
+#: gated on ``log.isEnabledFor(logging.DEBUG)``) -- see main()'s docstring.
+_DEBUG_OPTION = typer.Option(
+    False,
+    "--debug",
+    help=(
+        "Enable DEBUG-level logging, turning on DEBUG-gated diagnostic "
+        "instrumentation (e.g. the event-loop-lag probe). Takes precedence "
+        "over LODE_LOG_LEVEL when passed; unset, LODE_LOG_LEVEL (default "
+        "INFO) still applies. See docs/configuration.md."
+    ),
+)
+
+
 @app.callback()
-def main() -> None:
+def main(ctx: typer.Context, debug: bool = _DEBUG_OPTION) -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
     # subcommands. Configure logging once, here, so every subcommand (and the
     # Anthropic SDK) logs consistently (LODE_LOG_LEVEL / ANTHROPIC_LOG) and lands
-    # in $LODE_HOME/logs/ (lode.config.log_dir, docs/configuration.md).
-    configure_logging(log_dir=log_dir())
+    # in $LODE_HOME/logs/ (lode.config.log_dir, docs/configuration.md). ``--debug``
+    # (lode-1i8.3) resolves to an explicit DEBUG level, which takes precedence
+    # over the LODE_LOG_LEVEL env fallback (configure_logging's ``level=None``
+    # path); without it, behavior is unchanged. The resolved flag is stashed on
+    # ``ctx.obj`` so ``tui``'s file-only re-configure (lode-1i8.2) can preserve
+    # it across that second ``configure_logging`` call.
+    level = logging.DEBUG if debug else None
+    configure_logging(level=level, log_dir=log_dir())
+    ctx.obj = debug
 
 
 def _open_db(db: Path | None) -> sqlite3.Connection:
@@ -621,6 +643,7 @@ def config(
 
 @app.command()
 def tui(
+    ctx: typer.Context,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """Launch the Textual TUI (E11), starting on the instant capture screen.
@@ -638,8 +661,15 @@ def tui(
     removes that stream handler while keeping the file handler, so records
     still land in ``$LODE_HOME/logs/lode.log`` for telemetry — plain commands
     (``ask``/``add``/...) are untouched since only this command passes it.
+
+    Passes ``--debug`` (lode-1i8.3) through to this second ``configure_logging``
+    call via ``ctx.obj`` (set by the group callback) so the DEBUG level survives
+    the file-only re-configure: in the TUI, ``--debug`` raises verbosity in the
+    log FILE only, since ``console=False`` here means the console was never
+    reattached in the first place.
     """
-    configure_logging(log_dir=log_dir(), console=False)
+    level = logging.DEBUG if ctx.obj else None
+    configure_logging(level=level, log_dir=log_dir(), console=False)
 
     from lode.tui.app import run as run_tui
 
