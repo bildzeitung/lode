@@ -149,6 +149,16 @@ class EditScreen(Screen[None]):
     with zero edits. :meth:`action_cancel` instead compares the live buffer
     against the body loaded at :meth:`on_mount` -- "changed since it was
     opened," the same standard the CAS layer itself uses for the head.
+
+    **App-level Ctrl+Q (lode-b14).** :meth:`confirm_quit` gives
+    ``LodeApp.action_quit`` (lode-0wj.8's generic "ask the current screen"
+    hook) the same unchanged-vs-edited dirty check, but its own
+    Save/Discard/Cancel resolution ends in ``self.app.exit()`` /
+    ``self.app.exit(note_id)`` -- never ``pop_screen`` -- matching Ctrl+Q's
+    global "quit the whole app" contract rather than Escape's "back to
+    browse" one. The two can't share a method (see :meth:`action_cancel`'s
+    docstring); mirrors :meth:`~lode.tui.screens.capture.CaptureScreen.confirm_quit`'s
+    contract exactly.
     """
 
     BINDINGS = [
@@ -185,9 +195,27 @@ class EditScreen(Screen[None]):
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""
         body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+        result = self._attempt_save(body)
+        if result is None:
+            return
+        if isinstance(result, EditConflict):
+            self.app.push_screen(
+                ReconcileScreen(result, on_resolved=self._on_reconcile_resolved)
+            )
+            return
+        self.app.pop_screen()
+
+    def _attempt_save(self, body: str) -> SaveResult | EditConflict | None:
+        """Try the CAS save; ``None`` means refused-as-empty (already notified).
+
+        Shared by :meth:`action_save` (Ctrl+S) and :meth:`_on_quit_confirm`
+        (Ctrl+Q's confirm-then-save) -- both need the identical save attempt,
+        they only differ on what happens *after* a clean save or a conflict
+        (back to browse vs. quit the app).
+        """
         app = self.app
         try:
-            result = save_edit(
+            return save_edit(
                 app.db_path,
                 self.note_id,
                 body,
@@ -196,13 +224,7 @@ class EditScreen(Screen[None]):
             )
         except EmptyEditError:
             self.notify("Refusing to save an empty note.", severity="warning")
-            return
-        if isinstance(result, EditConflict):
-            self.app.push_screen(
-                ReconcileScreen(result, on_resolved=self._on_reconcile_resolved)
-            )
-            return
-        self.app.pop_screen()
+            return None
 
     def _on_reconcile_resolved(self, result: SaveResult | None) -> None:
         """The pushed ``ReconcileScreen`` resolved (re-applied or discarded).
@@ -223,12 +245,10 @@ class EditScreen(Screen[None]):
         ``LodeApp.action_quit``'s app-level Ctrl+Q hook (lode-0wj.8), whose
         contract is "confirm, then *quit the whole app*." This screen's
         Escape means "confirm, then go back to the browse list" instead, a
-        different final action -- reusing that method name here would make
-        Ctrl+Q silently just navigate back rather than quit. lode-0wj.6's
-        acceptance criteria cites lode-0wj.1 (Escape's guard) specifically,
-        not lode-0wj.8's Ctrl+Q one, so Ctrl+Q from this screen is left at
-        its existing default (immediate quit, no confirm) -- the same
-        behaviour every other non-capture screen already has today.
+        different final action -- reusing this method for Ctrl+Q would make
+        it silently just navigate back rather than quit, so Ctrl+Q instead
+        gets its own :meth:`confirm_quit` (lode-b14) that ends in
+        ``self.app.exit()`` rather than ``pop_screen``.
         """
         body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
         if body == self._loaded_body:
@@ -242,5 +262,49 @@ class EditScreen(Screen[None]):
             self.action_save()
         elif choice == "discard":
             self.app.pop_screen()
+        # "cancel" (or the dialog dismissing with no answer): stay right here,
+        # buffer untouched.
+
+    def confirm_quit(self) -> None:
+        """Exit the whole app immediately if unchanged, else confirm first.
+
+        ``LodeApp.action_quit``'s app-level Ctrl+Q hook (lode-0wj.8) calls
+        this generically, the same way it calls
+        :meth:`~lode.tui.screens.capture.CaptureScreen.confirm_quit` -- and
+        mirrors that method's contract exactly. The dirty check is the same
+        "changed since :meth:`on_mount` loaded it" comparison
+        :meth:`action_cancel` uses (not "is the buffer empty" -- a freshly
+        loaded existing version is never empty). Unlike
+        :meth:`action_cancel`/:meth:`_on_discard_confirm` (Escape's "back to
+        browse" contract, ``pop_screen``), every branch here ends in
+        ``self.app.exit()`` / ``self.app.exit(note_id)``, matching Ctrl+Q's
+        global "quit the whole app" contract.
+        """
+        body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+        if body == self._loaded_body:
+            self.app.exit()
+            return
+        self.app.push_screen(DiscardConfirmScreen(), self._on_quit_confirm)
+
+    def _on_quit_confirm(self, choice: str) -> None:
+        """Act on Ctrl+Q's confirm dialog answer: save-then-quit, quit, or resume.
+
+        A conflict on save pushes :class:`~lode.tui.screens.reconcile.ReconcileScreen`
+        with no ``on_resolved`` override -- its default already ends in
+        ``self.app.exit()`` / ``self.app.exit(note_id)`` (the same default
+        :meth:`~lode.tui.screens.capture.CaptureScreen` relies on), which is
+        exactly this method's own "quit the app" contract.
+        """
+        if choice == "save":
+            body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+            result = self._attempt_save(body)
+            if result is None:
+                return
+            if isinstance(result, EditConflict):
+                self.app.push_screen(ReconcileScreen(result))
+                return
+            self.app.exit(self.note_id)
+        elif choice == "discard":
+            self.app.exit()
         # "cancel" (or the dialog dismissing with no answer): stay right here,
         # buffer untouched.
