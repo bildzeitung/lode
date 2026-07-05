@@ -34,6 +34,18 @@ dev = [
 [project.scripts]
 lode = "lode.cli:app"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# --strict-markers turns a typo'd @pytest.mark.slow into a collection error
+# instead of a silently-ignored no-op, so the fast/slow split (lode-pql) stays
+# honest. See noxfile.py's `unit` session for the fast inner-loop command that
+# filters on this marker; `nox -s tests` (bare pytest, no -m filter) ignores
+# the marker entirely and always runs everything — the landing gate.
+addopts = "--strict-markers"
+markers = [
+    "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

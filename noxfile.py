@@ -3,11 +3,26 @@
 Two entry points run by default, both required before any merge (CLAUDE.md):
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
-    nox -s tests    pytest                            (the test gate)
+    nox -s tests    pytest                            (the test gate — the FULL suite,
+                                                         every test, no marker filter;
+                                                         this is what /land re-gates with)
 
-Plus one opt-in, credential-gated session that is **not** in the default set:
+Plus two opt-in sessions that are **not** in the default set:
 
+    nox -s unit     pytest -m "not slow"              (fast inner loop, lode-pql)
     nox -s eval     pytest tests/test_eval_live.py    (the golden-set eval, CI-only)
+
+**Fast vs. full split (lode-pql).** ``pytest --durations`` profiling found a small
+set of tests dominate wall-clock: end-to-end CLI flows and skeleton-gate tests that
+invoke ``lode ask``/``lode retrieve`` without mocking the reranker pay a real
+``FastEmbedCrossEncoder`` model-load cost (several seconds each), plus the live eval
+integration test below (~300s, when credentialed). Those are tagged
+``@pytest.mark.slow`` (registered in ``pyproject.toml``) — see the tests themselves
+(``tests/test_skeleton_gate.py``, ``tests/test_cli.py``, ``tests/test_eval_live.py``)
+for exactly which and why. ``nox -s unit`` filters them out for a fast code-time
+inner loop; ``nox -s tests`` applies **no** marker filter and always runs the FULL
+suite — that stays the merge/landing gate (CLAUDE.md, `/land`'s re-gate) so no test
+is ever skipped before trunk. See ``docs/onboarding.md`` for the full picture.
 
 ``eval`` runs the live integration test (``tests/test_eval_live.py``) end to
 end with the real local embedder and a real Anthropic client, so it needs
@@ -47,8 +62,28 @@ def fix(session: nox.Session) -> None:
 
 @nox.session
 def tests(session: nox.Session) -> None:
-    """Run the test suite (pytest)."""
+    """Run the FULL test suite (pytest, no marker filter) — the merge/landing gate.
+
+    Every test runs here, including ones tagged ``@pytest.mark.slow`` — this is
+    the suite ``/land`` re-gates with, so nothing slow is ever skipped before
+    trunk (lode-pql). For a fast code-time inner loop, see ``nox -s unit``.
+    """
     session.run("pytest")
+
+
+@nox.session
+def unit(session: nox.Session) -> None:
+    """Run the FAST inner-loop subset — pytest with slow tests excluded (lode-pql).
+
+    Excludes everything tagged ``@pytest.mark.slow`` (real model-load cost:
+    the un-mocked ``FastEmbedCrossEncoder`` reranker, or the live eval Q&A
+    leg) — see ``tests/test_skeleton_gate.py``, ``tests/test_cli.py``, and
+    ``tests/test_eval_live.py`` for exactly which tests and why.  This is a
+    code-time convenience only, never a merge gate: it drops no coverage
+    permanently, it just defers the slow tier to ``nox -s tests``, which
+    every merge (and `/land`'s re-gate) still runs in full.
+    """
+    session.run("pytest", "-m", "not slow")
 
 
 @nox.session

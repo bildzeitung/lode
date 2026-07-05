@@ -70,13 +70,35 @@ maintainer/CI integration test, not a shipped end-user command — run it via
 
 ```bash
 nox -t fix         # ruff format + ruff check --fix (the pre-merge fixer)
-nox -s tests       # pytest — the test gate
+nox -s tests       # pytest — the FULL test gate (every test, no marker filter)
 ```
+
+`nox -s tests` is the suite that must stay green before any merge, and the one
+`/land`'s re-gate runs — every test runs here, nothing is ever skipped before trunk.
+
+**Fast inner loop (lode-pql).** The full suite has a handful of tests whose
+wall-clock is dominated by a real model load (the un-mocked `FastEmbedCrossEncoder`
+reranker, hit by a few end-to-end CLI/skeleton-gate tests) rather than by test
+logic; profiling with `pytest --durations` found these are the multi-second
+outliers in an otherwise sub-second suite. Those tests are tagged
+`@pytest.mark.slow` (registered in `pyproject.toml`) and are the *only* thing a
+second, opt-in session excludes:
+
+```bash
+nox -s unit        # pytest -m "not slow" — fast code-time inner loop
+```
+
+Run `nox -s unit` while iterating; run `nox -s tests` (the full suite) before
+every merge — `nox -s unit` is a convenience, never a substitute for the gate.
+No test is dropped: every test runs in `nox -s tests` regardless of its marker,
+and most also run in `nox -s unit` (only the `slow`-tagged ones are deferred).
 
 A third session, `nox -s eval`, runs the live eval integration test
 (`tests/test_eval_live.py`); it is opt-in and credential-gated (it `skip`s
-without `ANTHROPIC_API_KEY`), so a bare `nox` and `nox -s tests` stay offline
-and never run it.
+without `ANTHROPIC_API_KEY`), so a bare `nox`, `nox -s tests`, and `nox -s unit`
+stay offline and never run it (that test is also `@pytest.mark.slow`, since an
+environment where the key *is* set would otherwise run it — live, ~300s — inside
+`nox -s tests` too).
 
 A successful `nox -s tests` ends with a line like `=== N passed, M skipped ===` and
 `Session tests was successful`. That green run is your "the environment is wired up
