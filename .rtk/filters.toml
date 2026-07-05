@@ -1,2 +1,2 @@
 [hooks]
-exclude_commands = ["bd show --json", "git worktree list --porcelain"]
+exclude_commands = ["^bd .+ --json", "git worktree list --porcelain"]
