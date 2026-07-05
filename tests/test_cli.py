@@ -12,6 +12,7 @@ and ``ask`` (the cited Q&A loop, lode-y42.2: retrieve → synthesize → faithfu
 gate → cite or abstain, with the Anthropic client mocked so the gate runs offline).
 """
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,89 @@ def test_help_lists_all_subcommands() -> None:
     assert result.exit_code == 0
     for name in ALL_SUBCOMMANDS:
         assert name in result.stdout
+
+
+# --- lode --debug (top-level flag, lode-1i8.3) ------------------------------
+#
+# The group callback (main()) is the single place logging is configured
+# (lode-txh.4): --debug resolves to an explicit DEBUG level, which takes
+# precedence over the LODE_LOG_LEVEL env fallback; without --debug, the env
+# fallback (default INFO) is unchanged. This is what turns on every
+# DEBUG-gated diagnostic (e.g. the TUI's event-loop-lag latency_probe) across
+# every subcommand, since the level set here persists for the rest of the
+# process unless a subcommand (only `tui`, for the console-suppression
+# interplay of lode-1i8.2) re-configures logging itself.
+
+
+def test_debug_flag_sets_debug_log_level() -> None:
+    result = runner.invoke(app, ["--debug", "version"])
+    assert result.exit_code == 0
+    assert logging.getLogger().level == logging.DEBUG
+
+
+def test_without_debug_flag_env_fallback_still_applies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LODE_LOG_LEVEL", "WARNING")
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert logging.getLogger().level == logging.WARNING
+
+
+def test_debug_flag_takes_precedence_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LODE_LOG_LEVEL", "WARNING")
+    result = runner.invoke(app, ["--debug", "version"])
+    assert result.exit_code == 0
+    assert logging.getLogger().level == logging.DEBUG
+
+
+def _spy_configure_logging(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Patch ``cli.configure_logging`` to record each call's level/console
+    while still delegating to the real implementation, so the callback
+    wiring is asserted without hand-rolling logging setup.
+    """
+    calls: list[dict] = []
+    real_configure_logging = cli.configure_logging
+
+    def _spy(*, level=None, log_dir=None, console=True):
+        calls.append({"level": level, "console": console})
+        return real_configure_logging(level=level, log_dir=log_dir, console=console)
+
+    monkeypatch.setattr(cli, "configure_logging", _spy)
+    return calls
+
+
+def test_tui_debug_flag_propagates_to_file_only_reconfigure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--debug must survive tui's second, file-only configure_logging call
+    (the lode-1i8.2 interplay): the TUI never reattaches a console handler,
+    so raising the level there only raises the log FILE's verbosity -- the
+    console stays suppressed either way.
+    """
+    calls = _spy_configure_logging(monkeypatch)
+    monkeypatch.setattr("lode.tui.app.run", lambda **kwargs: None)
+
+    result = runner.invoke(app, ["--debug", "tui"])
+    assert result.exit_code == 0
+    assert calls == [
+        {"level": logging.DEBUG, "console": True},
+        {"level": logging.DEBUG, "console": False},
+    ]
+
+
+def test_tui_without_debug_omits_level_on_reconfigure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _spy_configure_logging(monkeypatch)
+    monkeypatch.setattr("lode.tui.app.run", lambda **kwargs: None)
+
+    result = runner.invoke(app, ["tui"])
+    assert result.exit_code == 0
+    assert calls == [
+        {"level": None, "console": True},
+        {"level": None, "console": False},
+    ]
 
 
 # --- lode add ---------------------------------------------------------------

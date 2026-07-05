@@ -21,6 +21,7 @@ Everything lode persists lives under **one user-controllable root**, `$LODE_HOME
 | Log directory | runtime | `$LODE_HOME/logs/` | Application logs. |
 | `LODE_LOG_LEVEL` | runtime | `INFO` | lode's own root-logger level. Accepts a case-insensitive level name (`debug`, `info`, `warning`, ...); an unrecognized value raises rather than silently defaulting. Read when no level is passed explicitly (`src/lode/logconfig.py::resolve_level`). |
 | `ANTHROPIC_LOG` | runtime | unset | Not a lode-specific knob — the Anthropic SDK's own wire-level debug switch. Set to `debug` or `info` and the SDK logs on the `anthropic` logger, which propagates to the root logger and is formatted/routed alongside lode's own logs (`src/lode/logconfig.py`). |
+| `lode --debug` | runtime | off | Top-level CLI flag (`lode --debug <subcommand>`, e.g. `lode --debug tui`): forces the root-logger level to `DEBUG` for that invocation, which also flips on every DEBUG-gated diagnostic (e.g. the TUI's event-loop-lag `latency_probe`). Takes precedence over `LODE_LOG_LEVEL` when passed; omit it and `LODE_LOG_LEVEL` (default `INFO`) still applies unchanged. In the TUI this only raises verbosity in the log file — the console stays suppressed either way (`lode-1i8.2`); for plain CLI commands it raises both stderr and file verbosity (`src/lode/cli.py::main`). |
 | Config file path | runtime | `$LODE_HOME/config.toml` | User-editable runtime knobs. **Optional** — if absent, every knob uses its default below; no config file is a valid, fully-working state. |
 
 ```text
