@@ -127,6 +127,18 @@ are catalogued in [configuration.md](configuration.md).
   no on-disk data to migrate** — qd9's "`$LODE_HOME` for new installs, no auto-move" is the complete
   fix, and the discovered-from migration ticket (lode-qfp) is closed as moot. If a deployed install
   base ever predates a path change again, re-open the move-vs-document question then.
+- **`lode --debug` coupled to DEBUG log level (accepted tradeoff, split deferred).** The top-level
+  `lode --debug` flag (lode-1i8.3) ties log **verbosity** to diagnostic **feature-enablement**:
+  passing it forces the root logger to `DEBUG` for that invocation, and every DEBUG-gated diagnostic
+  (e.g. the TUI's event-loop-lag `latency_probe`, lode-0wj.2) checks that same level to decide
+  whether to run — there is no separate "enable this diagnostic" switch
+  ([configuration.md](configuration.md#paths--locations) `lode --debug` row). **Accepted tradeoff:**
+  one flag, one concept — simplest thing that works, at the cost of always paying DEBUG-level log
+  volume to get the diagnostics, and vice versa. **Split trigger:** revisit if a future debug feature
+  needs enabling *without* DEBUG-level log spam (a diagnostic cheap enough to always want on, but
+  DEBUG logging is too noisy to also flip on), or the reverse (DEBUG logging wanted without enabling
+  every diagnostic) — then decouple verbosity from feature-enablement into two flags/knobs. Until
+  one of those forces it, the coupling stands.
 - **Landing loop — architecture + mechanics settled; two future upgrades noted.** The whole landing
   loop is decided in
   [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land-planned) — all landing
