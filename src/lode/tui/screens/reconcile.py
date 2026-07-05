@@ -13,11 +13,24 @@ A caller pushes an instance directly — ``self.app.push_screen(ReconcileScreen(
 — since the screen needs the conflict's data; it is still registered by name
 in :data:`~lode.tui.app.LodeApp.SCREENS` for discoverability, following the
 app-shell's registration convention.
+
+**A second caller, a different lifecycle (lode-0wj.6).**
+:class:`~lode.tui.screens.capture.CaptureScreen` is the app's *root* screen,
+so a resolved conflict there ends the whole session (``self.app.exit(...)``)
+— that is what every existing test above pins. The edit flow
+(:class:`~lode.tui.screens.browse.EditScreen`) instead pushes this screen from
+*inside* an already-multi-screen session (capture → browse → edit), where
+"resolved" has to mean "pop back to the browse list," not "exit the app."
+Rather than hardcoding either convention, the optional ``on_resolved``
+constructor argument lets a caller supply its own "what happens next";
+leaving it unset (every existing caller) preserves the exit behaviour
+byte-for-byte.
 """
 
 from __future__ import annotations
 
 import difflib
+from collections.abc import Callable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -26,6 +39,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Static, TextArea
 
 from lode.tui.reconcile import Conflict, discard, reapply
+from lode.versions import SaveResult
 
 #: The diff view's widget id — read back in tests.
 DIFF_ID = "reconcile-diff"
@@ -51,9 +65,28 @@ class ReconcileScreen(Screen[None]):
         Binding("d", "discard", "Discard"),
     ]
 
-    def __init__(self, conflict: Conflict) -> None:
+    def __init__(
+        self,
+        conflict: Conflict,
+        *,
+        on_resolved: Callable[[SaveResult | None], None] | None = None,
+    ) -> None:
         super().__init__()
         self.conflict = conflict
+        #: Called with the successful ``SaveResult`` on re-apply, or ``None``
+        #: on discard, instead of the default "exit the app" — see the
+        #: module docstring's lode-0wj.6 note. ``None`` (every existing
+        #: caller) preserves the original behaviour exactly.
+        self._on_resolved = on_resolved
+
+    def _resolved(self, result: SaveResult | None) -> None:
+        """Route a successful resolution to the caller, or exit (the default)."""
+        if self._on_resolved is not None:
+            self._on_resolved(result)
+        elif result is not None:
+            self.app.exit(result.note_id)
+        else:
+            self.app.exit()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -80,9 +113,9 @@ class ReconcileScreen(Screen[None]):
                 severity="warning",
             )
             return
-        self.app.exit(result.note_id)
+        self._resolved(result)
 
     def action_discard(self) -> None:
         """Drop the rejected edit, remove its preserved draft, and exit."""
         discard(self.conflict)
-        self.app.exit()
+        self._resolved(None)
