@@ -55,12 +55,22 @@ FAITHFULNESS_FLOOR = 0.95
 ABSTENTION_FLOOR = 0.95
 
 
+@pytest.mark.slow
 def test_eval_golden_set_live() -> None:
     """Score the golden Q&A set end-to-end with real seams.
 
     Skips cleanly when ``ANTHROPIC_API_KEY`` is absent — the Q&A leg calls
     Claude, so this is the credentialed CI-style check, never part of the
     offline test gate. Run it explicitly via ``nox -s eval``.
+
+    Also ``@pytest.mark.slow`` (lode-pql): when a key IS present in the shell
+    (e.g. an agent environment), this test stops self-skipping and actually
+    runs — a live, network-bound Q&A call over the whole golden set measured
+    at ~300s in profiling, dwarfing the rest of the suite combined. The marker
+    keeps it out of the fast inner loop (``nox -s unit``) explicitly rather
+    than relying solely on the credential self-skip; ``nox -s tests`` (the
+    landing gate) and ``nox -s eval`` are unaffected — neither filters on
+    markers, so both still run/skip this exactly as before.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set — live eval needs Anthropic credentials")

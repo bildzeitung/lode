@@ -690,6 +690,16 @@ def _offline_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
 
 
+# ``_offline_embedder`` stubs only the embedder — it leaves ``lode.retrieval``'s
+# real, un-mocked ``FastEmbedCrossEncoder`` in place, so any ``ask``/``retrieve``
+# test whose corpus has candidates left to rerank pays that real model-load cost
+# (``pytest --durations`` measured several seconds per test, lode-pql). Those are
+# ``@pytest.mark.slow``; tests that mock the reranker directly (e.g. via
+# ``_InvertingCrossEncoder`` below) or that hit an empty/no-candidate corpus never
+# reach the real reranker and stay unmarked. See ``docs/onboarding.md`` for the
+# fast (``nox -s unit``) vs. full (``nox -s tests``) tiers this feeds.
+
+
 def _seed_corpus(
     db_path: Path, *, note_id: str, version_id: str, body: str, passage_id: str
 ) -> None:
@@ -730,6 +740,7 @@ def _seed_corpus(
         conn.close()
 
 
+@pytest.mark.slow
 def test_ask_retrieves_and_renders_a_cited_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -763,6 +774,7 @@ def test_ask_retrieves_and_renders_a_cited_claim(
     assert "OAuth" in call["messages"][0]["content"]
 
 
+@pytest.mark.slow
 def test_ask_abstains_when_no_claim_survives(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -793,6 +805,7 @@ def test_ask_out_of_corpus_question_abstains(
     assert cli._ABSTAIN_LINE in result.stdout
 
 
+@pytest.mark.slow
 def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None:
     """A passage matched only by the dense leg still reaches the Q&A context (lode-bkc).
 
@@ -1069,6 +1082,7 @@ def test_ask_requires_a_question() -> None:
     assert result.exit_code != 0  # missing required argument
 
 
+@pytest.mark.slow
 def test_ask_cli_threads_settings_to_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

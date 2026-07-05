@@ -35,6 +35,14 @@ The faithfulness gate is REAL and runs inline: every ``quoted_span`` that surviv
 must be verbatim in the retrieved version body.  The span check in the assertion
 below is *the same predicate the gate uses* — so if the assertion passes, the gate
 would have passed too (it already did, else the CLI would have abstained).
+
+**Fast/slow split (lode-pql).** Only the embedder is stubbed above; ``lode ask``
+still reranks with the real, un-mocked ``FastEmbedCrossEncoder`` (its model-load
+cost dominates: ``pytest --durations`` measured gate1/gate2/gate4 — the three
+sub-gates whose bodies call ``ask`` — at multiple seconds each, vs. sub-second for
+gate3 and gate5, which never call ``ask``). Those three are ``@pytest.mark.slow``:
+excluded from the fast inner-loop (``nox -s unit``), still run every time in the
+full landing gate (``nox -s tests``). See ``docs/onboarding.md`` for the tiers.
 """
 
 import hashlib
@@ -181,6 +189,7 @@ def _oracle_answerer(question, context):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -263,6 +272,7 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_gate2_out_of_corpus_question_abstains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -353,6 +363,7 @@ def test_gate3_eval_scorer_reports_green_on_golden_fixture(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_gate4_fts_findable_before_lode_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
