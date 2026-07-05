@@ -25,13 +25,16 @@ no benefit. Activate the venv first, then run nox.
 """
 
 import os
+import tempfile
+import zipfile
+from pathlib import Path
 
 import nox
 
 nox.options.default_venv_backend = "none"
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
-# key) stays explicit, never a default.
+# key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
 nox.options.sessions = ["fix", "tests"]
 
 
@@ -46,6 +49,29 @@ def fix(session: nox.Session) -> None:
 def tests(session: nox.Session) -> None:
     """Run the test suite (pytest)."""
     session.run("pytest")
+
+
+@nox.session
+def build(session: nox.Session) -> None:
+    """Build a wheel + sdist and assert the shipped package-data is present.
+
+    ``python -m build`` (lode-8vq) is the canonical packaging front-end, but a
+    build succeeding doesn't prove package-data made it in — that's exactly
+    the lode-1i8.4 footgun (the TUI's ``.tcss`` almost shipped without it).
+    Build into a scratch dir, then inspect the wheel's file list directly
+    rather than just trusting a clean exit.
+    """
+    with tempfile.TemporaryDirectory() as outdir:
+        session.run("python", "-m", "build", "--outdir", outdir)
+        wheels = list(Path(outdir).glob("*.whl"))
+        sdists = list(Path(outdir).glob("*.tar.gz"))
+        if not wheels or not sdists:
+            session.error("python -m build did not produce both a wheel and an sdist")
+        with zipfile.ZipFile(wheels[0]) as zf:
+            names = zf.namelist()
+        for expected in ("lode/schema.sql", "lode/tui/lode.tcss"):
+            if expected not in names:
+                session.error(f"wheel is missing expected package-data: {expected}")
 
 
 @nox.session
