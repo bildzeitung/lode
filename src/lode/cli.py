@@ -8,9 +8,13 @@ enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
 :meth:`lode.repository.Repository.purge`; ``notes`` (lode-1gr.1) lists every
 live note's full id, date, and summary via :func:`lode.notes_read.list_notes`
--- the id source for ``purge``; ``ask`` (lode-y42.2) runs the cited Q&A loop
-(retrieve → synthesize → faithfulness gate → cite or abstain); ``tui``
-(E11, lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
+-- the id source for ``purge``; ``show`` (lode-1gr.5) prints one note's head
+body plus its derived enrichment (summary/tags/entities/edges, via
+:mod:`lode.display`'s stale-display policy) and whether it is embedded --
+on-demand introspection, sharing ``purge``'s id/prefix resolution; ``ask``
+(lode-y42.2) runs the cited Q&A loop (retrieve → synthesize → faithfulness gate
+→ cite or abstain); ``tui`` (E11, lode-mkc.1) launches the Textual TUI shell on
+the instant capture screen.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -41,6 +45,7 @@ from lode.config import (
     lode_home,
     log_dir,
 )
+from lode.display import display_annotations, display_edges
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
@@ -465,6 +470,111 @@ def notes_(
         return
     for row in rows:
         typer.echo(f"{row.note_id}  {_short_date(row.created)}  {row.summary}")
+
+
+def _annotation_values(annotations: list[dict], kind: str) -> list[str]:
+    """Extract every visible annotation payload of ``kind``, stale-flagged inline.
+
+    ``payload`` is a bare string for ``tag``/``entity``/``summary`` rows (see
+    :func:`lode.enrich._write_enrichment`); a ``[stale]`` suffix is appended
+    per-item rather than hiding it, per the stale-display policy (show, but
+    flag -- ``docs/storage.md`` "Stale-display policy").
+    """
+    return [
+        f"{a['payload']} [stale]" if a["stale"] else str(a["payload"])
+        for a in annotations
+        if a["kind"] == kind
+    ]
+
+
+@app.command(name="show")
+def show_(
+    target: str = typer.Argument(
+        ..., help="Note id, or an unambiguous prefix of one, to show."
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Show a note's head body plus its derived enrichment (on-demand introspection).
+
+    specs/03-tui-features.md item 2 (lode-1gr.5): the CLI surface for
+    introspecting what enrichment has (or hasn't) landed on a note, without
+    opening the TUI. Prints the head body, then its summary/tags/entities
+    (``annotations``) and inferred edges (``edges``) via
+    :func:`lode.display.display_annotations` / :func:`~lode.display.
+    display_edges` -- the same stale-display policy (lode-npx.4) every
+    consumer shares, so an item that survived re-anchoring but went stale is
+    shown flagged rather than silently hidden or silently treated as current.
+    Finally reports whether the head is embedded (any ``passages`` rows).
+
+    ``target`` may be a full id or an unambiguous prefix of one, resolved via
+    :meth:`lode.repository.Repository.resolve_note_prefix` -- the exact
+    resolver ``purge`` uses (lode-1gr.3), so an unknown or ambiguous id errors
+    identically. An un-enriched note (no annotations/edges yet -- enrichment
+    is async) shows ``(none)`` for each empty section rather than erroring.
+    """
+    conn = _open_db(db)
+    try:
+        repo = Repository(conn)
+        try:
+            note_id = repo.resolve_note_prefix(target)
+        except KeyError:
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1) from None
+        except AmbiguousNoteIdError as exc:
+            typer.echo(
+                f"ambiguous note id prefix {target!r}: matches "
+                + ", ".join(exc.candidates),
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+
+        row = conn.execute(
+            "SELECT n.head_version_id, v.created, v.body FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            "WHERE n.note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if row is None:
+            # resolve_note_prefix returns a full id unchanged without checking
+            # it exists (purge's own contract) -- an unknown full id lands here.
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1)
+        head_version_id, created, body = row
+
+        annotations = display_annotations(conn, note_id)
+        edges = display_edges(conn, note_id)
+        (passage_count,) = conn.execute(
+            "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+            (head_version_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    typer.echo(f"note_id: {note_id}")
+    typer.echo(f"created: {_short_date(created)}")
+    typer.echo("")
+    typer.echo(body)
+    typer.echo("")
+
+    summaries = _annotation_values(annotations, "summary")
+    typer.echo(f"summary: {summaries[0] if summaries else '(none)'}")
+
+    tags = _annotation_values(annotations, "tag")
+    typer.echo(f"tags: {', '.join(tags) if tags else '(none)'}")
+
+    entities = _annotation_values(annotations, "entity")
+    typer.echo(f"entities: {', '.join(entities) if entities else '(none)'}")
+
+    if edges:
+        typer.echo("edges:")
+        for edge in edges:
+            flag = " [stale]" if edge["stale"] else ""
+            typer.echo(f"  -> {edge['to_id']}{flag}")
+    else:
+        typer.echo("edges: (none)")
+
+    embedded = "yes" if passage_count else "no"
+    typer.echo(f"embedded: {embedded} ({passage_count} passage(s))")
 
 
 class JobStatus(str, Enum):
