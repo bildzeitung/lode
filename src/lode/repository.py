@@ -296,7 +296,7 @@ class Repository:
         already purged) — only a *shorter* string goes through resolution.
 
         Resolution is scoped to **live** notes only, via the same
-        ``v.op != 'delete'`` guard :func:`lode.tui.browse._list_notes` uses
+        ``v.op != 'delete'`` guard :func:`lode.notes_read._list_notes` uses
         for the Browse table: a prefix resolves only what the user can already
         see via ``lode notes``/Browse, so a tombstoned note is not reachable
         by prefix (its full id still works, per above).
