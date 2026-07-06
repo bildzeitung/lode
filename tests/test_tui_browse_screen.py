@@ -256,3 +256,40 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
     row_count = asyncio.run(_drive())
 
     assert row_count == 1
+
+
+def test_long_summary_wraps_instead_of_scrolling_the_table(tmp_path: Path) -> None:
+    """A long Summary wraps down over several lines; the table never scrolls sideways.
+
+    Guards the lode-5qp fix: the Summary column is capped to the room left over
+    after Date/Version so a long summary grows the row's height (auto height)
+    rather than growing the table past the terminal width and forcing a
+    horizontal scroll.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary = ("wrap me " * 40).strip()  # ~320 chars: wider than any terminal
+    try:
+        save(conn, "note-a", long_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int, int, str]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return (
+                table.rows[row_key].height,
+                table.virtual_size.width,
+                table.size.width,
+                table.get_row_at(0)[2],
+            )
+
+    row_height, virtual_width, widget_width, summary_cell = asyncio.run(_drive())
+
+    assert row_height > 1  # the summary wrapped onto multiple lines
+    assert virtual_width <= widget_width  # ... so the table needs no h-scroll
+    assert summary_cell == long_summary  # the cell keeps the full text, untruncated

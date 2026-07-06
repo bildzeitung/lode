@@ -47,6 +47,7 @@ module already relies on.
 
 from __future__ import annotations
 
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -68,6 +69,16 @@ EDIT_BODY_ID = "note-edit-body"
 HISTORY_TABLE_ID = "version-history-table"
 #: The read-only prior-version body's widget id -- read back in tests.
 VERSION_BODY_ID = "version-view-body"
+
+#: Left+right cell padding a ``DataTable`` adds *per column* -- used to work out
+#: how much horizontal room the Summary column may claim without pushing the
+#: table past the terminal width (which is what caused the horizontal scroll).
+_CELL_PADDING = 2
+#: Floor for the computed Summary width -- purely a crash guard so a very narrow
+#: terminal can't hand ``add_column`` a zero/negative width. Below this the Date
+#: column's full ISO-8601 timestamp already overflows on its own; nothing the
+#: Summary width can do about that without reformatting Date (out of scope).
+_MIN_SUMMARY_WIDTH = 10
 
 
 class NoteViewScreen(Screen[None]):
@@ -195,9 +206,21 @@ class BrowseScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
-        table.add_columns("Date", "Version", "Summary")
-        table.focus()
+        # Columns are (re)built in _reload_rows, not here: the Summary column's
+        # width depends on the current terminal width, which _reload_rows reads
+        # back off the laid-out table. on_mount only needs to take focus.
+        self.query_one(f"#{TABLE_ID}", DataTable).focus()
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Rebuild on resize so the wrapped Summary column re-fills the new width.
+
+        The Summary column is bounded to whatever horizontal room is left after
+        the Date/Version columns (see :meth:`_reload_rows`); when the terminal
+        grows or shrinks that budget changes, so rows must be re-laid-out to
+        wrap at the new width. Reuses the same single load path as
+        :meth:`on_screen_resume`.
+        """
+        self._reload_rows()
 
     def on_screen_resume(self) -> None:
         """(Re)load the rows every time this screen becomes visible.
@@ -214,10 +237,40 @@ class BrowseScreen(Screen[None]):
         self._reload_rows()
 
     def _reload_rows(self) -> None:
+        """Rebuild the whole table so the Summary column wraps instead of scrolling.
+
+        A ``DataTable`` sizes an unbounded column to its widest cell, so a long
+        Summary used to push the table wider than the terminal and force an
+        inconvenient horizontal scroll. Instead the Date/Version columns keep
+        their natural (content) widths and the Summary column is capped to the
+        room left over, with rows added ``height=None`` (auto height) so the
+        summary text wraps down over as many lines as it needs -- the row grows
+        vertically rather than the table growing horizontally.
+
+        Rebuilt in full (``clear(columns=True)``) each time because the cap is a
+        function of the current terminal width, recomputed on every
+        :meth:`on_resize` and :meth:`on_screen_resume`.
+        """
         table = self.query_one(f"#{TABLE_ID}", DataTable)
-        table.clear()
-        for row in list_notes(self.app.db_path):
-            table.add_row(row.created, f"v{row.version}", row.summary, key=row.note_id)
+        rows = list_notes(self.app.db_path)
+        table.clear(columns=True)
+
+        # Date/Version keep their natural widths -- the same max(header, widest
+        # cell) a DataTable auto-column would pick. Date is a full ISO-8601
+        # timestamp, deliberately left intact rather than truncated.
+        date_width = max([len("Date"), *(len(row.created) for row in rows)])
+        version_cells = [f"v{row.version}" for row in rows]
+        version_width = max([len("Version"), *(len(cell) for cell in version_cells)])
+        remaining = table.size.width - date_width - version_width - _CELL_PADDING * 3
+        summary_width = max(_MIN_SUMMARY_WIDTH, remaining)
+
+        table.add_column("Date", width=date_width)
+        table.add_column("Version", width=version_width)
+        table.add_column("Summary", width=summary_width)
+        for row, version_cell in zip(rows, version_cells):
+            table.add_row(
+                row.created, version_cell, row.summary, key=row.note_id, height=None
+            )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         note_id = event.row_key.value
