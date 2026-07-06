@@ -94,6 +94,63 @@ def test_console_false_requires_log_dir() -> None:
         configure_logging("INFO", console=False)
 
 
+def test_console_drops_httpx_info_keeps_file_and_lode_info(tmp_path: Path) -> None:
+    # lode-1gr.7: httpx 200-OK lines (logged at INFO on the "httpx" logger)
+    # must not reach the console, but the file handler still records them,
+    # httpx WARNING+ still reaches the console, and lode's own INFO lines on
+    # the console are unaffected.
+    log_dir = tmp_path / "logs"
+    try:
+        configure_logging("INFO", log_dir=log_dir)
+        root = logging.getLogger()
+        stream_handlers = [
+            h for h in root.handlers if not getattr(h, "_lode_file", False)
+        ]
+        assert stream_handlers, "expected a console/stream handler to be installed"
+
+        httpx_info = logging.LogRecord(
+            name="httpx",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="HTTP Request: POST https://example.test 200 OK",
+            args=(),
+            exc_info=None,
+        )
+        httpx_warning = logging.LogRecord(
+            name="httpx",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="retrying request",
+            args=(),
+            exc_info=None,
+        )
+        lode_info = logging.LogRecord(
+            name="lode.test",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="lode info line",
+            args=(),
+            exc_info=None,
+        )
+        for handler in stream_handlers:
+            assert not handler.filter(httpx_info)
+            assert handler.filter(httpx_warning)
+            assert handler.filter(lode_info)
+
+        logging.getLogger("httpx").info(
+            "HTTP Request: POST https://example.test 200 OK"
+        )
+        logged = (log_dir / "lode.log").read_text(encoding="utf-8")
+        assert "200 OK" in logged
+    finally:
+        for handler in _lode_file_handlers():
+            logging.getLogger().removeHandler(handler)
+            handler.close()
+
+
 def test_console_false_removes_stream_handler_keeps_file(tmp_path: Path) -> None:
     # Simulates the group callback's console=True call (which installs a
     # stream handler via basicConfig) followed by the TUI's console=False
