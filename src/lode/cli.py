@@ -705,9 +705,12 @@ def work(
     pending jobs until none remain and exits.  ``--loop`` / ``--watch`` keeps
     the loop alive, sleeping ``--interval`` seconds between passes.
 
-    Only ``embed`` jobs have a handler now; ``enrich`` / ``refresh`` jobs
-    accumulate harmlessly until their handlers arrive (lode-i05.3 scope
-    fence).  A second ``lode work`` while one is already running is refused.
+    ``embed`` jobs run synchronously in the main claim-run loop.  ``enrich``
+    jobs are submitted to the Batches API in a pre-step ahead of that loop and
+    collected on a later drain pass (lode-npx.2); ``refresh`` still has no
+    handler and accumulates harmlessly until the connectors step arrives
+    (lode-i05.3 scope fence).  A second ``lode work`` while one is already
+    running is refused.
     """
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
