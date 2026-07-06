@@ -58,6 +58,25 @@ from pathlib import Path
 from lode.storage import init_db
 
 
+#: THE short note-id length across the epic (lode-1gr.2's Browse Id column,
+#: lode-1gr.5's 'lode show' short refs) -- long enough to feed
+#: 'lode purge <prefix>' (lode-1gr.3) unambiguously in practice. Distinct from
+#: cli._short's 12-char abbreviation, which is for VERSION-id digests only.
+SHORT_NOTE_ID_LENGTH = 8
+
+
+def short_note_id(note_id: str) -> str:
+    """Abbreviate a note id to its shared 8-char prefix for column/inline displays.
+
+    The one reusable note-id short helper (decided 2026-07-06, lode-1gr.2):
+    both Browse's Id column and 'lode show's short refs (lode-1gr.5) call this
+    rather than each growing their own truncation. ``lode notes`` itself
+    deliberately does *not* use this -- it prints the full id so it stays
+    copy-pasteable straight into ``lode purge`` (lode-1gr.1).
+    """
+    return note_id[:SHORT_NOTE_ID_LENGTH]
+
+
 @dataclass(frozen=True, slots=True)
 class NoteRow:
     """One live note as the browse list shows it."""

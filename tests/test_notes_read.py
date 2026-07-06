@@ -9,7 +9,13 @@ and the summary-annotation-or-first-line fallback for the Summary column.
 import json
 from pathlib import Path
 
-from lode.notes_read import list_notes, list_versions, note_body, version_body
+from lode.notes_read import (
+    list_notes,
+    list_versions,
+    note_body,
+    short_note_id,
+    version_body,
+)
 from lode.storage import init_db
 from lode.versions import delete, save
 
@@ -54,6 +60,15 @@ def _seed_note_with_created(
         conn.commit()
     finally:
         conn.close()
+
+
+def test_short_note_id_truncates_to_8_chars() -> None:
+    """The shared short-id helper (lode-1gr.2) -- Browse's Id column, 'lode show'."""
+    assert short_note_id("0123456789abcdef") == "01234567"
+
+
+def test_short_note_id_leaves_a_shorter_id_unchanged() -> None:
+    assert short_note_id("short") == "short"
 
 
 def test_list_notes_orders_newest_first(tmp_path: Path) -> None:

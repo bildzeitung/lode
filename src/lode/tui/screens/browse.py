@@ -5,7 +5,7 @@ without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
 CaptureScreen` via the app-level ``F3`` binding (:mod:`lode.tui.app`, the same
 "reachable from anywhere" convention ``F2``'s config screen already uses).
 This screen owns no read logic of its own -- it only renders the rows
-:func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Date |
+:func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
 Version | Summary, newest-first, live notes only) and reacts to a row select
 or an edit key press.
 
@@ -43,6 +43,16 @@ keyed to a specific ``version_id`` instead of always the live head. Escape
 pops one level at a time here too: version body -> history list -> note view,
 falling out of the same Textual screen-stack pop every other Escape in this
 module already relies on.
+
+**Expose the note id (lode-1gr.2).** Before this, nothing in the TUI showed a
+note's id, so a user could see a note in Browse but not ``purge`` it. The
+table's leading Id column shows :func:`lode.notes_read.short_note_id`'s 8-char
+prefix (the same shared abbreviation :func:`lode.cli` will use for ``lode
+show``, lode-1gr.5) -- enough to feed ``lode purge <prefix>``
+(lode-1gr.3) unambiguously in practice, without widening the table for a
+36-char id most rows never need in full. :class:`NoteViewScreen` shows the
+*full* id instead, in its header's ``sub_title`` -- selectable/copyable there,
+where there is no width budget to protect.
 """
 
 from __future__ import annotations
@@ -53,7 +63,13 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TextArea
 
-from lode.notes_read import list_notes, list_versions, note_body, version_body
+from lode.notes_read import (
+    list_notes,
+    list_versions,
+    note_body,
+    short_note_id,
+    version_body,
+)
 from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -90,6 +106,10 @@ class NoteViewScreen(Screen[None]):
     straight back to :class:`BrowseScreen`, unaffected: the history screen is
     reached and left via its own push/pop, not a change to this screen's own
     Escape contract.
+
+    **Full id (lode-1gr.2).** Browse's Id column is an 8-char prefix (a width
+    budget, not a full id); opening a note here shows its full 36-char
+    ``note_id`` in the header's ``sub_title`` so it can be selected/copied.
     """
 
     BINDINGS = [
@@ -107,6 +127,7 @@ class NoteViewScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.sub_title = self.note_id
         body = note_body(self.app.db_path, self.note_id)
         self.query_one(f"#{NOTE_BODY_ID}", TextArea).text = body or ""
 
@@ -193,7 +214,7 @@ class VersionViewScreen(Screen[None]):
 
 
 class BrowseScreen(Screen[None]):
-    """Date | Version | Summary, newest-first, over every live note."""
+    """Id | Date | Version | Summary, newest-first, over every live note."""
 
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
@@ -241,11 +262,11 @@ class BrowseScreen(Screen[None]):
 
         A ``DataTable`` sizes an unbounded column to its widest cell, so a long
         Summary used to push the table wider than the terminal and force an
-        inconvenient horizontal scroll. Instead the Date/Version columns keep
-        their natural (content) widths and the Summary column is capped to the
-        room left over, with rows added ``height=None`` (auto height) so the
-        summary text wraps down over as many lines as it needs -- the row grows
-        vertically rather than the table growing horizontally.
+        inconvenient horizontal scroll. Instead the Id/Date/Version columns
+        keep their natural (content) widths and the Summary column is capped
+        to the room left over, with rows added ``height=None`` (auto height)
+        so the summary text wraps down over as many lines as it needs -- the
+        row grows vertically rather than the table growing horizontally.
 
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
@@ -255,21 +276,34 @@ class BrowseScreen(Screen[None]):
         rows = list_notes(self.app.db_path)
         table.clear(columns=True)
 
-        # Date/Version keep their natural widths -- the same max(header, widest
-        # cell) a DataTable auto-column would pick. Date is a full ISO-8601
-        # timestamp, deliberately left intact rather than truncated.
+        # Id/Date/Version keep their natural widths -- the same max(header,
+        # widest cell) a DataTable auto-column would pick. Date is a full
+        # ISO-8601 timestamp, deliberately left intact rather than truncated;
+        # Id is the shared 8-char note-id abbreviation (lode-1gr.2), not the
+        # full id -- NoteViewScreen shows that instead, where there's no width
+        # budget to protect.
+        id_cells = [short_note_id(row.note_id) for row in rows]
+        id_width = max([len("Id"), *(len(cell) for cell in id_cells)])
         date_width = max([len("Date"), *(len(row.created) for row in rows)])
         version_cells = [f"v{row.version}" for row in rows]
         version_width = max([len("Version"), *(len(cell) for cell in version_cells)])
-        remaining = table.size.width - date_width - version_width - _CELL_PADDING * 3
+        remaining = (
+            table.size.width - id_width - date_width - version_width - _CELL_PADDING * 4
+        )
         summary_width = max(_MIN_SUMMARY_WIDTH, remaining)
 
+        table.add_column("Id", width=id_width)
         table.add_column("Date", width=date_width)
         table.add_column("Version", width=version_width)
         table.add_column("Summary", width=summary_width)
-        for row, version_cell in zip(rows, version_cells):
+        for row, id_cell, version_cell in zip(rows, id_cells, version_cells):
             table.add_row(
-                row.created, version_cell, row.summary, key=row.note_id, height=None
+                id_cell,
+                row.created,
+                version_cell,
+                row.summary,
+                key=row.note_id,
+                height=None,
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

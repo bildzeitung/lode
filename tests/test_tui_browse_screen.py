@@ -12,6 +12,7 @@ from pathlib import Path
 
 from textual.widgets import DataTable, TextArea
 
+from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.browse import (
@@ -55,9 +56,33 @@ def test_f3_reaches_the_browse_screen_with_notes_newest_first(
     rows = asyncio.run(_drive())
 
     assert len(rows) == 2
-    assert rows[0][2] == "second captured note"  # newest-first
-    assert rows[1][2] == "first captured note"
-    assert rows[0][1] == "v1"
+    assert rows[0][3] == "second captured note"  # newest-first
+    assert rows[1][3] == "first captured note"
+    assert rows[0][2] == "v1"
+
+
+def test_id_column_shows_the_shared_8_char_note_id_prefix(tmp_path: Path) -> None:
+    """The Id column (lode-1gr.2) is the shared short id, not the full id."""
+    long_note_id = "0123456789abcdef-longer-than-eight-chars"
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, long_note_id, "a note")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return str(table.get_row_at(0)[0])
+
+    id_cell = asyncio.run(_drive())
+
+    assert id_cell == short_note_id(long_note_id)
+    assert id_cell == "01234567"
+    assert id_cell != long_note_id
 
 
 def test_selecting_a_row_opens_a_read_only_note_view(tmp_path: Path) -> None:
@@ -80,6 +105,30 @@ def test_selecting_a_row_opens_a_read_only_note_view(tmp_path: Path) -> None:
     body = asyncio.run(_drive())
 
     assert body == "the note body to view"
+
+
+def test_note_view_screen_shows_the_full_note_id(tmp_path: Path) -> None:
+    """The note-view header shows the FULL id (lode-1gr.2), not the short prefix."""
+    long_note_id = "0123456789abcdef-longer-than-eight-chars"
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, long_note_id, "the note body to view")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, NoteViewScreen)
+            return app.screen.sub_title
+
+    sub_title = asyncio.run(_drive())
+
+    assert sub_title == long_note_id
 
 
 def test_escape_steps_back_note_then_list_then_capture(tmp_path: Path) -> None:
@@ -128,7 +177,7 @@ def test_deleted_note_does_not_appear_in_the_browse_list(
         async with app.run_test() as pilot:
             await pilot.press("f3")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
-            return [str(table.get_row_at(i)[2]) for i in range(table.row_count)]
+            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
 
     summaries = asyncio.run(_drive())
 
@@ -285,7 +334,7 @@ def test_long_summary_wraps_instead_of_scrolling_the_table(tmp_path: Path) -> No
                 table.rows[row_key].height,
                 table.virtual_size.width,
                 table.size.width,
-                table.get_row_at(0)[2],
+                table.get_row_at(0)[3],
             )
 
     row_height, virtual_width, widget_width, summary_cell = asyncio.run(_drive())
