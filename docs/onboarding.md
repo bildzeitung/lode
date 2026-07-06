@@ -113,6 +113,18 @@ scripts/update-images.sh      # one-time: pull the mermaid-cli image
 scripts/validate-mermaid.sh   # parse every fenced mermaid block, fail on syntax errors
 ```
 
+### 6. (Optional) RTK command exclusions
+
+Only if you use [RTK](https://github.com/rtk-ai/rtk) to proxy dev commands. lode
+requires two commands to bypass RTK's rewrite so their output stays raw — beads
+JSON (`bd … --json`) and `git worktree list --porcelain` (worktree GC parses real
+porcelain, not RTK's reformatted table). RTK stores this only in your user-global
+config with no project-level equivalent, so a one-time script makes it reproducible:
+
+```bash
+scripts/rtk-setup.sh          # idempotent: adds the two excludes to ~/.config/rtk/config.toml
+```
+
 ## You're set up when
 
 - `. ./venv/bin/activate` then `lode --help` prints the subcommand list, **and**
