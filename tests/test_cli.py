@@ -8,8 +8,10 @@ draft rather than clobbering — the operational read-outs (lode-y42.3): ``statu
 (job-queue health, dead-letters, egress summary), ``jobs`` (list/filter the derive
 queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
 ids/redactions); ``purge`` (the E8 hard delete via ``Repository.purge``, lode-7cx);
-and ``ask`` (the cited Q&A loop, lode-y42.2: retrieve → synthesize → faithfulness
-gate → cite or abstain, with the Anthropic client mocked so the gate runs offline).
+``notes`` (lode-1gr.1: list every live note's full id/date/summary, the id source
+for ``purge``); and ``ask`` (the cited Q&A loop, lode-y42.2: retrieve → synthesize →
+faithfulness gate → cite or abstain, with the Anthropic client mocked so the gate
+runs offline).
 """
 
 import logging
@@ -31,19 +33,20 @@ from lode.embedding import embed
 from lode.hashing import NO_PARENT, content_version_id
 from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
-from lode.versions import save
+from lode.versions import delete, save
 
 runner = CliRunner()
 
 # Every subcommand is real: `add` (lode-y42.1), `ask` (lode-y42.2), `status` /
-# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `config` (lode-ftc),
-# `work` (lode-i05.3: async work queue drain).
+# `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `notes` (lode-1gr.1),
+# `config` (lode-ftc), `work` (lode-i05.3: async work queue drain).
 # `eval` is NOT a shipped command — it is a maintainer/CI integration test run via
 # `nox -s eval` (see docs/decisions.md, Shape A, lode-5y8.5).
 ALL_SUBCOMMANDS = [
     "add",
     "ask",
     "purge",
+    "notes",
     "status",
     "jobs",
     "egress",
@@ -629,6 +632,53 @@ def test_purge_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
     result = runner.invoke(app, ["purge", "ghost", "--db", str(db_path)])
     assert result.exit_code == 1
     assert "no such note" in result.stderr
+
+
+# --- lode notes (list live notes, lode-1gr.1) -------------------------------
+
+
+def test_notes_empty_db_says_no_notes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "no notes"
+
+
+def test_notes_lists_the_full_id_date_and_summary(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "the first line of the note", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert note_id in result.stdout  # full id, copy-pasteable into `purge`
+    assert "the first line of the note" in result.stdout
+    created = _rows(db_path, "SELECT created FROM notes WHERE note_id = ?", (note_id,))[
+        0
+    ][0]
+    assert created[:16].replace("T", " ") in result.stdout
+
+
+def test_notes_excludes_a_tombstoned_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "gone soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, note_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "no notes"
 
 
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
