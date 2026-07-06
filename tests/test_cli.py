@@ -1341,6 +1341,118 @@ def test_work_never_dead_letters_enrich(
     assert enrich_status != "dead"
 
 
+def test_work_wait_exits_zero_once_queue_drains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work --wait' returns once the queue fully drains, no timeout needed.
+
+    Acceptance: with only embed jobs (which the noop handler clears in the
+    first drain pass), --wait sees an empty pending/running set immediately
+    and exits 0 without ever checking the timeout.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("embed", "ver-0"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
+    assert result.exit_code == 0, result.output
+    assert "drained 1 job(s)" in result.stdout
+
+
+def test_work_wait_times_out_naming_outstanding_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work --wait' exits non-zero and names jobs still in flight at timeout.
+
+    A 'refresh' job has no registered handler (registry patched to embed-only,
+    same as the other offline CLI tests) so it can never be claimed and stays
+    'pending' forever -- simulating a queue that never fully drains. The clock
+    is faked past the deadline on the first check so the test doesn't actually
+    block for Settings.work_wait_timeout_s.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("refresh", "ver-stuck"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    # The FIRST call to time.monotonic() establishes the deadline (work()'s
+    # `deadline = time.monotonic() + timeout_s`); every call AFTER that must
+    # read as far in the future so the loop's first timeout check trips
+    # immediately. A constant fake clock would be wrong here: both the
+    # deadline calc and the check would read the identical value, so
+    # `now >= deadline` (now == deadline - timeout_s) would never hold and
+    # the loop would spin for real (sleeping --interval seconds) forever.
+    calls = {"n": 0}
+
+    def _fake_monotonic() -> float:
+        calls["n"] += 1
+        return 0.0 if calls["n"] == 1 else 1_000_000.0
+
+    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
+    # Belt-and-suspenders: never really sleep in this test even if the
+    # timeout check above didn't fire on the first pass.
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
+    assert result.exit_code == 1
+    assert "timed out" in result.stderr
+    assert "refresh" in result.stderr
+    assert "pending" in result.stderr
+
+
+def test_work_wait_rejects_loop_combo(tmp_path: Path) -> None:
+    """'--wait' and '--loop' specify contradictory exit conditions -- refused."""
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["work", "--db", str(db_path), "--wait", "--loop"])
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.stderr
+
+
+def test_work_without_wait_is_unchanged_one_shot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --wait, behaviour is the pre-existing one-shot drain (no polling)."""
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("refresh", "ver-stuck"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "drained 0 job(s)" in result.stdout
+
+
 def test_work_refuses_when_lock_held(tmp_path: Path) -> None:
     """A second 'lode work' must refuse when the lockfile holds a live PID.
 
