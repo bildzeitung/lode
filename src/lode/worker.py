@@ -90,13 +90,19 @@ from lode.config import Settings, lance_dir as _lance_dir
 
 log = logging.getLogger(__name__)
 
-#: Handler signature: (conn, target_version, db_path, settings) -> None
+#: Handler signature: (conn, target_version, db_path, settings) -> str | None
 #:
 #: ``conn`` — open SQLite connection (same one the claim/run loop uses).
 #: ``target_version`` — the version to process.
 #: ``db_path`` — used to derive the LanceDB vector-store path (``lance_dir``).
 #: ``settings`` — resolved settings (retry knobs, model IDs, etc.).
-HandlerFn = Callable[[sqlite3.Connection, str, Path, Settings], None]
+#:
+#: Return value (lode-1gr.4): an optional one-line human-readable outcome
+#: summary (e.g. ``"embedded <short-id>: 3 passages"``), or ``None`` if there
+#: is nothing to report (e.g. the job was gated/skipped). :func:`run_one`
+#: appends a non-``None`` return to its ``outcomes`` sink when given one, so
+#: ``lode work`` can echo per-job outcomes instead of relying on log lines.
+HandlerFn = Callable[[sqlite3.Connection, str, Path, Settings], str | None]
 
 #: Module-level handler registry — maps ``jobs.type`` → handler function.
 #:
@@ -314,6 +320,8 @@ def run_one(
     db_path: Path,
     settings: Settings,
     registry: dict[str, HandlerFn],
+    *,
+    outcomes: list[str] | None = None,
 ) -> bool:
     """Run a single claimed job (``status='running'``).
 
@@ -326,7 +334,13 @@ def run_one(
       identity" half of the ``(type, target_version, prompt_ver)`` key
       ``docs/storage.md`` documents; :mod:`lode.reconcile`'s enrich-gap step
       reads it back to decide whether a ``done`` job is current. ``embed``
-      jobs are untouched — their ``prompt_ver`` stays NULL by design.
+      jobs are untouched — their ``prompt_ver`` stays NULL by design. When
+      ``outcomes`` is given and the handler returned a non-``None`` string
+      (lode-1gr.4), that string is appended — this is the channel
+      ``lode work`` uses to echo a per-job outcome line (e.g. ``"embedded
+      <short-id>: 3 passages"``) for jobs processed by the main claim/run
+      loop, i.e. ``embed`` and any fallback ``enrich`` job that escaped the
+      batch pre-step.
     - Handler raises, attempts < max → ``status='failed'``, backoff
       ``next_attempt_at`` set, ``last_error`` recorded
     - Handler raises, attempts == max → ``status='dead'``
@@ -348,7 +362,7 @@ def run_one(
     short = target_version[:12]
 
     try:
-        handler(conn, target_version, db_path, settings)
+        outcome = handler(conn, target_version, db_path, settings)
         with conn:
             if job_type == "enrich":
                 # Deferred import: only paid when an enrich job actually runs
@@ -364,6 +378,8 @@ def run_one(
             else:
                 conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
         log.info("job %d (%s target=%s) done", job_id, job_type, short)
+        if outcome is not None and outcomes is not None:
+            outcomes.append(outcome)
         return True
 
     except Exception as exc:  # noqa: BLE001
@@ -450,6 +466,7 @@ def _batch_collect_enrich(
     settings: Settings,
     *,
     _client: object | None = None,
+    outcomes: list[str] | None = None,
 ) -> int:
     """Poll in-flight Batches API requests and process any that have ended.
 
@@ -469,7 +486,12 @@ def _batch_collect_enrich(
     never calls ``batches.create`` — only ``retrieve``/``results`` — so a
     restart can never resubmit.
 
-    ``_client`` is injectable for tests.
+    ``_client`` is injectable for tests. ``outcomes``, if given, is passed
+    through to :func:`lode.enrich.collect_enrich_batch` (lode-1gr.4) so a
+    drain pass that collects a completed batch appends a per-note outcome
+    line for each succeeded result — the batch pre-step runs ahead of
+    :func:`drain`'s main claim/run loop, so this is the only channel that
+    surfaces those outcomes to the caller.
     """
     from lode.enrich import collect_enrich_batch
 
@@ -490,7 +512,7 @@ def _batch_collect_enrich(
 
     ended = 0
     for batch_id in batch_ids:
-        if collect_enrich_batch(conn, batch_id, settings, **kwargs):
+        if collect_enrich_batch(conn, batch_id, settings, outcomes=outcomes, **kwargs):
             ended += 1
 
     return ended
@@ -613,6 +635,7 @@ def drain(
     _registry: dict[str, HandlerFn] | None = None,
     *,
     _batch_client: object | None = None,
+    outcomes: list[str] | None = None,
 ) -> int:
     """Claim+run all ready pending jobs until none remain.
 
@@ -637,13 +660,21 @@ def drain(
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
     tests (passed through to the batch pre-steps).
+
+    ``outcomes`` (lode-1gr.4), if given, is a mutable list that this call
+    appends human-readable per-job outcome lines to — from both channels: the
+    batch pre-step (:func:`_batch_collect_enrich`, a *later* pass collecting a
+    completed enrich batch) and the main loop (via :func:`run_one`, e.g.
+    ``embed`` jobs). Left ``None`` (the default), behavior is unchanged from
+    before lode-1gr.4 — this is purely additive so existing callers (and the
+    ``int`` return contract) are unaffected.
     """
     settings = settings or Settings()
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
-    _batch_collect_enrich(conn, settings, _client=_batch_client)
+    _batch_collect_enrich(conn, settings, _client=_batch_client, outcomes=outcomes)
     _batch_submit_enrich(conn, settings, _client=_batch_client)
 
     reclaimed = _reclaim_stale_running(conn, settings)
@@ -661,7 +692,7 @@ def drain(
         job_id = _claim_one(conn, types, now)
         if job_id is None:
             break
-        run_one(conn, job_id, db_path, settings, registry)
+        run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
         processed += 1
 
     return processed
@@ -677,7 +708,7 @@ def _embed_handler(
     target_version: str,
     db_path: Path,
     settings: Settings,
-) -> None:
+) -> str | None:
     """Embed handler: vector leg only (lode-x6r.5, lode-xyb).
 
     The sole path for async embedding after capture: capture enqueues the
@@ -695,11 +726,18 @@ def _embed_handler(
     the note is keyword-findable before this handler runs.  The handler running
     again would just re-write identical FTS rows (idempotent), but dropping it
     is cleaner and keeps this handler model-bearing-only.
+
+    Returns a one-line human-readable outcome (lode-1gr.4), e.g. ``"embedded
+    <short-id>: 3 passages"``, for :func:`run_one` to surface to ``lode
+    work``'s echo.
     """
     from lode.embedding import embed
 
     # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
-    embed(conn, target_version, lance_dir=_lance_dir(db_path), settings=settings)
+    count = embed(
+        conn, target_version, lance_dir=_lance_dir(db_path), settings=settings
+    )
+    return f"embedded {target_version[:12]}: {count} passages"
 
 
 # Register the embed handler on module load.
@@ -716,7 +754,7 @@ def _enrich_handler(
     target_version: str,
     db_path: Path,
     settings: Settings,
-) -> None:
+) -> str | None:
     """Enrich handler: Haiku structured extraction of tags/entities/edges.
 
     Dispatches to :func:`lode.enrich.enrich_version` which:
@@ -730,10 +768,21 @@ def _enrich_handler(
     Deferred import keeps the Haiku / Anthropic SDK cost off code paths that
     never enrich.  The ``db_path`` parameter is accepted but unused: enrichment
     writes only to the SQLite DB, not to the LanceDB vector store.
-    """
-    from lode.enrich import enrich_version
 
-    enrich_version(conn, target_version, settings)
+    Returns a one-line human-readable outcome (lode-1gr.4) via
+    :func:`lode.enrich.format_enrich_outcome` when enrichment actually ran, or
+    ``None`` when :func:`~lode.enrich.enrich_version` skipped the version
+    (``no_egress`` / tombstone / purged) — this is the fallback handler for an
+    enrich job that escaped the batch pre-step (see module docstring); the
+    normal production path collects outcomes via
+    :func:`lode.enrich.collect_enrich_batch` instead.
+    """
+    from lode.enrich import enrich_version, format_enrich_outcome
+
+    result = enrich_version(conn, target_version, settings)
+    if result is None:
+        return None
+    return format_enrich_outcome(target_version, result)
 
 
 # Register the enrich handler on module load.

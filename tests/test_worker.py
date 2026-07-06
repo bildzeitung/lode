@@ -300,6 +300,63 @@ def test_run_enrich_success_stamps_prompt_ver(
     assert row["prompt_ver"] == ENRICH_PROMPT_VER
 
 
+def test_run_appends_handler_outcome_to_outcomes_sink(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A handler's returned outcome string is appended to `outcomes` (lode-1gr.4).
+
+    This is the channel a caller (lode.worker.drain, and ultimately 'lode
+    work') uses to surface a per-job outcome line -- e.g. what the real
+    _embed_handler returns ("embedded <short-id>: N passages").
+    """
+    job_id = _insert_job(conn, target_version="ver-outcome")
+    _claim_one(conn, ("embed",), _now_iso())
+    registry: dict[str, HandlerFn] = {
+        "embed": lambda conn, tv, db, s: f"embedded {tv}: 3 passages"
+    }
+    outcomes: list[str] = []
+    ok = run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
+    assert ok is True
+    assert outcomes == ["embedded ver-outcome: 3 passages"]
+
+
+def test_run_does_not_append_when_handler_returns_none(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A handler returning None (nothing to report) leaves `outcomes` empty."""
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    outcomes: list[str] = []
+    ok = run_one(conn, job_id, db_path, settings, _noop_registry(), outcomes=outcomes)
+    assert ok is True
+    assert outcomes == []
+
+
+def test_run_does_not_append_outcome_on_failure(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A failing handler never gets to return an outcome -- `outcomes` stays empty."""
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    outcomes: list[str] = []
+    ok = run_one(
+        conn, job_id, db_path, settings, _failing_registry(), outcomes=outcomes
+    )
+    assert ok is False
+    assert outcomes == []
+
+
+def test_run_outcomes_default_none_is_a_no_op(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Omitting outcomes (the default) does not error -- purely additive param."""
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    registry: dict[str, HandlerFn] = {"embed": lambda conn, tv, db, s: "some outcome"}
+    ok = run_one(conn, job_id, db_path, settings, registry)
+    assert ok is True
+
+
 def test_run_transient_error_sets_failed(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -746,6 +803,83 @@ def test_drain_processes_pending_embed_jobs(
         for r in conn.execute("SELECT status FROM jobs WHERE type = 'embed'").fetchall()
     ]
     assert all(s == "done" for s in statuses)
+
+
+def test_drain_appends_main_loop_outcomes(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """drain() forwards `outcomes` to the main claim/run loop (lode-1gr.4).
+
+    Each embed job processed by the main loop appends its handler's outcome
+    line -- this is the channel 'lode work' uses to echo a per-note passage
+    count, e.g. "embedded <short-id>: 3 passages".
+    """
+    _insert_job(conn, target_version="ver-a")
+    _insert_job(conn, target_version="ver-b")
+    registry: dict[str, HandlerFn] = {
+        "embed": lambda conn, tv, db, s: f"embedded {tv}: 3 passages"
+    }
+    outcomes: list[str] = []
+    n = drain(conn, db_path, settings, _registry=registry, outcomes=outcomes)
+    assert n == 2
+    assert sorted(outcomes) == [
+        "embedded ver-a: 3 passages",
+        "embedded ver-b: 3 passages",
+    ]
+
+
+def test_drain_no_op_pass_leaves_outcomes_empty(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A no-op drain pass (nothing pending) appends no outcome lines."""
+    outcomes: list[str] = []
+    n = drain(conn, db_path, settings, _registry=_noop_registry(), outcomes=outcomes)
+    assert n == 0
+    assert outcomes == []
+
+
+def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A later drain pass that collects a completed enrich batch appends an
+    enrich outcome line via the batch pre-step (lode-1gr.4) -- not the main
+    loop's return count, which never includes batch-collected enrich jobs.
+    """
+    from lode.enrich import EnrichmentResult, format_enrich_outcome
+
+    _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
+    job_id = _insert_enrich_job_worker(
+        conn, version_id="ver-1", status="running", batch_handle="collect-batch"
+    )
+
+    enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
+    result_obj = mock.MagicMock()
+    result_obj.custom_id = "ver-1"
+    result_obj.result.type = "succeeded"
+    tool_block = mock.MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.input = enrichment.model_dump()
+    result_obj.result.message.content = [tool_block]
+
+    client = _fake_batch_client_worker(
+        batch_id="collect-batch", results=[result_obj], processing_status="ended"
+    )
+
+    outcomes: list[str] = []
+    n = drain(
+        conn,
+        db_path,
+        settings,
+        _registry=_noop_registry(),
+        _batch_client=client,
+        outcomes=outcomes,
+    )
+    # Batch-collected enrich outcomes are not counted in the main loop's
+    # return value (docstring-documented) -- only the embed leg is, and
+    # there's no embed job here.
+    assert n == 0
+    assert outcomes == [format_enrich_outcome("ver-1", enrichment)]
+    assert _job(conn, job_id)["status"] == "done"
 
 
 def test_drain_main_loop_skips_enrich_batch_in_flight(

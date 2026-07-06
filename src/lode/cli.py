@@ -804,6 +804,15 @@ def work(
     handler and accumulates harmlessly until the connectors step arrives
     (lode-i05.3 scope fence).  A second ``lode work`` while one is already
     running is refused.
+
+    Each pass prints a per-job outcome line for what it actually produced
+    (lode-1gr.4) -- e.g. ``enriched <short-id>: 4 tags, 2 entities, 3 edges,
+    summary set`` for a batch collected this pass, or ``embedded <short-id>: 3
+    passages`` for an embed job -- ahead of the existing ``drained N job(s)``
+    summary. A one-shot ``work`` right after capture only *submits* the enrich
+    batch (nothing to collect yet), so the enrich line appears on a later pass
+    (or under ``--wait``); a no-op pass still just prints ``drained 0
+    job(s)``.
     """
     if wait and loop:
         typer.echo(
@@ -838,7 +847,13 @@ def work(
                         gap = _reconcile(conn)
                         if gap:
                             typer.echo(f"reconciled {gap} gap version(s)")
-                        n = _drain(conn, db_path, settings)
+                        # Per-job outcome lines (lode-1gr.4): what this pass's
+                        # embed jobs and any enrich batch it collected actually
+                        # produced, ahead of the existing job-count summary.
+                        outcomes: list[str] = []
+                        n = _drain(conn, db_path, settings, outcomes=outcomes)
+                        for outcome in outcomes:
+                            typer.echo(outcome)
                         typer.echo(f"drained {n} job(s)")
 
                         if wait:

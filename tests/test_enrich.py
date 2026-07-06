@@ -31,6 +31,7 @@ from lode.enrich import (
     InferredEdge,
     collect_enrich_batch,
     enrich_version,
+    format_enrich_outcome,
     submit_enrich_batch,
 )
 from lode.reconcile import _enrich_gap_step
@@ -1246,4 +1247,102 @@ def test_collect_enrich_batch_idempotent_on_no_running_jobs(
     client = _fake_batch_client(batch_id="batch-xyz")
     ended = collect_enrich_batch(conn, "batch-xyz", settings, client=client)
     # Batch is ended (processing_status='ended' is the default) so True.
+    assert ended is True
+
+
+# ---------------------------------------------------------------------------
+# CLI outcome formatting (lode-1gr.4)
+# ---------------------------------------------------------------------------
+
+
+def test_format_enrich_outcome_wording() -> None:
+    """format_enrich_outcome renders the exact 'lode work' echo wording."""
+    result = EnrichmentResult(
+        tags=["python", "api", "web", "backend"],
+        entities=["FastAPI", "Pydantic"],
+        inferred_edges=[
+            InferredEdge(to_id="a", reason="r1", confidence=0.5),
+            InferredEdge(to_id="b", reason="r2", confidence=0.6),
+            InferredEdge(to_id="c", reason="r3", confidence=0.7),
+        ],
+        summary="A note about FastAPI.",
+    )
+    line = format_enrich_outcome("abcdef0123456789", result)
+    assert line == ("enriched abcdef012345: 4 tags, 2 entities, 3 edges, summary set")
+
+
+def test_format_enrich_outcome_empty_summary() -> None:
+    """An empty summary renders 'summary empty', not 'summary set'."""
+    result = EnrichmentResult(tags=["x"], summary="")
+    line = format_enrich_outcome("ver-1", result)
+    assert "summary empty" in line
+
+
+def test_collect_enrich_batch_appends_outcome_line_on_success(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A succeeded batch result appends a format_enrich_outcome line (lode-1gr.4).
+
+    This is the channel a *later* drain pass that collects a completed enrich
+    batch uses to surface a per-note outcome to 'lode work' -- the batch
+    pre-step runs ahead of lode.worker.drain's main claim/run loop, so this is
+    the only place those outcomes are observable.
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-outcome' WHERE id = ?", (job_id,)
+        )
+
+    enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
+    br = _make_batch_result("ver-1", enrichment)
+    client = _fake_batch_client(batch_id="batch-outcome", results=[br])
+
+    outcomes: list[str] = []
+    ended = collect_enrich_batch(
+        conn, "batch-outcome", settings, client=client, outcomes=outcomes
+    )
+    assert ended is True
+    assert outcomes == [format_enrich_outcome("ver-1", enrichment)]
+
+
+def test_collect_enrich_batch_no_outcome_on_errored_result(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """An errored batch result appends no outcome line -- only successes do."""
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-err-outcome' WHERE id = ?",
+            (job_id,),
+        )
+
+    br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
+    client = _fake_batch_client(batch_id="batch-err-outcome", results=[br])
+
+    outcomes: list[str] = []
+    collect_enrich_batch(
+        conn, "batch-err-outcome", settings, client=client, outcomes=outcomes
+    )
+    assert outcomes == []
+
+
+def test_collect_enrich_batch_outcomes_default_none_is_a_no_op(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """Omitting outcomes (the default) does not error -- purely additive param."""
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-no-sink' WHERE id = ?", (job_id,)
+        )
+
+    enrichment = EnrichmentResult(tags=["x"])
+    br = _make_batch_result("ver-1", enrichment)
+    client = _fake_batch_client(batch_id="batch-no-sink", results=[br])
+
+    ended = collect_enrich_batch(conn, "batch-no-sink", settings, client=client)
     assert ended is True
