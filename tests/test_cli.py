@@ -631,6 +631,94 @@ def test_purge_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
     assert "no such note" in result.stderr
 
 
+# --- lode purge <prefix> (unambiguous note-id prefix, lode-1gr.3) -----------
+
+
+def test_purge_accepts_an_unambiguous_prefix(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "secret hunter2", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["purge", note_id[:8], "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert note_id in result.stdout  # resolved to the full id in the report
+
+    assert _rows(
+        db_path,
+        "SELECT purged_at IS NOT NULL FROM versions WHERE note_id = ?",
+        (note_id,),
+    ) == [(1,)]
+
+
+def test_purge_ambiguous_prefix_reports_candidates_and_purges_nothing(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-aaa111", "body a")
+        save(conn, "note-aaa222", "body b")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["purge", "note-aaa", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "ambiguous" in result.stderr
+    assert "note-aaa111" in result.stderr
+    assert "note-aaa222" in result.stderr
+
+    # Neither candidate was touched.
+    assert _rows(
+        db_path,
+        "SELECT purged_at FROM versions WHERE note_id IN "
+        "('note-aaa111', 'note-aaa222')",
+    ) == [(None,), (None,)]
+
+
+def test_purge_prefix_does_not_match_a_tombstoned_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        from lode.versions import delete
+
+        result = save(conn, "note-aaa111", "body a")
+        delete(conn, "note-aaa111", parent=result.version_id)
+    finally:
+        conn.close()
+
+    # The tombstoned note isn't reachable by prefix (it's not in Browse
+    # either) — same "no such note" as an unknown prefix.
+    result = runner.invoke(app, ["purge", "note-aaa", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
+
+
+def test_purge_full_id_still_works_regardless_of_note_state(
+    tmp_path: Path,
+) -> None:
+    """Full-id (36-char) purge is unchanged: it still reaches a tombstone."""
+    db_path = tmp_path / "lode.db"
+    full_id = "a" * 36  # a real uuid4 is also 36 chars; only the length matters
+    conn = init_db(db_path)
+    try:
+        from lode.versions import delete
+
+        result = save(conn, full_id, "body a")
+        delete(conn, full_id, parent=result.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["purge", full_id, "--db", str(db_path)])
+    assert result.exit_code == 0
+    # Both chain versions (create + delete tombstone) are purged.
+    assert _rows(
+        db_path,
+        "SELECT purged_at IS NOT NULL FROM versions WHERE note_id = ?",
+        (full_id,),
+    ) == [(1,), (1,)]
+
+
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
 
 

@@ -19,7 +19,13 @@ from pathlib import Path
 import pytest
 
 from lode.hashing import NO_PARENT, content_version_id
-from lode.repository import CacheBackend, CompositeCache, NullCache, Repository
+from lode.repository import (
+    AmbiguousNoteIdError,
+    CacheBackend,
+    CompositeCache,
+    NullCache,
+    Repository,
+)
 from lode.storage import init_db
 from lode.versions import HeadConflictError
 
@@ -386,6 +392,64 @@ def test_purge_clears_the_secret_from_the_real_lexical_index(conn):
     # The head is re-derived to the marker, so the purged note stays findable.
     assert index.search("purged", k=10)
     assert result.head_op == "update"
+
+
+# --- resolve_note_prefix: prefix -> full id, scoped to LIVE notes (lode-1gr.3) -
+#
+# Shared resolver behind `lode purge <prefix>` (and, later, `lode show`,
+# lode-1gr.5): a full 36-char id always bypasses resolution (works regardless
+# of note state, unchanged from before this ticket); anything shorter resolves
+# only against LIVE notes (same `v.op != 'delete'` guard Browse uses) to
+# exactly one match, or raises.
+
+_FULL_ID = "0" * 36  # not a real uuid4, just 36 chars — length is all that matters
+
+
+def test_resolve_note_prefix_returns_a_full_length_id_unchanged(conn):
+    repo = Repository(conn)
+
+    # No note with this id exists at all — a full id is never resolved/looked
+    # up here, just passed through so purge's own KeyError still fires.
+    assert repo.resolve_note_prefix(_FULL_ID) == _FULL_ID
+
+
+def test_resolve_note_prefix_resolves_a_unique_prefix(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+    repo.save("note-bbb222", "body b")
+
+    assert repo.resolve_note_prefix("note-aaa") == "note-aaa111"
+
+
+def test_resolve_note_prefix_raises_keyerror_when_nothing_matches(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+
+    with pytest.raises(KeyError):
+        repo.resolve_note_prefix("ghost")
+
+
+def test_resolve_note_prefix_raises_ambiguous_for_multiple_live_matches(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+    repo.save("note-aaa222", "body b")
+
+    with pytest.raises(AmbiguousNoteIdError) as excinfo:
+        repo.resolve_note_prefix("note-aaa")
+
+    # Nothing was purged — the caller decides what to do, this only reports.
+    assert set(excinfo.value.candidates) == {"note-aaa111", "note-aaa222"}
+
+
+def test_resolve_note_prefix_excludes_a_tombstoned_note(conn):
+    repo = Repository(conn)
+    root = repo.save("note-aaa111", "body a").version_id
+    repo.delete("note-aaa111", parent=root)
+
+    # The tombstoned note is not reachable by prefix — it isn't in Browse
+    # either — even though it is the only note with that prefix.
+    with pytest.raises(KeyError):
+        repo.resolve_note_prefix("note-aaa")
 
 
 # --- enqueue ownership + atomicity (lode-i05.1 / lode-npx.2) ------------------

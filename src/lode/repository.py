@@ -32,6 +32,27 @@ from lode.hashing import NO_PARENT
 from lode.redact import redact_before_index
 from lode.versions import SaveResult
 
+# A full note_id is a str(uuid.uuid4()) — 32 hex digits + 4 dashes = 36 chars
+# (lode.cli.add, lode.tui.capture.save_capture). Anything shorter is treated
+# as a prefix to resolve (lode-1gr.3).
+NOTE_ID_LENGTH = 36
+
+
+class AmbiguousNoteIdError(Exception):
+    """A note-id prefix matched more than one live note (lode-1gr.3).
+
+    Raised by :meth:`Repository.resolve_note_prefix`; carries the candidate
+    full ids so the caller (a CLI command) can list them instead of guessing
+    which one the user meant.
+    """
+
+    def __init__(self, prefix: str, candidates: Iterable[str]) -> None:
+        self.prefix = prefix
+        self.candidates = tuple(candidates)
+        super().__init__(
+            f"ambiguous note id prefix {prefix!r}: matches {', '.join(self.candidates)}"
+        )
+
 
 @runtime_checkable
 class CacheBackend(Protocol):
@@ -261,6 +282,45 @@ class Repository:
         body = redact_before_index(self._body(result.version_id), settings)
         self.cache.index(note_id, result.version_id, body)
         return result
+
+    def resolve_note_prefix(self, prefix: str) -> str:
+        """Resolve a note-id prefix to its one matching LIVE note (lode-1gr.3).
+
+        With Browse/``lode notes`` showing short ids, requiring the full
+        36-char id for commands like ``purge`` is hostile — this is the one
+        reusable resolver both ``purge`` and ``lode show`` (lode-1gr.5) share.
+
+        A full :data:`NOTE_ID_LENGTH`-char id is returned **unchanged,
+        unresolved**: a full id must keep working exactly as before this
+        ticket, purging any note regardless of state (live, soft-deleted, or
+        already purged) — only a *shorter* string goes through resolution.
+
+        Resolution is scoped to **live** notes only, via the same
+        ``v.op != 'delete'`` guard :func:`lode.tui.browse._list_notes` uses
+        for the Browse table: a prefix resolves only what the user can already
+        see via ``lode notes``/Browse, so a tombstoned note is not reachable
+        by prefix (its full id still works, per above).
+
+        Raises ``KeyError(prefix)`` if no live note matches — the same
+        exception a not-found full id already raises, so callers need only one
+        except clause for "no such note" — and :class:`AmbiguousNoteIdError`
+        if more than one does.
+        """
+        if len(prefix) >= NOTE_ID_LENGTH:
+            return prefix
+        rows = self.conn.execute(
+            "SELECT n.note_id FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            "WHERE v.op != 'delete' AND substr(n.note_id, 1, ?) = ? "
+            "ORDER BY n.note_id",
+            (len(prefix), prefix),
+        ).fetchall()
+        candidates = [row[0] for row in rows]
+        if not candidates:
+            raise KeyError(prefix)
+        if len(candidates) > 1:
+            raise AmbiguousNoteIdError(prefix, candidates)
+        return candidates[0]
 
     def purge(self, note_id: str) -> versions.PurgeResult:
         """Hard-delete ``note_id`` (see :func:`lode.versions.purge`), then cascade.
