@@ -429,6 +429,16 @@ def test_resolve_note_prefix_raises_keyerror_when_nothing_matches(conn):
         repo.resolve_note_prefix("ghost")
 
 
+def test_resolve_note_prefix_rejects_an_empty_prefix(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+
+    # An empty string is not an unambiguous prefix of anything; it must not
+    # resolve to (and let `lode purge ""` sweep) the sole live note.
+    with pytest.raises(KeyError):
+        repo.resolve_note_prefix("")
+
+
 def test_resolve_note_prefix_raises_ambiguous_for_multiple_live_matches(conn):
     repo = Repository(conn)
     repo.save("note-aaa111", "body a")

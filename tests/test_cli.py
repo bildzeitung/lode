@@ -694,6 +694,25 @@ def test_purge_prefix_does_not_match_a_tombstoned_note(tmp_path: Path) -> None:
     assert "no such note" in result.stderr
 
 
+def test_purge_empty_prefix_purges_nothing(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "the only note", "--db", str(db_path)]
+    ).stdout.strip()
+
+    # `lode purge ""` must not sweep the sole live note — an empty string is
+    # not an unambiguous prefix; it errors like any unknown id (lode-1gr.3).
+    result = runner.invoke(app, ["purge", "", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
+
+    assert _rows(
+        db_path,
+        "SELECT purged_at FROM versions WHERE note_id = ?",
+        (note_id,),
+    ) == [(None,)]
+
+
 def test_purge_full_id_still_works_regardless_of_note_state(
     tmp_path: Path,
 ) -> None:

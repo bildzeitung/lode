@@ -306,6 +306,12 @@ class Repository:
         except clause for "no such note" — and :class:`AmbiguousNoteIdError`
         if more than one does.
         """
+        if not prefix:
+            # An empty string is neither a full id nor a prefix of one; the
+            # substr guard below would otherwise match every live note, so a
+            # single-note store would purge on ``lode purge ""``. Treat it as
+            # "no such note", like any other zero-match prefix (lode-1gr.3).
+            raise KeyError(prefix)
         if len(prefix) >= NOTE_ID_LENGTH:
             return prefix
         rows = self.conn.execute(
