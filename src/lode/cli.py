@@ -682,6 +682,27 @@ def version() -> None:
     typer.echo(__version__)
 
 
+def _outstanding_jobs(conn: sqlite3.Connection) -> list[tuple[int, str, str, str]]:
+    """List jobs still ``pending``/``running`` -- for ``--wait``'s timeout report.
+
+    Read fresh each poll tick so it reflects the latest drain pass, including
+    batch-backed enrich jobs still ``running`` on an in-flight Batches API
+    request (they are not a bug -- see ``work``'s ``--wait`` docstring).
+    """
+    return conn.execute(
+        "SELECT id, type, status, target_version FROM jobs "
+        "WHERE status IN ('pending', 'running') ORDER BY id"
+    ).fetchall()
+
+
+def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
+    """Render outstanding ``(id, type, status, target_version)`` rows for the CLI."""
+    return ", ".join(
+        f"{job_id} ({job_type} {status} target={_short(target_version)})"
+        for job_id, job_type, status, target_version in jobs
+    )
+
+
 @app.command()
 def work(
     db: Path | None = _DB_OPTION,
@@ -694,8 +715,25 @@ def work(
     interval: float = typer.Option(
         5.0,
         "--interval",
-        help="Polling interval in seconds (--loop / --watch only).",
+        help="Polling interval in seconds (--loop / --watch / --wait).",
         min=0.1,
+    ),
+    wait: bool = typer.Option(
+        False,
+        "--wait",
+        "--until-done",
+        help=(
+            "Block, polling every --interval seconds, until the queue is fully "
+            "drained -- including collected Batches API enrich results -- or "
+            "the bounded timeout (Settings.work_wait_timeout_s, "
+            "docs/configuration.md) elapses, whichever comes first. On "
+            "timeout, exits non-zero naming the still-pending/running jobs. "
+            "Suits embed-heavy or small-batch cases; a large async enrich "
+            "load can legitimately outlast the timeout (Batches API SLA up "
+            "to 24h) -- that is expected, just re-run 'lode work' (or "
+            "--wait again) to keep collecting. Mutually exclusive with "
+            "--loop/--watch, which never exits on its own."
+        ),
     ),
 ) -> None:
     """Drain the async work queue: claim → run → retry/dead-letter.
@@ -703,15 +741,27 @@ def work(
     ONE-SHOT by default: acquires the single-instance advisory lock
     (lode-i05.2), resets overdue failed jobs, then claims and runs ready
     pending jobs until none remain and exits.  ``--loop`` / ``--watch`` keeps
-    the loop alive, sleeping ``--interval`` seconds between passes.
+    the loop alive forever, sleeping ``--interval`` seconds between passes.
+    ``--wait`` / ``--until-done`` instead polls only until the queue is fully
+    drained or a bounded timeout fires (see the option help) -- so a caller
+    doesn't have to re-run ``work`` by hand to see an async enrich batch land.
 
     Only ``embed`` jobs have a handler now; ``enrich`` / ``refresh`` jobs
     accumulate harmlessly until their handlers arrive (lode-i05.3 scope
     fence).  A second ``lode work`` while one is already running is refused.
     """
+    if wait and loop:
+        typer.echo(
+            "--wait and --loop/--watch are mutually exclusive "
+            "(--wait already polls until drained or timeout)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
+    settings = Settings()
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
@@ -719,16 +769,39 @@ def work(
         try:
             with WorkerLock(db_path):
                 try:
+                    deadline = (
+                        time.monotonic() + settings.work_wait_timeout_s
+                        if wait
+                        else None
+                    )
                     while True:
                         # Reconciliation scan runs at startup (first pass) and
-                        # periodically (each poll tick in --loop mode). Re-enqueues
-                        # any head versions missing a fresh embed; idempotent by
-                        # the live-job partial unique index (lode-i05.4).
+                        # periodically (each poll tick in --loop/--wait mode).
+                        # Re-enqueues any head versions missing a fresh embed;
+                        # idempotent by the live-job partial unique index
+                        # (lode-i05.4).
                         gap = _reconcile(conn)
                         if gap:
                             typer.echo(f"reconciled {gap} gap version(s)")
-                        n = _drain(conn, db_path)
+                        n = _drain(conn, db_path, settings)
                         typer.echo(f"drained {n} job(s)")
+
+                        if wait:
+                            outstanding = _outstanding_jobs(conn)
+                            if not outstanding:
+                                break
+                            if time.monotonic() >= deadline:
+                                typer.echo(
+                                    "--wait timed out after "
+                                    f"{settings.work_wait_timeout_s}s with "
+                                    f"{len(outstanding)} job(s) still in "
+                                    f"flight: {_format_outstanding(outstanding)}",
+                                    err=True,
+                                )
+                                raise typer.Exit(code=1)
+                            time.sleep(interval)
+                            continue
+
                         if not loop:
                             break
                         time.sleep(interval)

@@ -221,6 +221,18 @@ class Settings(BaseModel):
         "Max wait before flushing an enrich batch (time policy).",
         gt=0,
     )
+    work_wait_timeout_s: int = _knob(
+        1800,
+        Kind.RUNTIME,
+        "Max time 'lode work --wait' blocks polling for the queue to fully "
+        "drain (incl. batch enrich results collected) before exiting non-zero "
+        "and naming the still-pending/running jobs. The Batches API can take "
+        "minutes-to-hours (SLA <=24h, docs/storage.md) so --wait may "
+        "legitimately time out on a large enrich load -- that is accepted, not "
+        "a bug; --wait suits embed-heavy or small-batch cases, and a big async "
+        "enrich backlog may need a plain re-run of 'lode work' instead.",
+        gt=0,
+    )
 
     # --- Externals (with connectors) -----------------------------------------
     refresh_ttl_s: int = _knob(
