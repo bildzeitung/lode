@@ -26,6 +26,27 @@ _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 _LOG_FILE = "lode.log"
 
 
+class _ConsoleHttpxFilter(logging.Filter):
+    """Drop httpx's sub-WARNING records (the "HTTP Request: ... 200 OK" line).
+
+    Attached to the console/stream handler only (lode-1gr.7) -- the file
+    handler is untouched, so ``lode.log`` still records every httpx request
+    for debugging, while the console stays quiet for successful requests.
+    httpx WARNING+ (e.g. retries, errors) still reaches the console.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (
+            record.name.startswith("httpx") and record.levelno < logging.WARNING
+        )
+
+
+def _add_console_httpx_filter(handler: logging.Handler) -> None:
+    """Attach :class:`_ConsoleHttpxFilter` to ``handler`` unless already present."""
+    if not any(isinstance(f, _ConsoleHttpxFilter) for f in handler.filters):
+        handler.addFilter(_ConsoleHttpxFilter())
+
+
 def resolve_level(level: str | int | None = None) -> int:
     """Resolve a numeric log level from an arg, then ``LODE_LOG_LEVEL``, then INFO.
 
@@ -69,6 +90,14 @@ def configure_logging(
     straight to stderr) fire and reintroduce the very corruption this guards
     against. Plain CLI commands never pass ``console=False``, so ``ask``/
     ``add``/etc. keep mirroring to stderr unchanged.
+
+    In ``console=True`` mode, every non-file handler on the root logger (the
+    stream handler ``basicConfig`` installs) gets a filter that drops httpx's
+    sub-WARNING records -- the "HTTP Request: ... 200 OK" line the Anthropic
+    SDK's httpx transport logs at INFO (lode-1gr.7). The root logger's own
+    level is unchanged (still ``resolved``, e.g. INFO), so the file handler
+    keeps recording httpx 200s for debugging; only the console is quieted,
+    and httpx WARNING+/errors still reach it.
     """
     if not console and log_dir is None:
         raise ValueError("configure_logging: log_dir is required when console=False")
@@ -76,6 +105,9 @@ def configure_logging(
     root = logging.getLogger()
     if console:
         logging.basicConfig(level=resolved, format=_LOG_FORMAT)
+        for handler in root.handlers:
+            if not getattr(handler, "_lode_file", False):
+                _add_console_httpx_filter(handler)
     root.setLevel(resolved)
     if log_dir is not None:
         _attach_file_handler(root, Path(log_dir), resolved)
