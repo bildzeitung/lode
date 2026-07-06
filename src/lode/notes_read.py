@@ -1,16 +1,21 @@
-"""Read side for the browse screen (lode-0wj.5) -- list live notes, newest first.
+"""Read side for live notes -- list them, newest first (lode-0wj.5, lode-1gr.1).
 
 ``docs/design.md``'s browse screen shows three columns per live note: **Date**
 (``notes.created``), **Version** (the edit count / chain length, *not* the
 content-hash ``version_id`` -- rendered by the screen as ``v{n}``), and
 **Summary** (the head version's ``kind='summary'`` AI annotation, lode-0wj.9,
 falling back to the note's first line when no summary annotation exists yet --
-a fresh/un-enriched note, since enrichment is async).
+a fresh/un-enriched note, since enrichment is async). The ``lode notes`` CLI
+command (lode-1gr.1) reads the same :func:`list_notes` for the same rows,
+printed as plain text instead of a ``DataTable``.
 
-This is a **new read function**, not UI-only, mirroring the split every other
-E11 screen already uses (:mod:`lode.tui.capture` / :mod:`lode.tui.ask` /
-:mod:`lode.tui.related`): pure I/O, no widget/App state, so it is
-unit-testable without spinning up a Textual app.
+This module lives outside :mod:`lode.tui` (relocated by lode-1gr.1) because it
+is pure I/O, no widget/App state -- originally written alongside
+:mod:`lode.tui.capture` / :mod:`lode.tui.ask` / :mod:`lode.tui.related` for
+that same reason, but a CLI command reading through ``lode.tui.*`` would have
+the dependency direction backwards (cli -> tui). :mod:`lode.tui.screens.browse`
+imports these functions the same way it always has; nothing about them changed
+in the move.
 
 **Live notes only.** A tombstoned note (its head version's ``op = 'delete'``)
 is excluded by the same ``v.op != 'delete'`` guard :func:`lode.retrieval.

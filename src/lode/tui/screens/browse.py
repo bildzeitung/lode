@@ -5,12 +5,12 @@ without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
 CaptureScreen` via the app-level ``F3`` binding (:mod:`lode.tui.app`, the same
 "reachable from anywhere" convention ``F2``'s config screen already uses).
 This screen owns no read logic of its own -- it only renders the rows
-:func:`lode.tui.browse.list_notes` returns into a ``DataTable`` (Date |
+:func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Date |
 Version | Summary, newest-first, live notes only) and reacts to a row select
 or an edit key press.
 
 Selecting a row pushes :class:`NoteViewScreen`, a read-only view of that
-note's live head body (:func:`lode.tui.browse.note_body`) -- mirroring how
+note's live head body (:func:`lode.notes_read.note_body`) -- mirroring how
 :class:`~lode.tui.screens.reconcile.ReconcileScreen` shows a read-only
 ``TextArea`` for its diff. ``NoteViewScreen`` needs a ``note_id`` to push, so
 (like ``ReconcileScreen`` and ``CaptureScreen``'s own ``DiscardConfirmScreen``)
@@ -35,9 +35,9 @@ back from ``NoteViewScreen``/``EditScreen``), not only on first mount.
 
 **View prior versions (lode-0wj.7).** ``h`` on :class:`NoteViewScreen` pushes
 :class:`VersionHistoryScreen` -- a Date | Version | Op table over the note's
-whole chain (:func:`lode.tui.browse.list_versions`), newest (the head) first.
+whole chain (:func:`lode.notes_read.list_versions`), newest (the head) first.
 Selecting a row pushes :class:`VersionViewScreen`, a read-only view of that
-exact version's body (:func:`lode.tui.browse.version_body`) -- the same
+exact version's body (:func:`lode.notes_read.version_body`) -- the same
 "read-only ``TextArea``" pattern ``NoteViewScreen`` itself already uses, just
 keyed to a specific ``version_id`` instead of always the live head. Escape
 pops one level at a time here too: version body -> history list -> note view,
@@ -53,7 +53,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TextArea
 
-from lode.tui.browse import list_notes, list_versions, note_body, version_body
+from lode.notes_read import list_notes, list_versions, note_body, version_body
 from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen

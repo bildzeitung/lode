@@ -1,4 +1,4 @@
-"""Tests for lode.tui.browse -- the browse screen's read side (lode-0wj.5).
+"""Tests for lode.notes_read -- the shared notes read side (lode-0wj.5, lode-1gr.1).
 
 Pins the ticket's acceptance criterion at the module level, mirroring
 ``tests/test_tui_ask.py``'s direct unit style: live notes only (a soft-deleted
@@ -9,8 +9,8 @@ and the summary-annotation-or-first-line fallback for the Summary column.
 import json
 from pathlib import Path
 
+from lode.notes_read import list_notes, list_versions, note_body, version_body
 from lode.storage import init_db
-from lode.tui.browse import list_notes, list_versions, note_body, version_body
 from lode.versions import delete, save
 
 

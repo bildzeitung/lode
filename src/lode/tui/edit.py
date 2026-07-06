@@ -1,7 +1,7 @@
 """Edit-path save wiring for the TUI's browse-to-edit flow (lode-0wj.6).
 
 Pure I/O, no widget/App state — same convention as :mod:`lode.tui.capture` /
-:mod:`lode.tui.browse` — so it is unit-testable without spinning up a Textual
+:mod:`lode.notes_read` — so it is unit-testable without spinning up a Textual
 app; :class:`~lode.tui.screens.browse.EditScreen` is its only caller.
 
 **Update, never create — the whole point of this module.** :func:`save_capture`
@@ -54,7 +54,7 @@ def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     """Return ``(head_version_id, head_body)`` for ``note_id``'s live head.
 
     ``None`` if the note is absent or its head is a soft-delete tombstone
-    (``op = 'delete'``) — mirroring :func:`lode.tui.browse.note_body`'s "live
+    (``op = 'delete'``) — mirroring :func:`lode.notes_read.note_body`'s "live
     heads only" guard, since a tombstoned note has nothing editable to load.
     :class:`~lode.tui.screens.browse.EditScreen` uses this both to seed the
     editable buffer and to remember the CAS ``parent`` its save must reparent

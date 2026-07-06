@@ -6,8 +6,10 @@ enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
 (chunk + embed + FTS via the registered ``embed`` handler); the operational
 ``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
-:meth:`lode.repository.Repository.purge`; ``ask`` (lode-y42.2) runs the cited Q&A
-loop (retrieve → synthesize → faithfulness gate → cite or abstain); ``tui``
+:meth:`lode.repository.Repository.purge`; ``notes`` (lode-1gr.1) lists every
+live note's full id, date, and summary via :func:`lode.notes_read.list_notes`
+-- the id source for ``purge``; ``ask`` (lode-y42.2) runs the cited Q&A loop
+(retrieve → synthesize → faithfulness gate → cite or abstain); ``tui``
 (E11, lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
@@ -42,6 +44,7 @@ from lode.config import (
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
+from lode.notes_read import list_notes
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 
@@ -413,6 +416,40 @@ def purge(
         f"purged {result.note_id}: swept {len(result.purged_versions)} version(s); "
         f"body now {result.marker_body}"
     )
+
+
+def _short_date(created: str) -> str:
+    """Render a ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` timestamp as ``YYYY-MM-DD HH:MM``.
+
+    Just drops the seconds/fractional precision and the ISO ``T``/``Z``
+    markers for a shorter, still-sortable read-out; the full adaptive
+    (relative) date format is Browse-only scope (lode-1gr.8), not this
+    command's.
+    """
+    return created[:16].replace("T", " ")
+
+
+@app.command(name="notes")
+def notes_(
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """List every live note: full id, date, and summary (``docs/design.md``).
+
+    One row per live note, newest first (:func:`lode.notes_read.list_notes`):
+    the full ``note_id`` -- copy-pasteable straight into ``lode purge`` -- a
+    short date, and its summary (the head's ``kind='summary'`` AI annotation,
+    or the note's first line when not yet enriched). Tombstoned notes are
+    excluded, same live-heads-only rule ``purge`` and the TUI browse screen
+    already use.
+    """
+    db_path = db or default_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = list_notes(db_path)
+    if not rows:
+        typer.echo("no notes")
+        return
+    for row in rows:
+        typer.echo(f"{row.note_id}  {_short_date(row.created)}  {row.summary}")
 
 
 class JobStatus(str, Enum):
