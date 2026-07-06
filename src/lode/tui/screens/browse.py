@@ -32,6 +32,17 @@ longer match the just-written head), so :meth:`BrowseScreen.on_screen_resume`
 -- Textual's hook for "this screen is visible again" -- reloads the table
 every time browse becomes the top screen again (a fresh ``F3``, or popping
 back from ``NoteViewScreen``/``EditScreen``), not only on first mount.
+
+**View prior versions (lode-0wj.7).** ``h`` on :class:`NoteViewScreen` pushes
+:class:`VersionHistoryScreen` -- a Date | Version | Op table over the note's
+whole chain (:func:`lode.tui.browse.list_versions`), newest (the head) first.
+Selecting a row pushes :class:`VersionViewScreen`, a read-only view of that
+exact version's body (:func:`lode.tui.browse.version_body`) -- the same
+"read-only ``TextArea``" pattern ``NoteViewScreen`` itself already uses, just
+keyed to a specific ``version_id`` instead of always the live head. Escape
+pops one level at a time here too: version body -> history list -> note view,
+falling out of the same Textual screen-stack pop every other Escape in this
+module already relies on.
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, TextArea
 
-from lode.tui.browse import list_notes, note_body
+from lode.tui.browse import list_notes, list_versions, note_body, version_body
 from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -53,13 +64,26 @@ TABLE_ID = "browse-table"
 NOTE_BODY_ID = "note-view-body"
 #: The editable note body's widget id -- read back in tests.
 EDIT_BODY_ID = "note-edit-body"
+#: The version-history table's widget id -- read back in tests.
+HISTORY_TABLE_ID = "version-history-table"
+#: The read-only prior-version body's widget id -- read back in tests.
+VERSION_BODY_ID = "version-view-body"
 
 
 class NoteViewScreen(Screen[None]):
-    """A read-only view of one note's live head body."""
+    """A read-only view of one note's live head body.
+
+    **Version history (lode-0wj.7).** ``h`` pushes :class:`VersionHistoryScreen`
+    for this same ``note_id`` -- "expose its version history" from a note
+    already opened in browse, per the ticket title. Escape here still pops
+    straight back to :class:`BrowseScreen`, unaffected: the history screen is
+    reached and left via its own push/pop, not a change to this screen's own
+    Escape contract.
+    """
 
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
+        Binding("h", "show_history", "History"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -74,6 +98,84 @@ class NoteViewScreen(Screen[None]):
     def on_mount(self) -> None:
         body = note_body(self.app.db_path, self.note_id)
         self.query_one(f"#{NOTE_BODY_ID}", TextArea).text = body or ""
+
+    def action_dismiss_screen(self) -> None:
+        self.app.pop_screen()
+
+    def action_show_history(self) -> None:
+        """``h``: push this note's version-history list (lode-0wj.7)."""
+        self.app.push_screen(VersionHistoryScreen(self.note_id))
+
+
+class VersionHistoryScreen(Screen[None]):
+    """A note's version chain, newest (the head) first (lode-0wj.7).
+
+    Pushed from :class:`NoteViewScreen` via ``h``. Each row is one version
+    (Date | Version | Op, mirroring :class:`BrowseScreen`'s own column style);
+    selecting one pushes :class:`VersionViewScreen`, a read-only view of that
+    exact version's body -- deliberately every row, including the current head,
+    rather than filtering it out: picking the head row just shows the same
+    body :class:`NoteViewScreen` already displayed, which is harmless and
+    avoids an off-by-one special case for no real benefit.
+
+    Escape pops back to :class:`NoteViewScreen`, the same "one level at a time"
+    contract every other browse-family screen uses.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+    ]
+
+    def __init__(self, note_id: str) -> None:
+        super().__init__()
+        self.note_id = note_id
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id=HISTORY_TABLE_ID, cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+        table.add_columns("Date", "Version", "Op")
+        for row in list_versions(self.app.db_path, self.note_id):
+            table.add_row(row.created, f"v{row.seq}", row.op, key=row.version_id)
+        table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        version_id = event.row_key.value
+        if version_id is not None:
+            self.app.push_screen(VersionViewScreen(self.note_id, version_id))
+
+    def action_dismiss_screen(self) -> None:
+        self.app.pop_screen()
+
+
+class VersionViewScreen(Screen[None]):
+    """A read-only view of one specific (possibly non-head) version's body.
+
+    Pushed from :class:`VersionHistoryScreen` on row-select. Escape pops back
+    to that history list -- one level at a time, same as everywhere else in
+    this module.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+    ]
+
+    def __init__(self, note_id: str, version_id: str) -> None:
+        super().__init__()
+        self.note_id = note_id
+        self.version_id = version_id
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield TextArea("", read_only=True, id=VERSION_BODY_ID)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        body = version_body(self.app.db_path, self.note_id, self.version_id)
+        self.query_one(f"#{VERSION_BODY_ID}", TextArea).text = body or ""
 
     def action_dismiss_screen(self) -> None:
         self.app.pop_screen()

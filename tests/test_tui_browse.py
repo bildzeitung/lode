@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from lode.storage import init_db
-from lode.tui.browse import list_notes, note_body
+from lode.tui.browse import list_notes, list_versions, note_body, version_body
 from lode.versions import delete, save
 
 
@@ -193,3 +193,86 @@ def test_note_body_returns_none_for_an_absent_note(tmp_path: Path) -> None:
     init_db(db_path).close()
 
     assert note_body(db_path, "nonexistent") is None
+
+
+def test_list_versions_orders_newest_first_with_seq_matching_chain_length(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-1", "v1 body").version_id
+        head = save(conn, "note-1", "v2 body", parent=head).version_id
+        save(conn, "note-1", "v3 body", parent=head)
+    finally:
+        conn.close()
+
+    rows = list_versions(db_path, "note-1")
+
+    assert [row.seq for row in rows] == [3, 2, 1]
+    assert [row.op for row in rows] == ["update", "update", "create"]
+    # The head's seq matches list_notes' chain-length count for the same note.
+    assert rows[0].seq == list_notes(db_path)[0].version
+
+
+def test_list_versions_follows_parent_links_not_created_order(
+    tmp_path: Path,
+) -> None:
+    """Chain order comes from ``parent_version_id``, not the ``created`` column."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO notes (note_id, head_version_id) VALUES ('note-1', 'v2')"
+        )
+        # v2's created timestamp is earlier than v1's, but v2 is still v1's child.
+        conn.execute(
+            "INSERT INTO versions "
+            "(version_id, note_id, parent_version_id, body, op, created) "
+            "VALUES ('v1', 'note-1', NULL, 'root', 'create', "
+            "'2026-01-01T00:00:01.000Z')"
+        )
+        conn.execute(
+            "INSERT INTO versions "
+            "(version_id, note_id, parent_version_id, body, op, created) "
+            "VALUES ('v2', 'note-1', 'v1', 'child', 'update', "
+            "'2026-01-01T00:00:00.000Z')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_versions(db_path, "note-1")
+
+    assert [row.version_id for row in rows] == ["v2", "v1"]
+    assert [row.seq for row in rows] == [2, 1]
+
+
+def test_list_versions_returns_empty_for_an_absent_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    assert list_versions(db_path, "nonexistent") == []
+
+
+def test_version_body_returns_a_specific_non_head_version(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-1", "v1 body").version_id
+        save(conn, "note-1", "v2 body", parent=head)
+    finally:
+        conn.close()
+
+    assert version_body(db_path, "note-1", head) == "v1 body"
+
+
+def test_version_body_returns_none_for_an_unknown_version_id(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-1", "v1 body")
+    finally:
+        conn.close()
+
+    assert version_body(db_path, "note-1", "nonexistent-version") is None

@@ -33,6 +33,14 @@ re-anchor keeps this invariant -- a summary's ``source_version`` only ever
 advances to a new head when the row is freshly re-anchored). No such row means
 the note hasn't been enriched yet (or the summary was orphaned by an edit and
 a fresh one hasn't landed), so the note's first non-blank line stands in.
+
+**Version history (lode-0wj.7).** :func:`list_versions` and :func:`version_body`
+are this same read side's answer to "view prior versions of a note from
+browse" -- unlike the three functions above, which only ever look at the live
+head, these two walk and read the *whole* chain. :func:`list_versions` walks
+``parent_version_id`` back from the head rather than counting/sorting rows, so
+it stays correct even under same-tick timestamps; :func:`version_body` is a
+plain ``version_id`` lookup, live or not.
 """
 
 from __future__ import annotations
@@ -129,6 +137,93 @@ def note_body(db_path: Path, note_id: str) -> str | None:
             "JOIN versions v ON v.version_id = n.head_version_id "
             "WHERE n.note_id = ? AND v.op != 'delete'",
             (note_id,),
+        ).fetchone()
+        return row[0] if row is not None else None
+    finally:
+        conn.close()
+
+
+@dataclass(frozen=True, slots=True)
+class VersionRow:
+    """One version in a note's chain, as the history screen's table shows it.
+
+    ``seq`` is the version's 1-based position in the chain (root ``create`` =
+    1), so the current head's ``seq`` always equals :attr:`NoteRow.version`
+    (the same chain-length count :func:`list_notes` reports) -- both are
+    "how many versions deep is this note," just counted from opposite ends.
+    """
+
+    version_id: str
+    created: str
+    op: str
+    seq: int
+
+
+def list_versions(db_path: Path, note_id: str) -> list[VersionRow]:
+    """Return ``note_id``'s full version chain, newest (the head) first.
+
+    Feeds :class:`~lode.tui.screens.browse.VersionHistoryScreen` (lode-0wj.7):
+    "list its prior versions" off a note already opened in the browse screen.
+    Walks ``parent_version_id`` back from the live head rather than sorting by
+    ``created`` -- the chain link is the actual ancestry, so this stays correct
+    even if two versions land in the same timestamp tick, and (per
+    ``docs/storage.md``'s linear-chain guarantee) never needs recursive-CTE
+    machinery. An absent note returns an empty list rather than raising -- this
+    module makes no claim about *why* a note might be missing, only what its
+    chain looks like when it exists.
+    """
+    conn = init_db(db_path)
+    try:
+        return _list_versions(conn, note_id)
+    finally:
+        conn.close()
+
+
+def _list_versions(conn: sqlite3.Connection, note_id: str) -> list[VersionRow]:
+    row = conn.execute(
+        "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    ).fetchone()
+    if row is None:
+        return []
+    versions = {
+        version_id: (parent_version_id, created, op)
+        for version_id, parent_version_id, created, op in conn.execute(
+            "SELECT version_id, parent_version_id, created, op "
+            "FROM versions WHERE note_id = ?",
+            (note_id,),
+        )
+    }
+    chain: list[str] = []
+    current: str | None = row[0]
+    while current is not None:
+        chain.append(current)
+        current = versions[current][0]
+    total = len(chain)
+    return [
+        VersionRow(
+            version_id=version_id,
+            created=versions[version_id][1],
+            op=versions[version_id][2],
+            seq=total - i,
+        )
+        for i, version_id in enumerate(chain)
+    ]
+
+
+def version_body(db_path: Path, note_id: str, version_id: str) -> str | None:
+    """Return one specific version's body, or ``None`` if it isn't in this chain.
+
+    The history list's row-select opens a read-only view of a *prior* version
+    (:class:`~lode.tui.screens.browse.VersionViewScreen`, lode-0wj.7) -- unlike
+    :func:`note_body` this is keyed to an exact ``version_id``, live or not,
+    since viewing history is precisely about seeing a version that is no
+    longer the head.
+    """
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT body FROM versions WHERE version_id = ? AND note_id = ?",
+            (version_id, note_id),
         ).fetchone()
         return row[0] if row is not None else None
     finally:

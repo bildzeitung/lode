@@ -14,7 +14,16 @@ from textual.widgets import DataTable, TextArea
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.browse import NOTE_BODY_ID, TABLE_ID, BrowseScreen, NoteViewScreen
+from lode.tui.screens.browse import (
+    HISTORY_TABLE_ID,
+    NOTE_BODY_ID,
+    TABLE_ID,
+    VERSION_BODY_ID,
+    BrowseScreen,
+    NoteViewScreen,
+    VersionHistoryScreen,
+    VersionViewScreen,
+)
 from lode.tui.screens.capture import CaptureScreen
 from lode.versions import save
 
@@ -124,3 +133,126 @@ def test_deleted_note_does_not_appear_in_the_browse_list(
     summaries = asyncio.run(_drive())
 
     assert summaries == ["still here"]
+
+
+def test_h_from_note_view_opens_version_history_newest_first(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "v1 body").version_id
+        save(conn, "note-a", "v2 body", parent=head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[tuple]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, NoteViewScreen)
+            await pilot.press("h")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionHistoryScreen)
+            table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+            return [tuple(table.get_row_at(i)) for i in range(table.row_count)]
+
+    rows = asyncio.run(_drive())
+
+    assert len(rows) == 2
+    assert rows[0][1] == "v2"
+    assert rows[1][1] == "v1"
+    assert rows[0][2] == "update"
+    assert rows[1][2] == "create"
+
+
+def test_selecting_a_prior_version_shows_its_body_read_only(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "v1 body").version_id
+        save(conn, "note-a", "v2 body", parent=head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("h")
+            await pilot.pause()
+            # Cursor starts on the newest row (v2); move down to the prior (v1).
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionViewScreen)
+            return app.screen.query_one(f"#{VERSION_BODY_ID}", TextArea).text
+
+    body = asyncio.run(_drive())
+
+    assert body == "v1 body"
+
+
+def test_escape_steps_back_version_view_then_history_then_note_view(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "v1 body").version_id
+        save(conn, "note-a", "v2 body", parent=head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("h")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionViewScreen)
+            await pilot.press("escape")
+            back_to_history = isinstance(app.screen, VersionHistoryScreen)
+            await pilot.press("escape")
+            back_to_note_view = isinstance(app.screen, NoteViewScreen)
+            return back_to_history, back_to_note_view
+
+    back_to_history, back_to_note_view = asyncio.run(_drive())
+
+    assert back_to_history
+    assert back_to_note_view
+
+
+def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
+    """A note with a single (root) version still shows one selectable row."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "only version")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("h")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+            return table.row_count
+
+    row_count = asyncio.run(_drive())
+
+    assert row_count == 1
