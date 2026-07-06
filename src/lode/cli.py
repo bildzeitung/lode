@@ -45,7 +45,7 @@ from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
 from lode.notes_read import list_notes
-from lode.repository import CompositeCache, Repository
+from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 
 if TYPE_CHECKING:
@@ -391,7 +391,9 @@ def _format_citation(support: "Support") -> str:
 
 @app.command()
 def purge(
-    target: str = typer.Argument(..., help="Note id to hard-delete."),
+    target: str = typer.Argument(
+        ..., help="Note id, or an unambiguous prefix of one, to hard-delete."
+    ),
     db: Path | None = _DB_OPTION,
 ) -> None:
     """Hard-delete a note and its derived data (E8 hard delete, ``docs/externals.md``).
@@ -402,13 +404,26 @@ def purge(
     cascade-evict the derived cache through the repository's cache seam. Delegates to
     :meth:`lode.repository.Repository.purge` — no half-delete. (The cache is a no-op
     :class:`~lode.repository.NullCache` until the engine wiring lands, lode-1f9.)
+
+    ``target`` may be a full id or an unambiguous prefix of one (lode-1gr.3),
+    resolved via :meth:`lode.repository.Repository.resolve_note_prefix` — see
+    that method for exactly what a prefix is allowed to match.
     """
     conn = _open_db(db)
     try:
+        repo = Repository(conn)
         try:
-            result = Repository(conn).purge(target)
+            note_id = repo.resolve_note_prefix(target)
+            result = repo.purge(note_id)
         except KeyError:
             typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1) from None
+        except AmbiguousNoteIdError as exc:
+            typer.echo(
+                f"ambiguous note id prefix {target!r}: matches "
+                + ", ".join(exc.candidates),
+                err=True,
+            )
             raise typer.Exit(code=1) from None
     finally:
         conn.close()
