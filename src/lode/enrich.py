@@ -58,6 +58,7 @@ from pydantic import BaseModel, Field
 from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
+from lode.ids import short_version_id
 from lode.redact import redact_before_egress_counting
 
 log = logging.getLogger(__name__)
@@ -282,7 +283,7 @@ def format_enrich_outcome(version_id: str, result: EnrichmentResult) -> str:
     on a later drain pass that collects a completed Batches API result).
     """
     return (
-        f"enriched {version_id[:12]}: {len(result.tags)} tags, "
+        f"enriched {short_version_id(version_id)}: {len(result.tags)} tags, "
         f"{len(result.entities)} entities, {len(result.inferred_edges)} edges, "
         f"summary {'set' if result.summary else 'empty'}"
     )
@@ -326,17 +327,23 @@ def enrich_version(
     ).fetchone()
 
     if row is None:
-        log.warning("enrich_version: version %s not found", version_id[:12])
+        log.warning(
+            "enrich_version: version %s not found", short_version_id(version_id)
+        )
         return None
 
     body, op, purged_at, note_id, no_egress = row
 
     if op == "delete":
-        log.debug("enrich_version: skip tombstone version=%s", version_id[:12])
+        log.debug(
+            "enrich_version: skip tombstone version=%s", short_version_id(version_id)
+        )
         return None
 
     if purged_at is not None:
-        log.debug("enrich_version: skip purged version=%s", version_id[:12])
+        log.debug(
+            "enrich_version: skip purged version=%s", short_version_id(version_id)
+        )
         return None
 
     if no_egress:
@@ -360,7 +367,7 @@ def enrich_version(
 
     log.info(
         "enrich_version: version=%s tags=%d entities=%d edges=%d summary=%s",
-        version_id[:12],
+        short_version_id(version_id),
         len(result.tags),
         len(result.entities),
         len(result.inferred_edges),
@@ -469,7 +476,7 @@ def submit_enrich_batch(
         if row is None:
             log.warning(
                 "submit_enrich_batch: version %s not found — marking done",
-                version_id[:12],
+                short_version_id(version_id),
             )
             skip_ids.append(job_id)
             continue
@@ -479,7 +486,7 @@ def submit_enrich_batch(
         if op == "delete" or purged_at is not None or no_egress:
             log.debug(
                 "submit_enrich_batch: skip version=%s (op=%s purged=%s no_egress=%s)",
-                version_id[:12],
+                short_version_id(version_id),
                 op,
                 purged_at is not None,
                 bool(no_egress),
@@ -614,7 +621,7 @@ def collect_enrich_batch(
             log.warning(
                 "collect_enrich_batch: batch=%s result custom_id=%s has no running job",
                 batch_id,
-                version_id[:12] if len(version_id) >= 12 else version_id,
+                short_version_id(version_id),
             )
             continue
 
@@ -629,7 +636,7 @@ def collect_enrich_batch(
                 log.warning(
                     "collect_enrich_batch: batch=%s version=%s parse error: %s",
                     batch_id,
-                    version_id[:12],
+                    short_version_id(version_id),
                     exc,
                 )
                 continue
@@ -640,7 +647,7 @@ def collect_enrich_batch(
             if note_row is None:
                 log.warning(
                     "collect_enrich_batch: version %s disappeared after batch ended",
-                    version_id[:12],
+                    short_version_id(version_id),
                 )
                 with conn:
                     conn.execute(
@@ -665,7 +672,7 @@ def collect_enrich_batch(
                 "collect_enrich_batch: batch=%s version=%s done "
                 "(tags=%d entities=%d edges=%d)",
                 batch_id,
-                version_id[:12],
+                short_version_id(version_id),
                 len(enrichment.tags),
                 len(enrichment.entities),
                 len(enrichment.inferred_edges),
@@ -685,7 +692,7 @@ def collect_enrich_batch(
             log.warning(
                 "collect_enrich_batch: batch=%s version=%s %s",
                 batch_id,
-                version_id[:12],
+                short_version_id(version_id),
                 error_msg,
             )
 

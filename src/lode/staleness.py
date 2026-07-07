@@ -36,6 +36,8 @@ import json
 import logging
 import sqlite3
 
+from lode.ids import short_version_id
+
 log = logging.getLogger(__name__)
 
 
@@ -126,7 +128,7 @@ def reanchor_annotations(
     log.debug(
         "reanchor_annotations: note=%s new_ver=%s fresh=%d stale=%d orphaned=%d",
         note_id[:12],
-        new_version_id[:12],
+        short_version_id(new_version_id),
         counts["fresh"],
         counts["stale"],
         counts["orphaned"],
@@ -185,7 +187,7 @@ def reanchor_edges(
     log.debug(
         "reanchor_edges: note=%s new_ver=%s fresh=%d stale=%d orphaned=%d",
         note_id[:12],
-        new_version_id[:12],
+        short_version_id(new_version_id),
         counts["fresh"],
         counts["stale"],
         counts["orphaned"],
