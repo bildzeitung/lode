@@ -32,7 +32,7 @@ define it, so they keep quitting immediately.
 :class:`~lode.tui.screens.browse.BrowseScreen` the same "global, reachable
 from anywhere" way ``F2`` reaches config — a plain, non-priority ``App``
 binding, since (unlike Ctrl+Q) no screen needs to intercept it. It lists
-every live note (Date | Version | Summary, newest-first); selecting one
+every live note (Id | Date | Version | Summary, newest-first); selecting one
 pushes a read-only view, and Escape steps back one screen at a time (note
 view -> list -> capture) via each screen's own ``pop_screen``.
 
