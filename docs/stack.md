@@ -7,6 +7,7 @@ is the storage realization of the ownership boundary and data shape in [storage.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | **Python** | Richest LLM/embedding tooling; matches the existing harness |
+| Versioning | **setuptools-scm** | The git tag is the version source of truth, no literal to hand-edit — see [release.md](release.md) |
 | TUI | **Textual** | Already a proven front-end in the sibling project |
 | CLI | **Typer** | Repo convention (never argparse) |
 | **SQLite store** (one file) | **SQLite** | A single **container** file. Holds the **irreplaceable** rows — owned content (`notes`/`versions`/`externals`/`snapshots`) **and** user curation (`annotations`/`edges` where `source = user`) — *and*, in the same file, rebuildable cache (**FTS5**, `source = ai` rows, `passages`) + operational `jobs`. The partition is by **rows / value, not by file** (see [below](#the-partition-is-by-rows-not-by-file)). Tiny, durable, **backup = copy the file** (a harmless *superset* of the irreplaceable set) |
