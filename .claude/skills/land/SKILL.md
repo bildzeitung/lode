@@ -219,9 +219,9 @@ for id in $LANDED; do
   # GC the local builder worktree (best-effort — only on the machine that built it).
   # The builder records review_worktree/review_branch; once the work is on trunk the
   # worktree and its branch are dead weight (this is the accumulation cleanup).
-  WT=$(rtk bd show "$id" --json | jq -r '.metadata.review_worktree // empty')
+  WT=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_worktree // empty')
   if [ -n "$WT" ] && rtk git worktree list --porcelain | grep -qxF "worktree $WT"; then
-    BR=$(rtk bd show "$id" --json | jq -r '.metadata.review_branch // empty')
+    BR=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_branch // empty')
     rtk git worktree remove --force "$WT"            # the build artifact is on trunk now — force is safe
     [ -n "$BR" ] && rtk git branch -D "$BR" 2>/dev/null || true
   fi
