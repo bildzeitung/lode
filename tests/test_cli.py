@@ -648,7 +648,30 @@ def test_notes_empty_db_says_no_notes(tmp_path: Path) -> None:
     assert result.stdout.strip() == "no notes"
 
 
-def test_notes_lists_the_full_id_date_and_summary(tmp_path: Path) -> None:
+def test_notes_lists_the_full_id_date_and_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asserts against the pre-enrichment first-line fallback (lode-16g).
+
+    ``add``'s immediate-enrich fast path (lode-npx.2) claims + runs the
+    freshly enqueued enrich job inline, in-process -- so without stubbing it
+    here this test races the real ``enrich_version`` call: whether it
+    produces a summary annotation before ``notes`` reads the row is
+    non-deterministic (network/credential dependent), and when it does, the
+    summary column no longer contains the raw first line this test asserts
+    on. Stubbing it to a no-op -- the same pattern
+    ``test_add_captures_note_and_enqueues_embed_and_enrich_jobs`` and
+    ``test_add_calls_enrich_immediately`` already use -- pins the note to its
+    not-yet-enriched state, where ``notes_read.list_notes`` falls back to the
+    note's first line.
+    """
+    import lode.enrich as enrich_mod
+
+    def _fake_enrich(conn, version_id, settings, *, client=None):
+        pass
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
+
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "the first line of the note", "--db", str(db_path)]
