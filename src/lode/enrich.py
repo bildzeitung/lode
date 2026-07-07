@@ -269,6 +269,26 @@ def _write_enrichment(
 
 
 # ---------------------------------------------------------------------------
+# CLI outcome formatting (lode-1gr.4)
+# ---------------------------------------------------------------------------
+
+
+def format_enrich_outcome(version_id: str, result: EnrichmentResult) -> str:
+    """Render a one-line human-readable enrich outcome for ``lode work``'s echo.
+
+    Shared by both enrich routes so they surface identical wording: the
+    immediate path (:func:`lode.worker._enrich_handler`, wrapping
+    :func:`enrich_version`) and the batch path (:func:`collect_enrich_batch`,
+    on a later drain pass that collects a completed Batches API result).
+    """
+    return (
+        f"enriched {version_id[:12]}: {len(result.tags)} tags, "
+        f"{len(result.entities)} entities, {len(result.inferred_edges)} edges, "
+        f"summary {'set' if result.summary else 'empty'}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -521,6 +541,7 @@ def collect_enrich_batch(
     settings: Settings,
     *,
     client: anthropic.Anthropic | None = None,
+    outcomes: list[str] | None = None,
 ) -> bool:
     """Poll a submitted batch and process results if it has ended.
 
@@ -533,11 +554,17 @@ def collect_enrich_batch(
       Batches API is the primary production route for enrich jobs, so this
       mirrors the same stamp :func:`lode.worker.run_one` applies on the
       immediate path; :mod:`lode.reconcile`'s enrich-gap step reads a
-      ``done`` job's own ``prompt_ver`` to decide whether it is current.
+      ``done`` job's own ``prompt_ver`` to decide whether it is current. When
+      ``outcomes`` is given, a formatted :func:`format_enrich_outcome` line is
+      appended for each succeeded result (lode-1gr.4) — this is what lets
+      ``lode work`` print a per-note outcome for a drain pass that *collects*
+      a completed batch (the batch pre-step runs outside :func:`lode.worker.drain`'s
+      main claim/run loop, so its outcomes aren't otherwise observable).
     - **errored / expired / canceled**: marks the job ``failed`` with backoff
       (using :data:`~lode.config.Settings.retry_backoff_base_s`); at
       :data:`~lode.config.Settings.retry_max_attempts` the job is
-      dead-lettered.
+      dead-lettered. No outcome line is appended for these — the existing
+      ``log.warning`` covers them.
 
     Only jobs with ``type='enrich'``, ``status='running'``,
     ``batch_handle=batch_id`` are touched — in-flight jobs from other batches
@@ -643,6 +670,8 @@ def collect_enrich_batch(
                 len(enrichment.entities),
                 len(enrichment.inferred_edges),
             )
+            if outcomes is not None:
+                outcomes.append(format_enrich_outcome(version_id, enrichment))
 
         else:
             # errored, expired, canceled — treat as a transient failure.

@@ -1629,6 +1629,45 @@ def test_work_drains_pending_embed_jobs(
     assert statuses == {"done"}
 
 
+def _embed_outcome_registry() -> dict:
+    """A stub registry whose embed handler mimics the real one's outcome return
+    (lode-1gr.4) -- a one-line human-readable summary of what it produced.
+    """
+    return {"embed": lambda conn, tv, db, s: f"embedded {tv}: 3 passages"}
+
+
+def test_work_prints_per_job_embed_outcome_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' echoes a per-job outcome line ahead of 'drained N job(s)' (lode-1gr.4).
+
+    Acceptance: a drain pass that runs embed jobs prints a per-note
+    passage-count line.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("embed", "ver-1"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _embed_outcome_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "embedded ver-1: 3 passages" in result.stdout
+    # Outcome line precedes the existing job-count summary.
+    outcome_idx = result.stdout.index("embedded ver-1: 3 passages")
+    drained_idx = result.stdout.index("drained 1 job(s)")
+    assert outcome_idx < drained_idx
+
+
 def test_work_never_dead_letters_enrich(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
