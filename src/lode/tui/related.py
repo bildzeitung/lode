@@ -198,7 +198,7 @@ def humanize_age(created: str, *, now: datetime | None = None) -> str:
     "you wrote about this 3 weeks ago", not a precision timestamp.
     """
     now = now or datetime.now(UTC)
-    then = datetime.fromisoformat(created)
+    then = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
     seconds = max((now - then).total_seconds(), 0.0)
 
     if seconds < 60:
