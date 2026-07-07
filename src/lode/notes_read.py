@@ -61,7 +61,8 @@ from lode.storage import init_db
 #: THE short note-id length across the epic (lode-1gr.2's Browse Id column,
 #: lode-1gr.5's 'lode show' short refs) -- long enough to feed
 #: 'lode purge <prefix>' (lode-1gr.3) unambiguously in practice. Distinct from
-#: cli._short's 12-char abbreviation, which is for VERSION-id digests only.
+#: lode.ids.SHORT_VERSION_ID_LENGTH (12), which abbreviates VERSION-id digests
+#: only (lode-0bs).
 SHORT_NOTE_ID_LENGTH = 8
 
 

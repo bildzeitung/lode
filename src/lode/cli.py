@@ -46,6 +46,7 @@ from lode.config import (
     log_dir,
 )
 from lode.display import display_annotations, display_edges
+from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
@@ -601,8 +602,17 @@ class EgressPurpose(str, Enum):
 
 
 def _short(target_version: str) -> str:
-    """Abbreviate a version-id digest for a one-line listing (full id is a hash)."""
-    return target_version if len(target_version) <= 12 else f"{target_version[:12]}…"
+    """Abbreviate a version-id digest for a one-line listing (full id is a hash).
+
+    Delegates to the shared :func:`lode.ids.short_version_id` (lode-0bs), adding
+    the ``…`` suffix that marks the id as truncated -- a listing-specific touch
+    the bare log-line call sites elsewhere don't want.
+    """
+    return (
+        target_version
+        if len(target_version) <= SHORT_VERSION_ID_LENGTH
+        else f"{short_version_id(target_version)}…"
+    )
 
 
 def _format_sent(sent_targets: str) -> str:

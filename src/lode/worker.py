@@ -87,6 +87,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from lode.config import Settings, lance_dir as _lance_dir
+from lode.ids import short_version_id
 
 log = logging.getLogger(__name__)
 
@@ -359,7 +360,7 @@ def run_one(
 
     job_type, target_version, attempts = row
     handler = registry[job_type]
-    short = target_version[:12]
+    short = short_version_id(target_version)
 
     try:
         outcome = handler(conn, target_version, db_path, settings)
@@ -737,7 +738,7 @@ def _embed_handler(
     count = embed(
         conn, target_version, lance_dir=_lance_dir(db_path), settings=settings
     )
-    return f"embedded {target_version[:12]}: {count} passages"
+    return f"embedded {short_version_id(target_version)}: {count} passages"
 
 
 # Register the embed handler on module load.
