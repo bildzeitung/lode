@@ -192,13 +192,13 @@ def humanize_age(created: str, *, now: datetime | None = None) -> str:
     """Render an ISO-8601 UTC ``created`` timestamp as a coarse relative age.
 
     ``created`` is a ``versions.created`` / ``notes.created`` value
-    (``schema.sql``, ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')``); Python's
-    ``datetime.fromisoformat`` parses that ``Z``-suffixed form directly.
+    (``schema.sql``, ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')``), parsed with the
+    shared ``%Y-%m-%dT%H:%M:%S.%fZ`` stamp (matching :func:`lode.tui.dates._parse`).
     Buckets from "just now" through weeks/months to years — precise enough for
     "you wrote about this 3 weeks ago", not a precision timestamp.
     """
     now = now or datetime.now(UTC)
-    then = datetime.fromisoformat(created)
+    then = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
     seconds = max((now - then).total_seconds(), 0.0)
 
     if seconds < 60:

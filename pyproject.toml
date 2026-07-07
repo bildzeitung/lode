@@ -7,7 +7,7 @@ name = "lode"
 version = "0.0.0"
 description = "AI-first, TUI-first personal knowledge base for things you learn at work."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 
 # Runtime dependencies are seeded from the decided stack (docs/stack.md), the
 # same source as requirements.txt. Intentionally unpinned until the build starts

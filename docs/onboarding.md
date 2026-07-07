@@ -8,7 +8,7 @@
 
 | Tool | Why | Notes |
 |---|---|---|
-| **Python ≥ 3.10** | Runs lode and its tests. | The repo pins a working version in [`.python-version`](../.python-version); [pyenv](https://github.com/pyenv/pyenv) is the easy way to match it (`pyenv install`). Any CPython ≥ 3.10 on your `PATH` works. |
+| **Python ≥ 3.14** | Runs lode and its tests. | The repo pins a working version in [`.python-version`](../.python-version); [pyenv](https://github.com/pyenv/pyenv) is the easy way to match it (`pyenv install`). Any CPython ≥ 3.14 on your `PATH` works. |
 | **git** | Clone the repo; the dev workflow branches every change into a worktree. | Already required to read this. |
 | **Docker** | Validates the Mermaid diagrams in `docs/` (`scripts/validate-mermaid.sh`) via `minlag/mermaid-cli`. | Only needed if you touch a `docs/` diagram. No Node/Chromium toolchain is required on the host — the parser runs in the container. |
 | **beads (`bd`)** | Issue tracker — *all* task tracking lives here, not in markdown TODOs. | Only needed if you intend to pick up or file work. Install from the [beads project](https://github.com/gastownhall/beads); then run `bd prime` for the workflow. |
