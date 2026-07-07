@@ -9,11 +9,14 @@ draft rather than clobbering — the operational read-outs (lode-y42.3): ``statu
 queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
 ids/redactions); ``purge`` (the E8 hard delete via ``Repository.purge``, lode-7cx);
 ``notes`` (lode-1gr.1: list every live note's full id/date/summary, the id source
-for ``purge``); and ``ask`` (the cited Q&A loop, lode-y42.2: retrieve → synthesize →
-faithfulness gate → cite or abstain, with the Anthropic client mocked so the gate
-runs offline).
+for ``purge``); ``show`` (lode-1gr.5: one note's head body + derived enrichment --
+summary/tags/entities/edges via the stale-display policy -- plus embed status,
+sharing ``purge``'s id/prefix resolution); and ``ask`` (the cited Q&A loop,
+lode-y42.2: retrieve → synthesize → faithfulness gate → cite or abstain, with the
+Anthropic client mocked so the gate runs offline).
 """
 
+import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -47,6 +50,7 @@ ALL_SUBCOMMANDS = [
     "ask",
     "purge",
     "notes",
+    "show",
     "status",
     "jobs",
     "egress",
@@ -786,6 +790,170 @@ def test_purge_full_id_still_works_regardless_of_note_state(
         "SELECT purged_at IS NOT NULL FROM versions WHERE note_id = ?",
         (full_id,),
     ) == [(1,), (1,)]
+
+
+# --- lode show (per-note detail + derived enrichment, lode-1gr.5) ----------
+
+
+def test_show_unenriched_note_prints_body_and_empty_annotation_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly-added, not-yet-enriched note shows the body + '(none)' sections.
+
+    ``add`` writes passages synchronously (the lexical/FTS leg, lode-xyb) even
+    with enrichment stubbed out below -- so this note is already indexed;
+    what's un-enriched is the Haiku-derived layer (summary/tags/entities/edges).
+    """
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", lambda *a, **k: None)
+
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "an un-enriched note", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["show", note_id, "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert note_id in result.stdout
+    assert "an un-enriched note" in result.stdout
+    assert "summary: (none)" in result.stdout
+    assert "tags: (none)" in result.stdout
+    assert "entities: (none)" in result.stdout
+    assert "edges: (none)" in result.stdout
+
+
+def test_show_reports_not_embedded_when_no_passages_exist(tmp_path: Path) -> None:
+    """A note saved without going through the cache-wired Repository (no lexical
+    write) has no passages yet -- ``show`` reports it plainly, not an error.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-show-3", "not yet indexed")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-show-3", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "embedded: no (0 passage(s))" in result.stdout
+
+
+def test_show_prints_enrichment_and_embed_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-show-1", "the note body")
+        head_version_id = result.version_id
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'summary', ?, 'ai', 'fresh')",
+            ("note-show-1", head_version_id, json.dumps("a one-line summary")),
+        )
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'tag', ?, 'ai', 'fresh')",
+            ("note-show-1", head_version_id, json.dumps("python")),
+        )
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'entity', ?, 'ai', 'fresh')",
+            ("note-show-1", head_version_id, json.dumps("Anthropic")),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'concept-x', 'ai', 'because', 0.9, ?, 'fresh')",
+            ("note-show-1", head_version_id),
+        )
+        conn.execute(
+            "INSERT INTO passages (passage_id, target_version, ord, text) "
+            "VALUES ('p1', ?, 0, 'the note body')",
+            (head_version_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-show-1", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "the note body" in result.stdout
+    assert "summary: a one-line summary" in result.stdout
+    assert "tags: python" in result.stdout
+    assert "entities: Anthropic" in result.stdout
+    assert "concept-x" in result.stdout
+    assert "embedded: yes (1 passage(s))" in result.stdout
+
+
+def test_show_flags_stale_enrichment_rather_than_hiding_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-show-2", "body v1")
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'tag', ?, 'ai', 'stale')",
+            ("note-show-2", result.version_id, json.dumps("old-tag")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-show-2", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "old-tag [stale]" in result.stdout
+
+
+def test_show_accepts_an_unambiguous_prefix(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "prefix me", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["show", note_id[:8], "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert note_id in result.stdout
+    assert "prefix me" in result.stdout
+
+
+def test_show_ambiguous_prefix_reports_candidates(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-bbb111", "body a")
+        save(conn, "note-bbb222", "body b")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-bbb", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "ambiguous" in result.stderr
+    assert "note-bbb111" in result.stderr
+    assert "note-bbb222" in result.stderr
+
+
+def test_show_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["show", "ghost", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
+
+
+def test_show_unknown_full_id_reports_no_such_note(tmp_path: Path) -> None:
+    """A full-length (36-char) id that matches no note is 'no such note', not a crash."""
+    db_path = tmp_path / "lode.db"
+    full_id = "b" * 36
+    result = runner.invoke(app, ["show", full_id, "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
 
 
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
