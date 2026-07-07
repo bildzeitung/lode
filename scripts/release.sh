@@ -4,12 +4,14 @@
 #
 # Run from the repo root: scripts/release.sh X.Y.Z
 #
-# Guards that we're on trunk with a clean working tree, that vX.Y.Z doesn't
-# already exist (locally or on origin), and that the full test suite
-# (nox -s tests) is green; then creates an annotated tag on HEAD and pushes
-# it to origin. Stops there — .github/workflows/release.yml (lode-0ru.3)
-# owns the actual build+publish, triggered by the tag push. See
-# docs/release.md for the full flow.
+# Guards that we're on trunk with a clean working tree, that local trunk is
+# up to date with origin/trunk, that X.Y.Z is well-formed SemVer strictly
+# greater than the latest existing tag, that vX.Y.Z doesn't already exist
+# (locally or on origin), and that the full test suite (nox -s tests) is
+# green; then creates an annotated tag on HEAD and pushes it to origin.
+# Stops there — .github/workflows/release.yml (lode-0ru.3) owns the actual
+# build+publish, triggered by the tag push. See docs/release.md for the full
+# flow.
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
@@ -32,6 +34,12 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+git fetch origin --tags
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/trunk)" ]; then
+  echo "release.sh: local trunk is not up to date with origin/trunk — pull/push before releasing" >&2
+  exit 1
+fi
+
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   echo "release.sh: tag $TAG already exists locally" >&2
   exit 1
@@ -39,6 +47,33 @@ fi
 
 if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
   echo "release.sh: tag $TAG already exists on origin" >&2
+  exit 1
+fi
+
+# SemVer monotonicity: $1 > $2, both bare X.Y.Z (no leading 'v').
+version_gt() {
+  local IFS=.
+  local -a a=($1) b=($2)
+  for i in 0 1 2; do
+    if [ "${a[i]}" -gt "${b[i]}" ]; then return 0; fi
+    if [ "${a[i]}" -lt "${b[i]}" ]; then return 1; fi
+  done
+  return 1
+}
+
+LATEST=""
+for t in $(git tag -l 'v*'); do
+  tv="${t#v}"
+  case "$tv" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *) continue ;;
+  esac
+  if [ -z "$LATEST" ] || version_gt "$tv" "$LATEST"; then
+    LATEST="$tv"
+  fi
+done
+if [ -n "$LATEST" ] && ! version_gt "$VERSION" "$LATEST"; then
+  echo "release.sh: $VERSION does not exceed latest existing tag v$LATEST" >&2
   exit 1
 fi
 

@@ -32,9 +32,12 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
 
 ## Release flow (high level)
 
-1. **Kickoff** — `scripts/release.sh` (lode-0ru.2) gates the working tree (clean, `nox -t fix` +
-   `nox -s tests` green), computes/confirms the next `vX.Y.Z`, creates the annotated tag on the
-   release commit, and pushes the tag.
+1. **Kickoff** — `scripts/release.sh` (lode-0ru.2) gates on `trunk`, a clean working tree, and local
+   `trunk` up to date with `origin/trunk` (never tag an unpushed/unreviewed commit); validates the
+   `vX.Y.Z` arg is well-formed SemVer strictly greater than the latest existing tag and doesn't
+   already exist (locally or on origin); runs the **check-only** gate `nox -s tests` (never
+   `nox -t fix`, which mutates the tree in place and would dirty it — or tag uncommitted
+   reformatting — at tag time); then creates the annotated tag on the release commit and pushes it.
 2. **CI builds on tag push** — `.github/workflows/release.yml` (lode-0ru.3) triggers on `v*` tag
    push, does a clean-room `python -m build` (wheel + sdist; the `Version` metadata comes straight
    from `git describe` against the pushed tag), and publishes a GitHub release with both artifacts
