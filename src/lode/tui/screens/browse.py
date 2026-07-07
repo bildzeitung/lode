@@ -53,6 +53,13 @@ show``, lode-1gr.5) -- enough to feed ``lode purge <prefix>``
 36-char id most rows never need in full. :class:`NoteViewScreen` shows the
 *full* id instead, in its header's ``sub_title`` -- selectable/copyable there,
 where there is no width budget to protect.
+
+**Adaptive dates (lode-1gr.8).** Both this screen's Date column and
+:class:`VersionHistoryScreen`'s render :func:`lode.tui.dates.
+format_adaptive_date` instead of the raw ISO-8601 ``created`` string --
+today's time, this week's weekday+time, this year's month+day, or an older
+plain ISO date. Shorter on every bucket but the last, which is what frees more
+of :meth:`BrowseScreen._reload_rows`'s natural-width budget for Summary.
 """
 
 from __future__ import annotations
@@ -70,6 +77,7 @@ from lode.notes_read import (
     short_note_id,
     version_body,
 )
+from lode.tui.dates import format_adaptive_date
 from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -91,9 +99,7 @@ VERSION_BODY_ID = "version-view-body"
 #: table past the terminal width (which is what caused the horizontal scroll).
 _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
-#: terminal can't hand ``add_column`` a zero/negative width. Below this the Date
-#: column's full ISO-8601 timestamp already overflows on its own; nothing the
-#: Summary width can do about that without reformatting Date (out of scope).
+#: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
 
 
@@ -171,7 +177,12 @@ class VersionHistoryScreen(Screen[None]):
         table = self.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
         table.add_columns("Date", "Version", "Op")
         for row in list_versions(self.app.db_path, self.note_id):
-            table.add_row(row.created, f"v{row.seq}", row.op, key=row.version_id)
+            table.add_row(
+                format_adaptive_date(row.created),
+                f"v{row.seq}",
+                row.op,
+                key=row.version_id,
+            )
         table.focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -277,14 +288,16 @@ class BrowseScreen(Screen[None]):
         table.clear(columns=True)
 
         # Id/Date/Version keep their natural widths -- the same max(header,
-        # widest cell) a DataTable auto-column would pick. Date is a full
-        # ISO-8601 timestamp, deliberately left intact rather than truncated;
+        # widest cell) a DataTable auto-column would pick. Date is the short
+        # adaptive form (lode-1gr.8), not the full ISO-8601 timestamp --
+        # shorter, so it frees more of that natural width for Summary below;
         # Id is the shared 8-char note-id abbreviation (lode-1gr.2), not the
         # full id -- NoteViewScreen shows that instead, where there's no width
         # budget to protect.
         id_cells = [short_note_id(row.note_id) for row in rows]
         id_width = max([len("Id"), *(len(cell) for cell in id_cells)])
-        date_width = max([len("Date"), *(len(row.created) for row in rows)])
+        date_cells = [format_adaptive_date(row.created) for row in rows]
+        date_width = max([len("Date"), *(len(cell) for cell in date_cells)])
         version_cells = [f"v{row.version}" for row in rows]
         version_width = max([len("Version"), *(len(cell) for cell in version_cells)])
         remaining = (
@@ -296,10 +309,12 @@ class BrowseScreen(Screen[None]):
         table.add_column("Date", width=date_width)
         table.add_column("Version", width=version_width)
         table.add_column("Summary", width=summary_width)
-        for row, id_cell, version_cell in zip(rows, id_cells, version_cells):
+        for row, id_cell, date_cell, version_cell in zip(
+            rows, id_cells, date_cells, version_cells
+        ):
             table.add_row(
                 id_cell,
-                row.created,
+                date_cell,
                 version_cell,
                 row.summary,
                 key=row.note_id,
