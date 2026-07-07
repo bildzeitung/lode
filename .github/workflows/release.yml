@@ -1,0 +1,41 @@
+name: release
+
+# Tag-triggered clean-room build + GitHub release (docs/release.md). The pushed
+# `vX.Y.Z` tag is the version — setuptools-scm resolves it straight from
+# `git describe`, so the build here (not a developer's laptop) is what
+# produces the artifact that gets published.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # gh release create needs to publish a release + upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install build front-end
+        run: pip install build
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "lode ${GITHUB_REF_NAME}" \
+            --generate-notes
