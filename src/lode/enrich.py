@@ -59,6 +59,7 @@ from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
 from lode.ids import short_version_id
+from lode.notes_read import short_note_id
 from lode.redact import redact_before_egress_counting
 
 log = logging.getLogger(__name__)
@@ -347,7 +348,7 @@ def enrich_version(
         return None
 
     if no_egress:
-        log.debug("enrich_version: skip no_egress note_id=%s", note_id[:12])
+        log.debug("enrich_version: skip no_egress note_id=%s", short_note_id(note_id))
         return None
 
     # Redact secrets before sending to Haiku.
