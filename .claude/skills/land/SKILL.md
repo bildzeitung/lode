@@ -1,6 +1,6 @@
 ---
 name: land
-description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: semantic-review each `ready-for-land` branch (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, flag any epic whose last child this pass closed with `epic-ready-to-audit` (for `/epic-audit`), `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
+description: Drain the ready-for-land queue — the SINGLE owner of every write to `trunk`. Per pass: cheap-precheck each `ready-for-land` branch (drift + does it still merge onto `trunk` — a conflict is kicked back `needs-rebase`, no review spent); semantic-review the survivors (via the `land-review` skill) → accept | bounce | escalate; batch-merge the accepted set `--no-ff` into `trunk`, re-gate once, isolate the culprit on red; then push `trunk`, `bd close` the landed tickets, flag any epic whose last child this pass closed with `epic-ready-to-audit` (for `/epic-audit`), `bd dolt push`, and GC the merged `land/<id>` branches and the local builder worktrees. Bounces open a new linked ticket carrying the findings; escalations leave the branch for a human and land nothing. Run self-paced as `/loop 5m /land` on ONE machine; a local lockfile guard skips a tick that would overlap a still-running land. Producers (`/code`) never land their own work — this skill does. Examples — "/land", "/loop 5m /land", "drain the ready-for-land queue", "land the reviewed branches".
 ---
 
 # land
@@ -92,9 +92,12 @@ batch.
 
 ---
 
-## 2. Semantic review first — per branch, accept | bounce | escalate
+## 2. Vet each branch — cheap prechecks first, then the semantic review
 
-For **each** `ready-for-land` ticket, in this order:
+For **each** `ready-for-land` ticket, in this order. Steps 2a and 2b are **cheap gates I run before
+spending Opus on the semantic review** — a branch that has drifted or no longer merges cleanly is
+disqualified on mechanics alone, so I don't burn a `land-review` verifying contents that are about to
+be thrown back.
 
 ### 2a. Re-validate that beads and git haven't drifted
 
@@ -111,7 +114,36 @@ rtk git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on o
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
 (below): I will not land a branch I can't verify is the reviewed one.
 
-### 2b. Run the semantic gate
+### 2b. Cheap conflict precheck — does it still merge onto `trunk`?
+
+A branch that forked long ago is **not** stale-in-a-way-that-matters as long as it still merges
+clean: `git merge --no-ff` integrates non-linear history fine, and the combined re-gate in
+[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red) re-runs the tests on the
+*merged* `trunk`. So a stale-but-clean branch needs no rebase and no special handling. What *does*
+disqualify a branch is a **textual conflict** with current `trunk` — and discovering that only at
+merge time (Section 3) means I've already paid for a full `land-review` on contents the rebase will
+change. So I test it cheaply, up front, with a no-checkout trial merge against current `trunk`
+(the pass already brought local `trunk` current with `origin/trunk` in Section 1, and I have not
+merged anything yet this pass, so `origin/trunk` is the right base for every branch here):
+
+```bash
+# git merge-tree --write-tree exits 0 on a clean merge, non-zero on conflict — no working tree touched.
+# (Requires git >= 2.38.)
+if MT=$(rtk git merge-tree --write-tree --name-only origin/trunk "origin/land/<id>" 2>/dev/null); then
+  :                                        # clean — proceed to the semantic gate (2c)
+else
+  CONFLICTS=$(printf '%s\n' "$MT" | tail -n +2)   # merge-tree lists the conflicting paths after the tree OID
+  # → needs-rebase kick-back (see "Needs rebase — kick back"): skip land-review, leave the merge set.
+fi
+```
+
+A conflict here is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
+fine, it simply can't replay onto where `trunk` now is. I handle it per
+[Needs rebase — kick back](#needs-rebase--kick-back): remove `ready-for-land`, add `needs-rebase`,
+**keep the branch and the build worktree**, and move on — **without dispatching `land-review`**. The
+branch leaves this pass's merge set and the producer rebases it (this is where the noise went).
+
+### 2c. Run the semantic gate
 
 Dispatch the [`land-review`](../land-review/SKILL.md) skill with the ticket ID and its `land/<id>`
 branch. It reads both sides (ticket acceptance/design vs. the actual diff against the merge-base),
@@ -172,8 +204,11 @@ rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, co
   ```
 
   The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. (If a
-  merge raises a **textual conflict**, that branch can't cleanly combine — `git merge --abort` and
-  bounce it.)
+  merge raises a **textual conflict** here — a branch that passed the 2b precheck against `origin/trunk`
+  but conflicts with an *earlier survivor* merged this pass — that branch can't cleanly combine:
+  `git merge --abort` and handle it as a
+  [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce — its content wasn't judged bad,
+  it just needs to replay onto the new `trunk`.)
 
 ---
 
@@ -240,6 +275,33 @@ a clean **land**; a **bounce** drops the branch but the rebuild ticket may still
 **escalate** keeps everything until the human resolves it.
 
 ---
+
+## Needs rebase — kick back
+
+A **needs-rebase** is the outcome of the [2b precheck](#2b-cheap-conflict-precheck--does-it-still-merge-onto-trunk)
+(or a Section-3 textual conflict): the branch **can't merge onto current `trunk`**, but its content
+was never judged bad — I never ran `land-review` on it. It is a **third outcome, distinct from bounce
+and escalate**: not a rebuild (nothing is wrong with the work), not a human decision (there's nothing
+to decide — it just needs to replay onto where `trunk` moved). So I keep everything and hand it
+straight back to the producer:
+
+```bash
+rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
+  --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
+Conflicting paths:
+$CONFLICTS
+Rebase land/<id> onto current trunk in the build worktree, re-gate, force-push the branch, refresh
+metadata.head_sha, then swap needs-rebase back to ready-for-land."
+rtk bd dolt push       # publish the label swap + note over refs/dolt/data
+# The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
+```
+
+Unlike a bounce, I **do not** supersede, create a rebuild ticket, or drop the branch, and unlike an
+escalate there's no question for a human — the producer just replays its own already-reviewed work
+onto the new `trunk`. The ticket stays `in_progress`; the `needs-rebase` label (not `ready-for-land`)
+is now its state. **Producer-side pickup of `needs-rebase` is tracked in `lode-wfl`** — until that
+lands, a kicked-back branch waits on a human to nudge the producer, because an `in_progress` ticket
+doesn't surface in `bd ready`.
 
 ## Bounce — clear failure
 
@@ -331,8 +393,13 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
 
 ## What I never do
 
-- **Land work I can't verify.** Drift (missing branch / SHA mismatch), a textual merge conflict, a
-  red re-gate, or a `bounce` verdict all stop a branch from landing this pass.
+- **Land work I can't verify.** Drift (missing branch / SHA mismatch), a textual merge conflict (→
+  `needs-rebase` kick-back), a red re-gate, or a `bounce` verdict all stop a branch from landing this
+  pass.
+- **Rebase a producer's branch myself, or run `land-review` on a branch that won't merge.** A branch
+  that fails the 2b precheck is kicked back `needs-rebase` for the *producer* to rebase in its own
+  worktree — I never touch a producer's worktree or rewrite its branch, and I don't spend a semantic
+  review on contents a rebase will change.
 - **Land on a `bounce`/`escalate`, or skip the semantic review.** The review is the *first* task per
   branch; only an `accept` enters the merge set.
 - **Run two landers at once**, or run the loop on more than one machine — the local lock + one-machine
@@ -344,7 +411,9 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
 ## Stop and report
 
 When the pass ends I release the lock (the `trap`) and report: how many branches I reviewed; which
-**landed** (with the `trunk` merge SHA); which I **bounced** (and the new superseding ticket IDs);
-which I **escalated** (and the decision each owes a human); any **epic** I flagged `epic-ready-to-audit` because this pass closed its last child; and anything that **drifted**. On any
+**landed** (with the `trunk` merge SHA); which I **kicked back `needs-rebase`** (they never reached
+`land-review`); which I **bounced** (and the new superseding ticket IDs); which I **escalated** (and
+the decision each owes a human); any **epic** I flagged `epic-ready-to-audit` because this pass closed
+its last child; and anything that **drifted**. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
