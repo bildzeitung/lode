@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "lode"
-version = "0.0.0"
+dynamic = ["version"]
 description = "AI-first, TUI-first personal knowledge base for things you learn at work."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -45,6 +45,11 @@ addopts = "--strict-markers"
 markers = [
     "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",
 ]
+
+[tool.setuptools_scm]
+# The git tag is the single source of truth for the version (docs/release.md);
+# this file is build-generated and gitignored, never committed.
+version_file = "src/lode/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]

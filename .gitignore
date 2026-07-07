@@ -14,6 +14,9 @@ venv/
 .nox/
 build/
 
+# setuptools-scm build-generated version file (docs/release.md) — never committed
+src/lode/_version.py
+
 # Local data / secrets
 *.db
 *.db-wal
