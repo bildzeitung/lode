@@ -15,6 +15,7 @@ from textual.widgets import DataTable, TextArea
 from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
+from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
     HISTORY_TABLE_ID,
     NOTE_BODY_ID,
@@ -83,6 +84,38 @@ def test_id_column_shows_the_shared_8_char_note_id_prefix(tmp_path: Path) -> Non
     assert id_cell == short_note_id(long_note_id)
     assert id_cell == "01234567"
     assert id_cell != long_note_id
+
+
+def test_date_column_shows_the_adaptive_form_not_full_iso_8601(
+    tmp_path: Path,
+) -> None:
+    """The Date column (lode-1gr.8) renders the short adaptive form.
+
+    A just-saved note's ``created`` is "now", so the adaptive bucket is
+    "today" (just the time) -- the shortest bucket, and the clearest possible
+    contrast with the raw ISO-8601 timestamp this replaces.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "a note")
+        created = conn.execute(
+            "SELECT created FROM notes WHERE note_id = ?", ("note-a",)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return str(table.get_row_at(0)[1])
+
+    date_cell = asyncio.run(_drive())
+
+    assert date_cell == format_adaptive_date(created)
+    assert "T" not in date_cell  # never the raw ISO-8601 stamp
 
 
 def test_selecting_a_row_opens_a_read_only_note_view(tmp_path: Path) -> None:
@@ -215,6 +248,37 @@ def test_h_from_note_view_opens_version_history_newest_first(
     assert rows[1][1] == "v1"
     assert rows[0][2] == "update"
     assert rows[1][2] == "create"
+
+
+def test_version_history_date_column_shows_the_adaptive_form(
+    tmp_path: Path,
+) -> None:
+    """The version-history Date column (lode-1gr.8) is also the adaptive form."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "only version")
+        created = conn.execute(
+            "SELECT created FROM versions WHERE note_id = ?", ("note-a",)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("h")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+            return str(table.get_row_at(0)[0])
+
+    date_cell = asyncio.run(_drive())
+
+    assert date_cell == format_adaptive_date(created)
+    assert "T" not in date_cell
 
 
 def test_selecting_a_prior_version_shows_its_body_read_only(
