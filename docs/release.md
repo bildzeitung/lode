@@ -32,9 +32,10 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
 
 ## Release flow (high level)
 
-1. **Kickoff** — `scripts/release.sh` (lode-0ru.2) gates the working tree (clean, `nox -t fix` +
-   `nox -s tests` green), computes/confirms the next `vX.Y.Z`, creates the annotated tag on the
-   release commit, and pushes the tag.
+1. **Kickoff** — `scripts/release.sh` (lode-0ru.2) gates the working tree (clean, `nox -s tests`
+   green — check-only; it never runs `nox -t fix`, which mutates the tree and would violate the
+   clean-tree guard at tag time), computes/confirms the next `vX.Y.Z`, creates the annotated tag on
+   the release commit, and pushes the tag.
 2. **CI builds on tag push** — `.github/workflows/release.yml` (lode-0ru.3) triggers on `v*` tag
    push, does a clean-room `python -m build` (wheel + sdist; the `Version` metadata comes straight
    from `git describe` against the pushed tag), and publishes a GitHub release with both artifacts
@@ -44,6 +45,19 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
 
 A `/release` Claude skill (lode-0ru.4) wraps step 1: it computes the next semver bump from the
 commit history since the last tag and drives the kickoff.
+
+**First-release ordering constraint:** GitHub Actions runs the workflow file *as it exists in the
+tagged commit* — not whatever version of `release.yml` is on `trunk` at push time. That means
+`.github/workflows/release.yml` (lode-0ru.3) **must already be merged to `trunk` before the first
+`vX.Y.Z` tag is cut** by `scripts/release.sh`. Cut the tag first and the push triggers nothing —
+silently, with no error — because the tagged commit predates the workflow file.
+
+## Non-goals
+
+- **No PyPI releases.** lode publishes a GitHub release with the wheel and sdist attached as
+  downloadable artifacts — nothing is pushed to PyPI (confirmed by owner 2026-07-07). Don't assume
+  `pip install lode` works; installing from a release means pulling the artifact off the GitHub
+  release page (or installing from source).
 
 ## Why this shape
 
