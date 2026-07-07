@@ -110,6 +110,22 @@ I do not proceed past this point without an explicit go-ahead in the conversatio
 never cuts a tag unattended. If the human overrides with a bump word or a literal version, I recompute
 from that and re-confirm rather than silently substituting it.
 
+### 3a. The `.beads/issues.jsonl`-only dirty tree — discard, don't block
+
+`scripts/release.sh` requires a clean tree, but the one modification that recurs constantly here is a
+lone `M .beads/issues.jsonl` — the **passive beads export** (see CLAUDE.md: Dolt is authoritative, the
+jsonl is export-only). It carries no release-relevant content and must never gate a release. When the
+*only* dirty path is `.beads/issues.jsonl`, discard it and proceed — no need to ask:
+
+```bash
+git restore --staged .beads/issues.jsonl 2>/dev/null   # in case it's staged (first-column M)
+git checkout -- .beads/issues.jsonl
+git status --porcelain                                  # confirm now clean
+```
+
+If anything *other* than `.beads/issues.jsonl` is dirty, stop and surface it — that's a real tree the
+operator needs to decide on, not a passive export to throw away.
+
 ### 4. On confirm, invoke the script — nothing else
 
 ```bash
