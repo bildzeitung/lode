@@ -217,6 +217,33 @@ rather than flag; no extractor emits one yet (lode-npx.1 only produces `tag`/`en
 inferred edges, all show-flagged), so this is a forward-compatible hook for action-item extraction.
 `display_annotations`/`display_edges` are the DB-reading convenience wrappers.
 
+### Enrichment view-model: three-valued state (decided, implemented lode-ay5.1)
+
+`lode.enrichment_view.enrichment_view(db_path, note_id)` is the ONE shared read seam the TUI
+inspector modal and the CLI (`lode show`) both consume for "what did enrichment produce for this
+note" — built entirely on `display_annotations`/`display_edges` above (no second copy of the
+stale-display policy) plus a head-keyed `enrichment_state`.
+
+**Content vs. state are two different keys.** Content (summary/tags/entities/edges) is
+`note_id`-scoped and spans every version in the chain, exactly as `display_annotations`/
+`display_edges` already read it — never suppressed by state. `enrichment_state` instead is keyed on
+the note's **head version**, because "did the current head finish enriching" is a different question
+than "what's the latest known content." One consequence: a note mid-re-enrichment legitimately shows
+`enrichment_state="pending"` **alongside** its stale last-known content — that co-occurrence is
+intended, not a bug, and follows directly from the "show-flagged, never hide" stale-display policy.
+
+**The predicate** (pinned 2026-07-08, bd `lode-ay5.1`), evaluated against the head's
+`target_version`/`source_version`:
+
+- `"pending"` — the head has a live (`pending`/`running`) `type='enrich'` job.
+- `"failed"` — no live job, but a dead/failed one (`status` in `failed`/`dead`) exists AND zero
+  `source='ai'` rows (annotations or edges) exist for the head's `source_version` — a dead-lettered
+  enrich job surfaced honestly rather than misread as "enriched, nothing found."
+- `"ready"` — otherwise: either the head has real AI output, or there was never an enrich job for it.
+
+Async enrichment makes an empty section ambiguous ("hasn't run yet" vs. "ran and found nothing" vs.
+"ran and died") — this three-way split is what makes all three distinguishable on both surfaces.
+
 ### Provenance & user override
 
 - **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,
