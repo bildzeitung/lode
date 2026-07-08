@@ -368,7 +368,7 @@ flowchart TD
     ISO --> PUSH
 
     HUMAN --> RES{"human resolves<br>(outside a /land pass)"}
-    RES -->|"land as-is"| MATFIX["Materialize the fix in the ticket ·<br>swap to ready-for-land"]
+    RES -->|"land as-is"| MATFIX["Write the decision into the ticket ·<br>(branch unchanged) · swap to ready-for-land"]
     RES -->|"rebuild"| RSUPER["bd supersede → new ticket ·<br>drop branch"]
     RES -->|"drop"| RDROP["bd close (reason) ·<br>GC branch"]
     MATFIX -.->|"next /land pass<br>re-runs land-review"| SEM
@@ -390,16 +390,21 @@ pass, and every resolution **removes `land-escalated`** so a surfacer's queue ca
 instead of growing monotonically. Exactly three exits (full mechanics in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#resolving-a-land-escalated-branch)):
 
-- **Land as-is** — the human **materializes the decision in the ticket** (edits the acceptance
-  criteria / description to remove the ambiguity `land-review` flagged), *then* swaps the label back
-  to `ready-for-land`. A bare label swap with nothing else changed is **not** a valid transition:
-  `/land`'s next pass just re-dispatches `land-review`, which hits the same ambiguity and escalates
-  again. There is deliberately **no "human-blessed" bypass label** — `land-review` stays
-  authoritative on re-review; forcing a land past its objection is an out-of-band manual act, not a
-  designed fast-path.
+- **Land as-is** — the **branch is unchanged** (this exit is exactly the "it's fine as-is" case); the
+  human **writes the decision into the ticket** (edits the acceptance criteria / description to remove
+  the ambiguity `land-review` flagged), *then* swaps the label back to `ready-for-land`. A bare label
+  swap with nothing else changed is **not** a valid transition: `/land`'s next pass just re-dispatches
+  `land-review`, which hits the same ambiguity and escalates again. There is deliberately **no
+  "human-blessed" bypass label** — `land-review` stays authoritative on re-review; forcing a land past
+  its objection is an out-of-band manual act, not a designed fast-path.
 - **Rebuild** — handled exactly like a `land-review` bounce: `bd supersede` the original onto a new
   ticket carrying the human's decision, and drop the branch.
 - **Drop** — `bd close` the ticket with a reason, and GC the branch.
+
+These resolve the label as `/land` sets it. `/code`'s producers set the same label for build-time,
+technical-review, and rebase-conflict escalations: **rebuild** and **drop** apply to those unchanged,
+while **land as-is** must re-enter at the gate that escalated rather than at `ready-for-land`
+(`lode-08g`).
 
 ### Mechanics (decided)
 
