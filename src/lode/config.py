@@ -251,6 +251,30 @@ class Settings(BaseModel):
     drawdown_hop_limit: int = _knob(
         1, Kind.BUILD, "Follow explicit links this many hops, then stop.", ge=0
     )
+    fetch_timeout_s: float = _knob(
+        10.0,
+        Kind.RUNTIME,
+        "Per-fetch HTTP timeout (lode-w0h.1) before treated as a transient "
+        "(retryable) failure.",
+        gt=0.0,
+    )
+    fetch_max_redirects: int = _knob(
+        5,
+        Kind.RUNTIME,
+        "Max 3xx redirects a single web-fetch follows (lode-w0h.1) before "
+        "tombstoning as unresolvable. Distinct from drawdown_hop_limit, which "
+        "governs crawling a fetched page's own outbound links, not redirects "
+        "within one fetch.",
+        ge=0,
+    )
+    fetch_min_extract_chars: int = _knob(
+        200,
+        Kind.TUNE,
+        "Readability-extracted text shorter than this (lode-w0h.1) is treated "
+        "as a JS-scaffold/paywall/empty page and tombstoned rather than "
+        "snapshotted, even when the extractor returned non-None text.",
+        ge=0,
+    )
 
     # --- Privacy & egress -----------------------------------------------------
     no_egress_default: bool = _knob(

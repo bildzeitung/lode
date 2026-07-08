@@ -38,6 +38,9 @@ def test_documented_defaults_load() -> None:
     assert s.rrf_k == 60
     assert s.rerank_enabled is True
     assert s.drawdown_hop_limit == 1
+    assert s.fetch_timeout_s == 10.0
+    assert s.fetch_max_redirects == 5
+    assert s.fetch_min_extract_chars == 200
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
 
@@ -113,6 +116,9 @@ def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:
         {"entailment_threshold": 1.5},  # le=1.0
         {"entailment_threshold": -0.1},  # ge=0.0
         {"drawdown_hop_limit": -1},  # ge=0
+        {"fetch_timeout_s": 0},  # gt=0.0
+        {"fetch_max_redirects": -1},  # ge=0
+        {"fetch_min_extract_chars": -1},  # ge=0
         {"retry_max_attempts": 0},  # ge=1
         {"unknown_knob": 1},  # extra="forbid"
     ],
