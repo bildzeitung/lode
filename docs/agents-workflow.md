@@ -451,9 +451,9 @@ These resolve the label as `/land` sets it. `/code`'s producers set the same lab
 technical-review, and rebase-conflict escalations: **rebuild** and **drop** apply to those unchanged,
 while **land as-is** re-enters at the gate that escalated it rather than at `ready-for-land` —
 `ready-for-code-review` for both a `code-reviewer` technical-review escalation and a `coding`
-build-time clarification (the build-time case decided as the deliberately arguable one, accepted
-because the `code-reviewer` can still bounce or escalate a half-built branch), and `needs-rebase` for a
-`coding` rebase-pickup conflict; full mechanics and per-source table in
+build-time clarification (the arguable case, decided: re-entry asserts the *ambiguity* is resolved,
+not that the branch is finished — the `code-reviewer` can still escalate a half-built branch), and
+`needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and per-source table in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#exit-a-per-source--re-enter-at-the-gate-that-escalated)
 (`lode-08g`).
 

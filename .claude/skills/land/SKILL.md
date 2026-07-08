@@ -467,12 +467,12 @@ DECISION (human, 2026-07-08, `lode-08g`): whichever gate could not resolve the a
 that re-runs once the ambiguity is resolved — the same gate, against the now-unambiguous ticket, never
 a later gate taking the resolution on faith.
 
-| escalated by                       | exit (a) re-entry label |
-|-------------------------------------|--------------------------|
-| `/land` semantic review (`land-review`) | `ready-for-land`     |
-| `code-reviewer` technical review    | `ready-for-code-review` |
-| `coding` rebase-pickup conflict     | `needs-rebase`           |
-| `coding` build-time clarification   | `ready-for-code-review` |
+| escalated by                             | exit (a) re-entry label |
+|------------------------------------------|-------------------------|
+| `/land` semantic review (`land-review`)  | `ready-for-land`        |
+| `code-reviewer` technical review         | `ready-for-code-review` |
+| `coding` rebase-pickup conflict          | `needs-rebase`          |
+| `coding` build-time clarification        | `ready-for-code-review` |
 
 The first row is exit (a) as defined above; the other three follow the same shape — write the decision
 into the ticket first, then swap `land-escalated` for the row's label and `bd dolt push`:
@@ -493,10 +493,11 @@ rather than silently risky:
 
 1. The human writes the resolved answer into the ticket (`--append-notes`) **before** flipping the
    label, so the `code-reviewer` reads the resolved ambiguity rather than rediscovering it.
-2. The `code-reviewer` already owns **bounce** and **escalate** verdicts and is not obliged to pass a
-   half-built branch: a build-time re-entry asserts only that the *ambiguity* is resolved, not that the
-   branch is *finished*. A still-incomplete branch bounces or escalates again on technical review, same
-   as any other finding — and `land-review` is the backstop if it slips past that too.
+2. The `code-reviewer` is not obliged to pass a half-built branch: **escalate** is its standing
+   non-pass outcome (revert to green, re-apply `land-escalated`), so a build-time re-entry asserts only
+   that the *ambiguity* is resolved, not that the branch is *finished*. A still-incomplete branch
+   escalates again on technical review — and `land-review`'s **bounce** verdict is the backstop if it
+   slips past that too.
 3. Re-entry at `ready-for-code-review` for the build-time source means "the decision is made, re-run
    the pipeline from technical review" — **not** "this branch is done."
 
