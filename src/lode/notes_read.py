@@ -83,7 +83,12 @@ def short_note_id(note_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class NoteRow:
-    """One live note as the browse list shows it."""
+    """One note as a note list shows it.
+
+    Shared by :func:`list_notes` (live notes -- the browse table and plain
+    ``lode notes``) and :func:`list_deleted_notes` (tombstoned notes --
+    ``lode notes --deleted``).
+    """
 
     note_id: str
     created: str
@@ -146,7 +151,7 @@ def list_deleted_notes(db_path: Path) -> list[NoteRow]:
 
 def _list_deleted_notes(conn: sqlite3.Connection) -> list[NoteRow]:
     rows = conn.execute(
-        "SELECT n.note_id, n.created, n.head_version_id, v.body, "
+        "SELECT n.note_id, n.created, v.body, "
         "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
         "FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
@@ -160,12 +165,14 @@ def _list_deleted_notes(conn: sqlite3.Connection) -> list[NoteRow]:
             version=chain_length,
             # The tombstone's carried-forward body stands in for a summary --
             # no annotation row keys off a delete version_id (annotations are
-            # written against a content head, which a tombstone never is), so
-            # _head_summary would always miss and fall through to the first
-            # line anyway; skip the lookup and go straight there.
+            # written against a content head, which a tombstone never is; the
+            # tombstone re-hashes with the head as its parent, so their
+            # version_ids differ), so _head_summary would always miss and fall
+            # through to the first line anyway -- skip the lookup and the
+            # head_version_id it would need, and go straight there.
             summary=_first_line(body),
         )
-        for note_id, created, head_version_id, body, chain_length in rows
+        for note_id, created, body, chain_length in rows
     ]
 
 

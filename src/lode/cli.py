@@ -462,7 +462,7 @@ def notes_(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """List every live note: full id, date, and summary (``docs/design.md``).
+    """List notes -- live by default, tombstoned with ``--deleted``.
 
     One row per live note, newest first (:func:`lode.notes_read.list_notes`):
     the full ``note_id`` -- copy-pasteable straight into ``lode purge`` -- a
@@ -482,7 +482,10 @@ def notes_(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     rows = list_deleted_notes(db_path) if deleted else list_notes(db_path)
     if not rows:
-        typer.echo("no notes")
+        # Scope the empty message to what was actually asked for: a bare
+        # "no notes" under --deleted reads as "you have no notes at all",
+        # which is false whenever live notes exist (lode-d32.2).
+        typer.echo("no deleted notes" if deleted else "no notes")
         return
     for row in rows:
         typer.echo(f"{row.note_id}  {_short_date(row.created)}  {row.summary}")

@@ -736,16 +736,17 @@ def test_notes_deleted_flag_lists_only_tombstoned_notes(tmp_path: Path) -> None:
     assert "gone soon" in result.stdout
 
 
-def test_notes_deleted_flag_says_no_notes_when_none_are_tombstoned(
+def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
     tmp_path: Path,
 ) -> None:
+    """The empty message names the queried scope -- a live note exists here."""
     db_path = tmp_path / "lode.db"
     runner.invoke(app, ["add", "still here", "--db", str(db_path)])
 
     result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
 
     assert result.exit_code == 0
-    assert result.stdout.strip() == "no notes"
+    assert result.stdout.strip() == "no deleted notes"
 
 
 # --- lode purge <prefix> (unambiguous note-id prefix, lode-1gr.3) -----------
