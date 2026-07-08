@@ -171,7 +171,20 @@ Collect verdicts for the whole queue before merging — I want the full accepted
 Two branches each green *in isolation* can break when **combined** (a clean git merge with broken
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**:
 
+Before merging anything, unstage the passive jsonl export. `bd dolt pull` (Section 1) can leave
+`.beads/issues.jsonl` **staged** — its index blob differs from `HEAD` while the worktree matches the
+index — and `git diff` / `git diff --quiet` read **clean** in that state (they compare worktree to
+index, not index to `HEAD`), so the drift is invisible right up until `git merge --no-ff` refuses with
+"Your local changes to the following files would be overwritten by merge." A bare `git checkout --`
+does **not** fix this: it only overwrites the worktree, leaving the staged index entry in place, so a
+naive retry loops. `git restore --staged --worktree` resets both index and worktree back to `HEAD` in
+one shot:
+
 ```bash
+rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # unstage the passive export;
+  # a STAGED jsonl aborts 'git merge' even though 'git diff' reads clean (staged != unstaged) — never
+  # let the passive export block or enter a merge (import.auto: false; see bd-sync discipline below)
+
 # On trunk, accepted set = the IDs land-review accepted this pass.
 for id in $ACCEPTED; do
   rtk git merge --no-ff "origin/land/$id" -m "Merge land/$id: <summary> ($id)"
@@ -390,6 +403,11 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
   become a committed source of truth — Dolt + `bd dolt push` is the wire. (`import.auto: false`
   already stops the post-merge hook from re-importing a stale jsonl and reverting a close — the
   failure that bit lode-8bh / lode-wvf / lode-bxz; I do not re-enable that path.)
+- **Never let the passive export block or enter a merge.** `bd dolt pull` can leave
+  `.beads/issues.jsonl` *staged* (index != `HEAD`, worktree == index) — `git diff` reads clean in that
+  state, so the drift is invisible until `git merge --no-ff` refuses it outright. I unstage it with
+  `git restore --staged --worktree .beads/issues.jsonl` right before the Section 3 merge loop, every
+  pass, on the assumption it may be staged even when `git diff` says otherwise.
 - **Order so a close can't be reverted by a stale jsonl.** Push `trunk` and `bd close` the landed
   tickets, then `bd dolt push` to publish — the authoritative close lives in Dolt and is pushed
   immediately, never left to be overwritten by an intermediate committed jsonl on a later pull.
