@@ -4,12 +4,15 @@ Pins the ticket's acceptance criterion at the module level, mirroring
 ``tests/test_tui_ask.py``'s direct unit style: live notes only (a soft-deleted
 note is excluded), newest-first ordering, the edit-count/chain-length column,
 and the summary-annotation-or-first-line fallback for the Summary column.
+Also covers :func:`list_deleted_notes` (lode-d32.2), the tombstoned-only
+sibling reader ``lode notes --deleted`` calls.
 """
 
 import json
 from pathlib import Path
 
 from lode.notes_read import (
+    list_deleted_notes,
     list_notes,
     list_versions,
     note_body,
@@ -177,6 +180,78 @@ def test_list_notes_ignores_a_stale_summary_from_a_prior_head(tmp_path: Path) ->
 
     # No fresh summary anchored to the new head -> falls back to first line.
     assert rows[0].summary == "v2 body"
+
+
+def test_list_deleted_notes_returns_only_tombstoned_notes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "live-note", "still here")
+        gone_head = save(conn, "gone-note", "will be deleted").version_id
+        delete(conn, "gone-note", parent=gone_head)
+    finally:
+        conn.close()
+
+    rows = list_deleted_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["gone-note"]
+
+
+def test_list_deleted_notes_empty_when_nothing_is_tombstoned(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "live-note", "still here")
+    finally:
+        conn.close()
+
+    assert list_deleted_notes(db_path) == []
+
+
+def test_list_deleted_notes_orders_newest_first(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head1 = save(conn, "n1", "first note").version_id
+        head2 = save(conn, "n2", "second note").version_id
+        delete(conn, "n1", parent=head1)
+        delete(conn, "n2", parent=head2)
+    finally:
+        conn.close()
+    # Both tombstoned in the same tick, order pinned via an explicit re-seed of
+    # notes.created (same technique test_list_notes_orders_newest_first uses).
+    conn = init_db(db_path)
+    try:
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:00.000Z' WHERE note_id = 'n1'"
+        )
+        conn.execute(
+            "UPDATE notes SET created = '2026-02-01T00:00:00.000Z' WHERE note_id = 'n2'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_deleted_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["n2", "n1"]
+
+
+def test_list_deleted_notes_summary_falls_back_to_the_tombstones_carried_body(
+    tmp_path: Path,
+) -> None:
+    """A tombstone's body is the pre-delete body, carried forward by ``delete``."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-1", "the original first line\nmore text").version_id
+        delete(conn, "note-1", parent=head)
+    finally:
+        conn.close()
+
+    rows = list_deleted_notes(db_path)
+
+    assert rows[0].summary == "the original first line"
 
 
 def test_note_body_returns_the_live_head_body(tmp_path: Path) -> None:

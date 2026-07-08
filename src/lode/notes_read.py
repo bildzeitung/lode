@@ -17,12 +17,15 @@ the dependency direction backwards (cli -> tui). :mod:`lode.tui.screens.browse`
 imports these functions the same way it always has; nothing about them changed
 in the move.
 
-**Live notes only.** A tombstoned note (its head version's ``op = 'delete'``)
-is excluded by the same ``v.op != 'delete'`` guard :func:`lode.retrieval.
-live_head_versions` and :func:`lode.reconcile`'s gap queries already use for
-"the current, non-deleted head" -- this module reimplements the same one-line
-filter rather than importing a retrieval-pipeline module the browse screen has
-no other reason to depend on.
+**Live notes only.** :func:`list_notes` excludes a tombstoned note (its head
+version's ``op = 'delete'``) via the same ``v.op != 'delete'`` guard
+:func:`lode.retrieval.live_head_versions` and :func:`lode.reconcile`'s gap
+queries already use for "the current, non-deleted head" -- this module
+reimplements the same one-line filter rather than importing a
+retrieval-pipeline module the browse screen has no other reason to depend on.
+:func:`list_deleted_notes` (lode-d32.2) is the flip side -- ``lode notes
+--deleted``'s reader, listing *only* tombstoned notes so their full ids stay
+reachable after they vanish from Browse and ``lode notes``.
 
 **Chain length.** Per-note version chains are strictly linear and CAS-guarded
 (``docs/storage.md`` "event-sourced, linear per-note chains") -- a note never
@@ -118,6 +121,49 @@ def _list_notes(conn: sqlite3.Connection) -> list[NoteRow]:
             created=created,
             version=chain_length,
             summary=_head_summary(conn, note_id, head_version_id, body),
+        )
+        for note_id, created, head_version_id, body, chain_length in rows
+    ]
+
+
+def list_deleted_notes(db_path: Path) -> list[NoteRow]:
+    """Return every tombstoned note, newest-first -- the counterpart to :func:`list_notes`.
+
+    ``lode notes`` (lode-1gr.1) shows only live notes; a soft-deleted note
+    (its head version's ``op = 'delete'``, via :func:`lode.versions.delete`)
+    otherwise vanishes with no CLI route back to its id (lode-d32.2). This is
+    that sibling reader -- same shape and same short-lived-connection
+    convention as :func:`list_notes`, but flipping the ``op`` guard rather
+    than overloading :func:`list_notes`' live-only contract that browse/purge/
+    retrieval/reconcile all depend on.
+    """
+    conn = init_db(db_path)
+    try:
+        return _list_deleted_notes(conn)
+    finally:
+        conn.close()
+
+
+def _list_deleted_notes(conn: sqlite3.Connection) -> list[NoteRow]:
+    rows = conn.execute(
+        "SELECT n.note_id, n.created, n.head_version_id, v.body, "
+        "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
+        "FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE v.op = 'delete' "
+        "ORDER BY n.created DESC"
+    ).fetchall()
+    return [
+        NoteRow(
+            note_id=note_id,
+            created=created,
+            version=chain_length,
+            # The tombstone's carried-forward body stands in for a summary --
+            # no annotation row keys off a delete version_id (annotations are
+            # written against a content head, which a tombstone never is), so
+            # _head_summary would always miss and fall through to the first
+            # line anyway; skip the lookup and go straight there.
+            summary=_first_line(body),
         )
         for note_id, created, head_version_id, body, chain_length in rows
     ]

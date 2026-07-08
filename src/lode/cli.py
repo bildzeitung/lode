@@ -8,13 +8,16 @@ enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
 (E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
 :meth:`lode.repository.Repository.purge`; ``notes`` (lode-1gr.1) lists every
 live note's full id, date, and summary via :func:`lode.notes_read.list_notes`
--- the id source for ``purge``; ``show`` (lode-1gr.5) prints one note's head
-body plus its derived enrichment (summary/tags/entities/edges, via
-:mod:`lode.display`'s stale-display policy) and whether it is embedded --
-on-demand introspection, sharing ``purge``'s id/prefix resolution; ``ask``
-(lode-y42.2) runs the cited Q&A loop (retrieve → synthesize → faithfulness gate
-→ cite or abstain); ``tui`` (E11, lode-mkc.1) launches the Textual TUI shell on
-the instant capture screen.
+-- the id source for ``purge`` -- or, with ``--deleted`` (lode-d32.2), lists
+only tombstoned notes via the sibling reader
+:func:`lode.notes_read.list_deleted_notes`; ``show`` (lode-1gr.5) prints one
+note's head body plus its derived enrichment (summary/tags/entities/edges,
+via :mod:`lode.display`'s stale-display policy) and whether it is embedded --
+on-demand introspection, sharing ``purge``'s id/prefix resolution, and
+flagging a tombstoned head with a ``[deleted]`` marker (lode-d32.2) rather
+than rendering it as if live; ``ask`` (lode-y42.2) runs the cited Q&A loop
+(retrieve → synthesize → faithfulness gate → cite or abstain); ``tui`` (E11,
+lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -50,7 +53,7 @@ from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
-from lode.notes_read import list_notes
+from lode.notes_read import list_deleted_notes, list_notes
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 
@@ -452,6 +455,11 @@ def _short_date(created: str) -> str:
 
 @app.command(name="notes")
 def notes_(
+    deleted: bool = typer.Option(
+        False,
+        "--deleted",
+        help="List only tombstoned (soft-deleted) notes, instead of live ones.",
+    ),
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List every live note: full id, date, and summary (``docs/design.md``).
@@ -462,10 +470,17 @@ def notes_(
     or the note's first line when not yet enriched). Tombstoned notes are
     excluded, same live-heads-only rule ``purge`` and the TUI browse screen
     already use.
+
+    ``--deleted`` (lode-d32.2) flips that: it lists *only* tombstoned notes
+    (via the sibling reader :func:`lode.notes_read.list_deleted_notes`) rather
+    than overloading this command's live-only contract that browse/purge/
+    retrieval/reconcile all depend on. A deleted note vanishes from both
+    Browse and plain ``lode notes``, so this full-id listing is the only route
+    back to an id a later ``lode show``/``lode recover`` can act on.
     """
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = list_notes(db_path)
+    rows = list_deleted_notes(db_path) if deleted else list_notes(db_path)
     if not rows:
         typer.echo("no notes")
         return
@@ -512,6 +527,15 @@ def show_(
     resolver ``purge`` uses (lode-1gr.3), so an unknown or ambiguous id errors
     identically. An un-enriched note (no annotations/edges yet -- enrichment
     is async) shows ``(none)`` for each empty section rather than erroring.
+
+    A tombstoned note (lode-d32.2) is not filtered out here -- unlike
+    ``resolve_note_prefix``, which only ever resolves a *prefix* to a live
+    note, a full id still reaches a tombstone unchanged (same "full id always
+    works" contract ``purge`` relies on, repository.py). Rather than render it
+    as if live, the header carries a visible ``[deleted]`` marker (the same
+    ``[stale]``-suffix convention :func:`_annotation_values` already uses for
+    a flagged-not-hidden annotation) while still printing the carried-forward
+    body -- useful context for deciding whether to ``lode recover`` it.
     """
     conn = _open_db(db)
     try:
@@ -530,7 +554,7 @@ def show_(
             raise typer.Exit(code=1) from None
 
         row = conn.execute(
-            "SELECT n.head_version_id, v.created, v.body FROM notes n "
+            "SELECT n.head_version_id, v.created, v.body, v.op FROM notes n "
             "JOIN versions v ON v.version_id = n.head_version_id "
             "WHERE n.note_id = ?",
             (note_id,),
@@ -540,7 +564,7 @@ def show_(
             # it exists (purge's own contract) -- an unknown full id lands here.
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1)
-        head_version_id, created, body = row
+        head_version_id, created, body, op = row
 
         annotations = display_annotations(conn, note_id)
         edges = display_edges(conn, note_id)
@@ -551,7 +575,8 @@ def show_(
     finally:
         conn.close()
 
-    typer.echo(f"note_id: {note_id}")
+    deleted_marker = " [deleted]" if op == "delete" else ""
+    typer.echo(f"note_id: {note_id}{deleted_marker}")
     typer.echo(f"created: {_short_date(created)}")
     typer.echo("")
     typer.echo(body)
