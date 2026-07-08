@@ -312,6 +312,17 @@ def delete(
     (``parent`` must equal the head). It carries the head body forward so the
     lineage records *what* was deleted; recovery is :func:`recover` repointing the
     head back past the tombstone. ``KeyError`` if the note does not exist.
+
+    **Idempotent re-delete (lode-n8q):** ``version_id`` is content-addressed
+    (:func:`~lode.hashing.content_version_id`, which folds in ``note_id`` /
+    ``parent`` / ``body`` but not ``op``). A delete → recover → delete cycle on
+    an unchanged note reproduces the exact ``(note_id, parent, body)`` of the
+    first tombstone, so the second delete recomputes the identical
+    ``version_id``. That is content-addressing working correctly, not a
+    collision — so instead of re-inserting (which would violate the primary
+    key), this repoints the head to the existing tombstone row. No new version
+    is written and the returned :class:`SaveResult` carries the same
+    ``version_id`` as the original delete.
     """
     settings = settings or Settings()
     with conn:
@@ -329,7 +340,12 @@ def delete(
                 rejected_buffer=None,
             )
         version_id = content_version_id(note_id, head, head_body, settings)
-        _write_version(conn, version_id, note_id, head, head_body, "delete")
+        existing = conn.execute(
+            "SELECT 1 FROM versions WHERE version_id = ? AND note_id = ?",
+            (version_id, note_id),
+        ).fetchone()
+        if existing is None:
+            _write_version(conn, version_id, note_id, head, head_body, "delete")
         _cas_head(conn, note_id, version_id, head, rejected_buffer=None)
         return SaveResult(note_id, version_id, "delete")
 

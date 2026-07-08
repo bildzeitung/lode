@@ -41,6 +41,12 @@ Notes are stored as an **append-only version chain**. Each mutating operation **
 - **update** → new node parented to the prior version
 - **delete** → a tombstone node (soft delete; recovery = repoint the head)
 
+Version ids are content-addressed (`note_id` + `parent` + `body`), so a delete of an unchanged,
+recovered note is **idempotent**: re-deleting from the same recovered head reproduces the exact
+inputs of the earlier tombstone and repoints the head to that existing row rather than minting a
+new one (`versions.delete`, lode-n8q). Editing the body (or deleting from a different parent) still
+mints a new tombstone as usual.
+
 This was chosen specifically *because* the AI sidecar is the whole point. It hands us, for free:
 immutability **by construction**, precise staleness, deterministic annotation migration, full
 provenance, and undo. Without the AI layer this would be over-engineering; with it, it pays.
