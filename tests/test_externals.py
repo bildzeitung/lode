@@ -3,8 +3,10 @@
 Covers the acceptance criteria: a fetched page becomes one ``externals`` row +
 one ``snapshots`` row; an identical refetch adds no row; a changed body adds a
 new snapshot and moves ``head_snapshot_id``; a fetch failure writes a
-tombstone snapshot (not scaffolding); and an ``embed`` job (never ``enrich``)
-is enqueued on every non-deduped ingest.
+tombstone snapshot (not scaffolding); an ``embed`` job (never ``enrich``) is
+enqueued on every non-deduped ``ok`` ingest; and a ``tombstone`` ingest
+enqueues no ``embed`` job at all (decision, bd lode-w0h.2, 2026-07-08 — a
+failed fetch must not become a retrievable/citable vector).
 """
 
 from pathlib import Path
@@ -176,7 +178,7 @@ def test_repeated_identical_tombstone_reason_dedups(conn) -> None:
     assert _count_snapshots(conn, _EXTERNAL_ID) == 1
 
 
-def test_tombstone_after_ok_moves_head_and_enqueues_embed(conn) -> None:
+def test_tombstone_after_ok_moves_head_but_enqueues_no_embed(conn) -> None:
     ok_result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "real content")
     tomb_result = ingest_snapshot(
         conn, _EXTERNAL_ID, "web", tombstone_body("http_410"), status="tombstone"
@@ -184,7 +186,22 @@ def test_tombstone_after_ok_moves_head_and_enqueues_embed(conn) -> None:
 
     assert tomb_result.snapshot_id != ok_result.snapshot_id
     assert _external_row(conn, _EXTERNAL_ID) == ("web", tomb_result.snapshot_id)
-    assert _jobs_for(conn, tomb_result.snapshot_id) == [("embed", "pending")]
+    # The head moved to the tombstone row, but a tombstone must never become a
+    # retrievable/citable vector — no embed job for it (bd lode-w0h.2 decision).
+    assert _jobs_for(conn, tomb_result.snapshot_id) == []
+
+
+def test_tombstone_ingest_enqueues_no_embed_job(conn) -> None:
+    """A status='tombstone' snapshot enqueues NO embed job — fail closed.
+
+    (An 'ok' snapshot still enqueues exactly one embed job — already covered
+    by test_fresh_ingest_enqueues_embed_only_not_enrich above.)
+    """
+    result = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_403"), status="tombstone"
+    )
+
+    assert _jobs_for(conn, result.snapshot_id) == []
 
 
 # --- ingest_fetch_result adapter (webfetch.FetchResult -> ingest_snapshot) ---

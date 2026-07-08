@@ -55,13 +55,23 @@ still ``404``) produces the same tombstone body and therefore the same
 
 ## Embed-only enqueue (docs/externals.md "Re-embed on any change")
 
-Every non-deduped ingest — ``ok`` or ``tombstone`` alike — enqueues exactly
-one ``embed`` job (:func:`lode.jobs.enqueue_derive_jobs` with an explicit
-``types=("embed",)`` subset, the same targeted-enqueue shape the
-reconciliation scan's embed-gap step already uses). ``enrich`` is
-deliberately **not** enqueued here: re-enrichment is gated on a *material*
-change (embedding-similarity delta, decided post-embed), which is
-``lode-w0h.5``'s job, not this write path's.
+Every non-deduped ``ok`` ingest enqueues exactly one ``embed`` job
+(:func:`lode.jobs.enqueue_derive_jobs` with an explicit ``types=("embed",)``
+subset, the same targeted-enqueue shape the reconciliation scan's embed-gap
+step already uses). ``enrich`` is deliberately **not** enqueued here:
+re-enrichment is gated on a *material* change (embedding-similarity delta,
+decided post-embed), which is ``lode-w0h.5``'s job, not this write path's.
+
+A ``tombstone`` ingest enqueues **no** ``embed`` job (decision, bd
+lode-w0h.2, 2026-07-08): a failed fetch must not produce a
+retrievable/citable vector. ``vector_search`` has no score floor (top-k
+always returns k), and a tombstone's body *is* its own quoted span, so an
+embedded placeholder would pass the verbatim-span faithfulness check and
+could surface as a citation for content that was never actually fetched —
+"a hallucination wearing the uniform of a verified fact" (``docs/design.md``
+§2). This mirrors the owned-note delete path, which likewise does not
+enqueue ``embed`` and is filtered from retrieval by ``live_head_versions``'
+``op != 'delete'`` guard. Fail closed.
 """
 
 from __future__ import annotations
@@ -146,17 +156,21 @@ def ingest_snapshot(
     per citing note, ``docs/externals.md``). Computes ``snapshot_id =
     H(external_id, body)``; if it equals the current head, this is an
     identical refetch and is a no-op (no row, no enqueue, ``deduped=True``).
-    Otherwise inserts the new snapshot row, moves ``externals.head_snapshot_id``
-    to it, and enqueues one ``embed`` job keyed on the new ``snapshot_id``
-    (see the module docstring — ``enrich`` is not enqueued here).
+    Otherwise inserts the new snapshot row and moves
+    ``externals.head_snapshot_id`` to it; an ``"ok"`` snapshot also enqueues
+    one ``embed`` job keyed on the new ``snapshot_id`` (see the module
+    docstring — ``enrich`` is not enqueued here). A ``"tombstone"`` snapshot
+    enqueues no job at all — see the module docstring's "Embed-only enqueue"
+    section for why a failed fetch must not become a retrievable vector.
 
     ``status`` records the fetch outcome (``"ok"`` for real content,
     ``"tombstone"`` for a permanent failure); callers writing a tombstone
     should pass ``body=tombstone_body(reason)`` for the stable, inspectable
     convention. The whole write — externals upsert, snapshot insert, head
-    move, enqueue — runs in one ``with conn:`` transaction, so a crash
-    between steps never leaves a snapshot without its derive job or a head
-    pointing at a row that was never committed.
+    move, and the (status-gated) enqueue — runs in one ``with conn:``
+    transaction, so a crash between steps never leaves an ``ok`` snapshot
+    without its derive job or a head pointing at a row that was never
+    committed.
     """
     settings = settings or Settings()
     with conn:
@@ -178,7 +192,8 @@ def ingest_snapshot(
             "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
             (snapshot_id, external_id),
         )
-        jobs.enqueue_derive_jobs(conn, snapshot_id, types=("embed",))
+        if status != "tombstone":
+            jobs.enqueue_derive_jobs(conn, snapshot_id, types=("embed",))
         return IngestResult(external_id, snapshot_id, status, deduped=False)
 
 

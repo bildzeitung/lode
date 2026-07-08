@@ -93,13 +93,17 @@ spend on noisy sources without letting enrichment rot.
 **The write path** (`lode.externals.ingest_snapshot`, `lode-w0h.2`) is the mirrored analogue of the
 note save path: dedup on `external_id` (one `externals` row per source, created on first sight),
 compute `snapshot_id` and skip the write entirely when it equals the current head (the identical-
-refetch-is-free case above), otherwise insert the new snapshot and move `head_snapshot_id`, then
-enqueue **`embed` only** (never `enrich` — that gate is `lode-w0h.5`'s, decided post-embed). A fetch
-failure ([Draw-down rules](#draw-down-rules) below) writes a *tombstone* snapshot whose body is the
-stable, inspectable marker `"[tombstone: <reason>]"` — itself content-addressed, so a source that
-keeps failing the same way dedups its tombstones too, rather than growing one row per retry. This
-write path is deliberately **read-agnostic**: it does not wire a cache backend or make the snapshot
-directly retrievable — that is `lode-w0h.8`.
+refetch-is-free case above), otherwise insert the new snapshot and move `head_snapshot_id`. An **`ok`**
+snapshot then enqueues **`embed` only** (never `enrich` — that gate is `lode-w0h.5`'s, decided
+post-embed). A fetch failure ([Draw-down rules](#draw-down-rules) below) writes a *tombstone* snapshot
+whose body is the stable, inspectable marker `"[tombstone: <reason>]"` — itself content-addressed, so
+a source that keeps failing the same way dedups its tombstones too, rather than growing one row per
+retry — but enqueues **no** `embed` job: a failed fetch must not become a retrievable/citable vector
+(decision, `lode-w0h.2`, 2026-07-08; mirrors the owned-note delete path, which likewise is never
+embedded). This write path is deliberately **read-agnostic**: it does not wire a cache backend or make
+the snapshot directly retrievable — that is `lode-w0h.8`, which must in turn exclude tombstones from
+whatever it builds (the retrieval union if it ever embeds them, or the embed-gap reconciliation query
+if not — otherwise a tombstoned external re-enqueues embed forever).
 
 ---
 
