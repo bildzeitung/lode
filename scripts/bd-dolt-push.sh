@@ -54,3 +54,11 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   sleep "$sleep_for"
   attempt=$((attempt + 1))
 done
+
+# Not reachable for MAX_ATTEMPTS >= 1: the loop only ever leaves via an `exit` above.
+# But a zero / negative / non-numeric BD_DOLT_PUSH_MAX_ATTEMPTS skips the loop body
+# entirely, and falling off the end here would exit 0 — reporting a successful push
+# that never ran, which is the exact silent-strand this wrapper exists to prevent.
+# Never succeed without having pushed.
+echo "bd-dolt-push: no push attempted (BD_DOLT_PUSH_MAX_ATTEMPTS=${MAX_ATTEMPTS} is not a positive integer)" >&2
+exit 1
