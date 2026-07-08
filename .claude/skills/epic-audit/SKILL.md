@@ -148,8 +148,12 @@ re-files the same gaps:
 ```bash
 rtk bd label add <epic> epic-audited
 rtk bd label remove <epic> epic-ready-to-audit   # drop the work signal (no-op if it wasn't set)
-rtk bd dolt push                                 # publish gap tickets + escalations + label changes over refs/dolt/data
+rtk scripts/bd-dolt-push.sh                      # publish gap tickets + escalations + label changes over refs/dolt/data
 ```
+
+`scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
+transient embedded-mode lock, since this sweep can run concurrently with `/code` producers writing
+the same shared Dolt store (lode-83d).
 
 `epic-audited` is terminal for me: an audited epic is out of my sweep for good. (Re-auditing after the filed
 gaps are themselves built is a fresh, explicit `/epic-audit <epic>` — I don't re-arm automatically.) The epic
@@ -161,7 +165,8 @@ itself stays **open** — closing it is the human's call once the audit's gaps a
   `/land` and you.
 - **Auto-file a judgment call.** Ambiguous → `human`-labeled `decision` ticket, never speculative work.
 - **Re-audit an `epic-audited` epic** in a sweep, or file duplicate gaps.
-- **Commit or `bd import` the passive `.beads/*.jsonl`** in place of `bd dolt push` — Dolt is the wire.
+- **Commit or `bd import` the passive `.beads/*.jsonl`** in place of `scripts/bd-dolt-push.sh` — Dolt
+  is the wire.
 - **Record a design decision in a bd note** instead of `docs/` (that forks the record — a gap that is really
   a design question is an escalation, and its resolution lands in `docs/`).
 

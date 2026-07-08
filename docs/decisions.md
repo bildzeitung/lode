@@ -149,3 +149,28 @@ are catalogued in [configuration.md](configuration.md).
   the v1 guard once true concurrent multi-machine landing is wanted — the seam toward real CI; (2) a
   **stale-escalation sweep** to GC `land/<id>` branches left behind by tickets awaiting a human
   decision.
+- **`bd dolt push` retry-on-reject: a backoff wrapper, not a Dolt server-mode migration (lode-83d).**
+  lode-nps.3 validated that `bd dolt push` is fast-forward-only + atomically CAS-protected on the
+  branch ref (a losing concurrent writer is *rejected*, never silently dropped) but surfaced two
+  gaps: no call site retried a rejection, and lode's **embedded** (in-process Dolt engine) mode is
+  documented by beads itself as single-writer-via-file-lock, the wrong mode for `/code`'s
+  multi-producer fan-out, whose failure mode is a hard "database is locked" error with no built-in
+  retry. **Decision: fix both with one mechanism — a shared backoff-and-retry wrapper
+  (`scripts/bd-dolt-push.sh`), not a switch to Dolt server mode.** Every literal `bd dolt push` call
+  site across the skills (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`,
+  `.claude/skills/land/SKILL.md`, `.claude/skills/epic-audit/SKILL.md`) now calls the wrapper
+  instead: on a non-zero exit it runs `bd dolt pull` (folds in the winner's commit so a rejected push
+  has a shot at fast-forwarding on retry) and retries with exponential backoff + jitter (default 5
+  attempts, ~2s/4s/8s/16s base delays, `BD_DOLT_PUSH_MAX_ATTEMPTS` / `BD_DOLT_PUSH_BASE_DELAY`
+  override the defaults), surfacing the final failure's exit code if every attempt is exhausted.
+  **Why not switch to Dolt server mode:** it's the operationally heavier fix — every contributor
+  machine would need a running `dolt sql-server` process, port/credential config, and a lifecycle
+  story (start on session begin, survive across worktrees, restart on crash) before any producer
+  could write bd state at all; a single-repo, single-machine, short-lived-lock workload doesn't
+  warrant that infrastructure. Embedded mode's lock window is one bd operation (milliseconds to low
+  seconds), well inside the wrapper's backoff schedule — a few seconds of retry absorbs contention
+  from `/code`'s N-producer fan-out without a new daemon to run, monitor, or fail. **Revisit if:**
+  lock contention or push rejections become a *frequent* rather than occasional event (i.e. the
+  wrapper's default 5-attempt budget starts exhausting under normal fan-out width, not just an
+  unlucky race), or lode's contributor base grows to where a shared always-on Dolt server earns its
+  keep for reasons beyond this ticket's concurrency concern.
