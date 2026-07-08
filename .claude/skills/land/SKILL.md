@@ -386,6 +386,79 @@ rtk bd dolt push
 (A stale-escalation sweep to GC long-abandoned `land/<id>` branches is a deferred hygiene task in
 `docs/decisions.md`, not part of v1.)
 
+## Resolving a `land-escalated` branch
+
+`land-escalated` is **not terminal** — a human resolves it, and every resolution **removes the
+label**, so `bd list --label land-escalated` can reach empty. Resolution is a human action taken
+outside a `/land` pass — typically at `bd show <id>` time; `/land` only ever *sets* the label
+(above), never clears it. There are exactly three exits:
+
+### (a) Land as-is — materialize the decision first, then re-enter the queue
+
+A `/land` escalation means `land-review` hit a genuine ambiguity it couldn't settle on its own (an
+arguable "done", an unclear acceptance criterion). If the human decides the branch **should** land,
+**the branch itself needs no change** — this exit is exactly the "it's fine as-is" case. What changes
+is the *ticket*: swapping the label back to `ready-for-land` with nothing else touched is **not a
+complete transition**, because `/land`'s next pass re-dispatches `land-review`, which hits the *same*
+ambiguity and escalates again — an infinite escalate↔ready loop.
+
+So the swap is valid only once the human has **written the decision into the ticket** — edit the
+acceptance criteria / description so the ambiguity `land-review` flagged no longer exists — *then*
+swap the label. `land-review` stays authoritative on re-review; there is deliberately **no
+"human-blessed" bypass label** that skips it (forcing a land past a `land-review` objection is an
+out-of-band manual act, not a designed fast-path):
+
+```bash
+rtk bd update <id> --description="<revised, unambiguous acceptance/description>"   # write the decision in; the BRANCH is untouched
+rtk bd update <id> --remove-label land-escalated --add-label ready-for-land
+rtk bd dolt push
+# /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
+```
+
+### (b) Rebuild — supersede into a fresh ticket, drop the branch
+
+If the human decides the branch must be rebuilt (the escalated approach was wrong, or the real
+answer is "this needs a different design"), resolve it exactly like a `land-review`
+[bounce](#bounce--clear-failure): open a new ticket carrying the decision, `bd supersede` the
+original onto it, and drop the rejected branch (same epic re-parent / dependent re-point care as a
+bounce applies here too):
+
+```bash
+NEW=$(rtk bd create --type=<same-type-as-original> \
+  --title="<original title> (rebuild after land-escalated)" \
+  --description="Rebuild of <id>. Human resolution of the land-escalated decision:
+<the decision + what the rebuild must satisfy that the escalated branch did not>" \
+  --json | jq -r '.id')
+# re-parent onto the same epic / re-point blocking dependents — see Bounce above for why.
+rtk bd supersede <id> --with "$NEW"          # closes <id> as superseded, links to $NEW
+rtk bd update <id> --remove-label land-escalated
+rtk git push origin --delete "land/<id>"     # drop the escalated branch — the rebuild gets a fresh land/<new-id>
+rtk bd dolt push
+```
+
+### (c) Drop — close with reason, GC the branch
+
+If the human decides the work simply shouldn't happen (overtaken by events, no longer wanted),
+close the ticket directly and GC the branch:
+
+```bash
+rtk bd close <id> --reason "<why this is dropped>"
+rtk bd update <id> --remove-label land-escalated
+rtk git push origin --delete "land/<id>"     # GC the branch — nothing will land it
+rtk bd dolt push
+```
+
+All three end the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
+`/sweep` (`lode-nps.1`) — can actually drain rather than growing monotonically.
+
+**Scope.** The three exits above resolve the label as **`/land`** sets it. `/code`'s producers set the
+*same* label from three other places — a `coding` build-time decision, a `code-reviewer` technical-review
+decision, and a `coding` rebase-pickup conflict. Exits **(b)** and **(c)** apply to those unchanged (they
+only close the ticket and GC the branch). Exit **(a)** does **not**: such a ticket has to re-enter at the
+gate that escalated it, not blindly at `ready-for-land` — a build-time escalation never had its technical
+review, and a rebase conflict still won't merge onto `trunk`. That per-source mapping is deliberately
+**not specified here** (`lode-08g`).
+
 ---
 
 ## bd-sync discipline (non-negotiable)
