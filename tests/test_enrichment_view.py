@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from lode.enrichment_view import EnrichmentEdge, enrichment_view
+from lode.enrichment_view import EnrichmentEdge, EnrichmentItem, enrichment_view
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ def test_ready_when_ai_output_exists_and_no_job(conn: sqlite3.Connection) -> Non
 
     assert view is not None
     assert view.enrichment_state == "ready"
-    assert view.summary == "a summary"
+    assert view.summary == EnrichmentItem(value="a summary", stale=False)
 
 
 def test_pending_when_live_enrich_job_and_no_ai_rows(conn: sqlite3.Connection) -> None:
@@ -275,7 +275,7 @@ def test_reenriching_note_reports_pending_with_stale_content_shown(
 
     assert view is not None
     assert view.enrichment_state == "pending"
-    assert view.tags == ["old-tag [stale]"]
+    assert view.tags == [EnrichmentItem(value="old-tag", stale=True)]
     assert view.edges == [
         EnrichmentEdge(
             to_id="old-topic",
@@ -299,7 +299,10 @@ def test_stale_tag_shown_flagged_not_hidden(conn: sqlite3.Connection) -> None:
     view = enrichment_view(_db_path(conn), "note-1")
 
     assert view is not None
-    assert set(view.tags) == {"fresh-tag", "stale-tag [stale]"}
+    assert set(view.tags) == {
+        EnrichmentItem(value="fresh-tag", stale=False),
+        EnrichmentItem(value="stale-tag", stale=True),
+    }
 
 
 def test_summary_prefers_the_fresh_row_over_the_pre_edit_orphaned_one(
@@ -332,7 +335,7 @@ def test_summary_prefers_the_fresh_row_over_the_pre_edit_orphaned_one(
     view = enrichment_view(_db_path(conn), "note-1")
 
     assert view is not None
-    assert view.summary == "current summary"
+    assert view.summary == EnrichmentItem(value="current summary", stale=False)
 
 
 def test_summary_falls_back_to_the_stale_row_when_no_fresh_one_exists(
@@ -354,7 +357,7 @@ def test_summary_falls_back_to_the_stale_row_when_no_fresh_one_exists(
 
     assert view is not None
     assert view.enrichment_state == "pending"
-    assert view.summary == "last-known summary [stale]"
+    assert view.summary == EnrichmentItem(value="last-known summary", stale=True)
 
 
 def test_edges_carry_reason_and_confidence(conn: sqlite3.Connection) -> None:
@@ -395,7 +398,7 @@ def test_tombstoned_annotation_is_dropped(conn: sqlite3.Connection) -> None:
     view = enrichment_view(_db_path(conn), "note-1")
 
     assert view is not None
-    assert view.tags == ["kept-tag"]
+    assert view.tags == [EnrichmentItem(value="kept-tag", stale=False)]
 
 
 # ---------------------------------------------------------------------------

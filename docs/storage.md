@@ -238,6 +238,18 @@ than "what's the latest known content." One consequence: a note mid-re-enrichmen
 `enrichment_state="pending"` **alongside** its stale last-known content — that co-occurrence is
 intended, not a bug, and follows directly from the "show-flagged, never hide" stale-display policy.
 
+**Staleness is structured data on every field, not a baked-in string (decided, implemented
+lode-0qc).** `summary`/`tags`/`entities` carry a frozen `EnrichmentItem(value: str, stale: bool)`
+rather than a pre-rendered string with a `" [stale]"` suffix — symmetric with `edges`, which already
+carried a structured `stale: bool` on `EnrichmentEdge`. The seam hands back the `stale` bit as data;
+rendering it is entirely the consumer's call (the TUI styles a stale item, e.g. dimmed or iconed; the
+CLI prints the `" [stale]"` suffix). This was originally decided the other way (`tags`/`entities`/
+`summary` as bare strings, per the epic's pinned design) but revised before either consumer (the
+lode-ay5.2 modal, the lode-ay5.3 CLI parity work) was built: a string-only seam would force the TUI to
+string-sniff the suffix just to style a stale tag differently — exactly the format-as-protocol
+coupling this shared view-model seam exists to prevent, and cheap to fix only while both consumers
+were still unbuilt.
+
 **The predicate** (pinned 2026-07-08, bd `lode-ay5.1`), evaluated against the head's
 `target_version`/`source_version`:
 
