@@ -153,12 +153,7 @@ def _insert_passage(
 
 
 def test_missing_note_returns_none(conn: sqlite3.Connection) -> None:
-    assert (
-        enrichment_view(
-            Path(conn.execute("PRAGMA database_list").fetchone()[2]), "nope"
-        )
-        is None
-    )
+    assert enrichment_view(_db_path(conn), "nope") is None
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +300,61 @@ def test_stale_tag_shown_flagged_not_hidden(conn: sqlite3.Connection) -> None:
 
     assert view is not None
     assert set(view.tags) == {"fresh-tag", "stale-tag [stale]"}
+
+
+def test_summary_prefers_the_fresh_row_over_the_pre_edit_orphaned_one(
+    conn: sqlite3.Connection,
+) -> None:
+    """An edited-then-re-enriched note has TWO visible summary rows -- pick the fresh.
+
+    The pre-edit summary is orphaned by staleness.reanchor_annotations (its text
+    is not in the new body) but stays VISIBLE -- only source='user' orphans are
+    tombstones. It keeps the lower rowid, so taking the first row would surface a
+    summary from before the edit while a current one exists.
+    """
+    _insert_note(conn, version_id="ver-1")
+    _insert_annotation(
+        conn,
+        source_version="ver-1",
+        kind="summary",
+        payload_value="pre-edit summary",
+        status="orphaned",
+    )
+    _update_note(conn, version_id="ver-2", parent_version_id="ver-1")
+    _insert_annotation(
+        conn,
+        source_version="ver-2",
+        kind="summary",
+        payload_value="current summary",
+        status="fresh",
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.summary == "current summary"
+
+
+def test_summary_falls_back_to_the_stale_row_when_no_fresh_one_exists(
+    conn: sqlite3.Connection,
+) -> None:
+    """A re-enriching note still shows its last-known summary, flagged (never hidden)."""
+    _insert_note(conn, version_id="ver-1")
+    _insert_annotation(
+        conn,
+        source_version="ver-1",
+        kind="summary",
+        payload_value="last-known summary",
+        status="orphaned",
+    )
+    _update_note(conn, version_id="ver-2", parent_version_id="ver-1")
+    _insert_enrich_job(conn, target_version="ver-2", status="pending")
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.enrichment_state == "pending"
+    assert view.summary == "last-known summary [stale]"
 
 
 def test_edges_carry_reason_and_confidence(conn: sqlite3.Connection) -> None:

@@ -72,13 +72,13 @@ class EnrichmentEdge:
 class EnrichmentView:
     """A note's full enrichment view, assembled for display (lode-ay5.1).
 
-    ``summary`` is the first visible ``kind='summary'`` annotation payload (or
-    ``None`` if un-enriched), matching ``cli.show_``'s existing pick of
-    ``summaries[0]``. ``tags``/``entities`` are the payload strings of every
-    visible annotation of that kind, each carrying a ``" [stale]"`` suffix
-    when the stale-display policy flagged it -- the same rendering
-    ``cli.show_`` already does, reused here so ay5.3's refactor changes
-    nothing about wording that already matches.
+    ``summary`` is the note's one summary line -- the fresh row when one exists,
+    else the last-known stale one (see :func:`_summary`), or ``None`` when the
+    note has no summary annotation at all. ``tags``/``entities`` are the payload
+    strings of every visible annotation of that kind, each carrying a
+    ``" [stale]"`` suffix when the stale-display policy flagged it -- the same
+    rendering ``cli.show_`` already does, reused here so ay5.3's refactor
+    changes nothing about wording that already matches.
     """
 
     note_id: str
@@ -91,22 +91,50 @@ class EnrichmentView:
     passage_count: int
 
 
-def _annotation_values(annotations: list[dict], kind: str) -> list[str]:
-    """Extract every visible annotation payload of ``kind``, stale-flagged inline.
+def _stale_flagged(annotation: dict) -> str:
+    """Render one visible annotation's payload, appending ``" [stale]"`` when flagged.
 
     ``payload`` is a bare string for ``tag``/``entity``/``summary`` rows (see
-    :func:`lode.enrich._write_enrichment`); a ``" [stale]"`` suffix is
-    appended per-item rather than hiding it, per the stale-display policy
-    (show, but flag -- ``docs/storage.md`` "Stale-display policy"). This is a
-    formatting convenience, not a second copy of the display policy itself --
-    the ``visible``/``stale`` decision was already made by
+    :func:`lode.enrich._write_enrichment`); the suffix marks a flagged item
+    rather than hiding it, per the stale-display policy (show, but flag --
+    ``docs/storage.md`` "Stale-display policy"). This is a formatting
+    convenience, not a second copy of the display policy itself -- the
+    ``visible``/``stale`` decision was already made by
     :func:`~lode.display.display_annotations`.
     """
-    return [
-        f"{a['payload']} [stale]" if a["stale"] else str(a["payload"])
-        for a in annotations
-        if a["kind"] == kind
-    ]
+    payload = str(annotation["payload"])
+    return f"{payload} [stale]" if annotation["stale"] else payload
+
+
+def _annotation_values(annotations: list[dict], kind: str) -> list[str]:
+    """Every visible annotation payload of ``kind``, stale-flagged inline.
+
+    (Duplicated as ``cli._annotation_values`` only until lode-ay5.3 routes
+    ``cli.show_`` through this view-model and deletes that copy.)
+    """
+    return [_stale_flagged(a) for a in annotations if a["kind"] == kind]
+
+
+def _summary(annotations: list[dict]) -> str | None:
+    """The note's one summary line -- the fresh row when one exists.
+
+    :func:`~lode.display.display_annotations` is ``note_id``-scoped and spans
+    every version, and an AI summary orphaned by an edit stays *visible* (only
+    ``source='user'`` orphans are curation tombstones). So an edited-then-
+    re-enriched note carries TWO visible ``kind='summary'`` rows: the pre-edit
+    one (orphaned, hence stale-flagged) and the head's fresh one. Taking the
+    first would surface the pre-edit summary, because the rows arrive in rowid
+    (insertion) order -- oldest first.
+
+    Prefer a non-stale row; fall back to the last-known stale one so a
+    re-enriching note still shows a summary, flagged, rather than nothing
+    (the "show-flagged, never hide" stale-display policy). ``min`` on the
+    ``stale`` flag is stable, so ties keep insertion order.
+    """
+    summaries = [a for a in annotations if a["kind"] == "summary"]
+    if not summaries:
+        return None
+    return _stale_flagged(min(summaries, key=lambda a: a["stale"]))
 
 
 def enrichment_view(db_path: Path, note_id: str) -> EnrichmentView | None:
@@ -135,7 +163,6 @@ def _enrichment_view(conn: sqlite3.Connection, note_id: str) -> EnrichmentView |
     annotations = display_annotations(conn, note_id)
     edges = display_edges(conn, note_id)
 
-    summaries = _annotation_values(annotations, "summary")
     tags = _annotation_values(annotations, "tag")
     entities = _annotation_values(annotations, "entity")
     view_edges = [
@@ -156,7 +183,7 @@ def _enrichment_view(conn: sqlite3.Connection, note_id: str) -> EnrichmentView |
     return EnrichmentView(
         note_id=note_id,
         enrichment_state=_enrichment_state(conn, note_id, head_version_id),
-        summary=summaries[0] if summaries else None,
+        summary=_summary(annotations),
         tags=tags,
         entities=entities,
         edges=view_edges,
@@ -165,35 +192,48 @@ def _enrichment_view(conn: sqlite3.Connection, note_id: str) -> EnrichmentView |
     )
 
 
+def _has_enrich_job(
+    conn: sqlite3.Connection, head_version_id: str, statuses: tuple[str, ...]
+) -> bool:
+    """Does the head version carry a ``type='enrich'`` job in any of ``statuses``?"""
+    placeholders = ", ".join("?" * len(statuses))
+    (found,) = conn.execute(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE type = 'enrich' "
+        f"AND target_version = ? AND status IN ({placeholders}))",
+        (head_version_id, *statuses),
+    ).fetchone()
+    return bool(found)
+
+
+def _has_ai_output(
+    conn: sqlite3.Connection, note_id: str, head_version_id: str
+) -> bool:
+    """Did enrichment write any ``source='ai'`` row for the head's ``source_version``?
+
+    Either table counts: a run can legitimately produce only inferred edges and
+    no annotations (or vice versa), and either way it produced output.
+    """
+    (found,) = conn.execute(
+        "SELECT EXISTS("
+        "SELECT 1 FROM annotations "
+        "WHERE target = ? AND source = 'ai' AND source_version = ? "
+        "UNION ALL "
+        "SELECT 1 FROM edges "
+        "WHERE from_id = ? AND source = 'ai' AND source_version = ?"
+        ")",
+        (note_id, head_version_id, note_id, head_version_id),
+    ).fetchone()
+    return bool(found)
+
+
 def _enrichment_state(
     conn: sqlite3.Connection, note_id: str, head_version_id: str
 ) -> EnrichmentState:
     """Apply the pinned three-state predicate (see module docstring) to the head."""
-    (has_live_job,) = conn.execute(
-        "SELECT EXISTS(SELECT 1 FROM jobs WHERE type = 'enrich' "
-        "AND target_version = ? AND status IN (?, ?))",
-        (head_version_id, *_LIVE_JOB_STATUSES),
-    ).fetchone()
-    if has_live_job:
+    if _has_enrich_job(conn, head_version_id, _LIVE_JOB_STATUSES):
         return "pending"
-
-    (has_dead_job,) = conn.execute(
-        "SELECT EXISTS(SELECT 1 FROM jobs WHERE type = 'enrich' "
-        "AND target_version = ? AND status IN (?, ?))",
-        (head_version_id, *_DEAD_JOB_STATUSES),
-    ).fetchone()
-    if has_dead_job:
-        (has_ai_output,) = conn.execute(
-            "SELECT EXISTS("
-            "SELECT 1 FROM annotations "
-            "WHERE target = ? AND source = 'ai' AND source_version = ? "
-            "UNION "
-            "SELECT 1 FROM edges "
-            "WHERE from_id = ? AND source = 'ai' AND source_version = ?"
-            ")",
-            (note_id, head_version_id, note_id, head_version_id),
-        ).fetchone()
-        if not has_ai_output:
-            return "failed"
-
+    if _has_enrich_job(
+        conn, head_version_id, _DEAD_JOB_STATUSES
+    ) and not _has_ai_output(conn, note_id, head_version_id):
+        return "failed"
     return "ready"
