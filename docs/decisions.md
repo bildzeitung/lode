@@ -149,3 +149,15 @@ are catalogued in [configuration.md](configuration.md).
   the v1 guard once true concurrent multi-machine landing is wanted — the seam toward real CI; (2) a
   **stale-escalation sweep** to GC `land/<id>` branches left behind by tickets awaiting a human
   decision.
+- **`/sweep`'s notification channel is stop-and-report, not a real push (accepted for v1,
+  revisit if a push tool ever exists).** `/sweep` (`lode-nps.1`) is the loop family's human-decision
+  surfacer; its own design debate flagged that a "PushNotification" delivering to an *away* human was
+  unverified and asked for that to be confirmed before build. No such tool is available to a skill
+  session in this harness — verified, not assumed. Given that constraint, `/sweep` uses the same
+  channel every other loop leg (`/land`, `/epic-audit`) already relies on to reach a human: its own
+  final pass report, made hard to miss (a loud "NEW HUMAN-DECISION ITEMS" block when the delta is
+  non-empty). This is a real gap against the original ask — a report inside an unwatched `/loop`
+  transcript may not reach an away human any better than the `land-escalated`/`human` labels it
+  surfaces already did — but it is honest about what exists today rather than building against an
+  imaginary tool. **Revisit trigger:** if/when this harness gains an actual push-to-device
+  notification capability, wire `/sweep` into it and retire this note.
