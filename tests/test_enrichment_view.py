@@ -19,7 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from lode.display import display_annotations
 from lode.enrichment_view import EnrichmentEdge, EnrichmentItem, enrichment_view
+from lode.staleness import reanchor_annotations
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
@@ -358,6 +360,66 @@ def test_summary_falls_back_to_the_stale_row_when_no_fresh_one_exists(
     assert view is not None
     assert view.enrichment_state == "pending"
     assert view.summary == EnrichmentItem(value="last-known summary", stale=True)
+
+
+def test_edit_then_reenrich_then_read_drives_the_real_reanchor(
+    conn: sqlite3.Connection,
+) -> None:
+    """edit -> re-enrich -> read, driving the REAL staleness.reanchor_annotations.
+
+    The other summary tests hand-seed ``status='orphaned'``, which assumes the
+    premise rather than exercising it. This one locks the whole chain the seam
+    exists to paper over:
+
+    1. :func:`~lode.staleness.reanchor_annotations` MARKS the pre-edit AI summary
+       ``orphaned`` -- it does not delete it.
+    2. :func:`~lode.display.classify_annotation_display` keeps it VISIBLE (only
+       ``source='user'`` orphans are curation tombstones; ``summary`` is not in
+       ``ASSERTIVE_KINDS``), flagged stale.
+    3. It keeps the LOWER rowid, so a naive ``summaries[0]`` returns a pre-edit
+       summary -- the defect ``cli.show_`` still carries.
+
+    Were any link to break (reanchor deleting orphans, ``summary`` becoming
+    assertive), the hand-seeded tests would still pass while this seam's reason
+    for existing quietly evaporated.
+    """
+    _insert_note(conn, version_id="ver-1", body="Original body about jwt auth.")
+    _insert_annotation(
+        conn,
+        source_version="ver-1",
+        kind="summary",
+        payload_value="pre-edit summary",
+    )
+
+    # Edit: re-anchor the AI layer against the new body, as Repository.save does.
+    new_body = "Rewritten body about oauth scopes."
+    _update_note(conn, version_id="ver-2", parent_version_id="ver-1", body=new_body)
+    with conn:
+        counts = reanchor_annotations(conn, "note-1", "ver-2", new_body)
+    assert counts["orphaned"] == 1, "pre-edit summary is marked orphaned, not deleted"
+
+    # Re-enrich: the fresh head summary lands with a HIGHER rowid.
+    _insert_annotation(
+        conn,
+        source_version="ver-2",
+        kind="summary",
+        payload_value="post-edit summary",
+    )
+
+    # The bug premise, asserted against the real display policy.
+    summaries = [
+        a for a in display_annotations(conn, "note-1") if a["kind"] == "summary"
+    ]
+    assert len(summaries) == 2, "the orphaned AI summary stays visible"
+    assert summaries[0]["payload"] == "pre-edit summary", (
+        "naive summaries[0] is the bug"
+    )
+
+    # The seam skips it and returns the fresh one.
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.summary == EnrichmentItem(value="post-edit summary", stale=False)
 
 
 def test_edges_carry_reason_and_confidence(conn: sqlite3.Connection) -> None:

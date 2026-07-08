@@ -9,9 +9,9 @@ structured :class:`EnrichmentItem` values (each pairing a bare string with a
 three-valued :attr:`EnrichmentView.enrichment_state`. This is the ONE seam the
 TUI inspector modal (lode-ay5.2) and the CLI parity guard (lode-ay5.3) both
 consume, so the two surfaces cannot drift apart -- neither may re-derive the
-stale-display policy, the state predicate below, or how staleness is
-rendered: this module hands back the ``stale`` bit as data, and each
-consumer decides how to show it (the TUI styles it, the CLI prints
+stale-display policy or the state predicate below. Rendering, by contrast, is
+deliberately NOT shared: this module hands back the ``stale`` bit as data, and
+each consumer decides how to show it (the TUI styles it, the CLI prints
 ``" [stale]"``).
 
 **Content** is built ENTIRELY on :mod:`lode.display` --
@@ -119,6 +119,12 @@ def _annotation_items(annotations: list[dict], kind: str) -> list[EnrichmentItem
     :func:`lode.enrich._write_enrichment`); the ``stale`` flag was already
     decided by :func:`~lode.display.display_annotations` -- this only shapes
     it into the view-model's structured item, no re-deriving the policy.
+
+    ``cli._annotation_values`` is a surviving near-copy of this helper: it
+    filters by ``kind`` the same way but returns pre-rendered strings carrying
+    a baked ``" [stale]"`` suffix (the seam's old shape, before lode-0qc).
+    lode-ay5.3 deletes that copy when it routes ``cli.show_`` through this
+    view-model.
     """
     return [
         EnrichmentItem(value=str(a["payload"]), stale=a["stale"])
@@ -142,12 +148,18 @@ def _summary(annotations: list[dict]) -> EnrichmentItem | None:
     re-enriching note still shows a summary, flagged, rather than nothing
     (the "show-flagged, never hide" stale-display policy). ``min`` on the
     ``stale`` flag is stable, so ties keep insertion order.
+
+    ``cli.show_`` still carries this defect verbatim -- it picks its summary
+    with ``summaries[0]`` over ``cli._annotation_values(...)``, so an
+    edited-then-re-enriched note prints the PRE-EDIT summary. lode-ay5.3
+    inherits the fix by routing ``cli.show_`` through this seam; see
+    ``tests/test_enrichment_view.py`` for the end-to-end reproduction.
     """
-    summaries = [a for a in annotations if a["kind"] == "summary"]
-    if not summaries:
-        return None
-    chosen = min(summaries, key=lambda a: a["stale"])
-    return EnrichmentItem(value=str(chosen["payload"]), stale=chosen["stale"])
+    return min(
+        _annotation_items(annotations, "summary"),
+        key=lambda item: item.stale,
+        default=None,
+    )
 
 
 def enrichment_view(db_path: Path, note_id: str) -> EnrichmentView | None:
