@@ -35,10 +35,8 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   (see `lode-nps`'s Design field / `docs/decisions.md`); I only make their escalations visible.
 - **Does not touch `.beads/issues.jsonl`.** `import.auto: false` is a hard invariant (lode-6ra) —
   I never `git add`, commit, or `bd import` it.
-- **Never claims work off `bd ready`** and needs no worktree — every step here is `bd` + `git`
-  plumbing run from wherever I'm invoked; I write no repo files (the one doc exception, recording
-  my own notification-channel decision, is a separate one-time change in `docs/decisions.md`, not
-  a per-pass action).
+- **Never claims work off `bd ready`** and needs no worktree — every step here is `bd` plumbing run
+  from wherever I'm invoked; I touch no `git` and write no repo files at all.
 
 ## 0. Setup — Dolt-authoritative
 
@@ -62,8 +60,9 @@ HUMAN=$(rtk bd human list --status open --json \
   | jq -r '.[] | "\(.id)\thuman\t\(.title)"')
 ```
 
-If either `bd` call errors, note the failure and treat that source as empty for this pass rather
-than aborting — see [Failure handling](#failure-handling-a-substep-fails-the-loop-survives).
+If either `bd` call errors, note the failure and **skip the digest rewrite for this pass** rather
+than aborting — a failed query is not an empty queue. See
+[Failure handling](#failure-handling-a-substep-fails-the-loop-survives).
 
 ## 2. Collect epics ready for a human close-decision
 
@@ -104,14 +103,16 @@ N=$(echo "$DIGEST_ROWS" | jq 'length')
 ```
 
 - **`N == 0`** — bootstrap. Only create it if `$CURRENT` is non-empty (an empty queue with no prior
-  digest is a clean no-op — nothing to bootstrap, nothing to write). Immediately claim it so it
-  never appears in `bd ready` (it is bookkeeping, not buildable work — the same "claimed tickets
-  are out of `bd ready`" convention the coding loop relies on for `ready-for-code-review`/
-  `ready-for-land`):
+  digest is a clean no-op — nothing to bootstrap, nothing to write). Create it with a **placeholder
+  body carrying no `SWEEP-ITEM` lines**, so §5 reads `LAST_IDS` as empty and every item in the
+  current queue counts as new: the first pass must *notify* the full standing queue, not silently
+  swallow it. §6 then writes the real body on that same pass. Immediately claim it so it never
+  appears in `bd ready` (it is bookkeeping, not buildable work — the same "claimed tickets are out
+  of `bd ready`" convention the coding loop relies on for `ready-for-code-review`/`ready-for-land`):
 
   ```bash
   DIGEST_ID=$(rtk bd create --type=chore --title="Human-decision digest (auto-maintained by /sweep — do not build)" \
-    --label=sweep-digest --description="$(build_digest_body)" --silent)
+    --label=sweep-digest --description="(bootstrapping — /sweep fills this in on this same pass)" --silent)
   rtk bd update "$DIGEST_ID" --claim
   ```
 - **`N == 1`** — steady state. `DIGEST_ID=$(echo "$DIGEST_ROWS" | jq -r '.[0].id')`; update in place
@@ -144,7 +145,14 @@ until the next unrelated add; acceptance requires a resolved item to drop out *p
 If `$CURRENT_IDS` equals `$LAST_IDS` exactly, nothing changed: skip the write entirely (no
 `bd update`, no `bd dolt push` — a true no-op pass).
 
-## 6. Rewrite the digest (only when the queue changed)
+**Hard precondition — a failed source query suppresses the rewrite.** §6 rebuilds the digest
+wholesale from `$CURRENT`, so if any §1/§2 query errored, `$CURRENT` is not the true queue: a query
+that fails is indistinguishable from a queue that is empty, and rewriting on it would **delete real
+escalations from the durable record** and then re-notify them as "new" on the next pass. If any
+source failed, skip §6 and §7 and leave the prior digest untouched. Stale is recoverable;
+silently truncated is not.
+
+## 6. Rewrite the digest (only when the queue changed, and every source query succeeded)
 
 Digest body format — stable, line-oriented, designed to be re-parsed by the next pass and to read
 cleanly for a human at `bd show <digest-id>`:
@@ -178,14 +186,22 @@ rtk bd update "$DIGEST_ID" --body-file "$BODY_FILE"
 
 ## 7. Notify (only when `$NEW_IDS` is non-empty)
 
-**No dedicated push-notification tool exists in this harness** (verified — nothing under that name
-is available to a skill session). The channel every other loop leg already uses to reach a human is
-its own **stop-and-report**: `/land` and `/epic-audit` both surface exclusively through their final
-pass summary. I use the same channel, made impossible to miss: the report (§8) leads with a
-loud, explicit **NEW HUMAN-DECISION ITEMS** block listing exactly the `$NEW_IDS` rows (id, kind,
-title) whenever it's non-empty. This decision — and that it's revisit-if-a-real-push-channel-ever-
-exists — is recorded once in `docs/decisions.md` (a repo doc, not per-pass state); if a genuine
-push mechanism becomes available to a future session, wire it in there and update this section.
+I run as a **skill in the main conversation**, so I have the main session's tools — including
+`PushNotification`, which reaches a human who is away from the terminal. That is the entire point of
+this leg: the `land-escalated` and `human` labels already sat in `bd`, where nobody was looking.
+
+`PushNotification` is a **deferred** tool — its schema is not loaded up front, so load it before the
+first call, then send **one** notification per pass (not one per item):
+
+- `ToolSearch` with query `select:PushNotification` — this returns its schema and makes it callable.
+- Call it once with a short summary: how many new items, and their ids/kinds — e.g.
+  `2 new human-decision items: lode-abc (land-escalated), lode-xyz (human)`.
+
+Then **also** lead the §8 report with a loud, explicit **NEW HUMAN-DECISION ITEMS** block listing the
+`$NEW_IDS` rows (id, kind, title). The two are complementary, not alternatives: the push reaches an
+away human; the report block is what they read when they return to the `/loop` transcript. If
+`ToolSearch` cannot resolve `PushNotification` in the session I am actually running in, fall back to
+the report block alone and say so plainly in the report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
@@ -204,12 +220,18 @@ report (see below) — the pass still ends cleanly either way.
 
 ## Failure handling — a sub-step fails, the loop survives
 
-Each of §1 (two independent `bd` queries), §2 (per-epic `bd show`), §4, and §6 is treated as
-**independent**: if one `bd`/`jq` call errors, note the failure in the final report, treat that
-source as empty/unknown for this pass, and continue with whatever succeeded. I never let a single
-failed sub-step abort the whole pass or leave the digest half-written — either the rewrite in §6
-completes cleanly or it is skipped entirely (no partial `--body-file` write). A failed pass still
-ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
+A failed sub-step must never abort the pass — and must never corrupt the digest either. Those pull
+in opposite directions, and the digest wins: it is rebuilt wholesale from `$CURRENT`, so a source
+query that errors is indistinguishable from "that queue is empty", and rewriting on it would delete
+real items from the durable record a human relies on.
+
+- If any §1/§2 query errors (`bd` or `jq`), note the failure in the report, **skip the §6 rewrite and
+  the §7 notification entirely**, and leave the prior digest exactly as it was. Stale, not truncated.
+- The §6 rewrite is all-or-nothing: it either completes cleanly or is skipped (no partial
+  `--body-file` write).
+- If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
+  guessed at).
+- A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
 ## What I never do
 
