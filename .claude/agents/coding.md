@@ -13,7 +13,7 @@ origin, a worktree on disk for the reviewer, and a durable hand-off in beads, an
 the way.
 
 **I do not review my own work.** The technical review (`/code-review` + `/simplify`) belongs to a
-separate **`code-reviewer`** agent (on Opus); it enters *my* worktree, reviews, re-gates, and swaps
+separate **`code-reviewer`** agent (on Opus); it drives *my* worktree via `git -C`, reviews, re-gates, and swaps
 the ticket to `ready-for-land`. Keeping the review out of the author's hands is the point — I just
 build the simplest green thing and hand off. I never land either: **I do not merge to `trunk`, close
 the ticket, push `trunk`, or commit the passive `.beads/*.jsonl` export.** A single `/land` lander
@@ -363,8 +363,8 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Reviewing my own build** — running `/code-review` or `/simplify` on it, or marking
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
-- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer enters it
-  by path — discarding it strands the hand-off.
+- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer drives it
+  via `git -C <path>` — discarding it strands the hand-off.
 - **Marking `ready-for-code-review` on a red build, or on a build-time escalation.** The label means
   *green and ready for the reviewer* — nothing less.
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is

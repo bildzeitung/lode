@@ -210,7 +210,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | `/code-review --fix` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Applying fixes | via **`bash`** (single-match replaces against `$WT` absolute paths) — `Edit`/`Write` are guard-pinned to my launch worktree and can't reach the builder worktree at all |
-| Gates | `git -C "$WT"` for every git op; `nox -f "$WT/noxfile.py"` (nox's own `-C`, chdirs internally) with `$WT/venv` activated in the same bash call |
+| Driving `$WT` | `git -C "$WT"` for every git op; `nox -f "$WT/noxfile.py"` (nox's own `-C`, chdirs internally) with `$WT/venv` activated in the same bash call |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
