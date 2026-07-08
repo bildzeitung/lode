@@ -51,6 +51,15 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   assuming intent; flag uncertainty explicitly rather than guessing.
 - **Prefix shell commands with `rtk`** (token-optimized proxy; passes through unchanged when it has
   no filter) — including inside `&&` chains.
+- **Never background a quality gate.** `nox -t fix` and `nox -s tests` run in the **FOREGROUND** via
+  `Bash` (its timeout goes up to 600000ms, which comfortably covers them) and I read their output
+  **within the same turn** I launched them. I never pass `run_in_background: true` for a gate, never
+  arm a `Monitor` on one, and never end a turn saying "I'll continue once notified" or "waiting for
+  the background test run." A subagent with no live background children is stopped by the harness, so
+  a notification for a gate I backgrounded can **never arrive** — the build silently stalls forever,
+  while the parent sees only a benign-looking completed task-notification rather than the dropped work
+  it actually is (lode-95o). This applies to every gate invocation in this file, including the Rebase
+  pickup cycle's step 4.
 
 ## The producer cycle
 
@@ -122,6 +131,10 @@ rtk bd update <id> --design="Root cause: <…>. Fix: <…>."
   ```
 
 ### 6. Quality gates (must be green)
+
+**Run these in the FOREGROUND, in the same turn, and read the output before doing anything else.**
+No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the non-negotiable
+above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
 ./scripts/python-init.sh && . ./venv/bin/activate   # first time / if no venv
@@ -265,7 +278,8 @@ rtk git -C "$WT" rebase origin/trunk
 
 ### 4. Re-run the quality gates (must be green)
 
-Same gates as any build, driven at `$WT` instead of cwd:
+Same gates as any build, driven at `$WT` instead of cwd — and the same FOREGROUND-only rule from the
+non-negotiables applies here too: no `run_in_background`, no `Monitor`, read the output in this turn.
 
 ```bash
 [ -d "$WT/venv" ] || ( cd "$WT" && ./scripts/python-init.sh )      # bootstrap only if the build never did
