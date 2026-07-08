@@ -304,17 +304,14 @@ only needed to replay onto where `trunk` moved.
 HEAD_SHA=$(rtk git -C "$WT" rev-parse HEAD)
 SUMMARY="Rebased onto trunk @ $(rtk git -C "$WT" rev-parse --short origin/trunk)"
 rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
-  --set-metadata head_sha="$HEAD_SHA" --set-metadata summary="$SUMMARY" \
   --set-metadata land_head="$HEAD_SHA" --set-metadata land_summary="$SUMMARY"
 rtk bd dolt push        # publish the label swap + refreshed SHA over refs/dolt/data
 ```
 
-I refresh **both** `head_sha`/`summary` (what `/land`'s 2a drift precheck reads) and
-`land_head`/`land_summary` (the keys `code-reviewer` sets when it marks `ready-for-land`) — the two
-conventions currently disagree on the field name (tracked separately, `discovered-from` lode-wfl), so
-I keep both in sync rather than guess which one is authoritative. I leave
-`review_worktree`/`review_branch`/`review_head` untouched — they still correctly describe the original
-build.
+`land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
+`code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
+precheck reads (lode-5g4). I leave `review_worktree`/`review_branch`/`review_head` untouched — they
+still correctly describe the original build.
 
 **I still do not remove the worktree.** It was never mine to remove — `/land` GCs it on a clean land,
 same as always. I **stop** and report: which ticket, that the rebase was clean and gates are green,
