@@ -28,7 +28,7 @@ Work moves through three passes, with the human as the hinge:
    captured as beads issues, `/code` runs each task in **two dispatched phases**. First a `coding`
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
-   → stop. Then a `code-reviewer` (Opus) enters that worktree, runs the technical review
+   → stop. Then a `code-reviewer` (Opus) drives that worktree via `git -C`, runs the technical review
    (`/code-review` + `/simplify`), re-gates, re-pushes, and swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
 3. **Landing loop — `/land`.** A single lander drains the `ready-for-land` queue: it semantically
@@ -251,7 +251,7 @@ Review splits along a clean seam, and — crucially — **neither half is done b
 code:**
 
 - **Technical review — *the second phase of the coding loop*.** Bugs, cleanup, over-design,
-  complexity. A separate **`code-reviewer` (Opus) owns this** — it enters the builder's worktree and
+  complexity. A separate **`code-reviewer` (Opus) owns this** — it drives the builder's worktree via `git -C` and
   fixes problems, but it did **not** write the code. Splitting it out (the builder runs cheaper, on
   Sonnet) is what buys the independence *and* puts the review spend where it matters. It runs
   **autonomously** and you only hear about it on a real fork (see below).
