@@ -101,20 +101,45 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    (For the `--single` case: *"Pick the top ready item from `bd ready` and produce it…"*)
 
-3. **Phase 2 — dispatch a `code-reviewer` per built ticket** (only those that came back
-   **`ready-for-code-review`**; skip any that escalated). Use the Agent tool with
-   `subagent_type: "code-reviewer"` **and `isolation: "worktree"`** — the isolation gives it a cwd off
-   the repo root so it can legally `EnterWorktree` (`path` form) into the builder's worktree. Match the
-   build cadence: one reviewer in the foreground for a solo build; one reviewer per ticket
-   concurrently (`run_in_background: true`) for a fan-out, each dispatched as its builder returns.
+3. **Phase 2 — verify the hand-off, then dispatch a `code-reviewer` per built ticket.** Never trust a
+   builder's task-notification alone: a builder that backgrounded its gates and stalled (lode-95o) can
+   still emit a `status=completed` notification with a benign-looking summary, even though nothing was
+   pushed and the ticket is still sitting `in_progress`. Before dispatching a reviewer, check the
+   **actual** state in bd and on origin:
+
+   ```bash
+   rtk bd show <id> --json | jq -r '.[0].labels'          # ready-for-code-review? land-escalated?
+   rtk git ls-remote origin refs/heads/land/<id>           # must resolve to a SHA
+   ```
+
+   Dispatch the reviewer **only** for a ticket where both checks pass. Otherwise read the labels before
+   reacting — the two failure modes are not the same ticket:
+
+   - **`land-escalated` present** → the builder escalated *deliberately*: it reverted to green, pushed,
+     and stopped because a human owes a build decision. **Skip it.** No reviewer, and never resume it to
+     "complete the hand-off" — that would override the escalation. Surface it in step 4.
+   - **Otherwise** (no `ready-for-code-review`, or `origin/land/<id>` doesn't resolve) → the builder
+     stalled or never finished. Do **not** send a reviewer into an unverified worktree. Resume that same
+     builder (`SendMessage` to its agent id/name — it resumes with full context) and tell it plainly:
+     any background gate it armed will never notify it back (a subagent with no live background children
+     is stopped by the harness), so it must re-run the gate in the **FOREGROUND** within its own turn and
+     complete the hand-off. Re-check both conditions once it returns before proceeding.
+
+   For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
+   **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
+   never writes `trunk`. From there it drives the builder's worktree in place via `git -C <path>` —
+   **not** `EnterWorktree`, which the isolation guard refuses for commands resolved into a path-entered
+   worktree. Match the build cadence: one reviewer in the foreground for a solo build; one reviewer per
+   ticket concurrently (`run_in_background: true`) for a fan-out, each dispatched as its builder's
+   hand-off is verified.
 
    Pass the ticket id, e.g.:
 
    > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_worktree`/`review_head`
-   > from bd, `EnterWorktree` into that worktree, run `/code-review --fix` + `/simplify`, re-gate,
-   > re-push `land/<id>`, and swap the ticket to `ready-for-land`. Do **not** merge, close, or push
-   > trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready) only on a clarifying
-   > decision or "making it worse."
+   > from bd, drive that worktree via `git -C <path>` (do **not** `EnterWorktree` into it), run
+   > `/code-review --fix` + `/simplify`, re-gate, re-push `land/<id>`, and swap the ticket to
+   > `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap to
+   > `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
 
 4. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
