@@ -7,13 +7,15 @@ relaunching the TUI" (specs/04). Drives the real widgets end to end via
 Textual's ``run_test`` pilot, the same style ``tests/test_tui_app.py`` and
 ``tests/test_tui_reconcile_screen.py`` use.
 
-Two edge cases the epic's ``/debate`` review flagged (not just the ticket's
-named CAS-conflict case, which is unreachable in practice -- ``save_capture``
-mints a fresh ``uuid4`` on every call) get dedicated coverage: clearing the
-buffer must not restart the related-notes debounce for an empty buffer (a
-wasted embedder cold-load), and any in-flight related-notes pass from the
-just-saved note must not land after the reset and paint stale results into
-the freshly-cleared panel.
+The edge cases the epic's ``/debate`` review flagged (not the ticket's named
+CAS-conflict case, which is unreachable in practice -- ``save_capture`` mints a
+fresh ``uuid4`` on every call, so it is narrowed once in ``_save_buffer`` and
+given one test rather than a flow of its own) get dedicated coverage: clearing
+the buffer must not schedule a pointless related-notes pass, and no in-flight
+pass may land after the buffer is emptied and paint the previous draft's
+results into the cleared panel -- via Ctrl+N's reset *or* via a plain
+select-all-delete, which the empty-buffer guard would otherwise strand by
+skipping the ``@work(exclusive=True)`` pass that used to supersede it.
 """
 
 import asyncio
@@ -195,17 +197,27 @@ def test_ctrl_n_cas_conflict_routes_to_reconcile_screen_without_reset(
         conn.close()
     monkeypatch.setattr(capture_mod.uuid, "uuid4", lambda: _FixedUUID(fixed_id))
     app = LodeApp(db_path=db_path)
+    messages: list[str] = []
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
+            monkeypatch.setattr(
+                app, "notify", lambda message, **kw: messages.append(message)
+            )
             text_area = app.screen.query_one(f"#{BODY_ID}")
             text_area.text = "the conflicting edit"
             await pilot.press("ctrl+n")
             await pilot.pause()
             assert isinstance(app.screen, ReconcileScreen)
-            return "reconciled"
+            capture = next(s for s in app.screen_stack if isinstance(s, CaptureScreen))
+            return capture.query_one(f"#{BODY_ID}").text
 
-    asyncio.run(_drive())
+    buffer_text = asyncio.run(_drive())
+
+    # No reset: the rejected buffer stands and nothing announces a save that
+    # did not happen -- Ctrl+N's reset runs only on a clean save.
+    assert buffer_text == "the conflicting edit"
+    assert messages == []
     # The original note is untouched (no clobber) -- same guarantee Ctrl+S gives.
     assert _rows(
         db_path, "SELECT body FROM versions WHERE note_id = ?", (fixed_id,)
@@ -215,12 +227,17 @@ def test_ctrl_n_cas_conflict_routes_to_reconcile_screen_without_reset(
 class _CountingStubEmbedder:
     """Offline embedder stand-in that counts constructions (no ONNX download).
 
-    Reused from ``tests/test_tui_app.py``'s convention: if
-    :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new`'s
-    reset failed to stop the pending debounce timer (or the guard in
+    Reused from ``tests/test_tui_app.py``'s convention. ``_search_related``
+    calls ``_ensure_embedder`` before anything else, so a non-zero count is a
+    precise witness that a related-notes pass *ran at all*: if
+    :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new`'s reset
+    failed to stop the pending debounce timer (or the guard in
     ``on_text_area_changed`` failed to skip scheduling one for the now-empty
-    buffer), this would tick up -- proving the reset does not pay a real
-    embedder cold-load for nothing (the ``/debate`` review's edge case (a)).
+    buffer), this ticks up. (Constructing the wrapper is itself cheap -- the
+    ONNX load is lazy, inside ``embed_query`` -- so what the guard actually
+    saves is the pointless worker + thread hop, not a cold load. The real
+    hazard the guard must handle is the in-flight pass; see
+    ``test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker``.)
     """
 
     instances = 0
@@ -261,6 +278,41 @@ def test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass(
     assert _CountingStubEmbedder.instances == 0
 
 
+def _slow_find_related_notes(db_path, draft, *, settings=None, embedder=None):
+    """Stand-in for a slow pass, faithful to the real function's short-circuit.
+
+    ``find_related_notes`` returns ``[]`` immediately for a draft shorter than
+    ``related_notes_min_chars`` without touching the DB or the embedder, so this
+    stub must too -- otherwise a *new* pass on the just-emptied buffer would
+    also return the stale result, and a test asserting "no stale result" would
+    pass whether or not the in-flight pass was actually cancelled.
+    """
+    del embedder
+    min_chars = settings.related_notes_min_chars if settings else 20
+    if len(draft.strip()) < min_chars:
+        return []
+    _PASS_STARTED.set()
+    time.sleep(0.3)
+    from lode.tui.related import RelatedNote
+
+    return [RelatedNote(note_id="stale-note", snippet="stale", age="just now")]
+
+
+#: Set by :func:`_slow_find_related_notes` once a slow pass is genuinely running.
+_PASS_STARTED = threading.Event()
+
+
+async def _await_slow_pass_start() -> None:
+    """Block until the slow pass has started, without starving the event loop.
+
+    Waiting via ``asyncio.to_thread`` (rather than blocking this coroutine
+    directly) keeps the event loop free to run the debounce timer callback and
+    schedule the worker in the first place -- a direct blocking wait here would
+    starve the very event loop that needs to start the pass.
+    """
+    assert await asyncio.to_thread(_PASS_STARTED.wait, 2.0)
+
+
 def test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -269,35 +321,56 @@ def test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset(
     into the freshly-cleared panel.
     """
     db_path = tmp_path / "lode.db"
-    pass_started = threading.Event()
-
-    def _slow_find_related_notes(db_path, draft, *, settings=None, embedder=None):
-        del draft, settings, embedder
-        pass_started.set()
-        time.sleep(0.3)
-        from lode.tui.related import RelatedNote
-
-        return [RelatedNote(note_id="stale-note", snippet="stale", age="just now")]
-
+    _PASS_STARTED.clear()
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
     monkeypatch.setattr("lode.tui.related.find_related_notes", _slow_find_related_notes)
-    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
+    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=1)
     app = LodeApp(db_path=db_path, settings=settings)
 
     async def _drive() -> tuple[list, str]:
         async with app.run_test() as pilot:
             text_area = app.screen.query_one(f"#{BODY_ID}")
             text_area.text = "typing about something before saving"
-            # Let the 1ms debounce fire and the slow pass actually start.
-            # Waiting via asyncio.to_thread (rather than blocking this
-            # coroutine directly) keeps the event loop free to run the
-            # debounce timer callback and schedule the worker in the first
-            # place -- a direct blocking wait here would starve the very
-            # event loop that needs to start the pass.
-            assert await asyncio.to_thread(pass_started.wait, 2.0)
+            await _await_slow_pass_start()
             await pilot.press("ctrl+n")
             # Outlive the slow pass's 0.3s sleep so a not-actually-cancelled
             # worker would have time to land and repaint the panel.
+            await pilot.pause(0.5)
+            await app.workers.wait_for_complete()
+            panel = app.screen.query_one(f"#{RELATED_ID}")
+            return app.screen._related, str(panel.content)
+
+    related, panel_text = asyncio.run(_drive())
+
+    assert related == []
+    assert "stale" not in panel_text
+
+
+def test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Emptying the buffer by hand must kill the in-flight pass, like Ctrl+N does.
+
+    Skipping the debounce for an empty buffer means ``@work(exclusive=True)``
+    never starts a new pass, and so never supersedes the one already in flight
+    for the draft the user just deleted. Without an explicit cancel that pass
+    lands afterwards and paints the deleted draft's related notes into the
+    emptied panel -- the same hazard Ctrl+N's reset guards against, on the plain
+    select-all-delete path.
+    """
+    db_path = tmp_path / "lode.db"
+    _PASS_STARTED.clear()
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
+    monkeypatch.setattr("lode.tui.related.find_related_notes", _slow_find_related_notes)
+    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=1)
+    app = LodeApp(db_path=db_path, settings=settings)
+
+    async def _drive() -> tuple[list, str]:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "typing about something interesting"
+            await _await_slow_pass_start()
+            text_area.text = ""  # select-all, delete -- not Ctrl+N
             await pilot.pause(0.5)
             await app.workers.wait_for_complete()
             panel = app.screen.query_one(f"#{RELATED_ID}")

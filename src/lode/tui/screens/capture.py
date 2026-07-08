@@ -97,6 +97,7 @@ if TYPE_CHECKING:
     # pass actually runs.
     from lode.embedding import Embedder
     from lode.tui.related import RelatedNote
+    from lode.versions import SaveResult
 
 log = logging.getLogger(__name__)
 
@@ -248,39 +249,27 @@ class CaptureScreen(Screen[None]):
             self._embedder = FastEmbedEmbedder(self.app.settings)
         return self._embedder
 
-    def action_save(self) -> None:
-        """Save the buffer instantly (no AI call) and exit, or explain why not."""
-        body = self.query_one(f"#{BODY_ID}", TextArea).text
-        app = self.app
-        try:
-            result = save_capture(app.db_path, body, settings=app.settings)
-        except EmptyCaptureError:
-            self.notify("Refusing to save an empty note.", severity="warning")
-            return
-        if isinstance(result, CaptureConflict):
-            self.app.push_screen(ReconcileScreen(result))
-            return
-        self.app.exit(result.note_id)
+    def _save_buffer(self) -> SaveResult | None:
+        """Save the buffer instantly (no AI call); ``None`` if nothing was saved.
 
-    def action_save_and_new(self) -> None:
-        """Save the buffer instantly (no AI call) and reset for a fresh note.
+        The single save path Ctrl+S (:meth:`action_save`) and Ctrl+N
+        (:meth:`action_save_and_new`) share, so lode-d32.4's "identical no-AI
+        save path as Ctrl+S" is structural rather than a promise two copies of
+        the same eight lines have to keep. Returning ``None`` means the caller
+        must *not* treat the save as done: either the buffer was empty (refused
+        with the same notify ``lode add`` gives) or the compare-and-swap was
+        rejected, in which case the buffer is already preserved as a draft and
+        :class:`~lode.tui.screens.reconcile.ReconcileScreen` now owns the diff.
 
-        Same save path as :meth:`action_save` — identical no-AI
-        ``save_capture`` call, identical empty-buffer refusal, identical
-        CAS-conflict handoff to
-        :class:`~lode.tui.screens.reconcile.ReconcileScreen` — but a clean
-        save does not exit the app (lode-d32.4): it clears the text area and
-        the related-notes panel and leaves focus in the editor, so the next
-        note can start immediately without leaving the TUI.
-
-        The pending related-notes debounce timer is stopped and any
-        in-flight ``related-notes`` worker is cancelled *before* the buffer
-        is cleared, so a slow pass started for the just-saved note cannot
-        land after the reset and paint its results into the freshly-cleared
-        panel. Clearing the text area itself fires another ``Changed``
-        message, but :meth:`on_text_area_changed` no-ops a debounce restart
-        for an empty buffer, so the reset does not schedule a pointless pass
-        (and the embedder cold-load that would come with it) of its own.
+        A capture-path CAS reject is practically unreachable —
+        :func:`~lode.tui.capture.save_capture` mints a fresh ``uuid4`` per call,
+        so there is nothing for the compare-and-swap to collide with. It is
+        still narrowed here rather than assumed away, because ``save_capture``
+        is *typed* to return it: one branch in one place is cheaper than either
+        caller mistaking a :class:`~lode.tui.capture.CaptureConflict` for a
+        successful save and reporting it as one (Ctrl+N would clear the buffer
+        and announce "Saved."). This is the whole of the CAS handling — there
+        is deliberately no reconcile-then-continue flow.
         """
         body = self.query_one(f"#{BODY_ID}", TextArea).text
         app = self.app
@@ -288,21 +277,62 @@ class CaptureScreen(Screen[None]):
             result = save_capture(app.db_path, body, settings=app.settings)
         except EmptyCaptureError:
             self.notify("Refusing to save an empty note.", severity="warning")
-            return
+            return None
         if isinstance(result, CaptureConflict):
             self.app.push_screen(ReconcileScreen(result))
+            return None
+        return result
+
+    def action_save(self) -> None:
+        """Ctrl+S: save the buffer instantly (no AI call) and exit, or explain why not."""
+        result = self._save_buffer()
+        if result is None:
+            return
+        self.app.exit(result.note_id)
+
+    def action_save_and_new(self) -> None:
+        """Ctrl+N: save exactly like Ctrl+S, then reset for a fresh note (lode-d32.4).
+
+        A clean save does not exit the app: it clears the text area and the
+        related-notes panel and leaves focus in the editor, so the next note
+        can start immediately without relaunching the TUI. Because nothing
+        exits and nothing else changes on screen, an emptied buffer would
+        otherwise be indistinguishable from a discard — hence the notify.
+
+        The reset drops any scheduled *and* any in-flight related-notes pass
+        first (:meth:`_cancel_related_pass`), so a slow pass started for the
+        just-saved note cannot land afterwards and paint its results into the
+        freshly-cleared panel. A refused (empty) or CAS-rejected save resets
+        nothing: ``_save_buffer`` returned ``None`` and the buffer stands.
+        """
+        if self._save_buffer() is None:
             return
 
-        if self._related_timer is not None:
-            self._related_timer.stop()
-            self._related_timer = None
-        self.workers.cancel_group(self, "related-notes")
-
+        self._cancel_related_pass()
         text_area = self.query_one(f"#{BODY_ID}", TextArea)
         text_area.clear()
         self._render_related([])
         text_area.focus()
         self.notify("Saved. New note.")
+
+    def _cancel_related_pass(self) -> None:
+        """Drop the scheduled *and* the in-flight related-notes pass, if any.
+
+        Both halves are needed, and only together: stopping
+        ``self._related_timer`` prevents a pass that has not started yet, while
+        ``cancel_group`` stops one already running from reaching
+        :meth:`_render_related` with results for text no longer in the buffer.
+        ``cancel_group`` is the same mechanism ``@work(exclusive=True)`` uses to
+        supersede a prior pass, and it is prompt enough: every caller here runs
+        on the event loop and does not await between this call and the clear
+        that follows, so a cancelled worker cannot resume and repaint in the
+        gap — it wakes with ``CancelledError`` at its ``await`` inside
+        :meth:`_search_related` instead of returning results.
+        """
+        if self._related_timer is not None:
+            self._related_timer.stop()
+            self._related_timer = None
+        self.workers.cancel_group(self, "related-notes")
 
     def action_cancel(self) -> None:
         """Escape: exit immediately if the buffer is empty, else confirm first."""
@@ -348,24 +378,32 @@ class CaptureScreen(Screen[None]):
         so a future widget's ``Changed`` message (bubbling through the same
         handler name) can never mis-trigger this.
 
-        An empty/whitespace-only buffer (including one just cleared by
-        :meth:`action_save_and_new`'s reset, lode-d32.4) skips scheduling a
-        pass entirely rather than debouncing one that would only find
-        ``find_related_notes`` short-circuit on ``draft.strip()`` being too
-        short — that short-circuit runs *after* this screen's own
-        :meth:`_ensure_embedder` call in :meth:`_search_related`, so without
-        this guard an empty buffer still pays a real embedder cold-load for
-        nothing. The related panel is cleared immediately instead of waiting
-        out a debounce that would end up clearing it anyway.
+        An empty/whitespace-only buffer (a select-all-delete, or the reset
+        :meth:`action_save_and_new` performs, lode-d32.4) has nothing to search
+        on: ``find_related_notes`` would only short-circuit on
+        ``related_notes_min_chars``, so debouncing a pass just to reach that
+        short-circuit buys a worker and a thread hop and no results. The panel
+        is cleared straight away instead of waiting out a debounce that would
+        end up clearing it anyway.
+
+        Skipping the pass means ``@work(exclusive=True)`` never runs, so it can
+        no longer supersede an in-flight pass from the previous, non-empty
+        draft — that pass has to be cancelled here explicitly
+        (:meth:`_cancel_related_pass`) or it lands after this clear and paints
+        the deleted draft's related notes into the emptied panel.
+        :meth:`_ensure_embedder`'s own docstring cites this bug class: "a real
+        background load ran long enough in wall-clock time for an unrelated
+        debounce timer to fire during a should-be-instant discard."
         """
         if event.text_area.id != BODY_ID:
+            return
+        if not event.text_area.text.strip():
+            self._cancel_related_pass()
+            self._render_related([])
             return
         if self._related_timer is not None:
             self._related_timer.stop()
             self._related_timer = None
-        if not event.text_area.text.strip():
-            self._render_related([])
-            return
         delay_s = self.app.settings.related_notes_debounce_ms / 1000
         log.debug(
             "keystroke: related-notes debounce (re)started, delay=%.0fms",
