@@ -174,11 +174,11 @@ flowchart TD
     GATES -->|"nox -t fix · nox -s tests ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
     GFAIL -->|"no"| FIX["Fix & re-run —<br>never hand off on a failing gate"]
     FIX --> GATES
-    GFAIL -->|"yes"| FIXCOMMIT["Commit any nox -t fix<br>reformatting"]
+    GFAIL -->|"yes"| FIXCOMMIT["Commit gate output<br>(fixes + nox -t fix reformatting)"]
 
     FIXCOMMIT --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
     PUSH --> CLEAN2{"git status --short<br>empty?"}
-    CLEAN2 -->|"no"| FIXCOMMIT
+    CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
     HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review --fix + simplify · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
@@ -209,7 +209,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
-| Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so a dirty tree at either point can silently drop committed work (lode-tpt) |
+| Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so the tree that gated green must be the tree committed and pushed; a dirty tree at either point silently drops uncommitted work (lode-tpt) |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
 | Done (coding loop) | builder hands off at `ready-for-code-review` (worktree kept); code-reviewer reviews, re-gates, swaps to `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 

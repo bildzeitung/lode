@@ -70,9 +70,14 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   without committing again leaves `review_head` pointing at a commit that silently omits that later
   work — the reviewer trusts `review_head` (that's what `code/SKILL.md` tells it to check out), so the
   work is dropped with every gate, label, and notification looking green (lode-tpt). If either check
-  finds the tree dirty, I commit the remainder (it's my own uncommitted work — no ambiguity) and
-  re-check before proceeding; I never hand off, or gate, on a dirty tree. The Rebase pickup cycle's
-  step 5 carries the same assertion before its force-push.
+  finds the tree dirty, I commit the remainder and re-check before proceeding — the one exception being
+  a `.beads/*.jsonl` export dirtied by my own `bd` writes, which is never mine to commit (see the
+  anti-patterns below); leave it. Two readings keep this rule followable: a **red** gate's
+  fix-and-re-run loop necessarily re-runs against a dirty tree, and that is fine — a red gate certifies
+  nothing. What must never happen is a **green** gate whose tree is then pushed uncommitted, so before
+  step 8 I commit *everything* the gate loop produced: the edits I made to fix a red gate as well as
+  `nox -t fix`'s reformatting. The Rebase pickup cycle's step 5 carries the same assertion before its
+  force-push.
 
 ## The producer cycle
 
@@ -173,9 +178,13 @@ rtk nox -t fix                                       # ruff format + lint (fixes
 rtk nox -s tests                                     # pytest
 ```
 
-If `nox -t fix` changes files, stage and commit them **now**, then re-check `rtk git status --short`
-is empty again — the gate's `nox -t fix` output is itself uncommitted edits until this happens. For
-any change touching `docs/` diagrams:
+A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
+long as I close the loop: **gate → (red? fix, re-gate) → green → commit whatever changed → clean.**
+Once the gates are green, stage and commit **everything the gate loop produced** — both the edits I
+made to fix a red gate and any files `nox -t fix` reformatted — either amending step 6's commit
+(`rtk git commit --amend`) or adding a follow-up commit, then re-check `rtk git status --short` is
+empty again before step 8. Until that commit lands, the tree the gates just certified is not the tree
+`land/<id>` would receive. For any change touching `docs/` diagrams:
 
 ```bash
 scripts/validate-mermaid.sh                          # parse every ```mermaid block
@@ -214,11 +223,10 @@ rtk git status --short          # MUST be empty before I record review_head or a
 ```
 
 This is the core assertion this hand-off step exists to make (lode-tpt): if it's non-empty, edits
-happened after step 8's push that never made it into `land/<id>` — committing and re-pushing now, and
-deriving `HEAD_SHA` fresh, is mandatory before the label goes on. Recording `review_head` against a
-dirty tree, or against a stale `HEAD_SHA` captured before a late commit, is exactly the failure mode
-this ticket exists to close: the reviewer trusts `review_head` (that's what `code/SKILL.md` tells it
-to check out) and would silently review — and land — a tree missing my last edits.
+happened after step 8's push that never made it into `land/<id>` — and no gate has seen them either.
+So I go back to **step 6** (commit, re-gate, re-push) rather than push them straight out, and derive
+`HEAD_SHA` fresh afterwards. Recording `review_head` against a dirty tree, or against a stale
+`HEAD_SHA` captured before a late commit, is the failure mode this ticket exists to close.
 
 ```bash
 HEAD_SHA=$(rtk git rev-parse HEAD)
@@ -430,8 +438,9 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Marking `ready-for-code-review` (or force-pushing a rebase pickup) on a dirty tree, or trusting a
   gate that ran against one.** `nox` gates the working tree, not `HEAD` — a dirty tree at gate time or
   hand-off time means `review_head` can point at a commit that silently omits real edits (lode-tpt).
-  `git status --short` must be empty before gating, before hand-off, and before a rebase-pickup
-  force-push.
+  `git status --short` must be empty before the first gate run, before hand-off, and before a
+  rebase-pickup force-push. The invariant in one line: **the tree that gated green must be the tree
+  that gets committed and pushed.**
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
   `bd dolt push`/`pull`. **Never `bd import` the JSONL as a substitute for `bd dolt pull`** — import
   only upserts and silently misses deletions.
@@ -459,7 +468,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Rebase pickup | `needs-rebase` ticket → drive `review_worktree` via `git -C <path>` (never `EnterWorktree` — the isolation guard refuses commands resolved into a path-entered worktree), `git -C <path> rebase origin/trunk`, re-gate via `nox -f <path>/noxfile.py`, `push --force-with-lease`, swap straight to `ready-for-land` (no review); a conflict escalates instead |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
-| Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup force-push — `nox` gates the working tree, not `HEAD` (lode-tpt) |
+| Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup force-push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | CLI framework | **Typer** (never argparse) |
 | Shell | prefix with `rtk` |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
