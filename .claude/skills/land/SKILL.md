@@ -451,13 +451,54 @@ rtk bd dolt push
 All three end the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
 `/sweep` (`lode-nps.1`) — can actually drain rather than growing monotonically.
 
-**Scope.** The three exits above resolve the label as **`/land`** sets it. `/code`'s producers set the
-*same* label from three other places — a `coding` build-time decision, a `code-reviewer` technical-review
-decision, and a `coding` rebase-pickup conflict. Exits **(b)** and **(c)** apply to those unchanged (they
-only close the ticket and GC the branch). Exit **(a)** does **not**: such a ticket has to re-enter at the
-gate that escalated it, not blindly at `ready-for-land` — a build-time escalation never had its technical
-review, and a rebase conflict still won't merge onto `trunk`. That per-source mapping is deliberately
-**not specified here** (`lode-08g`).
+**Scope.** The three exits above resolve the label as **`/land`** sets it (semantic-review escalation,
+exit (a) re-entry = `ready-for-land`, as shown above). `/code`'s producers set the *same* label from
+three other places — a `coding` build-time clarifying decision, a `code-reviewer` technical-review
+escalation, and a `coding` rebase-pickup conflict. Exits **(b)** rebuild and **(c)** drop apply to all
+four sources unchanged — they only close the ticket and GC the branch, and neither cares which gate
+escalated. Exit **(a)** does **not** generalize to a single label: a build-time escalation never
+reached `ready-for-code-review` (it never had its technical review), and a rebase-conflict escalation
+still does not merge onto `trunk` — re-entering either blindly at `ready-for-land` would skip a gate
+that has never actually run.
+
+### Exit (a) per source — re-enter at the gate that escalated
+
+DECISION (human, 2026-07-08, `lode-08g`): whichever gate could not resolve the ambiguity is the gate
+that re-runs once the ambiguity is resolved — the same gate, against the now-unambiguous ticket, never
+a later gate taking the resolution on faith.
+
+| escalated by                       | exit (a) re-entry label |
+|-------------------------------------|--------------------------|
+| `/land` semantic review (`land-review`) | `ready-for-land`     |
+| `code-reviewer` technical review    | `ready-for-code-review` |
+| `coding` rebase-pickup conflict     | `needs-rebase`           |
+| `coding` build-time clarification   | `ready-for-code-review` |
+
+The first row is exit (a) as defined above; the other three follow the same shape — write the decision
+into the ticket first, then swap `land-escalated` for the row's label and `bd dolt push`:
+
+```bash
+rtk bd update <id> --append-notes "RESOLVED (human): <the decision>"
+rtk bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|needs-rebase>
+rtk bd dolt push
+```
+
+**The build-time case is the deliberately arguable one, decided rather than left implicit.** A
+build-time escalation means the producer stopped mid-build, so its branch is green-but-possibly
+**incomplete** and never reached `ready-for-code-review` on its own. Re-entering it there hands the
+`code-reviewer` a branch that may not implement the whole ticket. That trade-off is accepted anyway —
+routing every trivially-answerable build question through a full exit-(b) rebuild would over-charge a
+question the branch itself may already answer correctly — under three conditions that make it safe
+rather than silently risky:
+
+1. The human writes the resolved answer into the ticket (`--append-notes`) **before** flipping the
+   label, so the `code-reviewer` reads the resolved ambiguity rather than rediscovering it.
+2. The `code-reviewer` already owns **bounce** and **escalate** verdicts and is not obliged to pass a
+   half-built branch: a build-time re-entry asserts only that the *ambiguity* is resolved, not that the
+   branch is *finished*. A still-incomplete branch bounces or escalates again on technical review, same
+   as any other finding — and `land-review` is the backstop if it slips past that too.
+3. Re-entry at `ready-for-code-review` for the build-time source means "the decision is made, re-run
+   the pipeline from technical review" — **not** "this branch is done."
 
 ---
 
