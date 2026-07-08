@@ -51,15 +51,17 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   assuming intent; flag uncertainty explicitly rather than guessing.
 - **Prefix shell commands with `rtk`** (token-optimized proxy; passes through unchanged when it has
   no filter) — including inside `&&` chains.
-- **Never background a quality gate.** `nox -t fix` and `nox -s tests` run in the **FOREGROUND** via
-  `Bash` (its timeout goes up to 600000ms, which comfortably covers them) and I read their output
-  **within the same turn** I launched them. I never pass `run_in_background: true` for a gate, never
-  arm a `Monitor` on one, and never end a turn saying "I'll continue once notified" or "waiting for
-  the background test run." A subagent with no live background children is stopped by the harness, so
-  a notification for a gate I backgrounded can **never arrive** — the build silently stalls forever,
-  while the parent sees only a benign-looking completed task-notification rather than the dropped work
-  it actually is (lode-95o). This applies to every gate invocation in this file, including the Rebase
-  pickup cycle's step 4.
+- **Never background a quality gate, and never end a turn with one pending.** `nox -t fix` and
+  `nox -s tests` run in the **FOREGROUND** via `Bash` (its timeout goes up to 600000ms, which
+  comfortably covers them) and I read their output **within the same turn** I launched them. The rule
+  is about the *state I leave the turn in*, not about one tool: **if a gate is still running when I
+  would otherwise yield, I have already broken it.** So — no `run_in_background: true` on a gate, no
+  `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a detached script),
+  and no closing message that defers the result ("I'll continue once notified", "waiting for the
+  background test run" — those sentences are the symptom, not the rule). A subagent with no live
+  background children is stopped by the harness, so a notification for a gate I backgrounded can
+  **never arrive**: the build stalls forever and the work is silently dropped (lode-95o). This applies
+  to every gate invocation in this file, including the Rebase pickup cycle's step 4.
 
 ## The producer cycle
 
