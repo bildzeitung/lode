@@ -8,6 +8,7 @@ the async queue's retry machinery. All tests use a stub :class:`~lode.webfetch.F
 so the gate never makes a real network request.
 """
 
+import httpx
 import pytest
 
 from lode.config import load_settings
@@ -188,16 +189,54 @@ def test_redirect_final_url_differs_from_requested_url():
     assert result.final_url == final
 
 
-class TestHttpxFetcher:
-    """Exercises HttpxFetcher's own classification against a local http server.
+class _FakeResponse:
+    """Stands in for an httpx.Response without any transport."""
 
-    Uses pytest-httpserver-free local sockets would add a new test dependency;
-    instead this drives HttpxFetcher directly against unreachable/invalid
-    targets to exercise its exception-translation paths offline, and leaves
-    the "does a live GET actually work" concern to the deliberately opt-in
-    smoke suite convention this repo uses for real-network/model checks
-    (mirrors tests/test_models_smoke.py's opt-in pattern; no live network call
-    is made in this gate).
+    def __init__(self, status_code: int, url: str = _URL, text: str = "") -> None:
+        self.status_code = status_code
+        self.url = url
+        self.text = text
+
+
+def _fake_client_cls(status_code: int, captured: dict) -> type:
+    """Build a stand-in for httpx.Client that always answers ``status_code``.
+
+    HttpxFetcher constructs its own client, so this is how we reach its
+    status-classification branch without a transport. ``captured`` receives the
+    constructor kwargs, letting a test assert the config knobs are wired
+    through.
+    """
+
+    class _FakeClient:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+        def __enter__(self) -> "_FakeClient":
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def get(self, url: str) -> _FakeResponse:
+            return _FakeResponse(status_code, url)
+
+    return _FakeClient
+
+
+class TestHttpxFetcher:
+    """Exercises HttpxFetcher's own classification, entirely offline.
+
+    Two kinds of test here, neither of which touches the network:
+
+    * exception translation — driven against targets that fail before any DNS
+      or non-loopback connect (an unparseable URL, and a refused connection to
+      loopback port 1);
+    * status-code classification — driven against a fake ``httpx.Client``, since
+      HttpxFetcher constructs its own client and exposes no transport seam.
+
+    "Does a live GET actually work" is left to the deliberately opt-in smoke
+    suite convention this repo uses for real-network/model checks (mirrors
+    tests/test_models_smoke.py's opt-in pattern).
     """
 
     def test_invalid_scheme_is_transient(self):
@@ -218,3 +257,55 @@ class TestHttpxFetcher:
 
         with pytest.raises(TransientFetchError):
             fetcher.fetch("http://127.0.0.1:1/")
+
+    def test_unparseable_url_is_transient_not_uncaught(self):
+        """httpx.InvalidURL is NOT an httpx.HTTPError — it must still be caught.
+
+        Regression guard: an unparseable URL used to escape HttpxFetcher.fetch()
+        entirely, reaching the caller as an unclassified exception rather than a
+        TransientFetchError. Raised before any DNS/socket work, so still offline.
+        """
+        fetcher = HttpxFetcher(load_settings(fetch_timeout_s=1.0))
+
+        with pytest.raises(TransientFetchError):
+            fetcher.fetch("http://[::1")
+
+    @pytest.mark.parametrize("status_code", [408, 429, 500, 502, 503])
+    def test_transient_status_codes_raise(self, monkeypatch, status_code):
+        """408/429 (the 'try again later' 4xx) and every 5xx are retryable.
+
+        408 in particular is a server-reported timeout: tombstoning it would
+        permanently mark a live URL dead, defeating link-rot immunity.
+        """
+        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        fetcher = HttpxFetcher(load_settings())
+
+        with pytest.raises(TransientFetchError, match=str(status_code)):
+            fetcher.fetch(_URL)
+
+    @pytest.mark.parametrize("status_code", [200, 401, 403, 404, 410])
+    def test_non_transient_status_codes_return_a_response(
+        self, monkeypatch, status_code
+    ):
+        """Everything else comes back for fetch_and_extract to classify."""
+        monkeypatch.setattr(httpx, "Client", _fake_client_cls(status_code, {}))
+        fetcher = HttpxFetcher(load_settings())
+
+        response = fetcher.fetch(_URL)
+
+        assert response.status_code == status_code
+        assert response.final_url == _URL
+
+    def test_config_knobs_are_wired_into_the_client(self, monkeypatch):
+        """fetch_max_redirects / fetch_timeout_s must actually reach httpx."""
+        captured: dict = {}
+        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        fetcher = HttpxFetcher(
+            load_settings(fetch_max_redirects=3, fetch_timeout_s=2.5)
+        )
+
+        fetcher.fetch(_URL)
+
+        assert captured["max_redirects"] == 3
+        assert captured["timeout"] == 2.5
+        assert captured["follow_redirects"] is True

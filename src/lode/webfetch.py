@@ -19,17 +19,21 @@ that invokes this unit and owns queueing/retries around it.
 
 - **(a) 2xx + extractable text** → :data:`FetchStatus.OK` — job done.
 - **(b) PERMANENT failure** (retrying will not help) → :data:`FetchStatus.TOMBSTONE`:
-    - 401/403 and any other non-429 4xx response — a 4xx is definitionally not
-      retryable (an identical request gets an identical 4xx), **except** 429,
-      which HTTP itself flags as "try later" (see (c));
+    - 401/403 and any other 4xx response, **except** the two codes HTTP itself
+      flags as "try again later" — 408 Request Timeout and 429 Too Many
+      Requests, both of which are transient (see (c)). Every other 4xx means an
+      identical request gets an identical response, so retrying is pointless;
     - a 2xx response whose extracted text is ``None`` **or** shorter than
       ``fetch_min_extract_chars`` (a config knob) — the *one* testable signal
       that covers JS-rendered scaffolding, paywalled teasers, and genuinely
       empty pages alike, with no bespoke per-cause heuristic;
-    - a redirect chain longer than ``fetch_max_redirects`` (a loop/relay that
-      will never resolve).
+    - a redirect chain longer than ``fetch_max_redirects`` — whether a true
+      loop or a legitimate-but-too-long chain, we refuse it the same way and a
+      retry would refuse it identically.
 - **(c) TRANSIENT failure** (retrying might help) → raises
-  :class:`TransientFetchError`: 429, any 5xx, or a network/timeout error. This
+  :class:`TransientFetchError`: 408, 429, any 5xx, or a network/timeout error.
+  (408 is a server-reported timeout — the same condition as a client-side
+  timeout, just observed by the other end — so it belongs here, not in (b).) This
   module has **no queue and no opinion on retries** — it just raises, and the
   caller (the w0h.2/w0h.3 job handler) lets the exception propagate so
   ``worker.py``'s existing attempts/backoff/dead-letter machinery retries it
@@ -57,29 +61,38 @@ unrelated policies.
 
 **HTTP client — httpx**, over `requests` and stdlib `urllib.request`:
 
-- `requests` is in long-term maintenance mode; httpx is its actively developed
-  modern equivalent with the same synchronous "requests-like" call shape this
-  module needs (no async client required here).
-- httpx exposes ``follow_redirects`` + ``max_redirects`` explicitly (needed
-  for the redirect-hop cap in (d)) and a typed exception hierarchy
-  (``TooManyRedirects`` / ``TimeoutException`` / ``NetworkError``, all under
-  ``HTTPError``) that maps directly onto the taxonomy above.
-- stdlib ``urllib.request`` would avoid a dependency but has no redirect-count
-  cap, no connect/read timeout split, and a much less ergonomic exception
-  model — not worth hand-rolling for a first connector.
+- vs `requests`: the honest differentiator is maintenance status, *not*
+  features. `requests` is in long-term maintenance mode; httpx is its actively
+  developed equivalent with the same synchronous call shape this module needs.
+  Both expose a redirect cap (``requests.Session.max_redirects``) and a typed
+  exception hierarchy (``TooManyRedirects``/``Timeout``/``ConnectionError``), so
+  neither of those is a reason to prefer httpx over `requests` — only over
+  stdlib. httpx additionally ships an async client if a later connector wants
+  one; this module does not.
+- vs stdlib ``urllib.request``: it would avoid a dependency, but its redirect
+  cap is a hardcoded class attribute (``HTTPRedirectHandler.max_redirections``
+  = 10), not a per-request knob, so the ``fetch_max_redirects`` config knob in
+  (d) could not be honored without subclassing the handler. It also has no
+  connect/read timeout split and a much less ergonomic exception model — not
+  worth hand-rolling for a first connector.
+- httpx's exception hierarchy maps onto the taxonomy above
+  (``TooManyRedirects`` / ``TimeoutException`` / ``NetworkError``), but note
+  ``httpx.InvalidURL`` is **not** an ``HTTPError`` subclass — an unparseable
+  URL must be caught by name or it escapes uncaught (see :meth:`HttpxFetcher.fetch`).
 
 **Readability extraction — trafilatura**, named in the decision itself
 ("extractor None/empty (trafilatura-style)"):
 
 - ``trafilatura.extract()`` returns ``str | None`` — ``None`` on a failed/empty
   extraction *is* the testable signal (b) calls for, no adaptation needed.
-- Verified locally against three synthetic fixtures while building this
-  module: a normal multi-paragraph article extracts its full body; a
-  JS-shell page (an empty ``<div id="root">`` + a script tag, no content)
-  returns ``None``; a paywall teaser ("Subscribe to continue reading...")
-  returns a *short* non-``None`` string — confirming the length-floor knob
-  (:attr:`~lode.config.Settings.fetch_min_extract_chars`) is load-bearing,
-  not redundant with the ``None`` check.
+- Verified against the three synthetic fixtures in ``tests/test_webfetch.py``
+  (trafilatura 2.1.0): the multi-paragraph article extracts a 405-char body;
+  the JS-shell page (an empty ``<div id="root">`` + a script tag) returns
+  ``None``; the paywall teaser ("Subscribe to continue reading.") returns a
+  40-char non-``None`` string. Since 40 < the 200-char default floor < 405,
+  the length-floor knob (:attr:`~lode.config.Settings.fetch_min_extract_chars`)
+  is genuinely load-bearing — the ``None`` check alone would let the teaser
+  through as ``ok``.
 - Alternatives considered: ``readability-lxml`` (no active PyPI releases in
   years, weaker boilerplate removal per its own project notes) and
   ``boilerpy3`` (thinner API, no built-in metadata handling trafilatura
@@ -106,8 +119,12 @@ from lode.config import Settings
 #: than a bare httpx default (some sites 403 a missing/generic UA outright).
 _USER_AGENT = "lode-webfetch/1 (+https://github.com/anthropics/lode)"
 
-#: Status codes httpx should treat as retryable at the fetch level: 429 (the
-#: one 4xx HTTP itself flags "try later") and every 5xx.
+#: The 4xx codes HTTP itself flags as "try again later" — everything else in
+#: the 4xx range is a permanent tombstone. 408 Request Timeout (RFC 9110
+#: §15.5.9: "the client MAY repeat the request") and 429 Too Many Requests.
+_TRANSIENT_4XX = frozenset({408, 429})
+
+#: At and above this, every status is a 5xx server error — always retryable.
 _TRANSIENT_STATUS_FLOOR = 500
 
 
@@ -144,7 +161,7 @@ class FetchError(Exception):
 
 
 class TransientFetchError(FetchError):
-    """Retryable fetch failure — 429, 5xx, or a network/timeout error.
+    """Retryable fetch failure — 408, 429, 5xx, or a network/timeout error.
 
     Deliberately **not** caught by :func:`fetch_and_extract`: it propagates to
     the caller (the queue job handler), which lets the existing worker
@@ -156,9 +173,11 @@ class TransientFetchError(FetchError):
 class TooManyRedirectsError(FetchError):
     """The redirect chain exceeded ``fetch_max_redirects``.
 
-    Non-retryable (an identical request follows the identical chain and loops
-    the same way), so :func:`fetch_and_extract` turns this into a tombstone
-    rather than letting it propagate like :class:`TransientFetchError`.
+    Non-retryable: the chain is deterministic, so an identical request follows
+    the identical hops and exceeds the identical cap — true of a redirect loop
+    and of a merely-too-long chain alike. :func:`fetch_and_extract` therefore
+    turns this into a tombstone rather than letting it propagate like
+    :class:`TransientFetchError`.
     """
 
 
@@ -183,9 +202,10 @@ class Fetcher(Protocol):
         """GET ``url``, following redirects up to the configured cap.
 
         Returns a :class:`RawResponse` for any outcome :func:`fetch_and_extract`
-        can classify itself (2xx, 401/403, other non-429 4xx). Raises
-        :class:`TransientFetchError` for 429/5xx/network/timeout conditions, and
-        :class:`TooManyRedirectsError` if the redirect chain exceeds the cap.
+        can classify itself (2xx, 401/403, other permanent 4xx). Raises
+        :class:`TransientFetchError` for 408/429/5xx/network/timeout conditions
+        (and for a URL httpx cannot parse), and :class:`TooManyRedirectsError`
+        if the redirect chain exceeds the cap. It raises nothing else.
         """
         ...
 
@@ -215,14 +235,17 @@ class HttpxFetcher:
             raise TransientFetchError(f"timeout: {exc}") from exc
         except httpx.NetworkError as exc:
             raise TransientFetchError(f"network error: {exc}") from exc
-        except httpx.HTTPError as exc:
-            # Any other httpx-level failure (e.g. a malformed response) — no
-            # sharper classification is available, so default to retryable
-            # rather than silently tombstoning on an unrecognized condition.
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            # Any other httpx-level failure (e.g. a malformed response, or a
+            # URL httpx cannot even parse) — no sharper classification is
+            # available, so default to retryable rather than silently
+            # tombstoning on an unrecognized condition. httpx.InvalidURL is
+            # NOT an httpx.HTTPError subclass, so it must be named explicitly
+            # or it escapes this method entirely, unclassified.
             raise TransientFetchError(f"http client error: {exc}") from exc
 
         if (
-            response.status_code == 429
+            response.status_code in _TRANSIENT_4XX
             or response.status_code >= _TRANSIENT_STATUS_FLOOR
         ):
             raise TransientFetchError(f"http {response.status_code}")
