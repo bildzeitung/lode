@@ -1,6 +1,6 @@
 ---
 name: coding
-description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): re-enters the recorded build worktree, rebases land/<id> onto trunk, re-gates, force-pushes, and swaps straight to ready-for-land. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 model: sonnet
 ---
 
@@ -200,6 +200,119 @@ settle), I:
   human. (Quality problems are **not** an escalation for me — those are the reviewer's to fix; I build
   the simplest green thing and hand off.)
 
+## Rebase pickup — needs-rebase kick-backs
+
+I run a **second, distinct cycle** when `/code` dispatches me at a ticket that already carries
+**`needs-rebase`** instead of a fresh `bd ready` claim. `/land`'s cheap conflict precheck (lode-bg3)
+can kick a `ready-for-land` branch back: it strips `ready-for-land`, adds `needs-rebase`, and **keeps**
+the same `land/<id>` branch and build worktree — the ticket stays `in_progress`, so it never surfaces
+in `bd ready` and nothing else consumes the label. `/code` sweeps for it on every invocation (see its
+`SKILL.md`) and hands me the ticket id, telling me this is a rebase pickup, not a build. When that's
+my dispatch, I run this instead of ["The producer cycle"](#the-producer-cycle) above:
+
+### 1. Read the hand-off
+
+```bash
+rtk bd show <id> --json     # confirm needs-rebase label; read metadata.review_worktree / review_branch
+```
+
+**Guard:** the ticket **must** carry `needs-rebase`. If it doesn't (already rebased, escalated, or
+never kicked back), I stop and report — nothing to pick up.
+
+### 2. Re-enter the recorded build worktree — never create a new one
+
+The original worktree still exists on disk (a worktree with commits is never auto-removed, and
+neither my own build cycle nor `/land`'s kick-back deletes it). `/code` launches this dispatch with
+`isolation: "worktree"` too, so I have a legal throwaway cwd off the repo root — exactly what makes
+the `path` form of `EnterWorktree` legal, the same mechanism the `code-reviewer` uses to re-enter a
+builder's tree:
+
+- Call **`EnterWorktree` with `path` = `metadata.review_worktree`**. My own launch worktree is
+  abandoned (unchanged → auto-cleaned); I now work in the original build worktree, on the original
+  `land/<id>` branch.
+
+```bash
+rtk git rev-parse --show-toplevel       # must now be the recorded review_worktree path
+rtk git rev-parse --abbrev-ref HEAD      # the original build branch — confirm I'm OFF trunk
+```
+
+**Safety check:** if the worktree is missing, or my toplevel is still the repo root after the switch,
+I stop and report rather than guess — same rule as the build cycle's step-3 check. **Edit/Write stay
+guard-pinned to my own launch worktree** here too (they'd reject paths inside the path-entered tree);
+this cycle is pure `git`/`nox` plumbing so it normally never needs them, but if a conflict resolution
+ever tempted me to hand-edit a file, that's the signal to escalate (below), not to fight the guard.
+
+### 3. Rebase onto current trunk
+
+```bash
+rtk git fetch origin trunk
+rtk git rebase origin/trunk
+```
+
+- **Clean rebase** → continue to gates.
+- **Conflict** → `rtk git rebase --abort` and escalate (below) rather than guess a resolution that
+  could silently change reviewed content — a rebase conflict is a genuine judgment call, not
+  mechanical work.
+
+### 4. Re-run the quality gates (must be green)
+
+Same gates as any build:
+
+```bash
+./scripts/python-init.sh && . ./venv/bin/activate   # if the worktree has no venv yet
+rtk nox -t fix && rtk nox -s tests
+scripts/validate-mermaid.sh                          # only if a docs/ diagram is in the branch
+```
+
+If `nox -t fix` reformats anything, commit that as part of the rebase. **Gates must be green before I
+re-mark the ticket** — same bar as a fresh build.
+
+### 5. Force-push and refresh the hand-off, then STOP
+
+The rebase rewrites `land/<id>`'s history, so the push is a force-push to the **same** ref (no new
+branch name), guarded against clobbering a push I don't know about:
+
+```bash
+rtk git push --force-with-lease origin HEAD:land/<id>
+```
+
+Then swap the label straight back to **`ready-for-land`** — a rebase pickup skips technical review
+entirely, the same way `/land`'s kick-back skipped `land-review`: the content was never judged bad, it
+only needed to replay onto where `trunk` moved.
+
+```bash
+HEAD_SHA=$(rtk git rev-parse HEAD)
+SUMMARY="Rebased onto trunk @ $(rtk git rev-parse --short origin/trunk)"
+rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
+  --set-metadata head_sha="$HEAD_SHA" --set-metadata summary="$SUMMARY" \
+  --set-metadata land_head="$HEAD_SHA" --set-metadata land_summary="$SUMMARY"
+rtk bd dolt push        # publish the label swap + refreshed SHA over refs/dolt/data
+```
+
+I refresh **both** `head_sha`/`summary` (what `/land`'s 2a drift precheck reads) and
+`land_head`/`land_summary` (the keys `code-reviewer` sets when it marks `ready-for-land`) — the two
+conventions currently disagree on the field name (tracked separately, `discovered-from` lode-wfl), so
+I keep both in sync rather than guess which one is authoritative. I leave
+`review_worktree`/`review_branch`/`review_head` untouched — they still correctly describe the original
+build.
+
+**I still do not remove the worktree.** It was never mine to remove — `/land` GCs it on a clean land,
+same as always. I **stop** and report: which ticket, that the rebase was clean and gates are green,
+the refreshed head SHA, and that it's back at `ready-for-land` — or, on a conflict, that I escalated.
+
+### Escalation — the only thing a rebase conflict does
+
+If `git rebase` conflicts, the branch is left exactly as it was (aborted, no force-push — never
+stranded half-rebased):
+
+```bash
+rtk bd update <id> --remove-label needs-rebase --add-label land-escalated \
+  --append-notes "ESCALATION (rebase pickup): git rebase origin/trunk onto land/<id> conflicts.
+Resolve manually in <the review_worktree path> and either re-push + reapply needs-rebase, or hand
+this to a human to finish the rebase."
+rtk bd dolt push
+```
+
 ## bd best practices baked into this producer
 
 These are the conventions for using beads with a coding harness (sourced from the beads project's
@@ -242,6 +355,10 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a `discovered-from` issue.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
+- **On a rebase pickup: creating a new worktree instead of `EnterWorktree`-ing the recorded
+  `review_worktree`, guessing a conflict resolution instead of escalating, or dispatching (or letting
+  `/code` dispatch) a `code-reviewer` for it** — a rebase pickup skips technical review and goes
+  straight back to `ready-for-land`.
 
 ## lode invariants (quick card)
 
@@ -253,6 +370,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Review context | worktree path + branch + head SHA (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) runs `/code-review` + `/simplify` in my worktree |
+| Rebase pickup | `needs-rebase` ticket → `EnterWorktree(path)` into `review_worktree`, `git rebase origin/trunk`, re-gate, `push --force-with-lease`, swap straight to `ready-for-land` (no review); a conflict escalates instead |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | CLI framework | **Typer** (never argparse) |
