@@ -133,9 +133,11 @@ writing on `trunk`. It claims the issue, builds the simplest thing that works, t
 the gates, then **pushes a `land/<id>` branch to origin, marks the ticket `ready-for-code-review`
 (recording its worktree path), keeps the worktree, and stops** — it does **not** review its own work.
 
-Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It `EnterWorktree`s into the
-builder's worktree (by the recorded path), runs the **technical review** (`/code-review --fix` +
-`/simplify`, re-gate, keep the last green commit), re-pushes `land/<id>`, and swaps the ticket to
+Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It stays in its own launch
+worktree and drives the builder's worktree (by the recorded path) via `git -C <path>` — not
+`EnterWorktree`, which the worktree-isolation guard refuses for commands resolved into a
+path-entered worktree — runs the **technical review** (`/code-review --fix` + `/simplify`, re-gate,
+keep the last green commit), re-pushes `land/<id>`, and swaps the ticket to
 **`ready-for-land`**. Neither agent merges, closes, or writes `trunk` — landing is
 [`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't shown to the user,
 so `/code` relays what came back across **both** phases — which issue, that the build gates and the
@@ -173,7 +175,7 @@ flowchart TD
 
     COMMIT --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
     PUSH --> HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>EnterWorktree(path) ·<br>/code-review --fix + simplify · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review --fix + simplify · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -287,8 +289,11 @@ Each builder (the `coding` agent, on **Sonnet**), in its worktree:
 the technical review now lives in its own agent — not the builder — **neither review of a branch is
 done by its author** (the lander's semantic review is the other). The reviewer:
 
-1. **Enters the builder's worktree** by the recorded path (`EnterWorktree`, `path` form — legal from a
-   subagent launched with `isolation: "worktree"`), confirming it is off `trunk`.
+1. **Drives the builder's worktree by the recorded path via `git -C <path>`** — not `EnterWorktree`:
+   the worktree-isolation guard refuses to run commands resolved into a path-entered worktree
+   ("commands from a worktree-isolated agent must run inside its worktree"), so the reviewer stays in
+   its own launch worktree and confirms the builder's tree is off `trunk` via `git -C <path>
+   rev-parse --abbrev-ref HEAD`.
 2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
@@ -307,7 +312,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(worktree path · SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>EnterWorktree(path) ·<br>/code-review + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
@@ -383,7 +388,8 @@ flowchart TD
   (A claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to review
   or land.)
 - **Hand-off context is minimal — head SHA + a one-line summary**, plus the **builder's worktree path**
-  so the code-reviewer can `EnterWorktree` into it (small JSON in bd fields, read via `bd show --json`).
+  so the code-reviewer can drive it via `git -C <path>` (small JSON in bd fields, read via
+  `bd show --json`).
   The lander re-reviews and re-gates, so stored gate-results would be decorative; the SHA exists only to
   detect drift (a push onto the branch *after* it was marked ready). The branch name isn't stored — it's
   derived (below).
