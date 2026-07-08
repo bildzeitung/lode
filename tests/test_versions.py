@@ -168,6 +168,58 @@ def test_recover_rejects_a_version_from_another_note(conn):
         recover(conn, "note-1", target_version=other)
 
 
+# --- idempotent re-delete (lode-n8q) -----------------------------------------
+
+
+def test_delete_recover_delete_is_idempotent(conn):
+    """delete -> recover -> delete on an unchanged note must not raise.
+
+    content_version_id folds in note_id/parent/body but not op, so the second
+    delete recomputes the SAME tombstone id as the first (identical inputs).
+    delete() detects the existing row and repoints the head to it instead of
+    re-inserting, so the second delete is a no-op on the version table.
+    """
+    head = save(conn, "note-1", "body").version_id
+    t1 = delete(conn, "note-1", parent=head).version_id
+    recover(conn, "note-1", target_version=head)
+
+    result = delete(conn, "note-1", parent=head)  # must not raise IntegrityError
+
+    assert result.version_id == t1  # same content => same tombstone, repointed
+    assert result.op == "delete"
+    assert _head(conn, "note-1") == t1  # head is the tombstone
+    assert _count_versions(conn, "note-1") == 2  # exactly one tombstone, no dup row
+    # The pre-delete content head stays reachable in the chain (lineage intact).
+    (op, body) = conn.execute(
+        "SELECT op, body FROM versions WHERE version_id = ?", (head,)
+    ).fetchone()
+    assert (op, body) == ("create", "body")
+
+
+def test_delete_recover_edit_delete_mints_a_new_tombstone(conn):
+    """Negative control: an edit between recover and the second delete changes
+    the tombstone's inputs (different parent), so it must NOT dedup.
+    """
+    head = save(conn, "note-1", "body").version_id
+    t1 = delete(conn, "note-1", parent=head).version_id
+    recover(conn, "note-1", target_version=head)
+    edited = save(conn, "note-1", "body-v2", parent=head).version_id
+
+    t2 = delete(conn, "note-1", parent=edited).version_id
+
+    assert t2 != t1  # different content => different tombstone, no dedup
+    assert _head(conn, "note-1") == t2
+    assert _count_versions(conn, "note-1") == 4  # root, t1, edit, t2 all retained
+
+
+def test_plain_single_delete_still_mints_a_version(conn):
+    """Negative control: an ordinary (non-repeated) delete still writes a row."""
+    root = save(conn, "note-1", "body").version_id
+    result = delete(conn, "note-1", parent=root)
+    assert result.version_id != root
+    assert _count_versions(conn, "note-1") == 2
+
+
 # --- structured conflict surface (lode-s2f.4) -------------------------------
 
 
