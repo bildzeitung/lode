@@ -291,21 +291,23 @@ family unattended — not a new risk introduced by any later addition. Validated
 documented push/merge semantics (a stress test is corroboration only — a green run cannot prove the
 absence of a rare lost-write race; it is not the basis for this determination):
 
-- **No silent lost write.** `dolt push` — the primitive `bd dolt push` wraps, including in bd's
-  **embedded** mode lode runs in, which links the same Dolt push code the `dolt` CLI calls — is
-  **fast-forward-only, exactly like `git push`**: "Pushes to existing branches require that your
-  changes are fast-forward changes relative to what you are pushing to"
+- **No silent lost write.** `dolt push` — the primitive `bd dolt push` wraps, including in the
+  **embedded** (in-process Dolt engine) mode lode runs in — is **fast-forward-only, exactly like
+  `git push`**: "Pushes to existing branches require that your changes are fast-forward changes
+  relative to what you are pushing to"
   ([DoltHub docs](https://www.dolthub.com/docs/concepts/dolt/git/remotes)), enforced by an atomic
   compare-and-swap on the branch ref. Two racing pushes can never both silently win — one is
   atomically accepted, the other is **rejected outright** and must retry (pull → merge → push again).
   Because lode's Dolt remote is itself a plain git remote (`sync.remote:
   git+ssh://…/lode.git`, storing chunks under `refs/dolt/data`), a git server's own atomic ref-update
-  is a second, independent enforcement layer underneath Dolt's client-side check. Producers writing
-  disjoint issue rows (the documented convention) merge cleanly on retry via Dolt's cell-level merge —
-  confirmed in practice by a real-world instance,
-  [beads#2466](https://github.com/gastownhall/beads/issues/2466) (a genuine multi-machine push/pull
-  conflict, since fixed in beads v0.60.0 by moving the one shared bookkeeping row out of the
-  replicated table and into a local file).
+  is a second, independent enforcement layer underneath Dolt's client-side check — the guarantee is a
+  property of the remote ref update, not of any one client code path. Producers writing disjoint issue
+  rows (one ticket per producer) merge cleanly on retry via Dolt's cell-level merge. The only
+  multi-machine failure on record corroborates this by exclusion rather than confirming it directly:
+  [beads#2466](https://github.com/gastownhall/beads/issues/2466) was a recurring `bd dolt pull` merge
+  conflict on *shared bookkeeping rows* in the `metadata` table — "not a conflict on actual issue
+  data," in the issue's own words — fixed in beads v0.60.0 by moving that auto-push state out of the
+  replicated table and into a local file. (lode runs bd 1.0.4, well past that fix.)
 - **Invariant:** a `bd dolt push` from any producer can be *rejected* under concurrent writers, but
   never *silently loses* another writer's already-committed data. Treat a non-zero exit from
   `bd dolt push` as "needs pull + retry," never as proof of corruption.
@@ -313,10 +315,11 @@ absence of a rare lost-write race; it is not the basis for this determination):
 This investigation also surfaced two **gaps** the above safety net does not cover — filed as a
 follow-up (lode-83d), since this ticket validates only and does not build the fix:
 
-1. **No retry-on-reject exists today.** Every `bd dolt push` call site in the skills
-   (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`, `.claude/skills/land/SKILL.md`) is a
-   bare call with no exit-status check — a rejected push currently fails without the caller noticing,
-   undermining the "durable, cross-machine" hand-off the comments assume.
+1. **No retry-on-reject exists today.** All four `bd dolt push` call sites in the skills
+   (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`, `.claude/skills/land/SKILL.md`,
+   `.claude/skills/epic-audit/SKILL.md`) are bare calls with no exit-status check — a rejected push
+   currently fails without the caller noticing, undermining the "durable, cross-machine" hand-off the
+   comments assume.
 2. **Embedded mode is documented as the wrong mode for this concurrency.** lode runs bd in
    **embedded (in-process Dolt engine)** mode (`bd dolt show` → `Mode: embedded`), and every git
    worktree of this repo shares **one** physical store on a given machine (`.beads/embeddeddolt` at the
