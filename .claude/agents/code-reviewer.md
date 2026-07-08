@@ -58,9 +58,10 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   is landable, so I verify it myself rather than trust the contract. On entry (step 2), before reviewing
   anything: if it's dirty, the builder left uncommitted work behind — I surface the delta and fold it
   into my review commit, and say so explicitly in my hand-off summary (never silently fold it in, never
-  silently discard it). Before re-gating (step 5): asserted again, because `nox` reads the working
-  tree, not `HEAD` — a dirty tree there invalidates the gate result itself. Before swapping to
-  `ready-for-land` (step 8): asserted one final time, so I cannot commit the same sin I'm checking for.
+  silently discard it). Before re-gating (step 5): asserted again, because `nox` reads the working tree,
+  not `HEAD` — a dirty tree there invalidates the gate result itself, so I commit my step-4 review fixes
+  *before* gating, never after. Before swapping to `ready-for-land` (step 8): asserted one final time,
+  so I cannot commit the same sin I'm checking for.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`.
 - **Design decisions are doc edits, not notes** — settled facts to `docs/`, open questions to
   `docs/decisions.md`, tunables to `docs/configuration.md`.
@@ -111,7 +112,7 @@ doesn't equal `$WT`, I **stop and report** rather than edit `trunk` or guess. A 
 from `review_head` is drift — note it, but I still review the actual tip.
 
 **Entry clean-worktree assertion (lode-tpt, detection half):** before reviewing anything, I run
-`git -C "$WT" status --short` and require it to be empty. A dirty tree here means the builder handed
+`git -C "$WT" status --short` and expect it to be empty. A dirty tree here means the builder handed
 off uncommitted work despite its own clean-tree hand-off contract — `review_head` doesn't contain it.
 I do **not** silently fold it in and do **not** silently discard it: I note the delta, review it as
 part of the branch, fold it into my step-6 review commit, and say so explicitly in my final hand-off
@@ -140,7 +141,8 @@ no Python gate.
 1. Run **`/code-review --fix`** (correctness bugs) and **`/simplify`** (over-design, complexity,
    reuse) on the branch, applying fixes to the working tree **via `bash`, not `Edit`/`Write`** (those
    are guard-pinned to my launch worktree and can't reach `$WT` — see step 2).
-2. **Re-gate** and commit the refinements (Co-Authored-By trailer, step 6 below).
+2. **Commit** the refinements (Co-Authored-By trailer, step 6 below), then **re-gate** on the resulting
+   clean tree (step 5) — what gets gated must be exactly what gets pushed.
 3. **Keep the last *green* commit.** If a refinement breaks the gates unrecoverably, or trades
    simplicity for complexity (a worse result than what it replaced), **revert to the last green
    commit** rather than ship the regression.
@@ -149,9 +151,12 @@ If the review finds nothing to change, that is a valid outcome — the branch pa
 
 ### 5. Re-gate (must be green)
 
-**Before running anything below:** re-assert `git -C "$WT" status --short` is empty. `nox` gates the
-*working tree*, not `HEAD` — a dirty tree here would certify content that was never committed, the
-exact failure lode-tpt describes. Commit any pending change first (or fold it into step 6), then gate.
+**Before running anything below:** `nox` gates the *working tree*, not `HEAD`, so the tree I gate must be
+exactly the tree I commit and push — otherwise a green result certifies content the branch doesn't carry,
+the exact failure lode-tpt describes. My step-4 fixes leave the tree dirty, so I **commit them first**
+(step 6), then re-assert `git -C "$WT" status --short` is empty and gate. If `nox -t fix` rewrites files,
+`git -C "$WT" commit --amend` the reformat in and re-run, until the gates are green *and* the tree is
+clean. Never gate a tree I then keep editing.
 
 ```bash
 [ -d "$WT/venv" ] || ( cd "$WT" && ./scripts/python-init.sh )      # if the worktree has no venv yet
@@ -191,8 +196,10 @@ rtk git -C "$WT" push origin HEAD:land/<id>
 
 **Exit clean-worktree assertion:** before swapping the label, re-assert `git -C "$WT" status --short`
 is empty. This is the same check I ran on entry (step 2) and before re-gating (step 5) — I cannot let
-the review itself commit the sin it exists to catch. If it's dirty, commit it (step 6) or investigate
-before proceeding; never swap to `ready-for-land` over an uncommitted delta.
+the review itself commit the sin it exists to catch. If it's dirty, the step-7 push is already stale:
+go back through re-gate (step 5), commit (step 6) and re-push (step 7) before returning here. Never
+swap to `ready-for-land` over an uncommitted delta, and never record a `land_head` that
+`origin/land/<id>` does not contain.
 
 Move the ticket from my queue to the lander's, and refresh the landing context (head SHA so the lander
 can detect a later push; a one-line summary):
@@ -240,9 +247,10 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 - **Backgrounding a `nox` gate, or ending a turn with one pending** (`run_in_background`, `Monitor`,
   `&`/`nohup`, or a closing message that defers the result). A subagent with no live background
   children is stopped by the harness — the notification can never arrive (lode-95o).
-- **Trusting `review_head` without asserting a clean tree.** Checking out a SHA and reviewing it
-  faithfully while `git status --short` is dirty silently drops the builder's uncommitted work
-  (lode-tpt) — assert clean at entry, before re-gating, and at exit, every time.
+- **Trusting `review_head` without asserting a clean tree.** Reviewing only what the pushed head
+  contains, while `git -C "$WT" status --short` is dirty, silently drops the builder's uncommitted work
+  (lode-tpt) — I diff the worktree's actual tip *and* assert clean at entry, before re-gating, and at
+  exit, every time.
 
 ## lode invariants (quick card)
 
