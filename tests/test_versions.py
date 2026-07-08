@@ -212,12 +212,23 @@ def test_delete_recover_edit_delete_mints_a_new_tombstone(conn):
     assert _count_versions(conn, "note-1") == 4  # root, t1, edit, t2 all retained
 
 
-def test_plain_single_delete_still_mints_a_version(conn):
-    """Negative control: an ordinary (non-repeated) delete still writes a row."""
-    root = save(conn, "note-1", "body").version_id
-    result = delete(conn, "note-1", parent=root)
-    assert result.version_id != root
-    assert _count_versions(conn, "note-1") == 2
+def test_re_delete_against_a_stale_parent_still_conflicts(conn):
+    """The CAS guard runs BEFORE the dedup probe.
+
+    Once a tombstone exists, a delete from a stale parent must still raise
+    rather than silently resolving to that tombstone and repointing the head
+    onto it. (The plain single-delete control lives in
+    test_delete_writes_a_tombstone_preserving_lineage.)
+    """
+    head = save(conn, "note-1", "body").version_id
+    delete(conn, "note-1", parent=head)
+    recover(conn, "note-1", target_version=head)
+    edited = save(conn, "note-1", "body-v2", parent=head).version_id
+
+    with pytest.raises(HeadConflictError):
+        delete(conn, "note-1", parent=head)  # stale: the head is now `edited`
+
+    assert _head(conn, "note-1") == edited  # no silent repoint onto the tombstone
 
 
 # --- structured conflict surface (lode-s2f.4) -------------------------------
