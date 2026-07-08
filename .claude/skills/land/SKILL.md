@@ -299,9 +299,11 @@ rtk bd dolt push       # publish the label swap + note over refs/dolt/data
 Unlike a bounce, I **do not** supersede, create a rebuild ticket, or drop the branch, and unlike an
 escalate there's no question for a human — the producer just replays its own already-reviewed work
 onto the new `trunk`. The ticket stays `in_progress`; the `needs-rebase` label (not `ready-for-land`)
-is now its state. **Producer-side pickup of `needs-rebase` is tracked in `lode-wfl`** — until that
-lands, a kicked-back branch waits on a human to nudge the producer, because an `in_progress` ticket
-doesn't surface in `bd ready`.
+is now its state. **`/code` picks this up automatically** (lode-wfl): every invocation sweeps
+`bd list --label needs-rebase --status in_progress` first and dispatches a `coding` producer to rebase
+`land/<id>` onto current `trunk`, re-gate, force-push, and swap the label straight back to
+`ready-for-land` — no human nudge needed unless the rebase itself conflicts (that escalates,
+`land-escalated`, same as any other genuine decision).
 
 ## Bounce — clear failure
 

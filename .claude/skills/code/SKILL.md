@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to enter that worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to enter that worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — no manual nudge needed. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -33,6 +33,35 @@ Both subagents already own *how producer work flows* in lode (they honor `CLAUDE
 correctly **in order, build then review**, one task at a time, and relay what came back.
 
 ## What to do when invoked
+
+0. **Sweep for `needs-rebase` kick-backs first — every invocation, regardless of argument.**
+   `/land`'s cheap conflict precheck can kick a `ready-for-land` branch back: it strips
+   `ready-for-land`, adds **`needs-rebase`**, and keeps the same `land/<id>` branch + build worktree
+   (the ticket stays `in_progress`, so it never surfaces in `bd ready`). Nothing else consumes that
+   label, so before resolving the requested task set, always check for stranded kick-backs:
+
+   ```bash
+   rtk bd list --label needs-rebase --status in_progress --json
+   ```
+
+   For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
+   "worktree"`** — required for the same reason as Phase 2 below: it gives the dispatch a legal cwd
+   off the repo root so it can `EnterWorktree` (`path` form) into the *recorded* build worktree rather
+   than create a new one). Tell it explicitly this is a **rebase pickup**, not a fresh build, e.g.:
+
+   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — run your "Rebase
+   > pickup" cycle, not a fresh build: read `metadata.review_worktree` from bd, `EnterWorktree` into
+   > it, `git fetch origin trunk && git rebase origin/trunk`, re-gate, `push --force-with-lease` to
+   > the same `land/<id>` ref, refresh the head-SHA metadata, and swap `needs-rebase` straight to
+   > `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase conflict, abort and
+   > escalate (`land-escalated`, leave the branch as it was) rather than guess a resolution.
+
+   Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
+   (`run_in_background: true`) — a rebase pickup and a fresh build never share a ticket, so they can't
+   collide. **Do not dispatch a Phase 2 `code-reviewer` for a rebase pickup**: it lands directly at
+   `ready-for-land`, skipping technical review entirely, the same way `/land`'s kick-back skipped
+   `land-review` — the content was never judged bad, it only needed to replay onto where `trunk`
+   moved. If the sweep finds nothing, say so and move on; it's not an error.
 
 1. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read `bd ready` and **fan out** across
@@ -94,7 +123,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    applied `land-escalated`, did **not** hand off, and a human owes a build decision. If a **reviewer**
    escalated, likewise — green branch pushed, `land-escalated` set, not landable until the human
    decides. For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in
-   review, which escalated (at build or review) and why.
+   review, which escalated (at build or review) and why. Report the **Step 0 sweep** the same way —
+   which `needs-rebase` tickets were found, which rebased clean and are back at `ready-for-land`, and
+   which hit a rebase conflict and were escalated (say which one, so a human can resolve it).
 
 ## Notes
 
@@ -106,6 +137,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   review. The review must run on the *built* branch, so always dispatch the reviewer *after* its
   builder returns `ready-for-code-review` — never in parallel with its own build. Don't dispatch a
   reviewer for a ticket that escalated at build time.
+- **Step 0's rebase pickup is a third mode, not a phase.** It reuses the `coding` subagent (its
+  "Rebase pickup" cycle, distinct from its normal build cycle) but skips Phase 2 entirely — a
+  `needs-rebase` ticket already passed technical review before `/land` kicked it back, so it goes
+  straight to `ready-for-land` once the rebase is clean. Never dispatch a `code-reviewer` for one.
 - Producers do all repo mutation inside `isolation: "worktree"` worktrees and push to
   `origin/land/<id>`; **nothing merges and nothing the author wrote is reviewed by its author.** The
   main session stays on `trunk` and never edits files here. Landing those branches is `/land`'s job,
