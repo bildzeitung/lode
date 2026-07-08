@@ -117,7 +117,7 @@ from lode.config import Settings
 
 #: Sent on every fetch so a server sees an identifiable, non-empty UA rather
 #: than a bare httpx default (some sites 403 a missing/generic UA outright).
-_USER_AGENT = "lode-webfetch/1 (+https://github.com/anthropics/lode)"
+_USER_AGENT = "lode-webfetch/1 (+https://github.com/bildzeitung/lode)"
 
 #: The 4xx codes HTTP itself flags as "try again later" — everything else in
 #: the 4xx range is a permanent tombstone. 408 Request Timeout (RFC 9110
