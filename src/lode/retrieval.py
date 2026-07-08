@@ -52,6 +52,14 @@ from lode.vectorstore import VectorHit, VectorStore
 #: contain a double-quote, so quoting each term in :func:`build_match_query` is safe.
 _QUERY_TOKEN = re.compile(r"\w+")
 
+#: The live-head predicate: a version is live (not a soft-delete tombstone) when
+#: its ``op`` is not ``'delete'``. This is the single definition of "live" that
+#: keeps soft-deleted content out of every retrieval leg (module docstring,
+#: "Heads only"); every query scoping to live heads must reuse this fragment
+#: rather than restate the check inline. Assumes the versions row is joined and
+#: aliased ``v`` in the enclosing query.
+_LIVE_HEAD_PREDICATE = "v.op != 'delete'"
+
 
 def build_match_query(question: str) -> str:
     """Build an FTS5 ``MATCH`` expression from a natural-language ``question``.
@@ -86,7 +94,7 @@ def live_head_versions(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
         "SELECT n.head_version_id FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
-        "WHERE v.op != 'delete'"
+        f"WHERE {_LIVE_HEAD_PREDICATE}"
     ).fetchall()
     return [row[0] for row in rows]
 
@@ -488,7 +496,7 @@ def graph_expand(
             "JOIN versions v ON v.version_id = n.head_version_id "
             f"WHERE n.note_id IN ({placeholders}) "
             "AND n.head_version_id IS NOT NULL "
-            "AND v.op != 'delete'",
+            f"AND {_LIVE_HEAD_PREDICATE}",
             reached_ids,
         )
     }
