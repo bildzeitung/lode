@@ -101,14 +101,17 @@ be thrown back.
 
 ### 2a. Re-validate that beads and git haven't drifted
 
-The landing context is **minimal by design** — `head_sha` + a one-line `summary` in bd metadata,
-read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored). The SHA
-exists only to **detect drift**: a push onto the branch *after* the ticket was marked ready.
+The landing context is **minimal by design** — `land_head` + a one-line `land_summary` in bd
+metadata, read via `bd show <id> --json` (the branch name is *derived*, `land/<id>`, never stored).
+`land_head`/`land_summary` is the one field-name convention across the whole loop: `code-reviewer`
+writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`coding.md`) refreshes it
+on every re-push. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
+was marked ready.
 
 ```bash
-rtk bd show <id> --json     # read metadata.head_sha and metadata.summary
+rtk bd show <id> --json     # read metadata.land_head and metadata.land_summary
 rtk git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
-# ...and origin/land/<id>'s tip SHA must equal metadata.head_sha
+# ...and origin/land/<id>'s tip SHA must equal metadata.land_head
 ```
 
 A **missing branch** or a **SHA mismatch** is drift — treat it exactly like a review **bounce**
@@ -291,7 +294,7 @@ rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
 Conflicting paths:
 $CONFLICTS
 Rebase land/<id> onto current trunk in the build worktree, re-gate, force-push the branch, refresh
-metadata.head_sha, then swap needs-rebase back to ready-for-land."
+metadata.land_head, then swap needs-rebase back to ready-for-land."
 rtk bd dolt push       # publish the label swap + note over refs/dolt/data
 # The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
 ```
