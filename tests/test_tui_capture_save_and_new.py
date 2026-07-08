@@ -1,0 +1,309 @@
+"""Screen-level tests for Ctrl+N "save and new" on the capture screen (lode-d32.4).
+
+Ctrl+S saves and exits (``tests/test_tui_app.py``); Ctrl+N saves through the
+identical no-AI ``save_capture`` path but resets the screen for a fresh note
+instead of exiting -- the epic's design fix for "starting a second note means
+relaunching the TUI" (specs/04). Drives the real widgets end to end via
+Textual's ``run_test`` pilot, the same style ``tests/test_tui_app.py`` and
+``tests/test_tui_reconcile_screen.py`` use.
+
+Two edge cases the epic's ``/debate`` review flagged (not just the ticket's
+named CAS-conflict case, which is unreachable in practice -- ``save_capture``
+mints a fresh ``uuid4`` on every call) get dedicated coverage: clearing the
+buffer must not restart the related-notes debounce for an empty buffer (a
+wasted embedder cold-load), and any in-flight related-notes pass from the
+just-saved note must not land after the reset and paint stale results into
+the freshly-cleared panel.
+"""
+
+import asyncio
+import sqlite3
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from lode.config import Settings
+from lode.storage import init_db
+from lode.tui import capture as capture_mod
+from lode.tui.app import LodeApp
+from lode.tui.screens.capture import BODY_ID, RELATED_ID, CaptureScreen
+from lode.tui.screens.reconcile import ReconcileScreen
+from lode.versions import save
+
+
+def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+
+def test_ctrl_n_saves_clears_the_buffer_and_does_not_exit(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, bool]:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "the first note of the session"
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            assert isinstance(app.screen, CaptureScreen)
+            return app.screen.query_one(f"#{BODY_ID}").text, app.is_running
+
+    body_text, still_running = asyncio.run(_drive())
+
+    assert body_text == ""
+    assert still_running
+    # Never exited, so app.return_value stays the default (None) -- the note
+    # id is not surfaced this way like Ctrl+S's, but the note is persisted.
+    assert app.return_value is None
+    assert _rows(
+        db_path,
+        "SELECT body, op FROM versions",
+    ) == [("the first note of the session", "create")]
+
+
+def test_ctrl_n_leaves_focus_in_the_editor(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "focus should stay right here"
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            return app.screen.query_one(f"#{BODY_ID}").has_focus
+
+    has_focus = asyncio.run(_drive())
+
+    assert has_focus
+
+
+def test_ctrl_n_lets_a_second_note_be_typed_and_saved_immediately(
+    tmp_path: Path,
+) -> None:
+    """The acceptance criterion end to end: type, Ctrl+N, type again, Ctrl+S."""
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "first note"
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            text_area.text = "second note"
+            await pilot.press("ctrl+s")
+
+    asyncio.run(_drive())
+
+    assert app.return_value is not None
+    assert sorted(row[0] for row in _rows(db_path, "SELECT body FROM versions")) == [
+        "first note",
+        "second note",
+    ]
+
+
+def test_ctrl_n_on_empty_buffer_refuses_and_does_not_reset(tmp_path: Path) -> None:
+    """Mirrors Ctrl+S's empty refusal (``test_saving_an_empty_note_does_not_exit_or_write``)."""
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+    still_running = False
+
+    async def _drive() -> None:
+        nonlocal still_running
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+n")
+            still_running = app.is_running
+
+    asyncio.run(_drive())
+
+    assert still_running
+    assert not db_path.exists()
+
+
+def test_ctrl_n_shows_a_saved_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+    messages: list[str] = []
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            monkeypatch.setattr(
+                app, "notify", lambda message, **kw: messages.append(message)
+            )
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "notify me when this lands"
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+
+    asyncio.run(_drive())
+
+    assert any("Saved" in message for message in messages)
+
+
+def test_ctrl_n_on_empty_buffer_notifies_the_same_refusal_as_ctrl_s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+    messages: list[str] = []
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            monkeypatch.setattr(
+                app, "notify", lambda message, **kw: messages.append(message)
+            )
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+
+    asyncio.run(_drive())
+
+    assert messages == ["Refusing to save an empty note."]
+
+
+class _FixedUUID:
+    """Stand-in so ``str(uuid4())`` yields a chosen note id (forces a collision)."""
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def __str__(self) -> str:
+        return self._value
+
+
+def test_ctrl_n_cas_conflict_routes_to_reconcile_screen_without_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Practically unreachable in normal use (a fresh uuid4 per save never
+    collides) but handled identically to Ctrl+S -- forced here the same way
+    ``tests/test_tui_reconcile_screen.py`` forces it for Ctrl+S.
+    """
+    db_path = tmp_path / "lode.db"
+    fixed_id = "fixed-note-id"
+    conn = init_db(db_path)
+    try:
+        save(conn, fixed_id, "original body")
+    finally:
+        conn.close()
+    monkeypatch.setattr(capture_mod.uuid, "uuid4", lambda: _FixedUUID(fixed_id))
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "the conflicting edit"
+            await pilot.press("ctrl+n")
+            await pilot.pause()
+            assert isinstance(app.screen, ReconcileScreen)
+            return "reconciled"
+
+    asyncio.run(_drive())
+    # The original note is untouched (no clobber) -- same guarantee Ctrl+S gives.
+    assert _rows(
+        db_path, "SELECT body FROM versions WHERE note_id = ?", (fixed_id,)
+    ) == [("original body",)]
+
+
+class _CountingStubEmbedder:
+    """Offline embedder stand-in that counts constructions (no ONNX download).
+
+    Reused from ``tests/test_tui_app.py``'s convention: if
+    :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new`'s
+    reset failed to stop the pending debounce timer (or the guard in
+    ``on_text_area_changed`` failed to skip scheduling one for the now-empty
+    buffer), this would tick up -- proving the reset does not pay a real
+    embedder cold-load for nothing (the ``/debate`` review's edge case (a)).
+    """
+
+    instances = 0
+
+    def __init__(self, settings: Settings) -> None:
+        self._dim = settings.embedding_vector_dim
+        type(self).instances += 1
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text
+        return [0.0] * self._dim
+
+
+def test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    _CountingStubEmbedder.instances = 0
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
+    settings = Settings(related_notes_debounce_ms=50, related_notes_min_chars=0)
+    app = LodeApp(db_path=db_path, settings=settings)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "a note long enough to normally trigger a pass"
+            # The 50ms debounce timer is now pending, not yet fired.
+            await pilot.press("ctrl+n")
+            # Wait well past the debounce window a stray timer would fire on.
+            await pilot.pause(0.3)
+            await app.workers.wait_for_complete()
+
+    asyncio.run(_drive())
+
+    assert _CountingStubEmbedder.instances == 0
+
+
+def test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``/debate`` review's edge case (b): a slow in-flight pass from the
+    just-saved note must not land after the reset and paint its stale result
+    into the freshly-cleared panel.
+    """
+    db_path = tmp_path / "lode.db"
+    pass_started = threading.Event()
+
+    def _slow_find_related_notes(db_path, draft, *, settings=None, embedder=None):
+        del draft, settings, embedder
+        pass_started.set()
+        time.sleep(0.3)
+        from lode.tui.related import RelatedNote
+
+        return [RelatedNote(note_id="stale-note", snippet="stale", age="just now")]
+
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
+    monkeypatch.setattr("lode.tui.related.find_related_notes", _slow_find_related_notes)
+    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
+    app = LodeApp(db_path=db_path, settings=settings)
+
+    async def _drive() -> tuple[list, str]:
+        async with app.run_test() as pilot:
+            text_area = app.screen.query_one(f"#{BODY_ID}")
+            text_area.text = "typing about something before saving"
+            # Let the 1ms debounce fire and the slow pass actually start.
+            # Waiting via asyncio.to_thread (rather than blocking this
+            # coroutine directly) keeps the event loop free to run the
+            # debounce timer callback and schedule the worker in the first
+            # place -- a direct blocking wait here would starve the very
+            # event loop that needs to start the pass.
+            assert await asyncio.to_thread(pass_started.wait, 2.0)
+            await pilot.press("ctrl+n")
+            # Outlive the slow pass's 0.3s sleep so a not-actually-cancelled
+            # worker would have time to land and repaint the panel.
+            await pilot.pause(0.5)
+            await app.workers.wait_for_complete()
+            panel = app.screen.query_one(f"#{RELATED_ID}")
+            return app.screen._related, str(panel.content)
+
+    related, panel_text = asyncio.run(_drive())
+
+    assert related == []
+    assert "stale" not in panel_text

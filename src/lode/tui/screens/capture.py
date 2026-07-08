@@ -154,17 +154,21 @@ class DiscardConfirmScreen(ModalScreen[str]):
 class CaptureScreen(Screen[None]):
     """One text area plus a passive related-notes panel.
 
-    Ctrl+S saves and exits. Escape discards and exits immediately if the
-    buffer is empty/whitespace-only; otherwise it pops a Save/Discard/Cancel
-    confirm (lode-0wj.1) rather than discarding silently. The app-level
-    Ctrl+Q binding (:mod:`lode.tui.app`) applies the same guard via
-    :meth:`confirm_quit` (lode-0wj.8). The related-notes panel is read-only
-    and non-interactive — it never takes focus or input, so it changes
-    nothing about capture's "get in, dump text, get out" contract.
+    Ctrl+S saves and exits. Ctrl+N saves the same way but resets the buffer
+    for a fresh note instead of exiting, so a second (or third...) note never
+    requires leaving the TUI (lode-d32.4, :meth:`action_save_and_new`).
+    Escape discards and exits immediately if the buffer is empty/whitespace-
+    only; otherwise it pops a Save/Discard/Cancel confirm (lode-0wj.1) rather
+    than discarding silently. The app-level Ctrl+Q binding
+    (:mod:`lode.tui.app`) applies the same guard via :meth:`confirm_quit`
+    (lode-0wj.8). The related-notes panel is read-only and non-interactive —
+    it never takes focus or input, so it changes nothing about capture's
+    "get in, dump text, get out" contract.
     """
 
     BINDINGS = [
         Binding("ctrl+s", "save", "Save & quit"),
+        Binding("ctrl+n", "save_and_new", "Save & new"),
         Binding("escape", "cancel", "Discard & quit"),
     ]
 
@@ -258,6 +262,48 @@ class CaptureScreen(Screen[None]):
             return
         self.app.exit(result.note_id)
 
+    def action_save_and_new(self) -> None:
+        """Save the buffer instantly (no AI call) and reset for a fresh note.
+
+        Same save path as :meth:`action_save` — identical no-AI
+        ``save_capture`` call, identical empty-buffer refusal, identical
+        CAS-conflict handoff to
+        :class:`~lode.tui.screens.reconcile.ReconcileScreen` — but a clean
+        save does not exit the app (lode-d32.4): it clears the text area and
+        the related-notes panel and leaves focus in the editor, so the next
+        note can start immediately without leaving the TUI.
+
+        The pending related-notes debounce timer is stopped and any
+        in-flight ``related-notes`` worker is cancelled *before* the buffer
+        is cleared, so a slow pass started for the just-saved note cannot
+        land after the reset and paint its results into the freshly-cleared
+        panel. Clearing the text area itself fires another ``Changed``
+        message, but :meth:`on_text_area_changed` no-ops a debounce restart
+        for an empty buffer, so the reset does not schedule a pointless pass
+        (and the embedder cold-load that would come with it) of its own.
+        """
+        body = self.query_one(f"#{BODY_ID}", TextArea).text
+        app = self.app
+        try:
+            result = save_capture(app.db_path, body, settings=app.settings)
+        except EmptyCaptureError:
+            self.notify("Refusing to save an empty note.", severity="warning")
+            return
+        if isinstance(result, CaptureConflict):
+            self.app.push_screen(ReconcileScreen(result))
+            return
+
+        if self._related_timer is not None:
+            self._related_timer.stop()
+            self._related_timer = None
+        self.workers.cancel_group(self, "related-notes")
+
+        text_area = self.query_one(f"#{BODY_ID}", TextArea)
+        text_area.clear()
+        self._render_related([])
+        text_area.focus()
+        self.notify("Saved. New note.")
+
     def action_cancel(self) -> None:
         """Escape: exit immediately if the buffer is empty, else confirm first."""
         self.confirm_quit()
@@ -301,11 +347,25 @@ class CaptureScreen(Screen[None]):
         :meth:`_search_related`'s job). Guarded to the capture body's own id
         so a future widget's ``Changed`` message (bubbling through the same
         handler name) can never mis-trigger this.
+
+        An empty/whitespace-only buffer (including one just cleared by
+        :meth:`action_save_and_new`'s reset, lode-d32.4) skips scheduling a
+        pass entirely rather than debouncing one that would only find
+        ``find_related_notes`` short-circuit on ``draft.strip()`` being too
+        short — that short-circuit runs *after* this screen's own
+        :meth:`_ensure_embedder` call in :meth:`_search_related`, so without
+        this guard an empty buffer still pays a real embedder cold-load for
+        nothing. The related panel is cleared immediately instead of waiting
+        out a debounce that would end up clearing it anyway.
         """
         if event.text_area.id != BODY_ID:
             return
         if self._related_timer is not None:
             self._related_timer.stop()
+            self._related_timer = None
+        if not event.text_area.text.strip():
+            self._render_related([])
+            return
         delay_s = self.app.settings.related_notes_debounce_ms / 1000
         log.debug(
             "keystroke: related-notes debounce (re)started, delay=%.0fms",
