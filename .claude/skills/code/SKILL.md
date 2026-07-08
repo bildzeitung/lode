@@ -53,11 +53,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — run your "Rebase
    > pickup" cycle, not a fresh build: read `metadata.review_worktree` from bd, drive that worktree via
-   > `git -C <path>` (do **not** `EnterWorktree` into it), `git fetch origin trunk && git rebase
-   > origin/trunk`, re-gate via `nox -f <path>/noxfile.py`, `push --force-with-lease` to the same
-   > `land/<id>` ref, refresh the head-SHA metadata, and swap `needs-rebase` straight to
-   > `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase conflict, abort and
-   > escalate (`land-escalated`, leave the branch as it was) rather than guess a resolution.
+   > `git -C <path>` (do **not** `EnterWorktree` into it), `git -C <path> fetch origin trunk && git -C
+   > <path> rebase origin/trunk`, re-gate via `nox -f <path>/noxfile.py`, `git -C <path> push
+   > --force-with-lease` to the same `land/<id>` ref, refresh the head-SHA metadata, and swap
+   > `needs-rebase` straight to `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase
+   > conflict, abort and escalate (`land-escalated`, leave the branch as it was) rather than guess a
+   > resolution.
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
    (`run_in_background: true`) — a rebase pickup and a fresh build never share a ticket, so they can't
