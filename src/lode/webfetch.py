@@ -117,7 +117,19 @@ from lode.config import Settings
 
 #: Sent on every fetch so a server sees an identifiable, non-empty UA rather
 #: than a bare httpx default (some sites 403 a missing/generic UA outright).
-_USER_AGENT = "lode-webfetch/1 (+https://github.com/bildzeitung/lode)"
+#:
+#: Deliberately a bare product token, with no ``(+<url>)`` contact link. That
+#: convention identifies a *centrally operated* crawler, so an operator can
+#: reach whoever is responsible for the traffic. lode is neither: it fetches
+#: one user-pasted page, one hop, from the end user's own machine ("Recursion =
+#: unbounded web crawler, not a notes app" — docs/externals.md, "Draw-down
+#: rules"). The only real URL this project has is a maintainer's personal
+#: GitHub account, which names someone who is *not* the party fetching, and
+#: broadcasts that identity to every third-party host the user draws down from.
+#: The product token stays greppable and blockable — the one affordance an
+#: operator can actually act on. Restore ``(+<url>)`` only if lode ever gains a
+#: project-owned URL. (lode-yzv)
+_USER_AGENT = "lode-webfetch/1"
 
 #: The 4xx codes HTTP itself flags as "try again later" — everything else in
 #: the 4xx range is a permanent tombstone. 408 Request Timeout (RFC 9110

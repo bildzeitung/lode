@@ -309,3 +309,23 @@ class TestHttpxFetcher:
         assert captured["max_redirects"] == 3
         assert captured["timeout"] == 2.5
         assert captured["follow_redirects"] is True
+
+    def test_user_agent_is_a_bare_product_token(self, monkeypatch):
+        """The UA reaches httpx and advertises no ``(+<url>)`` contact link.
+
+        Regression guard (lode-yzv): this constant once shipped a fabricated
+        ``+<url>`` pointing at a repo that did not exist. A ``+<url>`` names the
+        party responsible for the traffic so an operator can contact/block it;
+        for a locally-run personal KB that party is the end user, never the repo
+        or its maintainer. Asserted as a property, not a literal, so bumping the
+        version does not break the guard.
+        """
+        captured: dict = {}
+        monkeypatch.setattr(httpx, "Client", _fake_client_cls(200, captured))
+        fetcher = HttpxFetcher(load_settings())
+
+        fetcher.fetch(_URL)
+
+        user_agent = captured["headers"]["User-Agent"]
+        assert user_agent.startswith("lode-webfetch/")
+        assert "+" not in user_agent
