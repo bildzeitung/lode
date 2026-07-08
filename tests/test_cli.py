@@ -708,6 +708,47 @@ def test_notes_excludes_a_tombstoned_note(tmp_path: Path) -> None:
     assert result.stdout.strip() == "no notes"
 
 
+# --- lode notes --deleted (list tombstoned notes, lode-d32.2) ---------------
+
+
+def test_notes_deleted_flag_lists_only_tombstoned_notes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    live_id = runner.invoke(
+        app, ["add", "still here", "--db", str(db_path)]
+    ).stdout.strip()
+    gone_id = runner.invoke(
+        app, ["add", "gone soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (gone_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, gone_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert gone_id in result.stdout  # full id -- the only route to `show`/`recover`
+    assert live_id not in result.stdout
+    assert "gone soon" in result.stdout
+
+
+def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
+    tmp_path: Path,
+) -> None:
+    """The empty message names the queried scope -- a live note exists here."""
+    db_path = tmp_path / "lode.db"
+    runner.invoke(app, ["add", "still here", "--db", str(db_path)])
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "no deleted notes"
+
+
 # --- lode purge <prefix> (unambiguous note-id prefix, lode-1gr.3) -----------
 
 
@@ -977,6 +1018,45 @@ def test_show_unknown_full_id_reports_no_such_note(tmp_path: Path) -> None:
     result = runner.invoke(app, ["show", full_id, "--db", str(db_path)])
     assert result.exit_code == 1
     assert "no such note" in result.stderr
+
+
+def test_show_flags_a_tombstoned_note_with_deleted_marker(tmp_path: Path) -> None:
+    """A tombstoned note reads as such rather than as if live (lode-d32.2).
+
+    ``resolve_note_prefix`` is scoped to live notes (repository.py), so a
+    tombstoned note is only reachable by its full 36-char id -- same
+    full-id-bypasses-resolution case as
+    ``test_purge_full_id_still_works_regardless_of_note_state``.
+    """
+    db_path = tmp_path / "lode.db"
+    full_id = "c" * 36  # a real uuid4 is also 36 chars; only the length matters
+    conn = init_db(db_path)
+    try:
+        result = save(conn, full_id, "the carried-forward body")
+        delete(conn, full_id, parent=result.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", full_id, "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert f"note_id: {full_id} [deleted]" in result.stdout
+    # The tombstone's carried-forward body is still shown -- useful context
+    # for deciding whether to recover it.
+    assert "the carried-forward body" in result.stdout
+
+
+def test_show_live_note_has_no_deleted_marker(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "still alive", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["show", note_id, "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert f"note_id: {note_id}" in result.stdout
+    assert "[deleted]" not in result.stdout
 
 
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
