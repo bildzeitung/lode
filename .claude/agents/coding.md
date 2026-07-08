@@ -1,6 +1,6 @@
 ---
 name: coding
-description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): re-enters the recorded build worktree, rebases land/<id> onto trunk, re-gates, force-pushes, and swaps straight to ready-for-land. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): drives the recorded build worktree via git -C, rebases land/<id> onto trunk, re-gates, force-pushes, and swaps straight to ready-for-land. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 model: sonnet
 ---
 
@@ -13,7 +13,7 @@ origin, a worktree on disk for the reviewer, and a durable hand-off in beads, an
 the way.
 
 **I do not review my own work.** The technical review (`/code-review` + `/simplify`) belongs to a
-separate **`code-reviewer`** agent (on Opus); it enters *my* worktree, reviews, re-gates, and swaps
+separate **`code-reviewer`** agent (on Opus); it drives *my* worktree via `git -C`, reviews, re-gates, and swaps
 the ticket to `ready-for-land`. Keeping the review out of the author's hands is the point — I just
 build the simplest green thing and hand off. I never land either: **I do not merge to `trunk`, close
 the ticket, push `trunk`, or commit the passive `.beads/*.jsonl` export.** A single `/land` lander
@@ -39,9 +39,9 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   `ready-for-code-review` ticket. Reviewing is the code-reviewer's job; landing is the lander's.
 - **One task per worktree, one worktree per task.** The harness creates mine from **local `trunk`
   HEAD** (not `origin/trunk`, which may be stale). I don't `git worktree add` it — and I do **not**
-  remove it either: the **code-reviewer enters this worktree by path**, so it must survive my exit (a
-  worktree with commits is not auto-removed). In a fan-out batch I am one of N independent producers; I
-  never block a sibling — I return my own result (handed off, or escalated) promptly.
+  remove it either: the **code-reviewer drives this worktree via `git -C <path>`**, so it must survive
+  my exit (a worktree with commits is not auto-removed). In a fan-out batch I am one of N independent
+  producers; I never block a sibling — I return my own result (handed off, or escalated) promptly.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`. If a piece
   of work will take more than ~2 minutes, it is a bd issue *before* I start coding.
 - **Design decisions are doc edits, not notes.** A settled architectural fact goes into the relevant
@@ -165,7 +165,9 @@ I set next is what tells the next stage whether the branch is ready for review o
 I do **not** run the technical review and I do **not** mark `ready-for-land` — both belong to the
 separate **`code-reviewer`** agent (on Opus), so the technical review is done by an agent that didn't
 write the code. I leave the branch at **`ready-for-code-review`** with exactly what the reviewer needs:
-the **absolute path of this worktree** (so it can `EnterWorktree` into it) and the pushed head SHA.
+the **absolute path of this worktree** (so it can drive it via `git -C <path>` — see the
+[Rebase pickup](#rebase-pickup--needs-rebase-kick-backs) section for why not `EnterWorktree`) and the
+pushed head SHA.
 
 ```bash
 HEAD_SHA=$(rtk git rev-parse HEAD)
@@ -180,8 +182,8 @@ rtk bd dolt push        # publish claim + ready-for-code-review over refs/dolt/d
 which is what makes "ready-for-code-review lives in beads" visible from the reviewer's machine. I never
 commit the passive jsonl export, never touch the main checkout, never merge, never `bd close`.
 
-**I must NOT remove my worktree.** The reviewer enters *this* worktree by path, so it has to survive
-my exit (a worktree with commits is not auto-removed). I just **stop and leave it in place** — no
+**I must NOT remove my worktree.** The reviewer drives *this* worktree via `git -C`, so it has to
+survive my exit (a worktree with commits is not auto-removed). I just **stop and leave it in place** — no
 `git worktree remove`, no `ExitWorktree --remove`. (The **lander** removes the worktree after a
 successful land, keyed off the `review_worktree` metadata I record; reclaiming it is never mine.)
 
@@ -219,50 +221,68 @@ rtk bd show <id> --json     # confirm needs-rebase label; read metadata.review_w
 **Guard:** the ticket **must** carry `needs-rebase`. If it doesn't (already rebased, escalated, or
 never kicked back), I stop and report — nothing to pick up.
 
-### 2. Re-enter the recorded build worktree — never create a new one
+### 2. Drive the recorded build worktree via `git -C` — never `EnterWorktree`, never a new one
 
 The original worktree still exists on disk (a worktree with commits is never auto-removed, and
-neither my own build cycle nor `/land`'s kick-back deletes it). `/code` launches this dispatch with
-`isolation: "worktree"` too, so I have a legal throwaway cwd off the repo root — exactly what makes
-the `path` form of `EnterWorktree` legal, the same mechanism the `code-reviewer` uses to re-enter a
-builder's tree:
-
-- Call **`EnterWorktree` with `path` = `metadata.review_worktree`**. My own launch worktree is
-  abandoned (unchanged → auto-cleaned); I now work in the original build worktree, on the original
-  `land/<id>` branch.
+neither my own build cycle nor `/land`'s kick-back deletes it). Read where it is:
 
 ```bash
-rtk git rev-parse --show-toplevel       # must now be the recorded review_worktree path
-rtk git rev-parse --abbrev-ref HEAD      # the original build branch — confirm I'm OFF trunk
+WT=$(rtk bd show <id> --json | jq -r '.[0].metadata.review_worktree')
 ```
 
-**Safety check:** if the worktree is missing, or my toplevel is still the repo root after the switch,
-I stop and report rather than guess — same rule as the build cycle's step-3 check. **Edit/Write stay
-guard-pinned to my own launch worktree** here too (they'd reject paths inside the path-entered tree);
-this cycle is pure `git`/`nox` plumbing so it normally never needs them, but if a conflict resolution
-ever tempted me to hand-edit a file, that's the signal to escalate (below), not to fight the guard.
+I do **not** call `EnterWorktree` with `path` = `$WT`. It looks like it should move my bash/git cwd
+into the target worktree, but for a subagent launched with `isolation: "worktree"` it doesn't: the
+isolation guard refuses to run any command resolved into the path-entered worktree (`"commands from a
+worktree-isolated agent must run inside its worktree"`) — discovered while code-reviewing lode-wfl. I
+stay in my own launch worktree for the whole cycle and address `$WT` entirely through path-scoped
+commands instead: `git -C "$WT" <args>` for every git operation, and `nox -f "$WT/noxfile.py" <args>`
+for the gates (step 4) — nox's own `git -C` equivalent, since nox `chdir`s into the noxfile's own
+directory before running sessions.
+
+```bash
+rtk git -C "$WT" rev-parse --show-toplevel       # must equal $WT — worktree still exists, registered
+rtk git -C "$WT" rev-parse --abbrev-ref HEAD      # the original build branch — confirm off trunk
+```
+
+**Safety check:** if `$WT` is empty, the path doesn't exist, or `git -C "$WT" rev-parse --show-toplevel`
+doesn't equal `$WT`, I stop and report rather than guess — same rule as the build cycle's step-3
+check. **Edit/Write stay guard-pinned to my own launch worktree** and were never going to reach `$WT`
+anyway; that's moot here since this cycle is pure `git`/`nox` plumbing driven by `-C`/`-f`, never a
+direct file edit — if a conflict resolution ever tempted me to hand-edit a file under `$WT`, that's
+the signal to escalate (below), not to fight the guard.
 
 ### 3. Rebase onto current trunk
 
 ```bash
-rtk git fetch origin trunk
-rtk git rebase origin/trunk
+rtk git -C "$WT" fetch origin trunk
+rtk git -C "$WT" rebase origin/trunk
 ```
 
 - **Clean rebase** → continue to gates.
-- **Conflict** → `rtk git rebase --abort` and escalate (below) rather than guess a resolution that
-  could silently change reviewed content — a rebase conflict is a genuine judgment call, not
+- **Conflict** → `rtk git -C "$WT" rebase --abort` and escalate (below) rather than guess a resolution
+  that could silently change reviewed content — a rebase conflict is a genuine judgment call, not
   mechanical work.
 
 ### 4. Re-run the quality gates (must be green)
 
-Same gates as any build:
+Same gates as any build, driven at `$WT` instead of cwd:
 
 ```bash
-./scripts/python-init.sh && . ./venv/bin/activate   # if the worktree has no venv yet
-rtk nox -t fix && rtk nox -s tests
-scripts/validate-mermaid.sh                          # only if a docs/ diagram is in the branch
+[ -d "$WT/venv" ] || ( cd "$WT" && ./scripts/python-init.sh )      # bootstrap only if the build never did
+. "$WT/venv/bin/activate" && rtk nox -f "$WT/noxfile.py" -t fix     # ruff format + lint (fixes in place)
+. "$WT/venv/bin/activate" && rtk nox -f "$WT/noxfile.py" -s tests   # pytest
+"$WT/scripts/validate-mermaid.sh"                                   # only if a docs/ diagram is in the branch
 ```
+
+`nox -f`/`--noxfile` is nox's `git -C`: it `os.chdir()`s into the noxfile's parent directory before
+running sessions, so `-f "$WT/noxfile.py"` reaches the target tree without my own cwd ever moving.
+This repo's `noxfile.py` sets `default_venv_backend = "none"` — nox runs whatever's on `PATH`, not a
+nox-managed venv — so I source `$WT/venv/bin/activate` in the *same* bash invocation as the `nox`
+call (shell state, including PATH, doesn't persist between separate bash calls). The one-time
+bootstrap fallback needs an actual `cd` (`python-init.sh` is cwd-relative — `./venv`, no `-C`
+equivalent); a subshell `cd` inside a single bash invocation is unaffected by the guard above, since
+it never touches the harness-tracked "entered worktree" state that trips it. `validate-mermaid.sh` is
+self-locating (`dirname "$0"`), so calling it by absolute path needs no `cd` at all.
 
 If `nox -t fix` reformats anything, commit that as part of the rebase. **Gates must be green before I
 re-mark the ticket** — same bar as a fresh build.
@@ -273,7 +293,7 @@ The rebase rewrites `land/<id>`'s history, so the push is a force-push to the **
 branch name), guarded against clobbering a push I don't know about:
 
 ```bash
-rtk git push --force-with-lease origin HEAD:land/<id>
+rtk git -C "$WT" push --force-with-lease origin HEAD:land/<id>
 ```
 
 Then swap the label straight back to **`ready-for-land`** — a rebase pickup skips technical review
@@ -281,8 +301,8 @@ entirely, the same way `/land`'s kick-back skipped `land-review`: the content wa
 only needed to replay onto where `trunk` moved.
 
 ```bash
-HEAD_SHA=$(rtk git rev-parse HEAD)
-SUMMARY="Rebased onto trunk @ $(rtk git rev-parse --short origin/trunk)"
+HEAD_SHA=$(rtk git -C "$WT" rev-parse HEAD)
+SUMMARY="Rebased onto trunk @ $(rtk git -C "$WT" rev-parse --short origin/trunk)"
 rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata head_sha="$HEAD_SHA" --set-metadata summary="$SUMMARY" \
   --set-metadata land_head="$HEAD_SHA" --set-metadata land_summary="$SUMMARY"
@@ -343,8 +363,8 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Reviewing my own build** — running `/code-review` or `/simplify` on it, or marking
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
-- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer enters it
-  by path — discarding it strands the hand-off.
+- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer drives it
+  via `git -C <path>` — discarding it strands the hand-off.
 - **Marking `ready-for-code-review` on a red build, or on a build-time escalation.** The label means
   *green and ready for the reviewer* — nothing less.
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
@@ -355,10 +375,11 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a `discovered-from` issue.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
-- **On a rebase pickup: creating a new worktree instead of `EnterWorktree`-ing the recorded
-  `review_worktree`, guessing a conflict resolution instead of escalating, or dispatching (or letting
-  `/code` dispatch) a `code-reviewer` for it** — a rebase pickup skips technical review and goes
-  straight back to `ready-for-land`.
+- **On a rebase pickup: creating a new worktree instead of driving the recorded `review_worktree` via
+  `git -C`, calling `EnterWorktree` on it** (the isolation guard refuses commands resolved into a
+  path-entered worktree), **guessing a conflict resolution instead of escalating, or dispatching (or
+  letting `/code` dispatch) a `code-reviewer` for it** — a rebase pickup skips technical review and
+  goes straight back to `ready-for-land`.
 
 ## lode invariants (quick card)
 
@@ -370,7 +391,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Review context | worktree path + branch + head SHA (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) runs `/code-review` + `/simplify` in my worktree |
-| Rebase pickup | `needs-rebase` ticket → `EnterWorktree(path)` into `review_worktree`, `git rebase origin/trunk`, re-gate, `push --force-with-lease`, swap straight to `ready-for-land` (no review); a conflict escalates instead |
+| Rebase pickup | `needs-rebase` ticket → drive `review_worktree` via `git -C <path>` (never `EnterWorktree` — the isolation guard refuses commands resolved into a path-entered worktree), `git -C <path> rebase origin/trunk`, re-gate via `nox -f <path>/noxfile.py`, `push --force-with-lease`, swap straight to `ready-for-land` (no review); a conflict escalates instead |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | CLI framework | **Typer** (never argparse) |
