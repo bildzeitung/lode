@@ -91,6 +91,9 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 | Refresh policy / TTL (per source) | runtime | per-source | On-access revalidation vs scheduled; a closed ticket rarely changes, an active PR hourly. ([decisions.md](decisions.md)) |
 | Re-enrichment materiality threshold | tune | size/similarity delta | Gates the paid re-enrichment of a changed external snapshot; below it, carry prior enrichment forward. Caps cloud spend on chatty sources. ([externals.md](externals.md#snapshot-churn-decouple-new-snapshot-from-re-enrich)) |
 | Draw-down hop limit | build | 1 | Follow explicit links one hop, then stop. ([externals.md](externals.md#draw-down-rules)) |
+| Fetch timeout | runtime | `10s` | Per-fetch HTTP timeout (`lode-w0h.1`); a timeout is a TRANSIENT failure (retried by the async queue), not a tombstone — as is a server-reported `408 Request Timeout`. |
+| Fetch max redirects | runtime | 5 | 3xx redirects a single web-fetch follows before tombstoning as unresolvable (`lode-w0h.1`). **Distinct from Draw-down hop limit above** — this caps redirects *within one fetch*; the hop limit caps crawling a fetched page's *own outbound links*. |
+| Fetch min-extract-chars floor | tune | 200 | Readability-extracted text shorter than this is treated as a JS-scaffold/paywall/empty page and tombstoned, even when the extractor returned non-`None` text — the length-floor half of the fetch-outcome signal ([externals.md](externals.md#draw-down-rules)). |
 
 ## Privacy & egress
 

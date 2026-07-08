@@ -105,9 +105,29 @@ spend on noisy sources without letting enrichment rot.
 
 - **Follow explicit links one hop, then stop.** Pull the linked page, extract *its* entities,
   but do not follow that page's links outward. Recursion = unbounded web crawler, not a notes app.
+  (This hop limit governs a fetched page's own *outbound links*; it is a separate knob from the
+  HTTP redirect cap a single fetch follows — see the fetch-outcome taxonomy below.)
 - **Readability extraction + graceful failure.** Many pages (JS-rendered, paywalled, 403) return
   scaffolding to a naive GET; strip nav/ads, snapshot cleaned text (+ optional raw HTML), and on
   failure write a tombstone snapshot rather than garbage.
+
+### Fetch-outcome taxonomy (decided, `lode-w0h.1`)
+
+One fetch of one URL resolves to exactly one of these outcomes:
+
+| Outcome | Trigger | Result |
+|---|---|---|
+| **OK** | 2xx response, extractor returns text at/above the length floor | snapshot with `status='ok'` |
+| **PERMANENT failure** | 401/403 and any other 4xx *except* 408/429; **or** a 2xx response whose extracted text is empty/`None`/shorter than the length floor (covers JS-rendered scaffolding, paywalled teasers, and empty pages with one signal); **or** a redirect chain longer than the configured cap (loop or merely-too-long — a retry hits the same cap) | snapshot with `status='tombstone'` — retrying will not help |
+| **TRANSIENT failure** | 408 or 429 (the two 4xx codes HTTP itself flags "try again later"), any 5xx, or a network/timeout error | **not** written as a snapshot by the fetch unit itself — the caller raises into the async work queue's existing attempts/backoff/dead-letter machinery (`failed` → `pending` retry, → `dead` at max attempts, PINNED `lode-i05.6`); on `dead`, the caller writes a tombstone snapshot so the note edge still resolves |
+| **3xx** | one or more redirects, within the configured cap | followed transparently; the *final* resolved URL is what gets canonicalized into `external_id` — a note edge created on the originally-pasted URL may need re-pointing to the final URL's canonical form |
+
+The testable detection signal for "PERMANENT — 2xx but not real content" is the readability
+extractor returning `None`/empty **or** text below a configured length floor
+([configuration.md](configuration.md)) — no separate paywall- or JS-shell-specific heuristic is
+needed. **JS-rendered pages are a permanent tombstone by this rule, deliberately** — actually
+rendering them (headless browser / JS execution) is an explicit deferred follow-on (`lode-oni`),
+not first-connector scope.
 
 ---
 
