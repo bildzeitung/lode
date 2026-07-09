@@ -167,14 +167,19 @@ flowchart TD
     GUARD -->|"no, in worktree"| CLAIM["claim (bd update --claim)"]
 
     CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
-    IMPL --> GATES{"Quality gates"}
+    IMPL --> COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
+    COMMIT --> CLEAN1{"git status --short<br>empty?"}
+    CLEAN1 -->|"no"| COMMIT
+    CLEAN1 -->|"yes"| GATES{"Quality gates"}
     GATES -->|"nox -t fix · nox -s tests ·<br>validate-mermaid (if diagram)"| GFAIL{"Pass?"}
     GFAIL -->|"no"| FIX["Fix & re-run —<br>never hand off on a failing gate"]
     FIX --> GATES
-    GFAIL -->|"yes"| COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
+    GFAIL -->|"yes"| FIXCOMMIT["Commit gate output<br>(fixes + nox -t fix reformatting)"]
 
-    COMMIT --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
-    PUSH --> HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
+    FIXCOMMIT --> PUSH["git push -u origin HEAD:land/&lt;id&gt;"]
+    PUSH --> CLEAN2{"git status --short<br>empty?"}
+    CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
+    CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
     HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review --fix + simplify · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
@@ -185,8 +190,8 @@ flowchart TD
     classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,RES start;
-    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,PUSH,HANDOFF,REV work;
-    class GATES,GFAIL,GUARD gate;
+    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,FIXCOMMIT,PUSH,HANDOFF,REV work;
+    class GATES,GFAIL,GUARD,CLEAN1,CLEAN2 gate;
     class BAIL,FIX bad;
     class MARKL,DONE good;
 ```
@@ -204,6 +209,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
+| Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so the tree that gated green must be the tree committed and pushed; a dirty tree at either point silently drops uncommitted work (lode-tpt) |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
 | Done (coding loop) | builder hands off at `ready-for-code-review` (worktree kept); code-reviewer reviews, re-gates, swaps to `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 
