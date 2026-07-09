@@ -383,8 +383,11 @@ rtk scripts/bd-dolt-push.sh
 # origin/land/<id> is KEPT (no delete) until the human resolves it.
 ```
 
-(A stale-escalation sweep to GC long-abandoned `land/<id>` branches is a deferred hygiene task in
-`docs/decisions.md`, not part of v1.)
+(A **stale-escalation sweep** — **surfacing**, not GC'ing, a `land-escalated` branch that has sat
+unresolved unusually long — is a deferred refinement in `docs/decisions.md`, not part of v1. `/sweep`
+already surfaces every open `land-escalated` item every pass regardless of age; a `land-escalated`
+branch is never touched by an automated sweep — only the three human-driven resolution exits below
+remove the label and let the branch go.)
 
 ## Resolving a `land-escalated` branch
 
@@ -409,7 +412,9 @@ swap the label. `land-review` stays authoritative on re-review; there is deliber
 out-of-band manual act, not a designed fast-path):
 
 ```bash
-rtk bd update <id> --description="<revised, unambiguous acceptance/description>"   # write the decision in; the BRANCH is untouched
+rtk bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # land-review reads
+  # acceptance_criteria as the contract — this is the field that must change; add --description too
+  # if the narrative text also needs updating. The BRANCH is untouched.
 rtk bd update <id> --remove-label land-escalated --add-label ready-for-land
 rtk scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
