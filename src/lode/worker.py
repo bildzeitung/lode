@@ -190,10 +190,31 @@ def _run_dead_letter_hook(
     last_error: str,
     settings: Settings,
 ) -> None:
-    """Invoke ``job_type``'s registered dead-letter hook, if any (no-op otherwise)."""
+    """Invoke ``job_type``'s registered dead-letter hook, if any (no-op otherwise).
+
+    Best-effort: the job's status is already durably committed to ``'dead'``
+    before this runs (:func:`run_one`'s max-attempts gate, or
+    :func:`_reclaim_stale_running`'s crash-reclaim gate), so a hook that raises
+    must never propagate and abort the drain loop — nor bubble out of the
+    interactive ``lode add`` immediate-enrich path, which calls
+    :func:`run_one` directly with no wrapping ``try``. A failed hook degrades
+    to exactly the narrow, already-accepted gap this module documents (the
+    external's tombstone is simply not written yet, its diagnostic still on the
+    job row's ``last_error``) rather than taking down the worker. The failure
+    is logged at ``error`` level so it stays observable.
+    """
     hook = _DEAD_LETTER_HOOKS.get(job_type)
-    if hook is not None:
+    if hook is None:
+        return
+    try:
         hook(conn, target_version, last_error, settings)
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "dead-letter hook for job type %r (target=%s) failed; job remains "
+            "'dead' but its dead-letter side effect was not recorded",
+            job_type,
+            target_version,
+        )
 
 
 # ---------------------------------------------------------------------------

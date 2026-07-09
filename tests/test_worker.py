@@ -534,6 +534,46 @@ def test_reclaim_refresh_dead_letter_writes_tombstone_snapshot(
     assert status == "tombstone"
 
 
+def test_dead_letter_hook_exception_does_not_propagate(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-at8: a raising dead-letter hook must not wedge the worker.
+
+    The job's status is already durably committed to 'dead' before the hook
+    runs, so a hook that raises degrades to the accepted "tombstone not
+    written yet" gap rather than propagating out of run_one and aborting the
+    drain loop (or bubbling out of the interactive `lode add`
+    immediate-enrich path, which calls run_one directly with no wrapping try).
+    """
+    external_id = "https://example.com/hook-explodes"
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+
+    def _boom(conn, target_version, last_error, settings):  # noqa: ARG001
+        raise RuntimeError("hook blew up")
+
+    with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _boom}):
+        # Must NOT raise, despite the registered hook raising.
+        ok = run_one(
+            conn,
+            job_id,
+            db_path,
+            settings,
+            _always_raising_refresh_registry("timeout"),
+        )
+
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"  # status transition still committed
+    # The hook failed, so no tombstone was written -- the accepted degraded
+    # state, not a propagated crash.
+    row = conn.execute(
+        "SELECT 1 FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert row is None
+
+
 # ---------------------------------------------------------------------------
 # claim_and_run_one — CLI immediate-enrich fast path (lode-npx.2)
 # ---------------------------------------------------------------------------
