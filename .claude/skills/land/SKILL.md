@@ -212,7 +212,8 @@ Only a genuinely unmerged index (`git ls-files -u` non-empty) is a real textual 
 ```bash
 merge_one() {   # $1 = id — merges "origin/land/$1" with its pre-computed message, retrying once past
                  # a re-staged jsonl; returns non-zero ONLY on a real textual conflict (or an unretried
-                 # failure), never on the jsonl symptom
+                 # failure), never on the jsonl symptom. On a real conflict it sets $CONFLICTS (the
+                 # unmerged paths) for the needs-rebase kick-back, then aborts to a clean tree.
   local id="$1" err
   err=$(rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" 2>&1) && return 0
   if printf '%s' "$err" | grep -q 'would be overwritten by merge' && [ -z "$(rtk git ls-files -u)" ]; then
@@ -220,8 +221,12 @@ merge_one() {   # $1 = id — merges "origin/land/$1" with its pre-computed mess
     rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" && return 0
   fi
   printf '%s\n' "$err" >&2
-  [ -n "$(rtk git ls-files -u)" ] && rtk git merge --abort   # real conflict — leave a clean tree for the caller
-  return 1        # real conflict — caller decides how to handle it (needs-rebase kick-back)
+  local unmerged; unmerged=$(rtk git ls-files -u)            # non-empty ONLY on a real textual conflict
+  if [ -n "$unmerged" ]; then
+    CONFLICTS=$(printf '%s\n' "$unmerged" | cut -f2- | sort -u)   # name the paths for the kick-back note...
+    rtk git merge --abort                                    # ...before the abort clears the unmerged index
+  fi
+  return 1        # real conflict — caller runs the needs-rebase kick-back (with $CONFLICTS) below
 }
 
 # On trunk, accepted set = the IDs land-review accepted this pass.
