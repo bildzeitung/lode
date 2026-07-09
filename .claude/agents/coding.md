@@ -280,9 +280,9 @@ settle), I:
 - **revert to the last green commit** and push the branch (so the work isn't stranded),
 - **record the worktree hand-off even though I'm not marking `ready-for-code-review` yet.** Exit (a)
   for this exact escalation source re-enters at `ready-for-code-review` (`docs/agents-workflow.md`),
-  and `code-reviewer` step 2 refuses a ticket with no `metadata.review_worktree` — leaving it unset
-  here strands that re-entry the moment a human resolves the decision (lode-t83). Same fields as the
-  green hand-off, captured now while the reverted-to-green tree and its push are still current:
+  and `/code`'s step-1 stranded-review sweep refuses a ticket with no `metadata.review_head` — leaving
+  it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same fields
+  as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
   ```bash
   rtk bd update <id> --set-metadata review_worktree="$(rtk git rev-parse --show-toplevel)" \
