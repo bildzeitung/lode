@@ -162,7 +162,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   otherwise told not to spawn agents unprompted — invoking `/code` *is* the user asking. Fan-out is
   the *only* sanctioned way to run several producers at once (there is no `/code-parallel`).
 - **Two phases, in order: build then review.** Phase 1 (`coding`, Sonnet) builds and **keeps its
-  worktree**; phase 2 (`code-reviewer`, Opus) enters that same worktree by path and runs the technical
+  worktree**; phase 2 (`code-reviewer`, Opus) drives that same worktree via `git -C <path>` (never
+  `EnterWorktree`) and runs the technical
   review. The review must run on the *built* branch, so always dispatch the reviewer *after* its
   builder returns `ready-for-code-review` — never in parallel with its own build. Don't dispatch a
   reviewer for a ticket that escalated at build time.
