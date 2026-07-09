@@ -132,7 +132,7 @@ states its own: **don't start a second `/code` while one is still running agains
 more IDs (or use bare `/code`) to the same invocation instead.** This is narrower than `/land`'s
 rule — it only forbids a *second concurrent invocation*, not a second machine outright, since a lone
 `/code` invocation's own builders already may legitimately fan out across machines (see the coding
-loop's [invocations may fan out across machines](#running-the-loop-family-unattended--epic-audit-sweep)
+loop's [producers may fan out across machines](#running-the-loop-family-unattended--epic-audit-sweep)
 note) as long as no other invocation's sweep is running concurrently with them. See
 [decisions.md](decisions.md) for the rationale.
 
@@ -283,7 +283,9 @@ that a second and third landing-side loop exist alongside it — the lock only e
 `/land` ticks on that one machine, and says nothing about where `/epic-audit` or `/sweep` run, so the
 convention has to be named, not assumed. `/code` producers are the one leg that **may** fan out across
 machines, because they write disjoint issue rows and push branches rather than touching any
-landing-side shared state.
+landing-side shared state — but only *within* one `/code` invocation: two *concurrent* `/code`
+invocations are unsupported, because their start-of-run sweeps race (lode-pzr; see [the coding
+loop's topology note](#the-coding-loop--code--coding--code-reviewer)).
 
 Two further safeguards a `/debate` pass considered for this unattended story — a `/land`
 bounce-lineage cap and a `/code` rebase-attempt cap — were deliberately **deferred**, and an
