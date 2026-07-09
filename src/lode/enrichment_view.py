@@ -1,13 +1,18 @@
-"""Enrichment view-model reader -- the shared TUI+CLI seam (lode-ay5.1).
+"""Enrichment view-model reader -- the shared TUI+CLI seam (lode-ay5.1, lode-0qc).
 
 A pure read function (no Textual, no Typer) that assembles a note's full
 enrichment view for display: :func:`enrichment_view` returns an
-:class:`EnrichmentView` carrying the note's summary/tags/entities, its
-inferred edges (each with ``to_id``/``reason``/``confidence``/``stale``),
-embed status, and a three-valued :attr:`EnrichmentView.enrichment_state`.
-This is the ONE seam the TUI inspector modal (lode-ay5.2) and the CLI parity
-guard (lode-ay5.3) both consume, so the two surfaces cannot drift apart --
-neither may re-derive the stale-display policy or the state predicate below.
+:class:`EnrichmentView` carrying the note's summary/tags/entities as
+structured :class:`EnrichmentItem` values (each pairing a bare string with a
+``stale`` flag), its inferred edges (each with
+``to_id``/``reason``/``confidence``/``stale``), embed status, and a
+three-valued :attr:`EnrichmentView.enrichment_state`. This is the ONE seam the
+TUI inspector modal (lode-ay5.2) and the CLI parity guard (lode-ay5.3) both
+consume, so the two surfaces cannot drift apart -- neither may re-derive the
+stale-display policy or the state predicate below. Rendering, by contrast, is
+deliberately NOT shared: this module hands back the ``stale`` bit as data, and
+each consumer decides how to show it (the TUI styles it, the CLI prints
+``" [stale]"``).
 
 **Content** is built ENTIRELY on :mod:`lode.display` --
 :func:`~lode.display.display_annotations` / :func:`~lode.display.
@@ -69,72 +74,92 @@ class EnrichmentEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class EnrichmentItem:
+    """One visible tag/entity/summary payload, paired with its stale bit.
+
+    Structured rather than a pre-rendered string (lode-0qc) so a consumer that
+    needs the boolean -- e.g. the TUI modal styling a stale tag dim rather
+    than printing a suffix -- doesn't have to string-sniff a baked-in
+    ``" [stale]"`` marker. ``value`` is the bare annotation payload; rendering
+    (including whether/how to mark staleness) is entirely the consumer's call.
+    """
+
+    value: str
+    stale: bool
+
+
+@dataclass(frozen=True, slots=True)
 class EnrichmentView:
     """A note's full enrichment view, assembled for display (lode-ay5.1).
 
-    ``summary`` is the note's one summary line -- the fresh row when one exists,
-    else the last-known stale one (see :func:`_summary`), or ``None`` when the
-    note has no summary annotation at all. ``tags``/``entities`` are the payload
-    strings of every visible annotation of that kind, each carrying a
-    ``" [stale]"`` suffix when the stale-display policy flagged it -- the same
-    rendering ``cli.show_`` already does, reused here so ay5.3's refactor
-    changes nothing about wording that already matches.
+    ``summary`` is the note's one summary line -- the fresh row when one
+    exists, else the last-known stale one (see :func:`_summary`), or ``None``
+    when the note has no summary annotation at all. ``tags``/``entities`` are
+    the :class:`EnrichmentItem` values of every visible annotation of that
+    kind. Staleness is carried as data (``EnrichmentItem.stale``), not baked
+    into the string, matching how ``edges`` already carries a structured
+    ``stale: bool`` -- every field on this view-model exposes staleness the
+    same way.
     """
 
     note_id: str
     enrichment_state: EnrichmentState
-    summary: str | None
-    tags: list[str]
-    entities: list[str]
+    summary: EnrichmentItem | None
+    tags: list[EnrichmentItem]
+    entities: list[EnrichmentItem]
     edges: list[EnrichmentEdge]
     embedded: bool
     passage_count: int
 
 
-def _stale_flagged(annotation: dict) -> str:
-    """Render one visible annotation's payload, appending ``" [stale]"`` when flagged.
+def _annotation_items(annotations: list[dict], kind: str) -> list[EnrichmentItem]:
+    """Every visible annotation of ``kind``, as an :class:`EnrichmentItem`.
 
     ``payload`` is a bare string for ``tag``/``entity``/``summary`` rows (see
-    :func:`lode.enrich._write_enrichment`); the suffix marks a flagged item
-    rather than hiding it, per the stale-display policy (show, but flag --
-    ``docs/storage.md`` "Stale-display policy"). This is a formatting
-    convenience, not a second copy of the display policy itself -- the
-    ``visible``/``stale`` decision was already made by
-    :func:`~lode.display.display_annotations`.
+    :func:`lode.enrich._write_enrichment`); the ``stale`` flag was already
+    decided by :func:`~lode.display.display_annotations` -- this only shapes
+    it into the view-model's structured item, no re-deriving the policy.
+
+    ``cli._annotation_values`` is a surviving near-copy of this helper: it
+    filters by ``kind`` the same way but returns pre-rendered strings carrying
+    a baked ``" [stale]"`` suffix (the seam's old shape, before lode-0qc).
+    lode-ay5.3 deletes that copy when it routes ``cli.show_`` through this
+    view-model.
     """
-    payload = str(annotation["payload"])
-    return f"{payload} [stale]" if annotation["stale"] else payload
+    return [
+        EnrichmentItem(value=str(a["payload"]), stale=a["stale"])
+        for a in annotations
+        if a["kind"] == kind
+    ]
 
 
-def _annotation_values(annotations: list[dict], kind: str) -> list[str]:
-    """Every visible annotation payload of ``kind``, stale-flagged inline.
-
-    (Duplicated as ``cli._annotation_values`` only until lode-ay5.3 routes
-    ``cli.show_`` through this view-model and deletes that copy.)
-    """
-    return [_stale_flagged(a) for a in annotations if a["kind"] == kind]
-
-
-def _summary(annotations: list[dict]) -> str | None:
+def _summary(annotations: list[dict]) -> EnrichmentItem | None:
     """The note's one summary line -- the fresh row when one exists.
 
     :func:`~lode.display.display_annotations` is ``note_id``-scoped and spans
     every version, and an AI summary orphaned by an edit stays *visible* (only
     ``source='user'`` orphans are curation tombstones). So an edited-then-
     re-enriched note carries TWO visible ``kind='summary'`` rows: the pre-edit
-    one (orphaned, hence stale-flagged) and the head's fresh one. Taking the
-    first would surface the pre-edit summary, because the rows arrive in rowid
+    one (orphaned, hence stale) and the head's fresh one. Taking the first
+    would surface the pre-edit summary, because the rows arrive in rowid
     (insertion) order -- oldest first.
 
     Prefer a non-stale row; fall back to the last-known stale one so a
     re-enriching note still shows a summary, flagged, rather than nothing
     (the "show-flagged, never hide" stale-display policy). ``min`` on the
     ``stale`` flag is stable, so ties keep insertion order.
+
+    ``cli.show_`` still carries this defect verbatim -- it picks its summary
+    with ``summaries[0]`` over ``cli._annotation_values(...)``, so an
+    edited-then-re-enriched note prints the PRE-EDIT summary. lode-ay5.3
+    inherits the fix by routing ``cli.show_`` through this seam; see
+    ``tests/test_enrichment_view.py`` for the end-to-end reproduction.
     """
-    summaries = [a for a in annotations if a["kind"] == "summary"]
-    if not summaries:
-        return None
-    return _stale_flagged(min(summaries, key=lambda a: a["stale"]))
+    return min(
+        _annotation_items(annotations, "summary"),
+        key=lambda item: item.stale,
+        default=None,
+    )
 
 
 def enrichment_view(db_path: Path, note_id: str) -> EnrichmentView | None:
@@ -163,8 +188,8 @@ def _enrichment_view(conn: sqlite3.Connection, note_id: str) -> EnrichmentView |
     annotations = display_annotations(conn, note_id)
     edges = display_edges(conn, note_id)
 
-    tags = _annotation_values(annotations, "tag")
-    entities = _annotation_values(annotations, "entity")
+    tags = _annotation_items(annotations, "tag")
+    entities = _annotation_items(annotations, "entity")
     view_edges = [
         EnrichmentEdge(
             to_id=edge["to_id"],
