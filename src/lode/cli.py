@@ -10,12 +10,16 @@ enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
 live note's full id, date, and summary via :func:`lode.notes_read.list_notes`
 -- the id source for ``purge`` -- or, with ``--deleted`` (lode-d32.2), lists
 only tombstoned notes via the sibling reader
-:func:`lode.notes_read.list_deleted_notes`; ``show`` (lode-1gr.5) prints one
-note's head body plus its derived enrichment (summary/tags/entities/edges,
-via :mod:`lode.display`'s stale-display policy) and whether it is embedded --
-on-demand introspection, sharing ``purge``'s id/prefix resolution, and
-flagging a tombstoned head with a ``[deleted]`` marker (lode-d32.2) rather
-than rendering it as if live; ``ask`` (lode-y42.2) runs the cited Q&A loop
+:func:`lode.notes_read.list_deleted_notes`; ``show`` (lode-1gr.5, brought to
+CONTENT parity with the TUI inspector modal by lode-ay5.3) prints one note's
+head body plus its full derived enrichment -- summary/tags/entities (stale-
+flagged), inferred edges (now with reason+confidence, compact), a
+three-valued ``enrichment:`` line ({pending, failed, ready}), and whether it
+is embedded -- via the shared :mod:`lode.enrichment_view` seam (lode-ay5.1)
+also consumed by the TUI, so on-demand CLI introspection cannot drift from
+the modal; sharing ``purge``'s id/prefix resolution, and flagging a
+tombstoned head with a ``[deleted]`` marker (lode-d32.2) rather than
+rendering it as if live; ``ask`` (lode-y42.2) runs the cited Q&A loop
 (retrieve → synthesize → faithfulness gate → cite or abstain); ``tui`` (E11,
 lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
@@ -48,7 +52,7 @@ from lode.config import (
     lode_home,
     log_dir,
 )
-from lode.display import display_annotations, display_edges
+from lode.enrichment_view import EnrichmentItem, enrichment_view_conn
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
@@ -491,19 +495,33 @@ def notes_(
         typer.echo(f"{row.note_id}  {_short_date(row.created)}  {row.summary}")
 
 
-def _annotation_values(annotations: list[dict], kind: str) -> list[str]:
-    """Extract every visible annotation payload of ``kind``, stale-flagged inline.
+def _render_item(item: EnrichmentItem) -> str:
+    """Render one :class:`~lode.enrichment_view.EnrichmentItem` for the CLI.
 
-    ``payload`` is a bare string for ``tag``/``entity``/``summary`` rows (see
-    :func:`lode.enrich._write_enrichment`); a ``[stale]`` suffix is appended
-    per-item rather than hiding it, per the stale-display policy (show, but
-    flag -- ``docs/storage.md`` "Stale-display policy").
+    The view-model carries ``stale`` as a bare boolean (lode-0qc); this is
+    where the CLI's own ``" [stale]"`` suffix convention gets applied -- the
+    TUI modal (lode-ay5.2) is free to style the same bit differently.
     """
-    return [
-        f"{a['payload']} [stale]" if a["stale"] else str(a["payload"])
-        for a in annotations
-        if a["kind"] == kind
-    ]
+    return f"{item.value} [stale]" if item.stale else item.value
+
+
+def _render_items(items: list[EnrichmentItem]) -> str:
+    """Render a list of items as a comma-joined line, or ``(none)`` when empty."""
+    return ", ".join(_render_item(item) for item in items) if items else "(none)"
+
+
+def _render_edge_detail(reason: str | None, confidence: float | None) -> str:
+    """Render an edge's optional ``(reason, confidence)`` parenthetical.
+
+    Both fields are nullable (``schema.sql``'s ``edges`` table) -- a
+    user-curated (``source='user'``) edge may carry neither. Render whichever
+    is present; an empty string when both are missing, so the line degrades to
+    today's bare ``-> to_id`` rather than printing an empty ``()``.
+    """
+    parts = [reason] if reason else []
+    if confidence is not None:
+        parts.append(f"{confidence:.2f}")
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 @app.command(name="show")
@@ -515,29 +533,42 @@ def show_(
 ) -> None:
     """Show a note's head body plus its derived enrichment (on-demand introspection).
 
-    specs/03-tui-features.md item 2 (lode-1gr.5): the CLI surface for
-    introspecting what enrichment has (or hasn't) landed on a note, without
-    opening the TUI. Prints the head body, then its summary/tags/entities
-    (``annotations``) and inferred edges (``edges``) via
-    :func:`lode.display.display_annotations` / :func:`~lode.display.
-    display_edges` -- the same stale-display policy (lode-npx.4) every
-    consumer shares, so an item that survived re-anchoring but went stale is
-    shown flagged rather than silently hidden or silently treated as current.
-    Finally reports whether the head is embedded (any ``passages`` rows).
+    specs/03-tui-features.md item 2 (lode-1gr.5), brought to CONTENT parity
+    with the TUI inspector modal (lode-ay5.2) by lode-ay5.3: the CLI surface
+    for introspecting what enrichment has (or hasn't) landed on a note,
+    without opening the TUI. Prints the head body, then renders
+    :func:`~lode.enrichment_view.enrichment_view_conn` -- the ONE seam both
+    this command and the TUI modal consume (lode-ay5.1), so neither re-derives
+    the stale-display policy or the enrichment-state predicate. Every
+    view-model field is surfaced: summary/tags/entities (stale-flagged),
+    inferred edges (now WITH reason+confidence, compact -- e.g.
+    ``-> to_id (reason, 0.82)[stale]``, a net-new field this command gained
+    over the pre-ay5.3 CLI), embed status, and a three-valued
+    ``enrichment:`` line ({pending, failed, ready}) that replaces the old
+    ambiguous bare ``(none)`` -- an un-enriched note now reads
+    ``enrichment: pending``, a dead-lettered one ``enrichment: failed``, both
+    distinct from enriched-but-empty (``enrichment: ready``). Per-field
+    ``(none)`` is unchanged for a genuinely empty section (content is never
+    suppressed by state, lode-ay5.1's pinned predicate) -- ``enrichment:``
+    and a field's own ``(none)`` are complementary, not substitutes.
+
+    Note lode-bvg (not fixed here, awaiting a human decision): the pinned
+    predicate reads ``enrichment: failed`` for a job merely in its transient
+    retry backoff window, not only for a genuine dead-letter -- see
+    :mod:`lode.enrichment_view`'s module docstring.
 
     ``target`` may be a full id or an unambiguous prefix of one, resolved via
     :meth:`lode.repository.Repository.resolve_note_prefix` -- the exact
     resolver ``purge`` uses (lode-1gr.3), so an unknown or ambiguous id errors
-    identically. An un-enriched note (no annotations/edges yet -- enrichment
-    is async) shows ``(none)`` for each empty section rather than erroring.
+    identically.
 
     A tombstoned note (lode-d32.2) is not filtered out here -- unlike
     ``resolve_note_prefix``, which only ever resolves a *prefix* to a live
     note, a full id still reaches a tombstone unchanged (same "full id always
     works" contract ``purge`` relies on, repository.py). Rather than render it
     as if live, the header carries a visible ``[deleted]`` marker (the same
-    ``[stale]``-suffix convention :func:`_annotation_values` already uses for
-    a flagged-not-hidden annotation) while still printing the carried-forward
+    ``[stale]``-suffix convention :func:`_render_item` already uses for a
+    flagged-not-hidden annotation) while still printing the carried-forward
     body -- useful context for deciding whether to ``lode recover`` it.
     """
     conn = _open_db(db)
@@ -557,7 +588,7 @@ def show_(
             raise typer.Exit(code=1) from None
 
         row = conn.execute(
-            "SELECT n.head_version_id, v.created, v.body, v.op FROM notes n "
+            "SELECT v.created, v.body, v.op FROM notes n "
             "JOIN versions v ON v.version_id = n.head_version_id "
             "WHERE n.note_id = ?",
             (note_id,),
@@ -567,16 +598,17 @@ def show_(
             # it exists (purge's own contract) -- an unknown full id lands here.
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1)
-        head_version_id, created, body, op = row
+        created, body, op = row
 
-        annotations = display_annotations(conn, note_id)
-        edges = display_edges(conn, note_id)
-        (passage_count,) = conn.execute(
-            "SELECT COUNT(*) FROM passages WHERE target_version = ?",
-            (head_version_id,),
-        ).fetchone()
+        # The shared TUI+CLI seam (lode-ay5.1): this command no longer builds
+        # its own display.py assembly. `conn` is already open and `note_id`
+        # already resolved, so the conn-taking variant avoids a second
+        # connection (lode-ay5.1's review note; enrichment_view_conn was
+        # promoted public for exactly this caller).
+        view = enrichment_view_conn(conn, note_id)
     finally:
         conn.close()
+    assert view is not None  # the row fetch above already proved note_id exists
 
     deleted_marker = " [deleted]" if op == "delete" else ""
     typer.echo(f"note_id: {note_id}{deleted_marker}")
@@ -585,25 +617,25 @@ def show_(
     typer.echo(body)
     typer.echo("")
 
-    summaries = _annotation_values(annotations, "summary")
-    typer.echo(f"summary: {summaries[0] if summaries else '(none)'}")
+    typer.echo(f"enrichment: {view.enrichment_state}")
 
-    tags = _annotation_values(annotations, "tag")
-    typer.echo(f"tags: {', '.join(tags) if tags else '(none)'}")
+    summary = _render_item(view.summary) if view.summary else "(none)"
+    typer.echo(f"summary: {summary}")
 
-    entities = _annotation_values(annotations, "entity")
-    typer.echo(f"entities: {', '.join(entities) if entities else '(none)'}")
+    typer.echo(f"tags: {_render_items(view.tags)}")
+    typer.echo(f"entities: {_render_items(view.entities)}")
 
-    if edges:
+    if view.edges:
         typer.echo("edges:")
-        for edge in edges:
-            flag = " [stale]" if edge["stale"] else ""
-            typer.echo(f"  -> {edge['to_id']}{flag}")
+        for edge in view.edges:
+            detail = _render_edge_detail(edge.reason, edge.confidence)
+            flag = " [stale]" if edge.stale else ""
+            typer.echo(f"  -> {edge.to_id}{detail}{flag}")
     else:
         typer.echo("edges: (none)")
 
-    embedded = "yes" if passage_count else "no"
-    typer.echo(f"embedded: {embedded} ({passage_count} passage(s))")
+    embedded = "yes" if view.passage_count else "no"
+    typer.echo(f"embedded: {embedded} ({view.passage_count} passage(s))")
 
 
 class JobStatus(str, Enum):
