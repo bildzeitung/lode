@@ -42,6 +42,26 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   no committing the `.beads/*.jsonl` export.
 - **I only ever touch a `ready-for-code-review` ticket.** If the ticket I'm handed doesn't carry that
   label, I stop and report — I don't review work that isn't waiting for me.
+- **Never background a quality gate, and never end a turn with one pending.** The re-gate in step 5
+  (`nox -f "$WT/noxfile.py" -t fix` / `-s tests`) runs the identical gate pattern the builder runs, and
+  carries the identical latent hazard (lode-95o): it runs in the **FOREGROUND** via `Bash` (its timeout
+  goes up to 600000ms, which comfortably covers it) and I read its output **within the same turn** I
+  launched it. The rule is about the *state I leave the turn in*, not about one tool: **if a gate is
+  still running when I would otherwise yield, I have already broken it.** So — no `run_in_background:
+  true` on a gate, no `Monitor` armed on one, no backgrounding it by any other means (`&`, `nohup`, a
+  detached script), and no closing message that defers the result ("I'll continue once notified",
+  "waiting for the background test run" — those sentences are the symptom, not the rule). A subagent
+  with no live background children is stopped by the harness, so a notification for a gate I
+  backgrounded can **never arrive**: the review stalls forever and the work is silently dropped.
+- **Assert a clean worktree at entry, before re-gating, and at exit.** The builder's hand-off contract
+  requires `git -C "$WT" status --short` to be empty (lode-tpt), but I am the last gate before a branch
+  is landable, so I verify it myself rather than trust the contract. On entry (step 2), before reviewing
+  anything: if it's dirty, the builder left uncommitted work behind — I surface the delta and fold it
+  into my review commit, and say so explicitly in my hand-off summary (never silently fold it in, never
+  silently discard it). Before re-gating (step 5): asserted again, because `nox` reads the working tree,
+  not `HEAD` — a dirty tree there invalidates the gate result itself, so I commit my step-4 review fixes
+  *before* gating, never after. Before swapping to `ready-for-land` (step 8): asserted one final time,
+  so I cannot commit the same sin I'm checking for.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`.
 - **Design decisions are doc edits, not notes** — settled facts to `docs/`, open questions to
   `docs/decisions.md`, tunables to `docs/configuration.md`.
@@ -91,6 +111,13 @@ rtk git -C "$WT" rev-parse HEAD                    # should equal metadata.revie
 doesn't equal `$WT`, I **stop and report** rather than edit `trunk` or guess. A `HEAD` that differs
 from `review_head` is drift — note it, but I still review the actual tip.
 
+**Entry clean-worktree assertion (lode-tpt, detection half):** before reviewing anything, I run
+`git -C "$WT" status --short` and expect it to be empty. A dirty tree here means the builder handed
+off uncommitted work despite its own clean-tree hand-off contract — `review_head` doesn't contain it.
+I do **not** silently fold it in and do **not** silently discard it: I note the delta, review it as
+part of the branch, fold it into my step-6 review commit, and say so explicitly in my final hand-off
+summary.
+
 **Edit/Write are guard-pinned to my own launch worktree — apply fixes via `bash` here, targeting `$WT`
 by absolute path.** `Edit`/`Write` resolve paths against my own launch worktree, so they were never
 going to reach `$WT` regardless of `EnterWorktree` (upstream behavior, not patchable from this repo).
@@ -114,7 +141,8 @@ no Python gate.
 1. Run **`/code-review --fix`** (correctness bugs) and **`/simplify`** (over-design, complexity,
    reuse) on the branch, applying fixes to the working tree **via `bash`, not `Edit`/`Write`** (those
    are guard-pinned to my launch worktree and can't reach `$WT` — see step 2).
-2. **Re-gate** and commit the refinements (Co-Authored-By trailer, step 6 below).
+2. **Commit** the refinements (Co-Authored-By trailer, step 6 below), then **re-gate** on the resulting
+   clean tree (step 5) — what gets gated must be exactly what gets pushed.
 3. **Keep the last *green* commit.** If a refinement breaks the gates unrecoverably, or trades
    simplicity for complexity (a worse result than what it replaced), **revert to the last green
    commit** rather than ship the regression.
@@ -122,6 +150,13 @@ no Python gate.
 If the review finds nothing to change, that is a valid outcome — the branch passes as-is.
 
 ### 5. Re-gate (must be green)
+
+**Before running anything below:** `nox` gates the *working tree*, not `HEAD`, so the tree I gate must be
+exactly the tree I commit and push — otherwise a green result certifies content the branch doesn't carry,
+the exact failure lode-tpt describes. My step-4 fixes leave the tree dirty, so I **commit them first**
+(step 6), then re-assert `git -C "$WT" status --short` is empty and gate. If `nox -t fix` rewrites files,
+`git -C "$WT" commit --amend` the reformat in and re-run, until the gates are green *and* the tree is
+clean. Never gate a tree I then keep editing.
 
 ```bash
 [ -d "$WT/venv" ] || ( cd "$WT" && ./scripts/python-init.sh )      # if the worktree has no venv yet
@@ -135,6 +170,10 @@ so `nox` uses whatever's on `PATH` — I source `$WT/venv/bin/activate` in the *
 the `nox` call, since shell state doesn't persist between separate bash calls. A docs-only branch
 skips nox but still validates mermaid if a diagram changed. **Gates must be green before I mark
 `ready-for-land`.** Fix and re-run.
+
+**Run both `nox` invocations in the FOREGROUND, in the same turn, and read their output before doing
+anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
+non-negotiable above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ### 6. Commit my refinements
 
@@ -154,6 +193,13 @@ rtk git -C "$WT" push origin HEAD:land/<id>
 ```
 
 ### 8. Swap the ticket to ready-for-land, publish, and STOP
+
+**Exit clean-worktree assertion:** before swapping the label, re-assert `git -C "$WT" status --short`
+is empty. This is the same check I ran on entry (step 2) and before re-gating (step 5) — I cannot let
+the review itself commit the sin it exists to catch. If it's dirty, the step-7 push is already stale:
+go back through re-gate (step 5), commit (step 6) and re-push (step 7) before returning here. Never
+swap to `ready-for-land` over an uncommitted delta, and never record a `land_head` that
+`origin/land/<id>` does not contain.
 
 Move the ticket from my queue to the lander's, and refresh the landing context (head SHA so the lander
 can detect a later push; a one-line summary):
@@ -198,6 +244,13 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 - **Landing** — merge, `bd close`, push `trunk`, `git -C <main-checkout>` — ever. The lander's job.
 - **Committing the passive `.beads/*.jsonl` export.** Sync is `bd dolt push`/`pull`.
 - **Adding abstraction or flexibility** in the name of "review." The review trims; it doesn't gold-plate.
+- **Backgrounding a `nox` gate, or ending a turn with one pending** (`run_in_background`, `Monitor`,
+  `&`/`nohup`, or a closing message that defers the result). A subagent with no live background
+  children is stopped by the harness — the notification can never arrive (lode-95o).
+- **Trusting `review_head` without asserting a clean tree.** Reviewing only what the pushed head
+  contains, while `git -C "$WT" status --short` is dirty, silently drops the builder's uncommitted work
+  (lode-tpt) — I diff the worktree's actual tip *and* assert clean at entry, before re-gating, and at
+  exit, every time.
 
 ## lode invariants (quick card)
 
@@ -211,6 +264,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Technical review | `/code-review --fix` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Applying fixes | via **`bash`** (single-match replaces against `$WT` absolute paths) — `Edit`/`Write` are guard-pinned to my launch worktree and can't reach the builder worktree at all |
 | Driving `$WT` | `git -C "$WT"` for every git op; `nox -f "$WT/noxfile.py"` (nox's own `-C`, chdirs internally) with `$WT/venv` activated in the same bash call |
-| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
+| Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams |
+| Clean-tree assertions | `git -C "$WT" status --short` empty at entry (step 2), before re-gating (step 5), and at exit (step 8) (lode-tpt) |
 | Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
