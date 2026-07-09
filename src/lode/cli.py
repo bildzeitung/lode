@@ -552,11 +552,6 @@ def show_(
     suppressed by state, lode-ay5.1's pinned predicate) -- ``enrichment:``
     and a field's own ``(none)`` are complementary, not substitutes.
 
-    Note lode-bvg (not fixed here, awaiting a human decision): the pinned
-    predicate reads ``enrichment: failed`` for a job merely in its transient
-    retry backoff window, not only for a genuine dead-letter -- see
-    :mod:`lode.enrichment_view`'s module docstring.
-
     ``target`` may be a full id or an unambiguous prefix of one, resolved via
     :meth:`lode.repository.Repository.resolve_note_prefix` -- the exact
     resolver ``purge`` uses (lode-1gr.3), so an unknown or ambiguous id errors
