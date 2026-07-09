@@ -427,6 +427,114 @@ def test_run_dead_does_not_overwrite_with_backoff(
 
 
 # ---------------------------------------------------------------------------
+# Dead-letter hook (lode-at8) — 'refresh' tombstones its external on 'dead'
+# ---------------------------------------------------------------------------
+
+
+def _always_raising_refresh_registry(
+    msg: str = "connection refused",
+) -> dict[str, HandlerFn]:
+    """Registry with a 'refresh' handler that always raises RuntimeError.
+
+    Mirrors :func:`_failing_registry`'s shape but for ``type='refresh'`` —
+    stands in for a real :class:`~lode.webfetch.TransientFetchError` that
+    keeps recurring across every retry (``lode.drawdown.refresh_external``
+    lets any exception propagate uncaught, per its own tests), without
+    pulling in httpx/trafilatura or hitting the network.
+    """
+
+    def _fail(conn, tv, db, s):
+        raise RuntimeError(msg)
+
+    return {"refresh": _fail}
+
+
+def test_run_refresh_dead_letter_writes_tombstone_snapshot(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-at8: a 'refresh' job that dead-letters leaves a tombstone snapshot.
+
+    Before this fix: a 'refresh' job that exhausted its retries reached
+    'dead' with no record against the external at all -- head_snapshot_id
+    stayed NULL, indistinguishable from a draw-down still in flight (the
+    ticket's exact reproduction). Now the worker's dead-letter hook
+    (_refresh_dead_letter_hook) tombstones the external the same way a
+    PERMANENT (non-retrying) fetch failure already would.
+    """
+    external_id = "https://example.com/dead-link"
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+    ok = run_one(
+        conn, job_id, db_path, settings, _always_raising_refresh_registry("timeout")
+    )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"
+
+    row = conn.execute(
+        "SELECT status, body FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert row is not None, "dead-lettered refresh job must leave a snapshot record"
+    status, body = row
+    assert status == "tombstone"
+    assert "timeout" in body  # the job's last_error is folded into the tombstone
+
+    (head_snapshot_id,) = conn.execute(
+        "SELECT head_snapshot_id FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert head_snapshot_id is not None, "head must point at the tombstone, not NULL"
+
+
+def test_run_refresh_transient_failure_writes_no_tombstone(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A 'refresh' failure that still has a retry coming must not tombstone yet."""
+    external_id = "https://example.com/retrying-link"
+    job_id = _insert_job(conn, "refresh", external_id)  # attempts=0, retries left
+    _claim_one(conn, ("refresh",), _now_iso())
+    ok = run_one(
+        conn, job_id, db_path, settings, _always_raising_refresh_registry("blip")
+    )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "failed"
+
+    row = conn.execute(
+        "SELECT 1 FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert row is None, "a still-retrying job must not create an externals row yet"
+
+
+def test_reclaim_refresh_dead_letter_writes_tombstone_snapshot(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The crash-reclaim path (lode-aor) fires the same dead-letter hook.
+
+    A 'refresh' job stuck 'running' past the staleness timeout, already at
+    max attempts, is reclaimed straight to 'dead' by _reclaim_stale_running
+    -- this must tombstone the external exactly like run_one's own
+    max-attempts gate does.
+    """
+    external_id = "https://example.com/crashed-link"
+    job_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version=external_id,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "dead"
+
+    (status,) = conn.execute(
+        "SELECT status FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert status == "tombstone"
+
+
+# ---------------------------------------------------------------------------
 # claim_and_run_one — CLI immediate-enrich fast path (lode-npx.2)
 # ---------------------------------------------------------------------------
 

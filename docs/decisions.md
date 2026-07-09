@@ -332,3 +332,36 @@ are catalogued in [configuration.md](configuration.md).
   reclaims it one stage earlier, at the review→`ready-for-land` swap, instead of waiting for the land
   itself. Either requires updating `coding.md`, `code-reviewer.md`, and `land/SKILL.md`'s GC section
   together so the hand-off contract and the GC contract don't drift apart.
+
+- **Dead-lettered `refresh` jobs tombstone their external: a `worker.py` terminal-transition hook, not
+  a reconcile sweep (lode-at8, decided 2026-07-09).** The gap: a `refresh` job that exhausts its
+  retries and reaches `dead` left no record against the external at all — `head_snapshot_id` stayed
+  `NULL`, indistinguishable from a draw-down still in flight. [externals.md](externals.md#draw-down-rules)'s
+  "Fetch-outcome taxonomy" already documented "on `dead`, the caller writes a tombstone snapshot" —
+  nothing had ever implemented that caller. **Chosen mechanism: (a) a `worker.py` dead-letter hook**
+  (`register_dead_letter`, `src/lode/worker.py`), invoked once, in its own transaction, immediately
+  after a job's status commits to `'dead'` — from *both* dead-letter gates (`run_one`'s max-attempts
+  gate and `_reclaim_stale_running`'s crash-reclaim gate). `refresh` registers
+  `_refresh_dead_letter_hook`, which calls `lode.externals.ingest_snapshot` with
+  `status='tombstone'` and a body carrying the job's `last_error`, under the exact same convention a
+  PERMANENT (non-retrying) fetch failure already uses — no schema change. **Rejected: (b) a
+  `reconcile.py` sweep** for dead `refresh` jobs with no tombstone — cheaper (no worker change) but
+  introduces a lag (a dead-lettered URL stays indistinguishable from "in flight" until the next
+  reconcile pass) and a second module that has to know about `externals`/`snapshots` shape, on top of
+  `lode.drawdown`/`lode.externals` already owning that. **Generalization deferred, not built:** the
+  hook registry is per-job-type (mirrors the existing `HandlerFn`/`_REGISTRY` run-handler pattern), so
+  `embed`/`enrich` could register their own dead-letter hooks later, but neither needs one today —
+  `lode-bvg` (the sibling "`failed` vs `dead` under-observed" ticket) resolved by fixing a *read*
+  predicate (`enrichment_view._enrichment_state`), not by adding a write-side dead-letter effect.
+  **Accepted gap:** the hook's tombstone write is a *separate* transaction from the status-to-`dead`
+  UPDATE (never nested — mirrors this codebase's existing "sequential, not nested" composition of
+  standalone-transactional functions, e.g. `lode.drawdown.refresh_external`'s own
+  ingest-then-repoint sequence); a crash between the two commits leaves a job `'dead'` with no
+  tombstone yet. Narrow and accepted — the job row's own `last_error` already carries the diagnostic,
+  and nothing sweeps this specific gap today. **Also decided: no "leave prior content alone" carve-out.**
+  If an external already has an `ok` head snapshot and a *later* refresh (`lode-w0h.6`'s staleness
+  policy, not the paste-triggered first draw-down) exhausts retries, the hook still moves the head to
+  a tombstone — `docs/externals.md`'s TRANSIENT-failure row commits to writing a tombstone on `dead`
+  unconditionally, and the alternative (silently keeping stale "known-good" content live while its
+  own refresh machinery has given up on it) is a worse failure mode to ship silently. Revisit if this
+  proves too aggressive once `lode-w0h.6` ships and staleness re-fetches are common.
