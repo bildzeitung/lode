@@ -45,16 +45,20 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    ```
 
    For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
-   "worktree"`** — required for the same reason as Phase 2 below: it gives the dispatch a legal cwd
-   off the repo root so it can `EnterWorktree` (`path` form) into the *recorded* build worktree rather
-   than create a new one). Tell it explicitly this is a **rebase pickup**, not a fresh build, e.g.:
+   "worktree"`** — required for the same reason as Phase 1 below: a subagent is pinned at the repo
+   root and **cannot** call `EnterWorktree` to *create* its own, so the harness must hand it a launch
+   worktree at dispatch). From there it drives the *recorded* build worktree in place via `git -C
+   <path>` — **not** `EnterWorktree`, which the isolation guard refuses for commands resolved into a
+   path-entered worktree. Tell it explicitly this is a **rebase pickup**, not a fresh build, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — run your "Rebase
-   > pickup" cycle, not a fresh build: read `metadata.review_worktree` from bd, `EnterWorktree` into
-   > it, `git fetch origin trunk && git rebase origin/trunk`, re-gate, `push --force-with-lease` to
-   > the same `land/<id>` ref, refresh the head-SHA metadata, and swap `needs-rebase` straight to
-   > `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase conflict, abort and
-   > escalate (`land-escalated`, leave the branch as it was) rather than guess a resolution.
+   > pickup" cycle, not a fresh build: read `metadata.review_worktree` from bd, drive that worktree via
+   > `git -C <path>` (do **not** `EnterWorktree` into it), `git -C <path> fetch origin trunk && git -C
+   > <path> rebase origin/trunk`, re-gate via `nox -f <path>/noxfile.py`, `git -C <path> push
+   > --force-with-lease` to the same `land/<id>` ref, refresh the head-SHA metadata, and swap
+   > `needs-rebase` straight to `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase
+   > conflict, abort and escalate (`land-escalated`, leave the branch as it was) rather than guess a
+   > resolution.
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
    (`run_in_background: true`) — a rebase pickup and a fresh build never share a ticket, so they can't
