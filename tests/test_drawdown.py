@@ -183,6 +183,20 @@ class TestCanonicalizeUrl:
             == "https://example.com/foo"
         )
 
+    def test_strips_userinfo_including_password(self):
+        # lode-0as: credentials in a pasted URL are transport secrets, not
+        # source identity -- they must never enter external_id.
+        with_password = canonicalize_url("https://user:hunter2@example.com/p")
+        with_username = canonicalize_url("https://user@example.com/p")
+        bare = canonicalize_url("https://example.com/p")
+        assert with_password == with_username == bare == "https://example.com/p"
+
+    def test_strips_userinfo_alongside_other_normalization(self):
+        assert (
+            canonicalize_url("HTTPS://user:pass@Example.COM:443/foo/#frag")
+            == "https://example.com/foo"
+        )
+
 
 # ---------------------------------------------------------------------------
 # detect_and_enqueue_drawdown
