@@ -262,7 +262,7 @@ for id in $LANDED; do
   [ "$READY" = "READY" ] && rtk bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
 done
 
-rtk bd dolt push               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
+rtk scripts/bd-dolt-push.sh               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
 
 for id in $LANDED; do
   rtk git push origin --delete "land/$id"   # GC the merged remote branch
@@ -308,7 +308,7 @@ Conflicting paths:
 $CONFLICTS
 Rebase land/<id> onto current trunk in the build worktree, re-gate, force-push the branch, refresh
 metadata.land_head, then swap needs-rebase back to ready-for-land."
-rtk bd dolt push       # publish the label swap + note over refs/dolt/data
+rtk scripts/bd-dolt-push.sh       # publish the label swap + note over refs/dolt/data
 # The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
 ```
 
@@ -360,7 +360,7 @@ rtk bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> a
 rtk bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
 
 rtk git push origin --delete "land/<id>"    # drop the rejected branch (a rebuild gets a fresh land/<new-id>)
-rtk bd dolt push                            # publish the new ticket + supersede over refs/dolt/data
+rtk scripts/bd-dolt-push.sh                            # publish the new ticket + supersede over refs/dolt/data
 ```
 
 `bd supersede` **closes** the original (with a reference to `NEW`) — superseded means *replaced*, and
@@ -379,7 +379,7 @@ the rest of the batch** (the accepted set still merges):
 ```bash
 rtk bd update <id> --add-label land-escalated --remove-label ready-for-land \
   --append-notes "ESCALATION (/land semantic review): <the decision needed, with options as land-review framed them>"
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 # origin/land/<id> is KEPT (no delete) until the human resolves it.
 ```
 
@@ -411,7 +411,7 @@ out-of-band manual act, not a designed fast-path):
 ```bash
 rtk bd update <id> --description="<revised, unambiguous acceptance/description>"   # write the decision in; the BRANCH is untouched
 rtk bd update <id> --remove-label land-escalated --add-label ready-for-land
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
 ```
 
@@ -433,7 +433,7 @@ NEW=$(rtk bd create --type=<same-type-as-original> \
 rtk bd supersede <id> --with "$NEW"          # closes <id> as superseded, links to $NEW
 rtk bd update <id> --remove-label land-escalated
 rtk git push origin --delete "land/<id>"     # drop the escalated branch — the rebuild gets a fresh land/<new-id>
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 ```
 
 ### (c) Drop — close with reason, GC the branch
@@ -445,7 +445,7 @@ close the ticket directly and GC the branch:
 rtk bd close <id> --reason "<why this is dropped>"
 rtk bd update <id> --remove-label land-escalated
 rtk git push origin --delete "land/<id>"     # GC the branch — nothing will land it
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 ```
 
 All three end the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
@@ -509,9 +509,11 @@ I am the system's heaviest bd writer, and the repo runs **`import.auto: false`**
 `.beads/config.yaml`, fixed in lode-6ra): **Dolt is authoritative; `.beads/issues.jsonl` is an
 export-only passive artifact, never a sync wire.** I honor that exactly:
 
-- **Pull at the start, push after writes.** `bd dolt pull` opens the pass; `bd dolt push` follows
-  *every* batch of bd writes (closes, bounce-creates, label changes). State travels cross-machine via
-  `refs/dolt/data`, **never** via committed jsonl.
+- **Pull at the start, push after writes.** `bd dolt pull` opens the pass; `scripts/bd-dolt-push.sh`
+  (a retry-on-reject wrapper around `bd dolt push` — backoff + re-pull between attempts, since a
+  concurrent `/code` producer's write can transiently reject or lock-contend the push, lode-83d)
+  follows *every* batch of bd writes (closes, bounce-creates, label changes). State travels
+  cross-machine via `refs/dolt/data`, **never** via committed jsonl.
 - **Never commit `.beads/issues.jsonl`, never `bd import` it.** I do not `git add` the jsonl export,
   and I never substitute `bd import` for `bd dolt pull` (import only upserts and silently misses
   deletions). When I merge a `land/<id>` branch, if it carried a jsonl diff I do **not** let it

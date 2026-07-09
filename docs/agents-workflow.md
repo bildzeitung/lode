@@ -319,13 +319,13 @@ absence of a rare lost-write race; it is not the basis for this determination):
   `bd dolt push` as "needs pull + retry," never as proof of corruption.
 
 This investigation also surfaced two **gaps** the above safety net does not cover — filed as a
-follow-up (lode-83d), since this ticket validates only and does not build the fix:
+follow-up (lode-83d):
 
-1. **No retry-on-reject exists today.** All four `bd dolt push` call sites in the skills
+1. **No retry-on-reject existed.** All four `bd dolt push` call sites in the skills
    (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`, `.claude/skills/land/SKILL.md`,
-   `.claude/skills/epic-audit/SKILL.md`) are bare calls with no exit-status check — a rejected push
-   currently fails without the caller noticing, undermining the "durable, cross-machine" hand-off the
-   comments assume.
+   `.claude/skills/epic-audit/SKILL.md`) were bare calls with no exit-status check — a rejected push
+   failed without the caller noticing, undermining the "durable, cross-machine" hand-off the comments
+   assumed.
 2. **Embedded mode is documented as the wrong mode for this concurrency.** lode runs bd in
    **embedded (in-process Dolt engine)** mode (`bd dolt show` → `Mode: embedded`), and every git
    worktree of this repo shares **one** physical store on a given machine (`.beads/embeddeddolt` at the
@@ -334,6 +334,16 @@ follow-up (lode-83d), since this ticket validates only and does not build the fi
    lock**, and recommend Dolt **server mode** for "high-concurrency scenarios (multiple agents)" —
    precisely what `/code`'s bare fan-out is. The documented failure is a hard `database is locked`
    error with no built-in retry.
+
+**Fixed (lode-83d): a shared retry-on-reject wrapper, not a Dolt server-mode migration.** All four
+call sites above now go through `scripts/bd-dolt-push.sh`, which retries a non-zero-exit `bd dolt
+push` with exponential backoff + jitter, pulling (folding in the winner's commit) between attempts.
+One mechanism covers both gaps: a rejected push gets a fast-forwardable retry, and a transient
+embedded-mode lock (held for at most one bd operation) clears well inside the backoff window.
+Switching to Dolt server mode was evaluated and deliberately **not** done — it trades a few seconds
+of occasional retry for a standing per-machine daemon (`dolt sql-server` + lifecycle/config), which
+is the wrong weight for this workload. Full rationale and the revisit trigger are in
+[decisions.md](decisions.md).
 
 ### The code-review pass — `code-reviewer` (Opus)
 

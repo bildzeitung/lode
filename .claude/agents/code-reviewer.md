@@ -209,8 +209,11 @@ HEAD_SHA=$(rtk git -C "$WT" rev-parse HEAD)
 rtk bd update <id> --remove-label ready-for-code-review --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
   --set-metadata land_summary="<one-line summary of what landed>"
-rtk bd dolt push        # publish the label swap over refs/dolt/data — durable, cross-machine
+rtk scripts/bd-dolt-push.sh   # publish the label swap over refs/dolt/data — durable, cross-machine
 ```
+
+`scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
+transient embedded-mode lock — an *expected* outcome under `/code` fan-out, not corruption (lode-83d).
 
 Then I **stop** and report: which ticket, that the technical review + gates are green, the `land/<id>`
 branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes.
@@ -228,7 +231,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   queue, and **add** `land-escalated`,
 - **annotate the ticket** (`rtk bd update <id> --remove-label ready-for-code-review --add-label
   land-escalated --append-notes "ESCALATION: <decision needed / why this is getting worse>"`), then
-  `rtk bd dolt push`,
+  `rtk scripts/bd-dolt-push.sh`,
 - **re-push the branch** (`git -C "$WT" push origin HEAD:land/<id>`) so the (green) work is never
   stranded, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
@@ -242,7 +245,8 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   green, and landable*.
 - **Touching a ticket without `ready-for-code-review`.** Not my queue.
 - **Landing** — merge, `bd close`, push `trunk`, `git -C <main-checkout>` — ever. The lander's job.
-- **Committing the passive `.beads/*.jsonl` export.** Sync is `bd dolt push`/`pull`.
+- **Committing the passive `.beads/*.jsonl` export.** Sync is `scripts/bd-dolt-push.sh` (retry-on-reject
+  wrapper) / `bd dolt pull`.
 - **Adding abstraction or flexibility** in the name of "review." The review trims; it doesn't gold-plate.
 - **Backgrounding a `nox` gate, or ending a turn with one pending** (`run_in_background`, `Monitor`,
   `&`/`nohup`, or a closing message that defers the result). A subagent with no live background

@@ -234,12 +234,16 @@ rtk bd update <id> --add-label ready-for-code-review \
   --set-metadata review_worktree="$(rtk git rev-parse --show-toplevel)" \
   --set-metadata review_branch="$(rtk git rev-parse --abbrev-ref HEAD)" \
   --set-metadata review_head="$HEAD_SHA"
-rtk bd dolt push        # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
+rtk scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
 ```
 
-`bd dolt push` is **not** a `.beads/*.jsonl` write — it syncs the Dolt store over `refs/dolt/data`,
-which is what makes "ready-for-code-review lives in beads" visible from the reviewer's machine. I never
-commit the passive jsonl export, never touch the main checkout, never merge, never `bd close`.
+`scripts/bd-dolt-push.sh` is a thin retry-on-reject wrapper around `bd dolt push` (backoff + `bd
+dolt pull` between attempts) — under `/code` fan-out a rejected push (non-fast-forward) or a
+transient embedded-mode lock is an *expected* outcome, not corruption, and a bare `bd dolt push` had
+no retry (lode-83d). It is **not** a `.beads/*.jsonl` write — it syncs the Dolt store over
+`refs/dolt/data`, which is what makes "ready-for-code-review lives in beads" visible from the
+reviewer's machine. I never commit the passive jsonl export, never touch the main checkout, never
+merge, never `bd close`.
 
 **I must NOT remove my worktree.** The reviewer drives *this* worktree via `git -C`, so it has to
 survive my exit (a worktree with commits is not auto-removed). I just **stop and leave it in place** — no
@@ -256,7 +260,7 @@ settle), I:
 
 - **revert to the last green commit** and push the branch (so the work isn't stranded),
 - **do not** set `ready-for-code-review`; instead `rtk bd update <id> --add-label land-escalated
-  --append-notes "ESCALATION: <the decision needed>"`, then `rtk bd dolt push`, and
+  --append-notes "ESCALATION: <the decision needed>"`, then `rtk scripts/bd-dolt-push.sh`, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
   human. (Quality problems are **not** an escalation for me — those are the reviewer's to fix; I build
   the simplest green thing and hand off.)
@@ -376,7 +380,7 @@ HEAD_SHA=$(rtk git -C "$WT" rev-parse HEAD)
 SUMMARY="Rebased onto trunk @ $(rtk git -C "$WT" rev-parse --short origin/trunk)"
 rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" --set-metadata land_summary="$SUMMARY"
-rtk bd dolt push        # publish the label swap + refreshed SHA over refs/dolt/data
+rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
 ```
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
@@ -398,7 +402,7 @@ rtk bd update <id> --remove-label needs-rebase --add-label land-escalated \
   --append-notes "ESCALATION (rebase pickup): git rebase origin/trunk onto land/<id> conflicts.
 Resolve manually in <the review_worktree path> and either re-push + reapply needs-rebase, or hand
 this to a human to finish the rebase."
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 ```
 
 ## bd best practices baked into this producer
@@ -442,8 +446,8 @@ own guidance); the cycle above already applies them, but the *why*:
   rebase-pickup force-push. The invariant in one line: **the tree that gated green must be the tree
   that gets committed and pushed.**
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
-  `bd dolt push`/`pull`. **Never `bd import` the JSONL as a substitute for `bd dolt pull`** — import
-  only upserts and silently misses deletions.
+  `scripts/bd-dolt-push.sh` (retry-on-reject wrapper) / `bd dolt pull`. **Never `bd import` the JSONL
+  as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
