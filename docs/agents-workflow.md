@@ -372,7 +372,7 @@ flowchart TD
     ONE --> BUILD["coding builder (Sonnet):<br>claim · build (simplest thing) ·<br>nox -t fix / nox -s tests green"]
     FAN --> BUILD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
-    BESC -->|"yes"| BHOLD["Revert to green · push ·<br>land-escalated · surface async"]
+    BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_worktree ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(worktree path · SHA) · KEEP worktree"]
     PUSH --> REV["code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
@@ -472,6 +472,23 @@ not that the branch is finished — the `code-reviewer` can still escalate a hal
 `needs-rebase` for a `coding` rebase-pickup conflict; full mechanics and per-source table in
 [`land/SKILL.md`](../.claude/skills/land/SKILL.md#exit-a-per-source--re-enter-at-the-gate-that-escalated)
 (`lode-08g`).
+
+**Making the `ready-for-code-review` re-entry executable (lode-08g's decision had two gaps; both
+closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-entry if something
+carries the hand-off and something else consumes the label —
+
+1. A `coding` build-time escalation used to skip recording `review_worktree`/`review_branch`/
+   `review_head` entirely (it only wrote that metadata in the green hand-off path). A re-entered
+   ticket therefore had no worktree for `code-reviewer` to drive. **Fixed:** the build-time escalation
+   now records those three metadata fields against the reverted-to-green commit at escalation time,
+   even though it doesn't set the label itself — so the fields are already there the moment a human
+   applies `ready-for-code-review`.
+2. Neither `bd ready` (the ticket stays `in_progress`) nor `/code`'s Phase 2 (which only reviews a
+   ticket its *own* Phase 1 just built) ever picked the re-entered ticket back up — it was worse off
+   than a `land-escalated` ticket, which at least `/sweep` surfaces. **Fixed:** `/code`'s step-0
+   sweep gained a sibling step that looks for `ready-for-code-review` + `in_progress` tickets the same
+   way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
+   `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
 
 ### Mechanics (decided)
 
