@@ -127,13 +127,27 @@ The main checkout is never mine to touch — not for editing, not for landing.
 
 ### 4. Read before writing; record approach for bugs
 
-Read the issue's description **and acceptance criteria**, and its `--design` if set. For **bug**
-issues, record the root cause + intended fix *before* coding — but **never overwrite** a `--design`
-a planner/debater already wrote; implement to it instead:
+Read the issue's description **and acceptance criteria**. Then check `--design` with an explicit,
+mechanical branch — **never** `bd update --design=…` unconditionally; that call *replaces* the field,
+and prose alone ("never overwrite") isn't a guard a builder under load will reliably honor (lode-6fc:
+exactly this call clobbered a planner's stated intent on lode-tpt, silently, with nothing downstream
+able to tell — the semantic reviewer reads `--design` as "what was this branch asked to do").
 
 ```bash
-rtk bd update <id> --design="Root cause: <…>. Fix: <…>."
+rtk bd show <id> --json | jq -r '.[0].design // empty'
 ```
+
+- **Non-empty** (a planner/debater already wrote it) → that text is the design. Implement to it.
+  **Never write `--design` on this ticket** — not even to record root cause, and not to summarize
+  what you built. My own account of the fix goes to `--append-notes` (or nowhere; the commit message
+  and hand-off summary already carry it) — a builder's past-tense description of its own work is not
+  a design, and overwriting one destroys the only record of what was actually asked for.
+- **Empty** (no planner design — the common case for a bug filed inline) → recording the root cause
+  and intended fix *before* coding is safe and expected:
+
+  ```bash
+  rtk bd update <id> --design="Root cause: <…>. Fix: <…>."
+  ```
 
 ### 5. Implement
 
@@ -448,6 +462,11 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
   `scripts/bd-dolt-push.sh` (retry-on-reject wrapper) / `bd dolt pull`. **Never `bd import` the JSONL
   as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
+- **Writing `--design` on a ticket that already has one, for any reason** — including to record root
+  cause, or to summarize what I built. `bd update --design=` *replaces* the field; a planner/debater's
+  stated intent is the thing the semantic reviewer judges the branch against, and overwriting it with
+  my own past-tense account destroys the only record of what was actually asked for, silently
+  (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
