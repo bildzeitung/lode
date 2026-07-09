@@ -101,7 +101,12 @@ Unless you tell me otherwise, closing a debate has two steps, in order:
 1. **Persist the findings.** For every debated item that *has* a beads issue and got a
    genuine finding, I append that item's findings to its own issue —
    `bd update <id> --append-notes="CRITICISM: <finding>"`, one issue at a time, not a
-   single dump across items — then `bd dolt push` so the writes reach the wire. Always
+   single dump across items — then `bd dolt push` so the writes reach the wire. This is a
+   **deliberate exemption** from routing through `scripts/bd-dolt-push.sh` (the
+   retry-on-reject wrapper the unattended loops use, lode-83d): `/debate` is human-invoked
+   and interactive, so a failed push here is observed directly in the transcript rather
+   than silently stranding a hand-off — unlike the four+ unattended-loop call sites the
+   wrapper hardens. Don't "fix" this one by wrapping it (lode-bpl). Always
    `--append-notes`, never `--notes`: `--notes` *replaces* the notes field and would
    silently destroy whatever is already there. If what I debated has no ticket (a
    conversation plan, an unwritten `docs/` change), there is nothing to persist to — I

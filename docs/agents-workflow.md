@@ -335,8 +335,8 @@ follow-up (lode-83d):
    precisely what `/code`'s bare fan-out is. The documented failure is a hard `database is locked`
    error with no built-in retry.
 
-**Fixed (lode-83d): a shared retry-on-reject wrapper, not a Dolt server-mode migration.** All four
-call sites above now go through `scripts/bd-dolt-push.sh`, which retries a non-zero-exit `bd dolt
+**Fixed (lode-83d): a shared retry-on-reject wrapper, not a Dolt server-mode migration.** The four
+files above now go through `scripts/bd-dolt-push.sh`, which retries a non-zero-exit `bd dolt
 push` with exponential backoff + jitter, pulling (folding in the winner's commit) between attempts.
 One mechanism covers both gaps: a rejected push gets a fast-forwardable retry, and a transient
 embedded-mode lock (held for at most one bd operation) clears well inside the backoff window.
@@ -344,6 +344,23 @@ Switching to Dolt server mode was evaluated and deliberately **not** done — it
 of occasional retry for a standing per-machine daemon (`dolt sql-server` + lifecycle/config), which
 is the wrong weight for this workload. Full rationale and the revisit trigger are in
 [decisions.md](decisions.md).
+
+**lode-83d's own enumeration was prefix-blind (lode-bpl).** It found its four files with
+`grep -rl "rtk bd dolt push" .claude/`, which cannot see a call written without the `rtk` prefix —
+CLAUDE.md's golden rule says to always prefix with `rtk`, but that's a human convention, not
+something a literal grep enforces. A prefix-agnostic re-audit
+(`grep -rnE '(rtk +)?bd +dolt +push'` over `.claude/`, `docs/`, and `scripts/`, worktrees excluded)
+turned up two more unwrapped call sites inside unattended loops, now also routed through the
+wrapper: `.claude/skills/land/SKILL.md`'s exit-(a) re-entry step (a bare call added by lode-08g,
+after lode-83d's audit ran) and `.claude/skills/sweep/SKILL.md`'s publish step (a skill that didn't
+exist yet when lode-83d ran its audit). Three more bare mentions survive as **deliberate
+exemptions**, not oversights: `.claude/skills/debate/SKILL.md` (`/debate` is human-invoked and
+interactive — a failed push is observed directly, unlike the unattended loops above — see the
+in-line note at its persist step), and `.beads/README.md` / `AGENTS.md` (generic, beads-generated
+quick-reference boilerplate demonstrating the base `bd` CLI to a human reader, not an automated call
+site in any skill). Any future "where do we call X" audit across `.claude/` should grep
+prefix-agnostically from the start — the failure mode was the enumeration method, not any one
+missed file.
 
 ### The code-review pass — `code-reviewer` (Opus)
 
