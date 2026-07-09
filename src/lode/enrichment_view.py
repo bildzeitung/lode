@@ -24,14 +24,18 @@ by :attr:`EnrichmentView.enrichment_state`; a re-enriching note legitimately
 shows ``pending`` state alongside its stale last-known content.
 
 **State** (``enrichment_state``) is keyed on the note's HEAD version instead,
-per the pinned predicate (bd lode-ay5.1 notes, decided 2026-07-08):
+per the pinned predicate (bd lode-ay5.1 notes, decided 2026-07-08; the
+``"failed"`` bucket corrected 2026-07-08, bd lode-bvg):
 
-- ``"pending"`` -- the head's ``target_version`` has a live (``pending`` or
-  ``running``) ``type='enrich'`` job.
-- ``"failed"`` -- the head has a dead/failed ``enrich`` job (``status`` in
-  ``failed``/``dead``) and NO live one, AND zero ``source='ai'`` annotation
-  or edge rows exist for the head's ``source_version`` -- a dead-letter
-  surfaced honestly rather than misread as enriched-empty.
+- ``"pending"`` -- the head's ``target_version`` has a live (``pending``,
+  ``running``, or ``failed``) ``type='enrich'`` job. ``worker.py`` writes
+  ``status='failed'`` only in the else-branch of its max-attempts gate, so a
+  ``'failed'`` job always has a retry coming -- it is pending work, not a
+  terminal outcome.
+- ``"failed"`` -- the head has a dead-lettered (``status='dead'``) ``enrich``
+  job and NO live one, AND zero ``source='ai'`` annotation or edge rows exist
+  for the head's ``source_version`` -- a dead-letter surfaced honestly rather
+  than misread as enriched-empty.
 - ``"ready"`` -- otherwise (the head has ``source='ai'`` rows, or there was
   never an enrich job for it at all).
 
@@ -52,15 +56,18 @@ from lode.storage import init_db
 #: see the module docstring for the exact predicate.
 EnrichmentState = Literal["pending", "ready", "failed"]
 
-#: Live (in-flight) job statuses -- schema.sql's ``pending -> running -> done``
-#: happy path, still short of a terminal outcome.
-_LIVE_JOB_STATUSES = ("pending", "running")
+#: Live (in-flight or about-to-retry) job statuses -- schema.sql's
+#: ``pending -> running -> done`` happy path, plus ``failed`` (DECIDED
+#: 2026-07-08, bd lode-bvg): worker.py writes ``status='failed'`` ONLY in the
+#: else-branch of the max-attempts gate, so a ``'failed'`` job always has a
+#: retry coming -- it is pending work, not a terminal outcome.
+_LIVE_JOB_STATUSES = ("pending", "running", "failed")
 
-#: Terminal-bad job statuses -- ``failed`` (transient, retried) and ``dead``
-#: (the poison terminal, schema.sql "The UI surfaces 'dead' rows as
-#: dead-letters"). Either one, with no live job and no AI output, means the
-#: last enrich attempt never produced content.
-_DEAD_JOB_STATUSES = ("failed", "dead")
+#: Terminal-bad job status -- ``dead``, the poison terminal (schema.sql "The
+#: UI surfaces 'dead' rows as dead-letters"). With no live job and no AI
+#: output, it means the last enrich attempt never produced content and no
+#: retry remains.
+_DEAD_JOB_STATUSES = ("dead",)
 
 
 @dataclass(frozen=True, slots=True)

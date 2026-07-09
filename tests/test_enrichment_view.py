@@ -127,12 +127,21 @@ def _insert_enrich_job(
     *,
     target_version: str = "ver-1",
     status: str = "pending",
+    next_attempt_at: str | None = None,
 ) -> None:
     with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('enrich', ?, ?)",
-            (target_version, status),
-        )
+        if next_attempt_at is None:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status) "
+                "VALUES ('enrich', ?, ?)",
+                (target_version, status),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('enrich', ?, ?, ?)",
+                (target_version, status, next_attempt_at),
+            )
 
 
 def _insert_passage(
@@ -211,17 +220,24 @@ def test_failed_when_dead_job_and_zero_ai_rows(conn: sqlite3.Connection) -> None
     assert view.enrichment_state == "failed"
 
 
-def test_failed_when_transient_failed_status_and_zero_ai_rows(
+def test_pending_when_transient_failed_status_awaiting_retry(
     conn: sqlite3.Connection,
 ) -> None:
-    """A transient 'failed' status (no live job, no AI output yet) also reads failed."""
+    """A transient 'failed' status reads pending, not failed (DECIDED 2026-07-08,
+    bd lode-bvg): worker.py writes status='failed' ONLY in the else-branch of the
+    max-attempts gate, so a 'failed' job always has a retry coming -- it is
+    pending work, not a terminal outcome. next_attempt_at is in the future here
+    (mid-backoff), same as a job worker.py has not yet reset to 'pending'.
+    """
     _insert_note(conn)
-    _insert_enrich_job(conn, status="failed")
+    _insert_enrich_job(
+        conn, status="failed", next_attempt_at="2099-01-01T00:00:00.000000Z"
+    )
 
     view = enrichment_view(_db_path(conn), "note-1")
 
     assert view is not None
-    assert view.enrichment_state == "failed"
+    assert view.enrichment_state == "pending"
 
 
 def test_ready_not_failed_when_dead_job_but_ai_rows_exist(
