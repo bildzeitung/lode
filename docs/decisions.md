@@ -233,3 +233,53 @@ are catalogued in [configuration.md](configuration.md).
   any landing-side shared state — see the concurrent-`bd dolt push` validation above. Distributed
   cross-machine landing (the `refs/locks/land` ref, above) stays separately deferred; this invariant
   does not un-defer it, it just states plainly what was always assumed.
+- **Review architecture — the reviewer checks the branch out into its own worktree; the `git -C
+  <builder-worktree>` architecture is retired (lode-k5e, lode-8k3).** Both `code-reviewer` (its
+  technical review) and `coding`'s rebase-pickup cycle used to stay in their own launch worktree and
+  drive the *builder's* existing worktree in place via `git -C <path>`, reasoning that `EnterWorktree`
+  into a path-entered worktree was refused for a worktree-isolated subagent. **That premise was
+  falsified by a direct probe (2026-07-09):** `EnterWorktree(path=…)` reports success, but a separate
+  isolation guard still hard-pins `Bash`/`Edit`/`Write` to the agent's own launch worktree regardless —
+  so `git -C` was never a workaround for a nonexistent constraint, the constraint (no writing outside
+  the launch worktree) is real, and it was never possible to `EnterWorktree` around it either way.
+  Worse, `git -C` alone can only *read* the builder's worktree; every `code-reviewer` fix had to go
+  through a `bash` single-match-replacement workaround (`Edit`/`Write` can't reach `$WT`), and a launch
+  worktree freshly branched off `trunk` HEAD has an *empty* diff against the builder's actual branch —
+  so `/code-review`/`/simplify` (both cwd-relative, no path/base argument) silently reviewed **nothing**
+  (lode-k5e), a false-green that six of six fan-out reviewers missed on one observed day. Separately,
+  `coding`'s rebase-pickup cycle had *no* mechanism at all for writing a conflict resolution once it
+  hit the same guard, so it escalated every conflict to a human — including trivially mechanical ones
+  (lode-8k3) — undermining `/code`'s "no manual nudge needed" claim.
+
+  **Decision: fetch `origin/land/<id>` and check it out into the agent's *own* launch worktree**
+  (`git fetch origin land/<id> trunk && git checkout -B land/<id> FETCH_HEAD`, or `--detach` if that
+  branch name happens to be checked out elsewhere), instead of reaching into the builder's worktree at
+  all. This is safe because no `land/<id>` branch is ever checked out in any worktree in practice
+  (verified 2026-07-09): builders work on `worktree-agent-<hash>` branches and only *push* `land/<id>`
+  as a remote ref. Once checked out locally, `Edit`/`Write`/`nox` all work natively — no guard to work
+  around — and `/code-review high --fix trunk...HEAD` / `/simplify` see the real diff (the explicit
+  `trunk...HEAD` base matters: `checkout -B` leaves no upstream, and `/code-review`'s own fallback base
+  is `main...HEAD`, the wrong default branch for this repo). `coding`'s rebase pickup gets the identical
+  treatment and, as a consequence, gains a real capability: a **mechanical** conflict (both sides add
+  independent, non-overlapping content) is now resolved directly with `Edit` and the rebase continues;
+  a **genuine disagreement** (the two sides changed the same content incompatibly) still aborts and
+  escalates — that remains a deliberate judgment boundary, not a tool-guard consequence, and it should
+  stay that way even though the tooling limitation that used to force *every* conflict down that path is
+  gone.
+
+  **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
+  rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
+  `metadata.review_worktree` is now vestigial for the reviewer and the rebase pickup — neither opens it
+  — but it is **not** removed from the hand-off: `/land`'s worktree GC still keys off it to reclaim the
+  builder's local worktree after a clean land, so the builder keeps recording it. `/code`'s step-1
+  stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
+  actually consumes). (3) Uncommitted work left in the builder's worktree is now structurally invisible
+  to the reviewer (it never opens that worktree at all) — accepted because the builder's hand-off
+  contract already requires a clean tree before recording `review_head` (lode-tpt); if that contract is
+  ever violated, this architecture can no longer even detect it as a "dirty builder worktree" the way
+  the old `git -C` architecture nominally could (though in practice the old detection existed only in
+  prose, not in a proven catch).
+
+  **Explicitly out of scope**, filed as a follow-up instead: whether the builder still needs to *keep*
+  its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether `/land`'s
+  worktree GC should change as a result. Both touch `/land`'s mechanics and are a separate decision.

@@ -28,8 +28,9 @@ Work moves through three passes, with the human as the hinge:
    captured as beads issues, `/code` runs each task in **two dispatched phases**. First a `coding`
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
-   → stop. Then a `code-reviewer` (Opus) drives that worktree via `git -C`, runs the technical review
-   (`/code-review` + `/simplify`), re-gates, re-pushes, and swaps the ticket to **`ready-for-land`**.
+   → stop. Then a `code-reviewer` (Opus) fetches that pushed branch and checks it out into its **own**
+   launch worktree, runs the technical review (`/code-review` + `/simplify`), re-gates, re-pushes, and
+   swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
 3. **Landing loop — `/land`.** A single lander drains the `ready-for-land` queue: it semantically
    reviews each branch, merges the accepted set into `trunk`, re-gates, closes the tickets, and
@@ -133,16 +134,15 @@ writing on `trunk`. It claims the issue, builds the simplest thing that works, t
 the gates, then **pushes a `land/<id>` branch to origin, marks the ticket `ready-for-code-review`
 (recording its worktree path), keeps the worktree, and stops** — it does **not** review its own work.
 
-Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It stays in its own launch
-worktree and drives the builder's worktree (by the recorded path) via `git -C <path>` — not
-`EnterWorktree`, which the worktree-isolation guard refuses for commands resolved into a
-path-entered worktree — runs the **technical review** (`/code-review --fix` + `/simplify`, re-gate,
-keep the last green commit), re-pushes `land/<id>`, and swaps the ticket to
-**`ready-for-land`**. Neither agent merges, closes, or writes `trunk` — landing is
-[`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't shown to the user,
-so `/code` relays what came back across **both** phases — which issue, that the build gates and the
-technical review passed, the pushed branch and head SHA, or exactly where it stopped (a build- or
-review-time escalation) and why.
+Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
+branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
+worktree, never `EnterWorktree`, and never the builder's worktree at all — runs the **technical
+review** (`/code-review --fix` + `/simplify`, re-gate, keep the last green commit), re-pushes
+`land/<id>`, and swaps the ticket to **`ready-for-land`**. Neither agent merges, closes, or writes
+`trunk` — landing is [`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't
+shown to the user, so `/code` relays what came back across **both** phases — which issue, that the
+build gates and the technical review passed, the pushed branch and head SHA, or exactly where it
+stopped (a build- or review-time escalation) and why.
 
 > **Adding a brand-new `src/lode/*.py` module?** Build a worktree-local venv before `nox` — run
 > `./scripts/python-init.sh` from *inside* the worktree. The shared `./venv` editable install
@@ -180,7 +180,7 @@ flowchart TD
     PUSH --> CLEAN2{"git status --short<br>empty?"}
     CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review --fix + simplify · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review --fix + simplify · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -204,7 +204,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Thing | Rule |
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** for the code-reviewer (removed after land) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; removed after land) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
@@ -306,10 +306,11 @@ Review splits along a clean seam, and — crucially — **neither half is done b
 code:**
 
 - **Technical review — *the second phase of the coding loop*.** Bugs, cleanup, over-design,
-  complexity. A separate **`code-reviewer` (Opus) owns this** — it drives the builder's worktree via `git -C` and
-  fixes problems, but it did **not** write the code. Splitting it out (the builder runs cheaper, on
-  Sonnet) is what buys the independence *and* puts the review spend where it matters. It runs
-  **autonomously** and you only hear about it on a real fork (see below).
+  complexity. A separate **`code-reviewer` (Opus) owns this** — it fetches the pushed branch, checks
+  it out into its *own* worktree, and fixes problems there, but it did **not** write the code.
+  Splitting it out (the builder runs cheaper, on Sonnet) is what buys the independence *and* puts the
+  review spend where it matters. It runs **autonomously** and you only hear about it on a real fork
+  (see below).
 - **Semantic review — *the first task of `/land`*.** Does it meet the ticket's acceptance? Is scope
   clean (no silent creep)? Are the design and the lode invariants honored? Is the approach right?
   This is the **build-side twin of `debate`**, and it's done by the lander, *not* the builder — the
@@ -417,11 +418,12 @@ missed file.
 the technical review now lives in its own agent — not the builder — **neither review of a branch is
 done by its author** (the lander's semantic review is the other). The reviewer:
 
-1. **Drives the builder's worktree by the recorded path via `git -C <path>`** — not `EnterWorktree`:
-   the worktree-isolation guard refuses to run commands resolved into a path-entered worktree
-   ("commands from a worktree-isolated agent must run inside its worktree"), so the reviewer stays in
-   its own launch worktree and confirms the builder's tree is off `trunk` via `git -C <path>
-   rev-parse --abbrev-ref HEAD`.
+1. **Fetches `origin/land/<id>` and checks it out into its own launch worktree** — not `git -C`
+   into the builder's worktree, and not `EnterWorktree`: the worktree-isolation guard refuses to run
+   commands resolved into a path-entered worktree ("commands from a worktree-isolated agent must run
+   inside its worktree"), and a launch worktree still at `trunk` HEAD has an empty diff against the
+   builder's real branch, so driving the builder's worktree in place both fought a guard *and*
+   produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
 2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
@@ -440,7 +442,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_worktree ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(worktree path · SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>git -C &lt;path&gt; (own worktree, not entered) ·<br>/code-review + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
@@ -564,12 +566,13 @@ carries the hand-off and something else consumes the label —
   own labels (`land-escalated`, …), composing on top of the lifecycle status rather than replacing it.
   (A claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to review
   or land.)
-- **Hand-off context is minimal — head SHA + a one-line summary**, plus the **builder's worktree path**
-  so the code-reviewer can drive it via `git -C <path>` (small JSON in bd fields, read via
-  `bd show --json`).
-  The lander re-reviews and re-gates, so stored gate-results would be decorative; the SHA exists only to
-  detect drift (a push onto the branch *after* it was marked ready). The branch name isn't stored — it's
-  derived (below).
+- **Hand-off context is minimal — head SHA + a one-line summary** (small JSON in bd fields, read via
+  `bd show --json`). The builder's worktree path is recorded too, but the code-reviewer no longer
+  drives it: it fetches `origin/land/<id>` and checks the branch out into its **own** launch worktree
+  instead, so the head SHA (`review_head`) is the field it actually depends on; the worktree path
+  survives only for `/land`'s worktree GC (below). The lander re-reviews and re-gates, so stored
+  gate-results would be decorative; the SHA exists only to detect drift (a push onto the branch
+  *after* it was marked ready). The branch name isn't stored — it's derived (below).
 - **Branches are `land/<ticket-id>` on origin** (`git push -u origin HEAD:land/<id>`) — derivable from
   the ticket, no opaque `worktree-agent-<hash>` refs on the remote. **GC:** delete `origin/land/<id>`
   on a successful land *or* a bounce (a rebuild gets a fresh `land/<new-id>`); keep it for an
