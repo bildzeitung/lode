@@ -625,6 +625,7 @@ def test_escape_dismisses_the_inspector_modal_back_to_browse(tmp_path: Path) -> 
             assert isinstance(app.screen, EnrichmentModalScreen)
             await pilot.press("escape")
             await pilot.pause()
+            assert app.focused is app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return isinstance(app.screen, BrowseScreen)
 
     back_to_list = asyncio.run(_drive())
@@ -669,3 +670,29 @@ def test_stale_tag_is_styled_dim_not_printed_as_a_cli_style_suffix(
     assert str(tags_text) == "Tags: stale-tag"
     assert "[stale]" not in str(tags_text)
     assert any(span.style == "dim" for span in tags_text.spans)
+
+
+def test_i_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> None:
+    """No highlighted row (empty list) -> 'i' opens nothing and does not raise.
+
+    ``action_inspect_selected`` guards ``row_count == 0`` before touching
+    ``coordinate_to_cell_key``; without that guard ``i`` on an empty Browse
+    list would raise. Mirrors the same empty-list contract ``e`` (edit) holds.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
+            await pilot.press("i")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    stayed_on_browse = asyncio.run(_drive())
+
+    assert stayed_on_browse
