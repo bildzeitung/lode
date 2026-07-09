@@ -67,7 +67,38 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    `land-review` — the content was never judged bad, it only needed to replay onto where `trunk`
    moved. If the sweep finds nothing, say so and move on; it's not an error.
 
-1. **Resolve the task set** from the argument:
+1. **Sweep for stranded `ready-for-code-review` re-entries too — same invocation, same reason.** A
+   human resolving a `code-reviewer` technical-review escalation or a `coding` build-time escalation
+   applies exit (a) per `docs/agents-workflow.md` by re-adding `ready-for-code-review` (and removing
+   `land-escalated`) directly on the ticket, **outside** any `/code` run. That ticket stays
+   `in_progress` exactly like a `needs-rebase` kick-back, so `bd ready` never returns it either — and
+   unlike `needs-rebase`, nothing in the ordinary Phase 1/2 flow below ever looks for it, because
+   Phase 2 only dispatches a reviewer for a ticket *this same invocation's* Phase 1 just built
+   (lode-t83). Check for it the same way as step 0:
+
+   ```bash
+   rtk bd list --label ready-for-code-review --status in_progress --json
+   ```
+
+   Any hit here is, by construction, stranded from a **previous** invocation — this check runs before
+   this invocation's own Phase 1 has built anything. For each hit, confirm the hand-off is actually
+   reviewable before dispatching:
+
+   ```bash
+   rtk bd show <id> --json | jq -r '.[0].metadata.review_worktree'   # must be non-empty
+   ```
+
+   If it's empty (this can only happen for a build-time escalation predating the coding.md fix for
+   lode-t83's Gap 1), don't guess a worktree — leave the label alone and surface it in the final
+   report as needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
+   exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, **`isolation: "worktree"`**, same
+   prompt shape: read `review_worktree`/`review_head`, drive via `git -C <path>`, `/code-review --fix`
+   + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again). Dispatch every hit
+   **concurrently** with each other, with any step-0 rebase pickups, and with this invocation's own
+   Phase 1 builds — a stranded re-entry never shares a ticket with a fresh build or rebase pickup, so
+   none of these collide. If the sweep finds nothing, say so and move on; it's not an error.
+
+2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read `bd ready` and **fan out** across
      the **independent, unblocked** frontier (honoring the dependency graph and phase-a ordering).
      Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the
@@ -82,7 +113,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    - **Free-text** (e.g. "add a --json flag to search") → one producer; tell the agent that is the
      task — it files the bd issue itself before coding, per its own rules.
 
-2. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
+3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
    `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a subagent is
    pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own, so the harness must
    hand each builder a worktree at dispatch — `isolation: "worktree"` launches it already cwd'd inside
@@ -105,7 +136,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    (For the `--single` case: *"Pick the top ready item from `bd ready` and produce it…"*)
 
-3. **Phase 2 — verify the hand-off, then dispatch a `code-reviewer` per built ticket.** Never trust a
+4. **Phase 2 — verify the hand-off, then dispatch a `code-reviewer` per built ticket.** Never trust a
    builder's task-notification alone: a builder that backgrounded its gates and stalled (lode-95o) can
    still emit a `status=completed` notification with a benign-looking summary, even though nothing was
    pushed and the ticket is still sitting `in_progress`. Before dispatching a reviewer, check the
@@ -121,7 +152,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    - **`land-escalated` present** → the builder escalated *deliberately*: it reverted to green, pushed,
      and stopped because a human owes a build decision. **Skip it.** No reviewer, and never resume it to
-     "complete the hand-off" — that would override the escalation. Surface it in step 4.
+     "complete the hand-off" — that would override the escalation. Surface it in step 5.
    - **Otherwise** (no `ready-for-code-review`, or `origin/land/<id>` doesn't resolve) → the builder
      stalled or never finished. Do **not** send a reviewer into an unverified worktree. Resume that same
      builder (`SendMessage` to its agent id/name — it resumes with full context) and tell it plainly:
@@ -145,7 +176,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap to
    > `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
 
-4. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
+5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
    re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`**
    (so `/land` can pick it up). If a **builder** escalated, say so — it reverted to green, pushed,
@@ -154,7 +185,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    decides. For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in
    review, which escalated (at build or review) and why. Report the **Step 0 sweep** the same way —
    which `needs-rebase` tickets were found, which rebased clean and are back at `ready-for-land`, and
-   which hit a rebase conflict and were escalated (say which one, so a human can resolve it).
+   which hit a rebase conflict and were escalated (say which one, so a human can resolve it). Report
+   step 1's sweep too — which stranded `ready-for-code-review` tickets were found, which got a
+   `code-reviewer` dispatched, and which were left alone for missing `review_worktree`.
 
 ## Notes
 
@@ -170,6 +203,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   "Rebase pickup" cycle, distinct from its normal build cycle) but skips Phase 2 entirely — a
   `needs-rebase` ticket already passed technical review before `/land` kicked it back, so it goes
   straight to `ready-for-land` once the rebase is clean. Never dispatch a `code-reviewer` for one.
+- **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
+  exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
+  ticket was left `ready-for-code-review` by a *previous* invocation (a human's exit-(a) re-entry)
+  rather than by this invocation's own Phase 1 (lode-t83). Its guard (`review_worktree` must be
+  non-empty) exists because one setter of `land-escalated` — `coding`'s build-time escalation — used
+  to skip recording that metadata entirely; that gap is fixed in `coding.md`, but the guard stays as
+  defense-in-depth for tickets escalated before the fix landed.
 - Producers do all repo mutation inside `isolation: "worktree"` worktrees and push to
   `origin/land/<id>`; **nothing merges and nothing the author wrote is reviewed by its author.** The
   main session stays on `trunk` and never edits files here. Landing those branches is `/land`'s job,

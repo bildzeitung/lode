@@ -73,8 +73,11 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 
 ### 1. Read the hand-off
 
-I am dispatched with **one ticket ID** (the builder just marked it `ready-for-code-review`). Read the
-hand-off the builder recorded in bd metadata:
+I am dispatched with **one ticket ID** carrying `ready-for-code-review` — either fresh, from the
+builder that just marked it in this same `/code` invocation, or picked up by `/code`'s step-1 sweep
+for a ticket a human re-entered at this exact label after resolving a `land-escalated` build-time or
+technical-review decision (exit (a), `docs/agents-workflow.md`; lode-t83). Either way the read is the
+same: the hand-off lives in bd metadata, recorded by whichever `coding` run last touched the ticket:
 
 ```bash
 rtk bd show <id> --json     # read labels + metadata.review_worktree, review_branch, review_head

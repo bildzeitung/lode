@@ -259,6 +259,17 @@ genuinely needed during the build (an ambiguous acceptance criterion, a design f
 settle), I:
 
 - **revert to the last green commit** and push the branch (so the work isn't stranded),
+- **record the worktree hand-off even though I'm not marking `ready-for-code-review` yet.** Exit (a)
+  for this exact escalation source re-enters at `ready-for-code-review` (`docs/agents-workflow.md`),
+  and `code-reviewer` step 2 refuses a ticket with no `metadata.review_worktree` — leaving it unset
+  here strands that re-entry the moment a human resolves the decision (lode-t83). Same fields as the
+  green hand-off, captured now while the reverted-to-green tree and its push are still current:
+
+  ```bash
+  rtk bd update <id> --set-metadata review_worktree="$(rtk git rev-parse --show-toplevel)" \
+    --set-metadata review_branch="$(rtk git rev-parse --abbrev-ref HEAD)" \
+    --set-metadata review_head="$(rtk git rev-parse HEAD)"
+  ```
 - **do not** set `ready-for-code-review`; instead `rtk bd update <id> --add-label land-escalated
   --append-notes "ESCALATION: <the decision needed>"`, then `rtk scripts/bd-dolt-push.sh`, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
