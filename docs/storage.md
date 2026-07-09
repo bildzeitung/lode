@@ -345,8 +345,13 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   work. (This does put more cache-ish state in the "irreplaceable" file — see
   [the partition is by rows](stack.md#the-partition-is-by-rows-not-by-file).)
 - **Job types:** `embed(version)` — fast, local, **high priority**; `enrich(version, prompt_ver)` —
-  slow, Claude; `refresh(external)` — arrives with connectors. Priority `embed > enrich` so semantic
-  recall lands fast while tags/edges lag.
+  slow, Claude; `refresh(external)` — implemented with the first connector (`lode-w0h.3`): the web
+  draw-down trigger enqueues it via `enqueue_derive_jobs(..., types=("refresh",))` when a note-save
+  detects a pasted URL, atomically with the edge + version write. The shared fetch→ingest handler
+  is `lode.drawdown.refresh_external`; `lode-w0h.6`'s later refresh policy reuses it unchanged.
+  Priority `embed > enrich` so semantic recall lands fast while tags/edges lag (`refresh` carries
+  no priority ordering against the other two — it is never in contention with a note capture's own
+  derive jobs, since it targets an external, not a version).
 - **Reconciliation scan on startup + periodically** re-enqueues any head version missing a fresh
   embedding/enrichment. This is the self-healing net for crashes, dropped jobs, and `prompt_ver`
   bumps (a bump makes every note's enrichment stale → the scan re-enqueues the corpus). Idempotency

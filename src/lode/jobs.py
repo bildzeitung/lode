@@ -12,8 +12,13 @@ Two derive jobs are enqueued per captured version, in the doc's priority order
   in seconds.
 - ``enrich`` — slow, Claude (tags / entities / inferred edges); may lag.
 
-``refresh(external)`` arrives with the connectors step, not from a note capture,
-so it is not enqueued here.
+``refresh(external)`` arrives with the connectors step (``lode-w0h.3``): the web
+draw-down trigger (:mod:`lode.drawdown`, called from
+:meth:`lode.repository.Repository.save`) enqueues it via this same function
+with an explicit ``types=("refresh",)`` override, keyed on an external's
+canonical URL rather than a note ``version_id`` — not through
+:data:`DERIVE_JOB_TYPES`, which stays the per-note-save default (embed +
+enrich only).
 
 **Transaction ownership (lode-i05.1, pinned 2026-06-28):** the enqueue is NOT its
 own transaction. :func:`enqueue_derive_jobs` runs as a plain INSERT on the caller's

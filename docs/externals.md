@@ -73,6 +73,30 @@ head lives on someone else's server and changes without telling you.** Consequen
 - One canonical node per `external_id` with many edges — never five copies of a ticket linked
   from five notes. Dedup on `external_id`; version on `snapshot_id`.
 
+### URL canonicalization (decided, `lode-w0h.3`)
+
+For a web source, `external_id` **is** its canonical URL string — not a hash — so this
+canonicalization *is* the dedup correctness "same URL in two notes = one node" depends on, and the
+same join key [`lode-w0h.6`](decisions.md)'s refresh policy reuses to find "the same source"
+across refetches. Applied in order (`lode.drawdown.canonicalize_url`):
+
+1. Lowercase the scheme and host (path/query stay as-cased — some servers treat them
+   case-sensitively).
+2. Strip the port when it equals the scheme's default (`:80` for `http`, `:443` for `https`).
+3. Drop the fragment (`#...`) entirely — never part of server-side identity.
+4. Strip query params matching the tracking blocklist (`url_tracking_param_blocklist`,
+   [configuration.md](configuration.md); default `utm_*`, `fbclid`, `gclid`).
+5. Sort the remaining query params.
+6. Normalize the trailing slash: an empty or bare `/` path becomes `/`; any other path loses a
+   trailing `/`.
+
+**The redirect wrinkle:** a note's edge is created against the *pasted* URL's canonical form
+before any fetch runs (fetching is the queued async job). If the fetch follows a 3xx chain to a
+different final URL, the snapshot is ingested under the *final* URL's canonical `external_id`
+instead, and every `source='user'` edge asserted against the pasted-canonical id is re-pointed
+onto the final-canonical id — so the note's edge always resolves to the node that actually holds
+content, and a persistently-redirecting URL still dedups onto one node.
+
 ### Snapshot churn: decouple new snapshot from re-enrich
 
 `snapshot_id = H(external_id ‖ body)` makes an *identical* refetch free (same hash, no new row). But
@@ -110,6 +134,10 @@ if not — otherwise a tombstoned external re-enqueues embed forever).
 ## Edges: explicit vs inferred
 
 - **Explicit** (a note cites `JIRA-1234` or pastes a URL): high confidence, user-asserted edge.
+  For a pasted web URL, this is `lode.drawdown.detect_and_enqueue_drawdown` (`lode-w0h.3`),
+  called from `Repository.save`: it creates the `source='user'` edge and enqueues the
+  `refresh` job that draws the page down — no network I/O in `save` itself, only the edge
+  INSERT and the job enqueue, atomically with the version write.
 - **Inferred** (AI decides "the auth migration" *is* PR #42): a **suggestion** (`source: ai`,
   confidence-scored), **never an asserted fact**. Surface for confirmation; a user nod promotes
   it. This is where a hallucinated link would silently corrupt the graph — keep it gated.
@@ -121,10 +149,20 @@ if not — otherwise a tombstoned external re-enqueues embed forever).
 - **Follow explicit links one hop, then stop.** Pull the linked page, extract *its* entities,
   but do not follow that page's links outward. Recursion = unbounded web crawler, not a notes app.
   (This hop limit governs a fetched page's own *outbound links*; it is a separate knob from the
-  HTTP redirect cap a single fetch follows — see the fetch-outcome taxonomy below.)
+  HTTP redirect cap a single fetch follows — see the fetch-outcome taxonomy below.) Structurally
+  enforced, not counted: only the note-save trigger ever scans note text for URLs
+  (`lode.drawdown.extract_urls`); the `refresh` job handler
+  (`lode.drawdown.refresh_external`, `lode-w0h.3`) never scans a fetched snapshot's body for
+  further links.
 - **Readability extraction + graceful failure.** Many pages (JS-rendered, paywalled, 403) return
   scaffolding to a naive GET; strip nav/ads, snapshot cleaned text (+ optional raw HTML), and on
   failure write a tombstone snapshot rather than garbage.
+- **Shared job type.** The draw-down job reuses the `refresh` value already reserved on
+  `jobs.type` — no schema migration. `lode-w0h.3` introduces the fetch→ingest handler
+  (`lode.drawdown.refresh_external`, registered in `lode.worker`); the paste-triggered initial
+  draw-down is just the first `refresh` of a source, riding the same attempts/backoff/dead-letter
+  machinery any later refetch would. `lode-w0h.6`'s refresh policy reuses this handler unchanged
+  and adds only staleness detection + scheduling.
 
 ### Fetch-outcome taxonomy (decided, `lode-w0h.1`)
 
