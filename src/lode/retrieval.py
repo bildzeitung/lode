@@ -503,7 +503,6 @@ def graph_expand(
             "FROM notes n "
             "JOIN versions v ON v.version_id = n.head_version_id "
             f"WHERE n.note_id IN ({placeholders}) "
-            "AND n.head_version_id IS NOT NULL "
             f"AND {_LIVE_HEAD_PREDICATE}",
             reached_ids,
         )
