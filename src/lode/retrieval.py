@@ -52,6 +52,22 @@ from lode.vectorstore import VectorHit, VectorStore
 #: contain a double-quote, so quoting each term in :func:`build_match_query` is safe.
 _QUERY_TOKEN = re.compile(r"\w+")
 
+#: The tombstone guard behind this module's live-head queries: a version is live
+#: when its ``op`` is not ``'delete'``. ``versions.op`` is ``NOT NULL CHECK (op IN
+#: ('create', 'update', 'delete'))``, so the test is total — no third state, no
+#: ``NULL`` to fall through it. Both :func:`live_head_versions` and
+#: :func:`graph_expand` interpolate this, so widening what counts as a delete (a
+#: second tombstone op, say) is one edit here (module docstring, "Heads only").
+#:
+#: It is a raw SQL fragment, so it carries two preconditions on the enclosing
+#: query: ``versions`` must be joined **aliased ``v``**, and joined **on
+#: ``notes.head_version_id``**. This fragment excludes tombstones and nothing
+#: else — the *head* half of "live head" is that join condition, not this string.
+#: Retrieval-local by design, and deliberately not shared further: ``reconcile``
+#: additionally guards on ``purged_at``, and ``notes_read`` / ``repository`` /
+#: ``tui.edit`` scope their own queries with their own copies.
+_LIVE_HEAD_PREDICATE = "v.op != 'delete'"
+
 
 def build_match_query(question: str) -> str:
     """Build an FTS5 ``MATCH`` expression from a natural-language ``question``.
@@ -86,7 +102,7 @@ def live_head_versions(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
         "SELECT n.head_version_id FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
-        "WHERE v.op != 'delete'"
+        f"WHERE {_LIVE_HEAD_PREDICATE}"
     ).fetchall()
     return [row[0] for row in rows]
 
@@ -488,7 +504,7 @@ def graph_expand(
             "JOIN versions v ON v.version_id = n.head_version_id "
             f"WHERE n.note_id IN ({placeholders}) "
             "AND n.head_version_id IS NOT NULL "
-            "AND v.op != 'delete'",
+            f"AND {_LIVE_HEAD_PREDICATE}",
             reached_ids,
         )
     }
