@@ -20,8 +20,19 @@ retries, then claim+run ready pending jobs until none remain and exit.
   jobs before the main claim-run loop, so this handler fires only for jobs that
   escaped the batch step (e.g. a unit test injecting enrich jobs into a registry
   that skips the batch steps).
-- ``refresh`` — *no handler*; accumulates harmlessly until the connectors step
-  arrives (lode-i05.3 scope fence).
+- ``refresh`` — registered (lode-w0h.3); the shared fetch->ingest handler for
+  the web draw-down connector. Dispatches to
+  :func:`lode.drawdown.refresh_external`, which fetches the job's
+  ``target_version`` (itself a canonical, directly-fetchable URL — a web
+  ``external_id`` *is* its canonical form) and ingests the result as a
+  mirrored snapshot. A :class:`~lode.webfetch.TransientFetchError` needs no
+  special-casing here: it is an ``Exception`` like any other, so
+  :func:`run_one`'s existing attempts/backoff/dead-letter accounting already
+  covers it. The paste-triggered initial draw-down
+  (:func:`lode.drawdown.detect_and_enqueue_drawdown`, called from
+  :meth:`lode.repository.Repository.save`) enqueues the *first* ``refresh``
+  job for a source; ``lode-w0h.6``'s later refresh policy reuses this same
+  handler unchanged and adds only staleness/scheduling on top.
 
 **Batch pre-steps (lode-npx.2)** run at the top of every :func:`drain` pass,
 before the main claim-run loop:
@@ -788,3 +799,41 @@ def _enrich_handler(
 
 # Register the enrich handler on module load.
 register("enrich", _enrich_handler)
+
+
+# ---------------------------------------------------------------------------
+# Refresh handler (registered at module load — lode-w0h.3)
+# ---------------------------------------------------------------------------
+
+
+def _refresh_handler(
+    conn: sqlite3.Connection,
+    target_version: str,
+    db_path: Path,
+    settings: Settings,
+) -> str | None:
+    """Refresh handler: fetch + ingest a web draw-down source (lode-w0h.3).
+
+    Dispatches to :func:`lode.drawdown.refresh_external`, passing no
+    ``fetcher`` override — production always resolves to the real
+    :class:`~lode.webfetch.HttpxFetcher` (:func:`lode.webfetch.
+    fetch_and_extract`'s own default when none is given). ``target_version``
+    is the job's canonical ``external_id`` (a directly-fetchable URL, not a
+    note version — the ``jobs.target_version`` column is a polymorphic
+    string, not FK'd to ``versions``). Deferred import mirrors
+    :func:`_embed_handler`/:func:`_enrich_handler`: the ``httpx``/
+    ``trafilatura`` cost stays off code paths that never draw down a URL.
+
+    The ``db_path`` parameter is accepted but unused, like the enrich
+    handler's: draw-down writes only to the SQLite DB (``externals`` /
+    ``snapshots``), never to the LanceDB vector store directly (the
+    resulting ``embed`` job — enqueued by :func:`lode.externals.
+    ingest_snapshot` for an ``ok`` snapshot — is what reaches LanceDB).
+    """
+    from lode.drawdown import refresh_external
+
+    return refresh_external(conn, target_version, settings)
+
+
+# Register the refresh handler on module load.
+register("refresh", _refresh_handler)

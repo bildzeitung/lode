@@ -26,7 +26,7 @@ import sqlite3
 from collections.abc import Iterable
 from typing import Protocol, runtime_checkable
 
-from lode import jobs, staleness, versions
+from lode import drawdown, jobs, staleness, versions
 from lode.config import Settings
 from lode.hashing import NO_PARENT
 from lode.redact import redact_before_index
@@ -205,6 +205,14 @@ class Repository:
         (lode-atv) — ``create`` has no prior AI-derived layer yet, and a dedup
         changed no body, so both are skipped.
 
+        **Web draw-down trigger (lode-w0h.3):** every non-dedup save also runs
+        :func:`lode.drawdown.detect_and_enqueue_drawdown`, in the same ``with
+        conn:`` — pasted URLs become ``source='user'`` edges plus a queued
+        ``refresh`` job apiece. This is a plain INSERT on ``self.conn``, same
+        as the derive-job enqueue above; no network I/O happens inside
+        ``save`` — the actual fetch is the queued job, run later by the
+        worker (``docs/externals.md`` "Draw-down rules").
+
         **redact-before-index (lode-n60):** the body handed to
         :meth:`CacheBackend.index` is passed through
         :func:`lode.redact.redact_before_index` first, so every cache engine
@@ -231,6 +239,13 @@ class Repository:
                 # has nothing to race against, and enrich_gap needs no
                 # special-casing for the capture path.
                 jobs.enqueue_derive_jobs(self.conn, result.version_id)
+                # Web draw-down trigger (lode-w0h.3): detect pasted URLs, create
+                # explicit source='user' edges, and enqueue a `refresh` job per
+                # newly-linked external — same transaction, no network I/O (the
+                # actual fetch is the queued async job, run later by the worker).
+                drawdown.detect_and_enqueue_drawdown(
+                    self.conn, note_id, result.version_id, body, settings=settings
+                )
                 if result.op == "update":
                     staleness.reanchor_annotations(
                         self.conn, note_id, result.version_id, body

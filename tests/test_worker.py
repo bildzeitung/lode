@@ -1009,11 +1009,11 @@ def test_enrich_is_registered_by_default() -> None:
     assert "enrich" in registered_types()
 
 
-def test_refresh_not_registered() -> None:
-    """refresh must NOT be in the default registry (no connector handler yet)."""
+def test_refresh_is_registered_by_default() -> None:
+    """The refresh handler is registered at import time (lode-w0h.3)."""
     from lode.worker import registered_types
 
-    assert "refresh" not in registered_types()
+    assert "refresh" in registered_types()
 
 
 # ---------------------------------------------------------------------------

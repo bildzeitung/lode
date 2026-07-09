@@ -275,6 +275,14 @@ class Settings(BaseModel):
         "snapshotted, even when the extractor returned non-None text.",
         ge=0,
     )
+    url_tracking_param_blocklist: list[str] = _knob(
+        ["utm_*", "fbclid", "gclid"],
+        Kind.RUNTIME,
+        "Query params stripped during URL canonicalization (lode-w0h.3) before "
+        "an external_id dedup key is computed. A trailing '*' matches a "
+        "prefix (case-insensitive), e.g. 'utm_*' matches utm_source, "
+        "utm_medium, utm_campaign, ... Everything else matches exactly.",
+    )
 
     # --- Privacy & egress -----------------------------------------------------
     no_egress_default: bool = _knob(
