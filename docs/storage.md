@@ -262,6 +262,22 @@ were still unbuilt.
 Async enrichment makes an empty section ambiguous ("hasn't run yet" vs. "ran and found nothing" vs.
 "ran and died") — this three-way split is what makes all three distinguishable on both surfaces.
 
+**`enrichment_view_conn(conn, note_id)` (implemented lode-ay5.3)** is the connection-taking sibling of
+`enrichment_view(db_path, note_id)` — same return value, but reuses a connection the caller already
+holds instead of opening a second one. Originally left private (`_enrichment_view`) by lode-ay5.1's
+review — "a public API with no caller and no test is speculative" — and promoted once `lode show`
+(which already holds an open `conn` and a resolved `note_id`) became that caller. `lode show` now
+renders entirely from this seam (no independent `display_annotations`/`display_edges` assembly of its
+own) and is at CONTENT parity with the TUI modal: it gained edge `reason`/`confidence` (compact, e.g.
+`-> to_id (reason, 0.82)[stale]`) and an `enrichment:` status line ({pending, failed, ready}), neither
+of which the pre-ay5.3 CLI printed.
+
+Known caveat, not fixed here (bd `lode-bvg`, awaiting a human decision): the pinned predicate's
+`"failed"` bucket includes `status='failed'`, which `schema.sql` documents as the *transient*
+last-error state a backoff retry resets from — so a note whose enrich hit a transient error reads
+`enrichment: failed` for its retry backoff window, then `pending`, then `ready`, even though it was
+never dead-lettered. Both consumers (the modal, `lode show`) inherit this as-is.
+
 ### Provenance & user override
 
 - **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,

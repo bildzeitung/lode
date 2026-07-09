@@ -120,11 +120,10 @@ def _annotation_items(annotations: list[dict], kind: str) -> list[EnrichmentItem
     decided by :func:`~lode.display.display_annotations` -- this only shapes
     it into the view-model's structured item, no re-deriving the policy.
 
-    ``cli._annotation_values`` is a surviving near-copy of this helper: it
-    filters by ``kind`` the same way but returns pre-rendered strings carrying
-    a baked ``" [stale]"`` suffix (the seam's old shape, before lode-0qc).
-    lode-ay5.3 deletes that copy when it routes ``cli.show_`` through this
-    view-model.
+    ``cli._annotation_values`` was a near-copy of this helper: it filtered by
+    ``kind`` the same way but returned pre-rendered strings carrying a baked
+    ``" [stale]"`` suffix (the seam's old shape, before lode-0qc). lode-ay5.3
+    deleted that copy when it routed ``cli.show_`` through this view-model.
     """
     return [
         EnrichmentItem(value=str(a["payload"]), stale=a["stale"])
@@ -149,10 +148,10 @@ def _summary(annotations: list[dict]) -> EnrichmentItem | None:
     (the "show-flagged, never hide" stale-display policy). ``min`` on the
     ``stale`` flag is stable, so ties keep insertion order.
 
-    ``cli.show_`` still carries this defect verbatim -- it picks its summary
-    with ``summaries[0]`` over ``cli._annotation_values(...)``, so an
-    edited-then-re-enriched note prints the PRE-EDIT summary. lode-ay5.3
-    inherits the fix by routing ``cli.show_`` through this seam; see
+    ``cli.show_`` used to carry this defect verbatim -- it picked its summary
+    with ``summaries[0]`` over the now-deleted ``cli._annotation_values(...)``,
+    so an edited-then-re-enriched note printed the PRE-EDIT summary. lode-ay5.3
+    fixed that by routing ``cli.show_`` through this seam; see
     ``tests/test_enrichment_view.py`` for the end-to-end reproduction.
     """
     return min(
@@ -168,16 +167,28 @@ def enrichment_view(db_path: Path, note_id: str) -> EnrichmentView | None:
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
     convention as :func:`lode.notes_read.list_notes` / :func:`~lode.
     notes_read.note_body` -- a plain top-level read, not tied to a connection
-    a caller might hold.
+    a caller might hold. Prefer :func:`enrichment_view_conn` when you already
+    hold an open connection (e.g. ``cli.show_``, lode-ay5.3) -- it avoids
+    opening a second one.
     """
     conn = init_db(db_path)
     try:
-        return _enrichment_view(conn, note_id)
+        return enrichment_view_conn(conn, note_id)
     finally:
         conn.close()
 
 
-def _enrichment_view(conn: sqlite3.Connection, note_id: str) -> EnrichmentView | None:
+def enrichment_view_conn(
+    conn: sqlite3.Connection, note_id: str
+) -> EnrichmentView | None:
+    """Same as :func:`enrichment_view`, but reuses a connection you already hold.
+
+    Promoted from a private helper (lode-ay5.1's technical review left it
+    private -- "a public API with no caller and no test is speculative");
+    ``cli.show_`` (lode-ay5.3) already holds an open ``conn`` and a resolved
+    ``note_id`` when it needs a note's enrichment view, so re-opening a second
+    connection here would be silent waste. This is that caller.
+    """
     row = conn.execute(
         "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
     ).fetchone()

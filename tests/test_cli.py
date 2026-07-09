@@ -9,9 +9,12 @@ draft rather than clobbering — the operational read-outs (lode-y42.3): ``statu
 queue); the ``egress`` audit read-out (lode-fk8.3: per-send ts/purpose/model/sent
 ids/redactions); ``purge`` (the E8 hard delete via ``Repository.purge``, lode-7cx);
 ``notes`` (lode-1gr.1: list every live note's full id/date/summary, the id source
-for ``purge``); ``show`` (lode-1gr.5: one note's head body + derived enrichment --
-summary/tags/entities/edges via the stale-display policy -- plus embed status,
-sharing ``purge``'s id/prefix resolution); and ``ask`` (the cited Q&A loop,
+for ``purge``); ``show`` (lode-1gr.5, brought to CONTENT parity with the TUI
+inspector modal by lode-ay5.3: one note's head body + full derived enrichment --
+summary/tags/entities/edges-with-reason-confidence via the shared
+``lode.enrichment_view`` seam, plus a three-valued ``enrichment:`` line and embed
+status -- sharing ``purge``'s id/prefix resolution); and ``ask`` (the cited Q&A
+loop,
 lode-y42.2: retrieve → synthesize → faithfulness gate → cite or abstain, with the
 Anthropic client mocked so the gate runs offline).
 """
@@ -953,6 +956,182 @@ def test_show_prints_enrichment_and_embed_status(tmp_path: Path) -> None:
     assert "entities: Anthropic" in result.stdout
     assert "concept-x" in result.stdout
     assert "embedded: yes (1 passage(s))" in result.stdout
+
+
+def test_show_renders_edge_reason_and_confidence_compact(tmp_path: Path) -> None:
+    """Edge parity (lode-ay5.3): 'lode show' gains reason+confidence, compact.
+
+    Pre-ay5.3, `show` printed only `-> to_id[stale]` even though both columns
+    exist on `edges`. This is the net-new CLI field the epic's parity decision
+    (2026-07-08) requires.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-show-edge", "body")
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'concept-x', 'ai', 'mentions jwt auth', 0.82, ?, 'fresh')",
+            ("note-show-edge", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-show-edge", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "-> concept-x (mentions jwt auth, 0.82)" in result.stdout
+
+
+def test_show_edge_with_no_reason_or_confidence_omits_the_parenthetical(
+    tmp_path: Path,
+) -> None:
+    """A user-curated edge (reason/confidence both NULL, per schema.sql) degrades
+    to the old bare '-> to_id' form rather than printing an empty '()'."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-show-user-edge", "body")
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, source_version, status) "
+            "VALUES (?, 'concept-y', 'user', ?, 'fresh')",
+            ("note-show-user-edge", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-show-user-edge", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "-> concept-y\n" in result.stdout
+    assert "concept-y (" not in result.stdout
+
+
+def test_show_enrichment_state_pending_failed_ready_are_wording_distinct(
+    tmp_path: Path,
+) -> None:
+    """The three-valued enrichment_state (lode-ay5.1) renders distinctly on the
+    CLI: 'pending' / 'failed' / 'ready' replace the old ambiguous bare '(none)'
+    that couldn't tell not-yet-enriched from enriched-empty from dead-lettered.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        pending = save(conn, "note-pending", "not yet enriched")
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', ?, 'pending')",
+            (pending.version_id,),
+        )
+
+        failed = save(conn, "note-failed", "enrich dead-lettered")
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) "
+            "VALUES ('enrich', ?, 'dead')",
+            (failed.version_id,),
+        )
+
+        # 'note-show-1' style: no job row at all -> ready (never enriched, or
+        # already finished) -- covered separately by the un-enriched/enriched
+        # tests above; here just confirm a third, bare note reads 'ready'.
+        save(conn, "note-ready", "genuinely no job")
+        conn.commit()
+    finally:
+        conn.close()
+
+    pending_out = runner.invoke(
+        app, ["show", "note-pending", "--db", str(db_path)]
+    ).stdout
+    failed_out = runner.invoke(
+        app, ["show", "note-failed", "--db", str(db_path)]
+    ).stdout
+    ready_out = runner.invoke(app, ["show", "note-ready", "--db", str(db_path)]).stdout
+
+    assert "enrichment: pending" in pending_out
+    assert "enrichment: failed" in failed_out
+    assert "enrichment: ready" in ready_out
+    # Distinct wording, not a shared ambiguous placeholder.
+    states = {"enrichment: pending", "enrichment: failed", "enrichment: ready"}
+    assert len(states) == 3
+
+
+def test_show_field_coverage_matches_the_view_model(tmp_path: Path) -> None:
+    """Content-parity guard (lode-ay5.3, epic decision 2026-07-08): parity is
+
+    checked by field-coverage against the shared view-model, not by diffing
+    'lode show' output against the TUI modal's exact bytes. This enumerates
+    EnrichmentView's own fields and asserts 'lode show' surfaces each one.
+    """
+    import dataclasses
+
+    from lode.enrichment_view import EnrichmentView
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-parity", "parity body")
+        head_version_id = result.version_id
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'summary', ?, 'ai', 'fresh')",
+            ("note-parity", head_version_id, json.dumps("a summary")),
+        )
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'tag', ?, 'ai', 'fresh')",
+            ("note-parity", head_version_id, json.dumps("a-tag")),
+        )
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'entity', ?, 'ai', 'fresh')",
+            ("note-parity", head_version_id, json.dumps("an-entity")),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'concept-parity', 'ai', 'because', 0.5, ?, 'fresh')",
+            ("note-parity", head_version_id),
+        )
+        conn.execute(
+            "INSERT INTO passages (passage_id, target_version, ord, text) "
+            "VALUES ('p-parity', ?, 0, 'parity body')",
+            (head_version_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-parity", "--db", str(db_path)])
+    assert result.exit_code == 0
+    stdout = result.stdout
+
+    field_names = {f.name for f in dataclasses.fields(EnrichmentView)}
+    assert field_names == {
+        "note_id",
+        "enrichment_state",
+        "summary",
+        "tags",
+        "entities",
+        "edges",
+        "embedded",
+        "passage_count",
+    }
+    # note_id -> the header line; enrichment_state -> the 'enrichment:' line;
+    # summary/tags/entities/edges -> their own sections; embedded +
+    # passage_count -> the combined 'embedded: yes (N passage(s))' line.
+    assert "note_id: note-parity" in stdout
+    assert "enrichment: ready" in stdout
+    assert "summary: a summary" in stdout
+    assert "tags: a-tag" in stdout
+    assert "entities: an-entity" in stdout
+    assert "-> concept-parity (because, 0.50)" in stdout
+    assert "embedded: yes (1 passage(s))" in stdout
 
 
 def test_show_flags_stale_enrichment_rather_than_hiding_it(tmp_path: Path) -> None:
