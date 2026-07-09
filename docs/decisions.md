@@ -147,8 +147,14 @@ are catalogued in [configuration.md](configuration.md).
   local "skip if running" guard + the one-machine convention). Deferred, *not* blocking v1: (1) a
   **distributed remote-lock ref** (`refs/locks/land`, owner + timestamp for stale-break) to replace
   the v1 guard once true concurrent multi-machine landing is wanted — the seam toward real CI; (2) a
-  **stale-escalation sweep** to GC `land/<id>` branches left behind by tickets awaiting a human
-  decision.
+  **stale-escalation sweep** — **surfacing** (not GC'ing) a `land-escalated` branch that has sat
+  unresolved unusually long, so a long-abandoned decision is called out distinctly rather than
+  blending into the routine digest. This is deliberately a refinement of surfacing, not a deletion
+  mechanism: `/sweep` (lode-nps.1, [agents-workflow.md](agents-workflow.md#running-the-loop-family-unattended--epic-audit-sweep))
+  already surfaces every open `land-escalated` item every pass regardless of age; a `land-escalated`
+  branch is otherwise never touched by an automated sweep — only the three human-driven resolution
+  exits ([agents-workflow.md](agents-workflow.md#the-lander--land-drained-by-a-self-paced-loop))
+  remove the label and let the branch go.
 - **`bd dolt push` retry-on-reject: a backoff wrapper, not a Dolt server-mode migration (lode-83d).**
   lode-nps.3 validated that `bd dolt push` is fast-forward-only + atomically CAS-protected on the
   branch ref (a losing concurrent writer is *rejected*, never silently dropped) but surfaced two
@@ -174,3 +180,48 @@ are catalogued in [configuration.md](configuration.md).
   wrapper's default 5-attempt budget starts exhausting under normal fan-out width, not just an
   unlucky race), or lode's contributor base grows to where a shared always-on Dolt server earns its
   keep for reasons beyond this ticket's concurrency concern.
+- **`/land` bounce-lineage cap — deferred, not built (lode-nps).** A `land-review` bounce supersedes
+  the original ticket into a fresh rebuild; if that rebuild is bounced again for the same reason,
+  nothing today stops an unbounded chain of rebuild tickets — a real internal livelock needing no
+  external churn. The mechanism sketched to close it is sound and cheap (a `bounce_depth` metadata
+  counter carried across each supersede, escalating to `land-escalated` past a cap), but no real
+  bounce chain has ever been *observed* — and `/sweep`
+  ([agents-workflow.md](agents-workflow.md#running-the-loop-family-unattended--epic-audit-sweep)) is
+  already the detector for one: it would surface a stuck lineage the moment it escalates, with no cap
+  needed to make that visible. **Revisit if:** a real bounce chain is actually observed running past
+  one or two rebuilds without landing.
+- **`/code` rebase-attempt cap — deferred (YAGNI).** A parallel safeguard considered for
+  `needs-rebase` starvation under perpetual `trunk` churn (a `rebase_attempts` counter, escalating
+  after N attempts). The failure mode is churn-only — a finite backlog of rebases quiesces on its
+  own — and a genuine rebase *conflict* already escapes to `land-escalated` today, so there is no
+  observed gap this cap would close. **Revisit if:** perpetual-churn starvation (a ticket rebasing
+  repeatedly without ever landing, absent any real conflict) is actually seen in practice.
+- **Epic auto-close + confirming re-audit — rejected, not merely deferred (lode-nps).** `/epic-audit`
+  never closes an epic itself and, after filing gap children, does not re-arm itself — closing an
+  `epic-audited` + all-children-closed epic stays a manual act (`/epic-audit <id>` to re-verify, or a
+  direct `bd close`). A `/debate` pass considered auto-closing an epic once every filed gap child had
+  landed and a confirming re-audit came back clean. **Rejected:** epic closure is a human
+  **capability judgment** — "did the delivered set actually satisfy what this epic promised" — not a
+  mechanical check a re-audit can safely stand in for. Every gap child already passes code-review +
+  land-review + the land gate on its own merits, so an automatic confirming re-audit would only redo
+  judgment a human should own, to save one rare click; the downside of a false-positive auto-close
+  (an epic quietly marked done when it wasn't) outweighs that saving. `/sweep` now surfaces a
+  closable epic (`epic-ready-to-close`) so the human is prompted rather than left to notice on their
+  own — that is the whole fix; manual `/epic-audit <id>` remains available to re-verify on demand.
+- **Loop poll / quiescence cost — deferred.** `/code`, `/land`, `/epic-audit`, and `/sweep` are all
+  designed to poll forever on a fixed interval (`/loop 5m /land`, `/loop 30m /sweep`, …); a no-op tick
+  still spends a model turn even when every queue is empty. Fixed-interval polling is accepted as-is
+  for now. **Revisit if:** no-op poll cost is actually *observed* to matter — then consider adaptive
+  backoff or a quiescence stop ("N consecutive empty passes → stop the loop") — rather than
+  pre-optimizing against a cost that hasn't been shown to bite.
+- **Loop topology — landing-side loops are a one-machine invariant, stated explicitly (lode-nps).**
+  `/land`, `/epic-audit`, and `/sweep` are all expected to run on **one** machine. This was previously
+  an implicit convention riding on `/land`'s single-lander lock
+  ([agents-workflow.md](agents-workflow.md#mechanics-decided)); with `/epic-audit` and `/sweep` now
+  also writing bd state as their own loop legs, the same one-machine expectation has to cover all
+  three explicitly — the lock itself only ever guarded overlapping `/land` ticks, and says nothing
+  about where the other two run. **`/code` producers are the one leg that MAY fan out across
+  machines**, because they write disjoint issue rows and push their own branches rather than touching
+  any landing-side shared state — see the concurrent-`bd dolt push` validation above. Distributed
+  cross-machine landing (the `refs/locks/land` ref, above) stays separately deferred; this invariant
+  does not un-defer it, it just states plainly what was always assumed.
