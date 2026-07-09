@@ -31,3 +31,21 @@ DiscardConfirmScreen {
     background: $panel;
     padding: 1 2;
 }
+
+/* Enrichment inspector modal (lode-ay5.2) -- a larger, scrollable popup
+ * (unlike #capture-confirm-dialog's small fixed box) since a note's summary/
+ * tags/entities/edges can run longer than the terminal height. Height is
+ * bounded (not auto) so the container itself -- not the dialog growing past
+ * the screen -- is what scrolls.
+ */
+EnrichmentModalScreen {
+    align: center middle;
+}
+
+#enrichment-inspector-dialog {
+    width: 80%;
+    height: 80%;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}

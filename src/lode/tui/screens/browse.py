@@ -60,16 +60,34 @@ format_adaptive_date` instead of the raw ISO-8601 ``created`` string --
 today's time, this week's weekday+time, this year's month+day, or an older
 plain ISO date. Shorter on every bucket but the last, which is what frees more
 of :meth:`BrowseScreen._reload_rows`'s natural-width budget for Summary.
+
+**Enrichment inspector modal (lode-ay5.2).** ``i`` on a highlighted row pushes
+:class:`EnrichmentModalScreen` -- a glance-and-dismiss popup (``Esc`` pops it,
+same one-level-at-a-time contract as everywhere else in this module) showing
+that note's enrichment: summary, tags, entities, inferred edges
+(reason+confidence+stale), embed status, and the three-valued
+``enrichment_state``. It renders :func:`lode.enrichment_view.enrichment_view`
+directly -- the shared TUI+CLI view-model seam (lode-ay5.1, lode-0qc) -- and
+holds **no** copy of the stale-display policy or any independent display
+assembly; :mod:`lode.cli`'s ``show_`` (lode-ay5.3) consumes the same seam so
+the two surfaces cannot drift. Registered like
+:class:`~lode.tui.screens.capture.DiscardConfirmScreen`: a bare
+``ModalScreen`` pushed over the still-visible list rather than a
+``SCREENS``-registry entry, dimming the table underneath for free via
+``ModalScreen``'s own ``DEFAULT_CSS``.
 """
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, TextArea
+from textual.containers import VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
+from lode.enrichment_view import EnrichmentEdge, EnrichmentItem, enrichment_view
 from lode.notes_read import (
     list_notes,
     list_versions,
@@ -93,6 +111,22 @@ EDIT_BODY_ID = "note-edit-body"
 HISTORY_TABLE_ID = "version-history-table"
 #: The read-only prior-version body's widget id -- read back in tests.
 VERSION_BODY_ID = "version-view-body"
+#: The enrichment inspector modal's dialog container id -- read back in tests.
+INSPECTOR_DIALOG_ID = "enrichment-inspector-dialog"
+#: The inspector's ``enrichment_state`` line id -- read back in tests.
+INSPECTOR_STATE_ID = "inspector-state"
+#: The inspector's summary line id -- read back in tests.
+INSPECTOR_SUMMARY_ID = "inspector-summary"
+#: The inspector's tags line id -- read back in tests.
+INSPECTOR_TAGS_ID = "inspector-tags"
+#: The inspector's entities line id -- read back in tests.
+INSPECTOR_ENTITIES_ID = "inspector-entities"
+#: The inspector's inferred-edges block id -- read back in tests.
+INSPECTOR_EDGES_ID = "inspector-edges"
+#: The inspector's embed-status line id -- read back in tests.
+INSPECTOR_EMBED_ID = "inspector-embed"
+#: Placeholder text for an empty section -- never suppressed, just labeled.
+_NONE_TEXT = "(none)"
 
 #: Left+right cell padding a ``DataTable`` adds *per column* -- used to work out
 #: how much horizontal room the Summary column may claim without pushing the
@@ -224,12 +258,144 @@ class VersionViewScreen(Screen[None]):
         self.app.pop_screen()
 
 
+def _item_text(item: EnrichmentItem) -> Text:
+    """One tag/entity/summary value, dimmed if stale.
+
+    Styles the ``stale`` bit directly rather than printing a baked-in suffix
+    (lode-0qc) -- the whole reason :class:`~lode.enrichment_view.
+    EnrichmentItem` carries ``stale`` as a structured flag instead of a
+    ``" [stale]"``-suffixed string is so a consumer that wants to *style* a
+    stale item (as this modal does) never has to string-sniff for the marker.
+    """
+    return Text(item.value, style="dim" if item.stale else "")
+
+
+def _items_line(items: list[EnrichmentItem]) -> Text:
+    """Every tag/entity on one comma-separated line, each styled by its own bit."""
+    if not items:
+        return Text(_NONE_TEXT)
+    line = Text()
+    for index, item in enumerate(items):
+        if index:
+            line.append(", ")
+        line.append_text(_item_text(item))
+    return line
+
+
+def _summary_text(summary: EnrichmentItem | None) -> Text:
+    """The note's one summary line, or the placeholder when it has none at all."""
+    if summary is None:
+        return Text(_NONE_TEXT)
+    return _item_text(summary)
+
+
+def _edges_text(edges: list[EnrichmentEdge]) -> Text:
+    """One inferred edge per line: target, reason, confidence -- dimmed if stale.
+
+    ``reason``/``confidence`` are nullable on the seam (a user-curated edge may
+    carry neither); missing values render as an explicit placeholder rather
+    than a blank so the line never reads as truncated.
+    """
+    if not edges:
+        return Text(_NONE_TEXT)
+    block = Text()
+    for index, edge in enumerate(edges):
+        if index:
+            block.append("\n")
+        reason = edge.reason if edge.reason is not None else "no reason recorded"
+        confidence = f"{edge.confidence:.2f}" if edge.confidence is not None else "n/a"
+        line = f"-> {short_note_id(edge.to_id)} ({reason}, {confidence})"
+        block.append(line, style="dim" if edge.stale else "")
+    return block
+
+
+class EnrichmentModalScreen(ModalScreen[None]):
+    """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
+
+    Pushed from :meth:`BrowseScreen.action_inspect_selected` via ``i`` on the
+    highlighted row, keyed to that row's ``note_id`` the same way ``e``
+    resolves one for :class:`EditScreen`. Renders
+    :func:`lode.enrichment_view.enrichment_view` verbatim -- summary, tags,
+    entities, inferred edges (reason+confidence+stale), embed status, and the
+    three-valued ``enrichment_state`` -- with **no** DB access or display
+    policy of its own; this screen only shapes the already-decided fields into
+    widgets. The module-level ``_item_text``/``_items_line``/``_edges_text``
+    helpers above do the one bit of real work this modal owns: styling
+    ``stale`` dim instead of string-sniffing a suffix (lode-0qc; see
+    ``docs/storage.md``'s "Enrichment view-model" section).
+
+    Content lives in a :class:`~textual.containers.VerticalScroll` (not a
+    fixed :class:`~textual.containers.Vertical`, unlike
+    :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s small fixed
+    dialog) so a note with many tags/entities/edges scrolls within the popup
+    rather than overflowing or truncating. ``Esc`` pops back to
+    :class:`BrowseScreen` -- the same one-level-at-a-time contract every other
+    screen in this module already uses. Like ``DiscardConfirmScreen``, this is
+    a bare ``ModalScreen`` pushed directly (not a :data:`~lode.tui.app.
+    LodeApp.SCREENS` entry): it dims the table underneath for free via
+    ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing
+    and centering for :data:`INSPECTOR_DIALOG_ID`.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+    ]
+
+    def __init__(self, note_id: str) -> None:
+        super().__init__()
+        self.note_id = note_id
+
+    def compose(self) -> ComposeResult:
+        yield VerticalScroll(
+            Static("", id=INSPECTOR_STATE_ID),
+            Static("", id=INSPECTOR_SUMMARY_ID),
+            Static("", id=INSPECTOR_TAGS_ID),
+            Static("", id=INSPECTOR_ENTITIES_ID),
+            Static("", id=INSPECTOR_EDGES_ID),
+            Static("", id=INSPECTOR_EMBED_ID),
+            id=INSPECTOR_DIALOG_ID,
+        )
+
+    def on_mount(self) -> None:
+        view = enrichment_view(self.app.db_path, self.note_id)
+        if view is None:
+            # BrowseScreen only ever pushes this for a row already in the
+            # (live-only) table, so a missing note here would be a real bug,
+            # not a normal race worth a soft fallback -- the same stance
+            # EditScreen.on_mount takes for a missing head.
+            raise LookupError(f"no live note {self.note_id!r} to inspect")
+
+        self.query_one(f"#{INSPECTOR_STATE_ID}", Static).update(
+            f"Enrichment: {view.enrichment_state}"
+        )
+        self.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).update(
+            Text("Summary: ") + _summary_text(view.summary)
+        )
+        self.query_one(f"#{INSPECTOR_TAGS_ID}", Static).update(
+            Text("Tags: ") + _items_line(view.tags)
+        )
+        self.query_one(f"#{INSPECTOR_ENTITIES_ID}", Static).update(
+            Text("Entities: ") + _items_line(view.entities)
+        )
+        self.query_one(f"#{INSPECTOR_EDGES_ID}", Static).update(
+            Text("Edges:\n") + _edges_text(view.edges)
+        )
+        self.query_one(f"#{INSPECTOR_EMBED_ID}", Static).update(
+            f"Embedded: {'yes' if view.embedded else 'no'} "
+            f"({view.passage_count} passages)"
+        )
+
+    def action_dismiss_screen(self) -> None:
+        self.app.pop_screen()
+
+
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("e", "edit_selected", "Edit"),
+        Binding("i", "inspect_selected", "Inspect"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -334,6 +500,15 @@ class BrowseScreen(Screen[None]):
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is not None:
             self.app.push_screen(EditScreen(note_id))
+
+    def action_inspect_selected(self) -> None:
+        """``i``: open the highlighted row's enrichment inspector modal."""
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        if table.row_count == 0:
+            return
+        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if note_id is not None:
+            self.app.push_screen(EnrichmentModalScreen(note_id))
 
     def action_dismiss_screen(self) -> None:
         self.app.pop_screen()

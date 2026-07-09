@@ -8,9 +8,12 @@ contents/ordering, selecting a row to open a read-only note view, and the
 """
 
 import asyncio
+import json
+import sqlite3
 from pathlib import Path
 
-from textual.widgets import DataTable, TextArea
+from rich.text import Text
+from textual.widgets import DataTable, Static, TextArea
 
 from lode.notes_read import short_note_id
 from lode.storage import init_db
@@ -18,10 +21,17 @@ from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
     HISTORY_TABLE_ID,
+    INSPECTOR_EDGES_ID,
+    INSPECTOR_EMBED_ID,
+    INSPECTOR_ENTITIES_ID,
+    INSPECTOR_STATE_ID,
+    INSPECTOR_SUMMARY_ID,
+    INSPECTOR_TAGS_ID,
     NOTE_BODY_ID,
     TABLE_ID,
     VERSION_BODY_ID,
     BrowseScreen,
+    EnrichmentModalScreen,
     NoteViewScreen,
     VersionHistoryScreen,
     VersionViewScreen,
@@ -406,3 +416,256 @@ def test_long_summary_wraps_instead_of_scrolling_the_table(tmp_path: Path) -> No
     assert row_height > 1  # the summary wrapped onto multiple lines
     assert virtual_width <= widget_width  # ... so the table needs no h-scroll
     assert summary_cell == long_summary  # the cell keeps the full text, untruncated
+
+
+# ---------------------------------------------------------------------------
+# Enrichment inspector modal (lode-ay5.2) -- 'i' on a highlighted row opens a
+# modal rendering lode.enrichment_view.enrichment_view (lode-ay5.1) verbatim.
+# Seeding jobs/annotations/edges mirrors tests/test_enrichment_view.py's own
+# hand-inserted convention -- save() alone (no Repository) enqueues no job and
+# writes no AI output, so the enrichment_state predicate reads these directly.
+# ---------------------------------------------------------------------------
+
+
+def _insert_enrich_job(
+    conn: sqlite3.Connection, *, target_version: str, status: str
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) VALUES ('enrich', ?, ?)",
+            (target_version, status),
+        )
+
+
+def _insert_annotation(
+    conn: sqlite3.Connection,
+    *,
+    target: str,
+    source_version: str,
+    kind: str,
+    payload_value: str,
+    source: str = "ai",
+    status: str = "fresh",
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (target, source_version, kind, json.dumps(payload_value), source, status),
+        )
+
+
+def _insert_edge(
+    conn: sqlite3.Connection,
+    *,
+    from_id: str,
+    to_id: str,
+    source_version: str,
+    reason: str = "mentions related material",
+    confidence: float = 0.75,
+    source: str = "ai",
+    status: str = "fresh",
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO edges "
+            "(from_id, to_id, source, reason, confidence, source_version, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (from_id, to_id, source, reason, confidence, source_version, status),
+        )
+
+
+def test_i_on_highlighted_row_opens_the_inspector_with_full_enrichment(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note about jwt auth").version_id
+        _insert_annotation(
+            conn,
+            target="note-a",
+            source_version=head,
+            kind="summary",
+            payload_value="a note about jwt auth",
+        )
+        _insert_annotation(
+            conn, target="note-a", source_version=head, kind="tag", payload_value="auth"
+        )
+        _insert_annotation(
+            conn,
+            target="note-a",
+            source_version=head,
+            kind="entity",
+            payload_value="JWT",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="note-b",
+            source_version=head,
+            reason="mentions jwt auth",
+            confidence=0.82,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> dict[str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            assert isinstance(app.screen, EnrichmentModalScreen)
+            screen = app.screen
+            return {
+                "state": str(
+                    screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content
+                ),
+                "summary": str(
+                    screen.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).content
+                ),
+                "tags": str(screen.query_one(f"#{INSPECTOR_TAGS_ID}", Static).content),
+                "entities": str(
+                    screen.query_one(f"#{INSPECTOR_ENTITIES_ID}", Static).content
+                ),
+                "edges": str(
+                    screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
+                ),
+                "embed": str(
+                    screen.query_one(f"#{INSPECTOR_EMBED_ID}", Static).content
+                ),
+            }
+
+    fields = asyncio.run(_drive())
+
+    assert fields["state"] == "Enrichment: ready"
+    assert fields["summary"] == "Summary: a note about jwt auth"
+    assert fields["tags"] == "Tags: auth"
+    assert fields["entities"] == "Entities: JWT"
+    assert (
+        fields["edges"]
+        == f"Edges:\n-> {short_note_id('note-b')} (mentions jwt auth, 0.82)"
+    )
+    assert fields["embed"] == "Embedded: no (0 passages)"
+
+
+def test_inspector_modal_shows_pending_for_an_unenriched_note(
+    tmp_path: Path,
+) -> None:
+    """A freshly captured note with a live enrich job and no AI output reads pending."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "freshly captured, not yet enriched").version_id
+        _insert_enrich_job(conn, target_version=head, status="pending")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            screen = app.screen
+            return (
+                str(screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content),
+                str(screen.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).content),
+                str(screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content),
+            )
+
+    state, summary, edges = asyncio.run(_drive())
+
+    assert state == "Enrichment: pending"
+    assert summary == "Summary: (none)"
+    assert edges == "Edges:\n(none)"
+
+
+def test_inspector_modal_shows_failed_for_a_dead_lettered_job(
+    tmp_path: Path,
+) -> None:
+    """A dead enrich job with zero AI output reads failed, not enriched-empty."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "enrichment kept dying").version_id
+        _insert_enrich_job(conn, target_version=head, status="dead")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            return str(app.screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content)
+
+    state = asyncio.run(_drive())
+
+    assert state == "Enrichment: failed"
+
+
+def test_escape_dismisses_the_inspector_modal_back_to_browse(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "a note")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            assert isinstance(app.screen, EnrichmentModalScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    back_to_list = asyncio.run(_drive())
+
+    assert back_to_list
+
+
+def test_stale_tag_is_styled_dim_not_printed_as_a_cli_style_suffix(
+    tmp_path: Path,
+) -> None:
+    """Guards lode-0qc: the modal styles ``stale`` as a Rich span, never a baked
+    ``" [stale]"`` marker -- that's ``lode show``'s rendering choice, not this
+    screen's (docs/storage.md's "Enrichment view-model" section).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+        _insert_annotation(
+            conn,
+            target="note-a",
+            source_version=head,
+            kind="tag",
+            payload_value="stale-tag",
+            status="stale",
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> Text:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            content = app.screen.query_one(f"#{INSPECTOR_TAGS_ID}", Static).content
+            assert isinstance(content, Text)
+            return content
+
+    tags_text = asyncio.run(_drive())
+
+    assert str(tags_text) == "Tags: stale-tag"
+    assert "[stale]" not in str(tags_text)
+    assert any(span.style == "dim" for span in tags_text.spans)
