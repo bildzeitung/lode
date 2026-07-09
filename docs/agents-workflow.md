@@ -226,6 +226,55 @@ miss it. Keep the decisions in the docs, and the two loops stay in agreement.
 
 ---
 
+## Running the loop family unattended — `/epic-audit`, `/sweep`
+
+The build/review/land story above is what happens to *one* task. Running the whole family — `/code`
++ `/land` + `/epic-audit` + `/sweep` — is intended to run **unattended**, each leg self-paced via
+`/loop` (`/loop 5m /land`, `/loop 30m /epic-audit`, `/loop 30m /sweep`), draining its own queue
+without a human present for the steady-state case. Most outputs already have a downstream consumer:
+a `needs-rebase` ticket is picked up by the next `/code` sweep, a `land-review` bounce re-enters `bd
+ready` as a fresh ticket, and `/epic-audit` runs itself as its own `/loop`.
+
+Two kinds of output had **no** consumer at all, and a third loop leg was needed to close that gap
+rather than any new prevention mechanism:
+
+- A **`land-escalated`** branch — a genuine decision only a human can make — sat wherever `/land` (or
+  a producer) left it; nothing pinged anyone, and (until the resolution transitions defined
+  [below](#the-lander--land-drained-by-a-self-paced-loop) existed) nothing even removed the label
+  once resolved.
+- An **`epic-audited`** epic with every child closed sits open forever: `/epic-audit` deliberately
+  never closes an epic itself (closure stays a human capability judgment — see
+  [decisions.md](decisions.md)), so nothing re-arms or notices that it's ready for a human to close.
+
+**`/sweep`** (skill: [`.claude/skills/sweep/SKILL.md`](../.claude/skills/sweep/SKILL.md)) is the
+fourth loop leg that closes this gap — **surface-only, lowest-privilege**: it makes **no** decision
+and dispatches **no** builder, lander, or auditor. Each pass it collects every open `land-escalated`
+branch, every open `human`-labeled decision ticket, and every epic that is `epic-audited` + open +
+fully child-closed; dedups the set against a durable digest issue it owns (located by the reserved
+label **`sweep-digest`**, itself excluded from the `land-escalated` query so the digest can never
+select itself); rewrites that digest only when the queue actually changed; and pushes one
+notification per pass, only when something genuinely new appeared. The digest issue is the entire
+write footprint — one self-owned bd row, Dolt-durable so the dedup state survives across machines and
+sessions the way the `ready-for-land` queue does.
+
+**Topology — landing-side loops are a one-machine invariant.** `/land`, `/epic-audit`, and `/sweep`
+are all expected to run on **one** machine. This is not a new rule invented for `/sweep`: it is
+`/land`'s existing single-lander-lock convention ([below](#mechanics-decided)), stated explicitly now
+that a second and third landing-side loop exist alongside it — the lock only ever guarded overlapping
+`/land` ticks on that one machine, and says nothing about where `/epic-audit` or `/sweep` run, so the
+convention has to be named, not assumed. `/code` producers are the one leg that **may** fan out across
+machines, because they write disjoint issue rows and push branches rather than touching any
+landing-side shared state.
+
+Two further safeguards a `/debate` pass considered for this unattended story — a `/land`
+bounce-lineage cap and a `/code` rebase-attempt cap — were deliberately **deferred**, and an
+epic-auto-close mechanism was deliberately **rejected**; see [decisions.md](decisions.md) for the
+rationale and each one's revisit trigger. `/sweep` itself is the detector for the deferred caps: it
+would surface a stuck bounce or rebase lineage the moment one actually occurs, well before a cap
+would trigger.
+
+---
+
 ## The landing loop — build, review, land
 
 > **One landing path for everything.** Producers (the coding loop above) build a branch and a separate
