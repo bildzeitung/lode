@@ -134,7 +134,7 @@ exactly this call clobbered a planner's stated intent on lode-tpt, silently, wit
 able to tell — the semantic reviewer reads `--design` as "what was this branch asked to do").
 
 ```bash
-rtk bd show <id> --json | jq -r '.[0].design'
+rtk bd show <id> --json | jq -r '.[0].design // empty'
 ```
 
 - **Non-empty** (a planner/debater already wrote it) → that text is the design. Implement to it.
@@ -466,7 +466,7 @@ own guidance); the cycle above already applies them, but the *why*:
   cause, or to summarize what I built. `bd update --design=` *replaces* the field; a planner/debater's
   stated intent is the thing the semantic reviewer judges the branch against, and overwriting it with
   my own past-tense account destroys the only record of what was actually asked for, silently
-  (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design'` first — empty only.
+  (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
