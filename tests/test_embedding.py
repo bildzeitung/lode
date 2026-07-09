@@ -151,6 +151,82 @@ def test_unknown_version_raises_keyerror(tmp_path: Path) -> None:
         conn.close()
 
 
+# --- polymorphic body resolution (lode-c5l) --------------------------------
+#
+# _version_body must resolve a note version_id OR an external snapshot_id, so
+# an embed job enqueued for a snapshot (lode.externals.ingest_snapshot) runs
+# to completion instead of raising KeyError.
+
+
+def test_embed_resolves_a_snapshot_id_body_no_keyerror(tmp_path: Path) -> None:
+    """Acceptance: an embed job enqueued for a snapshot_id runs to completion."""
+    from lode.externals import ingest_snapshot
+
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        result = ingest_snapshot(conn, "https://example.com/x", "web", BODY)
+        lance_dir = tmp_path / "vectors"
+
+        n = embed(
+            conn,
+            result.snapshot_id,
+            lance_dir=lance_dir,
+            embedder=_StubEmbedder(DIM),
+            settings=_settings(),
+        )
+
+        (passage_count,) = conn.execute(
+            "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+            (result.snapshot_id,),
+        ).fetchone()
+        assert n == passage_count > 1
+        rows = _open_vector_table(lance_dir).to_arrow().to_pylist()
+        assert {r["target_version"] for r in rows} == {result.snapshot_id}
+    finally:
+        conn.close()
+
+
+def test_embed_redacts_a_secret_in_a_snapshot_body_too(tmp_path: Path) -> None:
+    """redact-before-index applies identically whether the body came from
+    ``versions`` or ``snapshots`` (lode-c5l) — the vector leg's redaction is
+    driven by :func:`lode.embedding._version_body`'s resolution, not by which
+    table it happened to read from.
+    """
+    from lode.externals import ingest_snapshot
+
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+        body = f"mirrored page contents\ncreds: {secret} keep private\n"
+        result = ingest_snapshot(conn, "https://example.com/y", "web", body)
+        lance_dir = tmp_path / "vectors"
+        stub = _StubEmbedder(DIM)
+
+        embed(
+            conn,
+            result.snapshot_id,
+            lance_dir=lance_dir,
+            embedder=stub,
+            settings=_settings(),
+        )
+
+        assert not any(secret in text for texts in stub.calls for text in texts)
+        rows = conn.execute(
+            "SELECT text FROM passages WHERE target_version = ?",
+            (result.snapshot_id,),
+        ).fetchall()
+        assert rows, "sanity: the body chunked to at least one passage"
+        assert not any(secret in text for (text,) in rows)
+        # snapshots.body (the irreplaceable mirrored copy) still carries the
+        # raw secret — only the text handed to chunk() is redacted.
+        (stored_body,) = conn.execute(
+            "SELECT body FROM snapshots WHERE snapshot_id = ?", (result.snapshot_id,)
+        ).fetchone()
+        assert secret in stored_body
+    finally:
+        conn.close()
+
+
 def test_empty_body_embeds_nothing(tmp_path: Path) -> None:
     conn = init_db(tmp_path / "lode.db")
     try:

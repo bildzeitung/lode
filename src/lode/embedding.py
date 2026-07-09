@@ -137,13 +137,29 @@ class FastEmbedEmbedder:
 
 
 def _version_body(conn: sqlite3.Connection, target_version: str) -> str:
-    """Return the body of ``target_version``; raise ``KeyError`` if absent."""
+    """Return the body of ``target_version``; raise ``KeyError`` if absent.
+
+    ``target_version`` is polymorphic — a note ``version_id`` or an external
+    ``snapshot_id`` (mirrors :func:`lode.cited_answer._resolve_target`'s
+    versions-then-snapshots resolution, adapted here to take just the id: an
+    embed job is enqueued on ``target_version`` alone, with no ``is_external``
+    flag riding along, so this tries ``versions`` first and falls back to
+    ``snapshots`` rather than being told which). Resolving a snapshot here is
+    what lets an ``embed`` job enqueued for a mirrored external's snapshot_id
+    (:func:`lode.externals.ingest_snapshot`) run to completion instead of
+    raising.
+    """
     row = conn.execute(
         "SELECT body FROM versions WHERE version_id = ?", (target_version,)
     ).fetchone()
-    if row is None:
-        raise KeyError(target_version)
-    return row[0]
+    if row is not None:
+        return row[0]
+    row = conn.execute(
+        "SELECT body FROM snapshots WHERE snapshot_id = ?", (target_version,)
+    ).fetchone()
+    if row is not None:
+        return row[0]
+    raise KeyError(target_version)
 
 
 def _persist_passages(conn: sqlite3.Connection, passages: list[Passage]) -> None:
@@ -191,16 +207,21 @@ def embed(
 
     Idempotent: running twice on the same head version converges to the same
     passages and vectors. Returns the number of passages embedded (0 for a body
-    that chunks to nothing). Raises ``KeyError`` if ``target_version`` is unknown.
+    that chunks to nothing). ``target_version`` is polymorphic — a note
+    ``version_id`` or an external ``snapshot_id`` (:func:`_version_body`
+    resolves either). Raises ``KeyError`` if ``target_version`` is unknown to
+    both.
 
-    **redact-before-index (lode-n60):** the body read from ``versions`` is
-    redacted (:func:`lode.redact.redact_before_index`) before it is chunked —
-    the vector leg is driven by this async job off ``target_version`` alone
-    (no body travels through the enqueue), so it independently strips secrets
-    from what it reads rather than relying on a caller to have redacted first.
-    ``versions.body`` itself is left untouched (only ``purge`` clears that
-    durable copy); only the text handed to :func:`chunk` here is redacted, so
-    LanceDB and the ``passages`` rows this writes never carry the secret.
+    **redact-before-index (lode-n60):** the body read from ``versions`` or
+    ``snapshots`` is redacted (:func:`lode.redact.redact_before_index`) before
+    it is chunked — the vector leg is driven by this async job off
+    ``target_version`` alone (no body travels through the enqueue), so it
+    independently strips secrets from what it reads rather than relying on a
+    caller to have redacted first. ``versions.body``/``snapshots.body``
+    themselves are left untouched (only ``purge`` clears the durable copy of a
+    version; nothing currently purges a snapshot); only the text handed to
+    :func:`chunk` here is redacted, so LanceDB and the ``passages`` rows this
+    writes never carry the secret.
     """
     settings = settings or Settings()
     body = redact_before_index(_version_body(conn, target_version), settings)

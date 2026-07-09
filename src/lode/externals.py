@@ -8,19 +8,33 @@ a normalized URL, ``JIRA-1234``, ``repo@path@commit``, ...) and content
 (``body``) are asserted by whatever connector fetched it — first, the web
 draw-down unit (``lode-w0h.1``, :mod:`lode.webfetch`).
 
-**Scope, pinned by decision (bd lode-w0h.2, 2026-07-07):** this module is
-**write-path only**. It writes the ``externals``/``snapshots`` rows and
-enqueues the ``embed`` derive job so a later worker can index the snapshot —
-it does **not** wire a :class:`~lode.repository.CacheBackend` (no synchronous
-FTS write) and does **not** make a snapshot directly retrievable. Direct
-retrievability (allow-list union into ``live_head_versions``, polymorphic
-embed-body resolution for a ``snapshot_id`` target, and the synchronous FTS
-leg) is a distinct read-enablement concern, ``lode-w0h.8``. Until it lands,
-the ``embed`` job enqueued here sits ``pending`` (or fails loudly on a
-``KeyError``, per that ticket's own gap analysis) rather than resolving —
-enqueuing it now is still correct: the job exists the instant the snapshot
-does, so nothing needs re-enqueuing once w0h.8 teaches the worker to resolve
-a snapshot body.
+**Scope, pinned by decision (bd lode-w0h.2, 2026-07-07):** this module is the
+write path. It writes the ``externals``/``snapshots`` rows, enqueues the
+``embed`` derive job so the async worker can index the snapshot's vector leg
+(:func:`lode.embedding.embed`, which resolves a ``snapshot_id`` target
+polymorphically — ``lode-c5l``), and drives the **synchronous** FTS leg
+itself (:func:`_index_snapshot_fts`) the same way :meth:`lode.repository.
+Repository.save` drives :class:`~lode.repository.CacheBackend` for owned
+notes — so a freshly ingested ``ok`` snapshot is a direct keyword hit the
+instant :func:`ingest_snapshot` returns, and a direct vector hit once the
+embed worker drains. The allow-list union that admits a snapshot's current
+head into ``live_head_versions`` lives in :mod:`lode.retrieval` (``lode-c5l``,
+rebuild of the bounced ``lode-w0h.8``).
+
+**Redact-before-index on the FTS leg (lode-n60, the lode-c5l bounce fix):**
+:func:`_index_snapshot_fts` chunks ``redact_before_index(body, settings)``,
+never the raw ``body`` — mirroring exactly what :meth:`Repository.save` does
+for the lexical leg of an owned note, and what :func:`lode.embedding.embed`
+independently does for the vector leg. The bounced predecessor of this
+ticket chunked the raw body on the FTS leg only, so a secret in a fetched
+page landed in ``passages_fts``/``passages`` verbatim while the vector leg
+redacted it — a split-brain that also broke the deterministic-``passage_id``
+assumption :class:`~lode.lexical.LexicalCacheBackend` documents (both legs
+must chunk *identical* text for the embed worker's later ``INSERT OR
+REPLACE`` to land on the same rows rather than orphan a trailing one).
+``snapshots.body`` itself stays untouched — only the text handed to
+:func:`lode.chunking.chunk` is redacted, exactly as ``versions.body`` is
+never touched by the note-side redaction either.
 
 ## Dedup and head-move (docs/externals.md "Snapshot churn")
 
@@ -83,6 +97,8 @@ from typing import Literal
 from lode import jobs
 from lode.config import Settings
 from lode.hashing import content_snapshot_id
+from lode.lexical import LexicalCacheBackend
+from lode.redact import redact_before_index
 from lode.webfetch import FetchResult, FetchStatus
 
 #: The two snapshot outcomes the schema's CHECK constraint allows
@@ -139,6 +155,38 @@ def _external_head(
     return True, row[0]
 
 
+def _index_snapshot_fts(
+    conn: sqlite3.Connection,
+    external_id: str,
+    snapshot_id: str,
+    body: str,
+    *,
+    settings: Settings,
+) -> None:
+    """Drive the synchronous FTS leg for a just-committed ``ok`` snapshot.
+
+    Called by :func:`ingest_snapshot` **after** its write transaction has
+    committed (mirroring :meth:`lode.repository.Repository.save`'s
+    cache-after-commit ordering) — never nested inside that transaction,
+    since a nested ``with conn:`` would COMMIT early and could leave a
+    half-done irreplaceable write flushed before it was actually complete.
+
+    ``body`` is passed through :func:`lode.redact.redact_before_index` before
+    it is chunked — see the module docstring's "Redact-before-index on the
+    FTS leg" section for why this must never chunk the raw body. Reuses
+    :class:`~lode.lexical.LexicalCacheBackend`, which is ``target_version``-
+    generic (it chunks + persists ``passages`` + replaces the
+    ``passages_fts`` rows for whatever id it's given); ``external_id`` rides
+    along positionally as the backend's ``note_id`` parameter, which the
+    lexical backend never reads (the seam is note-shaped but content-id
+    agnostic).
+    """
+    redacted = redact_before_index(body, settings)
+    LexicalCacheBackend(conn, settings=settings).index(
+        external_id, snapshot_id, redacted
+    )
+
+
 def ingest_snapshot(
     conn: sqlite3.Connection,
     external_id: str,
@@ -155,22 +203,29 @@ def ingest_snapshot(
     (dedup on ``external_id`` — one canonical node per source, never one row
     per citing note, ``docs/externals.md``). Computes ``snapshot_id =
     H(external_id, body)``; if it equals the current head, this is an
-    identical refetch and is a no-op (no row, no enqueue, ``deduped=True``).
-    Otherwise inserts the new snapshot row and moves
+    identical refetch and is a no-op (no row, no enqueue, no FTS write,
+    ``deduped=True``). Otherwise inserts the new snapshot row and moves
     ``externals.head_snapshot_id`` to it; an ``"ok"`` snapshot also enqueues
     one ``embed`` job keyed on the new ``snapshot_id`` (see the module
-    docstring — ``enrich`` is not enqueued here). A ``"tombstone"`` snapshot
-    enqueues no job at all — see the module docstring's "Embed-only enqueue"
-    section for why a failed fetch must not become a retrievable vector.
+    docstring — ``enrich`` is not enqueued here) and drives the synchronous
+    FTS leg (:func:`_index_snapshot_fts`). A ``"tombstone"`` snapshot does
+    neither — no ``embed`` enqueue, no FTS write — see the module
+    docstring's "Embed-only enqueue" section for why a failed fetch must not
+    become a retrievable/citable hit on either leg.
 
     ``status`` records the fetch outcome (``"ok"`` for real content,
     ``"tombstone"`` for a permanent failure); callers writing a tombstone
     should pass ``body=tombstone_body(reason)`` for the stable, inspectable
-    convention. The whole write — externals upsert, snapshot insert, head
-    move, and the (status-gated) enqueue — runs in one ``with conn:``
-    transaction, so a crash between steps never leaves an ``ok`` snapshot
-    without its derive job or a head pointing at a row that was never
-    committed.
+    convention. The externals upsert, snapshot insert, head move, and the
+    (status-gated) embed enqueue run in one ``with conn:`` transaction, so a
+    crash between steps never leaves an ``ok`` snapshot without its derive
+    job or a head pointing at a row that was never committed. The FTS write
+    runs **after** that transaction commits (mirroring :meth:`lode.
+    repository.Repository.save`'s cache-after-commit ordering) — the cache
+    is regenerable, so it is deliberately kept out of the irreplaceable
+    write's atomic scope, but the embed enqueue stays inside it since
+    nothing currently re-discovers a snapshot with no derive job the way
+    :func:`lode.reconcile._embed_gap_step` does for notes.
     """
     settings = settings or Settings()
     with conn:
@@ -194,7 +249,14 @@ def ingest_snapshot(
         )
         if status != "tombstone":
             jobs.enqueue_derive_jobs(conn, snapshot_id, types=("embed",))
-        return IngestResult(external_id, snapshot_id, status, deduped=False)
+    # The write transaction above has committed (context-manager exit ==
+    # COMMIT on normal return). The FTS leg is driven now, outside it — see
+    # the docstring above for why (mirrors Repository.save's cache-after-
+    # commit; also the lode-c5l bounce fix: a tombstone must never reach
+    # here, same fail-closed rule as the embed enqueue).
+    if status != "tombstone":
+        _index_snapshot_fts(conn, external_id, snapshot_id, body, settings=settings)
+    return IngestResult(external_id, snapshot_id, status, deduped=False)
 
 
 def ingest_fetch_result(

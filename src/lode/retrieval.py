@@ -24,8 +24,16 @@ both document this — the note-wide hard cascade is purge's job, E8). Retrieval
 must therefore **filter to live heads** (``docs/retrieval.md``, "Index heads
 only" — "a note edited 5x would return 5 near-duplicate hits and cite a stale
 copy"). A *live head* is a note's current ``head_version_id`` whose version is not
-a delete tombstone (:func:`live_head_versions`); scoping each leg to that set
-drops both stale prior-head passages and soft-deleted notes' content in one move.
+a delete tombstone, **or** an external's current ``head_snapshot_id`` whose
+snapshot is not a tombstone (:func:`live_head_versions`); scoping each leg to
+that set drops both stale prior-head passages and soft-deleted notes' content in
+one move, and admits a mirrored external's current snapshot as a direct
+candidate on its own content rather than only reachable via graph-expansion
+from a citing note (``docs/externals.md`` "externals are directly retrievable").
+A *stale* (non-head) snapshot stays excluded from both direct legs by
+construction — only head pointers are read — the same way a superseded note
+version is; :func:`trust_rank` still tiers current-vs-stale for a snapshot
+reached via graph expansion instead.
 
 The query vector for the dense leg is the caller's (the ``emb(q)`` node in the
 pipeline is the embedder's concern, distinct from the search node), so
@@ -68,6 +76,18 @@ _QUERY_TOKEN = re.compile(r"\w+")
 #: ``tui.edit`` scope their own queries with their own copies.
 _LIVE_HEAD_PREDICATE = "v.op != 'delete'"
 
+#: The external-side analogue of :data:`_LIVE_HEAD_PREDICATE`: a snapshot is
+#: live when its ``status`` is not ``'tombstone'``. ``snapshots.status`` is
+#: ``NOT NULL CHECK (status IN ('ok', 'tombstone'))``, so this test is total
+#: too. A failed fetch must never become a directly-retrievable hit — the same
+#: fail-closed rule :mod:`lode.externals` applies to the embed enqueue applies
+#: here to the read side (a tombstone's body is a synthetic placeholder, not
+#: real content, ``docs/design.md`` §2). It is a raw SQL fragment carrying the
+#: same preconditions: ``snapshots`` must be joined **aliased ``s``**, joined
+#: **on ``externals.head_snapshot_id``** — that join condition is the *head*
+#: half of "live", this string only excludes tombstones.
+_LIVE_SNAPSHOT_PREDICATE = "s.status != 'tombstone'"
+
 
 def build_match_query(question: str) -> str:
     """Build an FTS5 ``MATCH`` expression from a natural-language ``question``.
@@ -90,19 +110,28 @@ def build_match_query(question: str) -> str:
 
 
 def live_head_versions(conn: sqlite3.Connection) -> list[str]:
-    """Return the version ids that are a note's current, non-deleted head.
+    """Return the ids that are a note's current head, or an external's current head.
 
-    A *live head* is a ``notes.head_version_id`` whose version's ``op`` is not a
-    delete tombstone — i.e. content that retrieval should surface. Non-head
-    versions (a note's prior, superseded edits) are excluded by construction
-    (only head pointers are read), and soft-deleted notes are excluded by the
-    ``op != 'delete'`` guard. This is the allow-list each leg's search is scoped
-    to so retrieval never returns a stale or tombstoned passage.
+    A *live head* is either a ``notes.head_version_id`` whose version's ``op`` is
+    not a delete tombstone, or an ``externals.head_snapshot_id`` whose snapshot's
+    ``status`` is not a tombstone — i.e. content that retrieval should surface.
+    Non-head versions/snapshots (a note's prior superseded edits, an external's
+    superseded snapshots) are excluded by construction (only head pointers are
+    read); soft-deleted notes and tombstoned externals are excluded by their
+    respective guards. This is the allow-list each leg's search is scoped to, so
+    retrieval never returns a stale or tombstoned passage — and, since it now
+    includes external heads, a mirrored snapshot is a direct lexical/vector
+    candidate on its own content, not only reachable via graph-expansion from a
+    citing note (``docs/externals.md`` "externals are directly retrievable").
     """
     rows = conn.execute(
         "SELECT n.head_version_id FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
-        f"WHERE {_LIVE_HEAD_PREDICATE}"
+        f"WHERE {_LIVE_HEAD_PREDICATE} "
+        "UNION "
+        "SELECT e.head_snapshot_id FROM externals e "
+        "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+        f"WHERE {_LIVE_SNAPSHOT_PREDICATE}"
     ).fetchall()
     return [row[0] for row in rows]
 
