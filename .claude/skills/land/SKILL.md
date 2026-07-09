@@ -475,12 +475,12 @@ a later gate taking the resolution on faith.
 | `coding` build-time clarification        | `ready-for-code-review` |
 
 The first row is exit (a) as defined above; the other three follow the same shape — write the decision
-into the ticket first, then swap `land-escalated` for the row's label and `bd dolt push`:
+into the ticket first, then swap `land-escalated` for the row's label and publish:
 
 ```bash
 rtk bd update <id> --append-notes "RESOLVED (human): <the decision>"
 rtk bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|needs-rebase>
-rtk bd dolt push
+rtk scripts/bd-dolt-push.sh
 ```
 
 **The build-time case is the deliberately arguable one, decided rather than left implicit.** A

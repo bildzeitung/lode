@@ -206,7 +206,7 @@ the report block alone and say so plainly in the report — never fail a pass ov
 ## 8. Publish and report
 
 ```bash
-rtk bd dolt push   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
+rtk scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
 Report exactly one line plus, when non-empty, the loud new-items block:

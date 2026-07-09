@@ -169,6 +169,14 @@ are catalogued in [configuration.md](configuration.md).
   has a shot at fast-forwarding on retry) and retries with exponential backoff + jitter (default 5
   attempts, ~2s/4s/8s/16s base delays, `BD_DOLT_PUSH_MAX_ATTEMPTS` / `BD_DOLT_PUSH_BASE_DELAY`
   override the defaults), surfacing the final failure's exit code if every attempt is exhausted.
+  **Follow-up (lode-bpl): that enumeration was itself prefix-blind** — it greped
+  `"rtk bd dolt push"`, missing any call site written without the `rtk` prefix. A prefix-agnostic
+  re-audit found and wrapped two more unattended-loop call sites (`land/SKILL.md`'s exit-(a)
+  re-entry step, `sweep/SKILL.md`'s publish step) and confirmed three deliberate exemptions —
+  `debate/SKILL.md` (human-invoked/interactive, a failed push is observed), `.beads/README.md` and
+  `AGENTS.md` (generic beads-generated quick-reference prose, not automated call sites). See the
+  "Concurrent `bd dolt push` under fan-out" section in [agents-workflow.md](agents-workflow.md) for
+  the full inventory.
   **Why not switch to Dolt server mode:** it's the operationally heavier fix — every contributor
   machine would need a running `dolt sql-server` process, port/credential config, and a lifecycle
   story (start on session begin, survive across worktrees, restart on crash) before any producer
