@@ -22,7 +22,8 @@ main checkout — a single `/land` lander owns every write to `trunk` and lands 
 
 There is **no separate `/code-parallel`.** Once landing left the producer, building one task and
 building five became the same act — a producer just leaves a green branch on origin, and a *new*
-branch ref doesn't race `trunk`, so N producers run safely in parallel. `/code` covers both:
+branch ref doesn't race `trunk`, so N producers run safely in parallel *within one `/code`
+invocation*. `/code` covers both:
 
 - **bare `/code`** (no argument), **`/code --all-ready`**, or **`/code <id> <id> …`** — **N producers
   in parallel**, each in its own isolated worktree. Bare `/code` is the **default**: it fans out
@@ -34,6 +35,18 @@ Both subagents already own *how producer work flows* in lode (they honor `CLAUDE
 correctly **in order, build then review**, one task at a time, and relay what came back.
 
 ## What to do when invoked
+
+> **Topology — run only one `/code` invocation at a time (concurrent invocations are unsupported,
+> lode-pzr).** Fan-out (N producers in parallel) is safe and encouraged **within** a single
+> invocation — see [Notes](#notes) for why. But **step 0 and step 1 below race across two
+> *concurrent* invocations**: both sweeps select on a ticket's label (`needs-rebase` /
+> `ready-for-code-review`), and that label is only swapped at the very **end** of the dispatched
+> agent's work — so invocation B's sweep can select a ticket whose agent from invocation A is still
+> live, and dispatch a **second** agent onto the same worktree via `git -C`. Today's consequence is
+> benign (the loser's push non-fast-forward-rejects; clean-tree assertions guard the worktree), but
+> it is a real race, not an invariant — don't start a second `/code` while one is still running
+> against this repo. Need more parallelism? Pass more IDs (or use bare `/code`) to the **same**
+> invocation instead of launching a second one.
 
 0. **Sweep for `needs-rebase` kick-backs first — every invocation, regardless of argument.**
    `/land`'s cheap conflict precheck can kick a `ready-for-land` branch back: it strips
@@ -198,7 +211,14 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
 - This skill is the **only** sanctioned way to spin up coding work from the main session, which is
   otherwise told not to spawn agents unprompted — invoking `/code` *is* the user asking. Fan-out is
-  the *only* sanctioned way to run several producers at once (there is no `/code-parallel`).
+  the *only* sanctioned way to run several producers at once (there is no `/code-parallel`) — and it
+  is the *supported* way: **fan out within one invocation rather than starting a second concurrent
+  `/code`.** See the topology note above [What to do when invoked](#what-to-do-when-invoked) — the
+  step 0 / step 1 sweeps race across concurrent invocations (lode-pzr), because a ticket's
+  `needs-rebase` / `ready-for-code-review` label is only cleared at the *end* of the agent dispatched
+  at it, so a second invocation's sweep can still select it and double-dispatch onto the same
+  worktree. Fan-out within a single invocation never hits this: each producer/reviewer pair is
+  dispatched once, by that invocation's own Phase 1/2, for a ticket only that invocation resolved.
 - **Two phases, in order: build then review.** Phase 1 (`coding`, Sonnet) builds and **keeps its
   worktree**; phase 2 (`code-reviewer`, Opus) fetches the pushed branch into its *own* launch worktree
   (never `EnterWorktree`, never the builder's worktree) and runs the technical review. The review must
