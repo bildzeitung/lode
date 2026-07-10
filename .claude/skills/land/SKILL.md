@@ -348,7 +348,7 @@ done
 MERGED=$(git branch --merged trunk --format='%(refname:short)')
 git worktree list --porcelain | awk '
   /^worktree / { path=$2; branch=""; locked=0 }
-  /^branch refs\/heads\// { branch=substr($0,20) }
+  /^branch refs\/heads\// { branch=substr($0,19) }
   /^locked/ { locked=1 }
   /^$/ { if (path!="" && branch ~ /^worktree-agent-/ && !locked) print path"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT BR; do
