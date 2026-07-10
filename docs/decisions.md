@@ -245,7 +245,10 @@ are catalogued in [configuration.md](configuration.md).
   Worse, `git -C` alone can only *read* the builder's worktree; every `code-reviewer` fix had to go
   through a `bash` single-match-replacement workaround (`Edit`/`Write` can't reach `$WT`), and a launch
   worktree freshly branched off `trunk` HEAD has an *empty* diff against the builder's actual branch —
-  so `/code-review`/`/simplify` (both cwd-relative, no path/base argument) silently reviewed **nothing**
+  so `/code-review`/`/simplify` (both cwd-relative, no working-directory argument — they always review
+  the current tree and cannot be pointed at another worktree's directory — even though a base/target
+  rev-range or file/branch IS accepted, which is exactly why the explicit `trunk...HEAD` below works)
+  silently reviewed **nothing**
   (lode-k5e), a false-green that six of six fan-out reviewers missed on one observed day. Separately,
   `coding`'s rebase-pickup cycle had *no* mechanism at all for writing a conflict resolution once it
   hit the same guard, so it escalated every conflict to a human — including trivially mechanical ones
@@ -278,7 +281,17 @@ are catalogued in [configuration.md](configuration.md).
   contract already requires a clean tree before recording `review_head` (lode-tpt); if that contract is
   ever violated, this architecture can no longer even detect it as a "dirty builder worktree" the way
   the old `git -C` architecture nominally could (though in practice the old detection existed only in
-  prose, not in a proven catch).
+  prose, not in a proven catch). (4) **Which `/code-review` resolves inside a subagent is now recorded
+  and confirmed (2026-07-09), closing lode-k5e's acceptance criterion that was never written down**:
+  it is the built-in first-party skill, not the marketplace `claude-plugins-official/code-review`
+  plugin of the same name. The evidence is behavioral, not just nominal — `/code-review high --fix
+  trunk...HEAD` wrote a fix directly to the reviewer's own working tree, which the marketplace plugin
+  cannot do under any invocation: its `commands/code-review.md` scopes `allowed-tools` entirely to `gh`
+  subcommands (`gh pr view`, `gh pr diff`, `gh pr comment`, …) and its whole flow is "review a GitHub
+  PR, then comment back on it via `gh pr comment`" — there is no path from that command to a local
+  working-tree edit, and a `land/<id>` branch has no PR to comment on in the first place. If the
+  marketplace command ever shadows the built-in in some environment, this review step would silently
+  no-op again in a new way (the same failure shape as the `git -C` false-green above).
 
   **Explicitly out of scope**, filed as a follow-up instead: whether the builder still needs to *keep*
   its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether `/land`'s
