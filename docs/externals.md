@@ -136,12 +136,30 @@ cost control, so the two operations are gated separately:
 
 - **Re-embed on any change** — local, cheap, keeps retrieval current.
 - **Re-enrich only on *material* change** — gate the expensive enrichment on a local delta between
-  the new snapshot and its predecessor (size / similarity below a threshold); below the bar, **carry
-  the prior enrichment forward**, re-anchored to the new snapshot. A one-comment PR update re-embeds
-  but does not re-enrich.
+  the new snapshot and its predecessor; below the bar, **carry the prior enrichment forward**,
+  re-anchored to the new snapshot. A one-comment PR update re-embeds but does not re-enrich.
+
+**Materiality signal (`lode-w0h.5`, pinned after debate):** embedding-similarity delta alone, not
+size — cosine similarity between the new and predecessor snapshot's mean-pooled passage vectors,
+computed **post-embed** (the signal needs the new snapshot's own vectors, so the gate runs from
+`lode.worker._embed_handler` right after `lode.embedding.embed` writes them, not from
+`ingest_snapshot` at write time). `delta = 1 - similarity`; material iff `delta >=
+reenrichment_materiality_threshold`. No predecessor to compare against — the external's first-ever
+snapshot, or a predecessor that was never embedded (e.g. a tombstone) — is unconditionally material:
+there is nothing to carry forward either. Below the threshold, `lode.externals.gate_reenrich` enqueues
+no `enrich` job and instead **carries the prior enrichment forward by re-anchoring it**
+(`lode.staleness.reanchor_annotations` / `reanchor_edges`, targeting the external_id) — the identical
+quoted-text mechanism `Repository.save` already runs for a note update, not a hand-rolled copy of the
+rows. At/above the threshold, one `enrich` job is enqueued for the new `snapshot_id`.
 
 The materiality threshold is a tunable knob ([configuration.md](configuration.md)); it caps cloud
 spend on noisy sources without letting enrichment rot.
+
+**Known gap:** the `enrich` job the gate enqueues is processed by `lode.worker._enrich_handler`,
+which dispatches to `lode.enrich.enrich_version` — today a note-only lookup that silently no-ops
+(job marked `done`, no Haiku call) for a `snapshot_id` target. Enqueuing the job is still correct
+against `lode-w0h.5`'s acceptance criterion; teaching `enrich_version` to actually run Haiku
+extraction over snapshot bodies is separate follow-on work.
 
 **The write path** (`lode.externals.ingest_snapshot`, `lode-w0h.2`) is the mirrored analogue of the
 note save path: dedup on `external_id` (one `externals` row per source, created on first sight),

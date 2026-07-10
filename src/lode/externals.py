@@ -74,7 +74,10 @@ Every non-deduped ``ok`` ingest enqueues exactly one ``embed`` job
 subset, the same targeted-enqueue shape the reconciliation scan's embed-gap
 step already uses). ``enrich`` is deliberately **not** enqueued here:
 re-enrichment is gated on a *material* change (embedding-similarity delta,
-decided post-embed), which is ``lode-w0h.5``'s job, not this write path's.
+decided post-embed), which is :func:`gate_reenrich`'s job, not this write
+path's — it runs from :func:`lode.worker._embed_handler`, after the new
+snapshot's own vectors exist (bd lode-w0h.5 decision C: materiality can only
+be judged once there is something to compare).
 
 A ``tombstone`` ingest enqueues **no** ``embed`` job (decision, bd
 lode-w0h.2, 2026-07-08): a failed fetch must not produce a
@@ -85,20 +88,58 @@ could surface as a citation for content that was never actually fetched —
 "a hallucination wearing the uniform of a verified fact" (``docs/design.md``
 §2). This mirrors the owned-note delete path, which likewise does not
 enqueue ``embed`` and is filtered from retrieval by ``live_head_versions``'
-``op != 'delete'`` guard. Fail closed.
+``op != 'delete'`` guard. Fail closed. A tombstone never reaches
+:func:`gate_reenrich` either, for the same reason: no embed job is ever
+enqueued for one, so the post-embed hook that calls it never fires.
+
+## Material-change re-enrich gating (docs/externals.md "Snapshot churn",
+lode-w0h.5)
+
+:func:`gate_reenrich` is the cost-control gate a *chatty* source needs: a
+one-comment PR update re-embeds (above, always) but should not always pay for
+a fresh Haiku extraction too. Materiality signal (bd lode-w0h.5 decision C,
+pinned after debate): **embedding-similarity delta** between the new
+snapshot's and its immediate predecessor's mean-pooled passage vectors — not
+size, despite ``docs/externals.md``'s looser "size / similarity" phrasing;
+size was dropped because it has no defined ordering relative to the async
+embed job the similarity signal already depends on. Below
+``settings.reenrichment_materiality_threshold`` the change is immaterial: no
+``enrich`` job is enqueued, and the predecessor's AI-derived annotations/edges
+are carried forward by *re-anchoring* them (:func:`lode.staleness.
+reanchor_annotations` / ``reanchor_edges``) to the new snapshot — the same
+quoted-text mechanism :meth:`lode.repository.Repository.save` already uses
+for a note update, reused here rather than duplicated. At/above the
+threshold — or when there is no predecessor vector to compare against at all
+(the external's first-ever snapshot, or a predecessor that was never
+embedded, e.g. a tombstone) — the change is material and an ``enrich`` job is
+enqueued for the new ``snapshot_id``.
+
+**Known gap (filed separately, not this ticket's scope):** the ``enrich`` job
+this enqueues is processed by :func:`lode.worker._enrich_handler`, which
+dispatches to :func:`lode.enrich.enrich_version` — today a **note-only**
+lookup (``SELECT ... FROM versions v JOIN notes n``) that returns ``None``
+(silent no-op, job marked ``done``) for a ``snapshot_id`` target. Enqueuing
+the job is still correct and matches this ticket's acceptance criterion
+literally ("a material change enqueues an enrich job"); teaching
+:func:`~lode.enrich.enrich_version` to actually run Haiku extraction over
+snapshot bodies is separate follow-on work.
 """
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
-from lode import jobs
+from lode import jobs, staleness
 from lode.config import Settings
 from lode.hashing import content_snapshot_id
+from lode.ids import short_version_id
 from lode.lexical import LexicalCacheBackend
 from lode.redact import redact_before_index
+from lode.vectorstore import VectorStore
 from lode.webfetch import FetchResult, FetchStatus
 
 #: The two snapshot outcomes the schema's CHECK constraint allows
@@ -296,4 +337,168 @@ def ingest_fetch_result(
         raw_payload=result.raw_html,
         status="tombstone",
         settings=settings,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Material-change re-enrich gating (lode-w0h.5) — see the module docstring's
+# "Material-change re-enrich gating" section for the design.
+# ---------------------------------------------------------------------------
+
+
+def _mean_pool(vectors: list[list[float]]) -> list[float]:
+    """Elementwise mean of ``vectors`` — a document-level stand-in for a snapshot.
+
+    ``vectors`` must be non-empty and share one dimension (both true of any
+    set of passage vectors returned by :meth:`lode.vectorstore.VectorStore.
+    vectors_for` for a single ``target_version``, since the pinned
+    ``embedding_vector_dim`` fixes the width for the whole table).
+    """
+    dim = len(vectors[0])
+    sums = [0.0] * dim
+    for vector in vectors:
+        for i, component in enumerate(vector):
+            sums[i] += component
+    n = len(vectors)
+    return [s / n for s in sums]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity of two equal-length vectors; 0.0 if either is a zero vector.
+
+    Plain Python (no numpy dependency) — the vectors here are two
+    mean-pooled, document-level vectors, not a passage-by-passage ANN
+    workload, so there's no case for pulling in a heavier dependency or
+    routing through LanceDB's own cosine metric for this.
+    """
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _predecessor_snapshot(
+    conn: sqlite3.Connection, external_id: str, snapshot_id: str
+) -> str | None:
+    """Return the snapshot immediately before ``snapshot_id`` for ``external_id``.
+
+    "Immediately before" = the most recently ``fetched_at`` (ties broken by
+    ``rowid``, SQLite's implicit insertion-order column) row for this
+    external, excluding ``snapshot_id`` itself. By the time this runs,
+    ``snapshot_id`` is already the external's head (:func:`ingest_snapshot`
+    moves the head inside its own transaction, and the embed job that
+    triggers :func:`gate_reenrich` only runs after that commits) — so this is
+    genuinely the predecessor head, not an arbitrary sibling. ``None`` if
+    ``snapshot_id`` is this external's first-ever snapshot.
+    """
+    row = conn.execute(
+        "SELECT snapshot_id FROM snapshots WHERE external_id = ? AND snapshot_id != ? "
+        "ORDER BY fetched_at DESC, rowid DESC LIMIT 1",
+        (external_id, snapshot_id),
+    ).fetchone()
+    return row[0] if row is not None else None
+
+
+def gate_reenrich(
+    conn: sqlite3.Connection,
+    snapshot_id: str,
+    *,
+    lance_dir: str | Path,
+    settings: Settings | None = None,
+) -> str | None:
+    """Decide whether ``snapshot_id``'s change is material enough to re-enrich.
+
+    Called by :func:`lode.worker._embed_handler` immediately after a
+    snapshot's own vectors are written — materiality is decided **post-embed**
+    (bd lode-w0h.5 decision C) since the signal needs those vectors to exist.
+    A no-op (returns ``None``) for anything that isn't a live ``"ok"``
+    snapshot: a note ``version_id`` (the embed handler runs for both
+    polymorphically), or a snapshot somehow re-embedded after being
+    tombstoned (never happens via the normal ingest path — see the module
+    docstring — but this stays defensive rather than assuming it can't).
+
+    **Materiality signal:** cosine similarity between the new snapshot's and
+    its predecessor's mean-pooled passage vectors (:func:`_mean_pool` +
+    :func:`_cosine_similarity`) — a single document-level vector per
+    snapshot, not a passage-by-passage comparison. ``delta = 1 -
+    similarity``; material iff ``delta >= settings.
+    reenrichment_materiality_threshold``. There is no predecessor to compare
+    against (treated as unconditionally material, i.e. ``delta`` reads as
+    "no baseline") when:
+
+    - this is the external's first-ever snapshot (:func:`_predecessor_snapshot`
+      returns ``None`` — nothing to carry forward from either), or
+    - either snapshot has zero passage vectors (the predecessor was never
+      embedded — e.g. it was a tombstone — or the new snapshot's body chunked
+      to zero passages).
+
+    **Material** → enqueues one ``enrich`` job for ``snapshot_id``
+    (:func:`lode.jobs.enqueue_derive_jobs`, idempotent — a live job already
+    pending/running is a no-op).
+
+    **Immaterial** → enqueues nothing; instead carries the predecessor's
+    AI-derived annotations/edges forward by re-anchoring them
+    (:func:`lode.staleness.reanchor_annotations` / ``reanchor_edges``) against
+    ``snapshot_id``'s own body — a verbatim ``quoted_text`` match advances
+    ``source_version`` to the new snapshot (still "fresh"); a changed-context
+    or vanished anchor is marked ``stale``/``orphaned`` exactly as it would be
+    for a note update. Both calls target ``external_id`` (the schema's
+    ``annotations.target`` / ``edges.from_id`` are polymorphic — note_id or
+    external_id — by design, ``src/lode/schema.sql``), so this reuses the
+    identical mechanism :meth:`lode.repository.Repository.save` already runs
+    for a note, rather than hand-rolling a copy-the-rows variant.
+
+    Returns a one-line human-readable outcome for the worker's outcome-echo
+    (mirrors every other handler's return contract, lode-1gr.4), or ``None``
+    when ``snapshot_id`` isn't a live ``"ok"`` snapshot at all.
+    """
+    settings = settings or Settings()
+    row = conn.execute(
+        "SELECT external_id, body, status FROM snapshots WHERE snapshot_id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    if row is None or row[2] != "ok":
+        return None
+    external_id, new_body, _status = row
+
+    store = VectorStore(lance_dir, settings)
+    new_vectors = store.vectors_for(snapshot_id)
+
+    predecessor_id = _predecessor_snapshot(conn, external_id, snapshot_id)
+    predecessor_vectors = store.vectors_for(predecessor_id) if predecessor_id else []
+
+    delta: float | None
+    if not new_vectors or not predecessor_vectors:
+        delta = None
+    else:
+        similarity = _cosine_similarity(
+            _mean_pool(new_vectors), _mean_pool(predecessor_vectors)
+        )
+        delta = 1.0 - similarity
+
+    threshold = settings.reenrichment_materiality_threshold
+    material = delta is None or delta >= threshold
+    short = short_version_id(snapshot_id)
+
+    if material:
+        jobs.enqueue_derive_jobs(conn, snapshot_id, types=("enrich",))
+        reason = (
+            "no baseline vectors to compare"
+            if delta is None
+            else f"delta={delta:.3f} >= threshold={threshold}"
+        )
+        return f"material change ({reason}): enqueued enrich {short}"
+
+    ann_counts = staleness.reanchor_annotations(
+        conn, external_id, snapshot_id, new_body
+    )
+    edge_counts = staleness.reanchor_edges(conn, external_id, snapshot_id, new_body)
+    return (
+        f"immaterial change (delta={delta:.3f} < threshold={threshold}): "
+        f"carried forward enrichment to {short} "
+        f"(annotations fresh={ann_counts['fresh']} stale={ann_counts['stale']} "
+        f"orphaned={ann_counts['orphaned']}; edges fresh={edge_counts['fresh']} "
+        f"stale={edge_counts['stale']} orphaned={edge_counts['orphaned']})"
     )

@@ -15,6 +15,7 @@ never the raw body — so a secret in a fetched page never lands in the local
 index; a ``tombstone`` gets neither the FTS write nor the ``embed`` enqueue.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,13 @@ from lode.embedding import embed
 from lode.hashing import content_snapshot_id
 from lode.externals import (
     IngestResult,
+    gate_reenrich,
     ingest_fetch_result,
     ingest_snapshot,
     tombstone_body,
 )
 from lode.storage import init_db
+from lode.vectorstore import VectorStore
 from lode.webfetch import FetchResult, FetchStatus
 
 _EXTERNAL_ID = "https://example.com/article"
@@ -448,3 +451,199 @@ def test_ingest_result_is_frozen_dataclass_shape() -> None:
     assert result.snapshot_id == "snap-1"
     assert result.status == "ok"
     assert result.deduped is True
+
+
+# --- gate_reenrich: material-change re-enrich gating (lode-w0h.5) --------------
+#
+# Vectors are written directly via VectorStore (mirrors tests/test_vectorstore.py)
+# rather than through the real embed leg -- gate_reenrich only ever reads
+# VectorStore.vectors_for, so this isolates the gate's own decision logic from
+# fastembed/chunking. A small vector dim keeps the test vectors trivial; the
+# production dim is the pinned build constant.
+
+_DIM = 4
+
+
+def _gate_settings(**overrides):
+    return load_settings(embedding_vector_dim=_DIM, **overrides)
+
+
+def _write_vector(
+    lance_dir: Path, target_version: str, vector: list[float], settings
+) -> None:
+    VectorStore(lance_dir, settings).replace_vectors(
+        target_version,
+        [
+            {
+                "passage_id": f"{target_version}:0",
+                "target_version": target_version,
+                "vector": vector,
+                "model": settings.embedding_model,
+            }
+        ],
+    )
+
+
+def test_gate_reenrich_first_snapshot_is_material(conn, tmp_path: Path) -> None:
+    """No predecessor to compare against -- nothing to carry forward either."""
+    settings = _gate_settings()
+    lance_dir = tmp_path / "vectors"
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "first body", settings=settings)
+    _write_vector(lance_dir, result.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+
+    outcome = gate_reenrich(
+        conn, result.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "material" in outcome
+    assert _jobs_for(conn, result.snapshot_id) == [
+        ("embed", "pending"),
+        ("enrich", "pending"),
+    ]
+
+
+def test_gate_reenrich_predecessor_never_embedded_is_material(
+    conn, tmp_path: Path
+) -> None:
+    """Predecessor exists (e.g. a tombstone) but has no vectors -- no baseline -> material."""
+    settings = _gate_settings()
+    lance_dir = tmp_path / "vectors"
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "version one", settings=settings)
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "version two", settings=settings
+    )
+    _write_vector(lance_dir, second.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+
+    outcome = gate_reenrich(
+        conn, second.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "material" in outcome
+    assert ("enrich", "pending") in _jobs_for(conn, second.snapshot_id)
+
+
+def test_gate_reenrich_identical_vectors_is_immaterial_enqueues_no_enrich(
+    conn, tmp_path: Path
+) -> None:
+    settings = _gate_settings()
+    lance_dir = tmp_path / "vectors"
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "version one", settings=settings)
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "version two", settings=settings
+    )
+    _write_vector(lance_dir, first.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+    _write_vector(
+        lance_dir, second.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings
+    )  # delta 0.0
+
+    outcome = gate_reenrich(
+        conn, second.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "immaterial" in outcome
+    assert _jobs_for(conn, second.snapshot_id) == [
+        ("embed", "pending")
+    ]  # no enrich enqueued
+
+
+def test_gate_reenrich_orthogonal_vectors_is_material_enqueues_enrich(
+    conn, tmp_path: Path
+) -> None:
+    settings = _gate_settings()
+    lance_dir = tmp_path / "vectors"
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "version one", settings=settings)
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "version two", settings=settings
+    )
+    _write_vector(lance_dir, first.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+    _write_vector(
+        lance_dir, second.snapshot_id, [0.0, 1.0, 0.0, 0.0], settings
+    )  # delta 1.0
+
+    outcome = gate_reenrich(
+        conn, second.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "material" in outcome
+    assert ("enrich", "pending") in _jobs_for(conn, second.snapshot_id)
+
+
+def test_gate_reenrich_immaterial_reanchors_matching_annotation_to_new_snapshot(
+    conn, tmp_path: Path
+) -> None:
+    """A verbatim-matching AI annotation carries forward: source_version advances,
+    status stays 'fresh' -- exactly Repository.save's re-anchor mechanism, reused
+    here rather than duplicated (lode.staleness.reanchor_annotations)."""
+    settings = _gate_settings()
+    lance_dir = tmp_path / "vectors"
+    first = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "the quick fox jumps", settings=settings
+    )
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "the quick fox jumps over the log", settings=settings
+    )
+    _write_vector(lance_dir, first.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+    _write_vector(
+        lance_dir, second.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings
+    )  # immaterial
+
+    with conn:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status, quoted_text) "
+            "VALUES (?, ?, 'tag', ?, 'ai', 'fresh', ?)",
+            (_EXTERNAL_ID, first.snapshot_id, json.dumps("fox"), "quick fox"),
+        )
+
+    outcome = gate_reenrich(
+        conn, second.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "immaterial" in outcome
+    (source_version, status) = conn.execute(
+        "SELECT source_version, status FROM annotations WHERE target = ?",
+        (_EXTERNAL_ID,),
+    ).fetchone()
+    assert source_version == second.snapshot_id
+    assert status == "fresh"
+
+
+def test_gate_reenrich_unknown_snapshot_id_returns_none(conn, tmp_path: Path) -> None:
+    assert gate_reenrich(conn, "not-a-real-id", lance_dir=tmp_path / "vectors") is None
+
+
+def test_gate_reenrich_tombstone_snapshot_returns_none(conn, tmp_path: Path) -> None:
+    result = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_403"), status="tombstone"
+    )
+    assert (
+        gate_reenrich(conn, result.snapshot_id, lance_dir=tmp_path / "vectors") is None
+    )
+
+
+def test_gate_reenrich_note_version_target_returns_none(conn, tmp_path: Path) -> None:
+    # A note version_id is never a row in `snapshots` -- the gate must be a
+    # no-op for it, since _embed_handler calls it unconditionally after every
+    # embed job, note or external alike.
+    assert (
+        gate_reenrich(conn, "some-note-version-id", lance_dir=tmp_path / "vectors")
+        is None
+    )
+
+
+def test_gate_reenrich_respects_custom_threshold(conn, tmp_path: Path) -> None:
+    """A small delta is material against a very low custom threshold."""
+    settings = _gate_settings(reenrichment_materiality_threshold=0.01)
+    lance_dir = tmp_path / "vectors"
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "version one", settings=settings)
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", "version two", settings=settings
+    )
+    _write_vector(lance_dir, first.snapshot_id, [1.0, 0.0, 0.0, 0.0], settings)
+    _write_vector(lance_dir, second.snapshot_id, [0.99, 0.01, 0.0, 0.0], settings)
+
+    outcome = gate_reenrich(
+        conn, second.snapshot_id, lance_dir=lance_dir, settings=settings
+    )
+
+    assert outcome is not None and "material" in outcome

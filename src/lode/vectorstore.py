@@ -122,6 +122,27 @@ class VectorStore:
         if rows:
             table.add(rows)
 
+    def vectors_for(self, target_version: str) -> list[list[float]]:
+        """Return every passage vector persisted for ``target_version``, unordered.
+
+        A plain metadata-filtered scan — no ANN query, no ``query_vector`` — for
+        a caller that wants ``target_version``'s *own* vectors rather than its
+        nearest neighbours (lode-w0h.5's post-embed materiality gate: it
+        mean-pools a snapshot's passage vectors into one document-level vector
+        to compare against its predecessor's). Empty if the store has no
+        vectors for this target (never embedded, or embedded with a body that
+        chunked to zero passages) — mirrors :meth:`search`'s empty-store
+        handling, including on a never-written store (opens an empty table and
+        finds none).
+        """
+        rows = (
+            self._open_or_create_table()
+            .search()
+            .where(f"target_version = '{target_version}'")
+            .to_list()
+        )
+        return [row["vector"] for row in rows]
+
     def search(
         self, query_vector: list[float], *, k: int, where: str | None = None
     ) -> list[VectorHit]:
