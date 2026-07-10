@@ -75,21 +75,49 @@ def _insert_edge(
 
 
 # ---------------------------------------------------------------------------
-# classify_annotation_display -- pure classifier
+# classify_annotation_display / classify_edge_display -- pure classifiers
+#
+# Non-assertive annotation kinds (tag, entity) and edges are symmetric: all
+# three are always visible regardless of status, only the `stale` flag moves.
+# classify_edge_display has no `kind` parameter (edges are never assertive),
+# so each classifier is wrapped down to a shared (source, status) call shape
+# -- the same "normalize the call, share the body" technique used for
+# reanchor_annotations/reanchor_edges in test_staleness.py. lode-b4w.3: this
+# folds the file's original tag/entity/ai_edge trio (each already
+# status-parametrized) into one test: 3 -> 1 (now a kind x status table).
+# The same wrappers also fold the user-sourced annotation/edge pairs below:
+# 2 -> 1 each, no assertion dropped from any of the five originals.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", ["fresh", "stale", "orphaned"])
-def test_tag_is_always_visible(status: str) -> None:
-    """Tags (non-assertive) show at every status -- only the stale flag moves."""
-    decision = classify_annotation_display("tag", "ai", status)
-    assert decision.visible is True
-    assert decision.stale == (status != "fresh")
+def _classify_tag(source: str, status: str):
+    return classify_annotation_display("tag", source, status)
 
 
+def _classify_entity(source: str, status: str):
+    return classify_annotation_display("entity", source, status)
+
+
+NON_ASSERTIVE_KINDS = [
+    pytest.param(_classify_tag, id="tag"),
+    pytest.param(_classify_entity, id="entity"),
+    pytest.param(classify_edge_display, id="ai_edge"),
+]
+
+# Only the annotation/edge pair -- user-sourced curation tests never varied
+# kind (fixed at "tag" in the originals), so entity isn't part of this axis.
+ANNOTATION_AND_EDGE = [
+    pytest.param(_classify_tag, id="annotation"),
+    pytest.param(classify_edge_display, id="edge"),
+]
+
+
+@pytest.mark.parametrize("classify_fn", NON_ASSERTIVE_KINDS)
 @pytest.mark.parametrize("status", ["fresh", "stale", "orphaned"])
-def test_entity_is_always_visible(status: str) -> None:
-    decision = classify_annotation_display("entity", "ai", status)
+def test_non_assertive_kind_is_always_visible(classify_fn, status: str) -> None:
+    """Tags, entities, and edges (non-assertive) show at every status -- only
+    the stale flag moves."""
+    decision = classify_fn("ai", status)
     assert decision.visible is True
     assert decision.stale == (status != "fresh")
 
@@ -109,40 +137,18 @@ def test_assertive_kind_hidden_when_not_fresh(status: str) -> None:
     assert decision.visible is False
 
 
-def test_user_orphaned_annotation_is_a_hidden_tombstone() -> None:
+@pytest.mark.parametrize("classify_fn", ANNOTATION_AND_EDGE)
+def test_user_fresh_is_visible_not_stale(classify_fn) -> None:
+    decision = classify_fn("user", "fresh")
+    assert decision.visible is True
+    assert decision.stale is False
+
+
+@pytest.mark.parametrize("classify_fn", ANNOTATION_AND_EDGE)
+def test_user_orphaned_is_a_hidden_tombstone(classify_fn) -> None:
     """source='user' + status='orphaned' is a curation tombstone -- never shown."""
-    decision = classify_annotation_display("tag", "user", "orphaned")
+    decision = classify_fn("user", "orphaned")
     assert decision.visible is False
-
-
-def test_user_fresh_annotation_is_visible_not_stale() -> None:
-    decision = classify_annotation_display("tag", "user", "fresh")
-    assert decision.visible is True
-    assert decision.stale is False
-
-
-# ---------------------------------------------------------------------------
-# classify_edge_display -- pure classifier
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("status", ["fresh", "stale", "orphaned"])
-def test_ai_edge_is_always_visible(status: str) -> None:
-    """Edges (links) are never assertive -- always shown, flagged when not fresh."""
-    decision = classify_edge_display("ai", status)
-    assert decision.visible is True
-    assert decision.stale == (status != "fresh")
-
-
-def test_user_orphaned_edge_is_a_hidden_tombstone() -> None:
-    decision = classify_edge_display("user", "orphaned")
-    assert decision.visible is False
-
-
-def test_user_fresh_edge_is_visible_not_stale() -> None:
-    decision = classify_edge_display("user", "fresh")
-    assert decision.visible is True
-    assert decision.stale is False
 
 
 # ---------------------------------------------------------------------------

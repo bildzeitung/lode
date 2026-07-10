@@ -134,16 +134,11 @@ def _edge_row(conn: sqlite3.Connection, row_id: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_quoted_text_column_exists_in_annotations(conn: sqlite3.Connection) -> None:
-    """quoted_text column is present on the annotations table after init_db."""
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(annotations)").fetchall()}
-    assert "quoted_text" in cols, "annotations.quoted_text must exist after init_db"
-
-
-def test_quoted_text_column_exists_in_edges(conn: sqlite3.Connection) -> None:
-    """quoted_text column is present on the edges table after init_db."""
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(edges)").fetchall()}
-    assert "quoted_text" in cols, "edges.quoted_text must exist after init_db"
+@pytest.mark.parametrize("table_name", ["annotations", "edges"])
+def test_quoted_text_column_exists(conn: sqlite3.Connection, table_name: str) -> None:
+    """quoted_text column is present on both re-anchored tables after init_db."""
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    assert "quoted_text" in cols, f"{table_name}.quoted_text must exist after init_db"
 
 
 def test_migration_idempotent(tmp_path: Path) -> None:
@@ -162,342 +157,236 @@ def test_migration_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# reanchor_annotations — with quoted_text set
+# reanchor_annotations / reanchor_edges — mirrored re-anchor semantics
+#
+# Both functions delegate to the same _classify() helper in src/lode/staleness.py
+# and differ only in which table/columns they read and write (annotations use
+# payload as the anchor value; edges use to_id) -- confirmed by reading the
+# source, not just name matching, per lode-b4w.3's re-verification requirement.
+# Parametrized over (reanchor_fn, insert_fn, row_fn) so each behavior below is
+# checked against both tables from one shared body: 16 tests -> 8, no assertion
+# dropped (every case still runs, now as a parametrize row instead of a
+# separate function).
 # ---------------------------------------------------------------------------
 
 
-def test_reanchor_annotations_unchanged_quote_is_fresh(
+def _insert_annotation_for_reanchor(
     conn: sqlite3.Connection,
+    *,
+    source_version: str,
+    value: str,
+    quoted_text: str | None,
+    source: str = "ai",
+    status: str = "fresh",
+) -> int:
+    return _insert_annotation(
+        conn,
+        source_version=source_version,
+        payload_value=value,
+        quoted_text=quoted_text,
+        source=source,
+        status=status,
+    )
+
+
+def _insert_edge_for_reanchor(
+    conn: sqlite3.Connection,
+    *,
+    source_version: str,
+    value: str,
+    quoted_text: str | None,
+    source: str = "ai",
+    status: str = "fresh",
+) -> int:
+    return _insert_edge(
+        conn,
+        to_id=value,
+        source_version=source_version,
+        quoted_text=quoted_text,
+        source=source,
+        status=status,
+    )
+
+
+REANCHOR_TABLES = [
+    pytest.param(
+        reanchor_annotations,
+        _insert_annotation_for_reanchor,
+        _annotation_row,
+        id="annotations",
+    ),
+    pytest.param(
+        reanchor_edges,
+        _insert_edge_for_reanchor,
+        _edge_row,
+        id="edges",
+    ),
+]
+
+
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_unchanged_quote_is_fresh(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
     """Verbatim quoted_text match in new body → fresh, source_version advanced.
 
     Acceptance criterion: unchanged quote stays fresh on update.
     """
     _insert_note(conn, body="The quick brown fox")
-    row_id = _insert_annotation(
-        conn,
-        source_version="ver-1",
-        payload_value="quick",
-        quoted_text="quick brown fox",
+    row_id = insert_fn(
+        conn, source_version="ver-1", value="quick", quoted_text="quick brown fox"
     )
 
-    reanchor_annotations(conn, "note-1", "ver-2", "The quick brown fox jumped")
+    reanchor_fn(conn, "note-1", "ver-2", "The quick brown fox jumped")
 
-    row = _annotation_row(conn, row_id)
+    row = row_fn(conn, row_id)
     assert row["status"] == "fresh"
     assert row["source_version"] == "ver-2", "source_version must advance when fresh"
 
 
-def test_reanchor_annotations_changed_context_is_stale(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_changed_context_is_stale(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """quoted_text gone but payload value still in body → stale, source_version NOT advanced.
+    """quoted_text gone but anchor value still in body → stale, source_version NOT advanced.
 
     Acceptance criterion: changed quote is stale on update.
     """
     _insert_note(conn, body="quick brown fox")
-    row_id = _insert_annotation(
+    row_id = insert_fn(
         conn,
         source_version="ver-1",
-        payload_value="fox",
+        value="fox",
         # Original context: "quick brown fox"; new body will keep "fox" but lose the context
         quoted_text="quick brown fox",
     )
 
-    # New body: quoted_text is gone but the payload value "fox" is still present.
-    reanchor_annotations(conn, "note-1", "ver-2", "lazy fox")
+    # New body: quoted_text is gone but the anchor value "fox" is still present.
+    reanchor_fn(conn, "note-1", "ver-2", "lazy fox")
 
-    row = _annotation_row(conn, row_id)
+    row = row_fn(conn, row_id)
     assert row["status"] == "stale"
     assert row["source_version"] == "ver-1", (
         "source_version must NOT advance when stale"
     )
 
 
-def test_reanchor_annotations_missing_both_is_orphaned(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_missing_both_is_orphaned(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """quoted_text absent and payload value absent → orphaned.
+    """quoted_text absent and anchor value absent → orphaned.
 
     Acceptance criterion: missing quote is orphaned on update.
     """
     _insert_note(conn, body="Note about Python")
-    row_id = _insert_annotation(
-        conn,
-        source_version="ver-1",
-        payload_value="python",
-        quoted_text="Note about Python",
+    row_id = insert_fn(
+        conn, source_version="ver-1", value="python", quoted_text="Note about Python"
     )
 
     # New body: both the quoted_text and "python" are gone.
-    reanchor_annotations(conn, "note-1", "ver-2", "Completely different topic")
+    reanchor_fn(conn, "note-1", "ver-2", "Completely different topic")
 
-    row = _annotation_row(conn, row_id)
+    row = row_fn(conn, row_id)
     assert row["status"] == "orphaned"
     assert row["source_version"] == "ver-1", (
         "source_version must NOT advance when orphaned"
     )
 
 
-# ---------------------------------------------------------------------------
-# reanchor_annotations — without quoted_text (fallback)
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_annotations_no_quoted_text_payload_present_is_fresh(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_no_quoted_text_value_present_is_fresh(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """No quoted_text: payload value in body → fresh, source_version advanced."""
+    """No quoted_text: anchor value in body → fresh, source_version advanced."""
     _insert_note(conn)
-    row_id = _insert_annotation(
-        conn,
-        source_version="ver-1",
-        payload_value="python",
-        quoted_text=None,
-    )
+    row_id = insert_fn(conn, source_version="ver-1", value="python", quoted_text=None)
 
-    reanchor_annotations(conn, "note-1", "ver-2", "A note about python and django")
+    reanchor_fn(conn, "note-1", "ver-2", "A note about python and django")
 
-    row = _annotation_row(conn, row_id)
+    row = row_fn(conn, row_id)
     assert row["status"] == "fresh"
     assert row["source_version"] == "ver-2"
 
 
-def test_reanchor_annotations_no_quoted_text_payload_absent_is_orphaned(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_no_quoted_text_value_absent_is_orphaned(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """No quoted_text: payload value absent from body → orphaned."""
+    """No quoted_text: anchor value absent from body → orphaned."""
     _insert_note(conn)
-    row_id = _insert_annotation(
-        conn,
-        source_version="ver-1",
-        payload_value="python",
-        quoted_text=None,
-    )
+    row_id = insert_fn(conn, source_version="ver-1", value="python", quoted_text=None)
 
-    reanchor_annotations(conn, "note-1", "ver-2", "A note about Rust and WASM")
+    reanchor_fn(conn, "note-1", "ver-2", "A note about Rust and WASM")
 
-    row = _annotation_row(conn, row_id)
+    row = row_fn(conn, row_id)
     assert row["status"] == "orphaned"
     assert row["source_version"] == "ver-1"
 
 
-# ---------------------------------------------------------------------------
-# reanchor_annotations — user annotations are never touched
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_annotations_user_source_not_touched(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_user_source_not_touched(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """User annotations (source='user') are never re-anchored, even if content changes.
+    """User rows (source='user') are never re-anchored, even if content changes.
 
     User curation is irreplaceable and attaches to the logical note, not a version.
     """
     _insert_note(conn)
-    row_id = _insert_annotation(
+    row_id = insert_fn(
         conn,
         source="user",
         source_version="ver-1",
-        payload_value="important",
+        value="important",
         status="fresh",
         quoted_text="important word",
     )
 
     # New body: both the quote and "important" are gone.
-    reanchor_annotations(conn, "note-1", "ver-2", "Completely different content")
+    reanchor_fn(conn, "note-1", "ver-2", "Completely different content")
 
-    row = _annotation_row(conn, row_id)
-    # User annotation must be untouched.
-    assert row["status"] == "fresh", "user annotation status must not change"
-    assert row["source_version"] == "ver-1", (
-        "user annotation source_version must not change"
-    )
+    row = row_fn(conn, row_id)
+    # User row must be untouched.
+    assert row["status"] == "fresh", "user row status must not change"
+    assert row["source_version"] == "ver-1", "user row source_version must not change"
 
 
-# ---------------------------------------------------------------------------
-# reanchor_annotations — return value (counts)
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_annotations_returns_counts(conn: sqlite3.Connection) -> None:
-    """reanchor_annotations returns a count dict with fresh/stale/orphaned totals."""
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_returns_counts(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
+) -> None:
+    """reanchor_* returns a count dict with fresh/stale/orphaned totals."""
     _insert_note(conn)
     # fresh: quoted_text is verbatim in the new body
-    _insert_annotation(conn, payload_value="python", quoted_text="python language")
-    # stale: quoted_text absent but payload "python" still in new body
-    _insert_annotation(conn, payload_value="python", quoted_text="python auth tutorial")
-    # orphaned: quoted_text absent and payload "rust" not in new body
-    _insert_annotation(conn, payload_value="rust", quoted_text="rust programming")
+    insert_fn(
+        conn, source_version="ver-1", value="python", quoted_text="python language"
+    )
+    # stale: quoted_text absent but anchor value "python" still in new body
+    insert_fn(
+        conn,
+        source_version="ver-1",
+        value="python",
+        quoted_text="python auth tutorial",
+    )
+    # orphaned: quoted_text absent and anchor value "rust" not in new body
+    insert_fn(
+        conn, source_version="ver-1", value="rust", quoted_text="rust programming"
+    )
 
-    counts = reanchor_annotations(conn, "note-1", "ver-2", "python language basics")
+    counts = reanchor_fn(conn, "note-1", "ver-2", "python language basics")
 
     assert counts["fresh"] == 1
     assert counts["stale"] == 1
     assert counts["orphaned"] == 1
 
 
-def test_reanchor_annotations_empty_returns_zeros(conn: sqlite3.Connection) -> None:
-    """No annotations on the note → all-zero count dict."""
-    _insert_note(conn)
-    counts = reanchor_annotations(conn, "note-1", "ver-2", "some body text")
-    assert counts == {"fresh": 0, "stale": 0, "orphaned": 0}
-
-
-# ---------------------------------------------------------------------------
-# reanchor_edges — with quoted_text set
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_edges_unchanged_quote_is_fresh(conn: sqlite3.Connection) -> None:
-    """Verbatim quoted_text match in new body → fresh, source_version advanced."""
-    _insert_note(conn, body="This discusses JWT token authentication")
-    row_id = _insert_edge(
-        conn,
-        to_id="jwt-topic",
-        source_version="ver-1",
-        quoted_text="JWT token authentication",
-    )
-
-    reanchor_edges(
-        conn, "note-1", "ver-2", "This discusses JWT token authentication flows"
-    )
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "fresh"
-    assert row["source_version"] == "ver-2"
-
-
-def test_reanchor_edges_changed_context_is_stale(conn: sqlite3.Connection) -> None:
-    """quoted_text gone but to_id still in body → stale, source_version NOT advanced."""
-    _insert_note(conn, body="JWT token authentication")
-    row_id = _insert_edge(
-        conn,
-        to_id="jwt-topic",
-        source_version="ver-1",
-        quoted_text="JWT token authentication",
-    )
-
-    # New body: quoted_text gone but "jwt-topic" appears literally.
-    reanchor_edges(conn, "note-1", "ver-2", "See also jwt-topic for more details")
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "stale"
-    assert row["source_version"] == "ver-1"
-
-
-def test_reanchor_edges_missing_both_is_orphaned(conn: sqlite3.Connection) -> None:
-    """quoted_text absent and to_id absent → orphaned."""
-    _insert_note(conn, body="JWT token authentication")
-    row_id = _insert_edge(
-        conn,
-        to_id="jwt-topic",
-        source_version="ver-1",
-        quoted_text="JWT token authentication",
-    )
-
-    # New body: both the quoted_text and "jwt-topic" are gone.
-    reanchor_edges(conn, "note-1", "ver-2", "Database indexing strategies")
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "orphaned"
-    assert row["source_version"] == "ver-1"
-
-
-# ---------------------------------------------------------------------------
-# reanchor_edges — without quoted_text (fallback)
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_edges_no_quoted_text_to_id_present_is_fresh(
-    conn: sqlite3.Connection,
+@pytest.mark.parametrize("reanchor_fn, insert_fn, row_fn", REANCHOR_TABLES)
+def test_empty_returns_zeros(
+    conn: sqlite3.Connection, reanchor_fn, insert_fn, row_fn
 ) -> None:
-    """No quoted_text: to_id value in body → fresh, source_version advanced."""
+    """No rows on the note → all-zero count dict."""
     _insert_note(conn)
-    row_id = _insert_edge(
-        conn, to_id="security", source_version="ver-1", quoted_text=None
-    )
-
-    reanchor_edges(conn, "note-1", "ver-2", "This covers security and auth patterns")
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "fresh"
-    assert row["source_version"] == "ver-2"
-
-
-def test_reanchor_edges_no_quoted_text_to_id_absent_is_orphaned(
-    conn: sqlite3.Connection,
-) -> None:
-    """No quoted_text: to_id absent from body → orphaned."""
-    _insert_note(conn)
-    row_id = _insert_edge(
-        conn, to_id="security", source_version="ver-1", quoted_text=None
-    )
-
-    reanchor_edges(conn, "note-1", "ver-2", "This covers performance tuning")
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "orphaned"
-    assert row["source_version"] == "ver-1"
-
-
-# ---------------------------------------------------------------------------
-# reanchor_edges — user edges are never touched
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_edges_user_source_not_touched(conn: sqlite3.Connection) -> None:
-    """User edges (source='user') are never re-anchored."""
-    _insert_note(conn)
-    row_id = _insert_edge(
-        conn,
-        to_id="auth-notes",
-        source="user",
-        source_version="ver-1",
-        status="fresh",
-        quoted_text="authentication flows",
-    )
-
-    # New body: both quote and "auth-notes" are gone.
-    reanchor_edges(conn, "note-1", "ver-2", "Completely different content")
-
-    row = _edge_row(conn, row_id)
-    assert row["status"] == "fresh", "user edge status must not change"
-    assert row["source_version"] == "ver-1", "user edge source_version must not change"
-
-
-# ---------------------------------------------------------------------------
-# reanchor_edges — return value and empty case
-# ---------------------------------------------------------------------------
-
-
-def test_reanchor_edges_returns_counts(conn: sqlite3.Connection) -> None:
-    """reanchor_edges returns a count dict with fresh/stale/orphaned totals."""
-    _insert_note(conn)
-    # fresh: quoted_text "OAuth2 flow" is verbatim in new body
-    _insert_edge(conn, to_id="oauth", source_version="ver-1", quoted_text="OAuth2 flow")
-    # stale: quoted_text "old OAuth2 context" absent, but to_id "security" IS in body
-    _insert_edge(
-        conn, to_id="security", source_version="ver-1", quoted_text="old OAuth2 context"
-    )
-    # orphaned: both quoted_text "gone text" and to_id "missing-concept" absent
-    _insert_edge(
-        conn, to_id="missing-concept", source_version="ver-1", quoted_text="gone text"
-    )
-
-    counts = reanchor_edges(
-        conn, "note-1", "ver-2", "OAuth2 flow and security patterns"
-    )
-
-    assert counts["fresh"] == 1
-    assert counts["stale"] == 1
-    assert counts["orphaned"] == 1
-
-
-def test_reanchor_edges_empty_returns_zeros(conn: sqlite3.Connection) -> None:
-    """No edges from the note → all-zero count dict."""
-    _insert_note(conn)
-    counts = reanchor_edges(conn, "note-1", "ver-2", "some body text")
+    counts = reanchor_fn(conn, "note-1", "ver-2", "some body text")
     assert counts == {"fresh": 0, "stale": 0, "orphaned": 0}
 
 

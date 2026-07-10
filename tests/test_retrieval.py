@@ -193,13 +193,6 @@ def test_lexical_search_excludes_soft_deleted_note(repo, conn) -> None:
     assert lexical_search(conn, "gamma", k=10) == []
 
 
-def test_lexical_search_caps_at_k(repo, conn) -> None:
-    for i in range(5):
-        repo.save(f"note-{i}", "alpha")
-
-    assert len(lexical_search(conn, "alpha", k=3)) == 3
-
-
 def test_lexical_search_empty_db_returns_no_hits(conn) -> None:
     assert lexical_search(conn, "alpha", k=10) == []
 
@@ -232,11 +225,23 @@ def test_vector_search_excludes_soft_deleted_note(repo, conn, store) -> None:
     assert g1 not in [h.target_version for h in hits]
 
 
-def test_vector_search_caps_at_k(repo, conn, store) -> None:
+# lode-b4w.3: lexical_search and vector_search cap their result count at k the
+# same way; the two prior tests (test_lexical_search_caps_at_k /
+# test_vector_search_caps_at_k) differed only in which search fn was called
+# (different signatures -- vector_search additionally takes `store` -- so the
+# body dispatches on a string id rather than passing the function object
+# itself). 2 tests -> 1, both original assertions still run as parametrize rows.
+@pytest.mark.parametrize("search_kind", ["lexical", "vector"])
+def test_search_caps_at_k(repo, conn, store, search_kind: str) -> None:
     for i in range(5):
         repo.save(f"note-{i}", "alpha")
 
-    assert len(vector_search(store, conn, _query_vector("alpha"), k=3)) == 3
+    if search_kind == "lexical":
+        hits = lexical_search(conn, "alpha", k=3)
+    else:
+        hits = vector_search(store, conn, _query_vector("alpha"), k=3)
+
+    assert len(hits) == 3
 
 
 def test_vector_search_empty_db_returns_no_hits(repo, conn, store) -> None:
@@ -756,22 +761,36 @@ def test_trust_rank_of_no_hits_is_empty(conn) -> None:
 # --- build_match_query: natural-language question -> FTS5 MATCH --------------
 
 
-def test_build_match_query_ors_quoted_word_tokens() -> None:
-    # Each word becomes a quoted term, OR-ed (not AND-ed) for recall; the trailing
-    # "?" and whitespace are separators, never part of a term.
-    assert build_match_query("what about auth?") == '"what" OR "about" OR "auth"'
-
-
-def test_build_match_query_quotes_terms_colliding_with_fts5_operators() -> None:
-    # A bare "or"/"and"/"not" would be parsed as an FTS5 operator; quoting keeps it
-    # a literal term so the expression stays valid.
-    assert build_match_query("alpha or beta") == '"alpha" OR "or" OR "beta"'
-
-
-def test_build_match_query_empty_when_no_word_tokens() -> None:
-    # No \w tokens -> empty expression; the caller skips the lexical leg (an empty
-    # MATCH is an FTS5 syntax error, not a match-none).
-    assert build_match_query("???  ...") == ""
+# lode-b4w.3: same function under test (build_match_query), different input
+# shapes -- parametrized over (text, expected), 3 tests -> 1, no case dropped.
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        pytest.param(
+            "what about auth?",
+            '"what" OR "about" OR "auth"',
+            id="ors_quoted_word_tokens",
+            # Each word becomes a quoted term, OR-ed (not AND-ed) for recall; the
+            # trailing "?" and whitespace are separators, never part of a term.
+        ),
+        pytest.param(
+            "alpha or beta",
+            '"alpha" OR "or" OR "beta"',
+            id="quotes_terms_colliding_with_fts5_operators",
+            # A bare "or"/"and"/"not" would be parsed as an FTS5 operator; quoting
+            # keeps it a literal term so the expression stays valid.
+        ),
+        pytest.param(
+            "???  ...",
+            "",
+            id="empty_when_no_word_tokens",
+            # No \w tokens -> empty expression; the caller skips the lexical leg
+            # (an empty MATCH is an FTS5 syntax error, not a match-none).
+        ),
+    ],
+)
+def test_build_match_query(text: str, expected: str) -> None:
+    assert build_match_query(text) == expected
 
 
 def test_build_match_query_result_is_a_valid_fts5_match(conn) -> None:

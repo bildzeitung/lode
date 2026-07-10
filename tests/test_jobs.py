@@ -111,40 +111,28 @@ def test_duplicate_enqueue_of_live_enrich_is_noop(conn) -> None:
     assert n == 1
 
 
-def test_reenqueue_after_done_is_allowed(conn) -> None:
-    """After a job completes (done), the same (type, version) can be re-enqueued.
+@pytest.mark.parametrize("terminal_status", ["done", "dead"])
+def test_reenqueue_after_terminal_status_is_allowed(conn, terminal_status: str) -> None:
+    """After a job reaches a terminal status, the same (type, version) can be
+    re-enqueued.
 
-    The partial index is scoped to pending/running only; done rows fall outside
-    the WHERE clause and do not block a new enqueue.
+    The partial index is scoped to pending/running only; 'done' and 'dead' rows
+    fall outside the WHERE clause and do not block a new enqueue. 'dead' is the
+    poison terminal at max-attempts (lode-i05.6).
     """
     enqueue_derive_jobs(conn, "ver-1")
-    # Simulate completion: move both jobs to 'done'.
+    # Simulate reaching the terminal status: move both jobs there.
     with conn:
-        conn.execute("UPDATE jobs SET status = 'done' WHERE target_version = 'ver-1'")
+        conn.execute(
+            "UPDATE jobs SET status = ? WHERE target_version = 'ver-1'",
+            (terminal_status,),
+        )
     # Re-enqueue should succeed (not be silently ignored).
     enqueue_derive_jobs(conn, "ver-1")
     (n,) = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE target_version = 'ver-1' AND status = 'pending'"
     ).fetchone()
     assert n == len(DERIVE_JOB_TYPES)  # fresh pending rows exist
-
-
-def test_reenqueue_after_dead_is_allowed(conn) -> None:
-    """After a job reaches dead (terminal), the same (type, version) can be re-enqueued.
-
-    'dead' is the poison terminal at max-attempts; the partial index excludes it
-    from the deduplication scope so re-derive is unblocked (lode-i05.6).
-    """
-    enqueue_derive_jobs(conn, "ver-1")
-    # Simulate dead-letter: move both jobs to 'dead'.
-    with conn:
-        conn.execute("UPDATE jobs SET status = 'dead' WHERE target_version = 'ver-1'")
-    # Re-enqueue should succeed.
-    enqueue_derive_jobs(conn, "ver-1")
-    (n,) = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE target_version = 'ver-1' AND status = 'pending'"
-    ).fetchone()
-    assert n == len(DERIVE_JOB_TYPES)
 
 
 def test_dead_status_accepted_by_schema(conn) -> None:
