@@ -74,6 +74,7 @@ def find_related_notes(
     *,
     settings: Settings | None = None,
     embedder: Embedder | None = None,
+    exclude_note_id: str | None = None,
 ) -> list[RelatedNote]:
     """Surface past notes related to the in-progress ``draft``, best-first.
 
@@ -93,6 +94,13 @@ def find_related_notes(
     **distinct notes** (deduped, keeping each note's best-ranked passage as its
     snippet), each carrying a human "N weeks ago"-style age
     (:func:`humanize_age`).
+
+    ``exclude_note_id`` (lode-aoc) drops that one note from the results before
+    the dedup/limit cap — the note being *edited* trivially matches its own
+    still-fresh draft, so :class:`~lode.tui.screens.browse.EditScreen` passes
+    its ``note_id`` here to keep a note from ever surfacing as "related" to
+    itself. ``None`` (the default, and what capture's brand-new-note pass
+    uses — there is no id yet to exclude) excludes nothing.
 
     Raises nothing pipeline-specific to the caller beyond what the underlying
     DB/model calls raise — the capture screen is responsible for keeping this
@@ -122,13 +130,22 @@ def find_related_notes(
         graphed = graph_expand(conn, expanded, settings=settings)
         context = trust_rank(conn, graphed).context
 
-        return _to_related_notes(conn, context, limit=settings.related_notes_limit)
+        return _to_related_notes(
+            conn,
+            context,
+            limit=settings.related_notes_limit,
+            exclude_note_id=exclude_note_id,
+        )
     finally:
         conn.close()
 
 
 def _to_related_notes(
-    conn: sqlite3.Connection, context: list[ContextItem], *, limit: int
+    conn: sqlite3.Connection,
+    context: list[ContextItem],
+    *,
+    limit: int,
+    exclude_note_id: str | None = None,
 ) -> list[RelatedNote]:
     """Reduce trust-ranked context to distinct owned notes, best-first, capped."""
     note_items = [item for item in context if item.tier in _NOTE_TIERS]
@@ -152,6 +169,8 @@ def _to_related_notes(
         if resolved is None:
             continue  # graph-expanded/withheld edge case: nothing to cite
         note_id, created = resolved
+        if note_id == exclude_note_id:
+            continue  # lode-aoc: the note being edited never matches itself
         if note_id in seen_notes:
             continue  # keep only the best-ranked passage per distinct note
         seen_notes.add(note_id)
