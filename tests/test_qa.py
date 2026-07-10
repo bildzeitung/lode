@@ -180,6 +180,32 @@ def test_send_is_recorded_in_egress_log(conn) -> None:
     assert "v-secret" not in sent_targets
 
 
+def test_egress_log_records_external_sends_and_excludes_withheld_ones(
+    conn,
+) -> None:
+    # lode-w0h.7: confirm egress_log coverage extends to externals, not just
+    # notes -- a sendable external's snapshot_id is recorded as sent; a
+    # no_egress external's is excluded entirely (never appears as a "sent"
+    # target, mirroring the note case above).
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn,
+        "q",
+        [
+            QaPassage("s-open", "public runbook", is_external=True),
+            QaPassage("s-secret", "internal creds", is_external=True, no_egress=True),
+        ],
+        client=client,
+    )
+    (sent_targets,) = conn.execute(
+        "SELECT sent_targets FROM egress_log WHERE id = ?",
+        (result.egress_log_id,),
+    ).fetchone()
+    assert "s-open" in sent_targets
+    assert "s-secret" not in sent_targets
+    assert [c.target_id for c in result.withheld_citations] == ["s-secret"]
+
+
 def test_empty_answer_is_valid(conn) -> None:
     # The model asserting nothing is a valid answer (downstream abstention path).
     client = _FakeClient(_envelope([]))

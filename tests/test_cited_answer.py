@@ -276,6 +276,44 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
     assert answer.claims[0].support[0].version_id is None
 
 
+def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
+    # Same enforcement path as the note case, exercised over an external
+    # snapshot (lode-w0h.7): _resolve_target's externals join resolves
+    # no_egress for a snapshot_id target exactly like it does for a note's
+    # version_id, so a withheld external never reaches the cloud context and
+    # is cited as present-but-withheld -- while staying locally retrievable
+    # (this test only asserts the egress path; retrieval is untouched by the
+    # flag, per lode.egress's "no_egress gates egress only").
+    _insert_external(
+        conn, external_id="EXT-open", snapshot_id="s-open", body="public runbook"
+    )
+    _insert_external(
+        conn,
+        external_id="EXT-secret",
+        snapshot_id="s-secret",
+        body="internal creds runbook",
+        no_egress=True,
+    )
+    client = _FakeClient([])
+
+    answer = ask(
+        conn,
+        "q",
+        [
+            _external_context("s-open", "public runbook"),
+            _external_context("s-secret", "internal creds runbook"),
+        ],
+        client=client,
+    )
+
+    prompt = _user_prompt(client)
+    assert "internal creds runbook" not in prompt  # withheld body never left the box
+    assert "s-secret" not in prompt
+    assert "public runbook" in prompt  # the sendable external did go out
+    assert [c.target_id for c in answer.withheld_citations] == ["s-secret"]
+    assert answer.withheld_citations[0].note == WITHHELD_CITATION
+
+
 def test_gate_cited_answer_composes_survivors_with_withheld() -> None:
     # The pure gate step: survivors from apply_gate plus the result's withheld set.
     body = "lode abstains rather than hallucinate."

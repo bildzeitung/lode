@@ -13,10 +13,13 @@ for ``purge``); ``show`` (lode-1gr.5, brought to CONTENT parity with the TUI
 inspector modal by lode-ay5.3: one note's head body + full derived enrichment --
 summary/tags/entities/edges-with-reason-confidence via the shared
 ``lode.enrichment_view`` seam, plus a three-valued ``enrichment:`` line and embed
-status -- sharing ``purge``'s id/prefix resolution); and ``ask`` (the cited Q&A
+status -- sharing ``purge``'s id/prefix resolution); ``ask`` (the cited Q&A
 loop,
 lode-y42.2: retrieve → synthesize → faithfulness gate → cite or abstain, with the
-Anthropic client mocked so the gate runs offline).
+Anthropic client mocked so the gate runs offline); and ``no-egress`` (lode-w0h.7:
+the no-egress-tier control surface for an external source -- sets/``--clear``s
+``externals.no_egress`` via ``lode.externals.set_no_egress``, refusing an unknown
+external_id).
 """
 
 import json
@@ -59,6 +62,7 @@ ALL_SUBCOMMANDS = [
     "status",
     "jobs",
     "egress",
+    "no-egress",
     "config",
     "work",
     "tui",
@@ -611,6 +615,62 @@ def test_egress_rejects_unknown_purpose(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["egress", "--purpose", "bogus", "--db", str(db_path)])
     assert result.exit_code != 0
+
+
+# --- lode no-egress (the no-egress-tier control surface, lode-w0h.7) --------
+
+
+def test_no_egress_marks_an_existing_external(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        ingest_snapshot(conn, "https://example.com/a", "web", "body")
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app, ["no-egress", "https://example.com/a", "--db", str(db_path)]
+    )
+    assert result.exit_code == 0
+    assert "marked no_egress" in result.stdout
+    assert _rows(
+        db_path,
+        "SELECT no_egress FROM externals WHERE external_id = ?",
+        ("https://example.com/a",),
+    ) == [(1,)]
+
+
+def test_no_egress_clear_flips_it_back(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        ingest_snapshot(conn, "https://example.com/a", "web", "body")
+    finally:
+        conn.close()
+    runner.invoke(app, ["no-egress", "https://example.com/a", "--db", str(db_path)])
+
+    result = runner.invoke(
+        app,
+        ["no-egress", "https://example.com/a", "--clear", "--db", str(db_path)],
+    )
+    assert result.exit_code == 0
+    assert "cleared no_egress" in result.stdout
+    assert _rows(
+        db_path,
+        "SELECT no_egress FROM externals WHERE external_id = ?",
+        ("https://example.com/a",),
+    ) == [(0,)]
+
+
+def test_no_egress_unknown_external_reports_and_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(
+        app, ["no-egress", "https://never-ingested.example", "--db", str(db_path)]
+    )
+    assert result.exit_code == 1
+    assert "no such external source" in result.stderr
 
 
 # --- lode purge (E8 hard delete via Repository.purge, lode-7cx) -------------
