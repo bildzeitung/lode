@@ -244,7 +244,8 @@ class Settings(BaseModel):
     reenrichment_materiality_threshold: float = _knob(
         0.2,
         Kind.TUNE,
-        "Size/similarity delta gating paid re-enrichment of a changed snapshot.",
+        "Embedding-similarity delta (1 - cosine) gating paid re-enrichment of a "
+        "changed snapshot.",
         ge=0.0,
         le=1.0,
     )
