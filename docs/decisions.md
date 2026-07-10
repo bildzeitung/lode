@@ -245,7 +245,8 @@ are catalogued in [configuration.md](configuration.md).
   Worse, `git -C` alone can only *read* the builder's worktree; every `code-reviewer` fix had to go
   through a `bash` single-match-replacement workaround (`Edit`/`Write` can't reach `$WT`), and a launch
   worktree freshly branched off `trunk` HEAD has an *empty* diff against the builder's actual branch —
-  so `/code-review`/`/simplify` (both cwd-relative, no path/directory argument — a base/target
+  so `/code-review`/`/simplify` (both cwd-relative, no working-directory argument — they always review
+  the current tree and cannot be pointed at another worktree's directory — even though a base/target
   rev-range or file/branch IS accepted, which is exactly why the explicit `trunk...HEAD` below works)
   silently reviewed **nothing**
   (lode-k5e), a false-green that six of six fan-out reviewers missed on one observed day. Separately,
