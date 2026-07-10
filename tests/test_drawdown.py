@@ -17,6 +17,7 @@ tests offline can leave the *default* implementation's wiring unexercised).
 """
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -196,6 +197,33 @@ class TestCanonicalizeUrl:
             canonicalize_url("HTTPS://user:pass@Example.COM:443/foo/#frag")
             == "https://example.com/foo"
         )
+
+    def test_ipv6_literal_host_keeps_brackets_with_non_default_port(self):
+        # lode-lt1: urlsplit().hostname strips the brackets from an IPv6
+        # literal ("[::1]:8080" -> hostname "::1"), so re-appending a port
+        # without re-adding the brackets yields "::1:8080" -- unparseable
+        # (the host's own colons get read as the port delimiter). The fix
+        # must keep the result re-parseable.
+        result = canonicalize_url("http://[::1]:8080/p")
+        assert result == "http://[::1]:8080/p"
+        reparsed = urlsplit(result)
+        assert reparsed.hostname == "::1"
+        assert reparsed.port == 8080
+
+    def test_ipv6_literal_host_keeps_brackets_with_default_port(self):
+        result = canonicalize_url("http://[2001:db8::1]/p")
+        assert result == "http://[2001:db8::1]/p"
+        reparsed = urlsplit(result)
+        assert reparsed.hostname == "2001:db8::1"
+        assert reparsed.port is None
+
+    def test_ipv6_literal_host_with_userinfo_strips_userinfo_keeps_brackets(self):
+        result = canonicalize_url("https://user:pass@[::1]:8080/p")
+        assert result == "https://[::1]:8080/p"
+        reparsed = urlsplit(result)
+        assert reparsed.hostname == "::1"
+        assert reparsed.port == 8080
+        assert reparsed.username is None
 
 
 # ---------------------------------------------------------------------------

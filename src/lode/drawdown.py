@@ -213,6 +213,14 @@ def canonicalize_url(url: str, settings: Settings | None = None) -> str:
     # (lode-0as): credentials are transport secrets, not source identity,
     # and must never enter external_id.
     netloc = (parts.hostname or "").lower()
+    # ``urlsplit().hostname`` strips the brackets from an IPv6 literal host
+    # (``[::1]`` -> ``::1``) -- re-add them before appending a port, or the
+    # rebuilt netloc (``::1:8080``) is ambiguous/unparseable (the host's own
+    # colons get read as the port delimiter). A bracketed host is the only
+    # one containing ``:`` at this point (userinfo and port are already
+    # stripped out of ``hostname``), so this check is unambiguous (lode-lt1).
+    if ":" in netloc:
+        netloc = f"[{netloc}]"
     if parts.port is not None and parts.port != _DEFAULT_PORTS.get(scheme):
         netloc = f"{netloc}:{parts.port}"
 
