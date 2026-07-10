@@ -47,7 +47,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-import statistics
 import time
 from pathlib import Path
 
@@ -194,33 +193,6 @@ def warm_embedder() -> FastEmbedEmbedder:
     embedder = FastEmbedEmbedder(Settings())
     embedder.embed_query("warm up the onnx runtime")
     return embedder
-
-
-# --- Experiment A: what does the pass actually cost against a realistic corpus? ----
-
-
-def test_related_notes_pass_cost_against_seeded_corpus(
-    seeded_db: Path, warm_embedder: FastEmbedEmbedder
-) -> None:
-    """Informational: how long does `find_related_notes` itself take?
-
-    Not a pass/fail — a pass taking 300ms is fine for typing responsiveness *if*
-    it truly runs off the event loop (see the GIL experiments below); this is
-    context for interpreting those, not the keystroke-latency verdict itself.
-    """
-    settings = Settings()
-    durations_ms = []
-    for draft in _DRAFTS:
-        start = time.perf_counter()
-        find_related_notes(seeded_db, draft, settings=settings, embedder=warm_embedder)
-        durations_ms.append((time.perf_counter() - start) * 1000)
-
-    print(
-        f"\n[lode-0wj.2] find_related_notes cost over {len(_DRAFTS)} realistic drafts "
-        f"against the {len(seed_notes())}-note seeded corpus: "
-        f"min={min(durations_ms):.1f}ms mean={statistics.mean(durations_ms):.1f}ms "
-        f"p95={_percentile(durations_ms, 95):.1f}ms max={max(durations_ms):.1f}ms"
-    )
 
 
 # --- Experiment B: the MUST-ANSWER question -- does the pass yield the loop? -------
