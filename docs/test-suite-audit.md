@@ -274,6 +274,35 @@ execution instruction for lode-b4w.2 is:
   duplicate could have landed since this audit. If none turn up, close lode-b4w.2 with that note; it's
   a legitimate "nothing to do" outcome, not a failure to find work.
 
+### Re-verification at lode-b4w.2 execution time (2026-07-10, later same day)
+
+Re-ran the clustering pass against trunk at `f1b8cf5` — 7 commits and ~40 new test functions had
+landed since this audit closed (`test_cli.py`, `test_enrichment_view.py`, `test_tui_browse_screen.py`,
+`test_externals.py`, `test_vectorstore.py`, `test_worker.py`, `test_retrieval.py`, `test_drawdown.py`,
+`test_eval_live.py`), so the re-check was not a formality. Method: AST-parsed every `tests/test_*.py`
+function (911 total, up from 873), then flagged same-file pairs by `SequenceMatcher` body-similarity
+(≥0.85 ratio, a tighter bar than the original pass's name/shape clustering — this one compares actual
+test bodies, not just name+LOC/assert/mock shape) — 29 pairs surfaced, all read against source.
+
+Every pair newly introduced since the original audit — `test_show_marks_a_tombstoned_external_stale`
+vs `test_show_marks_a_no_egress_external_withheld` (`test_cli.py`, lode-8d2's three-valued external
+state), `test_gate_reenrich_identical_vectors_is_immaterial_enqueues_no_enrich` vs
+`test_gate_reenrich_orthogonal_vectors_is_material_enqueues_enrich` (`test_externals.py`, lode-w0h.5's
+materiality gate), `test_run_refresh_dead_letter_writes_tombstone_snapshot` vs
+`test_reclaim_refresh_dead_letter_writes_tombstone_snapshot` (`test_worker.py`, lode-at8 — same
+dead-letter hook fired from two different code paths: direct `run_one` vs the crash-reclaim sweep) —
+turned out to be the same signature this audit already documented: same shape, different target state
+or code path, genuine independent coverage. Every remaining flagged pair (the `test_staleness.py`
+reanchor sets, `test_worker.py`'s registry trio, `test_drawdown.py`'s URL-normalization tests, etc.)
+predates this audit and is already accounted for in the [.3 consolidation checklist](#lode-b4w3-checklist-consolidation-groups)
+or the [near-duplicate pairs section](#near-duplicate-pairs-checked-and-cleared) above.
+
+**Outcome: still zero exact-duplicate or redundant tests.** No deletions executed — manufacturing one
+to have something to close with would just be .4's cutoff tradeoff done without sign-off, which this
+ticket explicitly rules out. `nox -t fix` / `nox -s tests` re-confirmed green with no test changes
+(wall-clock unchanged from this doc's baseline — no pruning to diff against). This is the correct,
+expected "nothing to delete" outcome the ticket describes, re-verified rather than assumed.
+
 ## lode-b4w.3 checklist (consolidation groups)
 
 Every group below is a **structural** finding (symmetric code paths tested via parallel, near-identical
