@@ -231,7 +231,8 @@ def test_event_loop_lag_during_related_notes_pass(
 ) -> None:
     """THE load-bearing question: does the passive pass actually yield the event loop?
 
-    Reproduces capture.py's ``_search_related`` exactly: ``asyncio.to_thread``
+    Reproduces ``RelatedNotesPanel._search_related`` (lode-aoc; originally
+    capture.py's, before that extraction) exactly: ``asyncio.to_thread``
     wrapping the full ``find_related_notes`` call (FTS5 + the ONNX embedder +
     LanceDB, the whole pass a real keystroke would trigger) on an asyncio event
     loop, while a heartbeat samples loop tick lag throughout. The pass repeats

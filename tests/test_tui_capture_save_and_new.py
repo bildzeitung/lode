@@ -30,6 +30,7 @@ from lode.config import Settings
 from lode.storage import init_db
 from lode.tui import capture as capture_mod
 from lode.tui.app import LodeApp
+from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, RELATED_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import save
@@ -227,9 +228,10 @@ def test_ctrl_n_cas_conflict_routes_to_reconcile_screen_without_reset(
 class _CountingStubEmbedder:
     """Offline embedder stand-in that counts constructions (no ONNX download).
 
-    Reused from ``tests/test_tui_app.py``'s convention. ``_search_related``
-    calls ``_ensure_embedder`` before anything else, so a non-zero count is a
-    precise witness that a related-notes pass *ran at all*: if
+    Reused from ``tests/test_tui_app.py``'s convention. ``RelatedNotesPanel.
+    _search_related`` (lode-aoc) calls ``_ensure_embedder`` before anything
+    else, so a non-zero count is a precise witness that a related-notes pass
+    *ran at all*: if
     :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new`'s reset
     failed to stop the pending debounce timer (or the guard in
     ``on_text_area_changed`` failed to skip scheduling one for the now-empty
@@ -278,16 +280,20 @@ def test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass(
     assert _CountingStubEmbedder.instances == 0
 
 
-def _slow_find_related_notes(db_path, draft, *, settings=None, embedder=None):
+def _slow_find_related_notes(
+    db_path, draft, *, settings=None, embedder=None, exclude_note_id=None
+):
     """Stand-in for a slow pass, faithful to the real function's short-circuit.
 
     ``find_related_notes`` returns ``[]`` immediately for a draft shorter than
     ``related_notes_min_chars`` without touching the DB or the embedder, so this
     stub must too -- otherwise a *new* pass on the just-emptied buffer would
     also return the stale result, and a test asserting "no stale result" would
-    pass whether or not the in-flight pass was actually cancelled.
+    pass whether or not the in-flight pass was actually cancelled. Accepts
+    (and ignores) ``exclude_note_id`` (lode-aoc) purely to match the real
+    function's signature -- ``RelatedNotesPanel`` always passes it through.
     """
-    del embedder
+    del embedder, exclude_note_id
     min_chars = settings.related_notes_min_chars if settings else 20
     if len(draft.strip()) < min_chars:
         return []
@@ -337,8 +343,8 @@ def test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset(
             # worker would have time to land and repaint the panel.
             await pilot.pause(0.5)
             await app.workers.wait_for_complete()
-            panel = app.screen.query_one(f"#{RELATED_ID}")
-            return app.screen._related, str(panel.content)
+            panel = app.screen.query_one(f"#{RELATED_ID}", RelatedNotesPanel)
+            return panel._related, str(panel.content)
 
     related, panel_text = asyncio.run(_drive())
 
@@ -373,8 +379,8 @@ def test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker(
             text_area.text = ""  # select-all, delete -- not Ctrl+N
             await pilot.pause(0.5)
             await app.workers.wait_for_complete()
-            panel = app.screen.query_one(f"#{RELATED_ID}")
-            return app.screen._related, str(panel.content)
+            panel = app.screen.query_one(f"#{RELATED_ID}", RelatedNotesPanel)
+            return panel._related, str(panel.content)
 
     related, panel_text = asyncio.run(_drive())
 
