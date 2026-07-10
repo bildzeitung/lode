@@ -382,6 +382,32 @@ are catalogued in [configuration.md](configuration.md).
   itself. Either requires updating `coding.md`, `code-reviewer.md`, and `land/SKILL.md`'s GC section
   together so the hand-off contract and the GC contract don't drift apart.
 
+- **The revisit trigger above fired: `/land`'s GC backstop was blind to `land/<id>`-branched
+  worktrees, and to dangling local `land/<id>` refs (lode-r78, decided 2026-07-10).** The
+  lode-k5e/lode-8k3 architecture change (above) means the reviewer and a rebase pickup each check
+  `land/<id>` out into their **own** fresh worktree, not the builder's — exactly the new worktree shape
+  the "no `land/<id>` branch is ever checked out in any worktree" note (above, describing the state
+  *before* that decision) stopped being true of. `/land`'s per-ticket GC net only knows one worktree per
+  ticket (`metadata.review_worktree`), and the lode-9j7 backstop sweep matched only
+  `branch ~ /^worktree-agent-/` — so a ticket reviewed across multiple cycles left *extra*
+  `land/<id>`-branched worktrees neither net could see, and they accumulated indefinitely (5 observed
+  live on one pass, plus older ones rooted at already-`closed` tickets going back weeks — precisely the
+  "worktree found rooted at an already-closed ticket (GC actually missing one)" trigger condition
+  above). Local `land/<id>` branch refs had the same gap for a narrower reason: the per-ticket removal
+  only runs `git branch -D` when it also finds a matching worktree, so a ref that lost its worktree by
+  any other path lingered even after `origin/land/<id>` was deleted.
+
+  **Fix (minimal, no architecture change):** extend the backstop sweep's branch match from
+  `^worktree-agent-` to also match `^land/`, under the *same* `locked`+`merged-into-trunk` guard already
+  used for `worktree-agent-*` (an in-flight `land/<id>` worktree is excluded because its branch hasn't
+  merged into `trunk` yet, or because the worktree is locked mid-build/-review — never both false for
+  live work). Add a second, independent backstop step that deletes any local `land/<id>` branch ref
+  whose `origin/land/<id>` counterpart is gone: an in-flight ticket's remote branch always exists (only
+  `/land` itself deletes it, only after landing/bounce/drop), so "remote absent" is sufficient signal on
+  its own — no extra locked/merged check needed, since `git branch -D` already refuses harmlessly if the
+  ref is still checked out in some worktree. See
+  [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors).
+
 - **Dead-lettered `refresh` jobs tombstone their external: a `worker.py` terminal-transition hook, not
   a reconcile sweep (lode-at8, decided 2026-07-09).** The gap: a `refresh` job that exhausts its
   retries and reaches `dead` left no record against the external at all — `head_snapshot_id` stayed
