@@ -131,10 +131,14 @@ Aggregate call-time by file (top contributors; full table in the companion CSV):
 | `test_tui_capture_save_and_new.py` | 5.29s | 10 |
 | `test_eval_harness.py` | 4.17s | 6 |
 
-Only **11 tests** across 3 files carry `@pytest.mark.slow` (`test_cli.py`: 5, `test_skeleton_gate.py`:
-4 by grep / 3 detected via AST decorator inspection — one is applied at class or module scope, not
-worth reconciling further here; `test_eval_live.py`: 2, one of which is the self-skipping live-eval
-test). That accounts for essentially all of the ~35s gap between the unit and full tiers. The
+Only **8 tests** across 3 files carry `@pytest.mark.slow` (`test_cli.py`: 4, `test_skeleton_gate.py`:
+3, `test_eval_live.py`: 1) — the matrix's `slow` column, the CSV's `slow=True` rows, and the **8
+deselected** in the unit-tier baseline above all agree on 8. (A naive `grep -c '@pytest.mark.slow'`
+returns 11 across these three files, but the extra hits are docstring/comment *mentions* of the marker
+string — `test_cli.py` line 1304, `test_skeleton_gate.py` line 43, `test_eval_live.py` line 66 — not
+decorated tests; `test_eval_live.py` in particular has only one test total. The AST-derived count in
+the matrix is the real one.) That accounts for essentially all of the ~35s gap between the unit and
+full tiers. The
 remaining ~142s unit-tier cost is **not** concentrated in a marker-filterable set — it's spread across
 real per-test TUI-pilot startup cost (`test_tui_*` files collectively) and un-mocked CLI/model-load
 paths that aren't marked `slow` today. That's squarely [lode-b4w.6](#appendix-c-what-this-audit-deliberately-left-to-lode-b4w6)'s
