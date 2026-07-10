@@ -250,13 +250,15 @@ string-sniff the suffix just to style a stale tag differently — exactly the fo
 coupling this shared view-model seam exists to prevent, and cheap to fix only while both consumers
 were still unbuilt.
 
-**The predicate** (pinned 2026-07-08, bd `lode-ay5.1`), evaluated against the head's
-`target_version`/`source_version`:
+**The predicate** (pinned 2026-07-08, bd `lode-ay5.1`; `"failed"` bucket corrected 2026-07-08, bd
+`lode-bvg`), evaluated against the head's `target_version`/`source_version`:
 
-- `"pending"` — the head has a live (`pending`/`running`) `type='enrich'` job.
-- `"failed"` — no live job, but a dead/failed one (`status` in `failed`/`dead`) exists AND zero
-  `source='ai'` rows (annotations or edges) exist for the head's `source_version` — a dead-lettered
-  enrich job surfaced honestly rather than misread as "enriched, nothing found."
+- `"pending"` — the head has a live (`pending`/`running`/`failed`) `type='enrich'` job. `worker.py`
+  writes `status='failed'` only in the else-branch of its max-attempts gate, so a `'failed'` job
+  always has a retry coming — it is pending work, not a terminal outcome.
+- `"failed"` — no live job, but a dead-lettered one (`status='dead'`) exists AND zero `source='ai'`
+  rows (annotations or edges) exist for the head's `source_version` — a dead-lettered enrich job
+  surfaced honestly rather than misread as "enriched, nothing found."
 - `"ready"` — otherwise: either the head has real AI output, or there was never an enrich job for it.
 
 Async enrichment makes an empty section ambiguous ("hasn't run yet" vs. "ran and found nothing" vs.
@@ -280,12 +282,6 @@ renders entirely from this seam (no independent `display_annotations`/`display_e
 own) and is at CONTENT parity with the TUI modal: it gained edge `reason`/`confidence` (compact, e.g.
 `-> to_id (reason, 0.82)[stale]`) and an `enrichment:` status line ({pending, failed, ready}), neither
 of which the pre-ay5.3 CLI printed.
-
-Known caveat, not fixed here (bd `lode-bvg`, awaiting a human decision): the pinned predicate's
-`"failed"` bucket includes `status='failed'`, which `schema.sql` documents as the *transient*
-last-error state a backoff retry resets from — so a note whose enrich hit a transient error reads
-`enrichment: failed` for its retry backoff window, then `pending`, then `ready`, even though it was
-never dead-lettered. Both consumers (the modal, `lode show`) inherit this as-is.
 
 ### Provenance & user override
 
