@@ -32,7 +32,11 @@ retries, then claim+run ready pending jobs until none remain and exit.
   (:func:`lode.drawdown.detect_and_enqueue_drawdown`, called from
   :meth:`lode.repository.Repository.save`) enqueues the *first* ``refresh``
   job for a source; ``lode-w0h.6``'s later refresh policy reuses this same
-  handler unchanged and adds only staleness/scheduling on top.
+  handler unchanged and adds only staleness/scheduling on top. Also registers
+  a **dead-letter hook** (:func:`_refresh_dead_letter_hook`, lode-at8, see
+  "Dead-letter hook" below) — a ``refresh`` job exhausting its retries writes
+  a tombstone snapshot rather than leaving the external's ``head_snapshot_id``
+  permanently ``NULL``.
 
 **Batch pre-steps (lode-npx.2)** run at the top of every :func:`drain` pass,
 before the main claim-run loop:
@@ -75,6 +79,29 @@ belt-and-suspenders behind the single-owner advisory lock.
   ``_reset_retryable`` at the *start* of each pass so overdue retries are
   picked up without a separate scheduler
 - max-attempts gate → ``status='dead'`` (terminal poison)
+
+**Dead-letter hook (lode-at8):** immediately after *either* dead-letter gate
+above commits (:func:`run_one`'s max-attempts gate, or
+:func:`_reclaim_stale_running`'s crash-reclaim gate), :func:`_run_dead_letter_hook`
+invokes whatever hook :func:`register_dead_letter` registered for that job's
+``type`` — a no-op if none was. Only ``refresh`` registers one today
+(:func:`_refresh_dead_letter_hook`): it tombstones the external
+(:func:`lode.externals.ingest_snapshot`, ``status='tombstone'``) so a
+permanently-failed draw-down no longer looks identical, at the schema level,
+to one still in flight (docs/externals.md "Draw-down rules" already documented
+this as "on dead, the caller writes a tombstone snapshot" — this hook is that
+caller). ``embed``/``enrich`` register no hook: neither ticket that touched
+their dead-letter observability (lode-bvg) needed a write-side fix, only a
+corrected *read* of the existing three-value ``enrichment_state``. The hook
+runs as its **own, separate transaction**, sequentially *after* the
+dead-status UPDATE's transaction has already committed — never nested in the
+same ``with conn:`` — mirroring this codebase's established "sequential, not
+nested" composition of standalone-transactional functions (e.g.
+:func:`lode.drawdown.refresh_external`'s own ingest-then-repoint sequence). A
+crash between the two commits leaves a job ``'dead'`` with no dead-letter
+side effect recorded yet — a narrow, accepted gap (the job row itself already
+carries the diagnostic in ``last_error``; nothing sweeps this gap today). See
+``docs/decisions.md`` for the (a)-vs-(b) mechanism choice and rationale.
 
 **Crash recovery** (lode-aor): if the worker (or the CLI's inline
 immediate-enrich fast path) crashes mid-run, a job can be left in
@@ -132,6 +159,62 @@ def register(job_type: str, handler: HandlerFn) -> None:
 def registered_types() -> tuple[str, ...]:
     """Return the job types the module-level registry can handle."""
     return tuple(_REGISTRY)
+
+
+#: Dead-letter hook signature: (conn, target_version, last_error, settings) -> None
+#:
+#: Invoked once, immediately after a job of the registered ``type`` reaches
+#: the terminal ``'dead'`` status — never on a transient ``'failed'`` that
+#: still has a retry coming. See the module docstring's "Dead-letter hook"
+#: section for the transaction-composition contract (own transaction,
+#: sequential not nested).
+DeadLetterFn = Callable[[sqlite3.Connection, str, str, Settings], None]
+
+#: Module-level dead-letter hook registry — maps ``jobs.type`` → hook.
+#:
+#: Distinct from :data:`_REGISTRY` (the run handlers): a job type can be
+#: fully functional with no dead-letter hook registered (``embed``/``enrich``
+#: register none today). Populated at module load by :func:`register_dead_letter`.
+_DEAD_LETTER_HOOKS: dict[str, DeadLetterFn] = {}
+
+
+def register_dead_letter(job_type: str, hook: DeadLetterFn) -> None:
+    """Register ``hook`` to run once when a ``job_type`` job reaches ``'dead'``."""
+    _DEAD_LETTER_HOOKS[job_type] = hook
+
+
+def _run_dead_letter_hook(
+    conn: sqlite3.Connection,
+    job_type: str,
+    target_version: str,
+    last_error: str,
+    settings: Settings,
+) -> None:
+    """Invoke ``job_type``'s registered dead-letter hook, if any (no-op otherwise).
+
+    Best-effort: the job's status is already durably committed to ``'dead'``
+    before this runs (:func:`run_one`'s max-attempts gate, or
+    :func:`_reclaim_stale_running`'s crash-reclaim gate), so a hook that raises
+    must never propagate and abort the drain loop — nor bubble out of the
+    interactive ``lode add`` immediate-enrich path, which calls
+    :func:`run_one` directly with no wrapping ``try``. A failed hook degrades
+    to exactly the narrow, already-accepted gap this module documents (the
+    external's tombstone is simply not written yet, its diagnostic still on the
+    job row's ``last_error``) rather than taking down the worker. The failure
+    is logged at ``error`` level so it stays observable.
+    """
+    hook = _DEAD_LETTER_HOOKS.get(job_type)
+    if hook is None:
+        return
+    try:
+        hook(conn, target_version, last_error, settings)
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "dead-letter hook for job type %r (target=%s) failed; job remains "
+            "'dead' but its dead-letter side effect was not recorded",
+            job_type,
+            target_version,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +307,11 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
 
     Applies uniformly to every job ``type`` (``embed``, ``enrich``, ``refresh``)
     — the staleness signal is the same regardless of what kind of work was
-    interrupted.
+    interrupted. A job reclaimed straight to ``'dead'`` (attempts already
+    exhausted) runs the same dead-letter hook (lode-at8, module docstring)
+    :func:`run_one` does — invoked *after* this function's own ``with conn:``
+    batch has committed, so a crash mid-reclaim never leaves a hook call
+    racing an uncommitted status write.
 
     Returns the count of jobs reclaimed.
     """
@@ -232,7 +319,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
         datetime.now(UTC) - timedelta(seconds=settings.stale_running_timeout_s)
     )
     rows = conn.execute(
-        "SELECT id, attempts FROM jobs "
+        "SELECT id, attempts, type, target_version FROM jobs "
         "WHERE status = 'running' AND batch_handle IS NULL "
         "AND (claimed_at IS NULL OR claimed_at <= ?)",
         (cutoff,),
@@ -242,9 +329,10 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
         return 0
 
     reclaimed = 0
+    newly_dead: list[tuple[str, str]] = []  # (job_type, target_version)
     err = "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
     with conn:
-        for job_id, attempts in rows:
+        for job_id, attempts, job_type, target_version in rows:
             new_attempts = attempts + 1
             if new_attempts >= settings.retry_max_attempts:
                 cur = conn.execute(
@@ -252,6 +340,8 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                     "WHERE id = ? AND status = 'running'",
                     (new_attempts, err, job_id),
                 )
+                if cur.rowcount:
+                    newly_dead.append((job_type, target_version))
             else:
                 next_at = _backoff_next_attempt_at(new_attempts, settings)
                 cur = conn.execute(
@@ -261,6 +351,9 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                     (new_attempts, err, next_at, job_id),
                 )
             reclaimed += cur.rowcount
+
+    for job_type, target_version in newly_dead:
+        _run_dead_letter_hook(conn, job_type, target_version, err, settings)
 
     return reclaimed
 
@@ -419,6 +512,10 @@ def run_one(
                 new_attempts,
                 err,
             )
+            # Own, separate transaction — after the dead-status UPDATE above
+            # has committed, never nested in the same `with conn:` (lode-at8,
+            # module docstring "Dead-letter hook").
+            _run_dead_letter_hook(conn, job_type, target_version, err, settings)
         else:
             next_at = _backoff_next_attempt_at(new_attempts, settings)
             with conn:
@@ -837,3 +934,66 @@ def _refresh_handler(
 
 # Register the refresh handler on module load.
 register("refresh", _refresh_handler)
+
+
+# ---------------------------------------------------------------------------
+# Refresh dead-letter hook (registered at module load — lode-at8)
+# ---------------------------------------------------------------------------
+
+
+def _refresh_dead_letter_hook(
+    conn: sqlite3.Connection,
+    target_external_id: str,
+    last_error: str,
+    settings: Settings,
+) -> None:
+    """Tombstone ``target_external_id`` when its 'refresh' job dead-letters (lode-at8).
+
+    Closes the gap :mod:`lode.webfetch` and ``docs/externals.md`` already
+    documented but nothing implemented: a TRANSIENT fetch failure
+    (408/429/5xx/network) is not written as a snapshot by the fetch unit
+    itself — it rides this module's existing attempts/backoff/dead-letter
+    machinery, and "on dead, the caller writes a tombstone snapshot so the
+    note edge still resolves" (docs/externals.md "Fetch-outcome taxonomy").
+    This hook is that caller.
+
+    Writes via :func:`lode.externals.ingest_snapshot` under the exact same
+    ``status='tombstone'`` convention a PERMANENT (non-retrying) fetch
+    failure already uses (:func:`lode.externals.tombstone_body`), so a URL
+    that dies after exhausting retries is indistinguishable, at the schema
+    level, from one that failed permanently on its very first fetch — both
+    leave ``externals.head_snapshot_id`` pointing at a tombstone row rather
+    than ``NULL``. The tombstone body folds in ``last_error`` (the job's own
+    diagnostic, already persisted on the job row) so the record satisfies the
+    ticket's "carrying the failure and its last error" acceptance criterion
+    without a schema change — no new column, no new table.
+
+    If ``target_external_id`` already has an ``ok`` head snapshot (i.e. a
+    *later* refresh — ``lode-w0h.6``'s staleness policy, not the
+    paste-triggered first draw-down — is the one that exhausted retries),
+    this still moves the head to a tombstone: the dead-letter terminal means
+    "retrying will not help right now", and docs/externals.md's
+    TRANSIENT-failure row commits to writing a tombstone on ``dead``
+    unconditionally, with no "unless there's prior content" carve-out. See
+    ``docs/decisions.md`` for the rationale (recorded alongside the (a)
+    worker-hook vs (b) reconcile-sweep mechanism choice).
+
+    Deferred import mirrors :func:`_refresh_handler`: keeps the
+    httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
+    cost off code paths where no ``refresh`` job has ever dead-lettered.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot, tombstone_body
+
+    ingest_snapshot(
+        conn,
+        target_external_id,
+        SOURCE_TYPE_WEB,
+        tombstone_body(f"dead: {last_error}"),
+        status="tombstone",
+        settings=settings,
+    )
+
+
+# Register the refresh dead-letter hook on module load.
+register_dead_letter("refresh", _refresh_dead_letter_hook)
