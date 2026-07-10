@@ -233,6 +233,32 @@ are catalogued in [configuration.md](configuration.md).
   any landing-side shared state — see the concurrent-`bd dolt push` validation above. Distributed
   cross-machine landing (the `refs/locks/land` ref, above) stays separately deferred; this invariant
   does not un-defer it, it just states plainly what was always assumed.
+- **`/code` invocation topology — concurrent invocations documented as unsupported, not locked
+  (lode-pzr).** Surfaced by the lode-t83 technical reviewer: `/code`'s step-0 `needs-rebase` sweep and
+  step-1 stranded-`ready-for-code-review` sweep (lode-t83) both select a ticket by **label**, and that
+  label is only cleared at the very *end* of the agent the sweep dispatches — so a *second*, concurrent
+  `/code` invocation's sweep can select the same ticket while the first invocation's agent is still
+  live, and dispatch a second agent onto the same builder worktree via `git -C`. This is distinct from
+  producer-level fan-out (the previous entry): **within** one invocation each producer/reviewer works a
+  ticket that invocation itself resolved, so they never collide; the race is specifically two *separate*
+  `/code` invocations each running their own start-of-run sweep. Today's consequence is benign (the
+  loser's push non-fast-forward-rejects; clean-tree assertions guard the worktree), which is why
+  lode-t83 didn't treat it as a regression to fix inline — but "benign today" is an observation about
+  current code paths, not an invariant. **Decision: document it as unsupported (option (a) from
+  lode-pzr's design), not build a claim mechanism (option (b)).** Rationale: `/code` fan-out already
+  parallelizes within one invocation across the whole ready frontier, so a second concurrent invocation
+  buys negligible extra parallelism for the cost of a claim-before-dispatch mechanism on *both* sweeps.
+  Mirrors how the entry above states `/land`/`/epic-audit`/`/sweep`'s one-machine invariant by
+  documentation rather than a distributed lock — same shape of tradeoff, cheaper fix for a race with no
+  observed harmful failure. Recorded in
+  [agents-workflow.md](agents-workflow.md#the-coding-loop--code--coding--code-reviewer) and
+  [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md): run only **one** `/code` invocation
+  at a time against a given repo; get more parallelism by passing more IDs (or bare `/code`) to that
+  same invocation. **Revisit if:** concurrent `/code` invocations become an actual desired mode (e.g.
+  two humans/agents each wanting to drive their own fan-out simultaneously) — then a per-ticket claim
+  stamp (label swap or metadata, applied by the sweep *before* dispatching, on both step 0 and step 1)
+  is the right mechanism, at per-ticket granularity — explicitly **not** a lockfile like `/land`'s,
+  since the contended resource here is a per-ticket worktree, not a single shared `trunk` write path.
 - **Review architecture — the reviewer checks the branch out into its own worktree; the `git -C
   <builder-worktree>` architecture is retired (lode-k5e, lode-8k3).** Both `code-reviewer` (its
   technical review) and `coding`'s rebase-pickup cycle used to stay in their own launch worktree and

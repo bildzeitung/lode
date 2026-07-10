@@ -117,6 +117,25 @@ is **no `/code-parallel`**. (Skill:
 [`.claude/agents/coding.md`](../.claude/agents/coding.md),
 [`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md).)
 
+**Topology — run only one `/code` invocation at a time (concurrent invocations unsupported,
+lode-pzr).** Fan-out (N builders in parallel) is safe and is the supported way to get parallelism —
+each producer works a distinct ticket in its own worktree and pushes its own `land/<id>` branch, so
+producers never collide with each other. But `/code` also sweeps for stranded work at the *start* of
+every invocation — `needs-rebase` kick-backs and stranded `ready-for-code-review` re-entries — and
+those sweeps select on a ticket's **label**, which is only cleared at the very *end* of the agent
+dispatched at it. Two concurrent `/code` invocations can therefore both sweep in a ticket whose
+agent from the *other* invocation is still live, and dispatch a second agent onto the same worktree
+via `git -C`. The observed consequence today is benign (the loser's push non-fast-forward-rejects;
+clean-tree assertions guard the worktree), but it is a race, not an invariant — so, mirroring how
+`/land` states its one-lander, one-machine topology invariant ([below](#mechanics-decided)), `/code`
+states its own: **don't start a second `/code` while one is still running against this repo; pass
+more IDs (or use bare `/code`) to the same invocation instead.** This is narrower than `/land`'s
+rule — it only forbids a *second concurrent invocation*, not a second machine outright, since a lone
+`/code` invocation's own builders already may legitimately fan out across machines (see the coding
+loop's [producers may fan out across machines](#running-the-loop-family-unattended--epic-audit-sweep)
+note) as long as no other invocation's sweep is running concurrently with them. See
+[decisions.md](decisions.md) for the rationale.
+
 Argument resolution:
 
 - **No argument** (the default) / **`--all-ready`** → fan out across the **independent, unblocked**
@@ -264,7 +283,9 @@ that a second and third landing-side loop exist alongside it — the lock only e
 `/land` ticks on that one machine, and says nothing about where `/epic-audit` or `/sweep` run, so the
 convention has to be named, not assumed. `/code` producers are the one leg that **may** fan out across
 machines, because they write disjoint issue rows and push branches rather than touching any
-landing-side shared state.
+landing-side shared state — but only *within* one `/code` invocation: two *concurrent* `/code`
+invocations are unsupported, because their start-of-run sweeps race (lode-pzr; see [the coding
+loop's topology note](#the-coding-loop--code--coding--code-reviewer)).
 
 Two further safeguards a `/debate` pass considered for this unattended story — a `/land`
 bounce-lineage cap and a `/code` rebase-attempt cap — were deliberately **deferred**, and an
