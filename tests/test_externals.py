@@ -7,12 +7,20 @@ tombstone snapshot (not scaffolding); an ``embed`` job (never ``enrich``) is
 enqueued on every non-deduped ``ok`` ingest; and a ``tombstone`` ingest
 enqueues no ``embed`` job at all (decision, bd lode-w0h.2, 2026-07-08 — a
 failed fetch must not become a retrievable/citable vector).
+
+Also covers the read-enablement extension (lode-c5l, rebuild of the bounced
+lode-w0h.8): a non-deduped ``ok`` ingest synchronously drives the FTS leg
+(``passages`` + ``passages_fts``), chunking ``redact_before_index(body)`` —
+never the raw body — so a secret in a fetched page never lands in the local
+index; a ``tombstone`` gets neither the FTS write nor the ``embed`` enqueue.
 """
 
 from pathlib import Path
 
 import pytest
 
+from lode.config import load_settings
+from lode.embedding import embed
 from lode.hashing import content_snapshot_id
 from lode.externals import (
     IngestResult,
@@ -268,6 +276,167 @@ def test_ingest_fetch_result_redirect_cap_tombstone_has_no_raw_payload(conn) -> 
     ).fetchone()
     assert body == "[tombstone: too_many_redirects]"
     assert raw_payload is None
+
+
+# --- synchronous FTS on ingest (lode-c5l) ---------------------------------------
+
+
+def _fts_hits(conn, target_version: str):
+    return conn.execute(
+        "SELECT passage_id FROM passages_fts WHERE target_version = ?",
+        (target_version,),
+    ).fetchall()
+
+
+def test_ok_ingest_synchronously_populates_passages_and_fts(conn) -> None:
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "alpha content here")
+
+    (passage_count,) = conn.execute(
+        "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchone()
+    assert passage_count >= 1
+    assert len(_fts_hits(conn, result.snapshot_id)) == passage_count
+    # Directly keyword-findable via FTS5, no embed worker involved.
+    rows = conn.execute(
+        "SELECT passage_id FROM passages_fts WHERE passages_fts MATCH 'alpha'"
+    ).fetchall()
+    assert rows
+
+
+def test_changed_body_reindexes_fts_for_the_new_head_only(conn) -> None:
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "alpha")
+    second = ingest_snapshot(conn, _EXTERNAL_ID, "web", "beta")
+
+    # Both snapshots keep their own passage rows (soft history, like note heads)...
+    assert _fts_hits(conn, first.snapshot_id)
+    assert _fts_hits(conn, second.snapshot_id)
+    # ...but each snapshot's FTS rows carry only its own body's terms.
+    rows = conn.execute(
+        "SELECT passage_id FROM passages_fts WHERE passages_fts MATCH 'alpha'"
+    ).fetchall()
+    assert {r[0] for r in rows} == {p[0] for p in _fts_hits(conn, first.snapshot_id)}
+
+
+def test_tombstone_ingest_writes_no_passages_or_fts_rows(conn) -> None:
+    result = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_403"), status="tombstone"
+    )
+
+    (passage_count,) = conn.execute(
+        "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchone()
+    assert passage_count == 0
+    assert _fts_hits(conn, result.snapshot_id) == []
+
+
+def test_deduped_identical_refetch_does_not_rewrite_fts(conn) -> None:
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "alpha content")
+    (before,) = conn.execute(
+        "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "alpha content")  # identical refetch
+
+    (after,) = conn.execute(
+        "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+    assert after == before
+
+
+# --- redact-before-index on the FTS leg (lode-c5l bounce fix) -------------------
+#
+# THE BOUNCE: the predecessor branch (land/lode-w0h.8 @ 53caca8) chunked the
+# RAW body on the FTS leg while the vector leg (embed) independently redacted
+# it — a split-brain that made a pasted secret directly keyword-retrievable,
+# violating the redact-before-index invariant (lode-n60) docs/externals.md
+# spells out. These are the regression tests the bounce ticket required.
+
+
+def test_ok_ingest_redacts_a_secret_before_fts_index(conn) -> None:
+    """(a)+(b)+(d) of the acceptance criteria: FTS/passages hold the redacted
+    form, never the secret; snapshots.body still holds the original."""
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"mirrored page contents\ncreds: {secret} keep private\n"
+
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", body)
+
+    fts_rows = conn.execute(
+        "SELECT text FROM passages_fts WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchall()
+    assert fts_rows, "sanity: the body chunked to at least one passage"
+    assert not any(secret in text for (text,) in fts_rows)
+    passage_rows = conn.execute(
+        "SELECT text FROM passages WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchall()
+    assert not any(secret in text for (text,) in passage_rows)
+    # snapshots.body (the irreplaceable mirrored copy) still carries the raw
+    # secret — only the text handed to chunk() is redacted, exactly as
+    # versions.body is never touched by the note-side redaction either.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM snapshots WHERE snapshot_id = ?", (result.snapshot_id,)
+    ).fetchone()
+    assert secret in stored_body
+
+
+def test_leg_parity_fts_and_embed_chunk_identical_redacted_text(
+    conn, tmp_path: Path
+) -> None:
+    """No orphaned trailing passages row after the embed worker drains.
+
+    LexicalCacheBackend.index documents that "the embed worker re-writes the
+    same rows later (same deterministic passage_ids)" — that assumption only
+    holds if the FTS leg and the vector leg chunk IDENTICAL text. Before the
+    lode-c5l fix, FTS chunked the raw body and embed chunked the redacted
+    body: if redaction shortened the body enough to drop a trailing chunk,
+    embed's INSERT OR REPLACE would overwrite ords 0..n-1 and leave a
+    trailing raw-text passages row orphaned (which expand_parents would then
+    build Q&A context from). Asserting the two legs converge to the exact
+    same passages rows (ids, ords, and text) closes that gap.
+    """
+
+    class _StubEmbedder:
+        def embed_passages(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] for _ in texts]
+
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    body = (
+        f"mirrored page contents\ncreds: {secret} keep private\n"
+        "## More section\nAdditional prose so the body chunks into more than "
+        "one passage, exercising the trailing-chunk orphan case.\n"
+    )
+    # Small overridden vector dim so the stub embedder's 1-wide vectors match
+    # the LanceDB table's fixed schema width (mirrors tests/test_embedding.py).
+    settings = load_settings(embedding_vector_dim=1)
+
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", body, settings=settings)
+    fts_leg_rows = conn.execute(
+        "SELECT passage_id, ord, char_range, text FROM passages "
+        "WHERE target_version = ? ORDER BY ord",
+        (result.snapshot_id,),
+    ).fetchall()
+
+    embed(
+        conn,
+        result.snapshot_id,
+        lance_dir=tmp_path / "vectors",
+        embedder=_StubEmbedder(),
+        settings=settings,
+    )
+    after_embed_rows = conn.execute(
+        "SELECT passage_id, ord, char_range, text FROM passages "
+        "WHERE target_version = ? ORDER BY ord",
+        (result.snapshot_id,),
+    ).fetchall()
+
+    assert fts_leg_rows, "sanity: the body chunked to at least one passage"
+    assert after_embed_rows == fts_leg_rows  # no orphaned/diverging rows
+    assert not any(secret in row[3] for row in after_embed_rows)
 
 
 # --- IngestResult shape --------------------------------------------------------

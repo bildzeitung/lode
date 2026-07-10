@@ -19,7 +19,8 @@ from pathlib import Path
 import pytest
 
 from lode.config import load_settings
-from lode.embedding import EmbeddingCacheBackend
+from lode.embedding import EmbeddingCacheBackend, embed
+from lode.externals import ingest_snapshot
 from lode.lexical import LexicalCacheBackend, LexicalHit
 from lode.repository import CompositeCache, Repository
 from lode.retrieval import (
@@ -123,6 +124,49 @@ def test_live_head_versions_empty_on_empty_db(conn) -> None:
     assert live_head_versions(conn) == []
 
 
+# --- live_head_versions: unions in external heads too (lode-c5l) ---------------
+#
+# DECISION A (docs/externals.md): a mirrored snapshot must be a DIRECT hit on
+# its own content, not only reachable via graph-expansion from a citing note.
+# _insert_external_snapshot is defined further below (small-to-big / trust_rank
+# section) but usable here — the whole module is parsed before any test runs.
+
+
+def test_live_head_versions_unions_in_current_external_snapshot(repo, conn) -> None:
+    v = repo.save("note-a", "alpha").version_id
+    current = _insert_external_snapshot(
+        conn, external_id="EXT-1", snapshot_id="snap-current", is_head=True
+    )
+
+    heads = set(live_head_versions(conn))
+
+    assert heads == {v, current}
+
+
+def test_live_head_versions_excludes_stale_external_snapshot(conn) -> None:
+    _insert_external_snapshot(
+        conn, external_id="EXT-1", snapshot_id="snap-old", is_head=False
+    )
+
+    assert live_head_versions(conn) == []
+
+
+def test_live_head_versions_excludes_tombstoned_head_snapshot(conn) -> None:
+    """A source whose only-ever snapshot is a tombstone stays out of the allow-list."""
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES ('EXT-1', 'web')"
+    )
+    conn.execute(
+        "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+        "VALUES ('snap-tomb', 'EXT-1', '[tombstone: http_404]', 'tombstone')"
+    )
+    conn.execute(
+        "UPDATE externals SET head_snapshot_id = 'snap-tomb' WHERE external_id = 'EXT-1'"
+    )
+
+    assert live_head_versions(conn) == []
+
+
 # --- the lexical leg: ranked, same unit, heads only ----------------------------
 
 
@@ -198,6 +242,105 @@ def test_vector_search_caps_at_k(repo, conn, store) -> None:
 def test_vector_search_empty_db_returns_no_hits(repo, conn, store) -> None:
     # No saves: no live heads, so the leg short-circuits to empty (never queried).
     assert vector_search(store, conn, _query_vector("alpha"), k=10) == []
+
+
+# --- an ingested snapshot is a DIRECT hit, no citing note involved (lode-c5l) --
+#
+# Acceptance: a freshly ingested external snapshot is a direct keyword hit (FTS,
+# synchronous — lode.externals.ingest_snapshot drives the FTS leg itself) and a
+# direct vector hit once the embed worker drains, with no owned note in the
+# picture at all.
+
+
+def test_freshly_ingested_snapshot_is_a_direct_lexical_hit(conn, settings) -> None:
+    result = ingest_snapshot(conn, "https://example.com/x", "web", "alpha content")
+
+    hits = lexical_search(conn, "alpha", k=10)
+
+    assert [h.target_version for h in hits] == [result.snapshot_id]
+
+
+def test_freshly_ingested_snapshot_is_a_direct_vector_hit_after_embed_drains(
+    conn, lance_dir, settings, store
+) -> None:
+    result = ingest_snapshot(conn, "https://example.com/x", "web", "alpha")
+
+    # The embed worker hasn't drained yet: no vector, so no dense hit.
+    assert vector_search(store, conn, _query_vector("alpha"), k=10) == []
+
+    embed(
+        conn,
+        result.snapshot_id,
+        lance_dir=lance_dir,
+        embedder=_BagEmbedder(),
+        settings=settings,
+    )
+
+    hits = vector_search(store, conn, _query_vector("alpha"), k=10)
+    assert [h.target_version for h in hits] == [result.snapshot_id]
+
+
+def test_stale_external_snapshot_is_not_a_direct_hit(conn, settings) -> None:
+    """A superseded snapshot (churn) must not surface as a direct keyword hit."""
+    ingest_snapshot(conn, "https://example.com/x", "web", "alpha one")
+    ingest_snapshot(conn, "https://example.com/x", "web", "alpha two")  # head moves
+
+    hits = lexical_search(conn, "alpha", k=10)
+
+    # Only the current head is a direct hit; the superseded snapshot is not.
+    (n,) = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()
+    assert n == 2  # sanity: churn really did write two snapshots
+    assert len(hits) == 1
+
+
+def test_tombstone_snapshot_is_never_a_direct_hit(conn, settings) -> None:
+    result = ingest_snapshot(
+        conn,
+        "https://example.com/dead",
+        "web",
+        "[tombstone: http_404]",
+        status="tombstone",
+    )
+
+    assert lexical_search(conn, "tombstone", k=10) == []
+    assert result.snapshot_id not in live_head_versions(conn)
+
+
+def test_ingested_snapshot_secret_is_redacted_on_both_direct_legs(
+    conn, lance_dir, settings, store
+) -> None:
+    """The lode-c5l bounce fix, exercised through the full retrieval pipeline.
+
+    A secret in a fetched page must not become directly keyword- or vector-
+    retrievable on either leg — the regression the bounced land/lode-w0h.8
+    branch shipped (FTS chunked the raw body while the vector leg redacted
+    it, a split-brain that made a pasted secret directly keyword-findable).
+    """
+    secret = "AKIAIOSFODNN7EXAMPLE"  # seeded AWS-access-key-id pattern
+    body = f"mirrored page contents\ncreds: {secret} keep private\n"
+
+    result = ingest_snapshot(conn, "https://example.com/secret", "web", body)
+    embed(
+        conn,
+        result.snapshot_id,
+        lance_dir=lance_dir,
+        embedder=_BagEmbedder(),
+        settings=settings,
+    )
+
+    # Positive control: ordinary body content really is retrievable via the
+    # union — proves the secret's absence below is redaction working, not the
+    # snapshot silently missing from live_head_versions.
+    assert [h.target_version for h in lexical_search(conn, "mirrored", k=10)] == [
+        result.snapshot_id
+    ]
+    # (c) a lexical_search for the secret returns no hit.
+    assert lexical_search(conn, build_match_query(secret), k=10) == []
+    # (d) snapshots.body still holds the original, unredacted text.
+    (stored_body,) = conn.execute(
+        "SELECT body FROM snapshots WHERE snapshot_id = ?", (result.snapshot_id,)
+    ).fetchone()
+    assert secret in stored_body
 
 
 # --- both legs rank the SAME passage unit --------------------------------------

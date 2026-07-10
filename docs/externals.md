@@ -118,16 +118,34 @@ spend on noisy sources without letting enrichment rot.
 note save path: dedup on `external_id` (one `externals` row per source, created on first sight),
 compute `snapshot_id` and skip the write entirely when it equals the current head (the identical-
 refetch-is-free case above), otherwise insert the new snapshot and move `head_snapshot_id`. An **`ok`**
-snapshot then enqueues **`embed` only** (never `enrich` — that gate is `lode-w0h.5`'s, decided
-post-embed). A fetch failure ([Draw-down rules](#draw-down-rules) below) writes a *tombstone* snapshot
-whose body is the stable, inspectable marker `"[tombstone: <reason>]"` — itself content-addressed, so
-a source that keeps failing the same way dedups its tombstones too, rather than growing one row per
-retry — but enqueues **no** `embed` job: a failed fetch must not become a retrievable/citable vector
-(decision, `lode-w0h.2`, 2026-07-08; mirrors the owned-note delete path, which likewise is never
-embedded). This write path is deliberately **read-agnostic**: it does not wire a cache backend or make
-the snapshot directly retrievable — that is `lode-w0h.8`, which must in turn exclude tombstones from
-whatever it builds (the retrieval union if it ever embeds them, or the embed-gap reconciliation query
-if not — otherwise a tombstoned external re-enqueues embed forever).
+snapshot then enqueues **`embed`** (never `enrich` — that gate is `lode-w0h.5`'s, decided post-embed)
+and drives the **synchronous FTS leg itself** (`lode-c5l`, rebuild of the bounced `lode-w0h.8`) — the
+same cache-after-commit shape `Repository.save` uses for owned notes, so an ingested snapshot is
+keyword-findable the instant `ingest_snapshot` returns, before the async embed worker ever runs. A
+fetch failure ([Draw-down rules](#draw-down-rules) below) writes a *tombstone* snapshot whose body is
+the stable, inspectable marker `"[tombstone: <reason>]"` — itself content-addressed, so a source that
+keeps failing the same way dedups its tombstones too, rather than growing one row per retry — but
+enqueues **no** `embed` job and writes **no** FTS row: a failed fetch must not become a
+retrievable/citable hit on either leg (decision, `lode-w0h.2`, 2026-07-08, extended to the FTS leg by
+`lode-c5l`; mirrors the owned-note delete path, which likewise is never indexed).
+
+### Externals are directly retrievable
+
+A snapshot's current head is a **direct** lexical/vector candidate on its own content, not only
+reachable via graph-expansion from a citing note: `lode.retrieval.live_head_versions` unions each
+external's non-tombstone `head_snapshot_id` alongside note heads, so both `lexical_search` and
+`vector_search` admit it (`lode-c5l`). A *stale* (non-head) snapshot stays excluded from both direct
+legs by construction — only head pointers are read; `trust_rank` still tiers current-vs-stale for a
+snapshot reached via graph expansion instead. `lode.embedding.embed`'s body resolution is polymorphic
+(versions, then snapshots) so the `embed` job enqueued above runs to completion instead of raising.
+
+**Redact-before-index applies to both legs identically.** The FTS leg chunks
+`redact_before_index(body, settings)`, exactly what the vector leg's `embed` independently redacts —
+so a secret in a fetched page never lands in `passages_fts`/`passages`/LanceDB on either leg, and both
+legs chunk the *same* redacted text (needed for the embed worker's deterministic `passage_id`
+`INSERT OR REPLACE` to land on the same rows rather than orphan a stale one). `snapshots.body` itself
+is left untouched, exactly as `versions.body` is — see [Two redactions, aimed at the right
+legs](#two-redactions-aimed-at-the-right-legs) below.
 
 ---
 
