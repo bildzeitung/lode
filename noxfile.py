@@ -49,6 +49,20 @@ Sessions run inside the already-built project venv (``./venv`` from
 runtime stack is heavy (lancedb, fastembed, textual, ...) and is installed
 once via ``-e .[dev]``, so re-provisioning it per session would be slow with
 no benefit. Activate the venv first, then run nox.
+
+**Parallelism (lode-b4w.6).** Both ``tests`` and ``unit`` run under
+``pytest-xdist`` (``-n auto``, one worker per CPU core). Measured on an
+8-core dev machine, offline (``ANTHROPIC_API_KEY`` unset — see the ambient-key
+determinism note below and lode-7mq for a related, separately-tracked leak):
+``unit`` 151.8s serial -> 33-41s parallel over repeated runs; the full
+``tests`` suite 126.7-133.9s serial -> 39-60s parallel over repeated runs, all
+green. This suite has no shared on-disk state to race on — every test gets its
+own ``$LODE_HOME`` via the autouse ``_isolate_lode_home`` fixture in
+``tests/conftest.py`` (a fresh ``tmp_path_factory`` directory per test), so
+distributing tests across worker processes is safe; repeated runs stayed green
+with no ordering-sensitive failures. If a future test introduces shared
+on-disk or global state, xdist would surface that as a flake — investigate the
+test's isolation before assuming xdist itself is at fault.
 """
 
 import os
@@ -79,8 +93,11 @@ def tests(session: nox.Session) -> None:
     Every test runs here, including ones tagged ``@pytest.mark.slow`` — this is
     the suite ``/land`` re-gates with, so nothing slow is ever skipped before
     trunk (lode-pql). For a fast code-time inner loop, see ``nox -s unit``.
+
+    Runs under ``pytest-xdist`` (``-n auto``, lode-b4w.6) — no marker filter
+    changes, no test skipped, just distributed across CPU cores.
     """
-    session.run("pytest")
+    session.run("pytest", "-n", "auto")
 
 
 @nox.session
@@ -94,8 +111,10 @@ def unit(session: nox.Session) -> None:
     code-time convenience only, never a merge gate: it drops no coverage
     permanently, it just defers the slow tier to ``nox -s tests``, which
     every merge (and `/land`'s re-gate) still runs in full.
+
+    Runs under ``pytest-xdist`` (``-n auto``, lode-b4w.6).
     """
-    session.run("pytest", "-m", "not slow")
+    session.run("pytest", "-m", "not slow", "-n", "auto")
 
 
 @nox.session

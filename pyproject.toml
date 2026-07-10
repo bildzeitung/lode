@@ -27,10 +27,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest", # tests (run via nox)
-    "nox",    # task runner (`nox -t fix` before merging)
-    "ruff",   # lint / format
-    "build",  # `python -m build` — canonical wheel/sdist packaging front-end
+    "pytest",        # tests (run via nox)
+    "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
+    "nox",           # task runner (`nox -t fix` before merging)
+    "ruff",          # lint / format
+    "build",         # `python -m build` — canonical wheel/sdist packaging front-end
 ]
 
 [project.scripts]

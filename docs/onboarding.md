@@ -107,6 +107,15 @@ A successful `nox -s tests` ends with a line like `=== N passed, M skipped ===` 
 `Session tests was successful`. That green run is your "the environment is wired up
 correctly" signal.
 
+**Parallelism (lode-b4w.6).** Both `nox -s tests` and `nox -s unit` run under
+`pytest-xdist` (`-n auto`, one worker per CPU core) — a pure wall-clock lever,
+no marker filter change and no test ever skipped. The suite has no shared
+on-disk state to race on (every test gets its own `$LODE_HOME` via the autouse
+`_isolate_lode_home` fixture in `tests/conftest.py`), so distributing across
+workers is safe; measured on an 8-core dev machine, offline, `nox -s unit` went
+from ~152s serial to 33-41s parallel, and `nox -s tests` from ~127-134s serial
+to 39-60s parallel, all green over repeated runs.
+
 ### 5. (Optional) Mermaid diagram validation
 
 Only if you edit a diagram under `docs/`:
