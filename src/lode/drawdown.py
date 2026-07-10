@@ -46,17 +46,34 @@ order:
 1. Lowercase the scheme and host (``urlsplit().hostname`` already lowercases;
    the path/query are left as-cased — servers may treat those
    case-sensitively).
-2. Strip the port when it equals the scheme's default (``:80`` for ``http``,
+2. **Drop userinfo** (``user[:pass]@``) **entirely** (lode-0as, 2026-07-09,
+   PRIVACY fix). Credentials in a pasted URL are transport secrets, not
+   source identity — the same reasoning that strips ``utm_*`` below, applied
+   to the strongest instance of that class. ``external_id`` is a durable
+   identifier that propagates into ``edges.to_id``, the retrieval candidate
+   set, and any UI that prints a source URL, and it is *not* covered by hard
+   delete (docs/externals.md "Hard delete" scrubs ``versions.body``, not an
+   identifier already copied into edges/indexes) — so a credential must never
+   enter it in the first place. ``https://user:pass@host/p``,
+   ``https://user@host/p``, and ``https://host/p`` all canonicalize
+   identically.
+3. Strip the port when it equals the scheme's default (``:80`` for ``http``,
    ``:443`` for ``https``).
-3. Drop the fragment (``#...``) entirely — never part of server-side
+4. Drop the fragment (``#...``) entirely — never part of server-side
    identity.
-4. Strip query params matching the tracking blocklist
+5. Strip query params matching the tracking blocklist
    (``settings.url_tracking_param_blocklist``, docs/configuration.md;
    default ``utm_*``, ``fbclid``, ``gclid``).
-5. Sort the remaining ``(key, value)`` query pairs.
-6. Normalize the trailing slash: an empty or bare ``/`` path becomes ``/``;
+6. Sort the remaining ``(key, value)`` query pairs.
+7. Normalize the trailing slash: an empty or bare ``/`` path becomes ``/``;
    any other path loses a trailing ``/`` (so ``/foo`` and ``/foo/`` collapse
    to one canonical form).
+
+Path percent-encoding (``%7E`` vs ``~``) and IDN hosts (unicode vs punycode)
+are **deliberately left unnormalized** — a decision, not an oversight; see
+docs/externals.md "URL canonicalization" for why these two are out of scope
+here (they are a dedup-correctness gap, not a privacy one, and normalizing
+them safely needs care this ticket didn't need to take on).
 
 ## The redirect wrinkle (decision, bd lode-w0h.3, debate round 3, 2026-07-08)
 
@@ -191,14 +208,13 @@ def canonicalize_url(url: str, settings: Settings | None = None) -> str:
     settings = settings or Settings()
     parts = urlsplit(url.strip())
     scheme = parts.scheme.lower()
+    # Userinfo (``user[:pass]@``) is dropped entirely, never carried into
+    # netloc — see the module docstring's "URL canonicalization" §2
+    # (lode-0as): credentials are transport secrets, not source identity,
+    # and must never enter external_id.
     netloc = (parts.hostname or "").lower()
     if parts.port is not None and parts.port != _DEFAULT_PORTS.get(scheme):
         netloc = f"{netloc}:{parts.port}"
-    if parts.username:
-        auth = parts.username
-        if parts.password:
-            auth = f"{auth}:{parts.password}"
-        netloc = f"{auth}@{netloc}"
 
     path = parts.path
     if path in ("", "/"):

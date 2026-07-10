@@ -73,7 +73,7 @@ head lives on someone else's server and changes without telling you.** Consequen
 - One canonical node per `external_id` with many edges — never five copies of a ticket linked
   from five notes. Dedup on `external_id`; version on `snapshot_id`.
 
-### URL canonicalization (decided, `lode-w0h.3`)
+### URL canonicalization (decided, `lode-w0h.3`; userinfo stripped, `lode-0as`)
 
 For a web source, `external_id` **is** its canonical URL string — not a hash — so this
 canonicalization *is* the dedup correctness "same URL in two notes = one node" depends on, and the
@@ -82,13 +82,42 @@ across refetches. Applied in order (`lode.drawdown.canonicalize_url`):
 
 1. Lowercase the scheme and host (path/query stay as-cased — some servers treat them
    case-sensitively).
-2. Strip the port when it equals the scheme's default (`:80` for `http`, `:443` for `https`).
-3. Drop the fragment (`#...`) entirely — never part of server-side identity.
-4. Strip query params matching the tracking blocklist (`url_tracking_param_blocklist`,
+2. **Drop userinfo (`user[:pass]@`) entirely.** Credentials in a pasted URL are transport
+   secrets, not source identity — the same reasoning that strips `utm_*` below, applied to the
+   strongest instance of that class. `https://user:pass@host/p`, `https://user@host/p`, and
+   `https://host/p` all canonicalize to one `external_id`.
+3. Strip the port when it equals the scheme's default (`:80` for `http`, `:443` for `https`).
+4. Drop the fragment (`#...`) entirely — never part of server-side identity.
+5. Strip query params matching the tracking blocklist (`url_tracking_param_blocklist`,
    [configuration.md](configuration.md); default `utm_*`, `fbclid`, `gclid`).
-5. Sort the remaining query params.
-6. Normalize the trailing slash: an empty or bare `/` path becomes `/`; any other path loses a
+6. Sort the remaining query params.
+7. Normalize the trailing slash: an empty or bare `/` path becomes `/`; any other path loses a
    trailing `/`.
+
+**Why userinfo is a privacy fix, not a dedup nit** (`lode-0as`): `external_id` is a durable
+identifier — it is a primary key, it is replicated into `edges.to_id` on every citing note, and
+it is reachable from the retrieval candidate set. [Hard delete](#hard-delete-the-deliberate-immutability-break-corrective-half)
+scrubs `versions.body`; it does **not** scrub an identifier already copied into edges and
+indexes. A credential that reaches `external_id` therefore outlives the content it guarded and
+survives a delete that looks complete. Stripping it at canonicalization time is the only point
+where the secret can be kept out of storage entirely, rather than redacted after the fact.
+
+**Two adjacent gaps, decided out of scope here (`lode-0as`):** path percent-encoding
+(`%7E` vs `~`) and IDN hosts (unicode vs punycode) are **not** normalized, so two URLs that are
+"the same page" in those respects still canonicalize to distinct `external_id`s and dedup as two
+nodes. This is a deliberate decision, not an oversight: unlike userinfo, neither is a privacy
+surface — both are ordinary dedup-correctness gaps, and normalizing either safely needs care
+(percent-decoding a path requires respecting RFC 3986 reserved-vs-unreserved characters so a
+literal `%2F` isn't mistaken for a path separator; IDN punycoding needs a real IDNA
+implementation) that this ticket did not need to take on to close the privacy hole. Left for a
+future ticket if a real corpus ever shows it matters.
+
+**Migration note (`lode-0as`, 2026-07-09):** changing `canonicalize_url` changes `external_id`
+for any web source already stored under the old (userinfo-preserving) form — a re-key +
+edge-repoint would be required for existing rows (the same shape as `_repoint_edges`, used today
+for the redirect wrinkle below). Checked at the time of this fix: no `externals` rows and no
+`edges.to_id` containing userinfo existed anywhere, so no migration was run. If this is ever
+revisited against a store with real web draw-down history, check first.
 
 **The redirect wrinkle:** a note's edge is created against the *pasted* URL's canonical form
 before any fetch runs (fetching is the queued async job). If the fetch follows a 3xx chain to a
