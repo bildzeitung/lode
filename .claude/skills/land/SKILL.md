@@ -407,10 +407,19 @@ git worktree prune          # drop any now-stale worktree admin entries
 # remote means this local ref is already stale. No extra locked/merged check is needed here
 # — `git branch -D` itself refuses harmlessly if the branch is still checked out in some
 # worktree, which is exactly the case the loop above would have just finished reclaiming.
-git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
-  git ls-remote --exit-code --heads origin "$BR" >/dev/null 2>&1 && continue   # remote still exists — keep
-  git branch -D "$BR" 2>/dev/null || true
-done
+# List origin's land refs ONCE (a single round-trip, not one `ls-remote` per local ref — a
+# machine can accumulate dozens of stale land refs) and only sweep if that listing SUCCEEDED:
+# an unreachable origin makes `ls-remote` exit non-zero, and reading that as "every remote
+# land branch is gone" would force-delete every local land ref on a transient network blip.
+# A failed listing therefore skips the sweep; an empty-but-successful one correctly means
+# every local land ref is stale (grep against the empty set matches nothing → all deleted).
+if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
+  REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
+  git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
+    printf '%s\n' "$REMOTE_LAND" | grep -qxF "$BR" && continue   # remote still exists — keep
+    git branch -D "$BR" 2>/dev/null || true
+  done
+fi
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
