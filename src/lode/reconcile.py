@@ -47,6 +47,18 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   produced an empty summary (Haiku returned ``""`` for a content-free note, so
   no ``summary`` row was written) is therefore correctly seen as
   current-and-done instead of being re-flagged as a gap on every scan.
+- ``refresh_stale`` — registered (``lode-w0h.6``). The web-connector **refresh
+  policy**: finds every external whose current head snapshot is non-tombstone
+  and older than ``settings.refresh_ttl_s``, with no live
+  (``pending``/``running``) ``refresh`` job already covering it, and
+  re-enqueues one. This is the **scheduling** half of "TTL / on-access
+  revalidation" (``docs/decisions.md`` "External refresh") — see the step's
+  own docstring and ``docs/externals.md`` "Refresh policy" for why a periodic
+  TTL sweep was chosen over a true on-access hook, and why a tombstoned
+  external is deliberately excluded. Rides :func:`lode.drawdown.
+  refresh_external` unchanged (already registered in :mod:`lode.worker` as
+  the ``refresh`` handler) — this step adds only staleness detection +
+  scheduling, never a second fetch path.
 
 **Idempotency** — each step re-enqueues via :func:`lode.jobs.enqueue_derive_jobs`,
 which uses ``INSERT … ON CONFLICT DO NOTHING`` against the ``idx_jobs_live``
@@ -74,8 +86,10 @@ without any change of their own.
 import logging
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from lode import jobs
+from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 
 log = logging.getLogger(__name__)
@@ -315,3 +329,114 @@ def _enrich_gap_step(conn: sqlite3.Connection) -> int:
 
 # Register the enrich-gap step on module load.
 register_step("enrich_gap", _enrich_gap_step)
+
+
+# ---------------------------------------------------------------------------
+# Refresh-stale step (registered at module load — lode-w0h.6)
+# ---------------------------------------------------------------------------
+
+
+def _iso(dt: datetime) -> str:
+    """Format ``dt`` as the schema's ISO-8601 millisecond-``Z`` timestamp.
+
+    Matches SQLite's ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` (millisecond
+    precision) so a string comparison against ``snapshots.fetched_at`` is
+    chronologically correct. Duplicated in :mod:`lode.worker` (private
+    ``_iso``) rather than shared — this codebase inlines the same
+    ``strftime`` shape per-module wherever it's needed (``worker.py``,
+    ``enrich.py``, ``versions.py``) rather than factoring out a timestamp
+    utility module for one two-line helper.
+    """
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _refresh_stale_step(
+    conn: sqlite3.Connection, settings: Settings | None = None
+) -> int:
+    """Refresh-stale: re-enqueue a ``refresh`` job for every external past its TTL.
+
+    The web-connector **refresh policy** (``lode-w0h.6``): the staleness
+    detection + scheduling this ticket adds on top of ``lode-w0h.3``'s
+    fetch->ingest ``refresh`` handler (:func:`lode.drawdown.refresh_external`,
+    unchanged — this step never fetches anything itself, only enqueues).
+
+    **Policy choice (TTL sweep, not a true on-access hook):**
+    ``docs/decisions.md``'s "External refresh" entry leaves each connector to
+    choose between on-access revalidation and scheduled background refresh.
+    A true on-access hook would need to run at *read* time (retrieval/Q&A),
+    but every synchronous read path in this codebase is deliberately
+    network-free (mirrors ``Repository.save``'s "no network I/O in save
+    itself" rule for the write side) — bolting a blocking HTTP fetch onto an
+    interactive Q&A call would trade a predictable, bounded citation latency
+    for an unbounded one. Instead this step rides the reconciliation scan's
+    existing periodic architecture (``lode.reconcile.reconcile``, run at
+    worker startup and every ``--loop``/``--wait`` tick, ``docs/storage.md``
+    "Reconciliation scan on startup + periodically") — a scheduled sweep
+    bounded by ``settings.refresh_ttl_s``, which amounts to "revalidate the
+    next time anything drains the queue, if the TTL has elapsed" rather than
+    "revalidate the instant a citation reads it." See ``docs/externals.md``
+    "Refresh policy" for the full write-up.
+
+    **Staleness signal:** ``externals.head_snapshot_id`` joined to
+    ``snapshots``, where the head snapshot's ``status != 'tombstone'`` and its
+    ``fetched_at`` is at or before ``now - settings.refresh_ttl_s``. Only the
+    current head is read (mirrors :func:`_embed_gap_step`'s snapshot arm), so
+    a superseded (non-head) snapshot's age is irrelevant.
+
+    **Tombstone exclusion (deliberate, not an oversight):** a tombstone head
+    means the source already failed permanently (a genuine 4xx/empty-extract,
+    or a transient failure that exhausted every retry and dead-lettered —
+    ``docs/externals.md`` "Fetch-outcome taxonomy") — mirrors
+    :func:`_embed_gap_step`'s own tombstone exclusion: blindly re-enqueuing a
+    fetch for a source the draw-down machinery has already given up on would
+    burn a retry budget on something the taxonomy has already classified as
+    unfetchable-for-now, not silently heal a transient blip (a *first*
+    dead-letter is already the terminal outcome of five backoff attempts,
+    ``lode-i05.6``). If a dead link recovering later matters in practice,
+    revisit — nothing here prevents a *user* from re-pasting the URL to force
+    a fresh draw-down.
+
+    **Idempotency:** the ``NOT EXISTS`` guard skips any external with a
+    ``pending``/``running`` ``refresh`` job already in flight, mirroring
+    :func:`_embed_gap_step`/:func:`_enrich_gap_step`'s own live-job guard;
+    the underlying :func:`lode.jobs.enqueue_derive_jobs` INSERT is also
+    ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live``, so running this step
+    repeatedly (or concurrently with the guard momentarily stale) enqueues no
+    duplicate row.
+
+    Returns the count of stale externals found (each triggered one
+    ``enqueue_derive_jobs`` call).
+    """
+    settings = settings or Settings()
+    cutoff = _iso(datetime.now(UTC) - timedelta(seconds=settings.refresh_ttl_s))
+
+    stale_externals = conn.execute(
+        """
+        SELECT e.external_id
+        FROM externals e
+        JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+        WHERE e.head_snapshot_id IS NOT NULL
+          AND s.status != 'tombstone'
+          AND s.fetched_at <= ?
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'refresh'
+                AND j.target_version = e.external_id
+                AND j.status IN ('pending', 'running')
+          )
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    if not stale_externals:
+        return 0
+
+    with conn:
+        for (external_id,) in stale_externals:
+            jobs.enqueue_derive_jobs(conn, external_id, types=("refresh",))
+
+    return len(stale_externals)
+
+
+# Register the refresh-stale step on module load.
+register_step("refresh_stale", _refresh_stale_step)

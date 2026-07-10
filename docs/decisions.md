@@ -8,6 +8,19 @@ are catalogued in [configuration.md](configuration.md).
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
   Decide per connector when building it. ([externals.md](externals.md#the-broken-assumption-external-staleness-is-not-topological))
+  **Decided-for-web (`lode-w0h.6`):** a **scheduled TTL sweep**, not a true on-access hook — every
+  synchronous read path in this codebase is deliberately network-free, so an on-access hook would
+  have to add a blocking fetch to interactive Q&A/retrieval, which this ticket's scope (staleness
+  detection + scheduling only, no second fetch path) does not take on. `lode.reconcile`'s new
+  `refresh_stale` step re-enqueues a `refresh` job for any external whose head snapshot is older
+  than `refresh_ttl_s` (default 1h, [configuration.md](configuration.md)), riding the reconciliation
+  scan's existing periodic cadence (worker startup + every `--loop`/`--wait` tick) rather than a new
+  mechanism. Tombstoned externals are excluded (mirrors `embed_gap`'s own tombstone exclusion — a
+  permanently-failed source is not blindly re-fetched forever). Full write-up:
+  [externals.md](externals.md#refresh-policy-ttl-based-revalidation-decided-for-web-lode-w0h6).
+  **Still open** for any future non-web connector — decide per connector when building it, as
+  originally noted above; nothing here presumes the same TTL-sweep answer is right for, say, a
+  webhook-capable source.
 - **History compaction / squash policy.** Not needed for years; revisit if storage matters.
   ([storage.md](storage.md#identity-vs-version))
 - **Minimal / archival backup export.** v1 backup is `cp lode.db` — a superset copy that drags
