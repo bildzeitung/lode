@@ -344,7 +344,17 @@ done
 # trivially "merged" into trunk by content identity, so `locked` must gate this even
 # though `merged` alone looks sufficient. `merged` is the same safety invariant the
 # per-ticket removal above already relies on ("the build artifact is on trunk now —
-# force is safe").
+# force is safe"). This `locked` check used to be a no-op in practice: nothing on the
+# producer side ever raised it, so every producer build was "merged" (trivially, by zero
+# divergence) and reclaimable from the moment its worktree was created until its first
+# commit -- this destroyed two builds' uncommitted work outright (branch and all, not
+# just the checkout) before the gap was understood (lode-oqr). `.claude/agents/coding.md`
+# now locks the worktree as the producer's first action and unlocks it right after its
+# first commit, closing that window; this loop's `locked` filter needed no change. The
+# one accepted trade-off: a crash strictly between lock and first commit leaves a locked
+# worktree this sweep won't auto-reclaim -- rare (a normal build commits within minutes)
+# and resolved by a manual `git worktree unlock` (or a future cleanup ticket), not by this
+# loop, since correctness (never destroy a live build) matters more here than eagerness.
 MERGED=$(git branch --merged trunk --format='%(refname:short)')
 git worktree list --porcelain | awk '
   /^worktree / { path=$2; branch=""; locked=0 }
@@ -371,7 +381,11 @@ a clean **land**; a **bounce** drops the branch but the rebuild ticket may still
 independent net over the same machine's worktrees: it doesn't consult any ticket's metadata, so it
 also reclaims a `worktree-agent-*` worktree whose `review_worktree` pointer went stale or was never
 recorded — it only requires the worktree to be **unlocked** (no in-flight agent owns it) and its
-branch already **merged into trunk** (the work is safely captured elsewhere).
+branch already **merged into trunk** (the work is safely captured elsewhere). "Unlocked" is a real
+signal now, not a formality: a producer (`.claude/agents/coding.md`) locks its worktree the instant it
+starts building and unlocks it right after its first commit, so this sweep only ever finds a
+`worktree-agent-*` worktree unlocked once its build has either not started or already diverged from
+`trunk` — never mid-build with uncommitted, unreclaimed-elsewhere work sitting in it (lode-oqr).
 
 ---
 
