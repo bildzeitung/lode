@@ -355,17 +355,24 @@ for id in $LANDED; do
   fi
 done
 
-# Backstop: catch any dangling agent-* worktree the per-ticket loop above missed — a
-# stale/missing review_worktree pointer, a build that never got GC'd on its own machine,
-# or (historically) this section's own rtk-mangled-porcelain bug. Walk the raw porcelain
-# blocks directly (not the per-ticket review_worktree path), so a worktree with no
-# matching ticket, or a ticket with wrong metadata, still gets reclaimed. Skip anything
-# `locked` — that's the git-native in-use signal, and it's load-bearing here: a
+# Backstop: catch any dangling agent-* OR land/<id> worktree the per-ticket loop above
+# missed — a stale/missing review_worktree pointer, a build that never got GC'd on its own
+# machine, a reviewer/rebase-pickup worktree from a multi-cycle review that no ticket's
+# single review_worktree field can point at (lode-r78 — the reviewer and a rebase pickup
+# each check `land/<id>` out into their OWN fresh worktree per lode-k5e/lode-8k3, so a
+# ticket reviewed more than once leaves extra land/<id>-branched worktrees the per-ticket
+# net never sees), or (historically) this section's own rtk-mangled-porcelain bug. Walk the
+# raw porcelain blocks directly (not the per-ticket review_worktree path), so a worktree
+# with no matching ticket, or a ticket with wrong metadata, still gets reclaimed. Skip
+# anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is
 # trivially "merged" into trunk by content identity, so `locked` must gate this even
 # though `merged` alone looks sufficient. `merged` is the same safety invariant the
 # per-ticket removal above already relies on ("the build artifact is on trunk now —
-# force is safe"). This `locked` check used to be a no-op in practice: nothing on the
+# force is safe") — for a `land/<id>` worktree specifically, `merged` is what proves the
+# ticket already landed (an in-flight `ready-for-code-review`/`ready-for-land` ticket's
+# branch has not merged into trunk yet, so its worktree is excluded regardless of lock
+# state). This `locked` check used to be a no-op in practice: nothing on the
 # producer side ever raised it, so every producer build was "merged" (trivially, by zero
 # divergence) and reclaimable from the moment its worktree was created until its first
 # commit -- this destroyed two builds' uncommitted work outright (branch and all, not
@@ -381,13 +388,38 @@ git worktree list --porcelain | awk '
   /^worktree / { path=$2; branch=""; locked=0 }
   /^branch refs\/heads\// { branch=substr($0,19) }
   /^locked/ { locked=1 }
-  /^$/ { if (path!="" && branch ~ /^worktree-agent-/ && !locked) print path"\t"branch; path="" }
+  /^$/ { if (path!="" && (branch ~ /^worktree-agent-/ || branch ~ /^land\//) && !locked) print path"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT BR; do
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue
   git worktree remove --force "$WT"
   git branch -D "$BR" 2>/dev/null || true
 done
 git worktree prune          # drop any now-stale worktree admin entries
+
+# Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
+# loop above never even considered them) and no remote counterpart left (lode-r78). The
+# per-ticket removal above only runs `git branch -D` when it also found a matching
+# worktree; a local land/<id> branch that already lost its worktree by some other path (or
+# never had one materialize beyond the fetch+checkout in coding.md's rebase pickup /
+# code-reviewer.md) is invisible to it. "Remote gone" is sufficient signal on its own: an
+# in-flight ticket's origin/land/<id> always exists (the producer pushed it in build step 8
+# and nothing deletes it until /land lands, bounces, or drops the ticket), so a missing
+# remote means this local ref is already stale. No extra locked/merged check is needed here
+# — `git branch -D` itself refuses harmlessly if the branch is still checked out in some
+# worktree, which is exactly the case the loop above would have just finished reclaiming.
+# List origin's land refs ONCE (a single round-trip, not one `ls-remote` per local ref — a
+# machine can accumulate dozens of stale land refs) and only sweep if that listing SUCCEEDED:
+# an unreachable origin makes `ls-remote` exit non-zero, and reading that as "every remote
+# land branch is gone" would force-delete every local land ref on a transient network blip.
+# A failed listing therefore skips the sweep; an empty-but-successful one correctly means
+# every local land ref is stale (grep against the empty set matches nothing → all deleted).
+if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
+  REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
+  git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
+    printf '%s\n' "$REMOTE_LAND" | grep -qxF "$BR" && continue   # remote still exists — keep
+    git branch -D "$BR" 2>/dev/null || true
+  done
+fi
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -400,13 +432,23 @@ see, and the build machine's own `/land` (or a later sweep there) reclaims it. I
 a clean **land**; a **bounce** drops the branch but the rebuild ticket may still want the tree, and an
 **escalate** keeps everything until the human resolves it. The end-of-pass backstop sweep is a second,
 independent net over the same machine's worktrees: it doesn't consult any ticket's metadata, so it
-also reclaims a `worktree-agent-*` worktree whose `review_worktree` pointer went stale or was never
-recorded — it only requires the worktree to be **unlocked** (no in-flight agent owns it) and its
-branch already **merged into trunk** (the work is safely captured elsewhere). "Unlocked" is a real
-signal now, not a formality: a producer (`.claude/agents/coding.md`) locks its worktree the instant it
-starts building and unlocks it right after its first commit, so this sweep only ever finds a
+also reclaims a `worktree-agent-*` **or `land/<id>`** worktree whose `review_worktree` pointer went
+stale or was never recorded — it only requires the worktree to be **unlocked** (no in-flight agent owns
+it) and its branch already **merged into trunk** (the work is safely captured elsewhere). "Unlocked" is
+a real signal now, not a formality: a producer (`.claude/agents/coding.md`) locks its worktree the
+instant it starts building and unlocks it right after its first commit, so this sweep only ever finds a
 `worktree-agent-*` worktree unlocked once its build has either not started or already diverged from
-`trunk` — never mid-build with uncommitted, unreclaimed-elsewhere work sitting in it (lode-oqr).
+`trunk` — never mid-build with uncommitted, unreclaimed-elsewhere work sitting in it (lode-oqr). The
+`land/<id>` half of the match is the reviewer's and a rebase pickup's *own* launch worktree, per the
+lode-k5e/lode-8k3 architecture (they `git fetch origin land/<id> && git checkout -B land/<id>
+FETCH_HEAD` instead of driving the builder's worktree) — a ticket reviewed across more than one cycle
+leaves *extra* such worktrees no single `review_worktree` field can name, so the backstop is the only
+net that ever reclaims them (lode-r78); `merged`+`unlocked` excludes an in-flight one exactly as it
+excludes an in-flight `worktree-agent-*` one. A **separate** pass right after the worktree sweep (see
+the script above) deletes any local `land/<id>` **branch ref** whose `origin/land/<id>` counterpart no
+longer exists — the per-ticket removal only deletes a local branch when it also found an attached
+worktree, so a bare ref with no worktree (e.g. `git worktree remove`d by some other path) would
+otherwise linger forever once its remote is gone.
 
 ---
 
