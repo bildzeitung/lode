@@ -171,23 +171,74 @@ Collect verdicts for the whole queue before merging — I want the full accepted
 Two branches each green *in isolation* can break when **combined** (a clean git merge with broken
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**:
 
-Before merging anything, unstage the passive jsonl export. `bd dolt pull` (Section 1) can leave
-`.beads/issues.jsonl` **staged** — its index blob differs from `HEAD` while the worktree matches the
-index — and `git diff` / `git diff --quiet` read **clean** in that state (they compare worktree to
-index, not index to `HEAD`), so the drift is invisible right up until `git merge --no-ff` refuses with
-"Your local changes to the following files would be overwritten by merge." A bare `git checkout --`
-does **not** fix this: it only overwrites the worktree, leaving the staged index entry in place, so a
-naive retry loops. `git restore --staged --worktree` resets both index and worktree back to `HEAD` in
-one shot:
+**Pre-compute every merge message before the first merge — no `bd` call inside the merge loop.** The
+`<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title),
+and *any* `bd` read regenerates the passive `.beads/issues.jsonl` export and leaves it **staged** — so
+a per-iteration `bd show` re-dirties the tree after the very first merge, and every merge from the
+second one on hits the same staged-jsonl failure the pre-loop restore below exists to prevent. One
+`bd` read pass over the accepted set, cached, keeps every `bd` call **outside** the loop that follows
+(the same rule already applies to the Section 4 GC loop's per-iteration `bd show`):
+
+```bash
+declare -A MSG
+for id in $ACCEPTED; do
+  SUMMARY=$(rtk bd show "$id" --json | jq -r '.[0].metadata.land_summary // .[0].title')
+  MSG[$id]="Merge land/$id: $SUMMARY ($id)"
+done
+```
+
+Before merging anything, unstage the passive jsonl export — the reads above can re-dirty it exactly
+like `bd dolt pull` (Section 1) does. `.beads/issues.jsonl` staged means its index blob differs from
+`HEAD` while the worktree matches the index — `git diff` / `git diff --quiet` read **clean** in that
+state (they compare worktree to index, not index to `HEAD`), so the drift is invisible right up until
+`git merge --no-ff` refuses with "Your local changes to the following files would be overwritten by
+merge." A bare `git checkout --` does **not** fix this: it only overwrites the worktree, leaving the
+staged index entry in place, so a naive retry loops. `git restore --staged --worktree` resets both
+index and worktree back to `HEAD` in one shot:
 
 ```bash
 rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # unstage the passive export;
   # a STAGED jsonl aborts 'git merge' even though 'git diff' reads clean (staged != unstaged) — never
   # let the passive export block or enter a merge (import.auto: false; see bd-sync discipline below)
+```
+
+**A failed `git merge` is not automatically a textual conflict.** With the `bd` calls now out of the
+loop this should not recur, but if the jsonl gets re-staged mid-loop by anything else, the failure
+looks identical to a conflict and must not be classified as one on sight. Classify on the actual
+failure: `would be overwritten by merge` in stderr *with* an **empty** `git ls-files -u` (no unmerged
+index entries) is the passive-export trap, not a conflict — restore and retry the same merge once.
+Only a genuinely unmerged index (`git ls-files -u` non-empty) is a real textual conflict:
+
+```bash
+merge_one() {   # $1 = id — merges "origin/land/$1" with its pre-computed message, retrying once past
+                 # a re-staged jsonl; returns non-zero ONLY on a real textual conflict (or an unretried
+                 # failure), never on the jsonl symptom. On a real conflict it sets $CONFLICTS (the
+                 # unmerged paths) for the needs-rebase kick-back, then aborts to a clean tree.
+  local id="$1" err
+  err=$(rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" 2>&1) && return 0
+  if printf '%s' "$err" | grep -q 'would be overwritten by merge' && [ -z "$(rtk git ls-files -u)" ]; then
+    rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # re-dirtied, not conflicted
+    rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" && return 0
+  fi
+  printf '%s\n' "$err" >&2
+  local unmerged; unmerged=$(rtk git ls-files -u)            # non-empty ONLY on a real textual conflict
+  if [ -n "$unmerged" ]; then
+    CONFLICTS=$(printf '%s\n' "$unmerged" | cut -f2- | sort -u)   # name the paths for the kick-back note...
+    rtk git merge --abort                                    # ...before the abort clears the unmerged index
+  fi
+  return 1        # real conflict — caller runs the needs-rebase kick-back (with $CONFLICTS) below
+}
 
 # On trunk, accepted set = the IDs land-review accepted this pass.
 for id in $ACCEPTED; do
-  rtk git merge --no-ff "origin/land/$id" -m "Merge land/$id: <summary> ($id)"
+  if ! merge_one "$id"; then
+    # → real textual conflict with a branch already merged this pass: both passed the 2b precheck
+    # against origin/trunk but conflict with *each other*. Needs-rebase kick-back (see below, with
+    # $CONFLICTS), NOT a land — it leaves this pass's set, so it is excluded from the re-gate, and from
+    # the $LANDED that Section 4 closes and GCs. Symmetric with the isolation loop below; without this
+    # check merge_one's clean abort would silently drop it into $LANDED and close/delete unlanded work.
+    continue
+  fi
 done
 ```
 
@@ -209,7 +260,12 @@ rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, co
   ```bash
   rtk git reset --hard origin/trunk
   for id in $ACCEPTED; do
-    rtk git merge --no-ff "origin/land/$id" -m "Merge land/$id: <summary> ($id)"
+    if ! merge_one "$id"; then
+      # → real textual conflict against an earlier survivor merged this pass: needs-rebase kick-back
+      # (see below), not a bounce — its content wasn't judged bad, it just needs to replay onto the
+      # new trunk. Continue with the rest.
+      continue
+    fi
     if rtk nox -s tests; then
       :                          # survivor — keep it merged
     else
@@ -219,12 +275,10 @@ rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, co
   done
   ```
 
-  The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. (If a
-  merge raises a **textual conflict** here — a branch that passed the 2b precheck against `origin/trunk`
-  but conflicts with an *earlier survivor* merged this pass — that branch can't cleanly combine:
-  `git merge --abort` and handle it as a
-  [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce — its content wasn't judged bad,
-  it just needs to replay onto the new `trunk`.)
+  The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. A branch
+  `merge_one` reports as a real conflict here — one that passed the 2b precheck against `origin/trunk`
+  but can't cleanly combine with an *earlier survivor* merged this pass — is handled as a
+  [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce.
 
 ---
 
