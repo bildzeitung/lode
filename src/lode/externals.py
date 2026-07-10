@@ -114,15 +114,15 @@ threshold — or when there is no predecessor vector to compare against at all
 embedded, e.g. a tombstone) — the change is material and an ``enrich`` job is
 enqueued for the new ``snapshot_id``.
 
-**Known gap (filed separately, not this ticket's scope):** the ``enrich`` job
-this enqueues is processed by :func:`lode.worker._enrich_handler`, which
-dispatches to :func:`lode.enrich.enrich_version` — today a **note-only**
-lookup (``SELECT ... FROM versions v JOIN notes n``) that returns ``None``
-(silent no-op, job marked ``done``) for a ``snapshot_id`` target. Enqueuing
-the job is still correct and matches this ticket's acceptance criterion
-literally ("a material change enqueues an enrich job"); teaching
-:func:`~lode.enrich.enrich_version` to actually run Haiku extraction over
-snapshot bodies is separate follow-on work.
+The ``enrich`` job this enqueues resolves polymorphically (lode-7qi):
+:func:`lode.enrich.enrich_version` (and the Batches API route,
+:func:`~lode.enrich.submit_enrich_batch` / :func:`~lode.enrich.
+collect_enrich_batch`, which actually claims a pending ``enrich`` job first
+in production) resolve ``target_version`` against ``versions``/``notes``
+first, falling back to ``snapshots``/``externals`` — the same blind
+resolution :func:`lode.embedding._version_body` already uses for the
+``embed`` leg. A material change therefore runs real Haiku extraction over
+the snapshot body and writes annotations/edges against ``external_id``.
 """
 
 from __future__ import annotations

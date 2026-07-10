@@ -94,6 +94,38 @@ def _insert_note(
         )
 
 
+def _insert_external(
+    conn: sqlite3.Connection,
+    *,
+    external_id: str = "ext-1",
+    snapshot_id: str = "snap-1",
+    body: str = "This is a test snapshot about Python authentication.",
+    status: str = "ok",
+    no_egress: int = 0,
+) -> None:
+    """Insert an externals + snapshots row pair and set the head pointer.
+
+    Mirrors :func:`_insert_note`'s note/version fixture, but on the external
+    side (lode-7qi) — insertion order: externals row first (head_snapshot_id
+    NULL / deferred FK), then snapshots row, then head pointer update.
+    """
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, no_egress) "
+            "VALUES (?, 'web', ?)",
+            (external_id, no_egress),
+        )
+        conn.execute(
+            "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+            "VALUES (?, ?, ?, ?)",
+            (snapshot_id, external_id, body, status),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+
+
 def _update_note(
     conn: sqlite3.Connection,
     *,
@@ -465,6 +497,114 @@ def test_enrich_version_skips_missing_version(
     result = enrich_version(conn, "nonexistent-ver", settings, client=client)
     assert result is None
     client.messages.create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# enrich_version -- external snapshot targets (lode-7qi)
+#
+# The gap this ticket closes: gate_reenrich (lode.externals) enqueues an
+# 'enrich' job keyed on a snapshot_id. Before lode-7qi, enrich_version's
+# note-only lookup returned None for that target -- silently no-op, no Haiku
+# call ever made. These tests exercise the snapshot resolution path directly.
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_version_snapshot_runs_haiku_and_writes_against_external_id(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A snapshot_id target runs Haiku extraction and writes against external_id.
+
+    This is lode-7qi's core acceptance criterion: an enrich job whose
+    target_version is a snapshot_id must actually call Haiku and persist
+    annotations/edges keyed to the external, not silently no-op.
+    """
+    _insert_external(conn, external_id="ext-1", snapshot_id="snap-1")
+    result = EnrichmentResult(
+        tags=["python", "auth"],
+        entities=["FastAPI"],
+        inferred_edges=[
+            InferredEdge(to_id="jwt-topic", reason="mentions JWT", confidence=0.8)
+        ],
+        summary="A snapshot about Python auth.",
+    )
+    client = _fake_client(result)
+    returned = enrich_version(conn, "snap-1", settings, client=client)
+
+    assert returned == result
+    client.messages.create.assert_called_once()
+
+    ann_rows = _annotations(conn, version_id="snap-1")
+    assert {r["kind"] for r in ann_rows} == {"tag", "entity", "summary"}
+
+    # annotations.target and edges.from_id both resolve to the external_id,
+    # not a note_id -- the polymorphic owner (schema.sql).
+    targets = {
+        r[0]
+        for r in conn.execute(
+            "SELECT target FROM annotations WHERE source_version = 'snap-1'"
+        ).fetchall()
+    }
+    assert targets == {"ext-1"}
+
+    edge_rows = _edges(conn, version_id="snap-1")
+    assert len(edge_rows) == 1
+    assert edge_rows[0]["from_id"] == "ext-1"
+    assert edge_rows[0]["to_id"] == "jwt-topic"
+
+
+def test_enrich_version_snapshot_writes_egress_log(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A snapshot enrichment audits egress the same as a note enrichment."""
+    _insert_external(conn)
+    result = EnrichmentResult(tags=["a"], entities=[], inferred_edges=[])
+    enrich_version(conn, "snap-1", settings, client=_fake_client(result))
+
+    log_rows = conn.execute("SELECT purpose, model FROM egress_log").fetchall()
+    assert len(log_rows) == 1
+    assert log_rows[0][0] == "enrich"
+
+
+def test_enrich_version_skips_no_egress_external(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A no_egress external's snapshot is never sent to Haiku."""
+    _insert_external(conn, no_egress=1)
+    client = _fake_client(EnrichmentResult())
+
+    result = enrich_version(conn, "snap-1", settings, client=client)
+    assert result is None
+    client.messages.create.assert_not_called()
+    assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
+
+
+def test_enrich_version_skips_tombstone_snapshot(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A link-rot tombstone snapshot (status='tombstone') is skipped."""
+    _insert_external(conn, status="tombstone")
+    client = _fake_client(EnrichmentResult())
+
+    result = enrich_version(conn, "snap-1", settings, client=client)
+    assert result is None
+    client.messages.create.assert_not_called()
+
+
+def test_enrich_version_snapshot_idempotent_replace(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """Re-enriching the same snapshot replaces existing source='ai' rows."""
+    _insert_external(conn)
+
+    first = EnrichmentResult(tags=["old-tag"], entities=[], inferred_edges=[])
+    enrich_version(conn, "snap-1", settings, client=_fake_client(first))
+
+    second = EnrichmentResult(tags=["new-tag"], entities=[], inferred_edges=[])
+    enrich_version(conn, "snap-1", settings, client=_fake_client(second))
+
+    payloads = {r["payload"] for r in _annotations(conn, version_id="snap-1")}
+    assert "old-tag" not in payloads
+    assert "new-tag" in payloads
 
 
 # ---------------------------------------------------------------------------
@@ -1127,6 +1267,91 @@ def test_submit_enrich_batch_multiple_versions(
 
 
 # ---------------------------------------------------------------------------
+# submit_enrich_batch -- external snapshot targets (lode-7qi)
+#
+# The Batches API pre-step is the route a gate_reenrich-enqueued 'enrich' job
+# actually takes in production (it runs ahead of the immediate-handler
+# fallback), so the same polymorphic gate must hold here too.
+# ---------------------------------------------------------------------------
+
+
+def test_submit_enrich_batch_includes_snapshot_target(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A snapshot_id job is resolved, redacted, and included in the batch."""
+    _insert_external(conn, external_id="ext-1", snapshot_id="snap-1")
+    job_id = _insert_enrich_job(conn, "snap-1")
+
+    client = _fake_batch_client(batch_id="batch-snap")
+    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+
+    assert result_id == "batch-snap"
+    call_kwargs = client.beta.messages.batches.create.call_args
+    requests = call_kwargs.kwargs.get("requests") or call_kwargs.args[0]
+    assert {r["custom_id"] for r in requests} == {"snap-1"}
+
+    row = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("running", "batch-snap")
+
+
+def test_submit_enrich_batch_skips_no_egress_external(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A no_egress external's snapshot job is marked done without an API call."""
+    _insert_external(conn, no_egress=1)
+    job_id = _insert_enrich_job(conn, "snap-1")
+
+    client = _fake_batch_client()
+    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+
+    assert result_id is None
+    client.beta.messages.batches.create.assert_not_called()
+    (status,) = conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert status == "done"
+
+
+def test_submit_enrich_batch_skips_tombstone_snapshot(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A tombstone snapshot job is marked done without an API call."""
+    _insert_external(conn, status="tombstone")
+    job_id = _insert_enrich_job(conn, "snap-1")
+
+    client = _fake_batch_client()
+    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+
+    assert result_id is None
+    client.beta.messages.batches.create.assert_not_called()
+    (status,) = conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert status == "done"
+
+
+def test_submit_enrich_batch_mixed_note_and_snapshot_targets(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A single batch can include both a note version and an external snapshot."""
+    _insert_note(conn, note_id="note-1", version_id="ver-1")
+    _insert_external(conn, external_id="ext-1", snapshot_id="snap-1")
+    job1 = _insert_enrich_job(conn, "ver-1")
+    job2 = _insert_enrich_job(conn, "snap-1")
+
+    client = _fake_batch_client(batch_id="batch-mixed")
+    submit_enrich_batch(
+        conn, [(job1, "ver-1"), (job2, "snap-1")], settings, client=client
+    )
+
+    call_kwargs = client.beta.messages.batches.create.call_args
+    requests = call_kwargs.kwargs.get("requests") or call_kwargs.args[0]
+    assert {r["custom_id"] for r in requests} == {"ver-1", "snap-1"}
+
+
+# ---------------------------------------------------------------------------
 # Batch API helpers — collect_enrich_batch (lode-npx.2)
 # ---------------------------------------------------------------------------
 
@@ -1248,6 +1473,60 @@ def test_collect_enrich_batch_idempotent_on_no_running_jobs(
     ended = collect_enrich_batch(conn, "batch-xyz", settings, client=client)
     # Batch is ended (processing_status='ended' is the default) so True.
     assert ended is True
+
+
+# ---------------------------------------------------------------------------
+# collect_enrich_batch -- external snapshot targets (lode-7qi)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_enrich_batch_writes_enrichment_against_external_id(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """A succeeded result for a snapshot_id job writes annotations/edges
+    against the external_id, not a note_id -- the same polymorphic owner
+    resolution :func:`enrich_version` uses (lode-7qi)."""
+    _insert_external(conn, external_id="ext-1", snapshot_id="snap-1")
+    job_id = _insert_enrich_job(conn, "snap-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-snap-done' WHERE id = ?",
+            (job_id,),
+        )
+
+    enrichment = EnrichmentResult(
+        tags=["python"],
+        entities=["FastAPI"],
+        inferred_edges=[
+            InferredEdge(
+                to_id="web-frameworks", reason="mentions FastAPI", confidence=0.9
+            )
+        ],
+    )
+    br = _make_batch_result("snap-1", enrichment)
+    client = _fake_batch_client(batch_id="batch-snap-done", results=[br])
+
+    ended = collect_enrich_batch(conn, "batch-snap-done", settings, client=client)
+    assert ended is True
+
+    (status, prompt_ver) = conn.execute(
+        "SELECT status, prompt_ver FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert status == "done"
+    assert prompt_ver == ENRICH_PROMPT_VER
+
+    targets = {
+        r[0]
+        for r in conn.execute(
+            "SELECT target FROM annotations WHERE source_version = 'snap-1'"
+        ).fetchall()
+    }
+    assert targets == {"ext-1"}
+
+    edge_rows = conn.execute(
+        "SELECT from_id, to_id FROM edges WHERE source_version = 'snap-1'"
+    ).fetchall()
+    assert edge_rows == [("ext-1", "web-frameworks")]
 
 
 # ---------------------------------------------------------------------------

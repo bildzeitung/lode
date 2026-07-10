@@ -155,11 +155,13 @@ rows. At/above the threshold, one `enrich` job is enqueued for the new `snapshot
 The materiality threshold is a tunable knob ([configuration.md](configuration.md)); it caps cloud
 spend on noisy sources without letting enrichment rot.
 
-**Known gap:** the `enrich` job the gate enqueues is processed by `lode.worker._enrich_handler`,
-which dispatches to `lode.enrich.enrich_version` — today a note-only lookup that silently no-ops
-(job marked `done`, no Haiku call) for a `snapshot_id` target. Enqueuing the job is still correct
-against `lode-w0h.5`'s acceptance criterion; teaching `enrich_version` to actually run Haiku
-extraction over snapshot bodies is separate follow-on work.
+The `enrich` job the gate enqueues resolves polymorphically (`lode-7qi`): `lode.enrich`'s three entry
+points (`enrich_version`, and the Batches API route `submit_enrich_batch`/`collect_enrich_batch` that
+actually claims a pending `enrich` job first in production) all resolve `target_version` against
+`versions`/`notes` first, falling back to `snapshots`/`externals` — the same blind resolution
+`lode.embedding._version_body` already used for the `embed` leg. A material change therefore runs real
+Haiku extraction over the snapshot body and writes annotations/edges against the `external_id` (the
+same polymorphic `annotations.target` / `edges.from_id` a note's `note_id` writes against).
 
 **The write path** (`lode.externals.ingest_snapshot`, `lode-w0h.2`) is the mirrored analogue of the
 note save path: dedup on `external_id` (one `externals` row per source, created on first sight),

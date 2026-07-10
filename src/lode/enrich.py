@@ -1,25 +1,38 @@
 """Haiku structured-output enrichment + provenance (lode-npx.1 / lode-npx.2).
 
-Extracts tags, entities, and inferred note-to-concept edges from a note version
-via Claude Haiku structured outputs (tool-use) + Pydantic validation. Records
-full provenance on every result. Inferred edges are AI suggestions with confidence
-scores, stored as ``source='ai'`` -- never asserted facts.
+Extracts tags, entities, and inferred concept edges from a note version OR an
+external snapshot (lode-7qi) via Claude Haiku structured outputs (tool-use) +
+Pydantic validation. Records full provenance on every result. Inferred edges
+are AI suggestions with confidence scores, stored as ``source='ai'`` -- never
+asserted facts.
+
+**Polymorphic target (lode-7qi):** every entry point (:func:`enrich_version`,
+:func:`submit_enrich_batch`, :func:`collect_enrich_batch`) takes the same
+``target_version`` a ``jobs`` row carries -- a note ``version_id`` or an
+external ``snapshot_id``, with no flag riding along to say which (mirrors
+:func:`lode.embedding._version_body`'s blind versions-then-snapshots
+resolution: an enrich job enqueued by :func:`lode.externals.gate_reenrich`
+looks identical to one enqueued by :mod:`lode.reconcile`'s enrich-gap step).
+:func:`_resolve_enrich_target` is the one place that resolution happens;
+everything downstream writes against the resolved ``owner_id`` (``note_id`` or
+``external_id`` -- the same polymorphic id ``annotations.target`` /
+``edges.from_id`` already accept, ``src/lode/schema.sql``).
 
 Architecture (docs/storage.md):
 
 - Tags + entities + a one-line summary → ``annotations`` table, ``source='ai'``,
-  ``kind='tag'`` / ``'entity'`` / ``'summary'``, whole-note scope
-  (``target = note_id``). ``summary`` (lode-0wj.9) is a single Haiku-derived
-  sentence describing the head version -- same row shape, same provenance,
-  same idempotent replace as tag/entity.
+  ``kind='tag'`` / ``'entity'`` / ``'summary'``, whole-item scope
+  (``target = owner_id``). ``summary`` (lode-0wj.9) is a single Haiku-derived
+  sentence describing the head version/snapshot -- same row shape, same
+  provenance, same idempotent replace as tag/entity.
 - Inferred edges → ``edges`` table, ``source='ai'``, with ``confidence``,
   ``reason``, and ``source_version``. These are Haiku suggestions; user curation
-  (``source='user'``) is separate and irreplaceable (pinned to ``note_id``).
+  (``source='user'``) is separate and irreplaceable (pinned to ``owner_id``).
 - Full provenance on every row: ``model``, ``prompt_ver`` (:data:`ENRICH_PROMPT_VER`),
-  ``source_version`` (the version_id enriched), ``created`` (ISO-8601 UTC).
-- Egress gate: ``no_egress`` notes are never sent to Haiku; ``redact_before_egress``
-  strips secrets before the payload leaves the box. One ``egress_log`` row is written
-  per enrichment call (``purpose='enrich'``).
+  ``source_version`` (the version_id/snapshot_id enriched), ``created`` (ISO-8601 UTC).
+- Egress gate: ``no_egress`` notes/externals are never sent to Haiku;
+  ``redact_before_egress`` strips secrets before the payload leaves the box.
+  One ``egress_log`` row is written per enrichment call (``purpose='enrich'``).
 - Idempotent: deletes existing ``source='ai'`` rows keyed to the enriched
   ``source_version`` before writing new results, so re-running on the same version
   converges cleanly.
@@ -50,6 +63,7 @@ job so gaps are self-healing.
 import json
 import logging
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import anthropic
@@ -59,7 +73,6 @@ from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
 from lode.ids import short_version_id
-from lode.notes_read import short_note_id
 from lode.redact import redact_before_egress_counting
 
 log = logging.getLogger(__name__)
@@ -190,23 +203,29 @@ def _call_haiku(
 
 def _write_enrichment(
     conn: sqlite3.Connection,
-    note_id: str,
+    owner_id: str,
     version_id: str,
     result: EnrichmentResult,
     model: str,
     ts: str,
 ) -> None:
-    """Write tags, entities, the whole-note summary, and inferred edges to the DB.
+    """Write tags, entities, the whole-item summary, and inferred edges to the DB.
+
+    ``owner_id`` is the polymorphic id the derived rows anchor to -- a
+    ``note_id`` when ``version_id`` is a note version, or an ``external_id``
+    when it is a snapshot (:func:`_resolve_enrich_target`, lode-7qi); the SQL
+    below never distinguishes the two, since ``annotations.target`` /
+    ``edges.from_id`` accept either by design (``src/lode/schema.sql``).
 
     Idempotent: deletes existing ``source='ai'`` annotations and edges keyed by
     ``source_version = version_id`` before inserting new rows. All writes commit
     in a single transaction.
 
     Tags + entities + summary go to ``annotations`` (``kind='tag'`` / ``'entity'``
-    / ``'summary'``, ``target = note_id``). Inferred edges go to ``edges``
-    (``from_id = note_id``, ``source='ai'``, ``status='fresh'``).
+    / ``'summary'``, ``target = owner_id``). Inferred edges go to ``edges``
+    (``from_id = owner_id``, ``source='ai'``, ``status='fresh'``).
 
-    The summary (lode-0wj.9) is a single whole-note row, written only when
+    The summary (lode-0wj.9) is a single whole-item row, written only when
     Haiku returned a non-empty ``result.summary`` -- an empty summary produces
     no row, mirroring how an empty tag/entity list produces no rows.
 
@@ -227,9 +246,9 @@ def _write_enrichment(
             (version_id,),
         )
 
-        # Tag + entity + summary annotations -- whole-note items carry no
+        # Tag + entity + summary annotations -- whole-item rows carry no
         # per-item confidence and share one row shape; only `kind` and the
-        # source list differ. The summary is a single whole-note value, so it
+        # source list differ. The summary is a single whole-item value, so it
         # joins the loop as a 0-or-1-element list -- an empty summary yields no
         # row, exactly like an empty tag list (lode-0wj.9).
         for kind, values in (
@@ -239,7 +258,7 @@ def _write_enrichment(
         ):
             for value in values:
                 payload = json.dumps(value)
-                if is_annotation_suppressed(conn, note_id, kind, payload):
+                if is_annotation_suppressed(conn, owner_id, kind, payload):
                     continue
                 conn.execute(
                     "INSERT INTO annotations "
@@ -247,7 +266,7 @@ def _write_enrichment(
                     "model, prompt_ver, created) "
                     "VALUES (?, ?, ?, ?, 'ai', 'fresh', ?, ?, ?)",
                     (
-                        note_id,
+                        owner_id,
                         version_id,
                         kind,
                         payload,
@@ -260,13 +279,13 @@ def _write_enrichment(
         # Inferred edges -- AI suggestions with confidence; stored source='ai',
         # never as asserted facts.
         for edge in result.inferred_edges:
-            if is_edge_suppressed(conn, note_id, edge.to_id):
+            if is_edge_suppressed(conn, owner_id, edge.to_id):
                 continue
             conn.execute(
                 "INSERT INTO edges "
                 "(from_id, to_id, source, reason, confidence, source_version, status) "
                 "VALUES (?, ?, 'ai', ?, ?, ?, 'fresh')",
-                (note_id, edge.to_id, edge.reason, edge.confidence, version_id),
+                (owner_id, edge.to_id, edge.reason, edge.confidence, version_id),
             )
 
 
@@ -291,6 +310,76 @@ def format_enrich_outcome(version_id: str, result: EnrichmentResult) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Polymorphic target resolution (lode-7qi)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _EnrichTarget:
+    """A resolved enrichable target -- a note version or an external snapshot.
+
+    ``owner_id`` is the polymorphic id enrichment rows write against
+    (``note_id`` for a version, ``external_id`` for a snapshot -- whatever
+    :func:`_write_enrichment`'s ``owner_id`` parameter expects). ``live`` is
+    ``False`` for a soft-deleted/purged version or a tombstoned snapshot --
+    callers skip enrichment for those without treating them as "not found".
+    """
+
+    owner_id: str
+    body: str
+    no_egress: bool
+    live: bool
+
+
+def _resolve_enrich_target(
+    conn: sqlite3.Connection, version_id: str
+) -> _EnrichTarget | None:
+    """Resolve ``version_id`` to its owner, body, ``no_egress``, and liveness.
+
+    ``version_id`` is polymorphic -- a note ``version_id`` or an external
+    ``snapshot_id`` -- with no flag riding along to say which (an enqueued
+    ``enrich`` job carries only ``target_version``, mirroring
+    :func:`lode.embedding._version_body`'s blind versions-then-snapshots
+    resolution). Tries ``versions`` first, then falls back to ``snapshots``.
+
+    Returns ``None`` when ``version_id`` is unknown to both tables. Otherwise
+    returns an :class:`_EnrichTarget` with ``live=False`` for a note's
+    soft-delete tombstone (``op='delete'``) or hard-purge (``purged_at``
+    set), or for a snapshot's link-rot tombstone (``status='tombstone'``,
+    ``src/lode/schema.sql``) -- the three "this exists but there's nothing to
+    enrich" cases callers gate on before ever calling Haiku.
+    """
+    row = conn.execute(
+        """
+        SELECT v.body, v.op, v.purged_at, n.note_id, n.no_egress
+        FROM versions v
+        JOIN notes n ON n.note_id = v.note_id
+        WHERE v.version_id = ?
+        """,
+        (version_id,),
+    ).fetchone()
+    if row is not None:
+        body, op, purged_at, note_id, no_egress = row
+        live = op != "delete" and purged_at is None
+        return _EnrichTarget(note_id, body, bool(no_egress), live)
+
+    row = conn.execute(
+        """
+        SELECT s.body, s.status, e.external_id, e.no_egress
+        FROM snapshots s
+        JOIN externals e ON e.external_id = s.external_id
+        WHERE s.snapshot_id = ?
+        """,
+        (version_id,),
+    ).fetchone()
+    if row is not None:
+        body, status, external_id, no_egress = row
+        return _EnrichTarget(external_id, body, bool(no_egress), status != "tombstone")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -302,57 +391,51 @@ def enrich_version(
     *,
     client: anthropic.Anthropic | None = None,
 ) -> EnrichmentResult | None:
-    """Enrich a single note version with Haiku structured extraction.
+    """Enrich a single note version or external snapshot with Haiku extraction.
 
-    Loads the version body, gates on ``no_egress`` / tombstone / purged, redacts
-    secrets before egress, calls Haiku with structured outputs, writes results to
-    the DB, and audits the egress.
+    Loads the target's body (:func:`_resolve_enrich_target`, polymorphic --
+    a note ``version_id`` or an external ``snapshot_id``, lode-7qi), gates on
+    ``no_egress`` / tombstone / purged, redacts secrets before egress, calls
+    Haiku with structured outputs, writes results to the DB (against the
+    resolved owner -- ``note_id`` or ``external_id``), and audits the egress.
 
     Returns the :class:`EnrichmentResult` on success, or ``None`` when enrichment
-    is skipped (``no_egress`` note, soft-delete tombstone, or purged version).
+    is skipped (target not found, ``no_egress``, soft-delete/purge, or a
+    snapshot tombstone).
 
     :param conn: Open SQLite connection.
-    :param version_id: The version to enrich.
+    :param version_id: The version or snapshot to enrich.
     :param settings: Resolved settings (enrichment model, redaction patterns, ...).
     :param client: Optional Anthropic client (created fresh if omitted). Inject in
         tests to avoid a live API call.
     """
-    row = conn.execute(
-        """
-        SELECT v.body, v.op, v.purged_at, n.note_id, n.no_egress
-        FROM versions v
-        JOIN notes n ON n.note_id = v.note_id
-        WHERE v.version_id = ?
-        """,
-        (version_id,),
-    ).fetchone()
+    target = _resolve_enrich_target(conn, version_id)
 
-    if row is None:
+    if target is None:
         log.warning(
             "enrich_version: version %s not found", short_version_id(version_id)
         )
         return None
 
-    body, op, purged_at, note_id, no_egress = row
-
-    if op == "delete":
+    if not target.live:
         log.debug(
-            "enrich_version: skip tombstone version=%s", short_version_id(version_id)
+            "enrich_version: skip tombstone/purged version=%s",
+            short_version_id(version_id),
         )
         return None
 
-    if purged_at is not None:
+    if target.no_egress:
         log.debug(
-            "enrich_version: skip purged version=%s", short_version_id(version_id)
+            "enrich_version: skip no_egress owner_id=%s version=%s",
+            target.owner_id,
+            short_version_id(version_id),
         )
-        return None
-
-    if no_egress:
-        log.debug("enrich_version: skip no_egress note_id=%s", short_note_id(note_id))
         return None
 
     # Redact secrets before sending to Haiku.
-    redacted_body, redaction_count = redact_before_egress_counting(body, settings)
+    redacted_body, redaction_count = redact_before_egress_counting(
+        target.body, settings
+    )
 
     if client is None:
         client = anthropic.Anthropic()
@@ -360,7 +443,9 @@ def enrich_version(
     result = _call_haiku(redacted_body, settings, client)
 
     ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    _write_enrichment(conn, note_id, version_id, result, settings.enrichment_llm, ts)
+    _write_enrichment(
+        conn, target.owner_id, version_id, result, settings.enrichment_llm, ts
+    )
 
     # Audit the egress -- one row per enrichment call.
     redactions = {version_id: redaction_count} if redaction_count else None
@@ -429,10 +514,13 @@ def submit_enrich_batch(
 
     Behaviour:
 
-    - Each version is gated: ``no_egress``, tombstone (``op='delete'``), and
-      purged (``purged_at IS NOT NULL``) versions are marked ``done`` immediately
-      without an API call — exactly the same skip logic as :func:`enrich_version`.
-    - Valid versions are redacted (:func:`lode.redact.redact_before_egress_counting`)
+    - Each target is resolved polymorphically (:func:`_resolve_enrich_target`,
+      lode-7qi — a note ``version_id`` or an external ``snapshot_id``) and
+      gated: not-found, ``no_egress``, tombstone (``op='delete'`` or a
+      snapshot's ``status='tombstone'``), and purged (``purged_at IS NOT
+      NULL``) targets are marked ``done`` immediately without an API call —
+      exactly the same skip logic as :func:`enrich_version`.
+    - Valid targets are redacted (:func:`lode.redact.redact_before_egress_counting`)
       then included as Batches API request objects (``custom_id = version_id``).
     - The batch is submitted to ``client.beta.messages.batches.create``.
     - Each submitted job row is updated to ``status='running'`` with
@@ -464,17 +552,9 @@ def submit_enrich_batch(
     redactions: dict[str, int] = {}
 
     for job_id, version_id in job_rows:
-        row = conn.execute(
-            """
-            SELECT v.body, v.op, v.purged_at, n.no_egress
-            FROM versions v
-            JOIN notes n ON n.note_id = v.note_id
-            WHERE v.version_id = ?
-            """,
-            (version_id,),
-        ).fetchone()
+        target = _resolve_enrich_target(conn, version_id)
 
-        if row is None:
+        if target is None:
             log.warning(
                 "submit_enrich_batch: version %s not found — marking done",
                 short_version_id(version_id),
@@ -482,20 +562,19 @@ def submit_enrich_batch(
             skip_ids.append(job_id)
             continue
 
-        body, op, purged_at, no_egress = row
-
-        if op == "delete" or purged_at is not None or no_egress:
+        if not target.live or target.no_egress:
             log.debug(
-                "submit_enrich_batch: skip version=%s (op=%s purged=%s no_egress=%s)",
+                "submit_enrich_batch: skip version=%s (live=%s no_egress=%s)",
                 short_version_id(version_id),
-                op,
-                purged_at is not None,
-                bool(no_egress),
+                target.live,
+                target.no_egress,
             )
             skip_ids.append(job_id)
             continue
 
-        redacted_body, redaction_count = redact_before_egress_counting(body, settings)
+        redacted_body, redaction_count = redact_before_egress_counting(
+            target.body, settings
+        )
         if redaction_count:
             redactions[version_id] = redaction_count
 
@@ -642,10 +721,15 @@ def collect_enrich_batch(
                 )
                 continue
 
-            note_row = conn.execute(
-                "SELECT note_id FROM versions WHERE version_id = ?", (version_id,)
-            ).fetchone()
-            if note_row is None:
+            # Polymorphic owner lookup (lode-7qi) — the same resolver
+            # submit_enrich_batch gated on, but only the owner_id matters
+            # here; liveness isn't re-checked (mirrors the pre-lode-7qi
+            # existence-only check — a target purged/tombstoned between
+            # submit and collect is rare enough that writing its last
+            # enrichment result is harmless, and re-gating here would need
+            # its own dead-code path with no test coverage to justify it).
+            target = _resolve_enrich_target(conn, version_id)
+            if target is None:
                 log.warning(
                     "collect_enrich_batch: version %s disappeared after batch ended",
                     short_version_id(version_id),
@@ -658,7 +742,7 @@ def collect_enrich_batch(
 
             _write_enrichment(
                 conn,
-                note_row[0],
+                target.owner_id,
                 version_id,
                 enrichment,
                 settings.enrichment_llm,
