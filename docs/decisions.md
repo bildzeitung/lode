@@ -401,3 +401,30 @@ are catalogued in [configuration.md](configuration.md).
   unconditionally, and the alternative (silently keeping stale "known-good" content live while its
   own refresh machinery has given up on it) is a worse failure mode to ship silently. Revisit if this
   proves too aggressive once `lode-w0h.6` ships and staleness re-fetches are common.
+
+- **Dead-letter recovery ownership — settled: two mechanisms, split by job type, no overlap
+  (lode-621, cross-referencing lode-at8).** Both tickets are instances of the same defect shape — a
+  job reaching the terminal `dead` status (max retries exhausted) with nothing observing or acting on
+  it — but for two different job types, and the right recovery action differs per type:
+  - **`embed` jobs (lode-621) → owned by `reconcile._embed_gap_step`'s periodic sweep.** A dead embed
+    job means only that the *async* attempt to vectorize a still-valid body failed; the body itself
+    (a note version or an external snapshot) is untouched and still embeddable. A blind periodic
+    re-enqueue is a safe, cheap, idempotent recovery (`ON CONFLICT DO NOTHING` against
+    `idx_jobs_live`) — no per-job-type hook is needed. lode-621 extended this existing sweep (already
+    the mechanism for notes) with a snapshot arm, so a dead embed job on an external's current
+    snapshot is now re-enqueued exactly like a note's version — closing the gap that made a
+    lode-w0h.8-mirrored snapshot silently vector-less forever once its embed job died.
+  - **`refresh` jobs (lode-at8) → owned by a worker terminal-transition hook.** A dead `refresh` job
+    means the URL is *permanently* unfetchable (retries already exhausted the backoff chain); blindly
+    re-enqueueing the same fetch forever would not converge, so instead the terminal transition writes
+    a durable **tombstone snapshot** recording the failure, distinguishing "permanently dead" from "draw-down
+    still in flight." That needs a hook fired at the exact moment a job goes `dead` (a periodic sweep
+    would only add unbounded discovery lag to a failure that is already final) — lode-at8's `worker.py`
+    dead-status-transition hook, registered per job type (mirroring the existing job-handler `_REGISTRY`
+    shape), fired sequential-not-nested immediately after the `dead` status commit.
+
+  **Why this doesn't collide:** the two mechanisms watch disjoint job-type sets (`embed` vs.
+  `refresh`) and take disjoint actions (retry-by-re-enqueue vs. record-permanent-failure). Nothing
+  implements the same recovery twice. If a *third* job type's dead-letter needs recovery, the fork is
+  this: "is the underlying content still valid and cheap to retry?" → sweep; "is retrying pointless and
+  the interesting fact is that it's permanently dead?" → terminal-transition hook.
