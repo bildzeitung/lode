@@ -552,6 +552,136 @@ def test_i_on_highlighted_row_opens_the_inspector_with_full_enrichment(
     assert fields["embed"] == "Embedded: no (0 passages)"
 
 
+def test_inspector_modal_field_coverage_matches_the_view_model(tmp_path: Path) -> None:
+    """TUI-side parity guard (lode-ay5.4), mirroring the CLI one (lode-ay5.3,
+
+    ``tests/test_cli.py::test_show_field_coverage_matches_the_view_model``).
+    That guard only enumerated ``EnrichmentView``'s fields against ``lode
+    show``'s stdout -- nothing enumerated them against the inspector modal, so
+    a field added to the view-model and surfaced only on the CLI side (or vice
+    versa) would pass every existing suite while the two surfaces silently
+    diverged (the exact drift the epic's debate flagged, note 3). This
+    enumerates the same field set and asserts each is surfaced by the modal,
+    with the two fields the modal deliberately does not give their own line
+    called out by name below -- not silently dropped.
+    """
+    import dataclasses
+
+    from lode.enrichment_view import EnrichmentView
+
+    field_names = {f.name for f in dataclasses.fields(EnrichmentView)}
+    assert field_names == {
+        "note_id",
+        "enrichment_state",
+        "summary",
+        "tags",
+        "entities",
+        "edges",
+        "embedded",
+        "passage_count",
+    }
+
+    # Fields the modal does NOT give their own widget/line -- an explicit,
+    # commented exemption per lode-ay5.4's acceptance criteria, not a silent
+    # omission:
+    #  - note_id: keyed to the Browse row the modal was opened on (``i`` on
+    #    a highlighted row) -- that row's Id column already shows it, so the
+    #    modal itself never re-prints it.
+    #  - embedded / passage_count: collapsed together into the ONE
+    #    "Embedded: yes/no (N passages)" line (INSPECTOR_EMBED_ID) rather than
+    #    each getting its own line -- both are checked below via that single
+    #    field.
+    exempt = {"note_id", "embedded", "passage_count"}
+    assert field_names - exempt == {
+        "enrichment_state",
+        "summary",
+        "tags",
+        "entities",
+        "edges",
+    }
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-parity-tui", "parity body").version_id
+        _insert_annotation(
+            conn,
+            target="note-parity-tui",
+            source_version=head,
+            kind="summary",
+            payload_value="a summary",
+        )
+        _insert_annotation(
+            conn,
+            target="note-parity-tui",
+            source_version=head,
+            kind="tag",
+            payload_value="a-tag",
+        )
+        _insert_annotation(
+            conn,
+            target="note-parity-tui",
+            source_version=head,
+            kind="entity",
+            payload_value="an-entity",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-parity-tui",
+            to_id="concept-parity-tui",
+            source_version=head,
+            reason="because",
+            confidence=0.5,
+        )
+        conn.execute(
+            "INSERT INTO passages (passage_id, target_version, ord, text) "
+            "VALUES ('p-parity-tui', ?, 0, 'parity body')",
+            (head,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> dict[str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            screen = app.screen
+            return {
+                "enrichment_state": str(
+                    screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content
+                ),
+                "summary": str(
+                    screen.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).content
+                ),
+                "tags": str(screen.query_one(f"#{INSPECTOR_TAGS_ID}", Static).content),
+                "entities": str(
+                    screen.query_one(f"#{INSPECTOR_ENTITIES_ID}", Static).content
+                ),
+                "edges": str(
+                    screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
+                ),
+                # embedded + passage_count together, the one combined line:
+                "embed": str(
+                    screen.query_one(f"#{INSPECTOR_EMBED_ID}", Static).content
+                ),
+            }
+
+    fields = asyncio.run(_drive())
+
+    assert fields["enrichment_state"] == "Enrichment: ready"
+    assert fields["summary"] == "Summary: a summary"
+    assert fields["tags"] == "Tags: a-tag"
+    assert fields["entities"] == "Entities: an-entity"
+    assert (
+        fields["edges"]
+        == f"Edges:\n-> {short_note_id('concept-parity-tui')} (because, 0.50)"
+    )
+    assert fields["embed"] == "Embedded: yes (1 passages)"
+
+
 def test_inspector_modal_shows_pending_for_an_unenriched_note(
     tmp_path: Path,
 ) -> None:
