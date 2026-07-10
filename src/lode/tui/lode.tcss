@@ -49,3 +49,18 @@ EnrichmentModalScreen {
     background: $panel;
     padding: 1 2;
 }
+
+/* Browse's delete confirm (lode-d32.1) -- same popup treatment as capture's
+ * DiscardConfirmScreen above, just its own screen/id pair since the two
+ * dialogs' prompts and choices differ. */
+DeleteConfirmScreen {
+    align: center middle;
+}
+
+#delete-confirm-dialog {
+    width: 50;
+    height: auto;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}

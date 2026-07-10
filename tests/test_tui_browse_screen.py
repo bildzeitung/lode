@@ -12,6 +12,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
 from rich.text import Text
 from textual.widgets import DataTable, Static, TextArea
 
@@ -21,6 +22,7 @@ from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
+    DELETE_CONFIRM_MESSAGE_ID,
     HISTORY_TABLE_ID,
     INSPECTOR_EDGES_ID,
     INSPECTOR_EMBED_ID,
@@ -32,6 +34,7 @@ from lode.tui.screens.browse import (
     TABLE_ID,
     VERSION_BODY_ID,
     BrowseScreen,
+    DeleteConfirmScreen,
     EnrichmentModalScreen,
     NoteViewScreen,
     VersionHistoryScreen,
@@ -1014,3 +1017,275 @@ def test_inspector_edge_without_a_matching_external_row_has_no_snapshot_line(
         == f"Edges:\n-> {short_note_id('note-b')} (mentions related material, 0.75)"
     )
     assert "snapshot" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Delete from browse (lode-d32.1) -- 'd' on a highlighted row pops a Yes/No
+# confirm; confirming appends an op='delete' tombstone (routed through
+# Repository so the cache leg is evicted too) and the note vanishes from the
+# reloaded live table; declining leaves it untouched; an empty table is a
+# no-op; a CAS reject notifies and reloads rather than crashing.
+# ---------------------------------------------------------------------------
+
+
+def test_d_on_a_highlighted_row_pops_the_delete_confirm(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "a note to maybe delete")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            return str(
+                app.screen.query_one(f"#{DELETE_CONFIRM_MESSAGE_ID}", Static).content
+            )
+
+    message = asyncio.run(_drive())
+
+    assert "elete" in message
+    assert "Y" in message
+    assert "N" in message
+
+
+def test_confirming_delete_appends_a_tombstone_and_the_note_vanishes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "kept-note", "stays")
+        save(conn, "gone-note", "goes")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            # Newest-first: "gone-note" (saved last) is the top row, and the
+            # cursor starts there by default -- no cursor manipulation needed.
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+
+    summaries = asyncio.run(_drive())
+
+    assert summaries == ["stays"]
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT op FROM versions WHERE note_id = ? ORDER BY created",
+            ("gone-note",),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("create",), ("delete",)]
+
+
+def test_declining_delete_leaves_the_note_untouched(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "keep me")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            await pilot.press("n")
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+
+    summaries = asyncio.run(_drive())
+
+    assert summaries == ["keep me"]
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT op FROM versions WHERE note_id = ?", ("note-a",)
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("create",)]
+
+
+def test_escape_on_the_delete_confirm_also_declines(tmp_path: Path) -> None:
+    """Escape is a bound alias for "no" on this dialog, same as the decline key."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "keep me too")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    back_to_list = asyncio.run(_drive())
+
+    assert back_to_list
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT op FROM versions WHERE note_id = ?", ("note-a",)
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("create",)]
+
+
+def test_d_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> None:
+    """No highlighted row (empty list) -> 'd' opens no confirm and does not raise.
+
+    Mirrors the same empty-list guard ``i`` (inspect) and ``e`` (edit) hold.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
+            await pilot.press("d")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    stayed_on_browse = asyncio.run(_drive())
+
+    assert stayed_on_browse
+
+
+def test_delete_confirmed_after_the_note_already_vanished_resyncs_not_crashes(
+    tmp_path: Path,
+) -> None:
+    """The note is gone by the time the confirm is answered -- not a crash.
+
+    ``BrowseScreen`` re-resolves the head right before deleting; if the note
+    is already gone by then (``load_head`` returns ``None`` -- e.g. deleted
+    from another session while this confirm dialog sat open), it just
+    resyncs the table instead of attempting a doomed delete.
+    """
+    from lode.versions import delete as versions_delete
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "about to vanish").version_id
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, list[str]]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            # Someone else deletes the note out from under the still-open
+            # confirm dialog.
+            conn = init_db(db_path)
+            try:
+                versions_delete(conn, "note-a", parent=head)
+            finally:
+                conn.close()
+            await pilot.press("y")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            summaries = [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+            return isinstance(app.screen, BrowseScreen), summaries
+
+    stayed_on_browse, summaries = asyncio.run(_drive())
+
+    assert stayed_on_browse
+    assert summaries == []
+
+
+def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine CAS reject inside ``delete_note`` (:class:`HeadConflictError`)
+    is handled gracefully -- notify and reload, never an unhandled crash.
+
+    Forcing this precisely requires the live head to move in the narrow gap
+    between ``BrowseScreen`` re-resolving it (:func:`~lode.tui.edit.load_head`)
+    and calling :func:`~lode.tui.edit.delete_note` -- not reachable from a
+    single-threaded pilot flow without patching that gap directly, so
+    ``load_head`` is monkeypatched to hand back a stale parent while the real
+    head has already moved on.
+    """
+    import lode.tui.screens.browse as browse_module
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        stale_head = save(conn, "note-a", "original body").version_id
+        # The real head moves on -- an edit lands, unbeknownst to the stale
+        # parent load_head is about to (be made to) hand back.
+        save(conn, "note-a", "moved on without you", parent=stale_head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    monkeypatch.setattr(
+        browse_module,
+        "load_head",
+        lambda db_path, note_id: (stale_head, "original body"),
+    )
+
+    async def _drive() -> tuple[bool, list[str]]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("d")
+            await pilot.pause()
+            assert isinstance(app.screen, DeleteConfirmScreen)
+            await pilot.press("y")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            summaries = [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+            return isinstance(app.screen, BrowseScreen), summaries
+
+    stayed_on_browse, summaries = asyncio.run(_drive())
+
+    assert stayed_on_browse
+    # No crash, and the reload reflects the note's real (undeleted) state.
+    assert summaries == ["moved on without you"]
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+            ("note-a",),
+        ).fetchall()
+    finally:
+        conn.close()
+    # No tombstone was written -- the rejected delete left the chain untouched.
+    assert rows == [("original body", "create"), ("moved on without you", "update")]
