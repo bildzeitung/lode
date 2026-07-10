@@ -127,6 +127,27 @@ def test_whitespace_only_draft_is_treated_as_too_short(tmp_path: Path) -> None:
     assert find_related_notes(db_path, "     \n\t  ", settings=settings) == []
 
 
+# --- the missing-db-file gate: cheap, no DB touched, no file created ------
+
+
+def test_missing_db_file_returns_empty_without_creating_it(tmp_path: Path) -> None:
+    """lode-e1s: nothing saved yet means nothing to search -- and no file.
+
+    ``lode.storage.init_db`` creates ``db_path`` the instant it connects, even
+    for a read-only pass. A debounced background search racing a discard/quit
+    that never saved anything must not leave a spurious empty database behind
+    (this was the flaky-test symptom: ``db_path.exists()`` intermittently True
+    after a discard, under full-suite/xdist scheduling load).
+    """
+    db_path = tmp_path / "lode.db"
+    settings = load_settings(related_notes_min_chars=0)
+
+    result = find_related_notes(db_path, "alpha bravo charlie", settings=settings)
+
+    assert result == []
+    assert not db_path.exists()  # init_db never called
+
+
 # --- lexical leg alone (before any embedding runs) ------------------------
 
 
