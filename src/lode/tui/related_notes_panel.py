@@ -177,6 +177,27 @@ class RelatedNotesPanel(Static):
         self._cancel_related_pass()
         self._render_related([])
 
+    def on_unmount(self) -> None:
+        """Drop any scheduled/in-flight pass when this widget goes away (lode-ivu).
+
+        :meth:`reset` is called explicitly only from
+        :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new` --
+        every *other* way a composing screen goes away (Ctrl+S save-and-exit,
+        Escape/Ctrl+Q discard, a future navigation) left the debounce timer
+        (and a since-started worker) running unattended. Textual dispatches
+        ``Unmount`` to every mounted widget as a screen is popped or the app
+        exits, so this single hook -- not a cancel call duplicated into each
+        exit path of every screen that composes this widget (capture *and*
+        :class:`~lode.tui.screens.browse.EditScreen`) -- catches all of them
+        uniformly. Purely a timer-lifecycle efficiency cleanup: a post-
+        teardown firing was already harmless (:func:`lode.tui.related.
+        find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
+        result was always discarded here (nothing left mounted to render
+        into) -- this just stops the wasted embed + FTS5 + LanceDB pass from
+        running at all.
+        """
+        self._cancel_related_pass()
+
     def _cancel_related_pass(self) -> None:
         """Drop the scheduled *and* the in-flight related-notes pass, if any.
 

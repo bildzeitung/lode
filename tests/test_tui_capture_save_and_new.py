@@ -386,3 +386,52 @@ def test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker(
 
     assert related == []
     assert "stale" not in panel_text
+
+
+def test_on_unmount_cancels_a_pending_related_notes_timer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-ivu: every exit/navigation path except Ctrl+N's
+    ``action_save_and_new`` left the debounce timer running after the screen
+    -- and hence this panel -- went away (Ctrl+S save-and-exit, Escape/Ctrl+Q
+    discard, a future navigation). ``RelatedNotesPanel.on_unmount`` closes
+    that gap generically, at the widget's own lifecycle hook, rather than
+    needing a ``reset()`` call duplicated into every exit path of every screen
+    that composes this widget (capture *and*
+    :class:`~lode.tui.screens.browse.EditScreen`).
+
+    Calls ``on_unmount`` directly rather than driving it through an actual
+    screen pop or app exit: Textual's *own* generic per-widget teardown
+    (``MessagePump._close_messages`` stopping every timer registered via
+    ``set_timer``, dispatched as part of the same removal Textual already
+    performs on a real unmount) turns out to already race-free cancel the
+    timer in every removal path this test tried empirically (a direct
+    ``panel.remove()``, and ``app.exit()`` followed by an immediate
+    ``run_test()`` exit) -- with *or without* this ticket's fix, making an
+    end-to-end drive through either path non-discriminating. Calling the
+    hook directly is the one deterministic way to pin down that this
+    specific method does its job: without it (before this fix), this fails
+    two ways -- ``AttributeError`` (no such method), and, if simulated by
+    skipping the call, the debounce timer surviving to actually run a pass
+    after the 50ms window elapses.
+    """
+    db_path = tmp_path / "lode.db"
+    _CountingStubEmbedder.instances = 0
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
+    settings = Settings(related_notes_debounce_ms=50, related_notes_min_chars=0)
+    app = LodeApp(db_path=db_path, settings=settings)
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            panel = app.screen.query_one(RelatedNotesPanel)
+            panel.update_draft("a note long enough to normally trigger a pass")
+            # The 50ms debounce timer is now pending, not yet fired.
+            panel.on_unmount()
+            # Outlive the debounce window a not-actually-cancelled timer
+            # would still fire on.
+            await pilot.pause(0.3)
+            await app.workers.wait_for_complete()
+
+    asyncio.run(_drive())
+
+    assert _CountingStubEmbedder.instances == 0
