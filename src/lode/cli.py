@@ -295,6 +295,15 @@ def ask(
         answer = cited_answer.ask(
             conn, question, context, think_harder=think_harder, settings=settings
         )
+        # Resolve each surviving citation's as-of provenance while conn is still
+        # open (docs/externals.md "Every AI claim from an external must cite
+        # 'as of fetched_at'") -- a note's is its version's write time, an
+        # external's its snapshot's fetch time (:func:`_resolve_as_of`).
+        as_of = {
+            support.target_id: _resolve_as_of(conn, support)
+            for claim in answer.claims
+            for support in claim.support
+        }
     except AuthError as err:
         # Fail gracefully on missing credentials: a clean, actionable line to the
         # user (no traceback) and the underlying cause to the log for debugging.
@@ -308,7 +317,7 @@ def ask(
         raise typer.Exit(code=1) from None
     finally:
         conn.close()
-    for line in _format_cited_answer(answer):
+    for line in _format_cited_answer(answer, as_of):
         typer.echo(line)
 
 
@@ -372,14 +381,20 @@ def _retrieve(
     return trust_rank(conn, graphed).context
 
 
-def _format_cited_answer(answer: "CitedAnswer") -> list[str]:
+def _format_cited_answer(
+    answer: "CitedAnswer", as_of: dict[str, str | None]
+) -> list[str]:
     """Render a gated answer for the terminal: cited claims, or an abstention.
 
     Each surviving claim prints its text followed by one indented citation line per
-    support — its ``version_id`` / ``snapshot_id`` and the verbatim span. When the
-    answer abstained (no claim survived the gate) the honest abstention line is
-    printed instead. Either way, any no_egress material is surfaced as "present,
-    withheld from cloud synthesis" so the user knows relevant local content exists.
+    support — its ``version_id`` / ``snapshot_id``, its resolved as-of provenance
+    (``as_of``, keyed by :attr:`Support.target_id` — :func:`_resolve_as_of`), and the
+    verbatim span. ``docs/externals.md`` ("Every AI claim from an external must cite
+    'as of fetched_at'") is why this line is never omitted, note citation or
+    external. When the answer abstained (no claim survived the gate) the honest
+    abstention line is printed instead. Either way, any no_egress material is
+    surfaced as "present, withheld from cloud synthesis" so the user knows relevant
+    local content exists.
     """
     lines: list[str] = []
     if answer.abstained:
@@ -387,19 +402,53 @@ def _format_cited_answer(answer: "CitedAnswer") -> list[str]:
     else:
         for claim in answer.claims:
             lines.append(claim.text)
-            lines.extend(_format_citation(support) for support in claim.support)
+            lines.extend(
+                _format_citation(support, as_of.get(support.target_id))
+                for support in claim.support
+            )
     for withheld in answer.withheld_citations:
         lines.append(f"  withheld {withheld.target_id}: {withheld.note}")
     return lines
 
 
-def _format_citation(support: "Support") -> str:
-    """Render one support as an indented ``<id-kind> <id>  "<span>"`` citation."""
+def _format_citation(support: "Support", as_of: str | None) -> str:
+    """Render one support as an indented ``<id-kind> <id>, as of <ts>  "<span>"`` line.
+
+    ``as_of`` is ``None`` only for a target the store could not resolve
+    (practically unreachable — the faithfulness gate already verified the span
+    against the stored body — but rendered as ``"as of unknown"`` rather than
+    assumed away).
+    """
     if support.version_id is not None:
         target = f"version_id {support.version_id}"
     else:
         target = f"snapshot_id {support.snapshot_id}"
-    return f'  - {target}  "{support.quoted_span}"'
+    provenance = f"{target}, as of {as_of}" if as_of else f"{target}, as of unknown"
+    return f'  - {provenance}  "{support.quoted_span}"'
+
+
+def _resolve_as_of(conn: sqlite3.Connection, support: "Support") -> str | None:
+    """Resolve one citation's as-of provenance from the store.
+
+    A note ``version_id``'s as-of is its write time (``versions.created``); an
+    external ``snapshot_id``'s is its fetch time (``snapshots.fetched_at`` —
+    ``docs/externals.md`` "Every AI claim from an external must cite 'as of
+    fetched_at'"). Mirrors :func:`lode.tui.ask._resolve_as_of`, which the TUI ask
+    screen uses for the same lookup. Returns ``None`` for a target absent from the
+    store (practically unreachable — the faithfulness gate already verified the
+    span against the stored body — but handled rather than assumed away).
+    """
+    if support.version_id is not None:
+        row = conn.execute(
+            "SELECT created FROM versions WHERE version_id = ?",
+            (support.version_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+            (support.snapshot_id,),
+        ).fetchone()
+    return row[0] if row is not None else None
 
 
 @app.command()

@@ -607,11 +607,14 @@ def _expanded(passage_id: str, target_version: str, score: float) -> ExpandedHit
 def _insert_external_snapshot(
     conn, *, external_id: str, snapshot_id: str, is_head: bool
 ) -> str:
-    """Insert an external + one snapshot; point head at it iff ``is_head``.
+    """Insert an external + one snapshot directly; point head at it iff ``is_head``.
 
-    Externals/snapshots are UNUSED until connectors (schema), so the test seeds the
-    rows directly to exercise the current/stale classification. Returns the
-    snapshot_id for citation as a ``target_version``.
+    A hand-rolled shortcut for pinning an *arbitrary* snapshot_id to a specific
+    current/stale state without going through churn (real ingest always makes the
+    newest write current — see the real-ingest test below,
+    ``test_trust_rank_orders_current_above_stale_with_real_ingested_snapshots``,
+    for that path through the real connector, :func:`lode.externals.ingest_snapshot`,
+    lode-w0h.2). Returns the snapshot_id for citation as a ``target_version``.
     """
     conn.execute(
         "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
@@ -669,6 +672,46 @@ def test_trust_rank_orders_note_above_current_above_stale_external(repo, conn) -
 
     assert ranked.withheld == []
     assert [item.target_version for item in ranked.context] == [v, current, stale]
+    assert [item.tier for item in ranked.context] == [
+        TrustTier.OWNED_NOTE,
+        TrustTier.CURRENT_EXTERNAL,
+        TrustTier.STALE_EXTERNAL,
+    ]
+
+
+def test_trust_rank_orders_current_above_stale_with_real_ingested_snapshots(
+    repo, conn
+) -> None:
+    """lode-w0h.4: the same gradient, verified against real externals ingest+churn.
+
+    The synthetic ``_insert_external_snapshot`` fixture above pins an arbitrary
+    snapshot_id to a current/stale state by hand; this test instead drives the
+    real write path (:func:`lode.externals.ingest_snapshot`, lode-w0h.2 — the
+    connector no longer being merely schema-shaped, ``docs/externals.md``): two
+    ingests of the same ``external_id`` churn the head, so the first snapshot
+    becomes stale and the second current exactly the way a real refetch would,
+    with a real ``fetched_at`` stamped on each.
+    """
+    v = repo.save("note-a", "alpha").version_id
+    stale_result = ingest_snapshot(conn, "https://example.com/x", "web", "one")
+    current_result = ingest_snapshot(conn, "https://example.com/x", "web", "two")
+    assert stale_result.snapshot_id != current_result.snapshot_id  # churn wrote two
+
+    ranked = trust_rank(
+        conn,
+        [
+            _expanded("p-stale", stale_result.snapshot_id, 0.9),
+            _expanded("p-current", current_result.snapshot_id, 0.8),
+            _expanded("p-note", v, 0.1),
+        ],
+    )
+
+    assert ranked.withheld == []
+    assert [item.target_version for item in ranked.context] == [
+        v,
+        current_result.snapshot_id,
+        stale_result.snapshot_id,
+    ]
     assert [item.tier for item in ranked.context] == [
         TrustTier.OWNED_NOTE,
         TrustTier.CURRENT_EXTERNAL,
