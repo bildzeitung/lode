@@ -545,9 +545,9 @@ def recover(
     """
     conn = _open_db(db)
     try:
-        resolver = Repository(conn)
+        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
-            note_id = resolver.resolve_note_prefix(target, include_deleted=True)
+            note_id = repo.resolve_note_prefix(target, include_deleted=True)
         except KeyError:
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1) from None
@@ -576,7 +576,6 @@ def recover(
             typer.echo(f"note is not deleted: {note_id}", err=True)
             raise typer.Exit(code=1)
 
-        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         result = repo.recover(note_id, target_version=parent_version_id)
     finally:
         conn.close()
