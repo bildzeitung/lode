@@ -57,6 +57,23 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
 - `requirements.txt` is a single editable-install line (`-e .[dev]`) so `pyproject.toml` is the one source of truth for dependencies; the actual dep list lives there (`[project].dependencies` + the `dev` extra), seeded from the decided stack (`docs/stack.md`) and unpinned until the build starts.
 
+## New machine setup
+
+Everything portable travels on two wires from the same git remote: **git** (code, docs, committed `.claude/` config — settings, skills, agents) and **Dolt** (`refs/dolt/data` — the bd issue DB *and* `bd remember` memories). On a fresh clone:
+
+1. `./scripts/python-init.sh && . ./venv/bin/activate`
+2. `bd dolt pull` — restores the full issue DB and persistent memories (`bd memories` to verify)
+3. Install **rtk**, then run `scripts/rtk-setup.sh` (idempotent; installs the required `exclude_commands` into `~/.config/rtk/config.toml`). If rtk is absent, skip this and the hook in step 4 — plain commands work fine and the committed `Bash(rtk *)` allow entry is inert.
+4. Re-create the deliberately **user-scope** (`~/.claude/settings.json`) pieces as wanted — these do NOT travel: the rtk PreToolUse hook (`{"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}`), `"defaultMode": "acceptEdits"`, model choice, personal statusline.
+
+Project-scope permissions and auto-mode consent rules live in the committed [`.claude/settings.json`](.claude/settings.json) and travel with the clone; machine-local one-offs go in `.claude/settings.local.json` (gitignored).
+
+## Workflow gotchas (learned the hard way)
+
+- **A beads pre-commit hook re-exports and stages `.beads/issues.jsonl` during every commit** — even when you staged only one file with an explicit `git add`. For a commit that must not carry the jsonl (e.g. a direct doc-only commit to trunk), use `git commit --no-verify`, then confirm with `git show --stat HEAD` that only the intended files rode along. A slipped jsonl is inert here (`import.auto: false`) — a hygiene slip, not an emergency.
+- **The session-close `git pull --rebase` flattens a just-made `--no-ff` merge** when trunk is 0 behind origin: rebase drops merge commits, silently discarding the merge bubble this file mandates. After merging a worktree branch into trunk, check `git rev-list --count trunk..origin/trunk` — if 0, push directly and skip the rebase; if actually behind, prefer `git merge origin/trunk` over rebasing to keep the bubble.
+- **Never `git add -A` on trunk** — it sweeps in unrelated untracked files, and the pre-commit hook adds the passive jsonl on top. Stage explicit paths only.
+
 ## General Directives
 
 1. **Ask, don't assume.** If something is unclear, ask before writing a single line. Never make silent assumptions about intent, architecture, or requirements.
