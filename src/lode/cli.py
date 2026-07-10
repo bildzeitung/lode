@@ -13,13 +13,15 @@ only tombstoned notes via the sibling reader
 :func:`lode.notes_read.list_deleted_notes`; ``show`` (lode-1gr.5, brought to
 CONTENT parity with the TUI inspector modal by lode-ay5.3) prints one note's
 head body plus its full derived enrichment -- summary/tags/entities (stale-
-flagged), inferred edges (now with reason+confidence, compact), a
-three-valued ``enrichment:`` line ({pending, failed, ready}), and whether it
-is embedded -- via the shared :mod:`lode.enrichment_view` seam (lode-ay5.1)
-also consumed by the TUI, so on-demand CLI introspection cannot drift from
-the modal; sharing ``purge``'s id/prefix resolution, and flagging a
-tombstoned head with a ``[deleted]`` marker (lode-d32.2) rather than
-rendering it as if live; ``ask`` (lode-y42.2) runs the cited Q&A loop
+flagged), inferred edges (now with reason+confidence, compact -- and, for an
+edge that draws down a web link, its external-snapshot introspection
+indented beneath, lode-8d2), a three-valued ``enrichment:`` line ({pending,
+failed, ready}), and whether it is embedded -- via the shared
+:mod:`lode.enrichment_view` seam (lode-ay5.1) also consumed by the TUI, so
+on-demand CLI introspection cannot drift from the modal; sharing ``purge``'s
+id/prefix resolution, and flagging a tombstoned head with a ``[deleted]``
+marker (lode-d32.2) rather than rendering it as if live; ``ask``
+(lode-y42.2) runs the cited Q&A loop
 (retrieve → synthesize → faithfulness gate → cite or abstain); ``tui`` (E11,
 lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
@@ -52,7 +54,7 @@ from lode.config import (
     lode_home,
     log_dir,
 )
-from lode.enrichment_view import EnrichmentItem, enrichment_view_conn
+from lode.enrichment_view import EnrichmentItem, ExternalView, enrichment_view_conn
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock, lock_path
 from lode.logconfig import configure_logging
@@ -573,6 +575,24 @@ def _render_edge_detail(reason: str | None, confidence: float | None) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
+def _render_external(external: ExternalView) -> str:
+    """Render one edge's :class:`~lode.enrichment_view.ExternalView`, indented (lode-8d2).
+
+    Browse-time introspection for a drawn-down web link, printed directly
+    beneath its edge's own ``-> to_id`` line -- the same view-model fields
+    the TUI inspector modal (lode-ay5.2) renders, through the ONE seam
+    (:mod:`lode.enrichment_view`) so this command holds no second copy of
+    what an external's fields mean. ``state`` is always shown explicitly
+    (``un-refreshed``/``stale``/``withheld``) rather than suppressed for the
+    default case, so all three are equally visible/greppable in the output.
+    """
+    return (
+        f"       {external.source_type} · snapshot "
+        f"{short_version_id(external.snapshot_id)} · as of {external.fetched_at} "
+        f"[{external.state}]"
+    )
+
+
 @app.command(name="show")
 def show_(
     target: str = typer.Argument(
@@ -675,6 +695,8 @@ def show_(
             detail = _render_edge_detail(edge.reason, edge.confidence)
             flag = " [stale]" if edge.stale else ""
             typer.echo(f"  -> {edge.to_id}{detail}{flag}")
+            if edge.external is not None:
+                typer.echo(_render_external(edge.external))
     else:
         typer.echo("edges: (none)")
 

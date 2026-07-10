@@ -15,6 +15,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.widgets import DataTable, Static, TextArea
 
+from lode.ids import short_version_id
 from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
@@ -696,3 +697,190 @@ def test_i_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> Non
     stayed_on_browse = asyncio.run(_drive())
 
     assert stayed_on_browse
+
+
+# ---------------------------------------------------------------------------
+# External-snapshot introspection (lode-8d2) -- an edge that draws down a web
+# link gains a second, indented line in the Edges block showing that
+# external's ExternalView (source_type/snapshot id/fetched_at/state),
+# through the same lode.enrichment_view.enrichment_view seam.
+# ---------------------------------------------------------------------------
+
+
+def _insert_external(
+    conn: sqlite3.Connection,
+    *,
+    external_id: str,
+    source_type: str = "web",
+    snapshot_id: str,
+    status: str = "ok",
+    no_egress: bool = False,
+    fetched_at: str = "2026-07-08T00:00:00.000000Z",
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, no_egress) "
+            "VALUES (?, ?, ?)",
+            (external_id, source_type, int(no_egress)),
+        )
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, status, fetched_at) "
+            "VALUES (?, ?, 'body', ?, ?)",
+            (snapshot_id, external_id, status, fetched_at),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+
+
+def test_inspector_shows_external_snapshot_for_a_drawn_down_edge(
+    tmp_path: Path,
+) -> None:
+    """An edge to a real external gains a snapshot line -- source_type, short
+    snapshot id, fetched_at, and its 'un-refreshed' state (the default,
+    still shown explicitly).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-tui-1",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> Text:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
+            assert isinstance(content, Text)
+            return content
+
+    edges_text = asyncio.run(_drive())
+    rendered = str(edges_text)
+
+    assert "-> https://example.com/article (pasted URL, 1.00)" in rendered
+    assert "web" in rendered
+    assert short_version_id("snap-tui-1") in rendered
+    assert "as of 2026-07-08T00:00:00.000000Z" in rendered
+    assert "[un-refreshed]" in rendered
+
+
+def test_inspector_distinguishes_stale_and_withheld_external_states(
+    tmp_path: Path,
+) -> None:
+    """A tombstoned external reads [stale]; a no_egress one reads [withheld] --
+    the three ExternalView states are distinguishable in one render.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(
+            conn,
+            "note-a",
+            "see https://dead.example.com/ and https://sensitive.example.com/",
+        ).version_id
+        _insert_external(
+            conn,
+            external_id="https://dead.example.com/",
+            snapshot_id="snap-tui-dead",
+            status="tombstone",
+        )
+        _insert_external(
+            conn,
+            external_id="https://sensitive.example.com/",
+            snapshot_id="snap-tui-sensitive",
+            no_egress=True,
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://dead.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://sensitive.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> Text:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
+            assert isinstance(content, Text)
+            return content
+
+    edges_text = asyncio.run(_drive())
+    rendered = str(edges_text)
+
+    assert "[stale]" in rendered
+    assert "[withheld]" in rendered
+    assert "[un-refreshed]" not in rendered
+
+
+def test_inspector_edge_without_a_matching_external_row_has_no_snapshot_line(
+    tmp_path: Path,
+) -> None:
+    """A plain inferred edge (to_id not a real external) prints only its own
+    line -- no extra snapshot sub-line, no crash."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="note-b",
+            source_version=head,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> Text:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("i")
+            await pilot.pause()
+            content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
+            assert isinstance(content, Text)
+            return content
+
+    edges_text = asyncio.run(_drive())
+    rendered = str(edges_text)
+
+    assert (
+        rendered
+        == f"Edges:\n-> {short_note_id('note-b')} (mentions related material, 0.75)"
+    )
+    assert "snapshot" not in rendered

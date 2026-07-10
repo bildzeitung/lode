@@ -39,6 +39,31 @@ per the pinned predicate (bd lode-ay5.1 notes, decided 2026-07-08; the
 - ``"ready"`` -- otherwise (the head has ``source='ai'`` rows, or there was
   never an enrich job for it at all).
 
+**External-snapshot introspection** (:class:`ExternalView`, lode-8d2) is the
+browse-time analogue of the above for a *mirrored* node: when one of a note's
+edges points at a real ``externals`` row (a drawn-down web link, ``lode-
+w0h.2``/``lode-w0h.3``), :attr:`EnrichmentEdge.external` carries that
+external's current snapshot -- source URL (the edge's own ``to_id``),
+``source_type``, the head ``snapshot_id``, ``fetched_at``, and a three-valued
+``state``. This ticket's only dependencies are ``lode-ay5.1`` and ``lode-
+w0h.2``, so ``state`` is scoped to what those two land: it does **not**
+attempt the refresh-cadence or re-enrich-materiality signals the epic
+description imagines (``lode-w0h.5``/``lode-w0h.6`` -- neither has landed,
+and this module fabricates no field for data that does not exist yet):
+
+- ``"withheld"`` -- ``externals.no_egress`` is set (``docs/externals.md``
+  "No-egress tier": captured and locally retrievable, never sent to Claude).
+  Checked first -- privacy trumps fetch outcome.
+- ``"stale"`` -- the head snapshot's ``status`` is ``"tombstone"`` (the last
+  fetch failed; there is no fresh mirrored content to trust,
+  :func:`lode.externals.tombstone_body`).
+- ``"un-refreshed"`` -- otherwise: an ``"ok"`` snapshot, not withheld. Named
+  for what is actually true today rather than implying liveness that
+  ``lode-w0h.6``'s refresh policy (TTL / on-access revalidation) alone would
+  earn -- nothing currently re-fetches a source on a schedule, so every
+  un-tombstoned, non-withheld external is exactly as fresh as its one
+  ``fetched_at``, and no more.
+
 No writes; this module only reads.
 """
 
@@ -56,6 +81,11 @@ from lode.storage import init_db
 #: see the module docstring for the exact predicate.
 EnrichmentState = Literal["pending", "ready", "failed"]
 
+#: The three states an :class:`ExternalView` can report -- see the module
+#: docstring's "External-snapshot introspection" section for the exact
+#: predicate (lode-8d2).
+ExternalState = Literal["un-refreshed", "stale", "withheld"]
+
 #: Live (in-flight or about-to-retry) job statuses -- schema.sql's
 #: ``pending -> running -> done`` happy path, plus ``failed`` (DECIDED
 #: 2026-07-08, bd lode-bvg): worker.py writes ``status='failed'`` ONLY in the
@@ -71,13 +101,43 @@ _DEAD_JOB_STATUSES = ("dead",)
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalView:
+    """A mirrored external's current snapshot, as browse-time introspection shows it.
+
+    The external analogue of a note's own enrichment (lode-8d2) -- assembled
+    the same pure-read way (no Textual, no Typer), attached to whichever
+    :class:`EnrichmentEdge` points at this external's ``external_id`` (its
+    ``to_id``) rather than surfaced as a standalone top-level read, since
+    browse only ever selects a *note* today (an external only becomes
+    directly selectable per ``lode-w0h.8``, out of this ticket's scope). See
+    the module docstring's "External-snapshot introspection" section for the
+    exact ``state`` predicate.
+    """
+
+    external_id: str
+    source_type: str
+    snapshot_id: str
+    fetched_at: str
+    status: Literal["ok", "tombstone"]
+    no_egress: bool
+    state: ExternalState
+
+
+@dataclass(frozen=True, slots=True)
 class EnrichmentEdge:
-    """One inferred (or user-curated) edge, as the view-model carries it."""
+    """One inferred (or user-curated) edge, as the view-model carries it.
+
+    ``external`` is ``None`` for an edge to another note (or to a not-yet-
+    drawn-down id); it carries the target's :class:`ExternalView` when
+    ``to_id`` resolves to a real ``externals`` row (lode-8d2) -- e.g. the
+    ``source='user'`` edge a pasted URL creates (``lode.drawdown``).
+    """
 
     to_id: str
     reason: str | None
     confidence: float | None
     stale: bool
+    external: ExternalView | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +274,7 @@ def enrichment_view_conn(
             reason=edge["reason"],
             confidence=edge["confidence"],
             stale=edge["stale"],
+            external=_external_view(conn, edge["to_id"]),
         )
         for edge in edges
     ]
@@ -232,6 +293,50 @@ def enrichment_view_conn(
         edges=view_edges,
         embedded=passage_count > 0,
         passage_count=passage_count,
+    )
+
+
+def _external_view(conn: sqlite3.Connection, to_id: str) -> ExternalView | None:
+    """``to_id``'s :class:`ExternalView`, or ``None`` if it isn't a real external.
+
+    An edge's ``to_id`` is polymorphic (another note, an inferred-edge target
+    string, or a drawn-down external's id) -- the only reliable way to tell
+    them apart is to ask the ``externals`` table itself, so this queries by
+    existence rather than guessing from ``to_id``'s shape (a web
+    ``external_id`` *is* its canonical URL, ``lode.drawdown``, but a future
+    connector's id need not look like one). Kept private, like
+    ``enrichment_view``'s own former ``_enrichment_view`` (ay5.1's review:
+    "a public API with no caller and no test is speculative") -- the one
+    caller is :func:`enrichment_view_conn`, attaching this to every edge that
+    resolves to an external so neither consumer needs a second read.
+    """
+    row = conn.execute(
+        "SELECT e.source_type, e.no_egress, s.snapshot_id, s.fetched_at, s.status "
+        "FROM externals e JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+        "WHERE e.external_id = ?",
+        (to_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    source_type, no_egress_raw, snapshot_id, fetched_at, status = row
+    no_egress = bool(no_egress_raw)
+
+    state: ExternalState
+    if no_egress:
+        state = "withheld"
+    elif status == "tombstone":
+        state = "stale"
+    else:
+        state = "un-refreshed"
+
+    return ExternalView(
+        external_id=to_id,
+        source_type=source_type,
+        snapshot_id=snapshot_id,
+        fetched_at=fetched_at,
+        status=status,
+        no_egress=no_egress,
+        state=state,
     )
 
 
