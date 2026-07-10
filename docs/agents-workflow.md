@@ -222,6 +222,48 @@ flowchart TD
     class MARKL,DONE good;
 ```
 
+### Concurrency cap (lode-2cf)
+
+`/code`'s fan-out (builders and reviewers, plus the step-0/step-1 sweep dispatches) shares **one
+concurrency cap** for the whole invocation — it was previously unbounded, dispatching the entire ready
+frontier at once.
+
+**Why.** On 2026-07-10 the Claude Code host process crashed twice, each time with **7** concurrent
+`/code` agents in flight (builders + reviewers), orphaning the whole fleet mid-run. Each agent's gate
+is `nox -s tests` with pytest-xdist `-n auto` = **8 workers**, each holding a cached ONNX cross-encoder
+(the [reranker](configuration.md#retrieval-and-ranking)) in memory — 7 agents × 8 workers on a
+15GiB/8-core WSL2 VM is the prime suspect for the crash (no `dmesg` OOM lines survived, since WSL2
+restarts the whole VM on a crash, so the memory hypothesis is strong but not conclusively proven —
+the cap is cheap insurance regardless). After manually staggering to **~4** concurrent agents, the
+identical workload completed with zero further crashes.
+
+**What.** `.claude/skills/code/SKILL.md` computes `CODE_MAX_CONCURRENT_AGENTS` once, at the start of
+every invocation, before its step-0 sweep. **Never** more than that many agents — builders and
+reviewers combined, across every dispatch source (step 0's rebase pickups, step 1's stranded-review
+pickups, Phase 1 builders, Phase 2 reviewers) — run concurrently; the rest of the resolved task set
+queues and dispatches as running agents complete and free a slot.
+
+**Default derivation (deliberately simple — a static per-machine number the user sets beats a clever
+heuristic that guesses wrong, per this ticket's own design note).** Read `MemAvailable` from
+`/proc/meminfo` (falling back to `MemTotal` if `MemAvailable` is absent), divide by an estimated
+**~3GiB per-agent gate footprint** (an 8-worker xdist run holding a cached reranker), then clamp to
+`[1, nproc/2]` and floor at 1. On the 15GiB/8-core WSL2 machine the crash occurred on, this resolves to
+**4** with no user action — matching the empirically-stable stagger count.
+
+**Override — machine-local, no `SKILL.md` edit.** The env var `LODE_CODE_MAX_CONCURRENT_AGENTS`, when
+set, wins outright over the derivation (no clamping — an explicit user choice is trusted as-is). Set
+it durably per machine via `.claude/settings.local.json`'s `"env"` block (gitignored, applied to every
+Claude Code session on that machine):
+
+```json
+{ "env": { "LODE_CODE_MAX_CONCURRENT_AGENTS": "6" } }
+```
+
+or export it in the shell that launches `claude` for a one-off override. The derivation/default logic
+itself stays in the committed skill so it travels to every clone; only the override is machine-local.
+The skill re-reads the env var fresh at the start of every invocation, so a changed value takes effect
+on the next `/code` run without any other action.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
@@ -233,6 +275,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; removed after land) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
+| Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |

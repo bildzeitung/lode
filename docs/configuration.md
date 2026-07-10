@@ -9,6 +9,12 @@ Every parameter the design exposes, in one place. Three kinds, flagged in the **
 
 Defaults below are starting points, not measured optima.
 
+**Scope note:** this page is the lode *application's* knobs — what `lode` itself reads at runtime.
+The `/code` skill's agent-orchestration concurrency cap (how many builder/reviewer agents Claude Code
+runs at once) is dev-tooling, not application config, so it's documented instead in
+[agents-workflow.md](agents-workflow.md#concurrency-cap-lode-2cf) alongside the rest of the coding
+loop's mechanics.
+
 ## Paths & locations
 
 Everything lode persists lives under **one user-controllable root**, `$LODE_HOME` (default `~/.lode`). One inspectable directory — trivial to surface, back up (`cp -r`), or relocate — rather than scattering data/state/config across separate trees. (This is deliberately *not* the [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) split of `$XDG_DATA_HOME` / `$XDG_STATE_HOME` / `$XDG_CONFIG_HOME`; a single root is simpler to reason about and matches the design's "co-locate the lock beside the DB" and "partition by rows, not by file" stance, [storage.md](storage.md#the-partition-is-by-rows-not-by-file).)

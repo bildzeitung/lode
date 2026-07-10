@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — self-heals a clean rebase or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — self-heals a clean rebase or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -48,6 +48,52 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > against this repo. Need more parallelism? Pass more IDs (or use bare `/code`) to the **same**
 > invocation instead of launching a second one.
 
+> **Concurrency cap — one shared budget for every dispatch below (lode-2cf).** 7 concurrent agents
+> (builders + reviewers) crashed the Claude Code host twice on 2026-07-10: each agent's gate is
+> `nox -s tests` with pytest-xdist `-n auto` = 8 workers, each holding a cached ONNX reranker, and
+> 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's memory. Staggering to ~4 concurrent agents
+> ran the identical workload with zero further crashes. **Before step 0**, compute the cap once and
+> hold it for the rest of the invocation:
+>
+> ```bash
+> CODE_MAX_CONCURRENT_AGENTS="${LODE_CODE_MAX_CONCURRENT_AGENTS:-$(
+>   mem_kib=$(awk '/^MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null)
+>   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
+>   nproc_n=$(nproc 2>/dev/null || echo 4)
+>   if [ -n "$mem_kib" ]; then
+>     mem_gib=$(( mem_kib / 1024 / 1024 ))
+>     by_mem=$(( mem_gib / 3 ))          # ~3GiB per agent gate (8-worker xdist + cached reranker)
+>   else
+>     by_mem=4                            # /proc/meminfo unavailable (non-Linux) — conservative fallback
+>   fi
+>   by_cpu=$(( nproc_n / 2 ))
+>   [ "$by_cpu" -lt 1 ] && by_cpu=1
+>   cap=$by_mem
+>   [ "$cap" -gt "$by_cpu" ] && cap=$by_cpu
+>   [ "$cap" -lt 1 ] && cap=1
+>   echo "$cap"
+> )}"
+> ```
+>
+> - **`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no
+>   derivation; a static per-machine number the user sets beats a heuristic that guesses wrong. Set it
+>   durably, machine-locally, **without editing this file**, via `.claude/settings.local.json`'s
+>   `"env"` block (gitignored, applied to every session on that machine):
+>   `{"env": {"LODE_CODE_MAX_CONCURRENT_AGENTS": "6"}}` — or export it in the shell that launches
+>   `claude` for a one-off override. The skill re-reads it fresh at the start of every invocation.
+> - **Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`) at ~3GiB per
+>   agent's gate footprint, clamped to `[1, nproc/2]`, floored at 1. Resolves to **4** on this
+>   15GiB/8-core WSL2 machine without any user action.
+> - **The cap is one shared budget across every dispatch source in this invocation** — step 0's
+>   rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw
+>   from the same count; builders and reviewers are not separate pools. Track how many dispatched
+>   agents are still in flight; when the next dispatch would exceed `CODE_MAX_CONCURRENT_AGENTS`,
+>   **queue** it instead and dispatch it only once an in-flight agent completes and frees a slot —
+>   across *all* sources, not per-step (e.g. a Phase 2 review that becomes dispatchable while step 0's
+>   rebase pickups are still running competes for the same slots they hold). Full rationale and the
+>   override mechanism are documented in
+>   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf).
+
 0. **Sweep for `needs-rebase` kick-backs first — every invocation, regardless of argument.**
    `/land`'s cheap conflict precheck can kick a `ready-for-land` branch back: it strips
    `ready-for-land`, adds **`needs-rebase`**, and keeps the same `land/<id>` branch + build worktree
@@ -77,8 +123,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > (`land-escalated`, leave the branch as it was) rather than guess — that stays a human decision.
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
-   (`run_in_background: true`) — a rebase pickup and a fresh build never share a ticket, so they can't
-   collide. **Do not dispatch a Phase 2 `code-reviewer` for a rebase pickup**: it lands directly at
+   (`run_in_background: true`), **subject to the concurrency cap** (`CODE_MAX_CONCURRENT_AGENTS`,
+   computed above) — a rebase pickup and a fresh build never share a ticket, so they can't collide,
+   but they draw from the same budget, so queue the overflow and dispatch it as slots free. **Do not
+   dispatch a Phase 2 `code-reviewer` for a rebase pickup**: it lands directly at
    `ready-for-land`, skipping technical review entirely, the same way `/land`'s kick-back skipped
    `land-review` — the content was never judged bad, it only needed to replay onto where `trunk`
    moved. If the sweep finds nothing, say so and move on; it's not an error.
@@ -111,9 +159,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree,
    `/code-review --fix` + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
    Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this
-   invocation's own Phase 1 builds — a stranded re-entry never shares a ticket with a fresh build or
-   rebase pickup, so none of these collide. If the sweep finds nothing, say so and move on; it's not an
-   error.
+   invocation's own Phase 1 builds, **subject to the same concurrency cap** — a stranded re-entry
+   never shares a ticket with a fresh build or rebase pickup, so none of these collide, but all of
+   them draw from the one shared budget; queue the overflow and dispatch it as slots free. If the
+   sweep finds nothing, say so and move on; it's not an error.
 
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read `bd ready` and **fan out** across
@@ -139,9 +188,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    - **Solo** (`/code <id>`, `/code --single`, free-text): dispatch **exactly one** builder in the
      foreground.
    - **Fan-out** (bare `/code`, `--all-ready`, `/code <id> <id> …`): dispatch **one builder per ticket,
-     concurrently** (`run_in_background: true`), and collect each result as it finishes. Each builds,
-     pushes `origin/land/<its-id>`, **keeps its worktree**, and marks its own ticket
-     `ready-for-code-review` independently; one builder's escalation must **not** block its siblings.
+     concurrently** (`run_in_background: true`), **up to the concurrency cap**
+     (`CODE_MAX_CONCURRENT_AGENTS`, shared with steps 0/1's sweeps and Phase 2 below) — queue any
+     remaining tickets and dispatch each as an in-flight agent completes and frees a slot. Collect each
+     result as it finishes. Each builds, pushes `origin/land/<its-id>`, **keeps its worktree**, and
+     marks its own ticket `ready-for-code-review` independently; one builder's escalation must **not**
+     block its siblings.
 
    Pass the resolved task in each prompt, e.g.:
 
@@ -183,7 +235,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    same launch worktree** — no `EnterWorktree`, no `git -C` into the builder's worktree; the builder's
    worktree is never opened by the reviewer under this architecture. Match the build cadence: one
    reviewer in the foreground for a solo build; one reviewer per ticket concurrently
-   (`run_in_background: true`) for a fan-out, each dispatched as its builder's hand-off is verified.
+   (`run_in_background: true`) for a fan-out, each dispatched as its builder's hand-off is verified —
+   **subject to the same concurrency cap as everything else** (`CODE_MAX_CONCURRENT_AGENTS`): a
+   reviewer that becomes dispatchable while the budget is already full from Phase 1 builders (or step
+   0/1 sweeps still in flight) queues behind them and dispatches the moment a slot frees, rather than
+   exceeding the cap.
 
    Pass the ticket id, e.g.:
 
@@ -205,7 +261,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    which `needs-rebase` tickets were found, which rebased clean and are back at `ready-for-land`, and
    which hit a rebase conflict and were escalated (say which one, so a human can resolve it). Report
    step 1's sweep too — which stranded `ready-for-code-review` tickets were found, which got a
-   `code-reviewer` dispatched, and which were left alone for missing `review_head`.
+   `code-reviewer` dispatched, and which were left alone for missing `review_head`. If the concurrency
+   cap ever throttled dispatch this invocation (more dispatchable work than free slots at some point),
+   say so — which cap value was in effect and roughly how the queue drained — so a fan-out that took
+   longer than the ticket count alone would suggest isn't mistaken for a stall.
 
 ## Notes
 
