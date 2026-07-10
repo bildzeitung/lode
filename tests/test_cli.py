@@ -1447,6 +1447,159 @@ def test_show_edge_without_a_matching_external_row_has_no_snapshot_line(
     assert "snapshot" not in result.stdout
 
 
+# --- lode recover <prefix> (undo a soft-delete, lode-d32.3) ----------------
+
+
+def test_recover_round_trip_reappears_in_notes(tmp_path: Path) -> None:
+    """delete -> recover: the note comes back into 'lode notes' and its FTS row."""
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "coming back soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, note_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    # Gone from the live listing while tombstoned.
+    assert runner.invoke(app, ["notes", "--db", str(db_path)]).stdout.strip() == (
+        "no notes"
+    )
+
+    result = runner.invoke(app, ["recover", note_id, "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert note_id in result.stdout
+    assert head_version_id in result.stdout  # head repointed past the tombstone
+
+    # Head is repointed past the tombstone, back to the pre-delete version.
+    assert _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    ) == [(head_version_id,)]
+
+    # Reappears in the live listing.
+    notes_result = runner.invoke(app, ["notes", "--db", str(db_path)])
+    assert note_id in notes_result.stdout
+
+    # The FTS row is restored -- the write-path cache composite
+    # (CompositeCache([LexicalCacheBackend(conn)])), not purge's bare
+    # NullCache, is what recover must use (d32.2 land-review decision).
+    assert _rows(
+        db_path,
+        "SELECT COUNT(*) FROM passages_fts WHERE target_version = ?",
+        (head_version_id,),
+    ) == [(1,)]
+
+
+def test_recover_accepts_an_unambiguous_prefix_of_a_deleted_note(
+    tmp_path: Path,
+) -> None:
+    """A tombstoned note IS reachable by prefix with include_deleted=True."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-ccc111", "gone soon")
+        delete(conn, "note-ccc111", parent=result.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["recover", "note-ccc", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "note-ccc111" in result.stdout
+
+    (op,) = _rows(
+        db_path,
+        "SELECT v.op FROM notes n JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE n.note_id = ?",
+        ("note-ccc111",),
+    )[0]
+    assert op == "create"
+
+
+def test_recover_live_note_errors_clearly(tmp_path: Path) -> None:
+    """Recovering a note that isn't tombstoned errors -- nothing to recover."""
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "still alive", "--db", str(db_path)]
+    ).stdout.strip()
+
+    result = runner.invoke(app, ["recover", note_id, "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "not deleted" in result.stderr
+
+    # Untouched: still live, head unchanged.
+    assert runner.invoke(app, ["notes", "--db", str(db_path)]).stdout.strip() != (
+        "no notes"
+    )
+
+
+def test_recover_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["recover", "ghost", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no such note" in result.stderr
+
+
+def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
+    tmp_path: Path,
+) -> None:
+    """A prefix matching one live + one deleted note is still ambiguous.
+
+    recover does not get to silently prefer the tombstone (d32.2 land-review
+    decision) -- this is the same ambiguity error purge/show already raise.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-ddd111", "still live")
+        result = save(conn, "note-ddd222", "gone soon")
+        delete(conn, "note-ddd222", parent=result.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["recover", "note-ddd", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "ambiguous" in result.stderr
+    assert "note-ddd111" in result.stderr
+    assert "note-ddd222" in result.stderr
+
+
+def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        r1 = save(conn, "note-eee111", "gone a")
+        delete(conn, "note-eee111", parent=r1.version_id)
+        r2 = save(conn, "note-eee222", "gone b")
+        delete(conn, "note-eee222", parent=r2.version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["recover", "note-eee", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "ambiguous" in result.stderr
+    assert "note-eee111" in result.stderr
+    assert "note-eee222" in result.stderr
+
+
+def test_recover_full_id_of_a_live_note_errors_not_deleted(tmp_path: Path) -> None:
+    """A full id also goes through the 'is it tombstoned' check, not just a prefix."""
+    db_path = tmp_path / "lode.db"
+    full_id = "d" * 36
+    conn = init_db(db_path)
+    try:
+        save(conn, full_id, "body")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["recover", full_id, "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "not deleted" in result.stderr
+
+
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------
 
 

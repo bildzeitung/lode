@@ -501,6 +501,87 @@ def purge(
     )
 
 
+@app.command()
+def recover(
+    target: str = typer.Argument(
+        ..., help="Note id, or an unambiguous prefix of one, to recover."
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Undo a soft-delete: repoint a tombstoned note's head past the tombstone.
+
+    Reverses :func:`lode.versions.delete` (``lode-d32.3``), the recover leg of
+    the epic ``lode-d32``: delete is a one-way trip to ``lode purge`` without
+    this command.
+
+    ``target`` may be a full id or an unambiguous prefix of one, resolved via
+    :meth:`lode.repository.Repository.resolve_note_prefix` with
+    ``include_deleted=True`` — the d32.2 land-review decision (option (a)):
+    unlike ``purge``/``show``, which default that flag to ``False`` and so
+    stay live-only, ``recover``'s only valid input is a tombstoned note, so a
+    prefix here may also resolve one. Ambiguity is judged identically to the
+    live-only path regardless of which state(s) match: a prefix matching one
+    live and one deleted note is still :class:`~lode.repository.AmbiguousNoteIdError`
+    — recover never silently prefers the tombstone — and unknown/ambiguous ids
+    error exactly like ``purge``/``show``.
+
+    A resolved note that is not currently tombstoned errors clearly rather
+    than silently no-op'ing (there is nothing to recover). The recover target
+    is the tombstone's own ``parent_version_id`` — by construction that IS the
+    pre-delete head (:func:`lode.versions.delete` writes the tombstone with
+    the live head as its parent, versions.py), so this is one column read, not
+    a chain walk.
+
+    Delegates to :meth:`lode.repository.Repository.recover`, NOT
+    :func:`lode.versions.recover` directly — ``Repository.recover`` is the
+    only path that applies :func:`~lode.redact.redact_before_index` before
+    re-indexing the recovered head (lode-ibv), so a recovered secret-bearing
+    note is not made keyword-findable again via the FTS/lexical cache leg.
+    Uses the same write-path cache composite ``add``/capture/edit/reconcile
+    already use (``CompositeCache([LexicalCacheBackend(conn)])``) — NOT the
+    bare ``Repository(conn)`` -> ``NullCache`` ``purge`` builds, under which
+    ``Repository.recover``'s ``cache.index()`` would be a silent no-op and the
+    FTS row would never be restored.
+    """
+    conn = _open_db(db)
+    try:
+        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
+        try:
+            note_id = repo.resolve_note_prefix(target, include_deleted=True)
+        except KeyError:
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1) from None
+        except AmbiguousNoteIdError as exc:
+            typer.echo(
+                f"ambiguous note id prefix {target!r}: matches "
+                + ", ".join(exc.candidates),
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+
+        row = conn.execute(
+            "SELECT v.op, v.parent_version_id FROM notes n "
+            "JOIN versions v ON v.version_id = n.head_version_id "
+            "WHERE n.note_id = ?",
+            (note_id,),
+        ).fetchone()
+        if row is None:
+            # resolve_note_prefix returns a full id unchanged without checking
+            # it exists (purge's/show's own contract) -- an unknown full id
+            # lands here.
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1)
+        op, parent_version_id = row
+        if op != "delete":
+            typer.echo(f"note is not deleted: {note_id}", err=True)
+            raise typer.Exit(code=1)
+
+        result = repo.recover(note_id, target_version=parent_version_id)
+    finally:
+        conn.close()
+    typer.echo(f"recovered {result.note_id}: head now {result.version_id}")
+
+
 def _short_date(created: str) -> str:
     """Render a ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` timestamp as ``YYYY-MM-DD HH:MM``.
 
