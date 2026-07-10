@@ -29,7 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from lode.reconcile import _embed_gap_step, reconcile
+from lode.config import Settings
+from lode.reconcile import _embed_gap_step, _refresh_stale_step, reconcile
 from lode.storage import init_db
 
 # ---------------------------------------------------------------------------
@@ -141,28 +142,72 @@ def _insert_external_snapshot(
     *,
     status: str = "ok",
     is_head: bool = True,
+    fetched_at: str | None = None,
 ) -> None:
     """Insert an external + one snapshot; point head at it iff ``is_head``.
 
     Externals/snapshots are UNUSED until connectors (schema), so tests seed the
     rows directly — mirrors ``tests/test_retrieval.py``'s
     ``_insert_external_snapshot`` helper.
+
+    ``fetched_at`` (lode-w0h.6), if given, overrides the schema's ``now()``
+    default — used by the ``refresh_stale`` step's tests to seed a snapshot
+    that is already past (or well within) the TTL window.
     """
     with conn:
         conn.execute(
             "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
             (external_id,),
         )
-        conn.execute(
-            "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
-            "VALUES (?, ?, ?, ?)",
-            (snapshot_id, external_id, "body text", status),
-        )
+        if fetched_at is not None:
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (snapshot_id, external_id, "body text", status, fetched_at),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES (?, ?, ?, ?)",
+                (snapshot_id, external_id, "body text", status),
+            )
         if is_head:
             conn.execute(
                 "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
                 (snapshot_id, external_id),
             )
+
+
+def _insert_refresh_job(
+    conn: sqlite3.Connection,
+    target_version: str = "ext-1",
+    status: str = "done",
+) -> None:
+    """Insert a minimal refresh job row with the given status (lode-w0h.6)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status) VALUES ('refresh', ?, ?)",
+            (target_version, status),
+        )
+
+
+def _pending_refresh_jobs(conn: sqlite3.Connection, external_id: str) -> list[str]:
+    """Return statuses of refresh jobs for external_id (lode-w0h.6)."""
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT status FROM jobs WHERE type = 'refresh' AND target_version = ?",
+            (external_id,),
+        ).fetchall()
+    ]
+
+
+def _old_timestamp(seconds_ago: int) -> str:
+    """An ISO-8601 timestamp ``seconds_ago`` seconds in the past (lode-w0h.6)."""
+    from datetime import UTC, datetime, timedelta
+
+    dt = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +497,198 @@ def test_embed_gap_reenqueues_when_all_jobs_dead(conn: sqlite3.Connection) -> No
     # The dead job stays; a new pending job was added.
     assert ("dead",) in statuses
     assert ("pending",) in statuses
+
+
+# ---------------------------------------------------------------------------
+# _refresh_stale_step — TTL staleness detection + scheduling (lode-w0h.6)
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_stale_enqueues_for_external_past_ttl(conn: sqlite3.Connection) -> None:
+    """An external whose head snapshot is older than the TTL is re-enqueued."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 1
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+
+
+def test_refresh_stale_skips_external_within_ttl(conn: sqlite3.Connection) -> None:
+    """A recently-fetched external (within the TTL) is not swept."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(10))
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "ext-1") == []
+
+
+def test_refresh_stale_returns_zero_when_no_externals(conn: sqlite3.Connection) -> None:
+    """An empty externals table produces a gap count of 0."""
+    assert _refresh_stale_step(conn) == 0
+
+
+def test_refresh_stale_excludes_tombstone_head(conn: sqlite3.Connection) -> None:
+    """A tombstoned head snapshot is NOT swept, even if well past the TTL.
+
+    A tombstone means the source already failed permanently (or exhausted
+    every retry and dead-lettered) — mirrors _embed_gap_step's own tombstone
+    exclusion; blindly re-fetching it is not this step's job.
+    """
+    _insert_external_snapshot(
+        conn,
+        "ext-1",
+        "snap-1",
+        status="tombstone",
+        fetched_at=_old_timestamp(7200),
+    )
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "ext-1") == []
+
+
+def test_refresh_stale_excludes_superseded_snapshot(conn: sqlite3.Connection) -> None:
+    """Only the current head's age matters — a superseded snapshot is not swept."""
+    _insert_external_snapshot(
+        conn,
+        "ext-1",
+        "snap-old",
+        is_head=False,
+        fetched_at=_old_timestamp(7200),
+    )
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "snap-old") == []
+
+
+def test_refresh_stale_no_gap_when_refresh_job_pending(
+    conn: sqlite3.Connection,
+) -> None:
+    """A pending refresh job (in-flight or just enqueued) means no gap."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_refresh_job(conn, "ext-1", status="pending")
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+
+
+def test_refresh_stale_no_gap_when_refresh_job_running(
+    conn: sqlite3.Connection,
+) -> None:
+    """A running refresh job means no gap — do not duplicate."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_refresh_job(conn, "ext-1", status="running")
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 0
+    assert _pending_refresh_jobs(conn, "ext-1") == ["running"]
+
+
+def test_refresh_stale_reenqueues_when_prior_job_done(
+    conn: sqlite3.Connection,
+) -> None:
+    """A prior 'done' refresh job does not block a fresh TTL-driven re-enqueue.
+
+    Unlike embed/enrich, a refresh job carries no notion of "still current" —
+    the external's own age (fetched_at) is the only staleness signal, so a
+    done job from the last revalidation cycle must not permanently cover it.
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_refresh_job(conn, "ext-1", status="done")
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 1
+    statuses = sorted(_pending_refresh_jobs(conn, "ext-1"))
+    assert statuses == ["done", "pending"]
+
+
+def test_refresh_stale_reenqueues_when_prior_job_dead(
+    conn: sqlite3.Connection,
+) -> None:
+    """A dead-lettered refresh job from a past cycle does not block re-enqueue."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_refresh_job(conn, "ext-1", status="dead")
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 1
+    statuses = sorted(_pending_refresh_jobs(conn, "ext-1"))
+    assert statuses == ["dead", "pending"]
+
+
+def test_refresh_stale_multiple_stale_externals(conn: sqlite3.Connection) -> None:
+    """Multiple stale externals all get a refresh job enqueued."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    _insert_external_snapshot(conn, "ext-2", "snap-2", fetched_at=_old_timestamp(7200))
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 2
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+    assert _pending_refresh_jobs(conn, "ext-2") == ["pending"]
+
+
+def test_refresh_stale_mixed_stale_and_fresh(conn: sqlite3.Connection) -> None:
+    """Only the past-TTL external is in the gap; the fresh one is left alone."""
+    _insert_external_snapshot(
+        conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200)
+    )  # stale
+    _insert_external_snapshot(
+        conn, "ext-2", "snap-2", fetched_at=_old_timestamp(10)
+    )  # fresh
+    settings = Settings(refresh_ttl_s=3600)
+    count = _refresh_stale_step(conn, settings)
+    assert count == 1
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+    assert _pending_refresh_jobs(conn, "ext-2") == []
+
+
+def test_refresh_stale_idempotent_repeated_calls(conn: sqlite3.Connection) -> None:
+    """Running _refresh_stale_step repeatedly must not duplicate jobs."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    settings = Settings(refresh_ttl_s=3600)
+    _refresh_stale_step(conn, settings)
+    _refresh_stale_step(conn, settings)
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+
+
+def test_refresh_stale_uses_default_settings_when_none_given(
+    conn: sqlite3.Connection,
+) -> None:
+    """With no settings arg, the step falls back to Settings()'s default TTL."""
+    default_ttl = Settings().refresh_ttl_s
+    _insert_external_snapshot(
+        conn, "ext-1", "snap-1", fetched_at=_old_timestamp(default_ttl + 60)
+    )
+    count = _refresh_stale_step(conn)
+    assert count == 1
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+
+
+def test_refresh_stale_registered_in_module_steps(conn: sqlite3.Connection) -> None:
+    """refresh_stale is registered in the module-level _STEPS registry."""
+    from lode.reconcile import _STEPS
+
+    names = [name for name, _ in _STEPS]
+    assert "refresh_stale" in names
+
+
+def test_refresh_stale_full_reconcile_enqueues_stale_external(
+    conn: sqlite3.Connection,
+) -> None:
+    """End-to-end: reconcile() with the refresh_stale step enqueues a stale refresh."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
+    total = reconcile(
+        conn,
+        steps=[
+            (
+                "refresh_stale",
+                lambda c: _refresh_stale_step(c, Settings(refresh_ttl_s=3600)),
+            )
+        ],
+    )
+    assert total == 1
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
 
 
 # ---------------------------------------------------------------------------

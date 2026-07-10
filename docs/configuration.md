@@ -88,7 +88,7 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 
 | Knob | Kind | Default | Notes |
 |---|---|---|---|
-| Refresh policy / TTL (per source) | runtime | per-source | On-access revalidation vs scheduled; a closed ticket rarely changes, an active PR hourly. ([decisions.md](decisions.md)) |
+| Refresh TTL (`refresh_ttl_s`) | runtime | `3600` (1h) | How long a web external's head snapshot may go un-revalidated before `lode.reconcile`'s `refresh_stale` step re-enqueues a `refresh` job for it (`lode-w0h.6`). Decided **scheduled TTL sweep**, not true on-access revalidation — see [externals.md](externals.md#refresh-policy-ttl-based-revalidation-decided-for-web-lode-w0h6). A single default today (no per-source override); a closed ticket rarely changing vs. an active PR changing hourly is exactly the kind of per-source judgment a future connector may want its own TTL for. |
 | Re-enrichment materiality threshold | tune | embedding-similarity delta (1 - cosine) | Gates the paid re-enrichment of a changed external snapshot; below it, carry prior enrichment forward. Caps cloud spend on chatty sources. ([externals.md](externals.md#snapshot-churn-decouple-new-snapshot-from-re-enrich)) |
 | Draw-down hop limit | build | 1 | Follow explicit links one hop, then stop. ([externals.md](externals.md#draw-down-rules)) |
 | Fetch timeout | runtime | `10s` | Per-fetch HTTP timeout (`lode-w0h.1`); a timeout is a TRANSIENT failure (retried by the async queue), not a tombstone — as is a server-reported `408 Request Timeout`. |

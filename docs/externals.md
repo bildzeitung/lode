@@ -55,7 +55,8 @@ For owned notes, staleness is free (head moved → you know instantly). For exte
 head lives on someone else's server and changes without telling you.** Consequences:
 
 - **Externals need a refresh policy** (TTL / on-access revalidation / webhook) — there is no
-  structural staleness signal. (Per-connector judgment; see [decisions.md](decisions.md).)
+  structural staleness signal. (Per-connector judgment; see [decisions.md](decisions.md). Decided
+  for the web connector: a scheduled TTL sweep — see [Refresh policy](#refresh-policy-ttl-based-revalidation-decided-for-web-lode-w0h6) below.)
 - **Every AI claim from an external must cite "as of `fetched_at`."** "The ticket is open" is a
   lie; "the ticket was open as of last sync, 3 days ago" is honest.
 - **Retrieval uses an explicit trust gradient**, in both ranking and citation display:
@@ -177,6 +178,72 @@ keeps failing the same way dedups its tombstones too, rather than growing one ro
 enqueues **no** `embed` job and writes **no** FTS row: a failed fetch must not become a
 retrievable/citable hit on either leg (decision, `lode-w0h.2`, 2026-07-08, extended to the FTS leg by
 `lode-c5l`; mirrors the owned-note delete path, which likewise is never indexed).
+
+### Refresh policy: TTL-based revalidation (decided-for-web, `lode-w0h.6`)
+
+[decisions.md](decisions.md)'s "External refresh" entry leaves each connector to choose between
+**on-access revalidation** and **scheduled background refresh**, both with an eye toward a TTL.
+For the web connector: **scheduled TTL sweep, not a true on-access hook.**
+
+**Why not on-access.** A true on-access hook would trigger revalidation the instant a citation
+reads a stale external — but every synchronous read path in this codebase is deliberately
+network-free (the same rule `Repository.save` follows on the write side: no network I/O inline).
+Bolting a blocking HTTP fetch onto an interactive Q&A call would trade a bounded, predictable
+citation latency for an unbounded one (a slow or hanging origin server would stall the answer that
+happens to cite it). No such hook exists on the retrieval/Q&A read path today, and building one is
+out of this ticket's "staleness detection + scheduling only, no second fetch path" scope.
+
+**The policy: ride the reconciliation scan.** `lode.reconcile`'s `refresh_stale` step (`lode-w0h.6`)
+runs alongside `embed_gap`/`enrich_gap` — at worker startup and every `--loop`/`--wait` poll tick
+(`docs/storage.md` "Reconciliation scan on startup + periodically"). Each pass: find every external
+whose current head snapshot is non-tombstone and older than `refresh_ttl_s`
+([configuration.md](configuration.md), default 1h) with no `refresh` job already
+`pending`/`running`, and enqueue one via the same `lode.jobs.enqueue_derive_jobs` path every other
+step uses (`ON CONFLICT DO NOTHING` against `idx_jobs_live` — idempotent, safe to run any time or
+frequency). The enqueued job is handled by the *exact same* `lode.drawdown.refresh_external`
+(`lode-w0h.3`) the paste-triggered first draw-down uses — this ticket adds no second fetch path, only
+the staleness check and the enqueue. A changed body re-embeds and re-enriches-if-material exactly as
+any other new snapshot does ([Snapshot churn](#snapshot-churn-decouple-new-snapshot-from-re-enrich)
+above); an unchanged refetch is free (identical `snapshot_id`, no new row).
+
+In practice this reads as "revalidate the next time anything drains the queue, if the TTL has
+elapsed" rather than "revalidate the instant a citation reads it" — a coarser cadence than true
+on-access, but one that never adds latency to a read, and matches
+[decisions.md](decisions.md)'s own leaning ("on-access with a short TTL cache ... for a single
+instance with finite API quota") in spirit: bounded, cheap, TTL-gated re-fetching, without the
+network-on-the-read-path cost on-access would actually require.
+
+**Tombstones are excluded from the sweep, deliberately.** A tombstone head means the source already
+failed *permanently* — either a genuine 4xx/empty-extract, or a transient failure that exhausted
+every retry and dead-lettered ([Fetch-outcome taxonomy](#fetch-outcome-taxonomy-decided-lode-w0h1)
+above; `lode-at8`'s dead-letter hook is what writes that tombstone). Re-fetching it on every TTL
+sweep would burn queue churn on a source the draw-down machinery has already classified as
+unfetchable-for-now — the same reasoning `lode.reconcile`'s `embed_gap` step already applies (a
+tombstone has no body worth re-embedding either). If a dead link recovering later ever matters in
+practice, nothing structural prevents it — a user re-pasting the same URL still triggers a fresh
+paste-time draw-down (`lode-w0h.3`) regardless of the sweep. Revisit if this proves too conservative.
+
+**Join key: `canonicalize_url`'s narrow canonical form, confirmed correct, not silently inherited.**
+This step's staleness/scheduling join key is `externals.external_id` — the *same* canonical URL
+string [URL canonicalization](#url-canonicalization-decided-lode-w0h3-userinfo-stripped-lode-0as)
+above defines. That section already settles, explicitly and by design, that path percent-encoding
+(`%7E` vs `~`) and IDN hosts (unicode vs punycode) are **not** normalized — two "same page" URLs
+differing only in those respects are, and remain, two distinct `external_id`s that this policy
+schedules and refreshes *independently*, never recognizing them as one source. `lode-w0h.6`
+confirms this narrow canonical is correct for the refresh policy too, for the same reason
+`lode-0as` gave it: normalizing either safely needs care (RFC 3986 reserved-vs-unreserved handling
+for percent-decoding; a real IDNA implementation for punycoding) this connector does not need to
+take on, and neither gap is a privacy surface the way userinfo was (userinfo *is* stripped —
+`lode-0as` — so no credential ever becomes part of this policy's join key or a refresh job's
+`target_version`). Widening the canonical form remains a live option for a future ticket, but would
+require a re-key + edge-repoint migration (`lode-0as`'s migration note) — deferred, not silently
+assumed away.
+
+**A single default TTL, not yet per-source.** `refresh_ttl_s` is one knob for every external
+(only web sources exist today). [decisions.md](decisions.md)'s "a closed ticket rarely changes, an
+active PR changes hourly" framing is a real per-source judgment call a future connector (or a
+future per-`source_type` override) may want to make — deferred, not built, since there is exactly
+one connector and one judgment to make today.
 
 ### Externals are directly retrievable
 
