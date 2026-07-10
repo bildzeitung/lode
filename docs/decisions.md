@@ -293,6 +293,42 @@ are catalogued in [configuration.md](configuration.md).
   marketplace command ever shadows the built-in in some environment, this review step would silently
   no-op again in a new way (the same failure shape as the `git -C` false-green above).
 
-  **Explicitly out of scope**, filed as a follow-up instead: whether the builder still needs to *keep*
-  its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether `/land`'s
-  worktree GC should change as a result. Both touch `/land`'s mechanics and are a separate decision.
+  **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
+  *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
+  `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
+
+- **Builder worktree retention — kept as-is; the builder keeps its worktree through the whole
+  build → review → land lifecycle, and `/land`'s GC still reclaims it only on a clean land (lode-3ci,
+  a follow-up to lode-k5e/lode-8k3 above).** After the reviewer/rebase-pickup architecture change,
+  nothing ever *reads* the builder's original worktree again after the push — the reviewer and the
+  rebase pickup both fetch `origin/land/<id>` into their **own** fresh worktree instead. So the
+  builder's worktree's only remaining function, for the rest of the lifecycle, is to sit on disk as a
+  path for `/land`'s GC to `git worktree remove` once the ticket lands. That raised the obvious
+  question: could the builder (or `/land`, earlier) reclaim it right after hand-off instead of waiting
+  for land?
+
+  **Decision: no change.** Three reasons. (1) **No proven problem.** A live check (2026-07-09, mid a
+  heavy `/code` fan-out) found 20 worktrees on disk; every one not this session's own was either an
+  active reviewer/rebase-pickup worktree with `land/<id>` checked out, or a builder worktree for a
+  ticket still genuinely `in_progress` (`ready-for-code-review` or `needs-rebase`) — none belonged to
+  an already-`closed` ticket. `/land`'s land-time GC is doing its job; there is no observed leak to fix
+  by moving the reclaim point earlier, only a hypothetical reduction in *peak* worktree count that
+  scales with fan-out width and review/land latency, not with which pipeline stage does the reclaiming.
+  (2) **Real cost to change it.** Reclaiming right after hand-off would need `coding.md`'s hand-off step
+  to stop recording a worktree the GC can still find (or `/land`'s `git worktree list` guard to accept
+  "already gone" as the normal case rather than a machine-mismatch signal), plus edits to the repeated
+  "I must NOT remove my worktree" invariant across `coding.md`, and to `land/SKILL.md`'s GC section and
+  its "best-effort... on a clean land" framing — a wide blast radius for an unproven benefit, and it
+  touches `/land`'s mechanics directly (the reason this was split out of lode-k5e to begin with). (3)
+  **An existing mechanic depends on the worktree surviving past the build step**: `/land`'s bounce path
+  explicitly keeps the worktree because "the rebuild ticket may still want the tree" — an early-reclaim
+  policy would have to special-case that, not just the clean-land path.
+
+  **Revisit trigger:** a *demonstrated* leak, not mere in-flight count — e.g., a worktree found rooted
+  at an already-`closed` or long-abandoned ticket (GC actually missing one), or a concrete disk-pressure
+  incident tied to worktree accumulation. If that happens, the two candidate fixes are (a) the builder
+  reclaims its own worktree right after a clean hand-off (`ready-for-code-review`, gates green, pushed),
+  accepting that `/land`'s GC then always no-ops for tickets built after the change, or (b) `/land`
+  reclaims it one stage earlier, at the review→`ready-for-land` swap, instead of waiting for the land
+  itself. Either requires updating `coding.md`, `code-reviewer.md`, and `land/SKILL.md`'s GC section
+  together so the hand-off contract and the GC contract don't drift apart.
