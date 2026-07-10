@@ -94,11 +94,14 @@ No test is dropped: every test runs in `nox -s tests` regardless of its marker,
 and most also run in `nox -s unit` (only the `slow`-tagged ones are deferred).
 
 A third session, `nox -s eval`, runs the live eval integration test
-(`tests/test_eval_live.py`); it is opt-in and credential-gated (it `skip`s
-without `ANTHROPIC_API_KEY`), so a bare `nox`, `nox -s tests`, and `nox -s unit`
-stay offline and never run it (that test is also `@pytest.mark.slow`, since an
-environment where the key *is* set would otherwise run it — live, ~300s — inside
-`nox -s tests` too).
+(`tests/test_eval_live.py`); it is opt-in via an env var, not just
+credential-gated (lode-b4w.7) — the test `skip`s unless `LODE_RUN_LIVE_EVAL=1`
+is set, and `nox -s eval` is the only session that sets it, so a bare `nox`,
+`nox -s tests`, and `nox -s unit` stay offline and never run it regardless of
+what's ambient in the shell. It also still `skip`s without `ANTHROPIC_API_KEY`
+once opted in. (Before lode-b4w.7, credential presence was the *only* gate —
+an environment with the key set, common for coding agents, made `nox -s
+tests` silently run this live, ~300s pass.)
 
 A successful `nox -s tests` ends with a line like `=== N passed, M skipped ===` and
 `Session tests was successful`. That green run is your "the environment is wired up

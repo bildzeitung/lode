@@ -83,7 +83,17 @@ are catalogued in [configuration.md](configuration.md).
   `ANTHROPIC_API_KEY` and the network, and stays **out** of the offline test gate: the noxfile keeps
   `nox.options.sessions = ["fix", "tests"]` so a bare `nox` and `nox -s tests` stay offline + keyless,
   and the `nox -s eval` session is the explicit, credential-gated CI-style check — it `skip`s itself
-  when `ANTHROPIC_API_KEY` is absent rather than failing or hitting the network. The deterministic
+  when `ANTHROPIC_API_KEY` is absent rather than failing or hitting the network. **Exclusion mechanism
+  — re-settled (lode-b4w.7, 2026-07-10):** credential presence alone was, for a while, the *only* thing
+  keeping the live pass out of `nox -s tests` (a bare `pytest.skip` when `ANTHROPIC_API_KEY` was
+  absent). `nox -s tests` applies no marker filter by design (lode-pql, so nothing slow is ever skipped
+  before trunk) and `@pytest.mark.slow` alone doesn't gate it — so whenever `ANTHROPIC_API_KEY` was
+  ambient in the shell (the normal case in agent environments, not just CI), `nox -s tests` silently
+  ran the live, ~273s, API-billed Q&A pass on every invocation, breaking the offline/deterministic gate
+  split this entry establishes. The test's skip is now gated on an explicit opt-in env var,
+  `LODE_RUN_LIVE_EVAL=1`, checked *before* the credential check; `nox -s eval` is the only session that
+  sets it, so `nox -s tests` and `nox -s unit` skip the test unconditionally regardless of ambient
+  credentials, and `nox -s eval` still self-skips without a key once opted in. The deterministic
   offline scorer tests (`tests/test_eval_*.py`, stubbed seams) are unchanged, and
   `lode.eval.harness.score_golden_set` stays a library function shared by both the offline stub tests
   and the live integration test. Knock-on: the Phase-A exit gate (lode-6w1 / lode-6w1.1) wording
