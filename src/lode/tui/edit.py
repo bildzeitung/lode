@@ -24,6 +24,20 @@ empty capture — this module does not grow "clear the buffer to delete the
 note" semantics; deletion is :meth:`~lode.repository.Repository.delete`'s own
 explicit, separately-confirmed path, not an accidental side effect of saving
 blank.
+
+**Delete from browse (lode-d32.1).** That explicit path is :func:`delete_note`
+— the soft-delete counterpart to :func:`save_edit`, called by
+:class:`~lode.tui.screens.browse.BrowseScreen` after its own confirm modal.
+It goes through :class:`~lode.repository.Repository` (the same cache-backed
+seam :func:`save_edit` uses) rather than :func:`lode.versions.delete`
+directly, so the FTS/lexical cache leg is evicted along with the tombstone
+write (the epic's own ``/debate`` pass on lode-d32 called this out: skipping
+Repository would leave a "deleted" note still keyword-findable). Unlike
+:func:`save_edit`, a CAS reject is **not** turned into a preserved-draft
+:class:`~lode.tui.reconcile.Conflict` here — a delete carries no user buffer
+to preserve, so it is simplest for the caller to let
+:class:`~lode.versions.HeadConflictError` propagate, notify, and reload the
+list (which already reflects the current state either way).
 """
 
 from __future__ import annotations
@@ -69,6 +83,40 @@ def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
             (note_id,),
         ).fetchone()
         return (row[0], row[1]) if row is not None else None
+    finally:
+        conn.close()
+
+
+def delete_note(
+    db_path: Path,
+    note_id: str,
+    *,
+    parent: str,
+    settings: Settings | None = None,
+) -> SaveResult:
+    """Soft-delete ``note_id`` via the CAS-guarded tombstone path (lode-d32.1).
+
+    Goes through :class:`~lode.repository.Repository`, the same cache-backed
+    seam :func:`save_edit` uses, rather than calling :func:`lode.versions.delete`
+    directly — so the FTS/lexical cache leg is evicted along with the
+    irreplaceable tombstone write. Skipping the Repository would leave a
+    "deleted" note still keyword-findable until something else happened to
+    touch the cache.
+
+    Unlike :func:`save_edit`, a CAS reject (:class:`~lode.versions.
+    HeadConflictError` — someone else edited or deleted the note first) is
+    **not** converted into a preserved-draft :class:`~lode.tui.reconcile.
+    Conflict` here: a delete carries no user buffer to preserve, so there is
+    nothing to reconcile. It is simplest for the caller
+    (:class:`~lode.tui.screens.browse.BrowseScreen`) to let the exception
+    propagate, notify, and reload the list — which already reflects the
+    current state either way.
+    """
+    settings = settings or Settings()
+    conn = init_db(db_path)
+    try:
+        repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
+        return repo.delete(note_id, parent=parent, settings=settings)
     finally:
         conn.close()
 

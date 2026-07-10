@@ -87,6 +87,22 @@ call -- no second DB read, no second policy. The edge's own target label
 switches from the truncated :func:`~lode.notes_read.short_note_id` prefix to
 the bare ``to_id`` when it resolves to an external, since that ``to_id`` is
 the full source URL, not a note id worth abbreviating.
+
+**Delete from browse (lode-d32.1).** ``d`` on a highlighted row soft-deletes
+that note via :func:`~lode.tui.edit.delete_note` -- the CAS-guarded
+``op='delete'`` tombstone (:func:`lode.versions.delete`, routed through
+:class:`~lode.repository.Repository` so the FTS/lexical cache leg is evicted
+too) that :func:`lode.versions.recover` can later undo. It reuses the
+*pattern* :class:`~lode.tui.screens.capture.DiscardConfirmScreen` established
+(a small bordered popup dialog, lode-1i8.4) rather than that exact class --
+its fixed Save/Discard/Cancel prompt doesn't fit "delete this note," so
+:class:`DeleteConfirmScreen` is its own small Yes/No modal. A delete has no
+buffer to preserve, so a CAS reject (:class:`~lode.versions.
+HeadConflictError` -- someone else changed or deleted the note first) is not
+routed through :class:`~lode.tui.screens.reconcile.ReconcileScreen` the way a
+save conflict is; it is simplest to notify and reload the table, which
+already reflects the current state either way. Declining the confirm, or an
+empty table, is a no-op.
 """
 
 from __future__ import annotations
@@ -114,11 +130,17 @@ from lode.notes_read import (
     version_body,
 )
 from lode.tui.dates import format_adaptive_date
-from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
+from lode.tui.edit import (
+    EditConflict,
+    EmptyEditError,
+    delete_note,
+    load_head,
+    save_edit,
+)
 from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
-from lode.versions import SaveResult
+from lode.versions import HeadConflictError, SaveResult
 
 #: The notes table's widget id -- read back in tests.
 TABLE_ID = "browse-table"
@@ -126,6 +148,8 @@ TABLE_ID = "browse-table"
 NOTE_BODY_ID = "note-view-body"
 #: The editable note body's widget id -- read back in tests.
 EDIT_BODY_ID = "note-edit-body"
+#: The delete-confirm dialog's message widget id -- read back in tests.
+DELETE_CONFIRM_MESSAGE_ID = "delete-confirm-message"
 #: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
 #: back in tests.
 EDIT_RELATED_ID = "edit-related-notes"
@@ -440,6 +464,35 @@ class EnrichmentModalScreen(ModalScreen[None]):
         self.app.pop_screen()
 
 
+class DeleteConfirmScreen(ModalScreen[bool]):
+    """A small Yes/No confirm before a browse-row soft-delete (lode-d32.1).
+
+    Mirrors :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s popup
+    *styling* (bordered, centered dialog over the dimmed screen beneath,
+    lode-1i8.4) but not its Save/Discard/Cancel choices -- there is nothing to
+    save here, just "yes, delete" or "no, don't." Dismisses with a ``bool``:
+    ``True`` on confirm, ``False`` on decline or Escape.
+    """
+
+    BINDINGS = [
+        Binding("y", "choose(True)", "Yes, delete"),
+        Binding("n", "choose(False)", "No, cancel"),
+        Binding("escape", "choose(False)", "Cancel", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static(
+                "Delete this note? (Y)es / (N)o",
+                id=DELETE_CONFIRM_MESSAGE_ID,
+            ),
+            id="delete-confirm-dialog",
+        )
+
+    def action_choose(self, confirmed: bool) -> None:
+        self.dismiss(confirmed)
+
+
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
@@ -447,6 +500,7 @@ class BrowseScreen(Screen[None]):
         Binding("escape", "dismiss_screen", "Back"),
         Binding("e", "edit_selected", "Edit"),
         Binding("i", "inspect_selected", "Inspect"),
+        Binding("d", "delete_selected", "Delete"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -560,6 +614,47 @@ class BrowseScreen(Screen[None]):
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is not None:
             self.app.push_screen(EnrichmentModalScreen(note_id))
+
+    def action_delete_selected(self) -> None:
+        """``d``: soft-delete the highlighted row's note, after confirming (lode-d32.1)."""
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        if table.row_count == 0:
+            return
+        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if note_id is None:
+            return
+        self.app.push_screen(
+            DeleteConfirmScreen(),
+            lambda confirmed: self._on_delete_confirm(confirmed, note_id),
+        )
+
+    def _on_delete_confirm(self, confirmed: bool | None, note_id: str) -> None:
+        """Act on the Yes/No dialog's answer: delete-then-reload, or leave untouched.
+
+        A CAS reject (:class:`~lode.versions.HeadConflictError` -- the note
+        changed or was already deleted between the confirm popping up and this
+        running) has no buffer to preserve, so unlike a save conflict this
+        doesn't route to :class:`~lode.tui.screens.reconcile.ReconcileScreen`
+        -- it is simplest to notify and reload, since the table then reflects
+        the current state either way.
+        """
+        if not confirmed:
+            return
+        head = load_head(self.app.db_path, note_id)
+        if head is None:
+            # Already gone by the time the confirm closed (e.g. deleted from
+            # another session) -- nothing to CAS against; just resync.
+            self._reload_rows()
+            return
+        head_version_id, _ = head
+        try:
+            delete_note(self.app.db_path, note_id, parent=head_version_id)
+        except HeadConflictError:
+            self.notify(
+                "This note changed before the delete went through -- reloading.",
+                severity="warning",
+            )
+        self._reload_rows()
 
     def action_dismiss_screen(self) -> None:
         self.app.pop_screen()
