@@ -341,6 +341,41 @@ def ingest_fetch_result(
 
 
 # ---------------------------------------------------------------------------
+# no_egress control surface (lode-w0h.7) — see docs/externals.md "No-egress
+# tier". The enforcement path (excluded from enrich/Q&A egress, cited as
+# withheld) already reads ``externals.no_egress`` generically via
+# lode.egress/lode.cited_answer/lode.enrich; this is the one thing that was
+# missing — a way to actually set the flag on an existing external_id.
+# ---------------------------------------------------------------------------
+
+
+def set_no_egress(
+    conn: sqlite3.Connection, external_id: str, no_egress: bool = True
+) -> bool:
+    """Set (or clear) ``externals.no_egress`` for ``external_id``.
+
+    A pure flag flip on an existing row — it never touches indexing or
+    retrieval (``docs/externals.md`` "No-egress tier": "no_egress gates
+    egress only"), so a just-marked source stays keyword/vector-retrievable
+    immediately; only the next enrich/Q&A egress send excludes it (via
+    :func:`lode.egress.partition_egress`, consumed generically by
+    :func:`lode.enrich.enrich_version` and :func:`lode.cited_answer.ask`
+    through :func:`lode.cited_answer._resolve_target`'s ``externals`` join —
+    no separate wiring needed here).
+
+    Returns ``True`` if ``external_id`` had a row to flip, ``False`` if no
+    such external exists (the caller — :mod:`lode.cli` — turns that into a
+    clean "no such external source" error rather than silently no-opping).
+    """
+    with conn:
+        cur = conn.execute(
+            "UPDATE externals SET no_egress = ? WHERE external_id = ?",
+            (int(no_egress), external_id),
+        )
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
 # Material-change re-enrich gating (lode-w0h.5) — see the module docstring's
 # "Material-change re-enrich gating" section for the design.
 # ---------------------------------------------------------------------------

@@ -302,6 +302,10 @@ A note — or an external source (a specific repo / ticket project) — can be m
 
 This keeps work secrets *in* the KB and retrievable while guaranteeing they never reach the cloud.
 
+The control surface for an external source is `lode no-egress <external_id>` (`--clear` to undo it),
+which flips `externals.no_egress`; every send path (enrichment, Q&A) reads the flag generically off
+the row, so setting it is the only step needed (lode-w0h.7).
+
 ### Egress log (auditability)
 
 Every time content leaves the box it is **logged**: timestamp, purpose (`enrich` | `qa`), model,

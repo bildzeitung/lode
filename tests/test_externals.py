@@ -28,6 +28,7 @@ from lode.externals import (
     gate_reenrich,
     ingest_fetch_result,
     ingest_snapshot,
+    set_no_egress,
     tombstone_body,
 )
 from lode.storage import init_db
@@ -451,6 +452,63 @@ def test_ingest_result_is_frozen_dataclass_shape() -> None:
     assert result.snapshot_id == "snap-1"
     assert result.status == "ok"
     assert result.deduped is True
+
+
+# --- set_no_egress: the no-egress control surface (lode-w0h.7) ----------------
+
+
+def test_set_no_egress_flips_the_flag_on_an_existing_external(conn) -> None:
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+
+    existed = set_no_egress(conn, _EXTERNAL_ID)
+
+    assert existed is True
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = ?", (_EXTERNAL_ID,)
+    ).fetchone()
+    assert no_egress == 1
+
+
+def test_set_no_egress_clear_flips_it_back(conn) -> None:
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+    set_no_egress(conn, _EXTERNAL_ID)
+
+    existed = set_no_egress(conn, _EXTERNAL_ID, no_egress=False)
+
+    assert existed is True
+    (no_egress,) = conn.execute(
+        "SELECT no_egress FROM externals WHERE external_id = ?", (_EXTERNAL_ID,)
+    ).fetchone()
+    assert no_egress == 0
+
+
+def test_set_no_egress_unknown_external_returns_false_and_writes_nothing(
+    conn,
+) -> None:
+    existed = set_no_egress(conn, "https://never-ingested.example/page")
+
+    assert existed is False
+    assert conn.execute("SELECT COUNT(*) FROM externals").fetchone()[0] == 0
+
+
+def test_set_no_egress_never_touches_indexing_or_retrieval(conn) -> None:
+    """no_egress gates egress only -- the flag flip alone changes no other row."""
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+    before_passages = conn.execute(
+        "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchone()[0]
+    before_jobs = _jobs_for(conn, result.snapshot_id)
+
+    set_no_egress(conn, _EXTERNAL_ID)
+
+    after_passages = conn.execute(
+        "SELECT COUNT(*) FROM passages WHERE target_version = ?",
+        (result.snapshot_id,),
+    ).fetchone()[0]
+    assert after_passages == before_passages
+    assert _jobs_for(conn, result.snapshot_id) == before_jobs
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", result.snapshot_id)
 
 
 # --- gate_reenrich: material-change re-enrich gating (lode-w0h.5) --------------

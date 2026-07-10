@@ -22,7 +22,11 @@ on-demand CLI introspection cannot drift from the modal; sharing ``purge``'s
 id/prefix resolution, and flagging a tombstoned head with a ``[deleted]``
 marker (lode-d32.2) rather than rendering it as if live; ``ask``
 (lode-y42.2) runs the cited Q&A loop
-(retrieve → synthesize → faithfulness gate → cite or abstain); ``tui`` (E11,
+(retrieve → synthesize → faithfulness gate → cite or abstain); ``no-egress``
+(lode-w0h.7) is the no-egress-tier control surface for a drawn-down external
+source -- flips ``externals.no_egress`` via :func:`lode.externals.set_no_egress`
+so it stays locally retrievable but is excluded from enrich/Q&A cloud egress
+(``docs/externals.md`` "No-egress tier"); ``tui`` (E11,
 lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
@@ -893,6 +897,46 @@ def egress(
             f"sent: {_format_sent(sent_targets)}  "
             f"redactions: {_format_redactions(redactions)}"
         )
+
+
+@app.command(name="no-egress")
+def no_egress_(
+    external_id: str = typer.Argument(
+        ..., help="The external source's id (its canonical URL) to mark/clear."
+    ),
+    clear: bool = typer.Option(
+        False,
+        "--clear",
+        help="Clear no_egress instead of setting it (source becomes cloud-eligible again).",
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Mark (or ``--clear``) an external source no_egress (``docs/externals.md``).
+
+    The no-egress-tier control surface (lode-w0h.7): a no_egress external is
+    still captured, chunked, embedded, and locally retrievable (keyword +
+    vector) — only cloud egress changes. It is excluded from both the
+    enrichment send and the Q&A context, and any answer that would have cited
+    it surfaces it instead as "present, withheld from cloud synthesis"
+    (:data:`lode.egress.WITHHELD_CITATION`). The flag is read generically off
+    the ``externals`` row by every send path (:mod:`lode.egress`,
+    :mod:`lode.cited_answer`) — this command just flips it.
+
+    ``external_id`` must already exist (e.g. drawn down via a note's pasted
+    URL, ``docs/externals.md``); this command does not create sources.
+    """
+    conn = _open_db(db)
+    try:
+        from lode.externals import set_no_egress
+
+        existed = set_no_egress(conn, external_id, no_egress=not clear)
+    finally:
+        conn.close()
+    if not existed:
+        typer.echo(f"no such external source: {external_id}", err=True)
+        raise typer.Exit(code=1)
+    state = "cleared" if clear else "marked"
+    typer.echo(f"{state} no_egress: {external_id}")
 
 
 def _config_lines(db: Path | None) -> list[str]:
