@@ -288,8 +288,29 @@ Only now — combined `trunk` is green — do I write the world. Order matters (
 [bd-sync discipline](#bd-sync-discipline-non-negotiable)): push `trunk` first, then close, then
 publish bd state, then GC branches **and the local builder worktrees**.
 
+First, check whether the re-gate's `nox -t fix` (above) actually changed anything:
+
 ```bash
-rtk git add -A -- ':!.beads' && rtk git commit -q -m "style: nox -t fix on merged trunk" || true   # commit any re-gate reformat (skip if clean); the ':!.beads' pathspec keeps the passive jsonl export OUT of the commit
+rtk git status --short
+```
+
+- **Empty** → `nox -t fix` touched nothing. Skip the commit entirely — there's nothing to commit.
+- **Non-empty** → stage **only** the explicitly-named reformatted source paths shown by that
+  `git status`. Never `-A`, and never rely on a `':!.beads'` pathspec exclude to keep the passive
+  jsonl export out — that exclude does not reliably survive the `rtk` proxy (it once let
+  `.beads/issues.jsonl` through, and separately `-A` swept in an unrelated pre-existing untracked
+  directory under a misleading `style:` message — both hit landing `lode-0wj.1`). Beads' own
+  pre-commit hook (`.beads/hooks/pre-commit`) re-exports and re-stages `.beads/issues.jsonl` on
+  *every* commit regardless of what was `git add`-ed (see CLAUDE.md's workflow gotchas), so the
+  commit itself must skip hooks too:
+
+  ```bash
+  rtk git add <path> <path> ...                                          # explicit reformatted source paths only, e.g. rtk git add src/foo.py src/bar.py
+  rtk git commit --no-verify -q -m "style: nox -t fix on merged trunk"   # --no-verify: skip the beads pre-commit hook so it can't re-stage .beads/issues.jsonl
+  rtk git show --stat HEAD                                               # confirm only the intended paths rode along — no jsonl, nothing else
+  ```
+
+```bash
 rtk git push origin trunk
 rtk git status                 # MUST show trunk up to date with origin
 
