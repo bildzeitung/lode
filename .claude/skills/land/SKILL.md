@@ -231,7 +231,14 @@ merge_one() {   # $1 = id — merges "origin/land/$1" with its pre-computed mess
 
 # On trunk, accepted set = the IDs land-review accepted this pass.
 for id in $ACCEPTED; do
-  merge_one "$id"
+  if ! merge_one "$id"; then
+    # → real textual conflict with a branch already merged this pass: both passed the 2b precheck
+    # against origin/trunk but conflict with *each other*. Needs-rebase kick-back (see below, with
+    # $CONFLICTS), NOT a land — it leaves this pass's set, so it is excluded from the re-gate, and from
+    # the $LANDED that Section 4 closes and GCs. Symmetric with the isolation loop below; without this
+    # check merge_one's clean abort would silently drop it into $LANDED and close/delete unlanded work.
+    continue
+  fi
 done
 ```
 
