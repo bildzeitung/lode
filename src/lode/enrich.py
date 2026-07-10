@@ -69,6 +69,7 @@ from datetime import UTC, datetime, timedelta
 import anthropic
 from pydantic import BaseModel, Field
 
+from lode.auth import build_client
 from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
@@ -406,8 +407,9 @@ def enrich_version(
     :param conn: Open SQLite connection.
     :param version_id: The version or snapshot to enrich.
     :param settings: Resolved settings (enrichment model, redaction patterns, ...).
-    :param client: Optional Anthropic client (created fresh if omitted). Inject in
-        tests to avoid a live API call.
+    :param client: Optional Anthropic client (credential-resolved via
+        :func:`lode.auth.build_client` if omitted). Inject in tests to avoid a
+        live API call.
     """
     target = _resolve_enrich_target(conn, version_id)
 
@@ -438,7 +440,7 @@ def enrich_version(
     )
 
     if client is None:
-        client = anthropic.Anthropic()
+        client = build_client()
 
     result = _call_haiku(redacted_body, settings, client)
 
@@ -536,13 +538,14 @@ def submit_enrich_batch(
     :param conn: Open SQLite connection.
     :param job_rows: ``(job_id, target_version)`` pairs to submit.
     :param settings: Resolved settings (model, redaction patterns, …).
-    :param client: Optional Anthropic client; created fresh if omitted.
+    :param client: Optional Anthropic client; credential-resolved via
+        :func:`lode.auth.build_client` if omitted.
     """
     if not job_rows:
         return None
 
     if client is None:
-        client = anthropic.Anthropic()
+        client = build_client()
 
     # Gate each version; build batch requests only for valid ones.
     requests: list[dict] = []
@@ -663,10 +666,11 @@ def collect_enrich_batch(
     :param conn: Open SQLite connection.
     :param batch_id: The Batches API handle recorded by :func:`submit_enrich_batch`.
     :param settings: Resolved settings (model, retry knobs, …).
-    :param client: Optional Anthropic client; created fresh if omitted.
+    :param client: Optional Anthropic client; credential-resolved via
+        :func:`lode.auth.build_client` if omitted.
     """
     if client is None:
-        client = anthropic.Anthropic()
+        client = build_client()
 
     batch = client.beta.messages.batches.retrieve(batch_id)
     if batch.processing_status != "ended":
