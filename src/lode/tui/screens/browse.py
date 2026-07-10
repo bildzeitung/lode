@@ -75,6 +75,18 @@ the two surfaces cannot drift. Registered like
 ``ModalScreen`` pushed over the still-visible list rather than a
 ``SCREENS``-registry entry, dimming the table underneath for free via
 ``ModalScreen``'s own ``DEFAULT_CSS``.
+
+**External-snapshot introspection (lode-8d2).** When an edge draws down a web
+link, its line in the Edges block gains a second, indented line showing that
+external's :class:`~lode.enrichment_view.ExternalView` -- source_type,
+snapshot id, ``fetched_at``, and its three-valued ``state``
+(``un-refreshed``/``stale``/``withheld``, dimmed like a stale edge already
+is). Renders :attr:`~lode.enrichment_view.EnrichmentEdge.external` verbatim,
+already assembled by the same :func:`~lode.enrichment_view.enrichment_view`
+call -- no second DB read, no second policy. The edge's own target label
+switches from the truncated :func:`~lode.notes_read.short_note_id` prefix to
+the bare ``to_id`` when it resolves to an external, since that ``to_id`` is
+the full source URL, not a note id worth abbreviating.
 """
 
 from __future__ import annotations
@@ -87,7 +99,13 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
-from lode.enrichment_view import EnrichmentEdge, EnrichmentItem, enrichment_view
+from lode.enrichment_view import (
+    EnrichmentEdge,
+    EnrichmentItem,
+    ExternalView,
+    enrichment_view,
+)
+from lode.ids import short_version_id
 from lode.notes_read import (
     list_notes,
     list_versions,
@@ -289,12 +307,37 @@ def _summary_text(summary: EnrichmentItem | None) -> Text:
     return _item_text(summary)
 
 
+def _external_text(external: ExternalView) -> Text:
+    """One edge's external-snapshot introspection sub-line (lode-8d2).
+
+    Rendered directly beneath its edge's own line in the same Edges block --
+    the external analogue of a note's tags/entities, through the exact
+    :class:`~lode.enrichment_view.ExternalView` fields
+    :func:`~lode.enrichment_view.enrichment_view` already assembled (no
+    second DB read, no re-derived policy). Dimmed for ``stale``/``withheld``
+    the same way a stale tag/edge already is (lode-0qc); the default
+    ``un-refreshed`` state renders plain, but is still printed explicitly so
+    all three states are equally visible in the modal.
+    """
+    line = (
+        f"     {external.source_type} · snapshot "
+        f"{short_version_id(external.snapshot_id)} · as of {external.fetched_at} "
+        f"[{external.state}]"
+    )
+    return Text(line, style="dim" if external.state != "un-refreshed" else "")
+
+
 def _edges_text(edges: list[EnrichmentEdge]) -> Text:
     """One inferred edge per line: target, reason, confidence -- dimmed if stale.
 
     ``reason``/``confidence`` are nullable on the seam (a user-curated edge may
     carry neither); missing values render as an explicit placeholder rather
-    than a blank so the line never reads as truncated.
+    than a blank so the line never reads as truncated. When an edge draws down
+    an external (``edge.external`` is not ``None``, lode-8d2), the target
+    label is the bare ``to_id`` (the source URL) rather than the truncated
+    :func:`~lode.notes_read.short_note_id` prefix -- that prefix is an
+    8-char slice meant for note ids, not a URL -- and a second, indented line
+    shows that external's snapshot introspection (:func:`_external_text`).
     """
     if not edges:
         return Text(_NONE_TEXT)
@@ -304,8 +347,12 @@ def _edges_text(edges: list[EnrichmentEdge]) -> Text:
             block.append("\n")
         reason = edge.reason if edge.reason is not None else "no reason recorded"
         confidence = f"{edge.confidence:.2f}" if edge.confidence is not None else "n/a"
-        line = f"-> {short_note_id(edge.to_id)} ({reason}, {confidence})"
+        target = edge.to_id if edge.external is not None else short_note_id(edge.to_id)
+        line = f"-> {target} ({reason}, {confidence})"
         block.append(line, style="dim" if edge.stale else "")
+        if edge.external is not None:
+            block.append("\n")
+            block.append_text(_external_text(edge.external))
     return block
 
 

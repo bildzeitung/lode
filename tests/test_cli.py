@@ -37,6 +37,7 @@ from lode.config import load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
 from lode.hashing import NO_PARENT, content_version_id
+from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
 from lode.versions import delete, save
@@ -1236,6 +1237,153 @@ def test_show_live_note_has_no_deleted_marker(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert f"note_id: {note_id}" in result.stdout
     assert "[deleted]" not in result.stdout
+
+
+# --- lode show: external-snapshot introspection (lode-8d2) -----------------
+
+
+def _seed_external(
+    conn: sqlite3.Connection,
+    *,
+    external_id: str = "https://example.com/article",
+    source_type: str = "web",
+    snapshot_id: str = "snap-cli-1",
+    status: str = "ok",
+    no_egress: bool = False,
+    fetched_at: str = "2026-07-08T00:00:00.000000Z",
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, no_egress) "
+            "VALUES (?, ?, ?)",
+            (external_id, source_type, int(no_egress)),
+        )
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, status, fetched_at) "
+            "VALUES (?, ?, 'body', ?, ?)",
+            (snapshot_id, external_id, status, fetched_at),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+
+
+def test_show_renders_external_snapshot_introspection_for_a_drawn_down_link(
+    tmp_path: Path,
+) -> None:
+    """A note whose edge draws down a web link shows that external's snapshot
+    (source_type/snapshot id/fetched_at/state) indented beneath the edge line
+    -- the CLI half of lode-8d2, through the same ay5.1 seam the TUI modal
+    consumes.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-external-1", "see https://example.com/article")
+        _seed_external(conn, snapshot_id="snap-cli-1")
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'https://example.com/article', 'user', 'pasted URL', "
+            "1.0, ?, 'fresh')",
+            ("note-external-1", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-external-1", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "-> https://example.com/article (pasted URL, 1.00)" in result.stdout
+    assert f"snapshot {short_version_id('snap-cli-1')}" in result.stdout
+    assert "web" in result.stdout
+    assert "as of 2026-07-08T00:00:00.000000Z" in result.stdout
+    assert "[un-refreshed]" in result.stdout
+
+
+def test_show_marks_a_tombstoned_external_stale(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-external-2", "see https://dead.example.com/")
+        _seed_external(
+            conn,
+            external_id="https://dead.example.com/",
+            snapshot_id="snap-cli-dead",
+            status="tombstone",
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'https://dead.example.com/', 'user', 'pasted URL', "
+            "1.0, ?, 'fresh')",
+            ("note-external-2", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-external-2", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "[stale]" in result.stdout
+
+
+def test_show_marks_a_no_egress_external_withheld(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-external-3", "see https://sensitive.example.com/")
+        _seed_external(
+            conn,
+            external_id="https://sensitive.example.com/",
+            snapshot_id="snap-cli-sensitive",
+            no_egress=True,
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'https://sensitive.example.com/', 'user', 'pasted URL', "
+            "1.0, ?, 'fresh')",
+            ("note-external-3", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-external-3", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "[withheld]" in result.stdout
+
+
+def test_show_edge_without_a_matching_external_row_has_no_snapshot_line(
+    tmp_path: Path,
+) -> None:
+    """An ordinary inferred edge (no externals row for its to_id) prints just
+    the one edge line -- no extra snapshot line, no crash."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-no-external", "body")
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, 'concept-not-external', 'ai', 'because', 0.5, ?, 'fresh')",
+            ("note-no-external", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["show", "note-no-external", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "-> concept-not-external (because, 0.50)" in result.stdout
+    assert "snapshot" not in result.stdout
 
 
 # --- lode ask (cited Q&A loop, lode-y42.2) ----------------------------------

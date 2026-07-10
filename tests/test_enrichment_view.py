@@ -144,6 +144,35 @@ def _insert_enrich_job(
             )
 
 
+def _insert_external(
+    conn: sqlite3.Connection,
+    *,
+    external_id: str = "https://example.com/article",
+    source_type: str = "web",
+    snapshot_id: str = "snap-1",
+    status: str = "ok",
+    no_egress: bool = False,
+    fetched_at: str = "2026-07-08T00:00:00.000000Z",
+) -> None:
+    """Seed one ``externals`` row + its head ``snapshots`` row (lode-8d2 tests)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, no_egress) "
+            "VALUES (?, ?, ?)",
+            (external_id, source_type, int(no_egress)),
+        )
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, status, fetched_at) "
+            "VALUES (?, ?, 'body', ?, ?)",
+            (snapshot_id, external_id, status, fetched_at),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+
+
 def _insert_passage(
     conn: sqlite3.Connection,
     *,
@@ -504,6 +533,134 @@ def test_embedded_false_with_no_passages(conn: sqlite3.Connection) -> None:
     assert view is not None
     assert view.embedded is False
     assert view.passage_count == 0
+
+
+# ---------------------------------------------------------------------------
+# External-snapshot introspection (lode-8d2)
+# ---------------------------------------------------------------------------
+
+
+def test_edge_to_a_real_external_carries_its_view(conn: sqlite3.Connection) -> None:
+    """A note's edge to a drawn-down web link attaches that external's snapshot."""
+    _insert_note(conn)
+    _insert_external(
+        conn,
+        external_id="https://example.com/article",
+        source_type="web",
+        snapshot_id="snap-ok",
+        status="ok",
+        fetched_at="2026-07-08T00:00:00.000000Z",
+    )
+    _insert_edge(
+        conn,
+        to_id="https://example.com/article",
+        source="user",
+        reason="pasted URL",
+        confidence=1.0,
+    )
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert len(view.edges) == 1
+    external = view.edges[0].external
+    assert external is not None
+    assert external.external_id == "https://example.com/article"
+    assert external.source_type == "web"
+    assert external.snapshot_id == "snap-ok"
+    assert external.fetched_at == "2026-07-08T00:00:00.000000Z"
+    assert external.status == "ok"
+    assert external.no_egress is False
+    assert external.state == "un-refreshed"
+
+
+def test_edge_to_a_non_external_to_id_has_no_external_view(
+    conn: sqlite3.Connection,
+) -> None:
+    """An ordinary note-to-note (or note-to-inferred-topic) edge attaches nothing.
+
+    ``to_id`` is polymorphic and no ``externals`` row exists for it here --
+    regression guard for every OTHER edge test in this file, which construct
+    :class:`EnrichmentEdge` without an ``external`` kwarg and rely on it
+    defaulting to ``None`` to match.
+    """
+    _insert_note(conn)
+    _insert_edge(conn, to_id="topic-a")
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.edges == [
+        EnrichmentEdge(
+            to_id="topic-a",
+            reason="mentions jwt auth",
+            confidence=0.82,
+            stale=False,
+            external=None,
+        )
+    ]
+
+
+def test_tombstone_head_snapshot_reports_stale_state(conn: sqlite3.Connection) -> None:
+    """A failed fetch (the head snapshot is a tombstone) reports state='stale'."""
+    _insert_note(conn)
+    _insert_external(
+        conn,
+        external_id="https://dead.example.com/",
+        snapshot_id="snap-dead",
+        status="tombstone",
+    )
+    _insert_edge(conn, to_id="https://dead.example.com/")
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    external = view.edges[0].external
+    assert external is not None
+    assert external.status == "tombstone"
+    assert external.state == "stale"
+
+
+def test_no_egress_external_reports_withheld_state(conn: sqlite3.Connection) -> None:
+    """A no_egress-marked external reports state='withheld', regardless of status."""
+    _insert_note(conn)
+    _insert_external(
+        conn,
+        external_id="https://sensitive.example.com/",
+        snapshot_id="snap-sensitive",
+        status="ok",
+        no_egress=True,
+    )
+    _insert_edge(conn, to_id="https://sensitive.example.com/")
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    external = view.edges[0].external
+    assert external is not None
+    assert external.no_egress is True
+    assert external.state == "withheld"
+
+
+def test_no_egress_takes_priority_over_tombstone_for_state(
+    conn: sqlite3.Connection,
+) -> None:
+    """withheld is checked before stale -- a no_egress tombstone still reads withheld."""
+    _insert_note(conn)
+    _insert_external(
+        conn,
+        external_id="https://both.example.com/",
+        snapshot_id="snap-both",
+        status="tombstone",
+        no_egress=True,
+    )
+    _insert_edge(conn, to_id="https://both.example.com/")
+
+    view = enrichment_view(_db_path(conn), "note-1")
+
+    assert view is not None
+    assert view.edges[0].external is not None
+    assert view.edges[0].external.state == "withheld"
 
 
 # ---------------------------------------------------------------------------
