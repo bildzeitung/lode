@@ -324,14 +324,39 @@ for id in $LANDED; do
   # GC the local builder worktree (best-effort — only on the machine that built it).
   # The builder records review_worktree/review_branch; once the work is on trunk the
   # worktree and its branch are dead weight (this is the accumulation cleanup).
+  # NOTE: plain git here, not rtk — rtk reformats `worktree list --porcelain`, so an
+  # rtk-piped guard never byte-matches "worktree $WT" and silently no-ops forever (lode-9j7).
   WT=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_worktree // empty')
-  if [ -n "$WT" ] && rtk git worktree list --porcelain | grep -qxF "worktree $WT"; then
+  if [ -n "$WT" ] && git worktree list --porcelain | grep -qxF "worktree $WT"; then
     BR=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_branch // empty')
-    rtk git worktree remove --force "$WT"            # the build artifact is on trunk now — force is safe
-    [ -n "$BR" ] && rtk git branch -D "$BR" 2>/dev/null || true
+    git worktree remove --force "$WT"            # the build artifact is on trunk now — force is safe
+    [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
   fi
 done
-rtk git worktree prune          # drop any now-stale worktree admin entries
+
+# Backstop: catch any dangling agent-* worktree the per-ticket loop above missed — a
+# stale/missing review_worktree pointer, a build that never got GC'd on its own machine,
+# or (historically) this section's own rtk-mangled-porcelain bug. Walk the raw porcelain
+# blocks directly (not the per-ticket review_worktree path), so a worktree with no
+# matching ticket, or a ticket with wrong metadata, still gets reclaimed. Skip anything
+# `locked` — that's the git-native in-use signal, and it's load-bearing here: a
+# currently-running sibling worktree whose branch hasn't diverged from trunk yet is
+# trivially "merged" into trunk by content identity, so `locked` must gate this even
+# though `merged` alone looks sufficient. `merged` is the same safety invariant the
+# per-ticket removal above already relies on ("the build artifact is on trunk now —
+# force is safe").
+MERGED=$(git branch --merged trunk --format='%(refname:short)')
+git worktree list --porcelain | awk '
+  /^worktree / { path=$2; branch=""; locked=0 }
+  /^branch refs\/heads\// { branch=substr($0,20) }
+  /^locked/ { locked=1 }
+  /^$/ { if (path!="" && branch ~ /^worktree-agent-/ && !locked) print path"\t"branch; path="" }
+' | while IFS=$'\t' read -r WT BR; do
+  printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue
+  git worktree remove --force "$WT"
+  git branch -D "$BR" 2>/dev/null || true
+done
+git worktree prune          # drop any now-stale worktree admin entries
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -342,7 +367,11 @@ The worktree GC is **best-effort and machine-local**: builds can happen on sever
 skips any ticket whose worktree isn't registered here — the lander never errors on a worktree it can't
 see, and the build machine's own `/land` (or a later sweep there) reclaims it. I GC a worktree only on
 a clean **land**; a **bounce** drops the branch but the rebuild ticket may still want the tree, and an
-**escalate** keeps everything until the human resolves it.
+**escalate** keeps everything until the human resolves it. The end-of-pass backstop sweep is a second,
+independent net over the same machine's worktrees: it doesn't consult any ticket's metadata, so it
+also reclaims a `worktree-agent-*` worktree whose `review_worktree` pointer went stale or was never
+recorded — it only requires the worktree to be **unlocked** (no in-flight agent owns it) and its
+branch already **merged into trunk** (the work is safely captured elsewhere).
 
 ---
 
