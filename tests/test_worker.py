@@ -1143,25 +1143,14 @@ def test_drain_empty_queue_returns_zero(
 # ---------------------------------------------------------------------------
 
 
-def test_embed_is_registered_by_default() -> None:
-    """The module-level registry must have 'embed' registered at import time."""
+@pytest.mark.parametrize("job_type", ["embed", "enrich", "refresh"])
+def test_job_type_is_registered_by_default(job_type: str) -> None:
+    """The module-level registry must have each core job type registered at
+    import time (embed: original registry; enrich: lode-npx.1; refresh:
+    lode-w0h.3)."""
     from lode.worker import registered_types
 
-    assert "embed" in registered_types()
-
-
-def test_enrich_is_registered_by_default() -> None:
-    """The enrich handler is registered at import time (lode-npx.1)."""
-    from lode.worker import registered_types
-
-    assert "enrich" in registered_types()
-
-
-def test_refresh_is_registered_by_default() -> None:
-    """The refresh handler is registered at import time (lode-w0h.3)."""
-    from lode.worker import registered_types
-
-    assert "refresh" in registered_types()
+    assert job_type in registered_types()
 
 
 # ---------------------------------------------------------------------------

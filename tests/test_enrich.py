@@ -231,23 +231,28 @@ def test_enrichment_result_roundtrip() -> None:
     assert rehydrated.inferred_edges[0].confidence == pytest.approx(0.85)
 
 
-def test_inferred_edge_confidence_bounds_valid() -> None:
-    """Boundary values 0.0 and 1.0 are accepted."""
-    InferredEdge(to_id="x", reason="y", confidence=0.0)
-    InferredEdge(to_id="x", reason="y", confidence=1.0)
-    InferredEdge(to_id="x", reason="y", confidence=0.5)
-
-
-def test_inferred_edge_confidence_below_zero_rejected() -> None:
-    """Confidence below 0.0 is rejected by Pydantic validation."""
-    with pytest.raises(Exception):
-        InferredEdge(to_id="x", reason="y", confidence=-0.01)
-
-
-def test_inferred_edge_confidence_above_one_rejected() -> None:
-    """Confidence above 1.0 is rejected by Pydantic validation."""
-    with pytest.raises(Exception):
-        InferredEdge(to_id="x", reason="y", confidence=1.01)
+# lode-b4w.3: the bounds-valid/below-zero/above-one trio all exercise the
+# same Pydantic confidence-field validator, differing only in the input
+# value and whether it should raise -- parametrized over (confidence,
+# should_raise), 3 tests -> 1, every original value still checked.
+@pytest.mark.parametrize(
+    "confidence, should_raise",
+    [
+        pytest.param(0.0, False, id="lower_bound"),
+        pytest.param(1.0, False, id="upper_bound"),
+        pytest.param(0.5, False, id="mid_range"),
+        pytest.param(-0.01, True, id="below_zero"),
+        pytest.param(1.01, True, id="above_one"),
+    ],
+)
+def test_inferred_edge_confidence_validation(
+    confidence: float, should_raise: bool
+) -> None:
+    if should_raise:
+        with pytest.raises(Exception):
+            InferredEdge(to_id="x", reason="y", confidence=confidence)
+    else:
+        InferredEdge(to_id="x", reason="y", confidence=confidence)
 
 
 # ---------------------------------------------------------------------------
@@ -852,21 +857,26 @@ def test_enrich_gap_idempotent(conn: sqlite3.Connection) -> None:
     assert rows[0] == 1
 
 
-def test_enrich_gap_skips_tombstone(conn: sqlite3.Connection) -> None:
-    """Soft-deleted head versions (op='delete') are not enqueued."""
-    _insert_note(conn, op="delete")
-    assert _enrich_gap_step(conn) == 0
-
-
-def test_enrich_gap_skips_purged(conn: sqlite3.Connection) -> None:
-    """Purged head versions (purged_at IS NOT NULL) are not enqueued."""
-    _insert_note(conn, purged_at="2026-01-01T00:00:00.000Z")
-    assert _enrich_gap_step(conn) == 0
-
-
-def test_enrich_gap_skips_no_egress(conn: sqlite3.Connection) -> None:
-    """no_egress notes are excluded from enrichment gap detection."""
-    _insert_note(conn, no_egress=1)
+# lode-b4w.3: tombstone/purged/no_egress each seed one static disqualifying
+# note attribute with an identical "insert, assert 0 gaps" shape -- verified
+# by reading _enrich_gap_step's WHERE clause, not just name matching.
+# Parametrized over the insert kwarg, 3 tests -> 1. test_enrich_gap_skips_live_job
+# below is NOT folded in: it inserts a *job* row (a materially different
+# setup, not a note attribute), per lode-b4w.1's explicit caution to verify
+# before merging it into this table.
+@pytest.mark.parametrize(
+    "insert_kwargs",
+    [
+        pytest.param({"op": "delete"}, id="tombstone"),
+        pytest.param({"purged_at": "2026-01-01T00:00:00.000Z"}, id="purged"),
+        pytest.param({"no_egress": 1}, id="no_egress"),
+    ],
+)
+def test_enrich_gap_skips_disqualifying_note(
+    conn: sqlite3.Connection, insert_kwargs: dict
+) -> None:
+    """Soft-deleted, purged, or no_egress head versions are not enqueued."""
+    _insert_note(conn, **insert_kwargs)
     assert _enrich_gap_step(conn) == 0
 
 

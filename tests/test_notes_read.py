@@ -11,6 +11,8 @@ sibling reader ``lode notes --deleted`` calls.
 import json
 from pathlib import Path
 
+import pytest
+
 from lode.notes_read import (
     list_deleted_notes,
     list_notes,
@@ -119,30 +121,37 @@ def test_list_notes_reports_chain_length_as_edit_count(tmp_path: Path) -> None:
     assert rows[0].version == 3
 
 
-def test_list_notes_falls_back_to_first_line_when_unenriched(tmp_path: Path) -> None:
+# lode-b4w.3: both cases exercise the same "no annotation -> fall back to
+# first non-blank line" summary logic, differing only in body content and
+# expected summary. Parametrized over (body, expected_summary), 2 tests -> 1.
+@pytest.mark.parametrize(
+    "body, expected_summary",
+    [
+        pytest.param(
+            "the actual first line\nmore text below",
+            "the actual first line",
+            id="first_line",
+        ),
+        pytest.param(
+            "\n   \nfirst real content\nmore",
+            "first real content",
+            id="first_non_blank_line",
+        ),
+    ],
+)
+def test_list_notes_falls_back_to_first_non_blank_line(
+    tmp_path: Path, body: str, expected_summary: str
+) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        save(conn, "note-1", "the actual first line\nmore text below")
+        save(conn, "note-1", body)
     finally:
         conn.close()
 
     rows = list_notes(db_path)
 
-    assert rows[0].summary == "the actual first line"
-
-
-def test_list_notes_falls_back_to_first_non_blank_line(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        save(conn, "note-1", "\n   \nfirst real content\nmore")
-    finally:
-        conn.close()
-
-    rows = list_notes(db_path)
-
-    assert rows[0].summary == "first real content"
+    assert rows[0].summary == expected_summary
 
 
 def test_list_notes_uses_the_head_summary_annotation_when_present(
@@ -254,28 +263,41 @@ def test_list_deleted_notes_summary_falls_back_to_the_tombstones_carried_body(
     assert rows[0].summary == "the original first line"
 
 
-def test_note_body_returns_the_live_head_body(tmp_path: Path) -> None:
+def _setup_live_head(conn) -> str | None:
+    head = save(conn, "note-1", "v1 body").version_id
+    save(conn, "note-1", "v2 body", parent=head)
+    return "v2 body"
+
+
+def _setup_deleted_note(conn) -> str | None:
+    head = save(conn, "note-1", "v1 body").version_id
+    delete(conn, "note-1", parent=head)
+    return None
+
+
+# lode-b4w.1's checklist flagged this pair as sharing a shape (parametrize
+# over note-state candidate); the setups differ (an update vs. a delete) so
+# each is wrapped as a setup_fn returning its expected note_body -- 2 tests
+# -> 1, no assertion dropped. test_version_body_returns_a_specific_non_head_version
+# below is explicitly NOT folded in here per the checklist's caution (it's a
+# related but distinct call, testing version_body's own happy path against a
+# known non-head version_id, not note_body's "reflects current note state").
+@pytest.mark.parametrize(
+    "setup_fn",
+    [
+        pytest.param(_setup_live_head, id="live_head"),
+        pytest.param(_setup_deleted_note, id="deleted"),
+    ],
+)
+def test_note_body_reflects_note_state(tmp_path: Path, setup_fn) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        head = save(conn, "note-1", "v1 body").version_id
-        save(conn, "note-1", "v2 body", parent=head)
+        expected = setup_fn(conn)
     finally:
         conn.close()
 
-    assert note_body(db_path, "note-1") == "v2 body"
-
-
-def test_note_body_returns_none_for_a_deleted_note(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        head = save(conn, "note-1", "v1 body").version_id
-        delete(conn, "note-1", parent=head)
-    finally:
-        conn.close()
-
-    assert note_body(db_path, "note-1") is None
+    assert note_body(db_path, "note-1") == expected
 
 
 def test_note_body_returns_none_for_an_absent_note(tmp_path: Path) -> None:
