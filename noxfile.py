@@ -32,6 +32,18 @@ absent. It is deliberately kept out of ``nox.options.sessions`` so a bare
 determinism/network split is settled in ``docs/decisions.md``, the eval-harness
 entry).
 
+**Opt-in via env var, not credential-gating alone (lode-b4w.7).** The live
+eval test self-skips unless ``LODE_RUN_LIVE_EVAL=1`` is set; this ``eval``
+session is the only place that sets it. Credential presence used to be the
+*only* gate (``pytest.skip`` when ``ANTHROPIC_API_KEY`` was absent) — that
+meant an ambient key in the shell (the normal case in agent environments)
+made ``nox -s tests`` silently run the live, ~273s, API-billed pass, since
+that session applies no marker filter and was never supposed to include it.
+The env var makes the offline gate's exclusion independent of whatever
+credentials happen to be sitting in the environment; the credential check
+still runs as a second layer once opted in, so ``nox -s eval`` keeps
+skipping cleanly without a key.
+
 Sessions run inside the already-built project venv (``./venv`` from
 ``scripts/python-init.sh``) rather than nox-managed isolated venvs: the
 runtime stack is heavy (lancedb, fastembed, textual, ...) and is installed
@@ -114,10 +126,19 @@ def eval(session: nox.Session) -> None:
     """Run the live eval integration test — CI-only, needs Anthropic creds.
 
     Runs ``tests/test_eval_live.py`` with the real local ONNX embedder and a
-    real Anthropic client.  Skipped when ``ANTHROPIC_API_KEY`` is absent: the
-    Q&A leg hits Claude, so this is the credentialed CI-style check, never part
-    of the offline test gate (see ``docs/decisions.md``, Shape A, lode-5y8.5).
+    real Anthropic client. Sets ``LODE_RUN_LIVE_EVAL=1`` so the test's opt-in
+    skip clears (lode-b4w.7) — this is the only session that sets it, which is
+    what keeps the live pass out of ``nox -s tests``/``nox -s unit``
+    regardless of ambient credentials. Also skips when ``ANTHROPIC_API_KEY``
+    is absent: the Q&A leg hits Claude, so this is the credentialed CI-style
+    check, never part of the offline test gate (see ``docs/decisions.md``,
+    Shape A, lode-5y8.5).
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         session.skip("ANTHROPIC_API_KEY not set — eval needs Anthropic credentials")
-    session.run("pytest", "tests/test_eval_live.py", "-v")
+    session.run(
+        "pytest",
+        "tests/test_eval_live.py",
+        "-v",
+        env={"LODE_RUN_LIVE_EVAL": "1"},
+    )

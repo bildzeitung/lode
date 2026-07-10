@@ -7,10 +7,18 @@ answerer (:func:`lode.cited_answer.ask` with the credential-resolved Anthropic
 client) sources the cited answers. The Q&A leg therefore needs
 ``ANTHROPIC_API_KEY`` and the network.
 
-**Not part of the offline gate.** This file is run only by ``nox -s eval``,
-which skips itself when ``ANTHROPIC_API_KEY`` is absent.  A bare ``nox`` and
-``nox -s tests`` collect this file but the test skips cleanly before touching
-the network (``pytest.skip()`` fires at the top of the test body).
+**Not part of the offline gate — opt-in via env var, not credential-gated
+(lode-b4w.7).** This file is run only by ``nox -s eval``, which sets
+``LODE_RUN_LIVE_EVAL=1`` before invoking pytest; the test skips unless that
+var is set, *before* it even looks at credentials. A bare ``nox`` and
+``nox -s tests`` collect this file but never set the var, so the test skips
+cleanly regardless of what's ambient in the shell — including
+``ANTHROPIC_API_KEY``, which used to be the *only* gate: when a key was
+ambient (e.g. an agent environment), ``nox -s tests`` silently ran this live,
+network-bound, ~273s API-billed pass. The credential check still runs as a
+second layer inside the opt-in path, so ``nox -s eval`` continues to skip
+itself when ``ANTHROPIC_API_KEY`` is absent rather than failing or hitting
+the network.
 The deterministic offline scorer coverage lives in ``tests/test_eval_harness.py``.
 
 Runs the scorer against a fresh ephemeral store — an in-memory SQLite DB and a
@@ -59,19 +67,25 @@ ABSTENTION_FLOOR = 0.95
 def test_eval_golden_set_live() -> None:
     """Score the golden Q&A set end-to-end with real seams.
 
-    Skips cleanly when ``ANTHROPIC_API_KEY`` is absent — the Q&A leg calls
-    Claude, so this is the credentialed CI-style check, never part of the
-    offline test gate. Run it explicitly via ``nox -s eval``.
+    Skips unless ``LODE_RUN_LIVE_EVAL=1`` is set — ``nox -s eval`` is the only
+    place that sets it, so this test never runs under ``nox -s tests`` or
+    ``nox -s unit`` regardless of what's ambient in the environment
+    (lode-b4w.7: ``ANTHROPIC_API_KEY`` alone used to be the only gate, so a
+    credentialed shell made the offline landing gate silently run a live,
+    ~273s, API-billed pass). Once opted in, it also skips cleanly when
+    ``ANTHROPIC_API_KEY`` is absent — the Q&A leg calls Claude, so this stays
+    the credentialed CI-style check.
 
-    Also ``@pytest.mark.slow`` (lode-pql): when a key IS present in the shell
-    (e.g. an agent environment), this test stops self-skipping and actually
-    runs — a live, network-bound Q&A call over the whole golden set measured
-    at ~300s in profiling, dwarfing the rest of the suite combined. The marker
-    keeps it out of the fast inner loop (``nox -s unit``) explicitly rather
-    than relying solely on the credential self-skip; ``nox -s tests`` (the
-    landing gate) and ``nox -s eval`` are unaffected — neither filters on
-    markers, so both still run/skip this exactly as before.
+    Also ``@pytest.mark.slow`` (lode-pql): kept for consistency with the
+    other slow-tier tests and to keep it out of ``nox -s unit`` even if the
+    opt-in var were ever set by mistake in that context; neither
+    ``nox -s tests`` (the landing gate) nor ``nox -s eval`` filters on
+    markers, so the env-var opt-in above is what actually does the gating.
     """
+    if not os.environ.get("LODE_RUN_LIVE_EVAL"):
+        pytest.skip(
+            "LODE_RUN_LIVE_EVAL not set — live eval is opt-in, run it via nox -s eval"
+        )
     if not os.environ.get("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set — live eval needs Anthropic credentials")
 
