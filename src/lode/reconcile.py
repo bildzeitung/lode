@@ -18,7 +18,17 @@ the tiny window between a version write and its enqueue (see ``docs/storage.md``
   on save, so their presence no longer implies vectors exist; the embed job
   status is the reliable proxy for "vector leg completed."
   Excludes soft-deleted (``op='delete'``) and purged (``purged_at IS NOT NULL``)
-  heads.
+  heads. **Snapshot arm (lode-621):** the same gap query also covers each
+  external's current ``head_snapshot_id`` — mirroring :func:`lode.retrieval.
+  live_head_versions`'s notes-UNION-externals shape — since lode-w0h.8 made a
+  snapshot a first-class retrieval candidate with its own async vector leg. A
+  tombstone snapshot (no body to embed) and a superseded (non-head) snapshot are
+  excluded, matching what ``live_head_versions`` itself admits. **Dead-letter
+  ownership, settled (docs/decisions.md):** this sweep is the sole re-enqueue
+  path for a dead ``embed`` job, for both notes and snapshots — distinct from
+  lode-at8's worker terminal-transition hook, which is scoped to ``refresh``
+  jobs recording a *permanent* fetch failure (a tombstone), not to retrying a
+  still-valid body's embedding.
 - ``enrich_gap`` — registered (E7, lode-npx.1). Finds head versions missing a
   live (non-dead) enrich job — i.e. Haiku extraction never ran, was
   dead-lettered, or otherwise lost its job row — and re-enqueues an ``enrich``
@@ -130,31 +140,53 @@ def reconcile(
 
 
 def _embed_gap_step(conn: sqlite3.Connection) -> int:
-    """Embed gap: re-enqueue embed jobs for head versions missing a live embed job.
+    """Embed gap: re-enqueue embed jobs for live heads missing a live embed job.
 
     **Gap signal (lode-xyb):** since ``passages`` + ``passages_fts`` are now
     written synchronously on save by :class:`~lode.lexical.LexicalCacheBackend`,
     a ``passages`` row existing no longer means "embed ran" — it just means "save
     ran."  The reliable signal for "embedding completed (vectors in LanceDB)" is a
     non-dead embed job: a ``pending``/``running``/``done``/``failed`` embed job for
-    the version means the vector work is either in-flight or completed; a ``dead``
+    the target means the vector work is either in-flight or completed; a ``dead``
     (max-retries exhausted) job or the total absence of a job means the vector leg
     is missing.
 
-    **Gap query:** live head versions — ``notes.head_version_id`` joined to
-    ``versions``, where the head op is not ``'delete'`` (not a soft-delete
-    tombstone) and ``purged_at IS NULL`` (not hard-deleted/purged) — with no
-    embed job in status ``pending``, ``running``, ``done``, or ``failed``.  That
-    is: no job at all, or all existing embed jobs are ``dead``.  Each such version
-    is re-enqueued.
+    **Gap query — notes arm:** live head versions — ``notes.head_version_id``
+    joined to ``versions``, where the head op is not ``'delete'`` (not a
+    soft-delete tombstone) and ``purged_at IS NULL`` (not hard-deleted/purged) —
+    with no embed job in status ``pending``, ``running``, ``done``, or ``failed``.
+
+    **Gap query — snapshot arm (lode-621):** the external analogue, mirroring
+    :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals shape —
+    ``externals.head_snapshot_id`` joined to ``snapshots``, where the snapshot's
+    ``status`` is not ``'tombstone'`` (a tombstone has no body to embed; sweeping
+    it would enqueue a job that can only fail).  Only the current
+    ``head_snapshot_id`` is read, so a superseded (non-head) snapshot is excluded
+    by construction, same as a note's non-head version — matching what
+    ``live_head_versions`` itself admits to the direct retrieval legs.  Before
+    lode-w0h.8 unioned external heads into ``live_head_versions``, a dead
+    snapshot embed job had no user-visible consequence (the snapshot was only
+    graph-reachable, never a direct vector hit); now it does, so this arm closes
+    the gap the notes-only query left.
+
+    In both arms: no job at all, or all existing embed jobs ``dead``, means the
+    vector leg is missing.  Each such target is re-enqueued.
+
+    **Dead-letter ownership (docs/decisions.md):** this sweep is the sole
+    re-enqueue mechanism for a dead ``embed`` job, for both arms — distinct from
+    lode-at8's worker terminal-transition hook, which handles ``refresh`` jobs
+    reaching ``dead`` by writing a tombstone (a *permanent* failure record), not
+    by retrying.  An embed job's body is still valid after a dead embed job (the
+    version/snapshot content didn't change), so a periodic blind re-enqueue is a
+    safe, cheap recovery — no hook needed.
 
     **Enqueue:** calls :func:`lode.jobs.enqueue_derive_jobs` with
     ``types=("embed",)`` inside a single ``with conn:`` transaction.  The INSERT
-    is ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live``, so a version whose
+    is ``ON CONFLICT DO NOTHING`` against ``idx_jobs_live``, so a target whose
     embed job is already pending or running produces no duplicate row — the scan
     is entirely idempotent.
 
-    Returns the count of gap versions found (each triggered one
+    Returns the count of gap targets found (each triggered one
     ``enqueue_derive_jobs`` call; some may be no-ops for in-flight jobs).
     """
     gap_versions = conn.execute(
@@ -169,6 +201,18 @@ def _embed_gap_step(conn: sqlite3.Connection) -> int:
               SELECT 1 FROM jobs j
               WHERE j.type = 'embed'
                 AND j.target_version = n.head_version_id
+                AND j.status != 'dead'
+          )
+        UNION
+        SELECT e.head_snapshot_id
+        FROM externals e
+        JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+        WHERE e.head_snapshot_id IS NOT NULL
+          AND s.status != 'tombstone'
+          AND NOT EXISTS (
+              SELECT 1 FROM jobs j
+              WHERE j.type = 'embed'
+                AND j.target_version = e.head_snapshot_id
                 AND j.status != 'dead'
           )
         """

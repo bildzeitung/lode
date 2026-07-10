@@ -10,6 +10,14 @@ Acceptance criteria (bd show lode-i05.4):
 - A purged head (purged_at IS NOT NULL) is NOT enqueued.
 - enqueue reuses the single i05.1 enqueue path (lode.jobs.enqueue_derive_jobs).
 
+lode-621 extends the embed-gap acceptance to external snapshots (mirroring
+live_head_versions' notes-UNION-externals shape):
+
+- An external's current head_snapshot_id whose embed job reached 'dead' (or is
+  altogether missing) is re-enqueued, exactly as a note's version would be.
+- A tombstone snapshot (no body to embed) is NOT enqueued.
+- A superseded (non-head) snapshot is NOT enqueued — only the current head.
+
 Strategy: all tests use a real SQLite DB (via init_db) to exercise the actual
 partial unique index and the ON CONFLICT DO NOTHING deduplication path.
 The module-level _STEPS registry is not touched; tests inject custom step
@@ -126,6 +134,37 @@ def _all_jobs_for_version(conn: sqlite3.Connection, version_id: str) -> list[tup
     ).fetchall()
 
 
+def _insert_external_snapshot(
+    conn: sqlite3.Connection,
+    external_id: str = "ext-1",
+    snapshot_id: str = "snap-1",
+    *,
+    status: str = "ok",
+    is_head: bool = True,
+) -> None:
+    """Insert an external + one snapshot; point head at it iff ``is_head``.
+
+    Externals/snapshots are UNUSED until connectors (schema), so tests seed the
+    rows directly — mirrors ``tests/test_retrieval.py``'s
+    ``_insert_external_snapshot`` helper.
+    """
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+            (external_id,),
+        )
+        conn.execute(
+            "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+            "VALUES (?, ?, ?, ?)",
+            (snapshot_id, external_id, "body text", status),
+        )
+        if is_head:
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+                (snapshot_id, external_id),
+            )
+
+
 # ---------------------------------------------------------------------------
 # _embed_gap_step — core gap detection and enqueue
 # ---------------------------------------------------------------------------
@@ -238,6 +277,113 @@ def test_embed_gap_mixed_gap_and_covered(conn: sqlite3.Connection) -> None:
     assert _pending_embed_jobs(conn, "ver-1") == ["pending"]
     # ver-2's done job is not touched (no new pending job created).
     assert _pending_embed_jobs(conn, "ver-2") == ["done"]
+
+
+# ---------------------------------------------------------------------------
+# _embed_gap_step — snapshot arm (lode-621)
+# ---------------------------------------------------------------------------
+
+
+def test_embed_gap_enqueues_embed_for_dead_snapshot_job(
+    conn: sqlite3.Connection,
+) -> None:
+    """A snapshot whose embed job reached 'dead' is re-enqueued (lode-621 AC).
+
+    Mirrors the notes-arm gap signal: a dead (max-retries-exhausted) embed job
+    counts the same as no job at all — the vector leg never completed.
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    _insert_embed_job(conn, "snap-1", status="dead")
+    count = _embed_gap_step(conn)
+    assert count == 1
+    statuses = _pending_embed_jobs(conn, "snap-1")
+    assert sorted(statuses) == ["dead", "pending"]
+
+
+def test_embed_gap_enqueues_embed_for_snapshot_missing_job(
+    conn: sqlite3.Connection,
+) -> None:
+    """A live external head snapshot with no embed job at all is a gap too."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    count = _embed_gap_step(conn)
+    assert count == 1
+    assert _pending_embed_jobs(conn, "snap-1") == ["pending"]
+
+
+def test_embed_gap_returns_zero_when_snapshot_embed_job_done(
+    conn: sqlite3.Connection,
+) -> None:
+    """A head snapshot with a done embed job is not in the gap."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    _insert_embed_job(conn, "snap-1", status="done")
+    count = _embed_gap_step(conn)
+    assert count == 0
+    assert _pending_embed_jobs(conn, "snap-1") == ["done"]
+
+
+def test_embed_gap_excludes_tombstone_snapshot(conn: sqlite3.Connection) -> None:
+    """A tombstone snapshot (no body to embed) must NOT be swept.
+
+    A tombstone has no real content — sweeping it would enqueue an embed job
+    that can only fail, converting a silent gap into a retry loop (design
+    constraint recorded on lode-621, inherited from lode-w0h.2's review note).
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-1", status="tombstone")
+    count = _embed_gap_step(conn)
+    assert count == 0
+    assert _pending_embed_jobs(conn, "snap-1") == []
+
+
+def test_embed_gap_excludes_superseded_snapshot(conn: sqlite3.Connection) -> None:
+    """A superseded (non-head) snapshot must NOT be swept — only the current head.
+
+    Matches what live_head_versions itself admits: only externals.head_snapshot_id
+    is read, so a prior, now-stale snapshot is excluded by construction, the same
+    way a note's non-head version is.
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-old", is_head=False)
+    count = _embed_gap_step(conn)
+    assert count == 0
+    assert _pending_embed_jobs(conn, "snap-old") == []
+
+
+def test_embed_gap_mixed_notes_and_snapshots(conn: sqlite3.Connection) -> None:
+    """Both a note-version gap and a snapshot gap are found in one scan."""
+    _insert_note_with_version(conn, "note-1", "ver-1")
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    count = _embed_gap_step(conn)
+    assert count == 2
+    assert _pending_embed_jobs(conn, "ver-1") == ["pending"]
+    assert _pending_embed_jobs(conn, "snap-1") == ["pending"]
+
+
+def test_embed_gap_snapshot_idempotent_repeated_calls(
+    conn: sqlite3.Connection,
+) -> None:
+    """Running _embed_gap_step repeatedly must not duplicate snapshot jobs."""
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    _embed_gap_step(conn)
+    _embed_gap_step(conn)
+    statuses = _pending_embed_jobs(conn, "snap-1")
+    assert statuses == ["pending"]
+
+
+def test_embed_gap_full_reconcile_heals_dead_snapshot_embed_job(
+    conn: sqlite3.Connection,
+) -> None:
+    """End-to-end: reconcile() re-enqueues a dead snapshot embed job.
+
+    Exercises the public reconcile() entrypoint (module-level _STEPS registry),
+    not just the private step function — the shape of lode-621's acceptance
+    criterion ("runs reconcile, and asserts a fresh embed job exists").
+    """
+    _insert_external_snapshot(conn, "ext-1", "snap-1")
+    _insert_embed_job(conn, "snap-1", status="dead")
+    total = reconcile(conn)
+    assert total >= 1
+    statuses = _pending_embed_jobs(conn, "snap-1")
+    assert "pending" in statuses
+    assert "dead" in statuses
 
 
 # ---------------------------------------------------------------------------
