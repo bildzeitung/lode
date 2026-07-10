@@ -298,25 +298,37 @@ class Repository:
         self.cache.index(note_id, result.version_id, body)
         return result
 
-    def resolve_note_prefix(self, prefix: str) -> str:
-        """Resolve a note-id prefix to its one matching LIVE note (lode-1gr.3).
+    def resolve_note_prefix(self, prefix: str, *, include_deleted: bool = False) -> str:
+        """Resolve a note-id prefix to its one matching note (lode-1gr.3, lode-d32.3).
 
         With Browse/``lode notes`` showing short ids, requiring the full
         36-char id for commands like ``purge`` is hostile — this is the one
-        reusable resolver both ``purge`` and ``lode show`` (lode-1gr.5) share.
+        reusable resolver ``purge``, ``lode show`` (lode-1gr.5), and ``lode
+        recover`` (lode-d32.3) share.
 
         A full :data:`NOTE_ID_LENGTH`-char id is returned **unchanged,
         unresolved**: a full id must keep working exactly as before this
         ticket, purging any note regardless of state (live, soft-deleted, or
         already purged) — only a *shorter* string goes through resolution.
 
-        Resolution is scoped to **live** notes only, via the same
+        Resolution is scoped to **live** notes only by default, via the same
         ``v.op != 'delete'`` guard :func:`lode.notes_read._list_notes` uses
         for the Browse table: a prefix resolves only what the user can already
         see via ``lode notes``/Browse, so a tombstoned note is not reachable
-        by prefix (its full id still works, per above).
+        by prefix (its full id still works, per above). ``include_deleted``
+        defaults to **False** so the existing call sites (``purge``, ``show``)
+        keep this exact live-only behavior with no change — ``recover`` is the
+        one caller that passes ``include_deleted=True``, since its only valid
+        input is a tombstoned note (d32.2 land-review decision, option (a)).
 
-        Raises ``KeyError(prefix)`` if no live note matches — the same
+        With ``include_deleted=True`` a prefix may match a live note, a
+        deleted note, or — across the two — more than one candidate; ambiguity
+        is judged the same way regardless of state, so a prefix matching one
+        live and one deleted note still raises
+        :class:`AmbiguousNoteIdError` rather than silently preferring the
+        tombstone.
+
+        Raises ``KeyError(prefix)`` if no matching note is found — the same
         exception a not-found full id already raises, so callers need only one
         except clause for "no such note" — and :class:`AmbiguousNoteIdError`
         if more than one does.
@@ -329,12 +341,16 @@ class Repository:
             raise KeyError(prefix)
         if len(prefix) >= NOTE_ID_LENGTH:
             return prefix
+        conditions = ["substr(n.note_id, 1, ?) = ?"]
+        params: list[str | int] = [len(prefix), prefix]
+        if not include_deleted:
+            conditions.append("v.op != 'delete'")
         rows = self.conn.execute(
             "SELECT n.note_id FROM notes n "
             "JOIN versions v ON v.version_id = n.head_version_id "
-            "WHERE v.op != 'delete' AND substr(n.note_id, 1, ?) = ? "
+            f"WHERE {' AND '.join(conditions)} "
             "ORDER BY n.note_id",
-            (len(prefix), prefix),
+            tuple(params),
         ).fetchall()
         candidates = [row[0] for row in rows]
         if not candidates:

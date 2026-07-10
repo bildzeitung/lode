@@ -462,6 +462,56 @@ def test_resolve_note_prefix_excludes_a_tombstoned_note(conn):
         repo.resolve_note_prefix("note-aaa")
 
 
+# --- resolve_note_prefix(include_deleted=True): lode recover, lode-d32.3 -----
+#
+# The d32.2 land-review decision (option (a)): include_deleted defaults to
+# False so purge/show (above) keep their exact live-only behavior unchanged.
+# recover is the one caller that passes True, since its only valid input is a
+# tombstoned note.
+
+
+def test_resolve_note_prefix_include_deleted_resolves_a_tombstoned_note(conn):
+    repo = Repository(conn)
+    root = repo.save("note-aaa111", "body a").version_id
+    repo.delete("note-aaa111", parent=root)
+
+    assert repo.resolve_note_prefix("note-aaa", include_deleted=True) == "note-aaa111"
+
+
+def test_resolve_note_prefix_include_deleted_still_resolves_a_live_note(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+
+    # A live note also resolves with include_deleted=True -- recover's own
+    # "note is not deleted" error is a separate, later check the CLI makes,
+    # not something resolve_note_prefix itself enforces.
+    assert repo.resolve_note_prefix("note-aaa", include_deleted=True) == "note-aaa111"
+
+
+def test_resolve_note_prefix_include_deleted_ambiguous_across_live_and_deleted(conn):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "still live")
+    root = repo.save("note-aaa222", "gone soon").version_id
+    repo.delete("note-aaa222", parent=root)
+
+    # A prefix matching one live and one deleted note is still ambiguous --
+    # recover does not get to silently prefer the tombstone.
+    with pytest.raises(AmbiguousNoteIdError) as excinfo:
+        repo.resolve_note_prefix("note-aaa", include_deleted=True)
+
+    assert set(excinfo.value.candidates) == {"note-aaa111", "note-aaa222"}
+
+
+def test_resolve_note_prefix_include_deleted_raises_keyerror_when_nothing_matches(
+    conn,
+):
+    repo = Repository(conn)
+    repo.save("note-aaa111", "body a")
+
+    with pytest.raises(KeyError):
+        repo.resolve_note_prefix("ghost", include_deleted=True)
+
+
 # --- enqueue ownership + atomicity (lode-i05.1 / lode-npx.2) ------------------
 #
 # Repository.save is the SOLE enqueue site for derive jobs. After lode-npx.2 it
