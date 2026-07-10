@@ -151,6 +151,18 @@ class _FakeClient:
         self.messages = _FakeMessages(claimed)
 
 
+def _fake_enrich_version(conn, version_id, settings, *, client=None) -> None:
+    """No-op stand-in for ``lode.enrich.enrich_version`` (lode-7mq).
+
+    ``lode add`` calls ``enrich_version`` immediately on the capture path
+    (lode-npx.2); left unstubbed it constructs a real Anthropic client and
+    makes a live, billed API call whenever ``ANTHROPIC_API_KEY`` happens to be
+    ambient — every other add-invoking test in ``test_cli.py`` already stubs
+    this the same way. This gate only exercises the embed/retrieval/Q&A path,
+    not enrichment, so a no-op is the correct fake.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -225,6 +237,13 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
     # query-embedding step.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
 
+    # Stub enrich_version — this gate exercises embed/retrieval/Q&A, not
+    # enrichment; unstubbed, `add` would make a real Haiku call whenever
+    # ANTHROPIC_API_KEY is ambient (lode-7mq).
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich_version)
+
     # Step 1: add the note; embed job is enqueued, nothing embedded yet.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0, add_result.output
@@ -288,6 +307,12 @@ def test_gate2_out_of_corpus_question_abstains(
 
     # Stub the embedder before lode work runs.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Stub enrich_version — see gate1's comment (lode-7mq): unstubbed, `add`
+    # would make a real Haiku call whenever ANTHROPIC_API_KEY is ambient.
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich_version)
 
     # Add the note; embed job is enqueued but not yet run.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
@@ -401,6 +426,12 @@ def test_gate4_fts_findable_before_lode_work(
     # are no indexed vectors, so the dense leg returns empty.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
 
+    # Stub enrich_version — see gate1's comment (lode-7mq): unstubbed, `add`
+    # would make a real Haiku call whenever ANTHROPIC_API_KEY is ambient.
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich_version)
+
     # Step 1: add the note.  No lode work runs.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
     assert add_result.exit_code == 0, add_result.output
@@ -461,6 +492,12 @@ def test_gate5_worker_does_not_double_index_fts(
 
     # Stub the embedder for the worker's vector leg.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _ConstantEmbedder)
+
+    # Stub enrich_version — see gate1's comment (lode-7mq): unstubbed, `add`
+    # would make a real Haiku call whenever ANTHROPIC_API_KEY is ambient.
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich_version)
 
     # Add a note — synchronous cache writes passages + passages_fts.
     add_result = runner.invoke(app, ["add", _NOTE_BODY, "--db", str(db_path)])
