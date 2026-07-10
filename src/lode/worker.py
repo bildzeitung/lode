@@ -836,17 +836,38 @@ def _embed_handler(
     again would just re-write identical FTS rows (idempotent), but dropping it
     is cleaner and keeps this handler model-bearing-only.
 
+    **Post-embed re-enrich gate for a snapshot target (lode-w0h.5):** after
+    the vector leg above, :func:`lode.externals.gate_reenrich` is called
+    unconditionally on the same ``target_version``. It is a no-op (returns
+    ``None``) for a note ``version_id`` — this handler runs for both note
+    versions and external snapshots polymorphically (:func:`lode.embedding.
+    embed`'s ``_version_body`` already resolves either), and the gate itself
+    checks whether ``target_version`` is a live snapshot before doing
+    anything. For a snapshot, it decides — now that this snapshot's own
+    vectors exist — whether the change is material enough to enqueue an
+    ``enrich`` job, or should instead carry the predecessor's enrichment
+    forward. See that function's docstring for the full decision.
+
     Returns a one-line human-readable outcome (lode-1gr.4), e.g. ``"embedded
-    <short-id>: 3 passages"``, for :func:`run_one` to surface to ``lode
+    <short-id>: 3 passages"``, optionally suffixed with the gate's own outcome
+    line for a snapshot target, for :func:`run_one` to surface to ``lode
     work``'s echo.
     """
     from lode.embedding import embed
+    from lode.externals import gate_reenrich
 
     # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
     count = embed(
         conn, target_version, lance_dir=_lance_dir(db_path), settings=settings
     )
-    return f"embedded {short_version_id(target_version)}: {count} passages"
+    outcome = f"embedded {short_version_id(target_version)}: {count} passages"
+
+    gate_outcome = gate_reenrich(
+        conn, target_version, lance_dir=_lance_dir(db_path), settings=settings
+    )
+    if gate_outcome is not None:
+        outcome = f"{outcome}; {gate_outcome}"
+    return outcome
 
 
 # Register the embed handler on module load.

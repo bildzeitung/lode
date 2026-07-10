@@ -1165,6 +1165,97 @@ def test_refresh_is_registered_by_default() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _embed_handler + the w0h.5 post-embed re-enrich gate (integration)
+#
+# Exercises the real embed() -> gate_reenrich() wiring _embed_handler adds
+# (unit coverage of the gate's own decision logic lives in
+# tests/test_externals.py). FastEmbedEmbedder is monkeypatched so no real
+# ONNX model loads; chunking, embedding, the vector store, and the gate all
+# run for real.
+# ---------------------------------------------------------------------------
+
+
+def _stub_embedder_returning(monkeypatch, vector: list[float]) -> None:
+    from lode.embedding import FastEmbedEmbedder
+
+    monkeypatch.setattr(
+        FastEmbedEmbedder,
+        "embed_passages",
+        lambda self, texts: [vector for _ in texts],
+    )
+
+
+def test_embed_handler_gates_material_first_snapshot(
+    conn: sqlite3.Connection, db_path: Path, monkeypatch
+) -> None:
+    from lode.externals import ingest_snapshot
+    from lode.worker import _embed_handler
+
+    _stub_embedder_returning(monkeypatch, [1.0, 0.0, 0.0, 0.0])
+    settings = Settings(embedding_vector_dim=4)
+    result = ingest_snapshot(
+        conn, "https://example.com/x", "web", "hello world", settings=settings
+    )
+
+    outcome = _embed_handler(conn, result.snapshot_id, db_path, settings)
+
+    assert outcome is not None
+    assert "embedded" in outcome
+    assert "material" in outcome
+    rows = conn.execute(
+        "SELECT type, status FROM jobs WHERE target_version = ? ORDER BY type",
+        (result.snapshot_id,),
+    ).fetchall()
+    assert ("enrich", "pending") in rows
+
+
+def test_embed_handler_gates_immaterial_carries_forward(
+    conn: sqlite3.Connection, db_path: Path, monkeypatch
+) -> None:
+    from lode.externals import ingest_snapshot
+    from lode.worker import _embed_handler
+
+    settings = Settings(embedding_vector_dim=4)
+    external_id = "https://example.com/x"
+    first = ingest_snapshot(conn, external_id, "web", "version one", settings=settings)
+    _stub_embedder_returning(monkeypatch, [1.0, 0.0, 0.0, 0.0])
+    _embed_handler(conn, first.snapshot_id, db_path, settings)  # embeds the predecessor
+
+    second = ingest_snapshot(conn, external_id, "web", "version two", settings=settings)
+    outcome = _embed_handler(
+        conn, second.snapshot_id, db_path, settings
+    )  # same vector -> immaterial
+
+    assert outcome is not None
+    assert "immaterial" in outcome
+    rows = conn.execute(
+        "SELECT type, status FROM jobs WHERE target_version = ? ORDER BY type",
+        (second.snapshot_id,),
+    ).fetchall()
+    # _embed_handler doesn't flip job status itself (run_one does) -- its own
+    # 'embed' job stays pending here; the point is no 'enrich' job appears.
+    assert rows == [("embed", "pending")]
+
+
+def test_embed_handler_gate_is_a_no_op_for_a_note_version(
+    conn: sqlite3.Connection, db_path: Path, monkeypatch
+) -> None:
+    """A note version's embed is untouched by the gate (no snapshots row for it)."""
+    from lode.versions import save
+    from lode.worker import _embed_handler
+
+    _stub_embedder_returning(monkeypatch, [1.0, 0.0, 0.0, 0.0])
+    settings = Settings(embedding_vector_dim=4)
+    version = save(conn, "note-1", "hello world", settings=settings).version_id
+
+    outcome = _embed_handler(conn, version, db_path, settings)
+
+    assert outcome is not None
+    assert "embedded" in outcome
+    assert "material" not in outcome and "immaterial" not in outcome
+
+
+# ---------------------------------------------------------------------------
 # Batch pre-steps — _batch_submit_enrich / _batch_collect_enrich (lode-npx.2)
 # ---------------------------------------------------------------------------
 

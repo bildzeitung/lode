@@ -129,3 +129,42 @@ def test_replace_with_empty_rows_clears_the_version(tmp_path: Path) -> None:
 def test_search_on_empty_store_returns_no_hits(tmp_path: Path) -> None:
     # A query against a store that has never been written must not raise.
     assert _store(tmp_path).search([1.0, 0.0, 0.0, 0.0], k=5) == []
+
+
+# --- vectors_for (lode-w0h.5's materiality gate reads a target's own vectors) --
+
+
+def test_vectors_for_returns_every_vector_for_the_target(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.replace_vectors(
+        "v1",
+        [
+            _row("a", "v1", [1.0, 0.0, 0.0, 0.0]),
+            _row("b", "v1", [0.0, 1.0, 0.0, 0.0]),
+        ],
+    )
+
+    vectors = store.vectors_for("v1")
+
+    assert sorted(vectors) == sorted([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
+
+
+def test_vectors_for_scopes_to_its_own_target(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    store.replace_vectors("v2", [_row("c", "v2", [0.0, 0.0, 1.0, 0.0])])
+
+    assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
+    assert store.vectors_for("v2") == [[0.0, 0.0, 1.0, 0.0]]
+
+
+def test_vectors_for_unknown_target_returns_empty(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+
+    assert store.vectors_for("nonexistent") == []
+
+
+def test_vectors_for_on_never_written_store_returns_empty(tmp_path: Path) -> None:
+    # Mirrors search()'s empty-store handling: opens an empty table, no raise.
+    assert _store(tmp_path).vectors_for("v1") == []
