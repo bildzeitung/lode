@@ -95,7 +95,7 @@ from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
@@ -115,6 +115,7 @@ from lode.notes_read import (
 )
 from lode.tui.dates import format_adaptive_date
 from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
+from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import SaveResult
@@ -125,6 +126,9 @@ TABLE_ID = "browse-table"
 NOTE_BODY_ID = "note-view-body"
 #: The editable note body's widget id -- read back in tests.
 EDIT_BODY_ID = "note-edit-body"
+#: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
+#: back in tests.
+EDIT_RELATED_ID = "edit-related-notes"
 #: The version-history table's widget id -- read back in tests.
 HISTORY_TABLE_ID = "version-history-table"
 #: The read-only prior-version body's widget id -- read back in tests.
@@ -585,6 +589,17 @@ class EditScreen(Screen[None]):
     browse" one. The two can't share a method (see :meth:`action_cancel`'s
     docstring); mirrors :meth:`~lode.tui.screens.capture.CaptureScreen.confirm_quit`'s
     contract exactly.
+
+    **Passive related-notes panel (lode-aoc).** Composes the same
+    :class:`~lode.tui.related_notes_panel.RelatedNotesPanel` widget
+    :class:`~lode.tui.screens.capture.CaptureScreen` uses, for parity --
+    "you wrote about this before" while editing, not just while capturing a
+    brand-new note. Constructed with ``exclude_note_id=self.note_id`` so the
+    note being edited never matches its own (near-identical) draft. Needs no
+    reset call of its own anywhere this screen exits: unlike capture's Ctrl+N
+    (which keeps the screen alive for a fresh note), every exit here either
+    pops or tears down this screen, and Textual cancels a screen's workers on
+    unmount -- the same guarantee the panel's own module docstring relies on.
     """
 
     BINDINGS = [
@@ -606,7 +621,10 @@ class EditScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield TextArea(id=EDIT_BODY_ID)
+        yield Vertical(
+            TextArea(id=EDIT_BODY_ID),
+            RelatedNotesPanel(exclude_note_id=self.note_id, id=EDIT_RELATED_ID),
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -615,8 +633,23 @@ class EditScreen(Screen[None]):
             raise LookupError(f"no live note {self.note_id!r} to edit")
         self._loaded_head, self._loaded_body = head
         text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
+        # Setting .text posts a TextArea.Changed message (load_text), so this
+        # also primes the related-notes panel with the just-loaded body via
+        # on_text_area_changed below -- editing an existing note surfaces
+        # related notes for its starting content, not only once the user
+        # types further.
         text_area.text = self._loaded_body
         text_area.focus()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Forward the body's text to the related-notes panel (lode-aoc).
+
+        Guarded to this screen's own body id, mirroring
+        :meth:`~lode.tui.screens.capture.CaptureScreen.on_text_area_changed`.
+        """
+        if event.text_area.id != EDIT_BODY_ID:
+            return
+        self.query_one(RelatedNotesPanel).update_draft(event.text_area.text)
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

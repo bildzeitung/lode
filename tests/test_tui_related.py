@@ -196,6 +196,66 @@ def test_dedupes_multiple_matching_passages_of_the_same_note(
     assert [r.note_id for r in related] == ["note-a"]
 
 
+# --- exclude_note_id (lode-aoc): a note never surfaces as related to itself --
+
+
+def test_exclude_note_id_removes_that_note_from_results(
+    lexical_only_repo, db_path, settings
+) -> None:
+    """The edit-screen wrinkle: the note being edited would otherwise trivially
+    match its own (near-identical) draft -- ``exclude_note_id`` drops it.
+    """
+    lexical_only_repo.save("note-a", "alpha bravo staging certificate rotation")
+    lexical_only_repo.conn.close()
+
+    related = find_related_notes(
+        db_path,
+        "alpha bravo staging certificate rotation, extended a little",
+        settings=settings,
+        embedder=_BagEmbedder(),
+        exclude_note_id="note-a",
+    )
+
+    assert related == []
+
+
+def test_exclude_note_id_leaves_other_notes_untouched(
+    lexical_only_repo, db_path, settings
+) -> None:
+    """Excluding one note must not swallow a distinct, genuinely related note."""
+    lexical_only_repo.save("note-a", "alpha bravo staging certificate rotation")
+    lexical_only_repo.save("note-b", "alpha bravo certificate renewal runbook")
+    lexical_only_repo.conn.close()
+
+    related = find_related_notes(
+        db_path,
+        "alpha bravo certificate rotation notes",
+        settings=settings,
+        embedder=_BagEmbedder(),
+        exclude_note_id="note-a",
+    )
+
+    assert [r.note_id for r in related] == ["note-b"]
+
+
+def test_exclude_note_id_none_excludes_nothing(
+    lexical_only_repo, db_path, settings
+) -> None:
+    """The default (``None``, what a brand-new capture has no id to pass) is a no-op."""
+    lexical_only_repo.save("note-a", "alpha bravo staging certificate rotation")
+    lexical_only_repo.conn.close()
+
+    related = find_related_notes(
+        db_path,
+        "alpha bravo runbook draft",
+        settings=settings,
+        embedder=_BagEmbedder(),
+        exclude_note_id=None,
+    )
+
+    assert [r.note_id for r in related] == ["note-a"]
+
+
 # --- the result-count cap (Settings.related_notes_limit) -------------------
 
 

@@ -1,0 +1,271 @@
+"""A self-contained passive related-notes panel (lode-aoc).
+
+``docs/design.md`` §2 supporting feature 2 ("you wrote about this 3 weeks
+ago") originally landed wired directly into
+:class:`~lode.tui.screens.capture.CaptureScreen` (lode-mkc.3). This module
+extracts that machinery — the debounce timer, the ``@work(exclusive=True)``
+search pass, the lazy shared query embedder, cancel-in-flight logic, and the
+panel's own rendering — into a self-contained widget any screen can compose,
+so :class:`~lode.tui.screens.browse.EditScreen` gets the same passive
+surfacing capture already has without a copy-pasted ~100 lines.
+
+**Composition, not inheritance (decided 2026-07-09, with user).** A common
+``NoteEditorScreen`` superclass was explicitly rejected: capture's and edit's
+surrounding lifecycle plumbing (dirty check, the discard-confirm dance,
+reconcile resolution) is deliberately divergent, and a base class would need
+several template-method hooks landing exactly on those divergences. This
+widget instead owns its own timer/worker/embedder/rendering end to end;
+a screen composes it and forwards its own ``TextArea.Changed`` text via
+:meth:`RelatedNotesPanel.update_draft`, and calls :meth:`RelatedNotesPanel.reset`
+wherever it used to cancel/clear the in-flight pass. Nothing about a screen's
+save/dirty/reconcile flow needs to know this widget exists.
+
+**Self-exclusion.** :class:`~lode.tui.screens.browse.EditScreen` constructs
+this widget with ``exclude_note_id`` set to the note being edited — its own
+freshly-typed draft would otherwise trivially match itself, since editing
+does not change a note's id. :class:`~lode.tui.screens.capture.CaptureScreen`
+passes ``None`` (a brand-new note has no id yet to exclude). The exclusion
+itself is enforced by :func:`lode.tui.related.find_related_notes`'s own
+``exclude_note_id`` parameter, not filtered here — this widget stays a thin
+wiring layer over that pure function, same as capture's original wiring was.
+
+**Behaviour contracts preserved from the extraction (lode-0wj.2, lode-0wj.4,
+lode-mkc.3):** the query embedder is constructed lazily (no eager ONNX load
+at mount — see :meth:`_ensure_embedder`) and reused for this widget's
+lifetime; a scheduled *and* an in-flight pass are both cancelled on
+:meth:`reset` or on an emptied draft, so a slow pass for an already-abandoned
+draft cannot land afterwards and paint stale results; an empty/whitespace-only
+draft clears the panel immediately without scheduling a pointless pass;
+``markup=False`` on the underlying ``Static`` (a note's snippet is verbatim
+user text and commonly contains bracket sequences Textual would otherwise
+parse as console markup, lode-mkc.3).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from typing import TYPE_CHECKING
+
+from textual import work
+from textual.timer import Timer
+from textual.widgets import Static
+
+if TYPE_CHECKING:
+    # Type-only; the runtime import lives inside _ensure_embedder so this
+    # module's own import stays free of the embedder (fastembed) until a
+    # passive-surfacing pass actually runs.
+    from lode.embedding import Embedder
+    from lode.tui.related import RelatedNote
+
+log = logging.getLogger(__name__)
+
+
+class RelatedNotesPanel(Static):
+    """A passive, read-only "related past notes" panel.
+
+    Owns its own debounce timer, worker, lazy shared embedder, and rendering;
+    a screen only ever calls :meth:`update_draft` (forwarding its
+    ``TextArea.Changed`` text) and :meth:`reset` (wherever it used to
+    cancel/clear a pass of its own). Non-interactive — it never takes focus
+    or input, so composing it changes nothing about a screen's own contract.
+    """
+
+    def __init__(
+        self,
+        *,
+        exclude_note_id: str | None = None,
+        id: str | None = None,
+    ) -> None:
+        super().__init__("", id=id, markup=False)
+        #: The note this pass must never surface as its own related result
+        #: (lode-aoc) -- ``None`` when there is no such note (a brand-new
+        #: capture has no id yet).
+        self.exclude_note_id = exclude_note_id
+        #: The pending debounce timer for a passive surfacing pass, restarted
+        #: on every :meth:`update_draft` call; ``None`` when no pass is
+        #: scheduled.
+        self._related_timer: Timer | None = None
+        #: The draft text captured at the most recent :meth:`update_draft`
+        #: call -- read back when the debounce timer fires, mirroring "search
+        #: whatever the current draft is" without this widget needing a
+        #: reference to the screen's ``TextArea``.
+        self._pending_draft: str = ""
+        #: The most recently rendered related-notes result, kept as plain
+        #: widget state (not just ``Static`` markup) so it is a stable, direct
+        #: assertion surface for tests rather than parsed back out of the
+        #: rendered widget.
+        self._related: list[RelatedNote] = []
+        #: Incrementing id for each related-notes pass (lode-0wj.2
+        #: instrumentation) -- lets the DEBUG log correlate a pass's
+        #: start/finish/cancellation lines.
+        self._related_pass_seq = 0
+        #: The shared query embedder for the related-notes pass, constructed
+        #: once and reused for this widget's lifetime (lode-0wj.4) rather than
+        #: a fresh instance per pass -- see :meth:`_ensure_embedder`.
+        self._embedder: Embedder | None = None
+
+    def _ensure_embedder(self) -> Embedder:
+        """Return the shared query embedder, constructing the wrapper on first use.
+
+        Cheap and synchronous: :class:`~lode.embedding.FastEmbedEmbedder`'s
+        ``__init__`` only stashes the model name -- the actual (expensive) ONNX
+        model load stays lazy inside it (guarded by a lock there against
+        concurrent callers) until the first :meth:`_search_related` pass
+        actually embeds something (lode-0wj.4). Deliberately **not** warmed
+        eagerly at mount: every screen composing this widget (including in
+        plain unit tests that never let the debounce fire) would otherwise pay
+        a real ONNX model load unconditionally, which is exactly the kind of
+        surprise cost :class:`~lode.embedding.FastEmbedEmbedder`'s lazy-by-design
+        docstring exists to avoid.
+        """
+        if self._embedder is None:
+            from lode.embedding import FastEmbedEmbedder
+
+            self._embedder = FastEmbedEmbedder(self.app.settings)
+        return self._embedder
+
+    def update_draft(self, text: str) -> None:
+        """Debounce a passive connection-surfacing pass for ``text``.
+
+        Every call restarts the idle timer (``Settings.related_notes_debounce_ms``)
+        rather than searching inline, so a burst of typing triggers at most one
+        pass per idle pause -- half of the acceptance criterion's "passive,
+        non-blocking" (the other half, keeping the pass itself off the UI
+        thread, is :meth:`_search_related`'s job). The caller (a screen's
+        ``on_text_area_changed``) is responsible for guarding this to its own
+        text area's id -- this widget forwards whatever text it is given.
+
+        An empty/whitespace-only ``text`` (a select-all-delete, or a screen's
+        own reset path) has nothing to search on: ``find_related_notes`` would
+        only short-circuit on ``related_notes_min_chars``, so debouncing a pass
+        just to reach that short-circuit buys a worker and a thread hop and no
+        results. The panel is cleared straight away instead of waiting out a
+        debounce that would end up clearing it anyway.
+
+        Skipping the pass means ``@work(exclusive=True)`` never runs, so it can
+        no longer supersede an in-flight pass from the previous, non-empty
+        draft -- that pass has to be cancelled here explicitly
+        (:meth:`_cancel_related_pass`) or it lands after this clear and paints
+        the deleted draft's related notes into the emptied panel.
+        """
+        if not text.strip():
+            self._cancel_related_pass()
+            self._render_related([])
+            return
+        if self._related_timer is not None:
+            self._related_timer.stop()
+            self._related_timer = None
+        self._pending_draft = text
+        delay_s = self.app.settings.related_notes_debounce_ms / 1000
+        log.debug(
+            "keystroke: related-notes debounce (re)started, delay=%.0fms",
+            delay_s * 1000,
+        )
+        self._related_timer = self.set_timer(delay_s, self._start_related_search)
+
+    def reset(self) -> None:
+        """Drop any scheduled/in-flight pass and clear the panel immediately.
+
+        For a screen's own "start fresh" moment (capture's Ctrl+N reset,
+        lode-d32.4) -- the reset drops any scheduled *and* any in-flight pass
+        first (:meth:`_cancel_related_pass`), so a slow pass started for the
+        just-abandoned draft cannot land afterwards and paint its results into
+        the freshly-cleared panel.
+        """
+        self._cancel_related_pass()
+        self._render_related([])
+
+    def _cancel_related_pass(self) -> None:
+        """Drop the scheduled *and* the in-flight related-notes pass, if any.
+
+        Both halves are needed, and only together: stopping
+        ``self._related_timer`` prevents a pass that has not started yet, while
+        ``cancel_group`` stops one already running from reaching
+        :meth:`_render_related` with results for text no longer current.
+        ``cancel_group`` is the same mechanism ``@work(exclusive=True)`` uses to
+        supersede a prior pass, and it is prompt enough: every caller here runs
+        on the event loop and does not await between this call and the clear
+        that follows, so a cancelled worker cannot resume and repaint in the
+        gap -- it wakes with ``CancelledError`` at its ``await`` inside
+        :meth:`_search_related` instead of returning results.
+        """
+        if self._related_timer is not None:
+            self._related_timer.stop()
+            self._related_timer = None
+        self.workers.cancel_group(self, "related-notes")
+
+    def _start_related_search(self) -> None:
+        """Timer callback: kick off the search worker for the pending draft."""
+        log.debug("related-notes debounce fired: starting a pass")
+        self._search_related(self._pending_draft)
+
+    @work(exclusive=True, group="related-notes")
+    async def _search_related(self, body: str) -> None:
+        """Run the retrieval/graph pipeline off the UI thread, then render it.
+
+        ``find_related_notes`` (:mod:`lode.tui.related`) does real DB + local-
+        model work (FTS5, LanceDB, the ONNX embedder); ``asyncio.to_thread``
+        keeps it off the event loop so typing and each screen's own save/cancel
+        bindings are never blocked on it. ``exclusive=True`` (same worker group
+        each call) cancels any still-running prior pass before starting this
+        one, so a fast typist never sees results arrive out of order.
+
+        **lode-0wj.2 instrumentation:** logs this pass's sequence number, wall-clock
+        duration and result count at DEBUG, and whether it got cancelled by a
+        newer pass before finishing (``exclusive=True`` makes true overlap
+        structurally impossible; this just makes that supersession visible
+        instead of silent).
+
+        **lode-aoc:** passes ``self.exclude_note_id`` through so a screen
+        editing an existing note never sees that note match its own draft.
+        """
+        from lode.tui.related import find_related_notes
+
+        self._related_pass_seq += 1
+        seq = self._related_pass_seq
+        log.debug("related-notes pass #%d: starting (draft_len=%d)", seq, len(body))
+        app = self.app
+        embedder = self._ensure_embedder()
+        start = time.monotonic()
+        try:
+            related = await asyncio.to_thread(
+                find_related_notes,
+                app.db_path,
+                body,
+                settings=app.settings,
+                embedder=embedder,
+                exclude_note_id=self.exclude_note_id,
+            )
+        except asyncio.CancelledError:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            log.debug(
+                "related-notes pass #%d: cancelled after %.1fms (superseded)",
+                seq,
+                elapsed_ms,
+            )
+            raise
+        elapsed_ms = (time.monotonic() - start) * 1000
+        log.debug(
+            "related-notes pass #%d: finished in %.1fms, %d related note(s)",
+            seq,
+            elapsed_ms,
+            len(related),
+        )
+        self._render_related(related)
+
+    def _render_related(self, related: list[RelatedNote]) -> None:
+        """Render (or clear) the panel.
+
+        ``self._related`` is kept as plain widget state alongside the
+        rendered ``Static`` markup, so a test (or a future caller) has a
+        stable, direct assertion surface rather than needing to parse
+        results back out of rendered widget content.
+        """
+        self._related = related
+        if not related:
+            self.update("")
+            return
+        lines = [f"· {note.age} — {note.snippet}" for note in related]
+        self.update("Related notes:\n" + "\n".join(lines))

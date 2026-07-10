@@ -23,6 +23,7 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
+from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 
@@ -162,10 +163,10 @@ def test_typing_surfaces_a_related_past_note(
 
     # No model download in the gate: same "swap the default ONNX embedder"
     # convention tests/test_cli.py's _offline_embedder uses, aimed at the
-    # module that actually holds the reference. lode-0wj.4: the capture screen
-    # now constructs its own shared embedder (CaptureScreen._ensure_embedder)
-    # rather than leaving find_related_notes build one internally, so the
-    # patch target is lode.embedding (what _ensure_embedder imports from),
+    # module that actually holds the reference. lode-0wj.4: the related-notes
+    # panel constructs its own shared embedder (RelatedNotesPanel._ensure_embedder,
+    # lode-aoc) rather than leaving find_related_notes build one internally, so
+    # the patch target is lode.embedding (what _ensure_embedder imports from),
     # not lode.tui.related.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
@@ -181,9 +182,9 @@ def test_typing_surfaces_a_related_past_note(
             # Let the 1ms debounce timer fire and the search worker run.
             await pilot.pause(0.1)
             await app.workers.wait_for_complete()
-            # Read the screen's state before the pilot context tears the
+            # Read the panel's state before the pilot context tears the
             # screen stack down (app.screen is unavailable once it exits).
-            related = app.screen._related
+            related = app.screen.query_one(RelatedNotesPanel)._related
 
     asyncio.run(_drive())
 
@@ -242,7 +243,8 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
     Work notes routinely contain ``list[0]``, ``[link](url)``, ``[ERROR]`` etc.;
     the related-notes ``Static`` renders snippets verbatim (``markup=False``), so
     such a snippet must render as plain text rather than raising ``MarkupError``
-    (lode-mkc.3). Drives ``_render_related`` on the real mounted widget.
+    (lode-mkc.3). Drives ``RelatedNotesPanel._render_related`` on the real
+    mounted widget.
     """
     from lode.tui.related import RelatedNote
 
@@ -254,7 +256,7 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
         async with app.run_test():
             screen = app.screen
             assert isinstance(screen, CaptureScreen)
-            screen._render_related(
+            screen.query_one(RelatedNotesPanel)._render_related(
                 [
                     RelatedNote(
                         "note-a",
