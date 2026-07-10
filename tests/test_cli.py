@@ -36,6 +36,7 @@ from lode.cited_answer import CitedAnswer
 from lode.config import load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
+from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.jobs import enqueue_derive_jobs
 from lode.storage import init_db
@@ -1368,6 +1369,14 @@ def test_ask_retrieves_and_renders_a_cited_claim(
         ],
     )
 
+    conn = init_db(db_path)
+    try:
+        (created,) = conn.execute(
+            "SELECT created FROM versions WHERE version_id = 'v1'"
+        ).fetchone()
+    finally:
+        conn.close()
+
     result = runner.invoke(
         app, ["ask", "what did we decide about auth?", "--db", str(db_path)]
     )
@@ -1375,10 +1384,62 @@ def test_ask_retrieves_and_renders_a_cited_claim(
     assert result.exit_code == 0
     assert "use OAuth" in result.stdout
     assert "version_id v1" in result.stdout
+    assert f"as of {created}" in result.stdout
     assert '"use OAuth"' in result.stdout
     # Retrieval actually fed the cited context to the Q&A send (v1's body reached it).
     (call,) = client.messages.calls
     assert "OAuth" in call["messages"][0]["content"]
+
+
+@pytest.mark.slow
+def test_ask_renders_as_of_fetched_at_for_a_cited_external(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance (lode-w0h.4): a claim citing a mirrored external shows its
+    ``fetched_at`` ("as of ..."), never a bare present-tense claim
+    (``docs/externals.md`` "Every AI claim from an external must cite 'as of
+    fetched_at'"). The snapshot is ingested through the real write path
+    (:func:`lode.externals.ingest_snapshot`) rather than a hand-inserted row, so
+    this exercises the citation line against real ingested external data.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        ingested = ingest_snapshot(
+            conn,
+            "https://example.com/JIRA-1",
+            "web",
+            "The ticket is open, waiting on review.",
+        )
+        (fetched_at,) = conn.execute(
+            "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+            (ingested.snapshot_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    _offline_embedder(monkeypatch)
+    # The model's claim cites the snapshot with a span verbatim in its body, so it
+    # survives the faithfulness gate and renders with its citation.
+    _mock_qa(
+        monkeypatch,
+        [
+            Claim(
+                text="ticket is open",
+                support=[
+                    Support(
+                        snapshot_id=ingested.snapshot_id, quoted_span="ticket is open"
+                    )
+                ],
+            )
+        ],
+    )
+
+    result = runner.invoke(app, ["ask", "is the ticket open?", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "ticket is open" in result.stdout
+    assert f"snapshot_id {ingested.snapshot_id}" in result.stdout
+    assert f"as of {fetched_at}" in result.stdout
 
 
 @pytest.mark.slow
@@ -1765,14 +1826,16 @@ def test_format_cited_answer_renders_claim_with_citation() -> None:
         withheld_citations=(),
     )
 
-    lines = cli._format_cited_answer(answer)
+    lines = cli._format_cited_answer(answer, {"v9": "2026-06-18T00:00:00.000Z"})
 
     assert lines[0] == "lode is append-only."
     assert "version_id v9" in lines[1]
+    assert "as of 2026-06-18T00:00:00.000Z" in lines[1]
     assert '"append-only"' in lines[1]
 
 
-def test_format_cited_answer_renders_snapshot_citation() -> None:
+def test_format_cited_answer_renders_snapshot_citation_with_fetched_at() -> None:
+    """Acceptance (lode-w0h.4): an external citation's line carries its fetched_at."""
     answer = CitedAnswer(
         claims=(
             Claim(
@@ -1783,15 +1846,24 @@ def test_format_cited_answer_renders_snapshot_citation() -> None:
         withheld_citations=(),
     )
 
-    lines = cli._format_cited_answer(answer)
+    lines = cli._format_cited_answer(answer, {"s3": "2026-06-01T00:00:00.000Z"})
 
     assert "snapshot_id s3" in lines[1]
+    assert "as of 2026-06-01T00:00:00.000Z" in lines[1]
+
+
+def test_format_citation_marks_an_unresolved_target_as_of_unknown() -> None:
+    """Practically unreachable (the gate already verified the body exists), but
+    rendered honestly rather than assumed away — mirrors ``lode.tui.ask``."""
+    line = cli._format_citation(Support(version_id="missing", quoted_span="x"), None)
+
+    assert "as of unknown" in line
 
 
 def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
     answer = CitedAnswer(claims=(), withheld_citations=(WithheldCitation("v-secret"),))
 
-    lines = cli._format_cited_answer(answer)
+    lines = cli._format_cited_answer(answer, {})
 
     assert lines[0] == cli._ABSTAIN_LINE
     assert any("v-secret" in line and "withheld" in line for line in lines)
