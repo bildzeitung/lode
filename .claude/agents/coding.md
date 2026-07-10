@@ -128,6 +128,23 @@ rtk git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktre
 I was launched without an isolated worktree — I **stop and report that** rather than edit on `trunk`.
 The main checkout is never mine to touch — not for editing, not for landing.
 
+**Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
+beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
+identity, which is exactly what `/land`'s end-of-pass backstop sweep treats as safe to reclaim
+(`land/SKILL.md`'s `!locked` filter is the only thing standing between that sweep and my in-progress,
+uncommitted work — lode-oqr, which cost a build its implementation twice over before the gap was
+understood). So, right here, before step 4:
+
+```bash
+rtk git worktree lock "$(rtk git rev-parse --show-toplevel)" --reason "producer build in progress (lode-<id>)"
+```
+
+I unlock it again the moment I have my **first commit** (end of step 6, once `git status --short` is
+clean) — from then on the branch has diverged from `trunk`, so the backstop's own (unmodified)
+`branch --merged trunk` check already excludes it for the rest of the build, hand-off, and
+review-pending window; no need to hold the lock any longer than the narrow pre-commit gap it exists
+to close.
+
 ### 4. Read before writing; record approach for bugs
 
 Read the issue's description **and acceptance criteria**. Then check `--design` with an explicit,
@@ -182,6 +199,14 @@ rtk git status --short          # must print nothing
 `nox` gates the *working tree*, not `HEAD` — a gate run against a dirty tree doesn't prove anything
 about what's about to be committed and pushed (lode-tpt). If this isn't empty, commit the remainder
 now (it's my own uncommitted work from step 5 — no ambiguity) and re-check before step 7.
+
+**Once that first commit exists and the tree is clean, unlock the worktree** — the lock from step 3
+has done its job (the branch has now diverged from `trunk`, so `/land`'s backstop sweep already
+excludes it via its own `branch --merged trunk` check, unlocked or not):
+
+```bash
+rtk git worktree unlock "$(rtk git rev-parse --show-toplevel)"
+```
 
 ### 7. Quality gates (must be green)
 
@@ -502,6 +527,7 @@ own guidance); the cycle above already applies them, but the *why*:
 |---|---|
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; not auto-removed) |
+| Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is what the reviewer actually uses; worktree path + branch are recorded too, for `/land`'s GC (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |

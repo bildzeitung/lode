@@ -149,9 +149,16 @@ Each builder then runs its orderly cycle. The worktree is **handed to it by the 
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins
 *already inside* `.claude/worktrees/agent-<hash>` on a branch off local `trunk` HEAD. It works
 in-cwd with plain git, and if its `pwd` is ever the repo root it **stops and reports** rather than
-writing on `trunk`. It claims the issue, builds the simplest thing that works, takes it green through
-the gates, then **pushes a `land/<id>` branch to origin, marks the ticket `ready-for-code-review`
-(recording its worktree path), keeps the worktree, and stops** — it does **not** review its own work.
+writing on `trunk`. Before touching a file it **locks that worktree** (`git worktree lock`) — a
+freshly created worktree has zero commits beyond `trunk`, so until the first commit its branch reads
+as trivially "merged" into `trunk` by content identity, which is exactly what `/land`'s end-of-pass
+backstop sweep otherwise treats as safe to reclaim; nothing raised that lock before (lode-oqr), so
+every producer build was silently exposed for that window. It unlocks again right after its first
+commit, once the branch has genuinely diverged and the backstop's own `merged`-into-`trunk` check
+takes over as protection for the rest of the build. It claims the issue, builds the simplest thing
+that works, takes it green through the gates, then **pushes a `land/<id>` branch to origin, marks the
+ticket `ready-for-code-review` (recording its worktree path), keeps the worktree, and stops** — it
+does **not** review its own work.
 
 Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
 branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
@@ -224,6 +231,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; removed after land) |
+| Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
 | Design decisions | doc edits under `docs/`, never a bd note or memory (that forks the record) |
