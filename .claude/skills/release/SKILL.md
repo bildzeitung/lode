@@ -1,6 +1,6 @@
 ---
 name: release
-description: Propose the next SemVer version from commit history since the latest vX.Y.Z tag, get it confirmed (or take an explicit override), and drive scripts/release.sh to cut the release. Thin wrapper — no build logic of its own; scripts/release.sh (lode-0ru.2) owns the actual gate + tag + push. Parses conventional-commit prefixes (feat -> minor, fix -> patch, `!`/BREAKING CHANGE -> major, but pre-1.0 a breaking change bumps MINOR per docs/release.md) and defaults to a PATCH proposal when no commit carries a recognized prefix. Examples — "/release", "/release patch", "/release minor", "/release major", "/release 0.2.0", "cut a release", "what's the next version".
+description: Propose the next SemVer version from commit history since the latest vX.Y.Z tag, compile the release notes from the resolved bd epics/tickets in that window (itemized + categorized, delivered as the annotated tag body that CI publishes), get both confirmed (or take an explicit version override), and drive scripts/release.sh to cut the release. Thin wrapper — no build logic of its own; scripts/release.sh (lode-0ru.2) owns the actual gate + tag + push. Parses conventional-commit prefixes (feat -> minor, fix -> patch, `!`/BREAKING CHANGE -> major, but pre-1.0 a breaking change bumps MINOR per docs/release.md) and defaults to a PATCH proposal when no commit carries a recognized prefix. Examples — "/release", "/release patch", "/release minor", "/release major", "/release 0.2.0", "cut a release", "what's the next version".
 ---
 
 # release
@@ -14,7 +14,8 @@ doc disagree, the doc wins.
 
 I run on the **main checkout, on `trunk`** — same as `scripts/release.sh` requires (it refuses to run
 anywhere else). I am not a producer task: there is no worktree, no bd ticket, no `ready-for-review`
-hand-off here. I just propose a version, confirm it, and invoke the script.
+hand-off here. I propose a version, compile the release notes from the resolved ticket record,
+confirm both, and invoke the script.
 
 ## How to use me
 
@@ -92,6 +93,52 @@ latest tag's `MAJOR.MINOR.PATCH`:
   proposal to a **PATCH** bump rather than guessing higher, and say plainly that nothing matched so
   the human can confirm or override.
 
+### 2a. Compile the release notes from the ticket record
+
+The notes are **compiled, not composed**: I don't write freeform prose about the release — I gather
+the resolved bd epics and tickets in the release window and turn them into an itemized, categorized
+list of what was implemented. The confirmed list becomes the annotated tag's **body**
+(`scripts/release.sh` keeps the `lode vX.Y.Z` subject), and `.github/workflows/release.yml`
+publishes that body as the GitHub release notes.
+
+1. **Collect the ticket IDs that landed in the window** — first-parent `trunk` history since the
+   latest tag; the **whole history** when this is the first release:
+
+   ```bash
+   if [ -n "$LATEST_TAG" ]; then RANGE="${LATEST_TAG}..HEAD"; else RANGE="HEAD"; fi
+   git log --first-parent --format='%s' "$RANGE"
+   ```
+
+   A landed unit is identified by its subject: `Merge land/<id>: …` (a `/land` merge) or a trailing
+   `(<id>)` marker on a direct-to-trunk commit. Dedupe — the same ticket can appear both ways.
+
+2. **Resolve each ID in bd** — `bd show <id>` for title, type, parent epic, and status. Only
+   **closed** tickets get a notes line; an ID that landed but is still open gets *flagged to the
+   human* at confirmation instead — that's a bookkeeping smell, not a delivered feature. If bd
+   doesn't know an ID at all, fall back to the merge subject as the line item rather than silently
+   dropping landed work.
+
+3. **Group and categorize** — suitable categorization means:
+   - **Child tickets group under their parent epic**, epic title as the heading; check
+     `bd list --status=closed --type=epic` for epics that closed in the window. An epic gets a
+     one-line summary, then its landed children as sub-items — don't re-list children as
+     top-level bullets.
+   - **Standalone tickets** categorize by type: **Features**, **Fixes**, and **Internal /
+     workflow** (tasks, CI, agent/skill machinery) — in that order.
+   - One line per item: what it delivers, phrased for a reader of the release page (not a commit
+     subject), with the ticket ID in parentheses.
+
+4. **Write the notes to a temp file** — body only, no `lode vX.Y.Z` heading, no version line (the
+   script owns the tag subject):
+
+   ```bash
+   NOTES_FILE="$(mktemp)"
+   # …write the itemized list into "$NOTES_FILE"…
+   ```
+
+An explicit `/release X.Y.Z` (or `patch|minor|major`) override skips the *version* derivation,
+never this step — every release gets compiled notes.
+
 ### 3. Always confirm before touching anything
 
 State the proposal plainly before doing anything else:
@@ -100,15 +147,19 @@ State the proposal plainly before doing anything else:
 Latest tag: v<LATEST> (or: no tag yet — this is the first release)
 Proposing:  v<PROPOSED>   (<breaking|feat|fix|none, and the reasoning — e.g. "2 feat commits since v0.3.1">)
 
-Commits since v<LATEST>:
-  <one line per subject>
+Release notes (<N> resolved tickets, <M> epics since v<LATEST>):
+  <the compiled notes body from §2a, verbatim>
+
+<flags, if any: landed-but-still-open tickets, IDs unknown to bd>
 
 Confirm v<PROPOSED>, or override: /release patch|minor|major|X.Y.Z
 ```
 
-I do not proceed past this point without an explicit go-ahead in the conversation — a bare `/release`
-never cuts a tag unattended. If the human overrides with a bump word or a literal version, I recompute
-from that and re-confirm rather than silently substituting it.
+Confirming the version also confirms the notes — if the human wants a notes line reworded or
+dropped, I apply that and re-show before proceeding. I do not proceed past this point without an
+explicit go-ahead in the conversation — a bare `/release` never cuts a tag unattended. If the human
+overrides with a bump word or a literal version, I recompute from that and re-confirm rather than
+silently substituting it.
 
 ### 3a. The `.beads/issues.jsonl`-only dirty tree — discard, don't block
 
@@ -129,8 +180,12 @@ operator needs to decide on, not a passive export to throw away.
 ### 4. On confirm, invoke the script — nothing else
 
 ```bash
-scripts/release.sh "$PROPOSED"     # bare X.Y.Z, no leading 'v' — the script adds it
+scripts/release.sh "$PROPOSED" "$NOTES_FILE"   # bare X.Y.Z, no leading 'v' — the script adds it
 ```
+
+The notes file rides along as the second argument; the script embeds it as the annotated tag's
+body (subject stays `lode vX.Y.Z`) and refuses a missing/empty file — so a confirmed release
+always carries its compiled notes.
 
 I do **not** run `nox` myself first, and I do **not** re-implement the clean-tree / on-`trunk` /
 up-to-date-with-`origin/trunk` / tag-monotonicity checks — `scripts/release.sh` already gates all of
@@ -142,6 +197,8 @@ different version on its behalf; that is a decision for whoever is running the r
 ## What I don't do
 
 - I never tag, push, or run the test suite directly — that's entirely `scripts/release.sh`.
+- I never write freeform release notes — the notes are compiled from the resolved bd ticket
+  record (§2a), and anything that can't be traced to a ticket is flagged, not narrated.
 - I never propose past a bare confirmation — no auto-release, ever, even when the derivation is
   obvious.
 - I never touch a producer worktree, a bd ticket, or `trunk`'s merge queue — this is an operator
