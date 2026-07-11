@@ -35,16 +35,35 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
 1. **Kickoff** — `scripts/release.sh` (lode-0ru.2) gates the working tree (clean, `nox -s tests`
    green — check-only; it never runs `nox -t fix`, which mutates the tree and would violate the
    clean-tree guard at tag time), computes/confirms the next `vX.Y.Z`, creates the annotated tag on
-   the release commit, and pushes the tag.
+   the release commit — with the confirmed release notes as the tag body, when a notes file is
+   passed as its second argument — and pushes the tag.
 2. **CI builds on tag push** — `.github/workflows/release.yml` (lode-0ru.3) triggers on `v*` tag
    push, does a clean-room `python -m build` (wheel + sdist; the `Version` metadata comes straight
    from `git describe` against the pushed tag), and publishes a GitHub release with both artifacts
-   attached.
+   attached and the tag body as the release notes.
 3. **Result** — `lode version` on an install of the released artifact reports the exact `X.Y.Z`
    tag, not `0.0.0`.
 
 A `/release` Claude skill (lode-0ru.4) wraps step 1: it computes the next semver bump from the
-commit history since the last tag and drives the kickoff.
+commit history since the last tag, compiles the release notes from the resolved ticket record
+(below), and drives the kickoff.
+
+## Release notes
+
+Release notes are **compiled from the ticket record, not composed as prose** (lode-0l1). At
+kickoff, the `/release` skill collects every bd ticket that landed on `trunk` in the release
+window — first-parent history since the previous tag (the whole history on the first release),
+identified by `Merge land/<id>:` subjects and trailing `(lode-…)` markers on direct commits —
+resolves each in bd, and produces an itemized list: child tickets grouped under their parent
+epic, standalone tickets categorized as features / fixes / internal-workflow. Tickets that
+landed but never closed are flagged to the operator instead of listed.
+
+The confirmed list travels as the **annotated tag's body** (`scripts/release.sh X.Y.Z
+notes-file`; the script owns the `lode vX.Y.Z` subject) — the tag is the only wire from kickoff
+to CI, so the notes need no side channel. The release workflow re-fetches the annotated tag
+object (`actions/checkout` demotes it to a lightweight ref, actions/checkout#290) and publishes
+the tag body via `gh release create --notes-file`. This replaced `--generate-notes`, which
+derives notes from merged PRs and produces nothing useful in this no-PR, `/land`-merge workflow.
 
 **First-release ordering constraint:** GitHub Actions runs the workflow file *as it exists in the
 tagged commit* — not whatever version of `release.yml` is on `trunk` at push time. That means

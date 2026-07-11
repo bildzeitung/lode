@@ -35,7 +35,14 @@ jobs:
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Release notes = the annotated tag's body, composed at kickoff from the
+        # resolved bd tickets/epics in the release window (docs/release.md). Not
+        # --generate-notes: that is PR-based and empty in this no-PR workflow.
+        # actions/checkout leaves the tag as a lightweight ref to the commit
+        # (actions/checkout#290), so re-fetch the real annotated tag object first.
         run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents:body)' "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/notes.md"
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --title "lode ${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes-file "${RUNNER_TEMP}/notes.md"

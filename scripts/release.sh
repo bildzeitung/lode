@@ -2,21 +2,33 @@
 #
 # Kick off a lode release: gate the tree, tag, and push the tag.
 #
-# Run from the repo root: scripts/release.sh X.Y.Z
+# Run from the repo root: scripts/release.sh X.Y.Z [notes-file]
 #
 # Guards that we're on trunk with a clean working tree, that local trunk is
 # up to date with origin/trunk, that X.Y.Z is well-formed SemVer strictly
 # greater than the latest existing tag, that vX.Y.Z doesn't already exist
 # (locally or on origin), and that the full test suite (nox -s tests) is
 # green; then creates an annotated tag on HEAD and pushes it to origin.
-# Stops there — .github/workflows/release.yml (lode-0ru.3) owns the actual
+# An optional notes-file becomes the tag BODY — the release notes that
+# .github/workflows/release.yml publishes; the subject stays "lode vX.Y.Z"
+# either way. Stops there — the workflow (lode-0ru.3) owns the actual
 # build+publish, triggered by the tag push. See docs/release.md for the full
 # flow.
+
+# Resolve the notes file against the caller's cwd, before the cd below.
+NOTES_FILE="${2:-}"
+if [ -n "$NOTES_FILE" ]; then
+  if [ ! -s "$NOTES_FILE" ]; then
+    echo "release.sh: notes file '$NOTES_FILE' not found or empty" >&2
+    exit 1
+  fi
+  NOTES_FILE="$(realpath "$NOTES_FILE")"
+fi
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
 
-VERSION="${1:?usage: scripts/release.sh X.Y.Z}"
+VERSION="${1:?usage: scripts/release.sh X.Y.Z [notes-file]}"
 if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "release.sh: version must be X.Y.Z (semver, no leading 'v'), got '$VERSION'" >&2
   exit 1
@@ -84,7 +96,13 @@ fi
 . ./venv/bin/activate
 nox -s tests
 
-git tag -a "$TAG" -m "lode $TAG"
+if [ -n "$NOTES_FILE" ]; then
+  # --cleanup=whitespace: the default 'strip' deletes '#'-prefixed lines,
+  # which would eat the notes' markdown headings.
+  { echo "lode $TAG"; echo; cat "$NOTES_FILE"; } | git tag -a "$TAG" --cleanup=whitespace -F -
+else
+  git tag -a "$TAG" -m "lode $TAG"
+fi
 git push origin "$TAG"
 
 echo "release.sh: pushed $TAG — CI will build + publish the release"
