@@ -43,6 +43,7 @@ from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs
+from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
 from lode.versions import delete, save
 
@@ -2644,6 +2645,91 @@ def test_work_honors_config_file_refresh_ttl_s_end_to_end(tmp_path: Path) -> Non
     # this test is proving: that refresh_ttl_s from the file is what caused the
     # row to be enqueued in the first place.
     assert len(_refresh_job_statuses(db_path)) == 1
+
+
+def test_add_honors_config_file_redaction_patterns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config.toml redact_before_index_patterns override reaches `lode add` (lode-40g).
+
+    The sharp edge of this ticket's bug class, and the reason `add` resolves
+    settings once and threads them into repo.save(): save() runs
+    redact_before_index() off the settings it is handed, so while `add` passed
+    none, a secret pattern the user had configured was silently ignored and the
+    raw secret was written to the passages/FTS index. `ACME-` is not in the
+    shipped seed set (_SECRET_SEED_PATTERNS), so nothing but the config file
+    can cause it to be redacted here.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'redact_before_index_patterns = ["ACME-[0-9]+"]\n', encoding="utf-8"
+    )
+    # `add` runs the enrich leg inline; keep it offline.
+    monkeypatch.setattr("lode.cli.enrich_version", lambda *a, **kw: None, raising=False)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(
+        app,
+        ["add", "--db", str(db_path), "the token is ACME-12345 keep it safe"],
+        env={"LODE_HOME": str(home)},
+    )
+    assert result.exit_code == 0, result.output
+
+    reader = sqlite3.connect(db_path)
+    try:
+        passages = " ".join(
+            r[0] for r in reader.execute("SELECT text FROM passages").fetchall()
+        )
+    finally:
+        reader.close()
+
+    assert passages, "expected lode add to write at least one passage"
+    assert "ACME-12345" not in passages, (
+        "the configured redaction pattern did not reach repo.save() — a secret "
+        "the user configured was indexed in the clear"
+    )
+    assert REDACTION_MARKER in passages
+
+
+@pytest.mark.parametrize(
+    ("body", "kind"),
+    [
+        ("refresh_ttl_s =\n", "TOML syntax error"),
+        ("not_a_real_knob = 1\n", "unknown key (pydantic extra=forbid)"),
+        ("refresh_ttl_s = 0\n", "out-of-range value (field validator)"),
+    ],
+)
+def test_cli_reports_a_bad_config_file_without_a_traceback(
+    tmp_path: Path, body: str, kind: str
+) -> None:
+    """A typo in the hand-edited config.toml is a clean CLI error, not a crash.
+
+    config.toml only started being *read* in lode-40g, which introduced this
+    failure mode: an unusable file made load_settings() raise straight through
+    every entry point, dumping a Python traceback at the terminal. cli's
+    _resolve_settings() converts both failure kinds (TOMLDecodeError and
+    pydantic ValidationError -- see tests/test_config.py) into the one-line
+    stderr + exit-1 convention every other user-facing CLI failure uses.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text(body, encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["work", "--db", str(tmp_path / "lode.db")],
+        env={"LODE_HOME": str(home)},
+    )
+    assert result.exit_code == 1, f"{kind}: {result.output}"
+    assert "invalid config file" in result.stderr, kind
+    assert str(home / "config.toml") in result.stderr, kind
+    # The load-bearing assertion. CliRunner also reports exit_code 1 for an
+    # *unhandled* exception, so exit_code alone cannot tell a clean error from
+    # a crash: what proves _resolve_settings() caught it is that the raised
+    # error is typer's own Exit (SystemExit) rather than the TOMLDecodeError /
+    # ValidationError that would otherwise have escaped to the terminal.
+    assert isinstance(result.exception, SystemExit), f"{kind}: {result.exception!r}"
 
 
 def test_work_uses_default_refresh_ttl_s_without_a_config_file(

@@ -7,6 +7,7 @@ model-weights cache directory (lode-gmo).
 """
 
 import tempfile
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,22 @@ def test_load_settings_config_toml_unknown_key_raises(
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
     with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_load_settings_malformed_config_toml_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A TOML *syntax* error surfaces as TOMLDecodeError, not ValidationError.
+
+    Distinct from the two cases above (both of which parse fine and then fail
+    pydantic): this never reaches Settings at all. The CLI has to catch both
+    kinds to keep a typo in the hand-edited file from becoming a traceback --
+    see tests/test_cli.py::test_cli_reports_a_bad_config_file_without_a_traceback.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("refresh_ttl_s =\n", encoding="utf-8")
+    with pytest.raises(tomllib.TOMLDecodeError):
         load_settings()
 
 

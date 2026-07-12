@@ -41,12 +41,14 @@ import sqlite3
 import sys
 import tempfile
 import time
+import tomllib
 import uuid
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import typer
+from pydantic import ValidationError
 
 from lode import __version__, versions
 from lode.config import (
@@ -155,8 +157,28 @@ def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
     return Path(name)
 
 
+def _resolve_settings() -> Settings:
+    """Resolve settings for one command, reporting a bad config file the CLI way.
+
+    :func:`lode.config.load_settings` raises on an unusable
+    ``$LODE_HOME/config.toml`` — ``TOMLDecodeError`` for a syntax error,
+    pydantic's ``ValidationError`` for an unknown key or an out-of-range value.
+    Raising is right for a *library* caller (a test asserts on it), but this
+    file is hand-edited by the user, so at the CLI boundary an uncaught raise
+    dumps a Python traceback at the terminal over a typo. Convert it to the
+    one-line stderr message + exit 1 that every other user-facing CLI failure
+    here uses (lode-40g). This is the only place a lode command resolves
+    settings; each entry point calls it once and threads the result down.
+    """
+    try:
+        return load_settings()
+    except (tomllib.TOMLDecodeError, ValidationError) as err:
+        typer.echo(f"invalid config file {config_path()}: {err}", err=True)
+        raise typer.Exit(code=1) from None
+
+
 def _enrich_immediately(
-    conn: sqlite3.Connection, db_path: Path, version_id: str
+    conn: sqlite3.Connection, db_path: Path, version_id: str, settings: Settings
 ) -> None:
     """Opportunistically claim + run the enrich job just enqueued for ``version_id``.
 
@@ -180,7 +202,7 @@ def _enrich_immediately(
     from lode.worker import claim_and_run_one
 
     claim_and_run_one(
-        conn, db_path, load_settings(), types=("enrich",), target_version=version_id
+        conn, db_path, settings, types=("enrich",), target_version=version_id
     )
 
 
@@ -219,6 +241,8 @@ def add(
         typer.echo("refusing to save an empty note", err=True)
         raise typer.Exit(code=1)
 
+    settings = _resolve_settings()
+
     # A fresh logical id per capture — `add` always creates a new note (no
     # aliasing), so `save` always takes its create path.
     note_id = str(uuid.uuid4())
@@ -231,7 +255,13 @@ def add(
         # (lode-xyb; embedding stays async via the worker).
         repo = Repository(conn, cache=CompositeCache([LexicalCacheBackend(conn)]))
         try:
-            result = repo.save(note_id, body)
+            # settings resolved once for the whole command and threaded into BOTH
+            # legs (lode-40g): save() runs redact_before_index() + the drawdown
+            # scan off it, so without this the user's own
+            # redact_before_index_patterns / url_tracking_param_blocklist would
+            # be ignored and a secret they configured would reach the index
+            # unredacted.
+            result = repo.save(note_id, body, settings=settings)
         except versions.HeadConflictError:
             # A create against an already-present note: never clobber or
             # auto-merge — preserve the buffer as a draft and bail (the
@@ -246,7 +276,7 @@ def add(
         # failure is handled by the job's own retry/backoff/dead-letter
         # accounting, not here.
         if not result.deduped:
-            _enrich_immediately(conn, db_path, result.version_id)
+            _enrich_immediately(conn, db_path, result.version_id, settings)
     finally:
         conn.close()
     typer.echo(note_id)
@@ -291,11 +321,12 @@ def ask(
     db_path = db or default_db_path()
     # Resolve settings once so gate-tuning knobs (entailment_threshold, etc.) come
     # from a single configured object, not from per-call Settings() defaults buried
-    # inside _retrieve and cited_answer.ask. load_settings() (not bare Settings())
-    # so a config-file/CLI-arg override actually reaches the pipeline (lode-40g) --
-    # previously this constructed a bare Settings(), so load_settings() had zero
-    # production callers and every knob ran at hardcoded defaults.
-    settings = load_settings()
+    # inside _retrieve and cited_answer.ask. _resolve_settings() (not bare
+    # Settings()) so a config-file override actually reaches the pipeline
+    # (lode-40g) -- previously this constructed a bare Settings(), so
+    # load_settings() had zero production callers and every knob ran at
+    # hardcoded defaults.
+    settings = _resolve_settings()
     conn = _open_db(db_path)
     try:
         context = _retrieve(
@@ -579,7 +610,12 @@ def recover(
             typer.echo(f"note is not deleted: {note_id}", err=True)
             raise typer.Exit(code=1)
 
-        result = repo.recover(note_id, target_version=parent_version_id)
+        # Threaded for the same reason as `add`'s save (lode-40g): recover()
+        # re-indexes the restored body through redact_before_index(), so a bare
+        # Settings() here would silently ignore the user's own redaction patterns.
+        result = repo.recover(
+            note_id, target_version=parent_version_id, settings=_resolve_settings()
+        )
     finally:
         conn.close()
     typer.echo(f"recovered {result.note_id}: head now {result.version_id}")
@@ -1103,7 +1139,7 @@ def tui(
     # then reads it back via self.app.settings (lode.tui.app's single
     # resolve-once-and-share pattern), rather than each screen falling back to
     # its own bare Settings() default independently.
-    run_tui(db_path=db or default_db_path(), settings=load_settings())
+    run_tui(db_path=db or default_db_path(), settings=_resolve_settings())
 
 
 @app.command()
@@ -1203,11 +1239,11 @@ def work(
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
-    # load_settings() (not bare Settings()) so a config-file override -- e.g.
+    # _resolve_settings() (not bare Settings()) so a config-file override -- e.g.
     # refresh_ttl_s -- actually reaches reconcile()'s steps and the drain loop
     # (lode-40g; lode-09n threaded settings through reconcile(), but nothing was
     # flowing through it since this constructed a bare Settings() default).
-    settings = load_settings()
+    settings = _resolve_settings()
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
