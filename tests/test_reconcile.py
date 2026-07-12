@@ -676,18 +676,45 @@ def test_refresh_stale_registered_in_module_steps(conn: sqlite3.Connection) -> N
 def test_refresh_stale_full_reconcile_enqueues_stale_external(
     conn: sqlite3.Connection,
 ) -> None:
-    """End-to-end: reconcile() with the refresh_stale step enqueues a stale refresh."""
+    """End-to-end: reconcile() with the refresh_stale step enqueues a stale refresh.
+
+    Passes ``settings`` through ``reconcile()`` itself (rather than baking the
+    override into the injected step, as a pre-lode-09n version of this test
+    would have had to) — this is the actual threading path production code
+    now uses too.
+    """
     _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(7200))
     total = reconcile(
         conn,
-        steps=[
-            (
-                "refresh_stale",
-                lambda c: _refresh_stale_step(c, Settings(refresh_ttl_s=3600)),
-            )
-        ],
+        settings=Settings(refresh_ttl_s=3600),
+        steps=[("refresh_stale", _refresh_stale_step)],
     )
     assert total == 1
+    assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
+
+
+def test_reconcile_threads_settings_to_refresh_stale_step(
+    conn: sqlite3.Connection,
+) -> None:
+    """reconcile(conn, settings) threads a caller's refresh_ttl_s override into
+    the module-registered refresh_stale step (lode-09n regression test).
+
+    Before lode-09n, ``reconcile()`` invoked every step as ``step_fn(conn)``
+    with no settings argument at all, so ``_refresh_stale_step`` always fell
+    back to its own default ``Settings()`` — a caller-supplied override (e.g.
+    from ``load_settings()``) never reached ``refresh_ttl_s``. This exercises
+    the *default* ``_STEPS`` registry (not an injected step list) so it
+    covers the exact path ``lode work`` (``cli.py``) drives.
+    """
+    # 120s old — well within Settings()'s (much larger) default TTL, but past
+    # a short caller-supplied override, so this only shows up as a refresh gap
+    # if the override actually reaches the step.
+    _insert_external_snapshot(conn, "ext-1", "snap-1", fetched_at=_old_timestamp(120))
+    assert Settings().refresh_ttl_s > 120  # sanity: default TTL would NOT flag this
+    reconcile(conn, settings=Settings(refresh_ttl_s=60))
+    # Assert on the refresh-job outcome specifically (not reconcile()'s total),
+    # since the default registry's embed_gap step independently also flags
+    # this same snapshot's missing embed job — an unrelated, expected gap.
     assert _pending_refresh_jobs(conn, "ext-1") == ["pending"]
 
 
@@ -697,20 +724,54 @@ def test_refresh_stale_full_reconcile_enqueues_stale_external(
 
 
 def test_reconcile_calls_all_steps(conn: sqlite3.Connection) -> None:
-    """reconcile() invokes each step in the injected list."""
+    """reconcile() invokes each step in the injected list, threading settings."""
     call_log: list[str] = []
 
-    def _step_a(c: sqlite3.Connection) -> int:
+    def _step_a(c: sqlite3.Connection, settings: Settings) -> int:
         call_log.append("a")
         return 2
 
-    def _step_b(c: sqlite3.Connection) -> int:
+    def _step_b(c: sqlite3.Connection, settings: Settings) -> int:
         call_log.append("b")
         return 3
 
     total = reconcile(conn, steps=[("a", _step_a), ("b", _step_b)])
     assert total == 5
     assert call_log == ["a", "b"]
+
+
+def test_reconcile_passes_settings_instance_through_to_each_step(
+    conn: sqlite3.Connection,
+) -> None:
+    """reconcile() threads the SAME caller-supplied Settings instance to every
+    step positionally (lode-09n) — not a step-local default construction.
+    """
+    received: list[Settings] = []
+
+    def _step(c: sqlite3.Connection, settings: Settings) -> int:
+        received.append(settings)
+        return 0
+
+    custom = Settings(refresh_ttl_s=42)
+    reconcile(conn, settings=custom, steps=[("step", _step)])
+    assert received == [custom]
+    assert received[0].refresh_ttl_s == 42
+
+
+def test_reconcile_defaults_settings_when_none_given(
+    conn: sqlite3.Connection,
+) -> None:
+    """reconcile() with no settings arg falls back to a fresh Settings() default,
+    same as :func:`lode.worker.drain`'s ``settings = settings or Settings()``.
+    """
+    received: list[Settings] = []
+
+    def _step(c: sqlite3.Connection, settings: Settings) -> int:
+        received.append(settings)
+        return 0
+
+    reconcile(conn, steps=[("step", _step)])
+    assert received[0].refresh_ttl_s == Settings().refresh_ttl_s
 
 
 def test_reconcile_returns_zero_for_no_steps(conn: sqlite3.Connection) -> None:

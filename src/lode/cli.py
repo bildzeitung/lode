@@ -1214,8 +1214,12 @@ def work(
                         # periodically (each poll tick in --loop/--wait mode).
                         # Re-enqueues any head versions missing a fresh embed;
                         # idempotent by the live-job partial unique index
-                        # (lode-i05.4).
-                        gap = _reconcile(conn)
+                        # (lode-i05.4). ``settings`` is threaded through so a
+                        # step reading a runtime knob (e.g. refresh_stale's
+                        # refresh_ttl_s) sees this call's actual Settings
+                        # instead of silently constructing its own default
+                        # (lode-09n).
+                        gap = _reconcile(conn, settings)
                         if gap:
                             typer.echo(f"reconciled {gap} gap version(s)")
                         # Per-job outcome lines (lode-1gr.4): what this pass's
