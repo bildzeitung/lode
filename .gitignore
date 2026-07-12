@@ -30,3 +30,6 @@ src/lode/_version.py
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key
+
+# Beads / Dolt files (added by bd init)
+.beads/proxieddb/
