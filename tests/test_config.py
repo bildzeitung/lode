@@ -84,6 +84,33 @@ def test_load_settings_explicit_override_wins_over_config_toml(
     assert load_settings(retrieval_top_k=9).retrieval_top_k == 9
 
 
+# --- a None override must not clobber config.toml (lode-n8n) -----------------
+#
+# The natural shape of a per-knob CLI flag is a Typer option defaulting to
+# None (`top_k: int | None = None`) passed straight through as **overrides.
+# Since None is still a *present* key, `Settings(**{**file, **overrides})`
+# would let it win over the file every time the user leaves the flag off --
+# silently reverting their config.toml value to the field default. These two
+# tests cover both directions of the fix.
+
+
+def test_load_settings_none_override_preserves_config_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("retrieval_top_k = 5\n", encoding="utf-8")
+    assert load_settings(retrieval_top_k=None).retrieval_top_k == 5
+
+
+def test_load_settings_explicit_override_still_wins_when_other_overrides_are_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("retrieval_top_k = 5\n", encoding="utf-8")
+    settings = load_settings(retrieval_top_k=9, rrf_k=None)
+    assert settings.retrieval_top_k == 9
+
+
 def test_load_settings_config_toml_invalid_value_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
