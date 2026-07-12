@@ -57,8 +57,8 @@ remote but under a separate ref, `refs/dolt/data`. `.beads/issues.jsonl` is a **
 export** — a read-only snapshot, never the wire. On a fresh clone `bd ready` fails with
 `no beads database found` until you do this.
 
-Clone into a directory named `lode` (the issue prefix is derived from the checkout
-directory), then:
+The issue prefix is pinned to `lode` in `.beads/config.yaml`, so the checkout directory
+can be called anything:
 
 ```bash
 bd init          # clones the Dolt DB from the remote configured in .beads/config.yaml
