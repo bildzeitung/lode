@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — self-heals a clean rebase or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — self-heals a clean rebase or a mechanical (independent, non-overlapping) conflict, though the force-push step itself needs the invoking human to have named it in chat first (a Claude Code auto-mode safety-classifier requirement, lode-cln); a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -121,6 +121,18 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > added independent, non-overlapping content (a **mechanical** conflict), resolve it directly with
    > `Edit` and continue the rebase; if the two sides genuinely **disagree**, abort and escalate
    > (`land-escalated`, leave the branch as it was) rather than guess — that stays a human decision.
+
+   > **A dispatch prompt worded exactly like the one above will be hard-blocked** by the Claude Code
+   > auto-mode safety classifier ("Git Destructive") unless the human invoking `/code` has, in their
+   > own chat message, named this force-push and its target branch — e.g. *"force-push
+   > --force-with-lease to origin/land/lode-ai1 for the rebase pickup"* (one id, or several for a
+   > fan-out). This is empirically confirmed (lode-cln) to be a deliberate safety boundary, not a
+   > wiring bug: the committed `autoMode.allow` consent paragraph in `.claude/settings.json` is not
+   > honored at this gate no matter its wording, and rewording this dispatch to avoid naming the
+   > command is independently disallowed (flagged as Instruction Poisoning). Full empirical write-up:
+   > [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln).
+   > If that authorization hasn't been given for a `needs-rebase` hit, **stop and ask for it** rather
+   > than skip the sweep or retry with different phrasing.
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
    (`run_in_background: true`), **subject to the concurrency cap** (`CODE_MAX_CONCURRENT_AGENTS`,
@@ -293,7 +305,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   worktree — lode-8k3); a conflict where the two sides *genuinely disagree* still escalates to a
   human. That's a deliberate judgment boundary, not a tooling gap — so this skill's own frontmatter
   claim of self-healing holds for the clean-rebase and mechanical-conflict cases, but a real
-  disagreement still needs a manual nudge, and always will.
+  disagreement still needs a manual nudge, and always will. **A second, orthogonal human dependency
+  also applies here (lode-cln):** dispatching step 0 at all requires the human running `/code` to
+  have named the force-push and its target in their own chat message (see the note inline in step 0
+  above and [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln))
+  — a Claude Code auto-mode safety-classifier requirement, not something this skill can satisfy on
+  its own, and not fixable by rewording committed config or the dispatch prompt.
 - **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
   exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
   ticket was left `ready-for-code-review` by a *previous* invocation (a human's exit-(a) re-entry)
