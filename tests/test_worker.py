@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 
+from lode.auth import AuthError
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import enqueue_derive_jobs
@@ -1067,9 +1068,11 @@ def test_drain_main_loop_skips_enrich_batch_in_flight(
     assert status == "running"
 
 
-@pytest.mark.network
 def test_drain_enrich_never_dead_lettered(
-    conn: sqlite3.Connection, db_path: Path, settings: Settings
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An enrich job is never dead-lettered even across many failing drain passes.
 
@@ -1079,18 +1082,25 @@ def test_drain_enrich_never_dead_lettered(
     inside collect_enrich_batch when the Batches API itself returns an error result
     after retry_max_attempts.
 
-    ``@pytest.mark.network`` (lode-85q): this test deliberately relies on the
-    real, un-mocked ``build_client()`` failing at construction in an unkeyed
-    environment (no ``ANTHROPIC_API_KEY``) to drive the batch-submit-failure
-    revert path under test -- not a real network call (no version row exists
-    for "ver-1", so every claimed row is gated out before any API call would
-    be attempted either way). Lifts tests/conftest.py's autouse LLM-client
-    guard, which otherwise can't distinguish this from an accidentally-real
-    client reach.
+    The batch-submit failure is driven by a ``build_client`` that *deterministically*
+    raises (lode-85q). It used to be driven by the ambient environment instead --
+    the real, un-mocked ``build_client()`` happening to fail at construction because
+    CI has no ``ANTHROPIC_API_KEY`` -- which made this test prove two different
+    things on two different machines: on a keyed dev box construction would succeed
+    and the submit-failure path under test was never exercised at all. That is
+    precisely the class of bug lode-85q exists to kill, so it is fixed here rather
+    than papered over with an escape-hatch marker.
     """
+    import lode.enrich as enrich_mod
+
+    def _no_credentials() -> object:
+        raise AuthError("no credentials (test)")
+
+    monkeypatch.setattr(enrich_mod, "build_client", _no_credentials)
+
     enqueue_derive_jobs(conn, "ver-1")
-    # Run drain many times with no batch client — the batch step fails gracefully
-    # (no API key), reverts to 'failed', never reaches 'dead'.
+    # Run drain many times — every batch submit fails at client construction,
+    # reverts to 'failed', and never reaches 'dead'.
     for _ in range(5):
         drain(conn, db_path, settings, _registry=_noop_registry())
 

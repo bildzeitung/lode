@@ -41,6 +41,51 @@ def test_real_outbound_socket_connect_fails_loudly() -> None:
         sock.close()
 
 
+def test_real_outbound_connect_ex_fails_loudly() -> None:
+    """``connect_ex`` is guarded too -- it does not route through ``connect``.
+
+    Guarding only ``socket.connect`` left the guard failing *open* here: a
+    ``connect_ex`` to a public IP sailed straight through. A guard that
+    silently misses is worse than no guard, so both are patched.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(pytest.fail.Exception, match="outbound network connection"):
+            sock.connect_ex(("93.184.216.34", 443))  # example.com's IP -- never dialed
+    finally:
+        sock.close()
+
+
+def test_loopback_alias_in_127_block_is_permitted() -> None:
+    """The whole ``127.0.0.0/8`` block is loopback, not just ``127.0.0.1``.
+
+    ``127.0.1.1`` is the stock Debian/Ubuntu ``/etc/hosts`` alias for the
+    machine's own hostname; a string-equality allowlist wrongly failed it as
+    "outbound network".
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError):  # refused, not guard-failed
+            sock.connect(("127.0.1.1", 1))
+    finally:
+        sock.close()
+
+
+def test_unix_socket_connect_is_not_treated_as_egress(tmp_path: Path) -> None:
+    """An ``AF_UNIX`` connect cannot reach a remote host -- blocking it is a
+    pure false positive, and a baffling one (the message says "network")."""
+    sock_path = tmp_path / "s.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(str(sock_path))
+        server.listen(1)
+        client.connect(str(sock_path))  # must not raise
+    finally:
+        client.close()
+        server.close()
+
+
 def test_loopback_connect_is_still_permitted() -> None:
     """The loopback escape stays intact for tests/test_webfetch.py's pattern.
 

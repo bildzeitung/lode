@@ -47,9 +47,22 @@ chain) rather than being swallowed as just another job failure:
    (+ ``AsyncAnthropic`` if present) to fail unconditionally, before the SDK's own
    credential-chain logic runs, so it fires identically whether the environment is
    keyed or not.
-2. **Generic outbound socket egress** — patches ``socket.socket.connect`` to fail
-   on any non-loopback destination (catches accidental egress through anything
-   other than the Anthropic SDK, e.g. a broken ``webfetch`` mock).
+2. **Generic outbound socket egress** — patches ``socket.socket.connect`` *and*
+   ``socket.socket.connect_ex`` (independent C methods; the latter does not call
+   the former, so guarding only ``connect`` would leave the guard failing open)
+   to fail on any non-loopback destination. Catches accidental egress through
+   anything other than the Anthropic SDK — e.g. a broken ``webfetch`` mock.
+   Verified empirically to fire on ``httpx`` (sync *and* async), ``urllib``,
+   ``socket.create_connection`` and ``asyncio.open_connection``: they all bottom
+   out in a plain ``socket.connect`` (for HTTPS, ``httpcore`` connects the TCP
+   socket first and only then wraps it in TLS, so ``ssl.SSLSocket.connect`` is
+   never reached).
+
+   Known limits, accepted: a connect made in a **subprocess** is out of reach
+   (separate interpreter), and one made in a **thread** prevents the call but
+   cannot itself fail the test (``pytest.fail`` in a non-main thread does not
+   propagate to the test). lode makes no such calls today; the guard is a net
+   for *accidents*, not an adversary.
 
 **Escape hatch (explicit, greppable): ``@pytest.mark.network``** (registered in
 ``pyproject.toml``) lifts *both* guards for a test that deliberately needs real
@@ -64,21 +77,76 @@ real-reranker-model-load tier (lode-pql/lode-gmo, see above) may need one HF Hub
 download on a cold model cache, a pre-existing, accepted exception this fixture
 must not regress — every ``slow`` test already mocks its own Anthropic/QA client,
 so guard 1 still protects it.
+
+That relaxation is the guard's **widest residual hole, and it is deliberate**: a
+``slow`` test may connect to *any* host, not merely HuggingFace. Host-allowlisting
+is not available to us — by the time ``connect()`` is reached the destination has
+already been resolved to a bare IP, so there is no hostname left to match on. The
+hole is bounded by keeping the ``slow`` tier small (a handful of tests, all of
+which load a real model on purpose) and by guard 1 still covering every one of
+them. Do not reach for ``slow`` as a way to quiet guard 2 on a test that is not
+about a real model load — use ``@pytest.mark.network``, which is greppable and
+says what it means.
 """
 
+import ipaddress
 import socket
 
 import pytest
 
 from lode.config import model_cache_dir
 
-#: Destinations guard 2 still permits — loopback-only. Existing offline tests
-#: deliberately connect to a refused loopback port to exercise a real
-#: ``ConnectionRefusedError`` without a fake server (e.g.
-#: ``tests/test_webfetch.py::TestHttpxFetcher::test_connection_error_is_transient``
-#: against ``127.0.0.1:1``); this keeps that pattern legal while still blocking
-#: any *real*, non-loopback egress.
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+#: Socket families guard 2 polices. Anything else (``AF_UNIX``, ``AF_NETLINK``,
+#: …) cannot reach a remote host at all, so blocking it would be a pure false
+#: positive — and a baffling one, since the failure message talks about network
+#: egress.
+_EGRESS_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
+
+
+def _is_loopback(address: object) -> bool:
+    """Is this ``connect()`` destination the local machine?
+
+    Loopback stays permitted: existing offline tests deliberately connect to a
+    *refused* loopback port to exercise a real ``ConnectionRefusedError``
+    without standing up a fake server (e.g.
+    ``tests/test_webfetch.py::TestHttpxFetcher::test_connection_error_is_transient``
+    against ``127.0.0.1:1``). Decided by ``ipaddress``, not a hardcoded set of
+    strings, so the whole ``127.0.0.0/8`` block counts — ``127.0.1.1`` is the
+    stock Debian/Ubuntu ``/etc/hosts`` alias for the machine's own hostname and
+    is every bit as loopback as ``127.0.0.1``.
+    """
+    host = address[0] if isinstance(address, tuple) else address
+    try:
+        return ipaddress.ip_address(str(host)).is_loopback
+    except ValueError:
+        # Not a literal IP -- a hostname. ``connect()`` is normally handed an
+        # already-resolved address (``socket.create_connection`` resolves via
+        # ``getaddrinfo`` first), so this is the rare direct-``connect()`` case.
+        return str(host) == "localhost"
+
+
+def _make_guarded_connect(method_name: str):
+    """Wrap ``socket.socket.<method_name>`` so non-loopback egress fails the test.
+
+    Passes straight through for a loopback destination, and for any socket
+    family that cannot reach a remote host in the first place (see
+    :data:`_EGRESS_FAMILIES`).
+    """
+    real = getattr(socket.socket, method_name)
+
+    def _guarded(
+        self: socket.socket, address: object, *args: object, **kwargs: object
+    ) -> object:
+        if self.family in _EGRESS_FAMILIES and not _is_loopback(address):
+            pytest.fail(
+                f"test attempted a real outbound network connection to "
+                f"{address!r} (socket.{method_name}) -- no fake was installed "
+                "for it. If this test genuinely needs live network access, opt "
+                "in with @pytest.mark.network (tests/conftest.py)."
+            )
+        return real(self, address, *args, **kwargs)
+
+    return _guarded
 
 
 @pytest.fixture(autouse=True)
@@ -133,24 +201,17 @@ def _block_unmocked_network_and_llm_access(
 
     # Guard 2: generic outbound socket egress (any non-loopback destination).
     # Relaxed for @pytest.mark.slow too -- see module docstring.
+    #
+    # Both connect() AND connect_ex() are patched: they are independent C
+    # methods (connect_ex does not call connect), so guarding only the former
+    # would leave the guard failing *open* on the latter -- and a guard that
+    # silently misses is worse than no guard, because it licenses false
+    # confidence.
     if not marked_network and not marked_slow:
-        real_connect = socket.socket.connect
-
-        def _guarded_connect(
-            self: socket.socket, address: object, *args: object, **kwargs: object
-        ) -> object:
-            host = address[0] if isinstance(address, tuple) else address
-            if host in _LOOPBACK_HOSTS:
-                return real_connect(self, address, *args, **kwargs)
-            pytest.fail(
-                f"test attempted a real outbound network connection to "
-                f"{address!r} -- no fake was installed for it. If this test "
-                "genuinely needs live network access, opt in with "
-                "@pytest.mark.network (tests/conftest.py)."
+        for _method in ("connect", "connect_ex"):
+            monkeypatch.setattr(
+                socket.socket, _method, _make_guarded_connect(_method), raising=True
             )
-            return None
-
-        monkeypatch.setattr(socket.socket, "connect", _guarded_connect)
 
 
 @pytest.fixture(scope="session", autouse=True)
