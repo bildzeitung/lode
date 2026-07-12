@@ -183,6 +183,25 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         conn.close()
 
 
+def _noop_enrich(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub `add`'s immediate-enrich fast path for tests that don't care about
+    enrichment's outcome (lode-85q).
+
+    ``add`` runs the enrich leg inline (lode-npx.2): without this, a test that
+    just invokes ``add`` and asserts on unrelated state (a note's body, a log
+    directory, a purge/recover flow, …) reaches the *real*, un-mocked
+    ``enrich_version`` -> ``anthropic.Anthropic`` path (tests/conftest.py's
+    autouse guard now fails loudly on exactly that, closing the gap lode-8xg
+    found). Same pattern as ``test_notes_lists_the_full_id_date_and_summary``'s
+    inline stub above and ``test_add_calls_enrich_immediately`` elsewhere in
+    this file — patch at the real lookup site (``lode.enrich``), not
+    ``lode.cli`` (which has no ``enrich_version`` symbol of its own).
+    """
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", lambda *a, **k: None)
+
+
 def test_add_captures_note_and_enqueues_embed_and_enrich_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -359,7 +378,10 @@ def test_add_enrich_failure_is_non_fatal(
     assert jobs_by_type["enrich"] == ("failed", 1)
 
 
-def test_add_reads_body_from_stdin_verbatim(tmp_path: Path) -> None:
+def test_add_reads_body_from_stdin_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["add", "--db", str(db_path)], input="from stdin\n")
     assert result.exit_code == 0
@@ -370,18 +392,24 @@ def test_add_reads_body_from_stdin_verbatim(tmp_path: Path) -> None:
     ) == [("from stdin\n",)]
 
 
-def test_add_uses_lode_home_env_var(tmp_path: Path) -> None:
+def test_add_uses_lode_home_env_var(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # $LODE_HOME is the single root: with no --db, `add` writes $LODE_HOME/lode.db
     # (lode-qd9, replacing the old $LODE_DB binding).
+    _noop_enrich(monkeypatch)
     home = tmp_path / "home"
     result = runner.invoke(app, ["add", "via env"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     assert (home / "lode.db").exists()
 
 
-def test_add_logs_land_under_lode_home(tmp_path: Path) -> None:
+def test_add_logs_land_under_lode_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Acceptance: logs land in $LODE_HOME/logs/ (lode-qd9). The group callback
     # attaches a file handler there on every command.
+    _noop_enrich(monkeypatch)
     home = tmp_path / "home"
     result = runner.invoke(app, ["add", "logged"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
@@ -397,7 +425,10 @@ def test_add_refuses_empty_or_whitespace_note(tmp_path: Path, body: str) -> None
     assert not db_path.exists()
 
 
-def test_add_creates_parent_directory(tmp_path: Path) -> None:
+def test_add_creates_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "nested" / "dir" / "lode.db"
     result = runner.invoke(app, ["add", "deep", "--db", str(db_path)])
     assert result.exit_code == 0
@@ -677,7 +708,10 @@ def test_no_egress_unknown_external_reports_and_exits_nonzero(
 # --- lode purge (E8 hard delete via Repository.purge, lode-7cx) -------------
 
 
-def test_purge_hard_deletes_a_note_and_reports_the_sweep(tmp_path: Path) -> None:
+def test_purge_hard_deletes_a_note_and_reports_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "secret hunter2", "--db", str(db_path)]
@@ -754,7 +788,10 @@ def test_notes_lists_the_full_id_date_and_summary(
     assert created[:16].replace("T", " ") in result.stdout
 
 
-def test_notes_excludes_a_tombstoned_note(tmp_path: Path) -> None:
+def test_notes_excludes_a_tombstoned_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "gone soon", "--db", str(db_path)]
@@ -777,7 +814,10 @@ def test_notes_excludes_a_tombstoned_note(tmp_path: Path) -> None:
 # --- lode notes --deleted (list tombstoned notes, lode-d32.2) ---------------
 
 
-def test_notes_deleted_flag_lists_only_tombstoned_notes(tmp_path: Path) -> None:
+def test_notes_deleted_flag_lists_only_tombstoned_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     live_id = runner.invoke(
         app, ["add", "still here", "--db", str(db_path)]
@@ -804,8 +844,10 @@ def test_notes_deleted_flag_lists_only_tombstoned_notes(tmp_path: Path) -> None:
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The empty message names the queried scope -- a live note exists here."""
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     runner.invoke(app, ["add", "still here", "--db", str(db_path)])
 
@@ -818,7 +860,10 @@ def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
 # --- lode purge <prefix> (unambiguous note-id prefix, lode-1gr.3) -----------
 
 
-def test_purge_accepts_an_unambiguous_prefix(tmp_path: Path) -> None:
+def test_purge_accepts_an_unambiguous_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "secret hunter2", "--db", str(db_path)]
@@ -878,7 +923,10 @@ def test_purge_prefix_does_not_match_a_tombstoned_note(tmp_path: Path) -> None:
     assert "no such note" in result.stderr
 
 
-def test_purge_empty_prefix_purges_nothing(tmp_path: Path) -> None:
+def test_purge_empty_prefix_purges_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "the only note", "--db", str(db_path)]
@@ -1218,7 +1266,10 @@ def test_show_flags_stale_enrichment_rather_than_hiding_it(tmp_path: Path) -> No
     assert "old-tag [stale]" in result.stdout
 
 
-def test_show_accepts_an_unambiguous_prefix(tmp_path: Path) -> None:
+def test_show_accepts_an_unambiguous_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "prefix me", "--db", str(db_path)]
@@ -1288,7 +1339,10 @@ def test_show_flags_a_tombstoned_note_with_deleted_marker(tmp_path: Path) -> Non
     assert "the carried-forward body" in result.stdout
 
 
-def test_show_live_note_has_no_deleted_marker(tmp_path: Path) -> None:
+def test_show_live_note_has_no_deleted_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "still alive", "--db", str(db_path)]
@@ -1451,8 +1505,11 @@ def test_show_edge_without_a_matching_external_row_has_no_snapshot_line(
 # --- lode recover <prefix> (undo a soft-delete, lode-d32.3) ----------------
 
 
-def test_recover_round_trip_reappears_in_notes(tmp_path: Path) -> None:
+def test_recover_round_trip_reappears_in_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """delete -> recover: the note comes back into 'lode notes' and its FTS row."""
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "coming back soon", "--db", str(db_path)]
@@ -1520,8 +1577,11 @@ def test_recover_accepts_an_unambiguous_prefix_of_a_deleted_note(
     assert op == "create"
 
 
-def test_recover_live_note_errors_clearly(tmp_path: Path) -> None:
+def test_recover_live_note_errors_clearly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Recovering a note that isn't tombstoned errors -- nothing to recover."""
+    _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
     note_id = runner.invoke(
         app, ["add", "still alive", "--db", str(db_path)]
@@ -2398,6 +2458,7 @@ def test_work_never_dead_letters_enrich(
     synthetic test case), submit_enrich_batch marks the job 'done' immediately
     (same skip logic as enrich_version).  The job must never become 'dead'.
     """
+    import lode.enrich as enrich_mod
     import lode.worker as worker_mod
 
     db_path = tmp_path / "lode.db"
@@ -2409,6 +2470,10 @@ def test_work_never_dead_letters_enrich(
         conn.close()
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+    # submit_enrich_batch calls build_client() before its per-row skip gate
+    # runs (lode-85q) -- stub it so the missing-version skip path is what's
+    # actually exercised here, not a real, un-mocked client construction.
+    monkeypatch.setattr(enrich_mod, "build_client", lambda: object())
 
     result = runner.invoke(app, ["work", "--db", str(db_path)])
     assert result.exit_code == 0
@@ -2668,10 +2733,9 @@ def test_add_honors_config_file_redaction_patterns(
     (home / "config.toml").write_text(
         'redact_before_index_patterns = ["ACME-[0-9]+"]\n', encoding="utf-8"
     )
-    # `add` runs the enrich leg inline; keep it offline.
-    import lode.enrich as enrich_mod
-
-    monkeypatch.setattr(enrich_mod, "enrich_version", lambda *a, **kw: None)
+    # `add` runs the enrich leg inline; keep it offline (patch at the real
+    # lookup site -- lode.cli has no enrich_version symbol of its own, lode-8xg).
+    _noop_enrich(monkeypatch)
 
     db_path = tmp_path / "lode.db"
     result = runner.invoke(

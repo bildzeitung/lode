@@ -1067,6 +1067,7 @@ def test_drain_main_loop_skips_enrich_batch_in_flight(
     assert status == "running"
 
 
+@pytest.mark.network
 def test_drain_enrich_never_dead_lettered(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -1077,6 +1078,15 @@ def test_drain_enrich_never_dead_lettered(
     ``status='dead'`` via the batch-submit failure path.  Dead-letter only happens
     inside collect_enrich_batch when the Batches API itself returns an error result
     after retry_max_attempts.
+
+    ``@pytest.mark.network`` (lode-85q): this test deliberately relies on the
+    real, un-mocked ``build_client()`` failing at construction in an unkeyed
+    environment (no ``ANTHROPIC_API_KEY``) to drive the batch-submit-failure
+    revert path under test -- not a real network call (no version row exists
+    for "ver-1", so every claimed row is gated out before any API call would
+    be attempted either way). Lifts tests/conftest.py's autouse LLM-client
+    guard, which otherwise can't distinguish this from an accidentally-real
+    client reach.
     """
     enqueue_derive_jobs(conn, "ver-1")
     # Run drain many times with no batch client — the batch step fails gracefully
