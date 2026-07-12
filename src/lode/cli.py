@@ -1097,8 +1097,10 @@ def config(
 
     A read-out of the single-root layout under ``$LODE_HOME`` (default ``~/.lode``)
     so you can find, back up, or inspect lode's state: the root, the SQLite DB and
-    its sibling lock, the LanceDB vector store, the log directory, and the optional
-    ``config.toml`` (shown present/absent). Reads the resolved paths from
+    its sibling lock, the LanceDB vector store, the model-weights cache, the log
+    directory, and the optional ``config.toml`` (shown present/absent) — the same
+    set ``docs/configuration.md`` "Paths & locations" documents. Reads the
+    resolved paths from
     :mod:`lode.config` rather than re-deriving them; ``--db`` shifts the displayed
     DB (and its lock + co-located vector store) to an explicit override.
     """
