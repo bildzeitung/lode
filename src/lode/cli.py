@@ -55,6 +55,7 @@ from lode.config import (
     config_path,
     default_db_path,
     lance_dir,
+    load_settings,
     lode_home,
     log_dir,
 )
@@ -179,7 +180,7 @@ def _enrich_immediately(
     from lode.worker import claim_and_run_one
 
     claim_and_run_one(
-        conn, db_path, Settings(), types=("enrich",), target_version=version_id
+        conn, db_path, load_settings(), types=("enrich",), target_version=version_id
     )
 
 
@@ -290,9 +291,11 @@ def ask(
     db_path = db or default_db_path()
     # Resolve settings once so gate-tuning knobs (entailment_threshold, etc.) come
     # from a single configured object, not from per-call Settings() defaults buried
-    # inside _retrieve and cited_answer.ask.  The eval path already does this;
-    # mirroring it here closes the gap so the interactive ask path honours config.
-    settings = Settings()
+    # inside _retrieve and cited_answer.ask. load_settings() (not bare Settings())
+    # so a config-file/CLI-arg override actually reaches the pipeline (lode-40g) --
+    # previously this constructed a bare Settings(), so load_settings() had zero
+    # production callers and every knob ran at hardcoded defaults.
+    settings = load_settings()
     conn = _open_db(db_path)
     try:
         context = _retrieve(
@@ -1096,7 +1099,11 @@ def tui(
 
     from lode.tui.app import run as run_tui
 
-    run_tui(db_path=db or default_db_path())
+    # Resolved once here and threaded onto LodeApp (lode-40g) -- every screen
+    # then reads it back via self.app.settings (lode.tui.app's single
+    # resolve-once-and-share pattern), rather than each screen falling back to
+    # its own bare Settings() default independently.
+    run_tui(db_path=db or default_db_path(), settings=load_settings())
 
 
 @app.command()
@@ -1196,7 +1203,11 @@ def work(
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
-    settings = Settings()
+    # load_settings() (not bare Settings()) so a config-file override -- e.g.
+    # refresh_ttl_s -- actually reaches reconcile()'s steps and the drain loop
+    # (lode-40g; lode-09n threaded settings through reconcile(), but nothing was
+    # flowing through it since this constructed a bare Settings() default).
+    settings = load_settings()
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)

@@ -25,7 +25,7 @@ external_id).
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2159,9 +2159,10 @@ def test_ask_cli_threads_settings_to_gate(
     question = "rerank behavior"
 
     # Strict threshold (0.8 > 0.5): the configured Settings is threaded to the gate,
-    # which drops the claim → abstain.
+    # which drops the claim → abstain. Patches lode.cli.load_settings (lode-40g:
+    # `ask` now resolves settings via load_settings(), not a bare Settings()).
     monkeypatch.setattr(
-        "lode.cli.Settings", lambda: load_settings(entailment_threshold=0.8)
+        "lode.cli.load_settings", lambda: load_settings(entailment_threshold=0.8)
     )
     strict = runner.invoke(app, ["ask", question, "--db", str(db_path)])
     assert strict.exit_code == 0
@@ -2169,7 +2170,7 @@ def test_ask_cli_threads_settings_to_gate(
 
     # Lax threshold (0.4 < 0.5): same claim, same scorer, the gate survives it.
     monkeypatch.setattr(
-        "lode.cli.Settings", lambda: load_settings(entailment_threshold=0.4)
+        "lode.cli.load_settings", lambda: load_settings(entailment_threshold=0.4)
     )
     lax = runner.invoke(app, ["ask", question, "--db", str(db_path)])
     assert lax.exit_code == 0
@@ -2551,3 +2552,116 @@ def test_work_refuses_when_lock_held(tmp_path: Path) -> None:
     result = runner.invoke(app, ["work", "--db", str(db_path)])
     assert result.exit_code == 1
     assert "lode worker" in result.stderr or "pid" in result.stderr
+
+
+# --- lode work honors a config.toml override end-to-end (lode-40g) ---------
+
+
+def _stale_iso(seconds_ago: int) -> str:
+    """An ISO-8601 timestamp ``seconds_ago`` seconds in the past."""
+    dt = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _seed_external_snapshot_120s_old(db_path: Path) -> None:
+    """Seed one external + head snapshot, 120s stale, with embed/enrich already
+    'done' so the default embed_gap/enrich_gap reconcile steps (also run by
+    'lode work') have nothing to re-enqueue -- isolates the test below to the
+    one step (refresh_stale) that refresh_ttl_s actually gates, and keeps it
+    fully offline (no fastembed/Anthropic call from the drain loop).
+
+    120s is well within the default refresh_ttl_s (3600s, so the un-configured
+    default would NOT flag it) but past a 60s config-file override.
+    """
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+                ("ext-1",),
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status, fetched_at) "
+                "VALUES (?, ?, ?, 'ok', ?)",
+                ("snap-1", "ext-1", "body text", _stale_iso(120)),
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' "
+                "WHERE external_id = 'ext-1'"
+            )
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status) "
+                "VALUES ('embed', 'snap-1', 'done')"
+            )
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status) "
+                "VALUES ('enrich', 'snap-1', 'done')"
+            )
+    finally:
+        conn.close()
+
+
+def _refresh_job_statuses(db_path: Path, external_id: str = "ext-1") -> list[str]:
+    reader = sqlite3.connect(db_path)
+    try:
+        return [
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'refresh' AND target_version = ?",
+                (external_id,),
+            ).fetchall()
+        ]
+    finally:
+        reader.close()
+
+
+def test_work_honors_config_file_refresh_ttl_s_end_to_end(tmp_path: Path) -> None:
+    """A config.toml override of refresh_ttl_s actually reaches 'lode work' (lode-40g).
+
+    Regression coverage for load_settings() having zero production callers: this
+    proves the override changes *observable behavior* end-to-end, not just that
+    Settings parses it. Companion
+    test_work_uses_default_refresh_ttl_s_without_a_config_file shows the same
+    120s-old snapshot is NOT flagged without the file present -- so this can
+    only be the file value reaching reconcile()'s refresh_stale step via
+    'lode work' -> load_settings() -> reconcile(conn, settings) (lode-09n).
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("refresh_ttl_s = 60\n", encoding="utf-8")
+
+    db_path = tmp_path / "lode.db"
+    _seed_external_snapshot_120s_old(db_path)
+
+    result = runner.invoke(
+        app, ["work", "--db", str(db_path)], env={"LODE_HOME": str(home)}
+    )
+    assert result.exit_code == 0, result.output
+    # One refresh job row exists for ext-1 -- reconcile()'s refresh_stale step
+    # enqueued it. Its *terminal* status (pending/failed/...) is
+    # _refresh_handler's own concern (it genuinely tries to fetch "ext-1" as a
+    # URL and fails, harmlessly, with a retry backoff) -- irrelevant to what
+    # this test is proving: that refresh_ttl_s from the file is what caused the
+    # row to be enqueued in the first place.
+    assert len(_refresh_job_statuses(db_path)) == 1
+
+
+def test_work_uses_default_refresh_ttl_s_without_a_config_file(
+    tmp_path: Path,
+) -> None:
+    """Control for the test above: with no config.toml, the default
+    refresh_ttl_s (3600s) does NOT flag the same 120s-old snapshot -- isolating
+    that the config file's value, not some other change, causes the refresh job
+    to appear.
+    """
+    home = tmp_path / "home"
+    home.mkdir()  # no config.toml written -- every knob stays at its default
+
+    db_path = tmp_path / "lode.db"
+    _seed_external_snapshot_120s_old(db_path)
+
+    result = runner.invoke(
+        app, ["work", "--db", str(db_path)], env={"LODE_HOME": str(home)}
+    )
+    assert result.exit_code == 0, result.output
+    assert _refresh_job_statuses(db_path) == []

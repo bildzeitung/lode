@@ -43,6 +43,22 @@ $LODE_HOME/                 # default ~/.lode, overridable by env var
 
 These resolved paths are what the CLI/TUI surfaces to the user (E10/E11).
 
+**`config.toml` format and load order (lode-40g).** A flat TOML table, one key
+per row above whose name matches the corresponding `Settings` field in
+`src/lode/config.py` (e.g. `refresh_ttl_s = 1800`) — no `[section]` headers,
+since `Settings` itself is flat. `lode.config.load_settings()` is the one
+function that resolves this layering: field defaults, then `config.toml` if
+present, then any explicit override the caller passes (a test fixture; there
+is no per-knob CLI flag or env var today — only `LODE_HOME`/`LODE_LOG_LEVEL`
+above are env-var knobs). An unrecognized key or an out-of-range value fails
+loudly at load (`pydantic`'s `extra="forbid"` plus each field's validators),
+the same as an invalid keyword override. Every CLI/TUI entry point
+(`add`/`ask`/`work`/`tui` in `src/lode/cli.py`) calls `load_settings()` so a
+file override actually reaches the runtime; a bare `Settings()` elsewhere in
+the codebase is a library-internal default for an *optional* caller-supplied
+override (`settings = settings or Settings()`), not a second config-loading
+path.
+
 ## Retrieval and ranking
 
 | Knob | Kind | Default | Notes |
