@@ -43,6 +43,39 @@ $LODE_HOME/                 # default ~/.lode, overridable by env var
 
 These resolved paths are what the CLI/TUI surfaces to the user (E10/E11).
 
+**`config.toml` format and load order (lode-40g).** A flat TOML table whose keys
+are `Settings` field names from `src/lode/config.py` — one per tunable knob in
+the tables below (e.g. `refresh_ttl_s = 1800`) — with no `[section]` headers,
+since `Settings` itself is flat. `lode.config.load_settings()` is the one
+function that resolves this layering: field defaults, then `config.toml` if
+present, then any explicit override the caller passes (a test fixture; there
+is no per-knob CLI flag or env var today — only `LODE_HOME`/`LODE_LOG_LEVEL`
+above are env-var knobs).
+
+The file is **validated on load**, so a bad one fails immediately rather than
+silently running at defaults: a TOML syntax error raises `TOMLDecodeError`, and
+an unrecognized key or an out-of-range value raises `pydantic`'s
+`ValidationError` (`extra="forbid"` plus each field's validators) — exactly as
+an invalid keyword override would. Because the file is hand-edited, the CLI
+catches both at its boundary (`src/lode/cli.py::_resolve_settings`) and reports
+a typo as a one-line `invalid config file <path>: …` on stderr with exit 1,
+rather than a Python traceback; library callers of `load_settings()` still get
+the raised exception.
+
+Each CLI/TUI entry point that needs settings resolves them **once** through that
+helper and threads the result down, rather than re-resolving per call site:
+`ask`, `work`, `recover`, `tui` (which hands the resolved `Settings` to
+`LodeApp`, where every screen reads it back off `self.app.settings`), and `add`
+(into *both* `Repository.save` and `_enrich_immediately`). Threading into the
+`Repository` legs is load-bearing, not cosmetic: `save`/`recover` run
+`redact_before_index()` off the settings they are handed, so an entry point that
+passes none would silently index a secret matched only by the user's *own*
+`redact_before_index_patterns` (lode-40g).
+
+A bare `Settings()` elsewhere in the codebase is a library-internal default for
+an *optional* caller-supplied override (`settings = settings or Settings()`),
+not a second config-loading path.
+
 ## Retrieval and ranking
 
 | Knob | Kind | Default | Notes |

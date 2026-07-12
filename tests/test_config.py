@@ -7,6 +7,7 @@ model-weights cache directory (lode-gmo).
 """
 
 import tempfile
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,75 @@ def test_documented_defaults_load() -> None:
     assert s.fetch_min_extract_chars == 200
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
+
+
+# --- load_settings() reads config.toml (lode-40g) ----------------------------
+#
+# load_settings() previously did nothing but ``Settings(**overrides)`` -- it
+# never read $LODE_HOME/config.toml at all, so wiring the CLI to call it (the
+# original scope of lode-40g) would have changed no observable behavior. These
+# cover the loader itself; tests/test_cli.py's
+# test_work_honors_config_file_refresh_ttl_s_end_to_end covers a caller
+# actually seeing the override reach real behavior, not just that Settings
+# parses it.
+
+
+def test_load_settings_reads_config_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("retrieval_top_k = 5\n", encoding="utf-8")
+    assert load_settings().retrieval_top_k == 5
+
+
+def test_load_settings_with_no_config_toml_uses_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    assert not (tmp_path / "config.toml").exists()
+    assert load_settings().retrieval_top_k == 20
+
+
+def test_load_settings_explicit_override_wins_over_config_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("retrieval_top_k = 5\n", encoding="utf-8")
+    assert load_settings(retrieval_top_k=9).retrieval_top_k == 9
+
+
+def test_load_settings_config_toml_invalid_value_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("retrieval_top_k = 0\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_load_settings_config_toml_unknown_key_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("not_a_real_knob = 1\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_settings()
+
+
+def test_load_settings_malformed_config_toml_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A TOML *syntax* error surfaces as TOMLDecodeError, not ValidationError.
+
+    Distinct from the two cases above (both of which parse fine and then fail
+    pydantic): this never reaches Settings at all. The CLI has to catch both
+    kinds to keep a typo in the hand-edited file from becoming a traceback --
+    see tests/test_cli.py::test_cli_reports_a_bad_config_file_without_a_traceback.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text("refresh_ttl_s =\n", encoding="utf-8")
+    with pytest.raises(tomllib.TOMLDecodeError):
+        load_settings()
 
 
 def test_model_ids_are_pinned() -> None:

@@ -24,6 +24,7 @@ each pattern is validated to compile at load.
 
 import os
 import re
+import tomllib
 from enum import Enum
 from pathlib import Path
 
@@ -374,8 +375,31 @@ def knob_kinds() -> dict[str, str]:
 
 
 def load_settings(**overrides: object) -> Settings:
-    """Construct and validate settings; invalid overrides raise at load."""
-    return Settings(**overrides)
+    """Construct and validate settings from every configured source.
+
+    Layers, lowest to highest precedence: the field defaults declared above,
+    then the optional ``$LODE_HOME/config.toml`` file if one is present
+    (``docs/configuration.md`` "Paths & locations" -- the one user-editable
+    file for runtime knobs), then ``overrides`` supplied by the caller (a CLI
+    flag, a test fixture). An explicit override therefore always wins over
+    whatever the file says. A missing file is a valid, fully-working state --
+    every knob just uses its default -- so this never raises on that account;
+    an invalid value, from the file or from ``overrides``, raises at
+    construction the same way either way, since pydantic validates every
+    field (``extra="forbid"`` rejects an unrecognized key from either
+    source). This is the one place a caller should resolve settings for a
+    whole command/session and thread the result down -- see ``lode.cli``'s
+    ``ask``/``work``/``add``/``tui`` entry points (lode-40g); everywhere else
+    a bare ``Settings()`` fallback (``settings = settings or Settings()``) is
+    the correct default for a function accepting an *optional* caller-supplied
+    override, not a second place to resolve the file/overrides layering.
+    """
+    path = config_path()
+    file_values: dict[str, object] = {}
+    if path.is_file():
+        with path.open("rb") as handle:
+            file_values = tomllib.load(handle)
+    return Settings(**{**file_values, **overrides})
 
 
 # --- On-disk layout (docs/configuration.md "Paths & locations") --------------
