@@ -382,33 +382,42 @@ def load_settings(**overrides: object) -> Settings:
     (``docs/configuration.md`` "Paths & locations" -- the one user-editable
     file for runtime knobs), then ``overrides`` supplied by the caller (a CLI
     flag, a test fixture). An explicit override therefore always wins over
-    whatever the file says. A ``None``-valued override is treated as *not
-    supplied* and dropped before merging: it is the shape a Typer flag takes
-    when the user didn't pass it (``top_k: int | None = None``), so passing
-    it straight through as ``**overrides`` would silently clobber a
+    whatever the file says -- unless its value is ``None``, which is treated as
+    *not supplied* and dropped before merging. ``None`` is the shape a Typer
+    flag takes when the user didn't pass it (``top_k: int | None = None``), so
+    passing it straight through as ``**overrides`` would silently clobber a
     ``config.toml`` value back to the field default every time that flag is
-    left off the command line (lode-n8n). No current knob's meaningful value
-    is ``None``, so this is unambiguous; if one ever needs to accept ``None``
-    as a deliberate value, this blanket filter is the thing to revisit. A
-    missing file is a valid, fully-working state -- every knob just uses its
-    default -- so this never raises on that account; an invalid value, from
-    the file or from ``overrides``, raises at construction the same way
-    either way, since pydantic validates every field (``extra="forbid"``
-    rejects an unrecognized key from either source). This is the one place a
-    caller should resolve settings for a whole command/session and thread
-    the result down -- see ``lode.cli``'s ``ask``/``work``/``add``/``tui``
-    entry points (lode-40g); everywhere else a bare ``Settings()`` fallback
-    (``settings = settings or Settings()``) is the correct default for a
-    function accepting an *optional* caller-supplied override, not a second
-    place to resolve the file/overrides layering.
+    left off the command line (lode-n8n). No current knob's meaningful value is
+    ``None`` (no field is ``Optional``), so this is unambiguous; if one ever
+    needs to accept ``None`` as a deliberate value, this filter is the thing to
+    revisit.
+
+    A missing file is a valid, fully-working state -- every knob just uses its
+    default -- so this never raises on that account; an invalid value, from the
+    file or from ``overrides``, raises at construction either way, since
+    pydantic validates every field. ``extra="forbid"`` still rejects an
+    unrecognized key from either source, ``None``-valued or not: the drop above
+    applies only to keys ``Settings`` actually declares, so a typo'd override
+    name surfaces as a ``ValidationError`` instead of vanishing silently.
+
+    This is the one place a caller should resolve settings for a whole
+    command/session and thread the result down -- see ``lode.cli``'s
+    ``ask``/``work``/``add``/``tui`` entry points (lode-40g); everywhere else a
+    bare ``Settings()`` fallback (``settings = settings or Settings()``) is the
+    correct default for a function accepting an *optional* caller-supplied
+    override, not a second place to resolve the file/overrides layering.
     """
     path = config_path()
     file_values: dict[str, object] = {}
     if path.is_file():
         with path.open("rb") as handle:
             file_values = tomllib.load(handle)
-    overrides = {k: v for k, v in overrides.items() if v is not None}
-    return Settings(**{**file_values, **overrides})
+    supplied = {
+        k: v
+        for k, v in overrides.items()
+        if v is not None or k not in Settings.model_fields
+    }
+    return Settings(**{**file_values, **supplied})
 
 
 # --- On-disk layout (docs/configuration.md "Paths & locations") --------------

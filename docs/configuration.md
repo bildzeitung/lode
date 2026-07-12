@@ -52,6 +52,15 @@ present, then any explicit override the caller passes (a test fixture; there
 is no per-knob CLI flag or env var today — only `LODE_HOME`/`LODE_LOG_LEVEL`
 above are env-var knobs).
 
+An override whose value is `None` is treated as **not supplied** and dropped
+before the merge, so it cannot clobber a `config.toml` value (lode-n8n). This
+is the contract the first per-knob CLI flag will rely on — a Typer option
+defaulting to `None` can be passed straight through, and leaving the flag off
+will not silently revert the user's configured value to the default. It holds
+only because no knob's meaningful value is `None` today (no `Settings` field is
+optional); a knob that legitimately needs `None` must revisit it. See
+`load_settings()`'s docstring for the full rationale.
+
 The file is **validated on load**, so a bad one fails immediately rather than
 silently running at defaults: a TOML syntax error raises `TOMLDecodeError`, and
 an unrecognized key or an out-of-range value raises `pydantic`'s

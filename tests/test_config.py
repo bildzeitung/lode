@@ -109,6 +109,22 @@ def test_load_settings_explicit_override_still_wins_when_other_overrides_are_non
     (tmp_path / "config.toml").write_text("retrieval_top_k = 5\n", encoding="utf-8")
     settings = load_settings(retrieval_top_k=9, rrf_k=None)
     assert settings.retrieval_top_k == 9
+    assert settings.rrf_k == 60  # the dropped None left the default intact
+
+
+def test_load_settings_unknown_override_still_raises_when_none_valued(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Dropping None overrides must not punch a hole in ``extra="forbid"``.
+
+    A typo'd override name (``top_k`` instead of ``retrieval_top_k``) carrying
+    the not-supplied ``None`` must still be rejected, not silently swallowed --
+    otherwise a mis-wired CLI flag would be a no-op every time the user left it
+    off, and only fail once someone passed it.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    with pytest.raises(ValidationError):
+        load_settings(top_k=None)
 
 
 def test_load_settings_config_toml_invalid_value_raises(
