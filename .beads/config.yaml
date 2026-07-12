@@ -3,10 +3,12 @@
 # All settings can also be set via environment variables (BD_* prefix)
 # or overridden with command-line flags
 
-# Issue prefix for this repository (used by bd init)
-# If not set, bd init will auto-detect from directory name
-# Example: issue-prefix: "myproject" creates issues like "myproject-1", "myproject-2", etc.
-# issue-prefix: ""
+# Issue prefix for this repository (used by bd init).
+# Pinned explicitly: left unset, bd init auto-detects the prefix from the CHECKOUT
+# DIRECTORY name, so a clone into any directory not named "lode" would mint issues
+# under the wrong prefix (observed: a clone into fresh/ came up with prefix "fresh").
+# Committed here so every clone agrees, whatever the directory is called.
+issue-prefix: "lode"
 
 # Use no-db mode: JSONL-only, no Dolt database
 # When true, bd will use .beads/issues.jsonl as the source of truth
