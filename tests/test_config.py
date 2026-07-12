@@ -112,25 +112,14 @@ def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:
     assert lance_dir(db) == tmp_path / "elsewhere" / "lancedb"
 
 
-def test_model_cache_dir_lives_under_lode_home_not_tempdir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    # lode-gmo: fastembed's own default (tempfile.gettempdir()/fastembed_cache) is
-    # wiped on reboot by WSL/systemd-tmpfiles, so the pinned model weights must
-    # resolve under the durable $LODE_HOME root instead.
-    root = tmp_path / "root"
-    monkeypatch.setenv("LODE_HOME", str(root))
-    cache_dir = model_cache_dir()
-    assert cache_dir == root / "models"
-    fastembed_default = Path(tempfile.gettempdir()) / "fastembed_cache"
-    assert cache_dir != fastembed_default
-
-
 def test_model_cache_dir_defaults_under_home_not_tempdir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Same regression guard with no $LODE_HOME override: the un-configured default
-    # must still resolve under the user's home directory, not a wipeable tempdir.
+    # lode-gmo: fastembed's own default (tempfile.gettempdir()/fastembed_cache) is
+    # wiped on reboot by WSL/systemd-tmpfiles, so the pinned weights must resolve
+    # under the durable root instead. The $LODE_HOME-relative case is covered by
+    # test_layout_lives_under_one_root; this pins the *un-configured* default,
+    # which must still land under the user's home, not a wipeable tempdir.
     monkeypatch.delenv("LODE_HOME", raising=False)
     cache_dir = model_cache_dir()
     assert cache_dir == Path.home() / ".lode" / "models"
