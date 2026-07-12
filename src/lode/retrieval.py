@@ -50,7 +50,7 @@ from typing import Protocol
 
 import networkx as nx
 
-from lode.config import Settings
+from lode.config import Settings, model_cache_dir
 from lode.lexical import LexicalHit, LexicalIndex
 from lode.vectorstore import VectorHit, VectorStore
 
@@ -247,8 +247,11 @@ class FastEmbedCrossEncoder:
     on first :meth:`rerank` call, so the model download/load (hundreds of MB) is
     deferred out of import and out of any path that never reranks. It runs on the
     **same ONNX runtime** as the embedder — no new stack, content stays on-box
-    (``docs/stack.md`` "Reranker"). The model + threshold ship untuned, revisited
-    against the eval harness (``docs/decisions.md``).
+    (``docs/stack.md`` "Reranker"). Weights are cached under
+    :func:`lode.config.model_cache_dir` (``$LODE_HOME/models/``), same as the
+    embedder, so the download survives a reboot (lode-gmo). The model +
+    threshold ship untuned, revisited against the eval harness
+    (``docs/decisions.md``).
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -259,7 +262,9 @@ class FastEmbedCrossEncoder:
         if self._model is None:
             from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-            self._model = TextCrossEncoder(model_name=self._model_name)
+            self._model = TextCrossEncoder(
+                model_name=self._model_name, cache_dir=str(model_cache_dir())
+            )
         return self._model
 
     def rerank(self, query: str, documents: list[str]) -> list[float]:

@@ -12,13 +12,18 @@ is **opt-in**: it is skipped unless ``LODE_SMOKE_MODELS=1`` is set, keeping the
 default ``nox -s tests`` gate fast and offline. Run the spike with::
 
     LODE_SMOKE_MODELS=1 pytest tests/test_models_smoke.py
+
+Each load passes ``cache_dir=str(model_cache_dir())`` -- the same durable
+``$LODE_HOME/models/`` cache_dir production uses (lode-gmo) -- rather than
+fastembed's own ``tempfile.gettempdir()`` default, so a smoke run doesn't leave
+downloaded weights somewhere a reboot wipes either.
 """
 
 import os
 
 import pytest
 
-from lode.config import Settings
+from lode.config import Settings, model_cache_dir
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("LODE_SMOKE_MODELS") != "1",
@@ -30,7 +35,7 @@ def test_embedder_loads_and_dim_matches_pin() -> None:
     from fastembed import TextEmbedding
 
     s = Settings()
-    emb = TextEmbedding(model_name=s.embedding_model)
+    emb = TextEmbedding(model_name=s.embedding_model, cache_dir=str(model_cache_dir()))
     vector = next(iter(emb.embed(["search_document: lode smoke test"])))
     assert len(vector) == s.embedding_vector_dim
 
@@ -39,7 +44,7 @@ def test_reranker_loads_and_scores() -> None:
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
     s = Settings()
-    ce = TextCrossEncoder(model_name=s.rerank_model)
+    ce = TextCrossEncoder(model_name=s.rerank_model, cache_dir=str(model_cache_dir()))
     scores = list(ce.rerank("what is lode?", ["lode is a personal KB", "bananas"]))
     # The relevant passage must outscore the irrelevant one.
     assert len(scores) == 2
@@ -53,6 +58,8 @@ def test_entailment_model_loads_via_pinned_loader() -> None:
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
     s = Settings()
-    ce = TextCrossEncoder(model_name=s.entailment_model)
+    ce = TextCrossEncoder(
+        model_name=s.entailment_model, cache_dir=str(model_cache_dir())
+    )
     scores = list(ce.rerank("lode stores notes you learn at work", ["lode is a KB"]))
     assert len(scores) == 1

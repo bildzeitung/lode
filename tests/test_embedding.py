@@ -278,6 +278,35 @@ def test_embed_query_applies_search_query_prefix() -> None:
     assert vector == [0.1, 0.2, 0.3]
 
 
+# --- FastEmbedEmbedder._load: cache_dir under $LODE_HOME, never /tmp (lode-gmo) -
+#
+# Without an explicit cache_dir, fastembed falls back to
+# tempfile.gettempdir()/fastembed_cache -- wiped on reboot by WSL/systemd-tmpfiles
+# -- so weights would be silently re-downloaded on a semi-regular basis. Verified
+# by patching the fastembed.TextEmbedding constructor itself (never called for
+# real), so this stays offline like every other test here.
+
+
+def test_load_passes_durable_model_cache_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import fastembed
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    captured: dict[str, object] = {}
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    embedder = FastEmbedEmbedder(_settings())
+    embedder._load()
+
+    assert captured["cache_dir"] == str(tmp_path / "root" / "models")
+
+
 # --- EmbeddingCacheBackend: vectors reached THROUGH the Repository (lode-1f9) ---
 #
 # The embed leg wrapped as a CacheBackend, so a save on the Repository fills the

@@ -2,9 +2,11 @@
 
 Asserts the acceptance criteria: every knob has a kind tag (runtime/tune/build),
 documented defaults load, and invalid values fail validation at load. Also covers
-the single-root on-disk layout under ``$LODE_HOME`` (lode-qd9).
+the single-root on-disk layout under ``$LODE_HOME`` (lode-qd9), including the
+model-weights cache directory (lode-gmo).
 """
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from lode.config import (
     load_settings,
     lode_home,
     log_dir,
+    model_cache_dir,
 )
 
 VALID_KINDS = {k.value for k in Kind}
@@ -99,6 +102,7 @@ def test_layout_lives_under_one_root(
     assert lance_dir(db) == root / "lancedb"
     assert log_dir() == root / "logs"
     assert config_path() == root / "config.toml"
+    assert model_cache_dir() == root / "models"
 
 
 def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:
@@ -106,6 +110,31 @@ def test_lance_dir_follows_an_explicit_db_override(tmp_path: Path) -> None:
     # so capture and retrieval still share one store.
     db = tmp_path / "elsewhere" / "custom.db"
     assert lance_dir(db) == tmp_path / "elsewhere" / "lancedb"
+
+
+def test_model_cache_dir_lives_under_lode_home_not_tempdir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # lode-gmo: fastembed's own default (tempfile.gettempdir()/fastembed_cache) is
+    # wiped on reboot by WSL/systemd-tmpfiles, so the pinned model weights must
+    # resolve under the durable $LODE_HOME root instead.
+    root = tmp_path / "root"
+    monkeypatch.setenv("LODE_HOME", str(root))
+    cache_dir = model_cache_dir()
+    assert cache_dir == root / "models"
+    fastembed_default = Path(tempfile.gettempdir()) / "fastembed_cache"
+    assert cache_dir != fastembed_default
+
+
+def test_model_cache_dir_defaults_under_home_not_tempdir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Same regression guard with no $LODE_HOME override: the un-configured default
+    # must still resolve under the user's home directory, not a wipeable tempdir.
+    monkeypatch.delenv("LODE_HOME", raising=False)
+    cache_dir = model_cache_dir()
+    assert cache_dir == Path.home() / ".lode" / "models"
+    assert not str(cache_dir).startswith(tempfile.gettempdir())
 
 
 @pytest.mark.parametrize(

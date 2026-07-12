@@ -41,7 +41,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from lode.answer import Claim, Support
-from lode.config import Settings
+from lode.config import Settings, model_cache_dir
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -185,10 +185,13 @@ class FastEmbedEntailmentScorer:
     separate loader, no egress (``docs/stack.md`` "Faithfulness NLI"). The model
     is loaded lazily on first :meth:`entailment` call (mirroring
     :class:`lode.retrieval.FastEmbedCrossEncoder`), so a gate run in which no
-    claim reaches step 3 never downloads or loads it. The cross-encoder's raw
-    relevance logit for the (claim, spans) pair is squashed to a ``[0, 1]``
-    entailment probability (:func:`_sigmoid`). The model + threshold ship
-    untuned, revisited against the eval harness (``docs/decisions.md``).
+    claim reaches step 3 never downloads or loads it. Weights are cached under
+    :func:`lode.config.model_cache_dir` (``$LODE_HOME/models/``), same as the
+    embedder and reranker, so the download survives a reboot (lode-gmo). The
+    cross-encoder's raw relevance logit for the (claim, spans) pair is squashed
+    to a ``[0, 1]`` entailment probability (:func:`_sigmoid`). The model +
+    threshold ship untuned, revisited against the eval harness
+    (``docs/decisions.md``).
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -199,7 +202,9 @@ class FastEmbedEntailmentScorer:
         if self._model is None:
             from fastembed.rerank.cross_encoder import TextCrossEncoder
 
-            self._model = TextCrossEncoder(model_name=self._model_name)
+            self._model = TextCrossEncoder(
+                model_name=self._model_name, cache_dir=str(model_cache_dir())
+            )
         return self._model
 
     def entailment(self, premise: str, hypothesis: str) -> float:
