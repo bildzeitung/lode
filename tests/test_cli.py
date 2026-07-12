@@ -2666,7 +2666,9 @@ def test_add_honors_config_file_redaction_patterns(
         'redact_before_index_patterns = ["ACME-[0-9]+"]\n', encoding="utf-8"
     )
     # `add` runs the enrich leg inline; keep it offline.
-    monkeypatch.setattr("lode.cli.enrich_version", lambda *a, **kw: None, raising=False)
+    import lode.enrich as enrich_mod
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", lambda *a, **kw: None)
 
     db_path = tmp_path / "lode.db"
     result = runner.invoke(
