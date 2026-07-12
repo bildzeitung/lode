@@ -106,12 +106,11 @@ log = logging.getLogger(__name__)
 #:
 #: **Settings threading (lode-09n):** :func:`reconcile` resolves ``settings``
 #: once (caller-supplied, or a fresh default) and passes that same instance
-#: positionally to every step — a step that reads a runtime knob (e.g.
+#: positionally to every step, so a step reading a runtime knob (e.g.
 #: ``refresh_stale``'s ``settings.refresh_ttl_s``) sees the caller's actual
-#: overrides instead of silently constructing its own default ``Settings()``.
-#: A step with no settings-dependent behavior (``embed_gap``, ``enrich_gap``)
-#: still accepts the parameter — one shared call shape across the registry —
-#: and simply ignores it.
+#: overrides rather than silently constructing its own default ``Settings()``.
+#: One shared call shape across the registry: a step with no
+#: settings-dependent behavior still accepts the parameter and ignores it.
 StepFn = Callable[[sqlite3.Connection, Settings], int]
 
 #: Module-level step registry — list of ``(name, fn)`` pairs in run order.
@@ -135,6 +134,7 @@ def register_step(name: str, fn: StepFn) -> None:
 def reconcile(
     conn: sqlite3.Connection,
     settings: Settings | None = None,
+    *,
     steps: list[tuple[str, StepFn]] | None = None,
 ) -> int:
     """Run all registered scan steps; return the total count of gap versions found.
@@ -144,19 +144,16 @@ def reconcile(
     ``ON CONFLICT DO NOTHING``, so the scan is safe to run at any time and any
     frequency.
 
-    ``settings`` (lode-09n) is resolved once — the caller's instance, or a
-    fresh ``Settings()`` default if omitted — and threaded positionally into
-    *every* step, mirroring :func:`lode.worker.drain`'s own
-    ``settings = settings or Settings()`` fallback pattern. Before this, each
-    step that read a runtime knob (``refresh_stale``'s ``settings.refresh_ttl_s``)
-    had no way to see a caller's override — it always constructed its own
-    default ``Settings()`` internally, so ``lode work`` threading a
-    ``load_settings()``-loaded override into ``reconcile()`` would still run
-    every step at defaults.
+    ``settings`` is resolved once — the caller's instance, or a fresh
+    ``Settings()`` default if omitted, mirroring :func:`lode.worker.drain`'s
+    ``settings = settings or Settings()`` — and threaded into every step; see
+    :data:`StepFn` for the contract (lode-09n).
 
-    ``steps`` is injectable for tests; production callers omit it and the
-    module-level :data:`_STEPS` list is used.  Returns ``0`` when no steps are
-    registered or all steps find no gaps.
+    ``steps`` is injectable for tests and is **keyword-only**, so that adding
+    ``settings`` ahead of it cannot silently rebind a positionally-passed step
+    list onto ``settings``. Production callers omit it and the module-level
+    :data:`_STEPS` list is used.  Returns ``0`` when no steps are registered or
+    all steps find no gaps.
     """
     settings = settings or Settings()
     if steps is None:
@@ -178,9 +175,7 @@ def reconcile(
 def _embed_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Embed gap: re-enqueue embed jobs for live heads missing a live embed job.
 
-    ``settings`` is accepted (and ignored) only to match the shared
-    :data:`StepFn` call shape :func:`reconcile` uses for every step
-    (lode-09n) — this step's gap query has no settings-dependent behavior.
+    ``settings`` is unused here (see :data:`StepFn`).
 
     **Gap signal (lode-xyb):** since ``passages`` + ``passages_fts`` are now
     written synchronously on save by :class:`~lode.lexical.LexicalCacheBackend`,
@@ -282,9 +277,7 @@ register_step("embed_gap", _embed_gap_step)
 def _enrich_gap_step(conn: sqlite3.Connection, settings: Settings | None = None) -> int:
     """Enrich gap: re-enqueue enrich jobs for head versions missing fresh enrichment.
 
-    ``settings`` is accepted (and ignored) only to match the shared
-    :data:`StepFn` call shape :func:`reconcile` uses for every step
-    (lode-09n) — this step's gap query has no settings-dependent behavior.
+    ``settings`` is unused here (see :data:`StepFn`).
 
     **Gap signal, part 1 (job existence):** a non-tombstone, non-purged,
     non-``no_egress`` head version with no in-flight/retryable enrich job
@@ -390,12 +383,10 @@ def _refresh_stale_step(
     fetch->ingest ``refresh`` handler (:func:`lode.drawdown.refresh_external`,
     unchanged — this step never fetches anything itself, only enqueues).
 
-    ``settings`` defaults to ``None`` here purely for standalone
-    callability (tests call this step directly with no settings); every
-    production call goes through :func:`reconcile`, which resolves settings
-    once and always passes a non-``None`` instance positionally (lode-09n) —
-    so ``settings.refresh_ttl_s`` reflects a caller's actual override instead
-    of this step silently constructing its own ``Settings()`` default.
+    ``settings`` defaults to ``None`` only for standalone callability (tests
+    call this step directly); every production call arrives via
+    :func:`reconcile`, which always passes the caller's resolved instance — so
+    ``settings.refresh_ttl_s`` honors an override (lode-09n).
 
     **Policy choice (TTL sweep, not a true on-access hook):**
     ``docs/decisions.md``'s "External refresh" entry leaves each connector to

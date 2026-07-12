@@ -745,6 +745,10 @@ def test_reconcile_passes_settings_instance_through_to_each_step(
 ) -> None:
     """reconcile() threads the SAME caller-supplied Settings instance to every
     step positionally (lode-09n) — not a step-local default construction.
+
+    Asserts with ``is`` (not ``==``): ``Settings`` is a pydantic model with
+    *value* equality, so ``==`` would still pass if reconcile() rebuilt a copy
+    per step. Two steps, so "every step" is actually exercised.
     """
     received: list[Settings] = []
 
@@ -753,9 +757,8 @@ def test_reconcile_passes_settings_instance_through_to_each_step(
         return 0
 
     custom = Settings(refresh_ttl_s=42)
-    reconcile(conn, settings=custom, steps=[("step", _step)])
-    assert received == [custom]
-    assert received[0].refresh_ttl_s == 42
+    reconcile(conn, settings=custom, steps=[("a", _step), ("b", _step)])
+    assert [s is custom for s in received] == [True, True]
 
 
 def test_reconcile_defaults_settings_when_none_given(
@@ -771,7 +774,7 @@ def test_reconcile_defaults_settings_when_none_given(
         return 0
 
     reconcile(conn, steps=[("step", _step)])
-    assert received[0].refresh_ttl_s == Settings().refresh_ttl_s
+    assert received == [Settings()]
 
 
 def test_reconcile_returns_zero_for_no_steps(conn: sqlite3.Connection) -> None:
