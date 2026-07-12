@@ -24,6 +24,7 @@ Everything lode persists lives under **one user-controllable root**, `$LODE_HOME
 | `LODE_HOME` | runtime | `~/.lode` | Root for all on-disk state. Env-var override; one directory holds the DB, vector store, logs, lock, and config. |
 | Database path | build | `$LODE_HOME/lode.db` | The SQLite file (irreplaceable rows + rebuildable cache + `jobs`). The single-instance advisory lock lives beside it as `lode.db.lock` ([storage.md](storage.md#single-user-single-instance-linear-chains-no-merge)). |
 | Vector store path | build | `$LODE_HOME/lancedb/` | LanceDB passage-vector store (rebuildable cache). A subdir keeps the root readable. |
+| Model cache directory | build | `$LODE_HOME/models/` | Local ONNX weights cache for every `fastembed`-loaded model (embedder, reranker, NLI/entailment cross-encoder — see [Models](#models)), passed as `cache_dir` to each loader. Without it, `fastembed` defaults to `tempfile.gettempdir()/fastembed_cache`, which WSL wipes on reboot (and `systemd-tmpfiles` clears on many distros) — silently re-downloading ~500MB from HuggingFace on a semi-regular basis instead of paying that cost once (`lode-gmo`). `fastembed` creates the directory itself on first load. |
 | Log directory | runtime | `$LODE_HOME/logs/` | Application logs. |
 | `LODE_LOG_LEVEL` | runtime | `INFO` | lode's own root-logger level. Accepts a case-insensitive level name (`debug`, `info`, `warning`, ...); an unrecognized value raises rather than silently defaulting. Read when no level is passed explicitly (`src/lode/logconfig.py::resolve_level`). |
 | `ANTHROPIC_LOG` | runtime | unset | Not a lode-specific knob — the Anthropic SDK's own wire-level debug switch. Set to `debug` or `info` and the SDK logs on the `anthropic` logger, which propagates to the root logger and is formatted/routed alongside lode's own logs (`src/lode/logconfig.py`). |
@@ -35,6 +36,7 @@ $LODE_HOME/                 # default ~/.lode, overridable by env var
 ├── lode.db                 # SQLite (irreplaceable rows + rebuildable cache + jobs)
 ├── lode.db.lock            # single-instance advisory lock (PID) — beside the DB
 ├── lancedb/                # LanceDB vector store (rebuildable cache)
+├── models/                 # fastembed ONNX weights cache (embedder/reranker/NLI)
 ├── logs/                   # application logs
 └── config.toml             # user-editable runtime knobs (optional; absent = defaults)
 ```
@@ -121,6 +123,8 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 | Q&A "think harder" | runtime | Opus 4.8 (toggle) | Higher-quality, higher-cost synthesis on demand. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs (Claude). See [stack.md](stack.md).
+
+All three load through `fastembed`'s model-management path and cache their weights at the [model cache directory](#paths--locations), `$LODE_HOME/models/` — never `fastembed`'s own `tempfile.gettempdir()` default (`lode-gmo`).
 
 These local ids/dim were pinned and **verified to load** on the `fastembed` ONNX runtime in `lode-txh.6` (`fastembed 0.8.0`); the spike's standing proof is `tests/test_models_smoke.py` (opt-in, `LODE_SMOKE_MODELS=1`, since loading downloads the models). Two spike findings shaped the pins: (1) `fastembed` does **not** ship the originally-assumed `bge-reranker-v2-m3`, so the reranker is `BAAI/bge-reranker-base` (the loadable bge-family cross-encoder); (2) `fastembed` ships **no dedicated NLI model**, so the NLI/entailment leg repurposes that same cross-encoder via `TextCrossEncoder` — confirming the docs' "bge-reranker repurposed" option and removing the need for a separate `optimum`/`onnxruntime` loader. The model + threshold remain [open tuning knobs](decisions.md), revisited against the eval harness.
 

@@ -5,17 +5,42 @@ The CLI resolves all on-disk state (DB, vector store, logs) under ``$LODE_HOME``
 throwaway per-test directory so a test invocation never reads or writes the real
 ``~/.lode`` — in particular the log file handler the group callback attaches lands
 in tmp, not the developer's home. Tests that exercise the default-path behaviour
-explicitly still get an isolated, asserted-against directory.
+explicitly still get an isolated, asserted-against directory. That no-touch rule
+holds for every piece of lode's *state*; it has exactly one deliberate exception,
+the model-weights cache, for the reason below.
+
+**The model-weights cache is the one thing that must NOT be isolated (lode-gmo).**
+``$LODE_HOME/models/`` is where every ``fastembed`` loader now caches its ONNX
+weights (:func:`lode.config.model_cache_dir`). The slow tier deliberately loads a
+*real*, un-mocked ``FastEmbedCrossEncoder`` (see below), so if the throwaway root
+carried the weights cache too, every real load would face an empty directory: the
+landing gate (``nox -s tests``, which runs the slow tier) would re-download
+``BAAI/bge-reranker-base`` from HuggingFace on *every run*, and fail outright with
+no network. So the fixture resolves the machine's real cache *before* it overrides
+``$LODE_HOME`` and links the throwaway root's ``models/`` at it — the DB, vectors,
+and logs stay isolated per test, while the weights are downloaded once per machine
+and shared with production.
 """
 
 import pytest
+
+from lode.config import model_cache_dir
 
 
 @pytest.fixture(autouse=True)
 def _isolate_lode_home(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Resolve the real, durable weights cache BEFORE $LODE_HOME is redirected --
+    # this is the machine-level cache production uses. Via model_cache_dir(), so
+    # the layout is resolved in exactly one place: hand-building $LODE_HOME/models
+    # here would silently aim the symlink at a stale path the day that function
+    # moves, reinstating the very re-download this fixes (lode-gmo).
+    durable_models = model_cache_dir()
+    durable_models.mkdir(parents=True, exist_ok=True)
+
     home = tmp_path_factory.mktemp("lode-home")
+    (home / "models").symlink_to(durable_models, target_is_directory=True)
     monkeypatch.setenv("LODE_HOME", str(home))
 
 

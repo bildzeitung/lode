@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Protocol
 
 from lode.chunking import Passage, chunk
-from lode.config import Settings
+from lode.config import Settings, model_cache_dir
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
 
@@ -97,9 +97,12 @@ class FastEmbedEmbedder:
 
     Constructs ``fastembed.TextEmbedding`` for ``settings.embedding_model`` lazily
     on first embed call (the model download/load is hundreds of MB, so it is
-    deferred out of import and out of any code path that never embeds). Documents
-    are prefixed with :data:`_DOCUMENT_PREFIX` and queries with :data:`_QUERY_PREFIX`
-    as the asymmetric model requires.
+    deferred out of import and out of any code path that never embeds). Weights
+    are cached under :func:`lode.config.model_cache_dir` (``$LODE_HOME/models/``)
+    rather than ``fastembed``'s own ``tempfile.gettempdir()`` default, so the
+    download survives a reboot (lode-gmo). Documents are prefixed with
+    :data:`_DOCUMENT_PREFIX` and queries with :data:`_QUERY_PREFIX` as the
+    asymmetric model requires.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -118,7 +121,10 @@ class FastEmbedEmbedder:
                 if self._model is None:
                     from fastembed import TextEmbedding
 
-                    self._model = TextEmbedding(model_name=self._model_name)
+                    self._model = TextEmbedding(
+                        model_name=self._model_name,
+                        cache_dir=str(model_cache_dir()),
+                    )
         return self._model
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:

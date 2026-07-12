@@ -19,6 +19,9 @@ FastEmbed-backed default's wiring without loading the real model.
 """
 
 import math
+from pathlib import Path
+
+import pytest
 
 from lode.answer import Claim, Support
 from lode.config import Settings
@@ -242,3 +245,29 @@ def test_fastembed_scorer_squashes_logit_and_frames_pair() -> None:
     score = scorer.entailment("the cited span", "the claim")
     assert math.isclose(score, _sigmoid(2.0))
     assert scorer._model.seen == ("the claim", ["the cited span"])
+
+
+# --- FastEmbedEntailmentScorer._load: cache_dir under $LODE_HOME, never /tmp
+# (lode-gmo) — mirrors the same test on FastEmbedEmbedder / FastEmbedCrossEncoder.
+# Verified by patching the fastembed TextCrossEncoder constructor itself, so this
+# stays offline.
+
+
+def test_load_passes_durable_model_cache_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fastembed.rerank import cross_encoder
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    captured: dict[str, object] = {}
+
+    class _FakeTextCrossEncoder:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cross_encoder, "TextCrossEncoder", _FakeTextCrossEncoder)
+
+    scorer = FastEmbedEntailmentScorer(Settings())
+    scorer._load()
+
+    assert captured["cache_dir"] == str(tmp_path / "root" / "models")

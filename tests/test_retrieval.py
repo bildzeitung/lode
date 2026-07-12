@@ -18,13 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from lode.config import load_settings
+from lode.config import Settings, load_settings
 from lode.embedding import EmbeddingCacheBackend, embed
 from lode.externals import ingest_snapshot
 from lode.lexical import LexicalCacheBackend, LexicalHit
 from lode.repository import CompositeCache, Repository
 from lode.retrieval import (
     ExpandedHit,
+    FastEmbedCrossEncoder,
     FusedHit,
     TrustTier,
     build_match_query,
@@ -592,6 +593,34 @@ def test_rerank_drops_a_hit_with_no_passage_row(conn) -> None:
 
     assert [h.passage_id for h in out] == ["p-a"]
     assert scorer.seen == ["alpha"]  # the missing hit never reached the model
+
+
+# --- FastEmbedCrossEncoder._load: cache_dir under $LODE_HOME, never /tmp (lode-gmo)
+#
+# Mirrors the embedder's version of this test (tests/test_embedding.py): without
+# an explicit cache_dir, fastembed falls back to
+# tempfile.gettempdir()/fastembed_cache -- wiped on reboot. Verified by patching
+# the fastembed TextCrossEncoder constructor itself, so this stays offline.
+
+
+def test_load_passes_durable_model_cache_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from fastembed.rerank import cross_encoder
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    captured: dict[str, object] = {}
+
+    class _FakeTextCrossEncoder:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(cross_encoder, "TextCrossEncoder", _FakeTextCrossEncoder)
+
+    encoder = FastEmbedCrossEncoder(Settings())
+    encoder._load()
+
+    assert captured["cache_dir"] == str(tmp_path / "root" / "models")
 
 
 # --- trust-ordered context builder (lode-az0.1) --------------------------------

@@ -425,6 +425,25 @@ def log_dir() -> Path:
     return lode_home() / "logs"
 
 
+def model_cache_dir() -> Path:
+    """The local-model weights cache under the root: ``$LODE_HOME/models/``.
+
+    Passed as ``cache_dir`` to every ``fastembed`` model loader (embedder,
+    reranker, NLI/entailment cross-encoder — all three load through the same
+    ``fastembed`` model-management path). Without an explicit ``cache_dir``,
+    ``fastembed`` defaults to ``tempfile.gettempdir()/fastembed_cache`` — a
+    directory WSL wipes on reboot (and ``systemd-tmpfiles`` clears on many
+    distros) — so the pinned ~500MB of ONNX weights would otherwise be
+    silently re-downloaded from HuggingFace on a semi-regular basis instead of
+    paying that cost once (lode-gmo). Living under ``$LODE_HOME`` keeps the
+    weights cache on the same durable, user-controllable root as the
+    DB/vectors/logs. ``fastembed`` creates the directory itself
+    (``mkdir(parents=True, exist_ok=True)``) on first load, so nothing here
+    needs to pre-create it.
+    """
+    return lode_home() / "models"
+
+
 def config_path() -> Path:
     """The optional user config file under the root: ``$LODE_HOME/config.toml``.
 
