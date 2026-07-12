@@ -60,6 +60,7 @@ from lode.config import (
     load_settings,
     lode_home,
     log_dir,
+    model_cache_dir,
 )
 from lode.enrichment_view import EnrichmentItem, ExternalView, enrichment_view_conn
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
@@ -1062,12 +1063,13 @@ def no_egress_(
 def _config_lines(db: Path | None) -> list[str]:
     """Render the resolved on-disk locations as aligned ``label  path`` lines.
 
-    The root, log dir, and ``config.toml`` come from ``$LODE_HOME`` (lode.config);
-    the DB, its sibling lock, and the vector store reflect a ``--db`` override when
-    given — the lock and store are derived beside the chosen DB, matching the
-    "co-locate beside the DB" layout (``docs/configuration.md``). Whether
-    ``$LODE_HOME`` is set in the environment (vs the ``~/.lode`` default) and
-    whether the optional ``config.toml`` is present are surfaced inline.
+    The root, model cache, log dir, and ``config.toml`` come from ``$LODE_HOME``
+    (lode.config); the DB, its sibling lock, and the vector store reflect a
+    ``--db`` override when given — the lock and store are derived beside the
+    chosen DB, matching the "co-locate beside the DB" layout
+    (``docs/configuration.md``). Whether ``$LODE_HOME`` is set in the
+    environment (vs the ``~/.lode`` default) and whether the optional
+    ``config.toml`` is present are surfaced inline.
     """
     db_path = db or default_db_path()
     lock_file = lock_path(db_path)
@@ -1079,6 +1081,7 @@ def _config_lines(db: Path | None) -> list[str]:
         ("database", str(db_path)),
         ("db lock", str(lock_file)),
         ("vector store", str(lance_dir(db_path))),
+        ("model cache", str(model_cache_dir())),
         ("logs", str(log_dir())),
         ("config", f"{cfg}  ({config_state})"),
     ]
@@ -1094,8 +1097,10 @@ def config(
 
     A read-out of the single-root layout under ``$LODE_HOME`` (default ``~/.lode``)
     so you can find, back up, or inspect lode's state: the root, the SQLite DB and
-    its sibling lock, the LanceDB vector store, the log directory, and the optional
-    ``config.toml`` (shown present/absent). Reads the resolved paths from
+    its sibling lock, the LanceDB vector store, the model-weights cache, the log
+    directory, and the optional ``config.toml`` (shown present/absent) — the same
+    set ``docs/configuration.md`` "Paths & locations" documents. Reads the
+    resolved paths from
     :mod:`lode.config` rather than re-deriving them; ``--db`` shifts the displayed
     DB (and its lock + co-located vector store) to an explicit override.
     """

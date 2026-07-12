@@ -2236,8 +2236,10 @@ def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
 
 
 def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> None:
-    # Acceptance: $LODE_HOME root, DB, vector store, log dir, and config file path
-    # are all displayed, resolved under the single root (docs/configuration.md).
+    # Acceptance: $LODE_HOME root, DB, vector store, model cache dir, log dir,
+    # and config file path are all displayed, resolved under the single root
+    # (docs/configuration.md §Paths & locations) -- the full set of paths that
+    # table documents (lode-agh: model cache was missing here).
     home = tmp_path / "home"
     result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
@@ -2246,6 +2248,7 @@ def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> 
     assert str(home / "lode.db") in out
     assert str(home / "lode.db.lock") in out
     assert str(home / "lancedb") in out
+    assert str(home / "models") in out
     assert str(home / "logs") in out
     assert str(home / "config.toml") in out
 
