@@ -62,7 +62,7 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 Everything portable travels on two wires from the same git remote: **git** (code, docs, committed `.claude/` config — settings, skills, agents) and **Dolt** (`refs/dolt/data` — the bd issue DB *and* `bd remember` memories). On a fresh clone:
 
 1. `./scripts/python-init.sh && . ./venv/bin/activate`
-2. `bd dolt pull` — restores the full issue DB and persistent memories (`bd memories` to verify)
+2. `bd init` — restores the full issue DB and persistent memories from `refs/dolt/data` (`bd ready` / `bd memories` to verify). **Not `bd dolt pull`** — with no local DB yet that fails with `no beads database found`; `bd dolt pull` is for *later*, once the DB exists. `bd init` also lands a git commit that rewrites `CLAUDE.md` / `AGENTS.md` / `.claude/settings.json` / `.gitignore` with beads boilerplate and adds `.codex/` — drop it (`git reset --hard origin/trunk`); the DB and `core.hooksPath` survive. Full walkthrough: [`docs/onboarding.md` §3](docs/onboarding.md).
 3. Install **rtk**, then run `scripts/rtk-setup.sh` (idempotent; installs the required `exclude_commands` into `~/.config/rtk/config.toml`). If rtk is absent, skip this and the hook in step 4 — plain commands work fine and the committed `Bash(rtk *)` allow entry is inert.
 4. Re-create the deliberately **user-scope** (`~/.claude/settings.json`) pieces as wanted — these do NOT travel: the rtk PreToolUse hook (`{"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk hook claude"}]}`), `"defaultMode": "acceptEdits"`, model choice, personal statusline.
 

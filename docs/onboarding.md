@@ -11,10 +11,11 @@
 | **Python ≥ 3.14** | Runs lode and its tests. | The repo pins a working version in [`.python-version`](../.python-version); [pyenv](https://github.com/pyenv/pyenv) is the easy way to match it (`pyenv install`). Any CPython ≥ 3.14 on your `PATH` works. |
 | **git** | Clone the repo; the dev workflow branches every change into a worktree. | Already required to read this. |
 | **Docker** | Validates the Mermaid diagrams in `docs/` (`scripts/validate-mermaid.sh`) via `minlag/mermaid-cli`. | Only needed if you touch a `docs/` diagram. No Node/Chromium toolchain is required on the host — the parser runs in the container. |
-| **beads (`bd`)** | Issue tracker — *all* task tracking lives here, not in markdown TODOs. | Only needed if you intend to pick up or file work. Install from the [beads project](https://github.com/gastownhall/beads); then run `bd prime` for the workflow. |
+| **beads (`bd`)** | Issue tracker — *all* task tracking lives here, not in markdown TODOs. | **Required for every developer.** The issue database does not arrive with `git clone`; you restore it in [§3](#3-restore-the-issue-database-beads) below. Install from the [beads project](https://github.com/gastownhall/beads). It bundles Dolt (embedded mode) — no separate Dolt install. |
 
-Python is the only hard requirement to build and test lode. Docker and beads are needed
-only for the specific contributor tasks noted above.
+Python is the only hard requirement to *build and test* lode. Docker is needed only if
+you touch a `docs/` diagram. beads is needed by anyone who claims, files, or closes
+work — which is everyone contributing.
 
 ## Install & setup
 
@@ -48,7 +49,69 @@ After activation your shell prompt is inside `./venv`. Re-activate
 (`. ./venv/bin/activate`) in any new shell; re-run the init script only when
 dependencies change.
 
-### 3. Confirm the `lode` console script
+### 3. Restore the issue database (beads)
+
+`git clone` gives you **no issues**. The Dolt database that backs `bd` lives in
+`.beads/embeddeddolt/`, which is gitignored; the issue data travels on the *same* git
+remote but under a separate ref, `refs/dolt/data`. `.beads/issues.jsonl` is a **passive
+export** — a read-only snapshot, never the wire. On a fresh clone `bd ready` fails with
+`no beads database found` until you do this.
+
+Clone into a directory named `lode` (the issue prefix is derived from the checkout
+directory), then:
+
+```bash
+bd init          # clones the Dolt DB from the remote configured in .beads/config.yaml
+```
+
+`sync.remote` is already committed in [`.beads/config.yaml`](../.beads/config.yaml), so
+plain `bd init` finds it and prints `✓ bd initialized from git remote!`. It also sets
+`core.hooksPath` to `.beads/hooks` — a *local* git config that does not travel with a
+clone, which is the other reason this step is not optional.
+
+> ⚠️ **`bd init` makes a git commit, and that commit is not welcome here.** It rewrites
+> `CLAUDE.md`, `AGENTS.md`, `.claude/settings.json`, and `.gitignore` with its own
+> boilerplate and adds `.codex/` — clobbering this repo's committed project config
+> (including the `autoMode` consent rules). Drop it immediately:
+>
+> ```bash
+> git log --oneline -1          # expect: "bd init: initialize beads issue tracking"
+> git reset --hard origin/trunk
+> ```
+>
+> Nothing is lost: the restored database is gitignored, so it survives the reset, and so
+> does `core.hooksPath` (it lives in `.git/config`).
+
+Verify all four:
+
+```bash
+bd ready                        # lists open issues — the DB is really here
+bd memories                     # persistent project memories came across too
+git config core.hooksPath       # → <repo>/.beads/hooks
+grep '^import.auto' .beads/config.yaml   # → import.auto: false  (must stay false)
+```
+
+Then run `bd prime` once for the full command reference and the session-close protocol.
+
+#### The rules that keep the database intact
+
+Dolt is authoritative; the JSONL is a footnote. Violating these has silently reverted
+closed issues in this repo before (`lode-6ra`):
+
+- **Sync only via `bd dolt push` / `bd dolt pull`.** Run `bd dolt push` after any `bd`
+  write, as part of the same session-close as `git push` — otherwise your issue changes
+  never leave the machine.
+- **Never `bd import` the JSONL**, and never hand-edit `.beads/issues.jsonl`. Treat it as
+  a read-only export.
+- **Keep `import.auto: false`.** beads defaults it to `true`, which makes the
+  `post-checkout`/`post-merge` hooks re-import a *stale* committed JSONL after a pull or
+  merge — replaying pre-`bd close` state and reverting closes. It is committed as `false`
+  in `.beads/config.yaml`; if a `bd` upgrade flips it back, flip it off again.
+
+Day to day: `bd ready` to find work, `bd show <id>`, `bd update <id> --claim` to claim,
+`bd close <id>` when done. See [AGENTS.md](../AGENTS.md) for the full workflow.
+
+### 4. Confirm the `lode` console script
 
 The editable install puts the `lode` entry point on your `PATH` (it maps to
 `lode.cli:app`):
@@ -63,7 +126,7 @@ Every subcommand is real: `add`, `ask`, `status`, `jobs`, `egress`, `purge`, and
 maintainer/CI integration test, not a shipped end-user command — run it via
 `nox -s eval` (see below and `docs/decisions.md`, Shape A).
 
-### 4. Run the dev loop (nox)
+### 5. Run the dev loop (nox)
 
 [`noxfile.py`](../noxfile.py) defines the two gates every change must pass. Nox runs
 **inside the already-built `./venv`** (not an isolated env), so activate the venv first:
@@ -116,7 +179,7 @@ workers is safe; measured on an 8-core dev machine, offline, `nox -s unit` went
 from ~152s serial to 33-41s parallel, and `nox -s tests` from ~127-134s serial
 to 39-60s parallel, all green over repeated runs.
 
-### 5. (Optional) Mermaid diagram validation
+### 6. (Optional) Mermaid diagram validation
 
 Only if you edit a diagram under `docs/`:
 
@@ -125,7 +188,7 @@ scripts/update-images.sh      # one-time: pull the mermaid-cli image
 scripts/validate-mermaid.sh   # parse every fenced mermaid block, fail on syntax errors
 ```
 
-### 6. (Optional) RTK command exclusions
+### 7. (Optional) RTK command exclusions
 
 Only if you use [RTK](https://github.com/rtk-ai/rtk) to proxy dev commands. lode
 requires two commands to bypass RTK's rewrite so their output stays raw — beads
@@ -140,7 +203,9 @@ scripts/rtk-setup.sh          # idempotent: adds the two excludes to ~/.config/r
 ## You're set up when
 
 - `. ./venv/bin/activate` then `lode --help` prints the subcommand list, **and**
-- `nox -s tests` reports all tests passing.
+- `nox -s tests` reports all tests passing, **and**
+- `bd ready` lists issues (not `no beads database found`), and `git status` is clean —
+  no stray `bd init` commit.
 
 From here, see [AGENTS.md](../AGENTS.md) (and `bd ready` / `bd prime`) for how work is
 claimed and landed, and [design.md](design.md) for the architecture you're building on.
