@@ -632,48 +632,39 @@ carries the hand-off and something else consumes the label —
 
 ### Delegated destructive git ops (lode-cln)
 
-**Destructive git operations belong to the orchestrating session. A delegated subagent never
-performs one.** lode holds this as a design rule on its own merits:
+A `/code` step-0 rebase pickup performs no destructive git operation, so there is nothing here that
+needs relocating to the orchestrating session. The pickup **merges** `origin/trunk` into the
+kicked-back branch instead of rebasing onto it: a merge commit appends to history, it never rewrites
+a commit already pushed to `land/<id>`. That makes the push back to `land/<id>` an ordinary
+fast-forward `git push` — no `--force`/`--force-with-lease` anywhere in the cycle.
 
-- **A single, identifiable owner for every destructive action**, rather than N delegated agents
-  each independently capable of one.
-- **The action happens in the session the human running the command is actually watching**, where
-  they can see it — not buried inside a subagent's dispatch.
-- **It's the same principle this repo already lives by and documents**: only `/land` writes
-  `trunk`, and a `coding` producer never merges its own work (see
-  [above](#the-landing-loop--build-review-land)). Here it's applied one level down — to a
-  force-push instead of a merge.
+Concretely, for a `/code` step-0 rebase pickup, the whole cycle stays inside the one dispatched
+`coding` producer, start to finish:
 
-Concretely, for a `/code` step-0 rebase pickup:
+- fetch `origin/land/<id>` and `origin/trunk`, check the branch out into its own launch worktree
+  (`--detach` if that branch name is already checked out elsewhere),
+- `git merge origin/trunk` (not `git rebase`) — a **mechanical** conflict (independent,
+  non-overlapping additions) is resolved directly with `Edit`; a **genuine disagreement** between the
+  two sides still escalates to a human, unchanged from before,
+- re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
+- `git push origin HEAD:land/<id>` (the head SHA if detached) — an ordinary, non-force push to a ref
+  that already exists on origin, because the merge commit descends from what's already there,
+- refresh `land_head`/`land_summary` and swap `needs-rebase` straight to `ready-for-land` itself.
 
-- `/code` step 0 dispatches the `coding` subagent to fetch `origin/land/<id>`, check it out in its
-  own launch worktree, rebase onto `origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit,
-  and **stop — without pushing.** It reports back its head SHA (and its branch name, which may not
-  exist — it checks out detached if `land/<id>` is already checked out elsewhere). The subagent's
-  job, as designed, contains no destructive step at all; the dispatch prompt names no destructive
-  command because there is none to name.
-- The orchestrating `/code` session runs the force-push itself, as a direct Bash call —
-  `git push --force-with-lease origin <reported-sha>:refs/heads/land/<id>`. Push the **reported
-  SHA**, not the branch name: the SHA is always reported, and it is the only handle that exists when
-  the producer had to check out detached. Every worktree under this repo shares one `.git` — the same
-  object store *and* the same refs — so both the producer's commits and the `origin/land/<id>`
-  remote-tracking ref that `--force-with-lease` leases against are already visible from the main
-  checkout: no `git -C`, and never entering the subagent's worktree. `/code` then refreshes the
-  head-SHA metadata and swaps `needs-rebase` to `ready-for-land` itself, per-hit as each dispatched
-  producer returns.
-
-**Unchanged:** a rebase conflict where the two sides genuinely disagree (not a mechanical,
-independent-addition conflict) still escalates to a human. That boundary was never in question —
-see [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md) step 0's dispatch prompt.
 This also doesn't affect a **clean fan-out of fresh builds** (Phase 1) or **technical reviews**
-(Phase 2) — only step 0's rebase-pickup force-push.
+(Phase 2) — only step 0's rebase pickup, and only in that it no longer needs a destructive push at
+all.
 
-`.claude/settings.json`'s `autoMode.allow` list carries an entry permitting exactly this direct
-`--force-with-lease` push to `land/*`. **Treat that entry as load-bearing, not decorative** — the
-step-0 flow above depends on it; it is not dead weight to be tidied away. Two other entries exist alongside it — permitting
-ticket-scoped edits to this repo's own agent/skill instruction docs, and permitting `/land`'s
-deletion of already-merged `land/<id>` branches — and neither was re-verified by this ticket; treat
-their effectiveness as still unconfirmed rather than assumed.
+**`needs-rebase` keeps its name even though the remedy is a merge.** The label names the *situation*
+(this branch no longer merges cleanly onto current `trunk`), not the remedy, so the mismatch is
+cosmetic. Renaming it would mean touching every producer and consumer of the label (`/code`'s step-0
+sweep, `/land`'s kick-back, this doc) for no behavioral gain, and a ticket may be sitting in that
+state at the time of a rename — stranding it or forcing a special case. Simplest left alone.
+
+Two `autoMode.allow` entries in `.claude/settings.json` remain relevant elsewhere in the landing
+loop — permitting ticket-scoped edits to this repo's own agent/skill instruction docs, and permitting
+`/land`'s deletion of already-merged `land/<id>` branches — and neither was re-verified by this
+ticket; treat their effectiveness as still unconfirmed rather than assumed.
 
 ### Mechanics (decided)
 

@@ -466,9 +466,8 @@ rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
 Conflicting paths:
 $CONFLICTS
-/code's step-0 pickup rebases land/<id> onto current trunk, re-gates, and commits; the orchestrating
-/code session then force-pushes the branch, refreshes metadata.land_head, and swaps needs-rebase back
-to ready-for-land (lode-cln)."
+/code's step-0 pickup merges current trunk into land/<id>, re-gates, commits, and pushes the result
+itself (an ordinary, non-force push), then swaps needs-rebase back to ready-for-land (lode-cln)."
 rtk scripts/bd-dolt-push.sh       # publish the label swap + note over refs/dolt/data
 # The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
 ```
@@ -478,12 +477,12 @@ escalate there's no question for a human — the producer just replays its own a
 onto the new `trunk`. The ticket stays `in_progress`; the `needs-rebase` label (not `ready-for-land`)
 is now its state. **`/code` picks this up automatically** (lode-wfl): every invocation sweeps
 `bd list --label needs-rebase --status in_progress` first and dispatches a `coding` producer to
-rebase `land/<id>` onto current `trunk`, re-gate, and commit — the orchestrating `/code` session
-then force-pushes the result itself and swaps the label straight back to `ready-for-land` (lode-cln;
-full mechanics in
+merge current `trunk` into `land/<id>`, re-gate, commit, and push the result itself — an ordinary,
+non-force push, since the merge only appends and never rewrites what's already on `land/<id>` — then
+swap the label straight back to `ready-for-land` itself (lode-cln; full mechanics in
 [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln))
-— no human nudge needed unless the rebase itself conflicts (that escalates, `land-escalated`, same
-as any other genuine decision).
+— no human nudge needed unless the merge itself conflicts and the two sides genuinely disagree (that
+escalates, `land-escalated`, same as any other genuine decision).
 
 ## Bounce — clear failure
 
