@@ -203,13 +203,14 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    sweep finds nothing, say so and move on; it's not an error.
 
 2. **Resolve the task set** from the argument:
-   - **No argument** (the **default**), or **`--all-ready`** → read `bd ready` and **fan out** across
-     the **independent, unblocked** frontier (honoring the dependency graph and phase-a ordering).
+   - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
+     frontier (callout below) and **fan out** across the **independent, unblocked** frontier (honoring
+     the dependency graph and phase-a ordering).
      Don't dispatch a ticket whose blocker is also in the batch — surface that instead of guessing the
      order.
-   - **`--single`** (no ID) → one producer; `/code` resolves the pick **itself** — same filtered `bd
-     ready --json` frontier as the no-argument path (below), take the **top** entry (`bd ready` is
-     already priority-ordered, so no extra sort is needed), dispatch it as an explicitly-named id.
+   - **`--single`** (no ID) → one producer; `/code` resolves the pick **itself** — build the same
+     filtered `bd ready --json` frontier the callout below defines, take the **top** entry (`bd ready`
+     is already priority-ordered, so no extra sort is needed), dispatch it as an explicitly-named id.
      `--single` collapses to "bare `/code`, limited to one ticket": same selection, same filter, same
      skip-reporting; only the fan-out width differs.
    - **One bd issue ID** (e.g. `lode-ai1`) → one producer; tell the agent to claim and implement it.
@@ -243,10 +244,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > priority-ordered, so this list's first entry **is** the highest-priority buildable item — no extra
    > sort needed. On the no-argument and `--all-ready` paths, filter the frontier this way **before**
    > fanning out across all of it. On `--single`, filter the same way and dispatch just the **top**
-   > entry — `/code` resolves the pick itself here too, same as the other two auto-select paths;
-   > nothing is left to the subagent. Either way, **report each ticket dropped** — id + reason
+   > entry. Either way, **report each ticket dropped** — id + reason
    > (`human`-labeled or epic) — per step 5: a skip is a signal to the operator, not noise to drop
    > silently.
+   >
+   > **If nothing survives the filter, dispatch nothing and say so** — never fall back to a
+   > filtered-out ticket. A frontier of nothing but `human` tickets and epics is a real, reachable
+   > state (both sit in `bd ready` indefinitely by nature: a decision ticket *is* its own blocker, and
+   > bd won't let a task block an epic), and it means there is no buildable work right now — a signal
+   > for `/sweep`, not a build target. That holds on all three auto-select paths: `--single` dispatches
+   > no producer at all, and the fan-out paths fan out across nothing.
    >
    > This filter applies **only** to auto-selection. **Explicitly-named IDs are an operator override
    > and are never filtered** — `/code lode-wbv8` (a single named ID) or `/code lode-wbv8 lode-ai1`
