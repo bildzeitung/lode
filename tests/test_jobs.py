@@ -8,11 +8,19 @@ duplicate enqueue of a live (pending/running) job is a no-op (ON CONFLICT DO
 NOTHING against idx_jobs_live), while re-enqueue after done/dead IS allowed.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from lode.jobs import DERIVE_JOB_TYPES, enqueue_derive_jobs
+from lode.config import Settings
+from lode.jobs import (
+    DERIVE_JOB_TYPES,
+    enqueue_derive_jobs,
+    iso,
+    now,
+    record_job_failure,
+)
 from lode.storage import init_db
 
 
@@ -146,3 +154,62 @@ def test_dead_status_accepted_by_schema(conn) -> None:
         "SELECT status FROM jobs WHERE target_version = 'ver-dead'"
     ).fetchone()
     assert status == "dead"
+
+
+# --- record_job_failure (lode-ajda) ------------------------------------------
+#
+# The shared attempts/backoff/dead-letter transition used by both
+# lode.worker.run_one (a transient handler failure) and
+# lode.enrich._mark_job_failed (an errored/expired/canceled Batches API
+# result) — previously two independent, drifting copies of this same logic.
+
+
+def _insert_running_job(conn) -> int:
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', 'ver-1', 'running')"
+        )
+    return cur.lastrowid
+
+
+def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
+    settings = Settings(retry_max_attempts=5)
+    # Anchor BEFORE the insert: the schema stamps next_attempt_at with its own
+    # NOT NULL DEFAULT (strftime('now')) — i.e. ~this instant. Asserting merely
+    # "not NULL", or "> before", would therefore pass even if record_job_failure
+    # stamped nothing at all. The backoff is only proven by requiring the value
+    # to sit a FULL retry_backoff_base_s ahead of this anchor, which the column
+    # default cannot satisfy.
+    before = now()
+    job_id = _insert_running_job(conn)
+
+    new_attempts, dead = record_job_failure(conn, job_id, 0, "boom", settings)
+
+    assert (new_attempts, dead) == (1, False)
+    row = conn.execute(
+        "SELECT status, attempts, last_error, next_attempt_at FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    assert row[0] == "failed"
+    assert row[1] == 1
+    assert row[2] == "boom"
+    # First failure -> min(base * 2**0, cap) == base seconds out. now() never
+    # decreases, so the stamp is >= before + base exactly; a >= compare is tight
+    # and cannot flake on a slow machine (elapsed time only pushes it further out).
+    earliest = iso(before + timedelta(seconds=settings.retry_backoff_base_s))
+    assert row[3] >= earliest
+
+
+def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=2)
+
+    new_attempts, dead = record_job_failure(conn, job_id, 1, "boom", settings)
+
+    assert (new_attempts, dead) == (2, True)
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row[0] == "dead"
+    assert row[1] == 2
+    assert row[2] == "boom"

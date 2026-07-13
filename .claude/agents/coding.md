@@ -397,21 +397,29 @@ architecture (`docs/decisions.md`) — I don't need it, and I don't open it. I b
 own* launch worktree instead, exactly like the code-reviewer now does, so `Edit`/`Write`/`nox` all work
 natively and the whole guard question — the isolation guard refuses to run any command resolved into a
 *path-entered* worktree (`"commands from a worktree-isolated agent must run inside its worktree"`) —
-never comes up:
+never comes up.
+
+**Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
+(lode-em6v). Reusing `land/<id>` as the local name meant a second cycle on the same ticket (or a
+leftover worktree from an earlier one that never cleaned itself up) collided with an already-checked-
+out `land/<id>` elsewhere, forcing a `git checkout --detach` fallback — and a detached worktree owns no
+branch ref, so every one of `/land`'s branch-name-keyed GC sweeps structurally missed it (that's
+exactly what `/land`'s backstop 4 exists to catch, and each leak made the next cycle more likely to hit
+the same fallback — self-compounding). Suffixing the local name with this worktree's own directory name
+makes that collision structurally impossible, so there is nothing left to guard for and the detaching
+fallback is removed outright:
 
 ```bash
 rtk git fetch origin land/<id> trunk
-rtk git worktree list --porcelain | grep -q "branch refs/heads/land/<id>" && echo elsewhere
+TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
+rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
+rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-- **Not checked out elsewhere (the normal case):** `rtk git checkout -B land/<id> FETCH_HEAD`.
-- **Checked out elsewhere:** `rtk git checkout --detach FETCH_HEAD` instead — a local branch name
-  can't be checked out twice; I push by explicit refspec in step 5 regardless of what my local `HEAD`
-  is called.
-
-```bash
-rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>, or (unnamed) if detached
-```
+The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
+that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
+sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
+`.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 ### 3. Merge current trunk in
 
@@ -476,7 +484,7 @@ Push straight to the ref that already exists on origin (no new branch, unlike a 
 origin HEAD:land/<id>` push to a ref that doesn't exist yet):
 
 ```bash
-rtk git push origin HEAD:land/<id>      # ordinary push — HEAD works whether I'm on a named branch or detached
+rtk git push origin HEAD:land/<id>      # ordinary push — HEAD works regardless of what my local branch is named
 ```
 
 Then refresh the hand-off metadata and swap the label myself:

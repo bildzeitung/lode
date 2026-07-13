@@ -125,11 +125,11 @@ resubmitting a request already in flight.
 
 import logging
 import sqlite3
-import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
+from lode import jobs
 from lode.config import Settings, lance_dir as _lance_dir
 from lode.ids import short_version_id
 
@@ -228,76 +228,6 @@ def _run_dead_letter_hook(
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime) -> str:
-    """Format ``dt`` as the schema's ISO-8601 millisecond-``Z`` timestamp.
-
-    Matches SQLite's ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` (millisecond
-    precision, e.g. ``2026-06-28T12:34:56.789Z``) so string comparisons in
-    ``next_attempt_at <= ?`` clauses are chronologically correct.
-    """
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
-# Wall-clock time corresponding to ``time.monotonic() == 0``. Ratcheted
-# forward-only, so :func:`_now` can never hand back a decreasing reading.
-_now_epoch: datetime = datetime.min.replace(tzinfo=UTC)
-
-
-def _now() -> datetime:
-    """Return the current UTC time, with two guarantees this module depends on.
-
-    1. **Never decreases within this process.** The OS may step
-       ``CLOCK_REALTIME`` (what ``datetime.now(UTC)`` reads) *backward* — NTP
-       correction, or hypervisor catch-up after the guest was descheduled. A
-       backward step is read by :func:`_claim_one`'s ``next_attempt_at <= now``
-       predicate as "nothing is ready yet", and :func:`drain`'s loop breaks on
-       the first miss — stranding an already-eligible job for the rest of the
-       pass.
-    2. **Never reads *behind* ``CLOCK_REALTIME``.** Not every timestamp this
-       clock is compared against comes *from* it: ``jobs.next_attempt_at``
-       defaults to SQLite's own ``strftime('now')`` (``schema.sql``), and a job
-       is typically enqueued by one process and claimed by another. A clock that
-       merely never went backward would lag those writers permanently after a
-       *forward* step and strand jobs just the same — trading one bug for a
-       worse one.
-
-    Both fall out of ratcheting the monotonic epoch forward only: the epoch
-    never decreases and neither does ``elapsed``, giving (1); the epoch is
-    always ``>= wall - elapsed``, giving (2). Absorbing a backward step means
-    running slightly ahead of true time until the wall clock catches up — the
-    right trade, since a job retried a hair late beats a job stranded.
-
-    The version-chain twin of this hazard, and the rule it implies, are in
-    ``docs/storage.md``; the repro is in lode-t1y.
-    """
-    global _now_epoch
-    elapsed = timedelta(seconds=time.monotonic())
-    _now_epoch = max(_now_epoch, datetime.now(UTC) - elapsed)
-    return _now_epoch + elapsed
-
-
-def _now_iso() -> str:
-    """Return :func:`_now` in the schema's ISO-8601 format."""
-    return _iso(_now())
-
-
-def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
-    """ISO-8601 UTC timestamp for the next retry after ``new_attempts`` failures.
-
-    Exponential backoff: ``min(base * 2^(new_attempts - 1), cap)``.
-
-    - attempt 1 (1st failure): ``base * 1``
-    - attempt 2: ``base * 2``
-    - attempt 3: ``base * 4``
-    - … capped at ``retry_backoff_cap_s``
-    """
-    delay = min(
-        settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
-        settings.retry_backoff_cap_s,
-    )
-    return _iso(_now() + timedelta(seconds=delay))
-
-
 def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
     """Flip ``status='failed' AND next_attempt_at <= now`` back to ``'pending'``.
 
@@ -359,7 +289,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
 
     Returns the count of jobs reclaimed.
     """
-    cutoff = _iso(_now() - timedelta(seconds=settings.stale_running_timeout_s))
+    cutoff = jobs.iso(jobs.now() - timedelta(seconds=settings.stale_running_timeout_s))
     rows = conn.execute(
         "SELECT id, attempts, type, target_version FROM jobs "
         "WHERE status = 'running' AND batch_handle IS NULL "
@@ -385,7 +315,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                 if cur.rowcount:
                     newly_dead.append((job_type, target_version))
             else:
-                next_at = _backoff_next_attempt_at(new_attempts, settings)
+                next_at = jobs.backoff_next_attempt_at(new_attempts, settings)
                 cur = conn.execute(
                     "UPDATE jobs SET status = 'failed', attempts = ?, "
                     "last_error = ?, next_attempt_at = ? "
@@ -578,43 +508,33 @@ def run_one(
         raise
 
     except Exception as exc:  # noqa: BLE001
-        new_attempts = attempts + 1
         err = str(exc)
         log.warning(
             "job %d (%s target=%s) failed (attempt %d/%d): %s",
             job_id,
             job_type,
             short,
-            new_attempts,
+            attempts + 1,
             settings.retry_max_attempts,
             err,
         )
-        if new_attempts >= settings.retry_max_attempts:
-            with conn:
-                conn.execute(
-                    "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
-                    "WHERE id = ?",
-                    (new_attempts, err, job_id),
-                )
+        # Shared attempts/backoff/dead-letter transition (lode-ajda) — also used
+        # by lode.enrich._mark_job_failed for a Batches API result, so there is
+        # exactly one implementation of this state machine.
+        new_attempts, dead = jobs.record_job_failure(
+            conn, job_id, attempts, err, settings
+        )
+        if dead:
             log.error(
                 "job %d dead-lettered after %d attempt(s): %s",
                 job_id,
                 new_attempts,
                 err,
             )
-            # Own, separate transaction — after the dead-status UPDATE above
-            # has committed, never nested in the same `with conn:` (lode-at8,
-            # module docstring "Dead-letter hook").
+            # Own, separate transaction — after the dead-status UPDATE inside
+            # record_job_failure above has committed, never nested in the same
+            # `with conn:` (lode-at8, module docstring "Dead-letter hook").
             _run_dead_letter_hook(conn, job_type, target_version, err, settings)
-        else:
-            next_at = _backoff_next_attempt_at(new_attempts, settings)
-            with conn:
-                conn.execute(
-                    "UPDATE jobs SET status = 'failed', attempts = ?, "
-                    "last_error = ?, next_attempt_at = ? "
-                    "WHERE id = ?",
-                    (new_attempts, err, next_at, job_id),
-                )
         return False
 
 
@@ -653,7 +573,7 @@ def claim_and_run_one(
     callers omit it and the module-level :data:`_REGISTRY` is used.
     """
     registry = _registry if _registry is not None else _REGISTRY
-    job_id = _claim_one(conn, types, _now_iso(), target_version=target_version)
+    job_id = _claim_one(conn, types, jobs.now_iso(), target_version=target_version)
     if job_id is None:
         return False
     run_one(conn, job_id, db_path, settings, registry)
@@ -771,7 +691,7 @@ def _batch_submit_enrich(
         "WHERE type = 'enrich' AND status = 'pending' AND next_attempt_at <= ? "
         "ORDER BY id "
         "LIMIT ?",
-        (_now_iso(), flush_size),
+        (jobs.now_iso(), flush_size),
     ).fetchall()
 
     if not rows:
@@ -792,7 +712,7 @@ def _batch_submit_enrich(
     # already run) elsewhere -- a double API spend. A lost CAS (rowcount 0)
     # means someone else owns it, so we drop it from this batch.
     claimed_rows: list[tuple[int, str]] = []
-    now = _now_iso()
+    now = jobs.now_iso()
     with conn:
         for job_id, version_id in rows:
             cur = conn.execute(
@@ -859,8 +779,13 @@ def _batch_submit_enrich(
         log.warning("_batch_submit_enrich: API call failed: %s — reverting jobs", exc)
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
         # are retried on the next pass (not immediately — avoids hammering the API).
-        delay = min(settings.retry_backoff_base_s, settings.retry_backoff_cap_s)
-        next_at = _iso(_now() + timedelta(seconds=delay))
+        # First-failure backoff (min(base * 2**0, cap) == min(base, cap)) via the
+        # shared helper rather than open-coded, so this path inherits any future
+        # change to the retry curve — e.g. jitter, which is exactly what a batch
+        # of jobs reverting together off one API error would want. NOTE: no
+        # attempt is charged here (`attempts` is untouched); the literal 1 selects
+        # the shortest rung of the curve, it is not this job's attempt count.
+        next_at = jobs.backoff_next_attempt_at(1, settings)
         with conn:
             conn.executemany(
                 "UPDATE jobs SET status = 'failed', last_error = ?, "
@@ -958,14 +883,14 @@ def drain(
     if reclaimed:
         log.warning("reclaimed %d stale 'running' job(s) (possible crash)", reclaimed)
 
-    now = _now_iso()
+    now = jobs.now_iso()
     reset = _reset_retryable(conn, now)
     if reset:
         log.debug("reset %d overdue failed job(s) to pending", reset)
 
     processed = 0
     while True:
-        now = _now_iso()
+        now = jobs.now_iso()
         job_id = _claim_one(conn, types, now)
         if job_id is None:
             break

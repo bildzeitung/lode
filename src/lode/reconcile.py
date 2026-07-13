@@ -359,20 +359,6 @@ register_step("enrich_gap", _enrich_gap_step)
 # ---------------------------------------------------------------------------
 
 
-def _iso(dt: datetime) -> str:
-    """Format ``dt`` as the schema's ISO-8601 millisecond-``Z`` timestamp.
-
-    Matches SQLite's ``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` (millisecond
-    precision) so a string comparison against ``snapshots.fetched_at`` is
-    chronologically correct. Duplicated in :mod:`lode.worker` (private
-    ``_iso``) rather than shared — this codebase inlines the same
-    ``strftime`` shape per-module wherever it's needed (``worker.py``,
-    ``enrich.py``, ``versions.py``) rather than factoring out a timestamp
-    utility module for one two-line helper.
-    """
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-
 def _refresh_stale_step(
     conn: sqlite3.Connection, settings: Settings | None = None
 ) -> int:
@@ -436,7 +422,12 @@ def _refresh_stale_step(
     ``enqueue_derive_jobs`` call).
     """
     settings = settings or Settings()
-    cutoff = _iso(datetime.now(UTC) - timedelta(seconds=settings.refresh_ttl_s))
+    # Format via jobs.iso (the one definition of the schema's ISO-8601 ms-Z
+    # shape, lode-ajda), but still stamped from the RAW wall clock — deliberately
+    # NOT jobs.now(). A backward wall-clock step here only refreshes an external
+    # late; it cannot strand one, so this predicate does not need the queue
+    # clock's forward-ratchet guarantee (lode-ajda scopes that out explicitly).
+    cutoff = jobs.iso(datetime.now(UTC) - timedelta(seconds=settings.refresh_ttl_s))
 
     stale_externals = conn.execute(
         """

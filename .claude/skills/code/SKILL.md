@@ -141,13 +141,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    pickup**, not a fresh build, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
-   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk && git
-   > checkout -B land/lode-ai1 FETCH_HEAD` (`--detach` if that branch name is checked out elsewhere),
-   > `git merge origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop
-   > produced, then `git push origin HEAD:land/lode-ai1` (an ordinary push — the merge only appends,
-   > it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`, and
-   > swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk. On
-   > a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
+   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk`, then
+   > `TOP=$(git rev-parse --show-toplevel)` and `git checkout -B "land/lode-ai1--${TOP##*/}"
+   > FETCH_HEAD` (a local name suffixed with your own launch worktree's directory — unique by
+   > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
+   > never needed), `git merge
+   > origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
+   > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
+   > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`,
+   > and swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk.
+   > On a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
    > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two
    > sides genuinely **disagree**, abort the merge and escalate yourself (`land-escalated`, leave the
    > branch as it was) rather than guess — that stays a human decision.
@@ -327,11 +330,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    Pass the ticket id, e.g.:
 
    > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, `git
-   > fetch origin land/lode-ai1 trunk && git checkout -B land/lode-ai1 FETCH_HEAD` (`--detach` if
-   > checked out elsewhere) into your own launch worktree, run `/code-review high --fix trunk...HEAD`
-   > + `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the ticket to
-   > `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap to
-   > `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
+   > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
+   > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
+   > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
+   > own launch worktree, run `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, commit,
+   > `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,
+   > close, or push trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready) only
+   > on a clarifying decision or "making it worse."
 
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
