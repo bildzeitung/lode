@@ -1315,13 +1315,13 @@ def models_pull() -> None:
     typer.echo(f"  reranker: {settings.rerank_model}")
     _warm(FastEmbedCrossEncoder(settings).warm, settings.rerank_model)
 
-    if settings.entailment_model == settings.rerank_model:
-        typer.echo(
-            f"  entailment (NLI): {settings.entailment_model} "
-            "(same model as reranker -- already cached)"
-        )
-    else:
-        typer.echo(f"  entailment (NLI): {settings.entailment_model}")
+    # rerank_model and entailment_model default to the same pinned id (lode-txh.6),
+    # so the second load would be a pure cache hit -- skip it, but still say so
+    # rather than silently omitting the model from the report.
+    same_as_reranker = settings.entailment_model == settings.rerank_model
+    suffix = " (same model as reranker -- already cached)" if same_as_reranker else ""
+    typer.echo(f"  entailment (NLI): {settings.entailment_model}{suffix}")
+    if not same_as_reranker:
         _warm(FastEmbedEntailmentScorer(settings).warm, settings.entailment_model)
 
     typer.echo(f"done: model weights cached at {cache_dir}")
