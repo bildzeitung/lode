@@ -207,6 +207,14 @@ class FastEmbedEntailmentScorer:
             )
         return self._model
 
+    def warm(self) -> None:
+        """Force the weights download/load now, ahead of any entailment call.
+
+        The public seam ``lode models pull`` (lode-6qh) warms the cache through,
+        so the CLI does not depend on the private :meth:`_load`.
+        """
+        self._load()
+
     def entailment(self, premise: str, hypothesis: str) -> float:
         model = self._load()
         # The cross-encoder scores a document's relevance to a query; framing the

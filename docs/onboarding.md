@@ -101,7 +101,23 @@ The eval harness (`lode.eval.harness.score_golden_set`) is deliberately *not* a
 subcommand — it is a maintainer/CI integration test, run via `nox -s eval`
 (`docs/decisions.md`, Shape A).
 
-### 5. Run the dev loop (nox)
+### 5. Warm the local model cache
+
+`lode`'s embedder and reranker/NLI cross-encoder run **locally** (fastembed/ONNX,
+no server) — but on a cold cache, the *first* call downloads ~500MB of weights
+from HuggingFace, right in the middle of your first `lode work` or `lode ask`.
+Pull them deliberately instead, once:
+
+```bash
+lode models pull
+```
+
+This warms `$LODE_HOME/models/` (the [model cache directory](configuration.md#paths--locations),
+`lode-gmo`) so a reboot never re-triggers the download. After this, indexing and
+retrieval are fully offline; see [configuration.md](configuration.md#models) for
+the `HF_HUB_OFFLINE=1` air-gapped escape hatch.
+
+### 6. Run the dev loop (nox)
 
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./venv`**, not an isolated
 env, so activate first. Two sessions are the default set and the merge gate:
@@ -125,7 +141,7 @@ Both `tests` and `unit` run under `pytest-xdist` (`-n auto`); every test gets it
 `$LODE_HOME` via the autouse `_isolate_lode_home` fixture, so there is no shared on-disk
 state to race on.
 
-### 6. (Optional) Mermaid diagram validation
+### 7. (Optional) Mermaid diagram validation
 
 Only if you edit a diagram under `docs/`:
 
@@ -134,7 +150,7 @@ scripts/update-images.sh      # one-time: pull the mermaid-cli image
 scripts/validate-mermaid.sh   # parse every fenced mermaid block, fail on syntax errors
 ```
 
-### 7. (Optional) RTK command exclusions
+### 8. (Optional) RTK command exclusions
 
 Only if you use [RTK](https://github.com/rtk-ai/rtk) to proxy dev commands. Two commands
 must bypass RTK's rewrite so their output stays raw: beads JSON (`bd … --json`) and `git
