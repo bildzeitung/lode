@@ -181,16 +181,25 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
 
   - **Genuinely can't be built until this ticket lands** (needs my code, or a diagnosis this ticket
-    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. Note the discovery
-    provenance in the new ticket's own text — the edge no longer carries it:
+    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. **Never `bd create --deps
+    blocks:<id>`** — verified empirically (lode-ij24), that specific form *inverts* the edge: it makes
+    `<id>` (the ticket I'm building — possibly the very branch I'm about to certify
+    `ready-for-code-review`) blocked by my *new* follow-up, not the reverse, silently dropping `<id>`
+    out of `bd ready` behind its own follow-up. Create the ticket first, then wire the gate as its own
+    step — `bd dep add <child> <parent> --type blocks` (positional, or the equivalent `--blocked-by`
+    flag) is verified to give the correct direction, the child ends up blocked by the parent, never the
+    reverse. Note the discovery provenance in the new ticket's own text — the edge no longer carries it:
 
     ```bash
-    rtk bd create --title="…" --description="Discovered while building <id>. …" --type=task \
-      --deps blocks:<id>
+    NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <id>. …" \
+      --type=task --silent)
+    rtk bd dep add "$NEW_ID" <id> --type blocks
     ```
 
   - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
-    provenance; `bd ready` returns it immediately, which is correct here):
+    provenance; `bd ready` returns it immediately, which is correct here). This direction is verified
+    correct as written — `bd create --deps discovered-from:<id>` makes the *new* ticket depend on
+    `<id>`, exactly as intended, unlike the `blocks:` form above:
 
     ```bash
     rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
@@ -591,6 +600,10 @@ own guidance); the cycle above already applies them, but the *why*:
   ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
   ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
   one dependency type per pair.
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** Verified empirically
+  (lode-ij24) to invert the edge — it makes `<id>` blocked by the new follow-up instead of the reverse,
+  which can drop the very ticket I'm about to hand off out of `bd ready`. Create the ticket, then wire
+  `blocks` as its own step with `bd dep add <new-id> <id> --type blocks` (see step 5 above).
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to
