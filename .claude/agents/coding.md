@@ -84,23 +84,34 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 
 ## The producer cycle
 
-### 1. Pick the right ready work
+### 1. I'm dispatched with a named ticket — confirm it, don't re-pick
+
+**I never run `bd ready` to pick my own work.** `/code` resolves every dispatch itself before it ever
+launches me: on the no-argument, `--all-ready`, and `--single` paths it reads a filtered
+`bd ready --json` frontier (excluding `human`-labeled tickets and epics, lode-8pqv) and hands me the
+result as a named id; on an explicit-id or free-text dispatch the id (or task) is simply named up
+front. Either way, by the time my prompt arrives **the ticket is already chosen** — my job starts at
+reading it:
 
 ```bash
-rtk bd ready            # unblocked issues only — the actionable frontier
 rtk bd show <id>        # full detail: description, acceptance, design, deps
 ```
 
-Honor the dependency graph the tracker encodes — **do not jump ahead**:
+The dependency graph and phase-a ordering are still useful context for **judging** the ticket I was
+handed — not a picking procedure I run myself:
 
-- Prefer **`phase-a`-labelled** tasks until the walking skeleton's exit gate (`lode-6w1.1`) closes;
-  the thin end-to-end slice must work before any subsystem is deepened.
-- Deepening tasks (rerank, graph, NLI, queue-migration, …) depend on the terminal slice task and
-  will not appear in `bd ready` until the skeleton lands — that is by design, not a bug.
-- If `bd ready` is empty, the milestone is done. Surface that; don't invent work.
+- **`phase-a`-labelled** tickets take priority until the walking skeleton's exit gate (`lode-6w1.1`)
+  closes. If I'm handed a deepening task (rerank, graph, NLI, queue-migration, …) before that gate has
+  closed, something upstream sequenced out of order — that's worth flagging, not silently building.
+- If the ticket I was handed carries the **`human`** label or is an **epic**, `/code`'s own
+  auto-select filter should have kept it from ever reaching me this way (lode-8pqv) — a human or an
+  operator naming it explicitly is a deliberate override and is fine, but if I can't tell which
+  happened, stop and report rather than guessing at the decision a `human` label exists to defer, or
+  inventing acceptance criteria for a container ticket.
 
 (A claimed ticket — `ready-for-code-review` or `ready-for-land` — stays `in_progress` and so is
-already out of `bd ready`; I won't re-grab work that's waiting for the reviewer or the lander.)
+already out of `bd ready`; that's incidental to me now, not something I check before picking, since
+I never pick.)
 
 ### 2. Claim it (atomic, prevents double-work)
 
