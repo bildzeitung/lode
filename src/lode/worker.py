@@ -692,8 +692,6 @@ def _batch_collect_enrich(
     :func:`drain`'s main claim/run loop, so this is the only channel that
     surfaces those outcomes to the caller.
     """
-    from lode.enrich import collect_enrich_batch
-
     batch_ids: list[str] = [
         row[0]
         for row in conn.execute(
@@ -704,6 +702,12 @@ def _batch_collect_enrich(
 
     if not batch_ids:
         return 0
+
+    # Below the early-return guard: no reason to import lode.enrich on a drain with
+    # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
+    # keeps an embed-only drain SDK-free is that lode.enrich and lode.auth are both
+    # cheap to import (their `import anthropic` is TYPE_CHECKING-guarded).
+    from lode.enrich import collect_enrich_batch
 
     kwargs: dict = {}
     if _client is not None:
@@ -756,12 +760,6 @@ def _batch_submit_enrich(
 
     ``_client`` is injectable for tests.
     """
-    # Deferred imports (`lode.enrich` pulls in the Anthropic SDK). AuthError is
-    # bound here rather than in the handler because an `except` clause header
-    # needs the class; it is free — `lode.enrich` imports `lode.auth` anyway.
-    from lode.auth import AuthError
-    from lode.enrich import submit_enrich_batch
-
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
         # ORDER BY id, not ``created``: ``jobs.id`` is INTEGER PRIMARY KEY (a
@@ -778,6 +776,12 @@ def _batch_submit_enrich(
 
     if not rows:
         return 0
+
+    # Below the early-return guard, same as _batch_collect_enrich (lode-4q97).
+    # AuthError is bound here rather than in the handler because an `except` clause
+    # header needs the class.
+    from lode.auth import AuthError
+    from lode.enrich import submit_enrich_batch
 
     # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
     # _claim_one does, and submit ONLY the jobs this step actually won. The
@@ -922,8 +926,8 @@ def drain(
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
-    # Deferred import (free: the batch pre-steps below import lode.enrich, which
-    # imports lode.auth transitively, on every call anyway).
+    # Unconditional -- the `except` header below needs the class on every drain --
+    # and cheap only because lode.auth does not import the Anthropic SDK (lode-4q97).
     from lode.auth import AuthError
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.

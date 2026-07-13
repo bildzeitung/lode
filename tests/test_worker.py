@@ -25,6 +25,7 @@ tests inject ``_batch_client`` (a MagicMock) so no real Anthropic calls are made
 """
 
 import sqlite3
+import sys
 import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1054,6 +1055,37 @@ def test_drain_processes_pending_embed_jobs(
     assert all(s == "done" for s in statuses)
 
 
+def test_drain_embed_only_does_not_import_the_sdk(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    forget_sdk_imports: None,
+) -> None:
+    """An embed-only drain must never import the **Anthropic SDK** (lode-4q97).
+
+    The end-to-end assertion for the whole ticket: embeds come from the LOCAL
+    fastembed model, so an unkeyed user draining nothing but embeds must not pay
+    the ~0.32s SDK import. ``drain`` reaches Anthropic-adjacent modules two ways --
+    the batch pre-steps' ``lode.enrich`` imports, and its own unconditional
+    ``from lode.auth import AuthError`` -- and this asserts on the SDK itself, so
+    it holds no matter which path a regression comes back through. (Asserting only
+    ``"lode.enrich" not in sys.modules`` would pass while the SDK was still fully
+    imported via ``lode.auth``, which is exactly the gap that shipped once.)
+
+    ``forget_sdk_imports`` evicts the import graph first; without it this file's own
+    module-level imports make the assertion vacuous.
+    """
+    for i in range(3):
+        _insert_job(conn, target_version=f"ver-{i}")
+    n = drain(conn, db_path, settings, _registry=_noop_registry())
+
+    assert n == 3
+    assert "anthropic" not in sys.modules, (
+        "embed-only drain imported the Anthropic SDK despite having no enrich "
+        "work to do and needing no credentials"
+    )
+
+
 def test_drain_appends_main_loop_outcomes(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -1601,6 +1633,25 @@ def test_batch_submit_no_op_when_no_pending_enrich(
     submitted = _batch_submit_enrich(conn, settings, _client=client)
     assert submitted == 0
     client.beta.messages.batches.create.assert_not_called()
+
+
+@pytest.mark.parametrize("pre_step", [_batch_submit_enrich, _batch_collect_enrich])
+def test_batch_pre_step_with_no_work_does_not_import_enrich(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    forget_sdk_imports: None,
+    pre_step,
+) -> None:
+    """Both batch pre-steps import ``lode.enrich`` only *below* their early-return
+    guard (lode-4q97), so a drain with no enrich work does not import it at all.
+
+    Hygiene rather than the load-bearing fix -- ``lode.enrich`` is cheap to import
+    now either way (see ``test_importing_module_does_not_import_the_sdk``) -- but
+    there is still no reason to import it to do nothing.
+    """
+    assert pre_step(conn, settings, _client=_fake_batch_client_worker()) == 0
+    assert "lode.enrich" not in sys.modules
+    assert "anthropic" not in sys.modules
 
 
 def test_batch_submit_reverts_on_api_failure(
