@@ -269,12 +269,26 @@ def _cache_cross_encoder_model_load():
     The loaded model is stateless inference weights, so caching one instance
     per model name for the whole test session and handing it to every
     ``FastEmbedCrossEncoder`` that asks for it changes no test's observable
-    behavior (identical to a production process that reuses one warm
-    reranker across multiple ``ask``s) — it just pays the load cost once
-    instead of once per slow test. Scoped to the session (not narrower) so
-    it survives across test *functions*; under ``pytest-xdist`` each worker
-    is its own process, so the cache is naturally per-worker (loads once per
-    worker, not once per test) rather than shared globally.
+    behavior *for any test that only consumes the model's return value*
+    (identical to a production process that reuses one warm reranker across
+    multiple ``ask``s) — it just pays the load cost once instead of once per
+    slow test. Scoped to the session (not narrower) so it survives across
+    test *functions*; under ``pytest-xdist`` each worker is its own process,
+    so the cache is naturally per-worker (loads once per worker, not once per
+    test) rather than shared globally.
+
+    CARVE-OUT (lode-vzwn): a test that instead observes a *side effect of the
+    real load call itself* -- e.g. by monkeypatching the underlying
+    ``TextCrossEncoder`` constructor to record its kwargs, the way
+    ``test_load_passes_durable_model_cache_dir`` does -- is not covered by the
+    "no observable behavior change" claim above: on a cache HIT, this
+    fixture's wrapper never calls the real ``_load``, so that constructor
+    never runs and the recorded side effect never happens. Any such test must
+    use a ``rerank_model`` name no other test uses, guaranteeing a cache MISS
+    (and therefore a real load) regardless of what ran before it on the same
+    xdist worker. Without a unique key, whether the assertion sees the real
+    constructor call is a coin flip on test order (``pytest-randomly``) --
+    exactly the bug this ticket fixed.
     """
     from lode.retrieval import FastEmbedCrossEncoder
 
