@@ -574,22 +574,34 @@ done
 # alive and untouched — it was never one of the two unified here.)
 #
 # CONTRACT, stated plainly because the branch-name filter used to hide it: ANY worktree under
-# `.claude/worktrees/` that is unlocked AND has not diverged from `trunk` is reclaimable by this loop,
-# whoever made it. A worktree freshly branched off `trunk` HEAD is trivially "merged" by zero
-# divergence, so uncommitted work in one is NOT protected by the merged check — `locked` is the only
-# thing holding this loop off, and only `.claude/agents/coding.md` raises it (lode-oqr). Commit, or
-# `git worktree lock`, or expect to be swept. This residual is PRE-EXISTING, not new (both unified
-# sweeps already had it), and lode-9hgu tracks fixing it at the root: guard on whether the tree is
-# actually DIRTY, rather than on a "merged" proxy that reads TRUE at zero divergence.
+# `.claude/worktrees/` that is unlocked AND EITHER has not diverged from `trunk` OR — for a
+# branch-attached worktree — has not diverged from its own branch's origin counterpart (lode-amif:
+# the predicate widened from "merged into trunk" alone to "captured on origin," so an escalated
+# ticket's reviewer/rebase-pickup worktree, whose branch never merges into trunk by definition, is
+# reclaimable too, once its content is safely on `origin/land/<id>`) is reclaimable by this loop,
+# whoever made it. A worktree freshly branched off `trunk` HEAD (or freshly checked out at its
+# origin branch's current tip) is trivially "merged"/"captured" by zero divergence, so uncommitted
+# work in one is NOT protected by either arm of the check — `locked` is the only thing holding this
+# loop off, and only `.claude/agents/coding.md` raises it (lode-oqr) — code-reviewer and coding's
+# rebase pickup raise no lock at all, so the same zero-divergence gap now also applies to the origin
+# arm, not just the trunk arm. Commit (or push, for the origin arm), or `git worktree lock`, or
+# expect to be swept. This residual is PRE-EXISTING for the trunk arm (both unified sweeps already
+# had it) and now extends to the origin arm as well; lode-9hgu tracks fixing it at the root for both:
+# guard on whether the tree is actually DIRTY, rather than on a "merged"/"captured" proxy that reads
+# TRUE at zero divergence.
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
 # "merged" into trunk by content identity, so `locked` must gate this even though `merged` alone
 # looks sufficient. `merged` is the same safety invariant the per-ticket removal above already relies
-# on ("the build artifact is on trunk now — force is safe") — for a `land/<id>` worktree
-# specifically, `merged` is what proves the ticket already landed (an in-flight
-# `ready-for-code-review`/`ready-for-land` ticket's branch has not merged into trunk yet, so its
-# worktree is excluded regardless of lock state). This `locked` check used to be a no-op in practice:
+# on ("the build artifact is on trunk now — force is safe") — for a **builder's own**
+# `worktree-agent-*` worktree specifically, `merged` is what proves the ticket already landed: its
+# branch is never pushed anywhere, so the origin arm added by lode-amif is always false for it, and
+# an in-flight `ready-for-code-review`/`ready-for-land`/`land-escalated` ticket's builder worktree is
+# excluded regardless of lock state, exactly as before. A `land/<id>`-branched **reviewer/rebase-pickup**
+# worktree is different since lode-amif: once its branch is pushed to `origin/land/<id>`, the origin
+# arm can make it reclaimable even though its branch has not (and, if escalated, never will) merge
+# into trunk — that is the gap this ticket exists to close. This `locked` check used to be a no-op in practice:
 # nothing on the producer side ever raised it, so every producer build was "merged" (trivially, by
 # zero divergence) and reclaimable from the moment its worktree was created until its first commit --
 # this destroyed two builds' uncommitted work outright (branch and all, not just the checkout) before
@@ -612,7 +624,38 @@ git worktree list --porcelain | awk '
   /^locked/ { locked=1 }
   /^$/ { if (path!="" && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT SHA BR; do
-  git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight)
+  # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
+  # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
+  # An ESCALATED branch never merges into trunk (by definition — it's held for a human decision), so
+  # the trunk-only test could never reclaim its reviewer/rebase-pickup worktree even after the /code
+  # session that would otherwise eagerly reclaim it (lode-vs7g) has itself died mid-fan-out — an
+  # indefinite leak one level up from the gap lode-vs7g closed. The real invariant is "captured on
+  # origin," which every reviewer/rebase-pickup worktree satisfies by construction: both push to
+  # origin/land/<id> before returning (lode-k5e/lode-8k3), on EITHER outcome (ready-for-land or
+  # land-escalated). So: reclaim if the worktree's HEAD is an ancestor of trunk, OR — for a
+  # branch-attached worktree only — an ancestor of that branch's origin counterpart. `${BR%%--*}`
+  # strips the lode-em6v worktree-uniqueness suffix (`land/<id>--<worktree-dir>` -> `land/<id>`) the
+  # same way backstop 2 already does, so this reaches origin/land/<id> regardless of which local name
+  # the reviewer/pickup checked the branch out under. A detached worktree (empty $BR) or a builder's
+  # own worktree-agent-* branch (never pushed to origin, so origin/worktree-agent-* doesn't exist and
+  # the ancestor test fails) fall through to `continue` exactly as before — this arm is simply false
+  # for them, so builder worktrees are unaffected.
+  #
+  # SAME RESIDUAL AS THE TRUNK ARM, NOW ALSO ON THIS ONE (lode-9hgu, not re-litigated here): the
+  # ancestor test is a proxy that reads TRUE at zero divergence. A reviewer/rebase-pickup worktree,
+  # freshly checked out at origin/land/<id>'s current tip, is trivially "an ancestor of" that same
+  # tip from the moment of checkout until its first local commit — during that narrow window this
+  # arm is already true even though nothing new has been pushed yet. Neither `code-reviewer` nor
+  # `coding`'s rebase pickup locks its worktree (only the producer build cycle does, per lode-oqr), so
+  # this widened arm inherits the identical unlocked-zero-divergence gap the trunk arm already has,
+  # just on a different branch shape. lode-9hgu is already the open, general tracking ticket for
+  # "the merged-proxy reads true at zero divergence in an unlocked worktree" and already names
+  # code-reviewer/rebase-pickup worktrees as one of the affected paths — whichever fix it lands
+  # (dirty-tree guard, broader locking, or accept-and-document) covers this arm too; not re-decided
+  # here.
+  git merge-base --is-ancestor "$SHA" trunk \
+    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
+    || continue
   git worktree remove --force "$WT"
   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
 done
@@ -755,6 +798,35 @@ branch, live or not); the guard is `merged`-into-`trunk` plus not currently chec
 same safety *predicate* the worktree sweep applies, reached by a branch-**name** lookup (`git branch
 --merged trunk`) rather than that sweep's HEAD-sha ancestry test, since a bare ref has no worktree and
 so no HEAD sha to test.
+
+**Update (lode-amif): the worktree sweep's predicate widened from "merged into trunk" alone to
+"merged into trunk OR captured on origin."** Everything above describes the sweep as it stood after
+lode-jiyk: `unlocked` + `HEAD-sha is-ancestor-of trunk`. That predicate structurally cannot reclaim an
+**escalated** ticket's reviewer/rebase-pickup worktree — an escalated branch is, by definition, held
+for a human decision and never merges into `trunk`, so if the `/code` session that would otherwise
+eagerly reclaim it (lode-vs7g) itself dies mid-fan-out before running that reclaim, the worktree leaks
+**indefinitely**: the trunk-ancestry test is never satisfied, so backstop 1 never even considers it a
+candidate. The gap is one level up from what lode-vs7g closed (lode-vs7g handles the normal-exit case,
+including a clean escalation return; this is the crash-before-that-point case).
+
+The fix widens the loop's predicate with a second arm: `git merge-base --is-ancestor "$SHA" trunk ||
+{ [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}"; } || continue` (see the
+script above and its inline comment). The real safety invariant was never "merged into trunk" — that
+was always a stand-in for "this worktree's content already exists safely elsewhere." A
+reviewer/rebase-pickup worktree satisfies that invariant by construction the moment it has pushed to
+`origin/land/<id>` (lode-k5e/lode-8k3), on **either** outcome, `ready-for-land` or `land-escalated` — so
+testing ancestry against that origin ref directly reaches exactly the cases the trunk-only test missed.
+`${BR%%--*}` strips the lode-em6v worktree-uniqueness suffix the same way backstop 2 already does, so
+the new arm resolves to `origin/land/<id>` regardless of which locally-suffixed name the branch was
+checked out under. A detached worktree (no `$BR`) and a builder's own `worktree-agent-*` worktree (never
+pushed to origin, so its origin counterpart doesn't exist and the ancestor test simply fails) are
+unaffected — the new arm is false for both, so they fall through to the unchanged `trunk`-only
+behavior. This inherits the *same* zero-divergence residual the trunk arm already has (see the
+CONTRACT paragraph above and lode-9hgu) rather than introducing a new one: a freshly-checked-out
+reviewer/pickup worktree is trivially "captured on origin" (identical to origin's current tip) until
+its first local commit, and neither `code-reviewer` nor `coding`'s rebase pickup locks its worktree —
+lode-9hgu already names this exact path as affected and is the single tracking ticket for fixing it at
+the root, for both arms.
 
 ---
 

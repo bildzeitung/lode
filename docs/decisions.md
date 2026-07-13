@@ -501,3 +501,43 @@ are catalogued in [configuration.md](configuration.md).
   implements the same recovery twice. If a *third* job type's dead-letter needs recovery, the fork is
   this: "is the underlying content still valid and cheap to retry?" → sweep; "is retrying pointless and
   the interesting fact is that it's permanently dead?" → terminal-transition hook.
+
+- **`/land`'s worktree backstop 1 predicate widened from "merged into trunk" to "merged into trunk OR
+  captured on origin" (lode-amif, a residual gap surfaced by lode-vs7g's own review).** lode-vs7g made
+  `/code`'s orchestrating session eagerly reclaim a reviewer's / rebase-pickup's launch worktree right
+  after the subagent returns, on either outcome (`ready-for-land` or `land-escalated`) — closing the
+  steady-state leak. What it explicitly could not close: backstop 1's own predicate
+  (`.claude/skills/land/SKILL.md` Section 4), `unlocked AND HEAD-sha is-ancestor-of trunk`, is never
+  satisfied by an **escalated** branch (it never merges into `trunk` by definition — that's what
+  "escalated, held for a human" means). So if the `/code` session itself dies **before** it can run its
+  own eager reclaim (a crash mid-fan-out), the worktree leaks **indefinitely** — the same failure
+  lode-vs7g exists to prevent, one level up, and structurally unreachable by the trunk-only backstop.
+
+  **Decision: widen the predicate's real invariant from "merged into trunk" to "already captured
+  elsewhere," and test it via a second arm.** "Merged into trunk" was always a stand-in for "this
+  worktree's content is safely captured elsewhere, so removing it loses nothing" — never the goal
+  itself. A reviewer/rebase-pickup worktree satisfies that real invariant by construction the moment it
+  has pushed to `origin/land/<id>` (lode-k5e/lode-8k3), regardless of whether the branch ever lands.
+  Backstop 1's loop now reclaims a candidate if `git merge-base --is-ancestor "$SHA" trunk` **or** — for
+  a branch-attached worktree — `git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}"` (the `${BR%%--*}`
+  strip maps the lode-em6v worktree-uniqueness suffix `land/<id>--<worktree-dir>` back to the bare
+  `origin/land/<id>` ref, the same mapping backstop 2 already applies). A detached worktree (no branch
+  name to resolve) and a builder's own `worktree-agent-*` worktree (never pushed to origin — no origin
+  counterpart exists, so the ancestor test simply fails) are unaffected by the new arm; it is `false`
+  for both, leaving their behavior exactly as before.
+
+  **Accepted, not newly introduced: the origin arm inherits the same zero-divergence residual the
+  trunk arm already has (lode-9hgu).** A reviewer/rebase-pickup worktree, freshly checked out at
+  `origin/land/<id>`'s current tip, is trivially "an ancestor of" that same tip from checkout until its
+  first local commit — during that narrow window the new arm reads true even though nothing new has
+  been pushed. Neither `code-reviewer` nor `coding`'s rebase pickup locks its worktree (only the
+  producer build cycle does, per lode-oqr), so this is the identical unlocked-zero-divergence gap the
+  trunk arm has always had, now also present on the origin arm. **lode-9hgu is already the open,
+  general tracking ticket for exactly this class of flaw** — it explicitly names
+  "code-reviewer / land-review worktrees do not lock" as one of the affected paths, predating this
+  widening — so no new ticket was filed; whichever fix lode-9hgu lands (a dirty-tree guard, broader
+  locking, or accept-and-document) covers the widened predicate for free. This decision does not
+  re-litigate lode-9hgu's open question.
+
+  Scope: `.claude/skills/land/SKILL.md` Section 4 (backstop 1's loop and its surrounding prose) plus
+  this entry. Docs/prompt-only — no Python code changed.
