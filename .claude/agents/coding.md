@@ -185,10 +185,12 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
     blocks:<id>`** — verified empirically (lode-ij24), that specific form *inverts* the edge: it makes
     `<id>` (the ticket I'm building — possibly the very branch I'm about to certify
     `ready-for-code-review`) blocked by my *new* follow-up, not the reverse, silently dropping `<id>`
-    out of `bd ready` behind its own follow-up. Create the ticket first, then wire the gate as its own
-    step — `bd dep add <child> <parent> --type blocks` (positional, or the equivalent `--blocked-by`
-    flag) is verified to give the correct direction, the child ends up blocked by the parent, never the
-    reverse. Note the discovery provenance in the new ticket's own text — the edge no longer carries it:
+    out of `bd ready` behind its own follow-up. Create the ticket with **no `--deps` at all** — not even
+    `discovered-from:<id>` to keep the provenance, since that edge occupies the same `(new-id, <id>)`
+    pair and the `bd dep add … --type blocks` below would then *fail*, leaving the follow-up unblocked —
+    then wire the gate as its own step. `bd dep add <new-id> <id> --type blocks` (positional, or the
+    equivalent `--blocked-by` flag) is verified correct: the **first** ID ends up blocked by the second,
+    never the reverse. Note the discovery provenance in the new ticket's own text instead:
 
     ```bash
     NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <id>. …" \
@@ -600,10 +602,9 @@ own guidance); the cycle above already applies them, but the *why*:
   ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
   ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
   one dependency type per pair.
-- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** Verified empirically
-  (lode-ij24) to invert the edge — it makes `<id>` blocked by the new follow-up instead of the reverse,
-  which can drop the very ticket I'm about to hand off out of `bd ready`. Create the ticket, then wire
-  `blocks` as its own step with `bd dep add <new-id> <id> --type blocks` (see step 5 above).
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
+  (lode-ij24), dropping the very ticket I'm about to hand off out of `bd ready`, behind its own
+  follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to

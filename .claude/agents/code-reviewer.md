@@ -180,13 +180,21 @@ For a docs-only branch there is no Python gate.
    [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
    `blocks` if the new ticket genuinely can't be built until *this* one lands (note the discovery
    provenance in its text instead, since the edge no longer carries it); `discovered-from` if it's
-   independently buildable right now. **Never `bd create --deps blocks:<id>`** — verified empirically
-   (lode-ij24) that specific form inverts the edge, making `<id>` (the ticket I'm reviewing) blocked by
-   my new follow-up instead of the reverse. Create the ticket, then wire the gate as its own step: `rtk
-   bd dep add <new-id> <id> --type blocks` (positional, or the equivalent `--blocked-by` flag, is
-   verified to give the correct direction — worked example and full verification in
+   independently buildable right now. **Never `bd create --deps blocks:<id>`** — that form *inverts* the
+   edge (lode-ij24), making `<id>` (the ticket I'm reviewing) blocked by my new follow-up. For a
+   `blocks` follow-up: create it with **no `--deps` at all** — not even `discovered-from:<id>` for the
+   provenance, since that edge occupies the same `(new-id, <id>)` pair and makes the next command *fail*
+   — then wire the gate as its own step:
+
+   ```bash
+   NEW_ID=$(rtk bd create --title="…" --description="Discovered while reviewing <id>. …" \
+     --type=task --silent)
+   rtk bd dep add "$NEW_ID" <id> --type blocks     # first ID ends up blocked by the second
+   ```
+
+   Provenance goes in the description, not the edge. Full verification and the `discovered-from` case:
    [`.claude/agents/coding.md`](coding.md#5-implement) and
-   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)).
+   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3).
 
 If the review finds nothing to change, that is a valid outcome — the branch passes as-is.
 
@@ -298,10 +306,9 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
-- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** Verified empirically
-  (lode-ij24) to invert the edge — it makes `<id>` (the ticket being reviewed) blocked by the new
-  follow-up instead of the reverse. Create the ticket, then wire `blocks` as its own step with `bd dep
-  add <new-id> <id> --type blocks` (step 4 above).
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
+  (lode-ij24), making `<id>` — the ticket I just certified — blocked by its own follow-up. Create with
+  no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 4 above.
 
 ## lode invariants (quick card)
 

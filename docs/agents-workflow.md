@@ -489,8 +489,19 @@ not a default, and the choice trades one property for the other:
   and bare `bd create --deps X` with no type prefix both give the expected direction — new issue
   depends on `X`. Only the explicit `blocks:` prefix on `bd create --deps` inverts.)
 
-  **Never write `bd create --deps blocks:<parent>`.** Create the ticket first (no `--deps`, or
-  `--deps discovered-from:<parent>` for pure provenance), then wire the gate as its own step:
+  The bare form is in fact a correct one-liner — `bd create --deps <parent>` records exactly the edge we
+  want, child blocked by parent, because `blocks` is bd's default dependency type. We still **don't**
+  prescribe it: it is right only by way of an *implicit* default, which is the same class of
+  under-specified `--deps` semantics that produced this bug in the first place, and it would silently
+  become the wrong edge if bd ever changed that default. Spell the edge out at the call site instead.
+
+  **Never write `bd create --deps blocks:<parent>`.** Create the ticket with **no `--deps` at all**,
+  then wire the gate as its own step. Do *not* reach for `--deps discovered-from:<parent>` on the
+  create as a way to keep the provenance: by the one-type-per-pair rule above, that edge occupies the
+  same ordered `(child, parent)` pair, so the `bd dep add … --type blocks` that follows **fails**
+  (`already exists with type "discovered-from" (requested "blocks")`) and leaves the follow-up sitting
+  in `bd ready` *unblocked* — the exact bug this section exists to kill, now with an error message an
+  unattended agent may never read. Provenance goes in the description, not the edge:
 
   ```bash
   NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <parent>. …" \
