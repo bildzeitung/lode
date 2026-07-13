@@ -692,8 +692,6 @@ def _batch_collect_enrich(
     :func:`drain`'s main claim/run loop, so this is the only channel that
     surfaces those outcomes to the caller.
     """
-    from lode.enrich import collect_enrich_batch
-
     batch_ids: list[str] = [
         row[0]
         for row in conn.execute(
@@ -704,6 +702,11 @@ def _batch_collect_enrich(
 
     if not batch_ids:
         return 0
+
+    # Deferred import (`lode.enrich` pulls in the Anthropic SDK) — placed after
+    # the early-return guard above so an embed-only drain (no running enrich
+    # batches) never pays this cost (lode-4q97).
+    from lode.enrich import collect_enrich_batch
 
     kwargs: dict = {}
     if _client is not None:
@@ -756,12 +759,6 @@ def _batch_submit_enrich(
 
     ``_client`` is injectable for tests.
     """
-    # Deferred imports (`lode.enrich` pulls in the Anthropic SDK). AuthError is
-    # bound here rather than in the handler because an `except` clause header
-    # needs the class; it is free — `lode.enrich` imports `lode.auth` anyway.
-    from lode.auth import AuthError
-    from lode.enrich import submit_enrich_batch
-
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
         # ORDER BY id, not ``created``: ``jobs.id`` is INTEGER PRIMARY KEY (a
@@ -778,6 +775,14 @@ def _batch_submit_enrich(
 
     if not rows:
         return 0
+
+    # Deferred imports (`lode.enrich` pulls in the Anthropic SDK) — placed
+    # after the early-return guard above so an embed-only drain (no pending
+    # enrich jobs) never pays this cost (lode-4q97). AuthError is bound here
+    # rather than in the handler because an `except` clause header needs the
+    # class; it is free at this point — `lode.enrich` imports `lode.auth` anyway.
+    from lode.auth import AuthError
+    from lode.enrich import submit_enrich_batch
 
     # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
     # _claim_one does, and submit ONLY the jobs this step actually won. The

@@ -25,6 +25,7 @@ tests inject ``_batch_client`` (a MagicMock) so no real Anthropic calls are made
 """
 
 import sqlite3
+import sys
 import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1054,6 +1055,37 @@ def test_drain_processes_pending_embed_jobs(
     assert all(s == "done" for s in statuses)
 
 
+def test_drain_embed_only_does_not_import_enrich(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An embed-only drain (no enrich jobs pending at all) must never import
+    ``lode.enrich`` -- and therefore never pay the Anthropic SDK import cost
+    (lode-4q97). Both batch pre-steps import ``lode.enrich`` only after their
+    early-return guard, so with zero enrich jobs in the queue neither guard's
+    body (where the import lives) ever executes.
+
+    ``lode.enrich`` is removed from ``sys.modules`` first so this test proves
+    something regardless of whether an earlier test in the suite already
+    imported it (module-level imports elsewhere, e.g. this file's own
+    ``from lode.enrich import ENRICH_PROMPT_VER``, would otherwise make the
+    assertion vacuously true).
+    """
+    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+
+    for i in range(3):
+        _insert_job(conn, target_version=f"ver-{i}")
+    n = drain(conn, db_path, settings, _registry=_noop_registry())
+
+    assert n == 3
+    assert "lode.enrich" not in sys.modules, (
+        "embed-only drain imported lode.enrich (and therefore anthropic) "
+        "despite having no enrich work to do"
+    )
+
+
 def test_drain_appends_main_loop_outcomes(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -1603,6 +1635,24 @@ def test_batch_submit_no_op_when_no_pending_enrich(
     client.beta.messages.batches.create.assert_not_called()
 
 
+def test_batch_submit_no_pending_enrich_does_not_import_enrich(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_batch_submit_enrich imports ``lode.enrich`` only after its early-return
+    guard (lode-4q97): with no pending enrich rows, the import must not run.
+    """
+    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+
+    client = _fake_batch_client_worker()
+    submitted = _batch_submit_enrich(conn, settings, _client=client)
+
+    assert submitted == 0
+    assert "lode.enrich" not in sys.modules
+
+
 def test_batch_submit_reverts_on_api_failure(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -1793,6 +1843,24 @@ def test_batch_collect_returns_count_of_ended_batches(
     # Job marked done.
     row = _job(conn, job_id)
     assert row["status"] == "done"
+
+
+def test_batch_collect_no_running_batches_does_not_import_enrich(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_batch_collect_enrich imports ``lode.enrich`` only after its early-return
+    guard (lode-4q97): with no running enrich batches, the import must not run.
+    """
+    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+
+    client = _fake_batch_client_worker()
+    ended = _batch_collect_enrich(conn, settings, _client=client)
+
+    assert ended == 0
+    assert "lode.enrich" not in sys.modules
 
 
 # ---------------------------------------------------------------------------
