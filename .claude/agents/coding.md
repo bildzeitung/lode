@@ -416,10 +416,13 @@ rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--age
 rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
-that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
-sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
-`.claude/skills/land/SKILL.md`; nothing for me to do either way.
+The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
+all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
+is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree reclaims exactly as
+it always has once my build lands. That name-independence is scoped to the worktree loop only: `/land`'s
+dangling-**ref** backstops still match `land/*` and `worktree-agent-*` by name (they must — `refs/heads/*`
+is shared with human branches), and the `land/*` one strips this suffix before comparing against the
+exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 ### 3. Merge current trunk in
 
