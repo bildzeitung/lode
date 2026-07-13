@@ -488,6 +488,45 @@ pending -> running -> done                    (success)
 worker can distinguish "retry me" from "give up", and the UI surfaces `dead` rows
 as dead-letters (not `failed` rows).
 
+### Transient vs. permanent job failures — pinned (lode-9yy)
+
+`run_one`'s handler-failure catch is deliberately broad (`except Exception`) because
+the whole `pending -> failed -> dead` lifecycle above assumes a failure is
+*transient* — safe to retry with backoff, and eventually dead-letter as a last
+resort. That is the right default for a flaky network call, a rate limit, or a
+Batches API hiccup. It is **wrong** for a failure that retrying can never fix: most
+concretely `lode.auth.AuthError`, raised by `lode.auth.build_client` when no
+Anthropic credentials can be resolved. Retrying an unauthenticated call burns the
+retry budget on something structurally certain to fail again, and the operator
+never sees `build_client`'s actionable "set `ANTHROPIC_API_KEY` / run `ant auth
+login`" message — they see an ordinary failed, then dead-lettered, job.
+
+The taxonomy: **permanent** = `lode.auth.AuthError` (today's only member; a future
+config-shape error belongs here too, same treatment) — never retried, never
+charged against `attempts`, must reach the operator directly. Everything else is
+**transient** — the existing `except Exception` accounting, unchanged.
+
+`run_one` and `_batch_submit_enrich` special-case `AuthError` ahead of their
+generic catch: the claimed job is reset straight back to `'pending'` with
+`attempts` untouched (never `'failed'` with backoff, never `'dead'`), then the
+exception is **re-raised** rather than absorbed. What happens next depends on the
+caller — the queue mechanism itself has no opinion here, by design; each caller
+decides how loud "surface it" should be:
+
+- `lode work` (`lode.worker.drain`) lets it propagate all the way to the CLI,
+  which prints `build_client`'s actionable message to stderr and exits non-zero —
+  the same clean, traceback-free treatment `lode ask` already gives `AuthError`.
+- `lode add`'s opportunistic immediate-enrich fast path
+  (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
+  stay instant (`design.md` §1) regardless of whether Anthropic credentials are
+  configured. The job is already back at `'pending'`, uncharged, for the next
+  explicit `lode work` to report loudly.
+- `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
+  request) needs no special case at all: it never wraps its `build_client()` /
+  `collect_enrich_batch()` calls in a broad `except`, so an `AuthError` there
+  already propagates untouched — the swallow this section fixes never existed
+  on that path.
+
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 
 The eligibility predicate is `next_attempt_at <= now`, and `drain`'s loop stops at the **first** miss —
