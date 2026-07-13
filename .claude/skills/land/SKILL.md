@@ -621,10 +621,20 @@ fi
 # instant it's created). The correct guard is the same one the first backstop already
 # applies to worktree-attached refs: merged into `trunk` (the work is safely captured
 # elsewhere) AND not currently checked out in any worktree. Reuse $MERGED (already computed
-# above, before any removal in this pass) rather than recompute it. `git branch -D` itself
+# above, before any removal in this pass) rather than recompute it — but SELF-HEAL if it is
+# unset: this loop is the only consumer of a variable defined ~55 lines up, on the far side
+# of the second backstop's `if ... fi`, so running the tail of this block on its own (a lander
+# retrying just the sweeps after a hiccup, or a future edit splitting the fence) would leave
+# $MERGED empty, every `grep -qxF` would miss, the `|| continue` would fire on EVERY ref, and
+# this sweep would silently delete nothing — a backstop that cannot fire, which is the exact
+# bug class this ticket exists to fix. `${MERGED:-...}` keeps the intended reuse on the normal
+# single-script path (no second `git branch --merged`) and recomputes only when it must; the
+# recomputed set is identical for every ref `for-each-ref` still lists, since `trunk` has not
+# moved and the refs the earlier sweeps deleted are gone from both sides. `git branch -D` itself
 # also refuses harmlessly if the branch is still checked out somewhere, but that alone is
 # not the guard being relied on — the explicit merged check is what keeps an in-flight,
 # not-yet-merged build ref from ever being a candidate in the first place.
+MERGED=${MERGED:-$(git branch --merged trunk --format='%(refname:short)')}
 CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
 git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | while read -r BR; do
   printf '%s\n' "$CHECKED_OUT" | grep -qxF "$BR" && continue   # still checked out somewhere — keep
