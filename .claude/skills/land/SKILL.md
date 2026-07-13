@@ -555,10 +555,12 @@ done
 #
 # NOTE (lode-vs7g): `/code`'s own orchestrating session now reclaims a reviewer's or rebase-pickup's
 # launch worktree proactively, right after that subagent returns (either outcome — ready-for-land or
-# land-escalated) — see `.claude/skills/code/SKILL.md` and docs/decisions.md's lode-vs7g entry. This
-# backstop is UNCHANGED and stays exactly as it was: it's the net for the one case the proactive
-# reclaim cannot reach — an agent that crashes before it can report its own worktree back. Expect it
-# to fire far less often now, not never.
+# land-escalated), deriving it from the ticket id via the `land/<id>--<worktree-dir>` branch name — see
+# `.claude/skills/code/SKILL.md` and docs/decisions.md's lode-vs7g entry. This backstop is UNCHANGED
+# and stays exactly as it was, but it is a PARTIAL net, not a total one: it only ever reclaims a
+# worktree whose branch is already merged into trunk, so it cannot cover an escalated ticket (whose
+# branch never merges) — that case is closed by /code's reclaim, not here. Expect this to fire far less
+# often now: mostly for a /code session that died mid-fan-out, before it could reclaim.
 #
 # ONE loop covers BOTH branch-attached and DETACHED worktrees (lode-jiyk unifies what were formerly
 # two separate WORKTREE sweeps here: a branch-NAME-keyed one, lode-r78, and a later HEAD-sha-keyed

@@ -746,11 +746,12 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    summary), then stops. Its escalation rule mirrors the builder's: a genuine **decision**, or "I'm
    making it worse," reverts to green, swaps the label to `land-escalated`, and surfaces async —
    landing nothing.
-4. **Reports its own launch worktree (path + branch) so `/code` can reclaim it** — on either outcome
-   (lode-vs7g). It cannot remove the worktree it's standing in itself, and neither backstop-1's
-   merged-into-`trunk` sweep nor the end-of-pass GC can reach it on an escalation (that branch never
-   merges), so `/code`'s orchestrating session does the removal immediately after it returns, rather
-   than leaving the worktree to leak indefinitely.
+4. **Leaves its own launch worktree for `/code` to reclaim** — on either outcome (lode-vs7g). It
+   cannot remove the worktree it is standing in, and `/land`'s backstop 1 (merged-into-`trunk`) can
+   never reach it on an escalation, since that branch never merges. So `/code`'s orchestrating session
+   removes it immediately after the agent returns, *deriving* which worktree was the agent's from the
+   ticket id alone — the branch is `land/<id>--<worktree-dir>` — so the reclaim needs nothing handed
+   back and still fires if the agent crashed or escalated.
 
 ```mermaid
 flowchart TD
@@ -931,14 +932,19 @@ leak (every worktree is now branch-attached, hence reachable by `/land`'s backst
 pickup's worktree still wasn't actually **removed** — only left standing until the branch eventually
 merged into `trunk`. Worse, an *escalated* pickup's branch never merges at all, so backstop 1
 structurally could never reach it, and the worktree leaked indefinitely. The pickup cannot
-`git worktree remove` the worktree it's standing in, so it reports its own path and local branch name
-in its final message instead (either outcome); `/code`'s orchestrating session — which runs from the
-repo root, never itself worktree-isolated — reclaims both immediately after collecting that result.
-Safe on both outcomes: by the time the pickup reports, its worktree holds nothing `origin/land/<id>`
-doesn't already have. `/land`'s backstops 1-4 stay untouched, as the net for a pickup that crashes
-before it can report. Same mechanism, same reasoning, applies to `code-reviewer`'s launch worktree
-(Phase 2 and the step-1 stranded-review sweep) — see `.claude/skills/code/SKILL.md` and
-`docs/decisions.md`'s lode-vs7g entry.
+`git worktree remove` the worktree it's standing in, so `/code`'s orchestrating session — which runs
+from the repo root, never itself worktree-isolated — removes it immediately after the pickup returns,
+on either outcome. It **derives** the worktree rather than being told it: the local-name suffix above
+guarantees the branch is `land/<id>--<worktree-dir>`, so the ticket id alone recovers both the path and
+the branch (`git worktree list --porcelain`, filtered on that prefix). That derivation is what makes
+the fix hold in the cases that actually leak — it needs no cooperation from the agent, so it still
+fires when the agent crashed, escalated, or returned a garbled report, and it reclaims **every**
+worktree the ticket accumulated across N cycles, not just the last one. It cannot touch the builder's
+worktree, which is branch-named `worktree-agent-*` and so never matches. Safe on both outcomes: by the
+time the pickup returns, its worktree holds nothing `origin/land/<id>` doesn't already have. `/land`'s
+backstops 1-4 stay untouched as a partial net (they still only reach a branch that eventually merges).
+Same mechanism, same reasoning, applies to `code-reviewer`'s launch worktree (Phase 2 and the step-1
+stranded-review sweep) — see `.claude/skills/code/SKILL.md` and `docs/decisions.md`'s lode-vs7g entry.
 
 ### Stacked land branches (lode-02v)
 

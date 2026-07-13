@@ -243,27 +243,19 @@ rtk scripts/bd-dolt-push.sh   # publish the label swap over refs/dolt/data — d
 `scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
 transient embedded-mode lock — an *expected* outcome under `/code` fan-out, not corruption (lode-83d).
 
-**Report my own launch worktree for reclaim (lode-vs7g).** I cannot `git worktree remove` the worktree
-I am currently standing in, so I don't try — instead I state its path and local branch name in my
-final message, and `/code`'s orchestrating session reclaims both immediately after I return, on
-**either** outcome (`ready-for-land` or `land-escalated`):
-
-```bash
-rtk git rev-parse --show-toplevel        # my own launch worktree's path — state this in my report
-rtk git rev-parse --abbrev-ref HEAD      # my own local branch name (land/<id>--<suffix>) — state too
-```
-
-This is distinct from the builder's worktree mentioned below: it's the fresh worktree the harness
-handed *me* at dispatch, and by the time I report it, it holds nothing `origin/land/<id>` doesn't
-already have (step 7's push happened first) — so reclaiming it loses no work, on a clean pass or an
-escalation alike (an escalation still pushes the reverted-to-green commit before I report, per the
-Escalation rule below).
+**I never clean up my own launch worktree — and I never need to report it either (lode-vs7g).** I
+cannot `git worktree remove` the worktree I am standing in, so I don't try. `/code`'s orchestrating
+session reclaims it for me right after I return, on **either** outcome (`ready-for-land` or
+`land-escalated`), and it *derives* which worktree was mine from the ticket id alone — my branch is
+`land/<id>--<my-own-worktree-dir>` (step 2), so nothing has to be handed back for the reclaim to find
+it. That's deliberate: it still works if I crash, escalate, or never get to speak. All I owe it is the
+push (step 7) — by the time I return, my worktree holds nothing `origin/land/<id>` doesn't already
+have, so removing it can never lose work.
 
 Then I **stop** and report: which ticket, that the technical review + gates are green, the `land/<id>`
-branch and head SHA, the one-line summary, my own launch worktree path + branch (above) — or, on
-escalation, exactly what decision the human owes (plus that same worktree path + branch). I never
-opened the builder's worktree this cycle, so there's nothing of mine to clean up there; `/land` still
-GCs the builder's local worktree and the merged branch on a clean land, keyed off the
+branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes. I
+never opened the builder's worktree this cycle, so there's nothing of mine to clean up there; `/land`
+still GCs the builder's local worktree and the merged branch on a clean land, keyed off the
 `review_worktree` metadata the builder recorded (unchanged by this fix — see `docs/decisions.md`).
 
 ### Escalation rule — the only thing that pulls a human in
@@ -279,10 +271,9 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   `rtk scripts/bd-dolt-push.sh`,
 - **re-push the branch** (`git push origin HEAD:land/<id>`) so the (green) work is never stranded, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
-  human. The missing `ready-for-land` label keeps the lander from grabbing it. I still report my own
-  launch worktree path + branch here too (above) — an escalation never merges into `trunk`, so
-  `/land`'s backstop 1 structurally cannot reach this worktree, which is exactly why `/code` reclaims
-  it right after I return rather than waiting on that sweep (lode-vs7g).
+  human. The missing `ready-for-land` label keeps the lander from grabbing it. My launch worktree is
+  reclaimed by `/code` on this path too (lode-vs7g) — it must be: an escalated branch never merges into
+  `trunk`, so `/land`'s backstop 1 structurally cannot reach it.
 
 ## Anti-patterns (do not do these)
 
@@ -312,9 +303,8 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
 - **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
-  currently standing in — that's why I *report* its path and branch instead (step 8) and let `/code`'s
-  orchestrating session reclaim it after I return (lode-vs7g). Don't wait for `/land`'s backstop 1
-  either: on an escalation the branch never merges into `trunk`, so that sweep can never reach it.
+  currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
+  — I neither remove it nor need to report it.
 
 ## lode invariants (quick card)
 
@@ -330,6 +320,6 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
 | Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
-| My own launch worktree | reclaimed by `/code` right after I return — either outcome (`ready-for-land` or `land-escalated`) — since I cannot remove it myself; I just report its path + branch (step 8, lode-vs7g) |
+| My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |

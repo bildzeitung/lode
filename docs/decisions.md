@@ -392,23 +392,44 @@ are catalogued in [configuration.md](configuration.md).
   human resolved the escalation and the branch eventually landed.
 
   **Fix: `/code`'s own orchestrating session reclaims the worktree, right after the subagent that used
-  it returns — on *either* outcome (`ready-for-land` or `land-escalated`).** Neither `code-reviewer` nor
-  a rebase pickup can `git worktree remove` the worktree it is currently standing in, so each instead
-  **reports** its own launch worktree's path and local branch name in its final message; `/code` (never
-  itself worktree-isolated — it runs from the repo root, the same place `/land`'s own GC already runs
-  its `git worktree remove --force` from) does the actual removal immediately after collecting that
-  agent's result, per ticket, not batched to the end of a fan-out. This is safe on both outcomes because
-  of the same fetch-and-checkout architecture the collision fix relies on: by the time either agent
-  reports its worktree, that worktree holds nothing `origin/land/<id>` doesn't already have — a clean
-  pass pushes before it reports, and an escalation's aborted merge (rebase pickup) or reverted-to-green
-  commit (reviewer) leaves the checkout an exact mirror of what was already on origin. Nothing local is
-  ever lost by removing it. `/land`'s backstops 1-4 are untouched by this — they remain the net for the
-  one case this fix cannot reach: an agent that crashes before it can report its own worktree back.
-  Scope: `.claude/skills/code/SKILL.md` (step 0, step 1, and Phase 2's dispatch instructions each now
-  ask the subagent to report its worktree path + branch, and each immediately reclaims it),
-  `.claude/agents/code-reviewer.md` and `.claude/agents/coding.md`'s rebase-pickup section (both report
-  their own launch worktree in their final message, on either outcome). Docs-only change, no code/tests
-  affected — same shape as lode-em6v.
+  it returns — on *either* outcome (`ready-for-land` or `land-escalated`) — and *derives* which worktree
+  that was, rather than being told.** Neither `code-reviewer` nor a rebase pickup can `git worktree
+  remove` the worktree it is currently standing in, so `/code` (never itself worktree-isolated — it runs
+  from the repo root, the same place `/land`'s own GC already runs its `git worktree remove --force`
+  from) does the removal immediately after collecting that agent's result, per ticket, not batched to
+  the end of a fan-out.
+
+  The derivation is the load-bearing choice, and it falls straight out of lode-em6v: the agent's branch
+  is always `land/<id>--<its-own-worktree-dir>`, so the **ticket id alone** recovers both the worktree
+  path and the branch name from `git worktree list --porcelain`. An earlier draft had each agent
+  *report* its path and branch in its final message and had `/code` act on that string; deriving instead
+  is strictly better on the cases that actually leak. It needs no cooperation from the agent, so it
+  still fires when the agent **crashed**, **escalated**, or returned a garbled path — whereas a reported
+  string is exactly what a crashed agent never sends, leaving the very case this ticket exists to close
+  (an escalated branch, which never merges into `trunk`, so backstop 1 can never reach it) uncovered a
+  second time. It also reclaims **every** worktree a ticket accumulated across N review/pickup cycles,
+  not just the last one, and it removes the trust boundary (and the path-validation guard that boundary
+  would otherwise need). It cannot touch the **builder's** worktree: that is branch-named
+  `worktree-agent-*`, never `land/<id>--*`, so the filter skips it by construction and `/land`'s
+  `review_worktree` GC still finds it.
+
+  Two `git` behaviours this depends on, both verified live: `rtk` reformats `worktree list --porcelain`
+  and breaks the field parse, so the reclaim uses **plain `git`** (same hazard as lode-9j7); and the
+  agent harness **locks** a launch worktree while its agent runs (`locked claude agent <name> (pid …)`)
+  and unlocks it on exit, so a **single** `--force` removes a finished agent's worktree but *refuses* a
+  still-locked one — it fails safe. `-f -f` must not be used: it would override the lock and rip a
+  worktree out from under a live agent.
+
+  Safe on both outcomes, for the same reason the fetch-and-checkout architecture is: by the time either
+  agent returns, its worktree holds nothing `origin/land/<id>` doesn't already have — a clean pass
+  pushes first, and an escalation's aborted merge (rebase pickup) or reverted-to-green commit (reviewer)
+  leaves the checkout an exact mirror of what is already on origin. `/land`'s backstops 1-4 are untouched
+  and remain a *partial* net — they still only reach a worktree whose branch eventually merges into
+  `trunk`, which is precisely why the reclaim above must not depend on the agent saying anything.
+  Scope: `.claude/skills/code/SKILL.md` (one reclaim block, defined at step 0 and referenced by step 1
+  and Phase 2), `.claude/agents/code-reviewer.md` and `.claude/agents/coding.md`'s rebase-pickup section
+  (both now say plainly that they neither remove nor report their own launch worktree). Docs-only
+  change, no code/tests affected — same shape as lode-em6v.
 
 - **Builder worktree retention — kept as-is; the builder keeps its worktree through the whole
   build → review → land lifecycle, and `/land`'s GC still reclaims it only on a clean land (lode-3ci,
