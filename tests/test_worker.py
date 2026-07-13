@@ -892,6 +892,45 @@ def test_reclaim_dead_letters_at_max_attempts(
     assert row["attempts"] == settings.retry_max_attempts
 
 
+@pytest.mark.parametrize("attempts_before_this_failure", [0, 1, 2])
+def test_reclaim_and_record_job_failure_agree_on_the_dead_letter_gate(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    attempts_before_this_failure: int,
+) -> None:
+    """_reclaim_stale_running and jobs.record_job_failure must dead-letter at
+    the SAME attempts count (lode-yb9t) -- a crash-reclaimed job is supposed to
+    obey the identical max-attempts gate as a cleanly-failed one, and prior to
+    this ticket nothing but a docstring note enforced that. Both now delegate
+    to jobs.next_failure_state, so this test would catch either path silently
+    reimplementing its own (possibly drifted) gate again in the future.
+    """
+    stale_job = _insert_job(
+        conn,
+        status="running",
+        attempts=attempts_before_this_failure,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    running_job = _insert_job(
+        conn,
+        target_version="ver-2",
+        status="running",
+        attempts=attempts_before_this_failure,
+    )
+
+    _reclaim_stale_running(conn, settings)
+    reclaimed_row = _job(conn, stale_job)
+
+    _, record_dead = jobs.record_job_failure(
+        conn, running_job, attempts_before_this_failure, "boom", settings
+    )
+
+    reclaimed_dead = reclaimed_row["status"] == "dead"
+    assert reclaimed_dead == record_dead
+    assert reclaimed_row["attempts"] == _job(conn, running_job)["attempts"]
+
+
 def test_reclaim_excludes_batch_backed_enrich_jobs(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:

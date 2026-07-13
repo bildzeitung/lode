@@ -18,6 +18,7 @@ from lode.jobs import (
     DERIVE_JOB_TYPES,
     enqueue_derive_jobs,
     iso,
+    next_failure_state,
     now,
     record_job_failure,
 )
@@ -213,3 +214,48 @@ def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
     assert row[0] == "dead"
     assert row[1] == 2
     assert row[2] == "boom"
+
+
+# --- next_failure_state (lode-yb9t) ------------------------------------------
+#
+# The pure policy decision factored out of record_job_failure so that
+# worker._reclaim_stale_running (which cannot call record_job_failure itself —
+# see its docstring) shares this decision instead of duplicating it. No conn,
+# no SQL, no txn — record_job_failure's persistence is exercised by the tests
+# above; these test the decision in isolation.
+
+
+def test_next_failure_state_below_max_attempts_applies_backoff() -> None:
+    settings = Settings(retry_max_attempts=5)
+    before = now()
+
+    new_attempts, dead, next_at = next_failure_state(0, settings)
+
+    assert (new_attempts, dead) == (1, False)
+    assert next_at is not None
+    # Same tight-backoff assertion style as
+    # test_record_job_failure_applies_backoff_below_max_attempts: >= a full
+    # retry_backoff_base_s ahead of a pre-call anchor.
+    earliest = iso(before + timedelta(seconds=settings.retry_backoff_base_s))
+    assert next_at >= earliest
+
+
+def test_next_failure_state_dead_letters_at_max_attempts() -> None:
+    settings = Settings(retry_max_attempts=2)
+
+    new_attempts, dead, next_at = next_failure_state(1, settings)
+
+    assert (new_attempts, dead, next_at) == (2, True, None)
+
+
+def test_record_job_failure_delegates_to_next_failure_state(conn) -> None:
+    """record_job_failure's returned (new_attempts, dead) must match the pure
+    policy decision for the same inputs -- the persistence wrapper must not
+    silently diverge from the policy it delegates to."""
+    settings = Settings(retry_max_attempts=4)
+    job_id = _insert_running_job(conn)
+
+    expected_attempts, expected_dead, _ = next_failure_state(2, settings)
+    new_attempts, dead = record_job_failure(conn, job_id, 2, "boom", settings)
+
+    assert (new_attempts, dead) == (expected_attempts, expected_dead)

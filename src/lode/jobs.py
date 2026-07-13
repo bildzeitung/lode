@@ -160,6 +160,31 @@ def backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
     return iso(now() + timedelta(seconds=delay))
 
 
+def next_failure_state(
+    current_attempts: int, settings: Settings
+) -> tuple[int, bool, str | None]:
+    """Pure retry-policy decision for a job that just failed (lode-yb9t).
+
+    No ``conn``, no SQL, no transaction — this is the *policy* half of the
+    shared attempts/backoff/dead-letter transition, factored out of
+    :func:`record_job_failure` so a caller that cannot use that function's
+    persistence (see :func:`lode.worker._reclaim_stale_running`, which needs
+    its own CAS-guarded UPDATE and outer batched transaction) can still share
+    the decision instead of duplicating it.
+
+    Returns ``(new_attempts, dead_lettered, next_attempt_at)``:
+    ``new_attempts`` is ``current_attempts + 1``; ``dead_lettered`` is whether
+    that count reached ``settings.retry_max_attempts``; ``next_attempt_at`` is
+    the exponential-backoff ISO-8601 timestamp (:func:`backoff_next_attempt_at`)
+    when not dead-lettered, or ``None`` when it is (no further attempt is
+    scheduled).
+    """
+    new_attempts = current_attempts + 1
+    if new_attempts >= settings.retry_max_attempts:
+        return new_attempts, True, None
+    return new_attempts, False, backoff_next_attempt_at(new_attempts, settings)
+
+
 def record_job_failure(
     conn: sqlite3.Connection,
     job_id: int,
@@ -172,7 +197,8 @@ def record_job_failure(
     Increments ``attempts`` past ``current_attempts``; if the new count reaches
     ``settings.retry_max_attempts`` the row is marked ``status='dead'``,
     otherwise ``status='failed'`` with an exponential-backoff
-    ``next_attempt_at`` (:func:`backoff_next_attempt_at`).
+    ``next_attempt_at`` (:func:`next_failure_state` /
+    :func:`backoff_next_attempt_at`).
 
     Returns ``(new_attempts, dead_lettered)``. This function owns only the DB
     state transition — a caller that needs to run a dead-letter hook
@@ -187,20 +213,22 @@ def record_job_failure(
 
     **The one caller this does NOT serve** is
     :func:`lode.worker._reclaim_stale_running`, which keeps its own inline
-    UPDATEs: it needs an ``AND status='running'`` CAS guard (the row may no
-    longer be its claim) plus the per-row ``rowcount`` that guard yields, and it
-    batches every reclaimed row into one outer ``with conn:`` — which this
-    function's own ``with conn:`` cannot nest inside (sqlite3's connection
-    context manager doesn't nest; the inner exit would commit the outer's
-    partial work). It shares the backoff *formula* via
-    :func:`backoff_next_attempt_at`, but the attempts increment and the
-    ``>= retry_max_attempts`` dead-letter gate are genuinely duplicated there.
-    **A change to the retry policy has to be made in both places** — the reclaim
-    path promises a crash-reclaimed job obeys the identical max-attempts gate as
-    a cleanly-failed one, and nothing enforces that but this note.
+    CAS-guarded UPDATEs: it needs an ``AND status='running'`` guard (the row
+    may no longer be its claim) plus the per-row ``rowcount`` that guard
+    yields, and it batches every reclaimed row into one outer ``with conn:``
+    — which this function's own ``with conn:`` cannot nest inside (sqlite3's
+    connection context manager doesn't nest; the inner exit would commit the
+    outer's partial work). **It now shares the policy decision** via
+    :func:`next_failure_state` (lode-yb9t) — the attempts increment and the
+    ``>= retry_max_attempts`` dead-letter gate live in exactly one place, so
+    only the SQL/persistence shape is duplicated there, not the policy: a
+    crash-reclaimed job is *structurally* guaranteed to obey the identical
+    max-attempts gate as a cleanly-failed one.
     """
-    new_attempts = current_attempts + 1
-    if new_attempts >= settings.retry_max_attempts:
+    new_attempts, dead_lettered, next_at = next_failure_state(
+        current_attempts, settings
+    )
+    if dead_lettered:
         with conn:
             conn.execute(
                 "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
@@ -208,7 +236,6 @@ def record_job_failure(
                 (new_attempts, error_msg, job_id),
             )
         return new_attempts, True
-    next_at = backoff_next_attempt_at(new_attempts, settings)
     with conn:
         conn.execute(
             "UPDATE jobs SET status = 'failed', attempts = ?, "
