@@ -673,6 +673,89 @@ loop — permitting ticket-scoped edits to this repo's own agent/skill instructi
 `/land`'s deletion of already-merged `land/<id>` branches — and neither was re-verified by this
 ticket; treat their effectiveness as still unconfirmed rather than assumed.
 
+### Stacked land branches (lode-02v)
+
+A producer sometimes must build one `land/<id>` branch **on top of** another still-unlanded
+`land/<base>` branch — merging it in — because its ticket only makes sense once the base's code
+exists. **OBSERVED, 2026-07-12 (the lode-6qh / lode-96t knot — full history in lode-og3's FOLD-IN
+note):** lode-96t was the error-handling fix *for* the `lode models pull` command lode-6qh
+introduced, which was not yet on `trunk`; lode-96t's branch merged `land/lode-6qh` to have something
+to fix. Nothing in the landing loop modeled this before lode-02v, and the gap broke in three separate
+places at once:
+
+1. **A bounce could silently strand a dependent.** `/land` bounced lode-6qh (a real defect) and
+   deleted `origin/land/lode-6qh`, with no idea `land/lode-96t` had already merged it — lode-96t then
+   sat on a foundation that had just been rejected, carrying its defect verbatim, and could never
+   have landed. Discovering that cost a full `land-review` and a human decision, a pass later, with
+   the context cold.
+2. **`land-review` misjudged a stacked branch's scope, even in the happy path.** It diffed against
+   `git merge-base origin/trunk origin/land/<id>` — for a stacked branch that merge-base *predates*
+   its base branch, so the diff carries the base's own work too. lode-96t's diff read as 529 lines /
+   8 files when only 290 lines / 3 files were its own. This was **not** a consequence of the bounce —
+   had lode-6qh been accepted and both landed in the same pass, `land-review` would still have flagged
+   lode-96t for importing ~500 lines of "foreign" work on the scope axis.
+3. **The merge set was unordered.** A stacked branch merged before its base drags the base's
+   unreviewed content onto `trunk` under the wrong ticket's name; and a stacked branch whose base
+   isn't in the same pass's accepted set (bounced, escalated, kicked back `needs-rebase`) must not
+   land at all that pass.
+
+**This is deliberately one ticket, not a general branch-dependency subsystem — documented-YAGNI.** It
+has happened exactly once. The fix closes the three holes above with the smallest mechanism that
+covers the observed shape; it does not attempt to solve arbitrary multi-way branch dependencies.
+
+**Detection is from git, always — never from producer cooperation or bd metadata.** A branch that
+merged another live land branch contains its commits, tested directly with `git merge-base
+--is-ancestor` / `git for-each-ref --contains` over `refs/remotes/origin/land/*` — computed fresh,
+once per `/land` pass, never persisted or trusted from an earlier pass (full mechanics:
+[`land/SKILL.md` §1a](../.claude/skills/land/SKILL.md#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
+**Known, documented gap — not claimed airtight:** if a base branch's history were ever rewritten and
+force-pushed after a dependent merged it, containment against the base's *current* tip would miss the
+dependent's now-stale copy. Nothing in the current architecture force-pushes a `land/<id>` branch
+automatically (the `needs-rebase` pickup merges and pushes ordinary-fast-forward, lode-cln; the
+code-reviewer's re-push is also ordinary-fast-forward), so this is a defense against future drift or
+a manual force-push, not an actively-triggered gap today. Testing containment of the base's *oldest*
+unique commit as well as its tip narrows the exposure but does not close it completely — this is
+recorded as a known limitation, deliberately, rather than papered over.
+
+**The three fixes, each keyed to the hole it closes:**
+
+- **Bounce (and the exit-(b)/(c) human-resolution paths, which also delete a branch) check for live
+  descendants before deleting.** If a live `land/<dep>` branch already contains the branch about to
+  be deleted, the deletion does **not** proceed silently — it escalates, surfacing "bouncing `<base>`
+  strands `<dep>`: fold, sequence, or drop?" while both branches are still live, for a human to
+  decide. The lander never makes this call itself — it's exactly the shape of question the existing
+  `land-escalated` exit already exists for.
+- **A second, now-documented branch disposition on the bounce path.** Before lode-02v the *only*
+  documented outcome of a bounce was "drop the branch" — the lode-96t resolution invented "keep the
+  branch so the rebuild can lift the reviewed implementation from it" as an undocumented one-off. The
+  rule, written down now: **DROP (default)** when the bounce finding is about the branch's own
+  content (unmet acceptance, wrong approach, violated invariant — nothing there survives review).
+  **KEEP-FOR-LIFT**, reserved for a fold resolution of a strand escalation: the *dependent's* branch
+  (not the bounced base's) is kept when its content was independently judged sound, and the combined
+  rebuild ticket says explicitly "lift verbatim from `land/<dep>` @ `<sha>`" rather than re-deriving
+  the same design — mirroring lode-og3's own FOLD-IN note pattern (`git show`/`git diff` pointers, not
+  prose re-derivation). The bounced base's own branch is still dropped either way; folding doesn't
+  rescue the branch that was actually rejected.
+- **`land-review` diffs a stacked branch against its base, not `trunk`.** When `/land` tells it the
+  branch is stacked on a live `land/<base>`, it diffs `origin/land/<base>..origin/land/<id>` instead
+  of the usual trunk merge-base — isolating exactly the branch's own commits, and it must not flag
+  scope creep merely for containing the base's own, separately-reviewed content.
+- **`/land`'s merge set is topologically ordered.** Base before dependent, derived from the same git
+  containment graph, restricted to the pass's accepted set. A dependent whose base isn't accepted
+  this pass (bounced, escalated, kicked back, or simply not yet `ready-for-land`) is **held** — pulled
+  out of the merge set entirely rather than merged out of order — and automatically re-evaluated next
+  pass once its base's own outcome resolves.
+
+**The producer records `builds_on: [<id>, ...]` in bd metadata — redundancy and intent, never the
+mechanism.** When a `coding` producer discovers it must build on an unlanded `land/<other-id>`
+branch, it merges that branch into its own worktree branch and writes `builds_on` as a cheap,
+human-readable breadcrumb (`.claude/agents/coding.md`). `/land` never depends on this field being
+present or correct — it always derives the actual stacked-branch graph from git containment. A prose
+note in the ticket, or a bd field the lander trusts, was considered and rejected for the mechanism
+itself: "the producer remembers to write it and the lander reads it correctly" are precisely the two
+failure modes that caused the original incident, and building the fix on top of the same class of
+assumption would not have closed it.
+
 ### Mechanics (decided)
 
 - **Queue state is a label, not a status.** A built-but-unlanded ticket stays `in_progress` and moves

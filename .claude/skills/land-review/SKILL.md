@@ -30,6 +30,13 @@ field, read via `bd show <id> --json`. If I'm handed only an ID, I derive the br
 handed only a branch, I derive the ticket from its name. If either the ticket or the branch is
 genuinely unidentifiable, I report that as an **escalate** rather than guess.
 
+**When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
+because its ticket needed that base's code (see
+[docs/agents-workflow.md#stacked-land-branches-lode-02v](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) —
+the lander also hands me the live **base** branch it detected from git containment. I diff against
+that base instead of `trunk` (below). `/land` derives this from git, never from a bd field; if the
+lander hands me nothing, I assume unstacked and diff against `trunk` as before.
+
 ## What I do
 
 ### 1. Read the whole thing first
@@ -39,9 +46,21 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 - **The ticket:** `bd show <id> --json` — title, description, **acceptance criteria**, `design`,
   notes, parent/links. The acceptance criteria are the contract; the `design` (if a planner or
   `debate` wrote one) is the agreed approach. I read these as the standard, not my own preference.
-- **The branch:** the actual diff against the merge-base with `trunk` —
-  `git fetch origin land/<id>` then `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
-  — and the commit messages. I read what changed, not what the summary *claims* changed.
+- **The branch:** `git fetch origin land/<id>` (and `land/<base>` too if the lander told me this is a
+  stacked branch), then diff against the right base:
+  - **Unstacked (the common case):**
+    `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
+  - **Stacked** (the lander names a live `land/<base>`): diff against the **base's tip directly**,
+    not `trunk` — `git diff origin/land/<base>..origin/land/<id>`. A stacked branch's merge-base
+    with `trunk` **predates** its base branch (the base hasn't landed yet), so a trunk-diff carries
+    the base's own, separately-reviewed work as if it were this branch's — misjudging scope every
+    time, not just on a bad day (OBSERVED: lode-96t read as 529 lines / 8 files against `trunk` when
+    only 290 lines / 3 files were its own). Diffing against the base's tip isolates exactly this
+    branch's own commits. **Never flag scope creep merely for containing the base's commits** —
+    that's the base's own content, under its own ticket's review, not this branch smuggling in
+    unrelated work.
+
+  I read what changed, not what the summary *claims* changed.
 - **The design source of truth:** where the branch touches an architectural fact, I cross-check it
   against `docs/` (start with `docs/design.md`). A branch that contradicts a settled decision — or
   that *makes* a new decision the branch records only in code or a bd note instead of `docs/` — is a
