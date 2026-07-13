@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from lode.jobs import DERIVE_JOB_TYPES, enqueue_derive_jobs
+from lode.config import Settings
+from lode.jobs import DERIVE_JOB_TYPES, enqueue_derive_jobs, record_job_failure
 from lode.storage import init_db
 
 
@@ -144,5 +145,51 @@ def test_dead_status_accepted_by_schema(conn) -> None:
         )
     (status,) = conn.execute(
         "SELECT status FROM jobs WHERE target_version = 'ver-dead'"
+    ).fetchone()
+    assert status == "dead"
+
+
+# --- record_job_failure (lode-ajda) ------------------------------------------
+#
+# The shared attempts/backoff/dead-letter transition used by both
+# lode.worker.run_one (a transient handler failure) and
+# lode.enrich._mark_job_failed (an errored/expired/canceled Batches API
+# result) — previously two independent, drifting copies of this same logic.
+
+
+def _insert_running_job(conn) -> int:
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', 'ver-1', 'running')"
+        )
+    return cur.lastrowid
+
+
+def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=5)
+
+    new_attempts, dead = record_job_failure(conn, job_id, 0, "boom", settings)
+
+    assert (new_attempts, dead) == (1, False)
+    row = conn.execute(
+        "SELECT status, attempts, last_error, next_attempt_at FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    assert row[0] == "failed"
+    assert row[1] == 1
+    assert row[2] == "boom"
+    assert row[3] is not None  # a future next_attempt_at was stamped
+
+
+def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=2)
+
+    new_attempts, dead = record_job_failure(conn, job_id, 1, "boom", settings)
+
+    assert (new_attempts, dead) == (2, True)
+    (status,) = conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()
     assert status == "dead"

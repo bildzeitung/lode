@@ -64,11 +64,12 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import anthropic
 from pydantic import BaseModel, Field
 
+from lode import jobs
 from lode.auth import build_client
 from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
@@ -801,37 +802,23 @@ def _mark_job_failed(
 ) -> None:
     """Apply the retry/dead-letter state transition for a failed batch result.
 
-    Mirrors the logic in :func:`lode.worker.run_one` for transient failures:
-    increments ``attempts``, applies exponential backoff on ``next_attempt_at``,
-    and dead-letters at ``retry_max_attempts``.
+    Delegates to :func:`lode.jobs.record_job_failure` — the same shared
+    transition :func:`lode.worker.run_one` uses for a transient handler
+    failure (increments ``attempts``, applies exponential backoff on
+    ``next_attempt_at`` via the same wall-clock-drift-safe clock the worker's
+    claim predicate reads, and dead-letters at ``retry_max_attempts``). No
+    dead-letter hook is invoked here — ``embed``/``enrich`` register none
+    (``lode.worker`` module docstring).
     """
     row = conn.execute("SELECT attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
     current_attempts = row[0] if row else 0
-    new_attempts = current_attempts + 1
 
-    if new_attempts >= settings.retry_max_attempts:
-        with conn:
-            conn.execute(
-                "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
-                "WHERE id = ?",
-                (new_attempts, error_msg, job_id),
-            )
+    new_attempts, dead = jobs.record_job_failure(
+        conn, job_id, current_attempts, error_msg, settings
+    )
+    if dead:
         log.error(
             "_mark_job_failed: job %d dead-lettered after %d attempt(s)",
             job_id,
             new_attempts,
         )
-    else:
-        delay = min(
-            settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
-            settings.retry_backoff_cap_s,
-        )
-        next_at = (datetime.now(UTC) + timedelta(seconds=delay)).strftime(
-            "%Y-%m-%dT%H:%M:%S.%f"
-        )[:-3] + "Z"
-        with conn:
-            conn.execute(
-                "UPDATE jobs SET status = 'failed', attempts = ?, "
-                "last_error = ?, next_attempt_at = ? WHERE id = ?",
-                (new_attempts, error_msg, next_at, job_id),
-            )
