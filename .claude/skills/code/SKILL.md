@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to rebase, re-gate, force-push, and swap each straight back to ready-for-land — self-heals a clean rebase or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -112,15 +112,25 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    all work natively once the branch is checked out locally. Tell it explicitly this is a **rebase
    pickup**, not a fresh build, e.g.:
 
-   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — run your "Rebase
-   > pickup" cycle, not a fresh build: `git fetch origin land/lode-ai1 trunk && git checkout -B
-   > land/lode-ai1 FETCH_HEAD` (`--detach` if that branch name is checked out elsewhere), `git rebase
-   > origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), `git push --force-with-lease` to the same
-   > `land/lode-ai1` ref, refresh the head-SHA metadata, and swap `needs-rebase` straight to
-   > `ready-for-land`. Do **not** merge, close, or push trunk. On a rebase conflict: if both sides
-   > added independent, non-overlapping content (a **mechanical** conflict), resolve it directly with
-   > `Edit` and continue the rebase; if the two sides genuinely **disagree**, abort and escalate
-   > (`land-escalated`, leave the branch as it was) rather than guess — that stays a human decision.
+   > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
+   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk && git
+   > checkout -B land/lode-ai1 FETCH_HEAD` (`--detach` if that branch name is checked out elsewhere),
+   > `git merge origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop
+   > produced, then `git push origin HEAD:land/lode-ai1` (an ordinary push — the merge only appends,
+   > it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`, and
+   > swap `needs-rebase` straight to `ready-for-land` yourself. Do not merge, close, or push trunk. On
+   > a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
+   > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two
+   > sides genuinely **disagree**, abort the merge and escalate yourself (`land-escalated`, leave the
+   > branch as it was) rather than guess — that stays a human decision.
+
+   Merging `trunk` into the branch — rather than rebasing the branch onto `trunk` — is what keeps
+   this whole cycle inside the one dispatched producer, start to finish: a merge commit appends to
+   history, it never rewrites what `land/<id>` already carries on origin, so the push back is an
+   ordinary fast-forward. Expect the merge to **conflict** — a branch only carries `needs-rebase`
+   because it already failed `/land`'s clean-merge precheck — and resolving it keeps the push a
+   fast-forward all the same. Full reasoning:
+   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln).
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
    (`run_in_background: true`), **subject to the concurrency cap** (`CODE_MAX_CONCURRENT_AGENTS`,
@@ -287,13 +297,19 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 - **Step 0's rebase pickup is a third mode, not a phase.** It reuses the `coding` subagent (its
   "Rebase pickup" cycle, distinct from its normal build cycle) but skips Phase 2 entirely — a
   `needs-rebase` ticket already passed technical review before `/land` kicked it back, so it goes
-  straight to `ready-for-land` once the rebase is clean. Never dispatch a `code-reviewer` for one.
-  **Self-healing covers a clean rebase and a *mechanical* conflict** (independent, non-overlapping
-  additions the pickup now resolves directly with `Edit`, since it works from its own checked-out
-  worktree — lode-8k3); a conflict where the two sides *genuinely disagree* still escalates to a
-  human. That's a deliberate judgment boundary, not a tooling gap — so this skill's own frontmatter
-  claim of self-healing holds for the clean-rebase and mechanical-conflict cases, but a real
-  disagreement still needs a manual nudge, and always will.
+  straight to `ready-for-land` once current `trunk` is merged in. Never dispatch a
+  `code-reviewer` for one. **Self-healing covers a clean merge and a *mechanical* conflict**
+  (independent, non-overlapping additions the pickup resolves directly with `Edit`, since it works
+  from its own checked-out worktree — lode-8k3); a conflict where the two sides *genuinely disagree*
+  still escalates to a human. That's a deliberate judgment boundary, not a tooling gap — so this
+  skill's own frontmatter claim of self-healing holds for the clean-merge and mechanical-conflict
+  cases, but a real disagreement still needs a manual nudge, and always will. **The whole cycle —
+  fetch, merge, re-gate, commit, push, label swap — is the dispatched `coding` producer's own job,
+  start to finish (lode-cln):** it merges `origin/trunk` into the branch rather than rebasing onto
+  it, so its push back to `land/<id>` is an ordinary fast-forward, never a rewrite — and that stays
+  true after a conflict is resolved, since resolving changes the merge commit's tree, not its
+  ancestry. Full reasoning:
+  [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln).
 - **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
   exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
   ticket was left `ready-for-code-review` by a *previous* invocation (a human's exit-(a) re-entry)

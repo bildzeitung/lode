@@ -1,6 +1,6 @@
 ---
 name: coding
-description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, rebases onto trunk (resolving a mechanical conflict directly, escalating a genuine one), re-gates, force-pushes, and swaps straight to ready-for-land. Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
+description: Builds a single lode coding/docs task in an isolated git worktree as a PRODUCER — claim a bd issue, build in the worktree, pass quality gates, push the branch to origin, and hand off at ready-for-code-review. It does NOT run the technical review (a separate Opus code-reviewer does), and never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Also runs a second "rebase pickup" cycle when dispatched at a needs-rebase ticket (a /land conflict kick-back): fetches land/<id> and checks it out into its own launch worktree, merges trunk in (resolving a mechanical conflict directly, escalating a genuine one), re-gates, and pushes the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping the ticket straight to ready-for-land itself (lode-cln). Use for any task that changes the lode repo (code, docs, configs). Honors the phase-a skeleton order and the project invariants in CLAUDE.md / AGENTS.md.
 model: sonnet
 ---
 
@@ -79,8 +79,8 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   fix-and-re-run loop necessarily re-runs against a dirty tree, and that is fine — a red gate certifies
   nothing. What must never happen is a **green** gate whose tree is then pushed uncommitted, so before
   step 8 I commit *everything* the gate loop produced: the edits I made to fix a red gate as well as
-  `nox -t fix`'s reformatting. The Rebase pickup cycle's step 5 carries the same assertion before its
-  force-push.
+  `nox -t fix`'s reformatting. The Rebase pickup cycle's step 5 carries the same assertion before it
+  pushes.
 
 ## The producer cycle
 
@@ -362,23 +362,26 @@ rtk git worktree list --porcelain | grep -q "branch refs/heads/land/<id>" && ech
 rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>, or (unnamed) if detached
 ```
 
-### 3. Rebase onto current trunk
+### 3. Merge current trunk in
 
 ```bash
-rtk git rebase origin/trunk
+rtk git merge origin/trunk
 ```
 
-- **Clean rebase** → continue to gates (step 4).
+A merge **appends** to history — it never rewrites a commit already pushed to `land/<id>` — which is
+exactly why my push back in step 5 can be an ordinary, non-force push (lode-cln).
+
+- **Clean merge** → continue to gates (step 4).
 - **Conflict** → classify it before touching anything:
   - **Mechanical** (both sides add independent, non-overlapping content at the same anchor — e.g. two
     branches each appended a distinct section to the same doc, or added an unrelated function to the
     same file) → resolve it directly with `Edit` — I'm in my own worktree now, so the write goes
     through normally, no `bash` workaround needed. Re-read the resolved file to confirm the merge is
-    what it looks like, `git add` it, and `git rebase --continue`. This is a genuine capability now,
-    not a tool-guard consequence: I can write the fix, so I do, the same way I'd resolve any other
-    conflict in my own worktree.
+    what it looks like, `git add` it, and `git commit` to complete the merge. This is a genuine
+    capability now, not a tool-guard consequence: I can write the fix, so I do, the same way I'd
+    resolve any other conflict in my own worktree.
   - **Genuine disagreement** (the two sides changed the *same* content in incompatible ways, and
-    picking one discards the other's intent) → `rtk git rebase --abort` and escalate (below). This
+    picking one discards the other's intent) → `rtk git merge --abort` and escalate (below). This
     stays a deliberate judgment boundary (lode-8k3) — a decision only a human should make, not a
     tooling limitation this fix removes.
 
@@ -395,51 +398,61 @@ rtk nox -s tests                                     # pytest
 scripts/validate-mermaid.sh                          # only if a docs/ diagram is in the branch
 ```
 
-If `nox -t fix` reformats anything, or step 3's mechanical-conflict resolution touched anything,
-commit that as part of the rebase. **Gates must be green before I re-mark the ticket** — same bar as a
-fresh build.
+If `nox -t fix` reformats anything, commit it — step 3 already completed the merge commit, so this is
+an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
+re-mark the ticket** — same bar as a fresh build.
 
-### 5. Force-push and refresh the hand-off, then STOP
+### 5. Push and swap the label myself, then STOP
 
-**Before force-pushing, assert my worktree is clean — same rule as the build cycle's hand-off (lode-tpt):**
+Because I merged `trunk` into the branch instead of rebasing onto it, my push back to `land/<id>`
+never rewrites a commit that's already on origin — it's an ordinary fast-forward, so the whole cycle
+stays mine to finish, start to end (lode-cln, full reasoning in
+[`docs/agents-workflow.md`](../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
+This holds even when the merge conflicted and I resolved it: resolving changes the merge commit's
+*tree*, never its ancestry, so the branch's already-pushed tip is still an ancestor and the push is
+still a fast-forward.
 
-```bash
-rtk git status --short          # MUST be empty before force-pushing
-```
-
-If step 4's `nox -t fix` (or step 3's conflict resolution) left anything dirty, commit it now before
-force-pushing. A force-push of a dirty tree's *last-committed* state, while the working tree itself
-holds further uncommitted edits, would silently strand those edits exactly the way an ungated hand-off
-would.
-
-The rebase rewrites `land/<id>`'s history, so the push is a force-push to the **same** ref (no new
-branch name), guarded against clobbering a push I don't know about:
+**Before pushing, assert my worktree is clean — same rule as the build cycle's hand-off (lode-tpt):**
 
 ```bash
-rtk git push --force-with-lease origin HEAD:land/<id>
+rtk git status --short          # MUST be empty before pushing
 ```
 
-Then swap the label straight back to **`ready-for-land`** — a rebase pickup skips technical review
-entirely, the same way `/land`'s kick-back skipped `land-review`: the content was never judged bad, it
-only needed to replay onto where `trunk` moved.
+If step 4's `nox -t fix` (or step 3's conflict resolution) left anything dirty, commit it now — a
+gate that ran green against a tree I then push uncommitted content on top of proves nothing (lode-tpt).
+
+Push straight to the ref that already exists on origin (no new branch, unlike a fresh build's `-u
+origin HEAD:land/<id>` push to a ref that doesn't exist yet):
+
+```bash
+rtk git push origin HEAD:land/<id>      # ordinary push — HEAD works whether I'm on a named branch or detached
+```
+
+Then refresh the hand-off metadata and swap the label myself:
 
 ```bash
 HEAD_SHA=$(rtk git rev-parse HEAD)
-SUMMARY="Rebased onto trunk @ $(rtk git rev-parse --short origin/trunk)"
 rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
-  --set-metadata land_head="$HEAD_SHA" --set-metadata land_summary="$SUMMARY"
+  --set-metadata land_head="$HEAD_SHA" \
+  --set-metadata land_summary="Merged trunk @ $(rtk git rev-parse --short origin/trunk) into the branch"
 rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
 ```
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
-precheck reads (lode-5g4). I leave `review_worktree`/`review_branch`/`review_head` untouched — they
-still correctly describe the original build (and remain what `/land`'s worktree GC keys off).
+precheck reads. I leave `review_worktree`/`review_branch`/`review_head` untouched — they still
+correctly describe the original build (and remain what `/land`'s worktree GC keys off).
 
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
-opened it this cycle — `/land` GCs it on a clean land, same as always. I **stop** and report: which
-ticket, that the rebase was clean and gates are green, the refreshed head SHA, and that it's back at
-`ready-for-land` — or, on an escalation, which kind of conflict it was and why.
+opened it this cycle — `/land` GCs it on a clean land, same as always.
+
+I **stop** and report: which ticket, that the merge was clean and the gates are green, the refreshed
+head SHA, and that it's back at `ready-for-land` — or, on an escalation, which kind of conflict it was
+and why.
+
+An **escalation** is different and stays mine: on a genuine-disagreement conflict I abort, leave the
+branch exactly as it was (no push — nothing changed to push), and set `land-escalated` myself (step
+3). That is a bd write, not a destructive git op.
 
 ### Escalation — only a genuine conflict, not a mechanical one
 
@@ -447,15 +460,15 @@ A **mechanical** conflict (independent, non-overlapping additions) is resolved d
 that's a genuine capability under this architecture, not a tool-guard limitation, so it's no longer an
 automatic escalation either. Only a **genuine disagreement** (the two sides changed the same content
 in incompatible ways) escalates — that stays a deliberate policy choice (lode-8k3), not a consequence
-of what `Edit` can reach. When it does, the branch is left exactly as it was (aborted, no force-push —
-never stranded half-rebased):
+of what `Edit` can reach. When it does, the branch is left exactly as it was (aborted, no push — never
+stranded half-merged):
 
 ```bash
 rtk bd update <id> --remove-label needs-rebase --add-label land-escalated \
-  --append-notes "ESCALATION (rebase pickup): git rebase origin/trunk onto land/<id> conflicts, and
+  --append-notes "ESCALATION (rebase pickup): git merge origin/trunk into land/<id> conflicts, and
 the two sides genuinely disagree (not a mechanical, independent-addition conflict I can resolve
 directly). Resolve manually and either re-push + reapply needs-rebase, or hand this to a human to
-finish the rebase."
+finish the merge."
 rtk scripts/bd-dolt-push.sh
 ```
 
@@ -494,12 +507,18 @@ own guidance); the cycle above already applies them, but the *why*:
   strands that bookkeeping.
 - **Marking `ready-for-code-review` on a red build, or on a build-time escalation.** The label means
   *green and ready for the reviewer* — nothing less.
-- **Marking `ready-for-code-review` (or force-pushing a rebase pickup) on a dirty tree, or trusting a
-  gate that ran against one.** `nox` gates the working tree, not `HEAD` — a dirty tree at gate time or
-  hand-off time means `review_head` can point at a commit that silently omits real edits (lode-tpt).
+- **Marking `ready-for-code-review` (or pushing during a rebase pickup) on a dirty tree, or
+  trusting a gate that ran against one.** `nox` gates the working tree, not `HEAD` — a dirty tree at
+  gate time or hand-off time means the pushed commit can silently omit real edits (lode-tpt).
   `git status --short` must be empty before the first gate run, before hand-off, and before a
-  rebase-pickup force-push. The invariant in one line: **the tree that gated green must be the tree
-  that gets committed and pushed.**
+  rebase-pickup push. The invariant in one line: **the tree that gated green must be the tree that
+  gets committed and pushed.**
+- **Rebasing instead of merging during a rebase pickup.** `git rebase origin/trunk` rewrites commits
+  already pushed to `land/<id>`, which would need a force-push to land; merging instead keeps the
+  push an ordinary fast-forward (lode-cln).
+- **Force-pushing during a rebase pickup, or reaching for `--force`/`--force-with-lease` when a plain
+  push is rejected.** A rejection means the remote moved since I fetched — re-fetch, re-merge, and
+  retry; the merge design's entire point is that the push back is an ordinary fast-forward (lode-cln).
 - **Committing the passive `.beads/*.jsonl` export.** It's a passive export; the sync wire is
   `scripts/bd-dolt-push.sh` (retry-on-reject wrapper) / `bd dolt pull`. **Never `bd import` the JSONL
   as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
@@ -532,10 +551,10 @@ own guidance); the cycle above already applies them, but the *why*:
 | Review context | head SHA (`review_head`) is what the reviewer actually uses; worktree path + branch are recorded too, for `/land`'s GC (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs `/code-review` + `/simplify` there |
-| Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git rebase origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, `push --force-with-lease`, swap straight to `ready-for-land` (no review) |
+| Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
-| Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup force-push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
+| Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | CLI framework | **Typer** (never argparse) |
 | Shell | prefix with `rtk` |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |

@@ -630,6 +630,49 @@ carries the hand-off and something else consumes the label —
    way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
    `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
 
+### The step-0 pickup merges, it never rebases (lode-cln)
+
+The `/code` step-0 pickup **merges** `origin/trunk` into the kicked-back branch instead of rebasing
+onto it. A merge commit *appends* to history: it never rewrites a commit already pushed to
+`land/<id>`, so the branch's existing tip stays an ancestor of the new one and the push back is an
+ordinary fast-forward `git push` — no `--force`/`--force-with-lease` anywhere in the cycle. That is
+the whole reason the pickup is a single self-contained producer job.
+
+Concretely, the whole cycle stays inside the one dispatched `coding` producer, start to finish:
+
+- fetch `origin/land/<id>` and `origin/trunk`, check the branch out into its own launch worktree
+  (`--detach` if that branch name is already checked out elsewhere),
+- `git merge origin/trunk` (not `git rebase`) — a **mechanical** conflict (independent,
+  non-overlapping additions) is resolved directly with `Edit`, `git add`, `git commit`; a **genuine
+  disagreement** between the two sides still escalates to a human, unchanged from before,
+- re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
+- `git push origin HEAD:land/<id>` (the head SHA if detached) — an ordinary, non-force push to a ref
+  that already exists on origin, because the merge commit descends from what's already there,
+- refresh `land_head`/`land_summary` and swap `needs-rebase` straight to `ready-for-land` itself.
+
+**Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
+`needs-rebase` when its precheck (`git merge-tree origin/trunk origin/land/<id>`) reports a conflict,
+so by construction a branch arriving at step 0 *does* conflict with current `trunk`; the clean-merge
+path is the rare one (it means `trunk` moved again in a way that dissolved the conflict). Resolving
+the conflict does not change any of the above: resolution rewrites the merge commit's *tree*, never
+its ancestry, so the branch's already-pushed tip remains an ancestor and the push stays a
+fast-forward. A conflicting pickup is therefore just as self-healing as a clean one — the only thing
+that pulls a human in is a *genuine disagreement* between the two sides.
+
+This doesn't affect a **clean fan-out of fresh builds** (Phase 1) or **technical reviews** (Phase 2)
+— only step 0's pickup, and only in that it needs no destructive push at all.
+
+**`needs-rebase` keeps its name even though the remedy is a merge.** The label names the *situation*
+(this branch no longer merges cleanly onto current `trunk`), not the remedy, so the mismatch is
+cosmetic. Renaming it would mean touching every producer and consumer of the label (`/code`'s step-0
+sweep, `/land`'s kick-back, this doc) for no behavioral gain, and a ticket may be sitting in that
+state at the time of a rename — stranding it or forcing a special case. Simplest left alone.
+
+Two `autoMode.allow` entries in `.claude/settings.json` remain relevant elsewhere in the landing
+loop — permitting ticket-scoped edits to this repo's own agent/skill instruction docs, and permitting
+`/land`'s deletion of already-merged `land/<id>` branches — and neither was re-verified by this
+ticket; treat their effectiveness as still unconfirmed rather than assumed.
+
 ### Mechanics (decided)
 
 - **Queue state is a label, not a status.** A built-but-unlanded ticket stays `in_progress` and moves
