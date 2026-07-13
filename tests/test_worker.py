@@ -161,6 +161,11 @@ def _past_iso(seconds: float = 3600) -> str:
     )[:-3] + "Z"
 
 
+def _parse_iso(ts: str) -> datetime:
+    """Parse a schema-format ISO-8601 timestamp (the inverse of ``worker._iso``)."""
+    return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+
+
 # ---------------------------------------------------------------------------
 # _claim_one — atomic claim
 # ---------------------------------------------------------------------------
@@ -836,13 +841,26 @@ def test_reclaim_resets_stale_running_to_failed_with_backoff(
         status="running",
         claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
     )
+    # Anchor the backoff check to a baseline captured BEFORE the reclaim call,
+    # not to "now" re-read after it. next_attempt_at is computed once, inside
+    # _reclaim_stale_running, off the same monotonically-nondecreasing clock
+    # (worker._now); comparing against a snapshot taken here beforehand means
+    # the assertion below can never race however long the test takes to reach
+    # it (lode-0x1 — this used to compare against a live `_now_iso()` call two
+    # statements later, which raced the 1.0s backoff under load).
+    before = _now_iso()
     count = _reclaim_stale_running(conn, settings)
     assert count == 1
     row = _job(conn, job_id)
     assert row["status"] == "failed"
     assert row["attempts"] == 1
     assert "reclaimed" in row["last_error"]
-    assert row["next_attempt_at"] > _now_iso()
+    # attempts goes 0 -> 1, so the applied backoff is exactly
+    # retry_backoff_base_s * 2**(1-1) == retry_backoff_base_s (see
+    # worker._backoff_next_attempt_at). Assert the full delay was applied,
+    # not just "some time passed" -- the intent is "a backoff was applied".
+    delta = (_parse_iso(row["next_attempt_at"]) - _parse_iso(before)).total_seconds()
+    assert delta >= settings.retry_backoff_base_s
 
 
 def test_reclaim_leaves_recently_claimed_running_alone(
