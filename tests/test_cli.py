@@ -3183,3 +3183,69 @@ def test_fastembed_still_raises_the_exhausted_sources_signature(
         "fastembed reworded its exhausted-sources error; lode.cli._warm() no "
         f"longer recognizes it and 'lode models pull' will traceback: {excinfo.value!r}"
     )
+
+
+def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
+    """Canary: ``_warm()``'s ``except httpx.TransportError`` arm still has a
+    library underneath it that can actually raise one (lode-iadh).
+
+    The ValueError canary above pins fastembed's exhausted-sources *message*;
+    this pins the other arm's *exception type*, which is a transitive coupling
+    rather than a direct one: fastembed itself declares ``requests``, not
+    ``httpx`` (``pip show fastembed`` / its own dependency metadata never
+    mentions httpx). The ``httpx.TransportError`` ``_warm()`` catches is raised
+    by **huggingface_hub**, which fastembed delegates model downloads to.
+
+    The obvious cheap guard -- "if the transport changes, our own `import
+    httpx` breaks" -- does NOT work: httpx is a *direct* lode dependency
+    (``pyproject.toml``, for the unrelated web draw-down client) and is also
+    required independently by ``anthropic``, so ``import httpx`` keeps
+    succeeding no matter what fastembed/huggingface_hub do. There is no
+    ImportError to key off.
+
+    So this pins the actual coupling via package metadata instead of behavior:
+    if huggingface_hub ever drops httpx for another transport (it has swapped
+    transports once before, requests -> httpx), this fails here, loudly and
+    hermetically -- no network, no loopback port, nothing flaky -- rather than
+    ``except httpx.TransportError`` silently stopping matching and 'lode
+    models pull' regressing to a raw traceback on its single most likely
+    failure path (no network), with the rest of the suite staying green.
+
+    Scope, stated plainly: this pins huggingface_hub's *declared* core
+    dependency, not its *runtime* behavior. It catches the realistic regression
+    -- a transport swap, which necessarily changes the dependency -- but not the
+    exotic one where huggingface_hub keeps declaring httpx and raises something
+    else anyway. A behavioral canary (point HF's endpoint at a refused loopback
+    port) was deliberately rejected in lode-og3 review as version-sensitive and
+    flaky, and a flaky canary is worse than none.
+
+    Note the ``extra`` filter below is load-bearing, not decoration:
+    huggingface_hub lists httpx *five* times -- once as a core dependency and
+    four more under the ``oauth``/``testing``/``all``/``dev`` extras. A naive
+    substring match over the raw list would keep passing if huggingface_hub
+    moved to another core transport while merely retaining httpx as a test
+    extra, which is exactly the shape a real transport migration takes. That
+    would leave this canary green while the arm it guards was already dead.
+    """
+    from importlib.metadata import requires
+
+    from packaging.requirements import Requirement
+
+    hub_requires = [Requirement(r) for r in requires("huggingface_hub") or []]
+    # Core dependencies only -- an ``extra == ...`` requirement is optional, so
+    # it proves nothing about the transport huggingface_hub actually uses.
+    core_requires = [
+        req for req in hub_requires if not (req.marker and "extra" in str(req.marker))
+    ]
+    assert any(req.name == "httpx" for req in core_requires), (
+        "huggingface_hub no longer declares httpx as a core dependency (core "
+        f"deps are now: {sorted(req.name for req in core_requires)!r}). "
+        "lode.cli._warm() catches httpx.TransportError to turn the no-network "
+        "case into 'no network route to huggingface.co' -- and that arm only "
+        "matches because fastembed delegates its downloads to huggingface_hub "
+        "(fastembed itself never declared httpx). If the hub has switched "
+        "transports, that arm is dead and 'lode models pull' now tracebacks on "
+        "the no-network path instead. TO FIX: catch the new transport's "
+        "exception in _warm() (src/lode/cli.py), and re-point this canary at "
+        "the new dependency."
+    )
