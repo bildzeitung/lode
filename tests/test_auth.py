@@ -20,6 +20,8 @@ LLM-client-construction guard (lode-85q), which otherwise can't distinguish
 "real construction on purpose" from "real construction because a mock broke".
 """
 
+import subprocess
+import sys
 from pathlib import Path
 
 import anthropic
@@ -45,6 +47,55 @@ def test_no_hardcoded_key_in_source() -> None:
     src = Path(auth.__file__).read_text()
     assert "sk-ant" not in src
     assert "api_key=" not in src
+
+
+@pytest.mark.parametrize("module", ["lode.auth", "lode.enrich"])
+def test_importing_module_does_not_import_the_sdk(module: str) -> None:
+    """Importing ``lode.auth`` / ``lode.enrich`` must NOT import ``anthropic``
+    (lode-4q97).
+
+    This is the **boundary** guard, and it is deliberately stated about the modules
+    rather than about any one caller. Both are imported on paths that never touch
+    Anthropic and may have no credentials at all:
+
+    * ``lode.auth`` -- :func:`lode.worker.drain` imports ``AuthError`` from it
+      unconditionally on every drain (its ``except`` header needs the class); and
+    * ``lode.enrich`` -- :mod:`lode.reconcile` imports ``ENRICH_PROMPT_VER`` from it
+      at module level, and ``lode work`` runs a reconcile pass on every invocation.
+
+    So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
+    model) would otherwise pay the ~0.32s SDK import on every single run to do
+    nothing with it. In both modules the SDK is used only in annotations, and the
+    ``import anthropic`` is ``TYPE_CHECKING``-guarded.
+
+    Asserting this at the module boundary -- rather than once per known call site --
+    is what makes it hold for *future* callers too: a new eager
+    ``from lode.enrich import ...`` anywhere in the codebase stays free, and cannot
+    silently reintroduce the cost.
+
+    Runs in a **subprocess** deliberately. A fresh interpreter is the real-world
+    condition this is about, and it is the only way to answer the question honestly:
+    in-process, every one of these modules is already resident (this very file
+    imports two of them), so the assertion would be vacuous -- and evicting them
+    from ``sys.modules`` to un-vacuum it re-imports them, which rebinds the
+    submodule as an attribute of the ``lode`` package and leaves a duplicate module
+    object behind to poison later tests. A subprocess sidesteps both traps.
+    """
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import {module}, sys; print('anthropic' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert proc.stdout.strip() == "False", (
+        f"importing {module} pulled in the Anthropic SDK -- keep `import anthropic` "
+        "TYPE_CHECKING-guarded (or inside the function that builds a client)"
+    )
 
 
 @pytest.mark.network
