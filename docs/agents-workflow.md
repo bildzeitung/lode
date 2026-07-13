@@ -411,6 +411,13 @@ itself stays in the committed skill so it travels to every clone; only the overr
 The skill re-reads the env var fresh at the start of every invocation, so a changed value takes effect
 on the next `/code` run without any other action.
 
+**Onboarding note (lode-y24n).** Once a machine's cap is pinned via `LODE_CODE_MAX_CONCURRENT_AGENTS`
+in `.claude/settings.local.json`, it is a **cached, per-machine constant** — it will **not** track a
+later hardware or VM-size change (more RAM, a different box, a raised WSL2 memory limit) on its own.
+There's no separate command to memorize for this: just ask Claude to recompute it, and do so after any
+such change. This is one of the small family of deliberately machine-local, non-travelling settings
+listed in [`CLAUDE.md` — New machine setup](../CLAUDE.md#new-machine-setup).
+
 ### Filing follow-up work: `blocks` vs `discovered-from` (lode-c0t3)
 
 When a builder or reviewer discovers follow-up work mid-task, the dependency type it files that
