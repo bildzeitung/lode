@@ -244,39 +244,95 @@ reviewers combined, across every dispatch source (step 0's rebase pickups, step 
 pickups, Phase 1 builders, Phase 2 reviewers) — run concurrently; the rest of the resolved task set
 queues and dispatches as running agents complete and free a slot.
 
-**Default derivation — memory term scales with workers actually spawned, not a flat constant
-(lode-lwx6).** The original derivation budgeted a flat ~3GiB per agent, calibrated on the 8 workers
-`-n auto` spawned on the 8-core reference box above. Because `-n auto` spawns one worker **per CPU
-core**, that flat constant silently undercounted on higher-core machines: on a 24-core box `-n auto`
-spawns 24 workers per agent, not 8, so a formula that still assumed 3GiB/agent resolved to **9**
-concurrent agents there — each running ~3x the memory footprint the constant assumed, i.e. optimistic
-in exactly the direction that crashed the host on the reference box. Read `MemAvailable` from
-`/proc/meminfo` (falling back to `MemTotal` if `MemAvailable` is absent); derive a **per-worker**
-memory estimate from the original calibration data point (3GiB budgeted for 8 workers on the reference
-box ⇒ ~0.375GiB/worker), multiply by *this machine's* `nproc` (matching what `-n auto` will actually
-spawn per agent here) to get the real per-agent gate footprint, divide `MemAvailable` by that, then
-clamp to `[1, nproc/2]` and floor at 1:
+**Default derivation — the per-agent budget scales with core count, and it is measured, not guessed
+(lode-lwx6).** The original derivation budgeted a **flat ~3GiB per agent**. That constant was only ever
+calibrated for the 8 workers `-n auto` spawns on the 8-core reference box — but `-n auto` spawns one
+worker **per CPU core**, so on a 24-core box each agent's gate spawns 24 workers, not 8, while the
+constant stayed at 3GiB. The old formula therefore resolved to **9** concurrent agents on a
+31GiB/24-core machine: optimistic in exactly the direction that crashed the host on the reference box.
+That is the bug.
+
+The fix budgets per agent as a **fixed cost plus a per-core cost**:
 
 ```
-per_agent_gib  = 0.375 GiB/worker × nproc
+per_agent_gib  = 2 + nproc / 8          # 3GiB @ 8 cores, 5GiB @ 24 cores
 by_mem         = MemAvailable_GiB / per_agent_gib
 by_cpu         = nproc / 2
-cap            = clamp(min(by_mem, by_cpu), 1, ∞)
+cap            = max(1, min(by_mem, by_cpu))
 ```
 
-On the 15GiB/8-core WSL2 machine the crash occurred on, `per_agent_gib` is still 0.375×8 = **3GiB** —
-identical to the old flat constant — so this resolves to the same **4** with no user action, matching
-the empirically-stable stagger count and regressing nothing there. On a 31GiB/24-core machine,
-`per_agent_gib` becomes 0.375×24 = **9GiB**, so `by_mem` = 29/9 = **3** — a safe number, not the old
-formula's unsafe 9.
+Read `MemAvailable` from `/proc/meminfo` (falling back to `MemTotal` if absent), divide by
+`per_agent_gib`, take the lower of that and `nproc/2`, floor at 1.
 
-Two directions were on the table (lode-lwx6's own design note): scale the memory term with workers
-actually spawned (chosen, above), or pin pytest's `-n` to a fixed number in the nox test session so
-the flat constant would mean something stable across machines. The fixed-`-n` route was rejected here
-because it changes the gate for every developer and every CI run, not just this fan-out heuristic,
-trading suite wall-clock time on big machines for a fix that only needed to correct a stale calibration
-constant — the memory-term fix is scoped to the concurrency-cap estimate alone and touches nothing a
-developer runs directly.
+**Where those numbers come from (measured 2026-07-12, not extrapolated).** The `2 + nproc/8` shape is
+not a guess — an earlier draft of this fix *was* one (it linearly extrapolated ~0.375GiB/worker from
+the single 3GiB/8-worker calibration point), and the measurement below refutes that draft in **both**
+directions. Peak **PSS** of the whole gate process group (PSS, not summed RSS — summing RSS across
+workers double-counts shared, memory-mapped model pages and would "confirm" any linear model), full
+suite, 31GiB/24-core box:
+
+| xdist workers | peak PSS | peak summed RSS |
+|---|---|---|
+| 4 | 4.1 GiB | 4.5 GiB |
+| 8 | **6.5 GiB** | 7.4 GiB |
+| 24 (`-n auto` here) | **11.4 GiB** | 13.0 GiB |
+
+Two things fall out, both of which contradict a plausible-sounding story:
+
+- **Footprint is real, and it is mostly *not* shared.** PSS ≈ summed RSS (11.4 vs 13.0 GiB), and ~99%
+  of it is anonymous memory. The workers do **not** meaningfully share one memory-mapped copy of the
+  reranker — so "the ONNX weights are shared through the page cache, therefore a big fan-out is nearly
+  free" is **false**, and sizing the cap on that belief would badly over-subscribe the host.
+- **But growth is concave, not linear.** Doubling 4→8 workers costs +2.4GiB (~600MiB/worker); going
+  8→24 costs only +4.9GiB (~310MiB/worker). A straight line through the origin (the rejected draft)
+  under-predicts the real 24-worker footprint by 27% (9GiB predicted vs 11.4GiB measured) while
+  simultaneously over-penalizing the cap. A fixed term plus a per-core term fits all three points; that
+  is exactly `2 + nproc/8` after the duty-cycle factor below.
+
+**The cap is a throughput heuristic, not a worst-case memory bound — do not "fix" it into one.** If all
+N agents were inside their gate at the same instant, even the empirically-safe caps would exceed RAM
+(5 × 11.4GiB = 57GiB on a 31GiB box). They don't: the gate is ~1 minute of a multi-minute agent
+lifetime, so gates mostly do not align. Dividing `MemAvailable` by the raw measured peak yields **2** on
+*both* boxes — contradicting both known-safe operating points — which is how we know the alignment
+factor is real. The `/8` (rather than `/4`) in the formula *is* that factor: it assumes roughly half of
+the in-flight agents are inside their gate at any instant. That halving is the one modelling assumption
+left, and it is pinned by two independent empirical anchors rather than by taste:
+
+| Box | measured gate peak | `per_agent_gib` | derived cap | known-good in practice |
+|---|---|---|---|---|
+| 15GiB / 8-core (the crash box) | 6.5 GiB | **3** | **4** | 4 stable, **7 crashed it** |
+| 31GiB / 24-core | 11.4 GiB | **5** | **5** | 5 stable across a full `/code` session |
+
+The formula reproduces every data point we have: it lands on **4** on the crash box (identical to the
+old flat constant there — `2 + 8/8` = 3GiB — so nothing regresses, and the original calibration is
+re-derived rather than discarded), it would have **refused** the 7 agents that actually crashed that box
+(7 × 3 = 21GiB > the ~14.5GiB available), and it lands on **5** on the 24-core box, matching what a full
+session ran without incident instead of cutting throughput ~40% to 3.
+
+**Re-measure when the suite grows.** The stale-constant bug this section documents happened because a
+memory number was written down once and never checked again. The measurement above is reproducible in
+about two minutes — run the gate under its own process group and sample peak PSS:
+
+```bash
+setsid nox -s tests & PG=$!
+while kill -0 $PG 2>/dev/null; do
+  ps -eo pid=,pgid= | awk -v g=$PG '$2==g{print $1}' |
+    xargs -I{} awk '/^Pss:/{s+=$2} END{print s}' /proc/{}/smaps_rollup 2>/dev/null |
+    awk '{t+=$1} END{print t/1024 " MiB"}'
+  sleep 2
+done
+```
+
+If the peak at this machine's `nproc` has drifted well away from `2 + nproc/8` GiB (doubled, say),
+re-fit the two coefficients — don't just nudge the cap.
+
+Two directions were on the table (lode-lwx6's own design note): scale the memory term with the workers
+actually spawned (chosen, above), or pin pytest's `-n` to a fixed number in the nox test session so a
+flat constant would mean something stable across machines. The fixed-`-n` route was rejected because it
+changes the gate for every developer and every CI run, not just this fan-out heuristic, trading suite
+wall-clock time on big machines for a fix that only needed to correct a stale calibration constant — the
+memory-term fix is scoped to the concurrency-cap estimate alone and touches nothing a developer runs
+directly.
 
 **Override — machine-local, no `SKILL.md` edit.** The env var `LODE_CODE_MAX_CONCURRENT_AGENTS`, when
 set, wins outright over the derivation (no clamping — an explicit user choice is trusted as-is). Set

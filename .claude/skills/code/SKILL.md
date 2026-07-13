@@ -61,16 +61,14 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
 >   nproc_n=$(nproc 2>/dev/null || echo 4)
 >   if [ -n "$mem_kib" ]; then
->     # -n auto spawns one xdist worker per core, so an agent's gate footprint
->     # scales with THIS machine's core count, not a flat constant (lode-lwx6:
->     # a flat 3GiB/agent undercounted a 24-core box by ~3x, since 3GiB was
->     # only ever calibrated for the 8 workers -n auto spawns on an 8-core
->     # box). Calibration: 3GiB budgeted for 8 workers on the reference
->     # 15GiB/8-core box => ~0.375GiB/worker (393216 KiB) — scale that by
->     # THIS machine's nproc to get its real per-agent gate footprint.
->     per_worker_kib=$(( 3 * 1024 * 1024 / 8 ))
->     per_agent_kib=$(( per_worker_kib * nproc_n ))
->     [ "$per_agent_kib" -lt 1 ] && per_agent_kib=1
+>     # Per-agent gate budget = 2GiB fixed + 0.125GiB/core: -n auto spawns one
+>     # xdist worker per core, so the footprint scales with THIS machine's core
+>     # count, not a flat constant (lode-lwx6 — a flat 3GiB/agent was calibrated
+>     # only for the 8 workers of an 8-core box, and let a 24-core box dispatch
+>     # 9 agents). Measured, not extrapolated; 3GiB/agent @ 8 cores, 5GiB @ 24.
+>     # docs/agents-workflow.md#concurrency-cap-lode-2cf holds the measurements,
+>     # the modelling assumption, and how to re-measure when the suite grows.
+>     per_agent_kib=$(( 2 * 1024 * 1024 + nproc_n * 1024 * 1024 / 8 ))
 >     by_mem=$(( mem_kib / per_agent_kib ))
 >   else
 >     by_mem=4                            # /proc/meminfo unavailable (non-Linux) — conservative fallback
@@ -91,12 +89,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   `{"env": {"LODE_CODE_MAX_CONCURRENT_AGENTS": "6"}}` — or export it in the shell that launches
 >   `claude` for a one-off override. The skill re-reads it fresh at the start of every invocation.
 > - **Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`), divided by a
->   per-agent gate footprint that scales with **this machine's core count** (~0.375GiB per xdist
->   worker, one worker per core), clamped to `[1, nproc/2]`, floored at 1. Resolves to **4** on the
->   original 15GiB/8-core WSL2 machine (unchanged — its per-agent footprint is still 0.375×8 = 3GiB,
->   identical to the old flat constant) and to a **safe, much lower number on higher-core machines**
->   (a 31GiB/24-core box: per-agent footprint 0.375×24 = 9GiB, `by_mem` = 29/9 = 3) instead of the old
->   formula's unsafe 9.
+>   per-agent gate budget that scales with **this machine's core count** — `2 + nproc/8` GiB, since
+>   `-n auto` spawns one xdist worker per core — then capped at `nproc/2` and floored at 1. Resolves to
+>   **4** on the original 15GiB/8-core WSL2 machine (unchanged — `2 + 8/8` = 3GiB/agent, identical to
+>   the old flat constant, so the empirically-stable stagger is preserved) and to **5** on a
+>   31GiB/24-core box (`2 + 24/8` = 5GiB/agent), instead of the old formula's unsafe 9. Both numbers are
+>   backed by a real measurement of the gate's peak memory, recorded in
+>   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf) — the cap is a
+>   throughput heuristic, **not** a worst-case memory bound; don't "tighten" it into one without reading
+>   that section.
 > - **The cap is one shared budget across every dispatch source in this invocation** — step 0's
 >   rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw
 >   from the same count; builders and reviewers are not separate pools. Track how many dispatched
