@@ -641,6 +641,32 @@ git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | whi
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
   git branch -D "$BR" 2>/dev/null || true
 done
+
+# Fourth backstop: catch DETACHED worktrees, invisible to all three sweeps above (lode-mxeu).
+# `land-review` fetches `origin/land/<id>` and checks it out DETACHED into its own launch
+# worktree per lode-k5e/lode-8k3 (fetch + checkout, no branch created) -- so it leaks one
+# worktree PER REVIEWED BRANCH, PER PASS. Every net above keys on a porcelain
+# 'branch refs/heads/...' line; a detached worktree emits 'detached' instead, so it is
+# invisible to all of them -- a third instance of the lode-r78/lode-j5i0 bug family, this
+# time a namespace that was never branch-backed in the first place. There is no branch name
+# to check "merged" against here, so the merged check CANNOT reuse $MERGED (a list of BRANCH
+# NAMES, structurally unable to match a detached worktree) -- it is
+# 'git merge-base --is-ancestor <HEAD-sha> trunk' against the sha the block's own 'HEAD ' line
+# reports. 'locked' stays the load-bearing in-use guard (lode-oqr), unchanged in meaning from
+# every sweep above: a live land-review or rebase-pickup agent's worktree must never be
+# reclaimed mid-run. Scoped to paths under .claude/worktrees/ so this can never touch the main
+# checkout (which is never detached in normal operation, but the path guard costs nothing).
+git worktree list --porcelain | awk '
+  /^worktree / { path=$2; head=""; detached=0; locked=0 }
+  /^HEAD / { head=$2 }
+  /^detached/ { detached=1 }
+  /^locked/ { locked=1 }
+  /^$/ { if (path!="" && detached && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head; path="" }
+' | while IFS=$'\t' read -r WT SHA; do
+  git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight review)
+  git worktree remove --force "$WT"                       # no branch to delete — this is the whole reclaim
+done
+git worktree prune          # drop any now-stale worktree admin entries
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -676,7 +702,18 @@ it was swept by nothing and accumulated without bound — 17 confirmed orphans o
 all already merged. Unlike `land/<id>`, a `worktree-agent-*` branch is never pushed to origin, so
 "remote gone" can't be the guard here (it would fire on every branch, live or not); the guard is
 `merged`-into-`trunk` (reusing the same `$MERGED` set the first sweep computed) plus not currently
-checked out anywhere, mirroring the first backstop's safety invariant rather than the second's.
+checked out anywhere, mirroring the first backstop's safety invariant rather than the second's. A
+**fourth** pass closes a namespace none of the first three ever covered at all (lode-mxeu):
+`land-review` checks `origin/land/<id>` out **detached** into its own launch worktree (a fetch +
+checkout, no branch created), so its worktree carries no `branch refs/heads/...` porcelain line —
+the one thing every sweep above keys on — and is invisible to all of them. This leaks one worktree
+*per reviewed branch, per pass*, forever, unlike the historical one-time residue lode-r78 and
+lode-j5i0 cleaned up. With no branch name to test, "merged" here is
+`git merge-base --is-ancestor <HEAD-sha> trunk` against the sha the worktree's own porcelain `HEAD`
+line reports — **not** a `$MERGED` lookup, since `$MERGED` is a list of branch names and a detached
+worktree has none to be in it. `locked` is still the same load-bearing in-use guard as everywhere
+else (lode-oqr): a live `land-review` or rebase-pickup run must never be reclaimed mid-review. There
+is no branch to `git branch -D`, so `git worktree remove --force` is the entire reclaim.
 
 ---
 
