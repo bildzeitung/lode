@@ -1086,7 +1086,7 @@ def test_confirming_delete_appends_a_tombstone_and_the_note_vanishes(
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT op FROM versions WHERE note_id = ? ORDER BY created",
+            "SELECT op FROM versions WHERE note_id = ? ORDER BY created, rowid",
             ("gone-note",),
         ).fetchall()
     finally:
@@ -1282,7 +1282,7 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+            "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created, rowid",
             ("note-a",),
         ).fetchall()
     finally:

@@ -94,7 +94,7 @@ def test_reapply_saves_onto_new_head_and_exits(
     assert app.return_value == fixed_id
     assert _rows(
         db_path,
-        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created, rowid",
         (fixed_id,),
     ) == [("original body", "create"), ("the conflicting edit", "update")]
     assert list(tmp_path.glob("*.draft")) == []

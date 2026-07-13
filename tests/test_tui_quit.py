@@ -253,7 +253,7 @@ def test_ctrl_q_confirm_save_saves_the_edit_and_quits_the_app(tmp_path: Path) ->
     assert app.return_value == "note-a"
     assert _rows(
         db_path,
-        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created, rowid",
         ("note-a",),
     ) == [("original body", "create"), ("saved via ctrl+q", "update")]
 
@@ -366,6 +366,6 @@ def test_ctrl_q_confirm_save_with_cas_conflict_shows_reconcile_then_quits_on_res
     # Discard: the concurrent edit's head is untouched, no clobber.
     assert _rows(
         db_path,
-        "SELECT body FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body FROM versions WHERE note_id = ? ORDER BY created, rowid",
         ("note-a",),
     ) == [("original body",), ("someone else's concurrent edit",)]

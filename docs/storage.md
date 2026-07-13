@@ -81,6 +81,19 @@ flowchart LR
     class A_USER usr;
 ```
 
+**Ordering note (lode-t1y):** the chain's *true* total order is `parent_version_id` — walking the
+chain from root to head. `created` (millisecond precision) is a convenience for the common
+"give me the chain oldest-first" query, but it is **not itself a total order**: two versions written
+inside the same millisecond tick tie, and a bare `ORDER BY created` breaks that tie arbitrarily —
+this bit `lode.versions.purge`'s whole-chain sweep, which mis-ordered ties under load (confirmed via
+xdist-parallel testing, not merely a test artifact). Any query that reconstructs chain order from
+`created` alone must tie-break deterministically — `versions.purge` does this with `ORDER BY created,
+rowid` (SQLite's implicit rowid on this table is a safe insertion-order tiebreaker: the only insert
+call site, `_write_version`, is invoked once per version and a child's parent FK must already exist,
+so rowid order == chain order). Prefer walking `parent_version_id` directly wherever the code already
+needs a `version_id → version` map; the `created, rowid` tiebreak is for read-only reporting queries
+where a chain walk is not otherwise wanted.
+
 ### Two graphs — do not conflate them
 
 - **Version lineage** — per-note history. With the decisions below, this is a **linear chain**,

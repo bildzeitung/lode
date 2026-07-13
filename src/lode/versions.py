@@ -411,10 +411,19 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
         if row is None:
             raise KeyError(note_id)
         head_version_id, head_op = row
+        # ``created`` alone is not a total order: two versions written inside
+        # the same millisecond tick (schema default has millisecond precision)
+        # tie, and SQLite breaks that tie arbitrarily -- observed directly as
+        # a mis-ordered chain under xdist load (lode-t1y). ``rowid`` (implicit
+        # on this table -- see schema.sql, no WITHOUT ROWID) is a reliable
+        # tiebreaker: every version is inserted by exactly one call site
+        # (_write_version) and a child's parent must already exist (FK), so
+        # insertion order == chain order and rowid only ever increases.
         version_ids = tuple(
             r[0]
             for r in conn.execute(
-                "SELECT version_id FROM versions WHERE note_id = ? ORDER BY created",
+                "SELECT version_id FROM versions WHERE note_id = ? "
+                "ORDER BY created, rowid",
                 (note_id,),
             )
         )

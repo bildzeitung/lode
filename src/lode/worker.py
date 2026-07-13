@@ -120,6 +120,7 @@ resubmitting a request already in flight.
 
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -232,9 +233,49 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+# Anchor pair (wall-clock reading, monotonic reading) established on first
+# call to :func:`_now` in this process. See :func:`_now` for why this exists.
+_now_anchor: tuple[datetime, float] | None = None
+
+
+def _now() -> datetime:
+    """Return the current UTC time, guaranteed non-decreasing within this process.
+
+    ``datetime.now(UTC)`` reads the OS wall clock (``CLOCK_REALTIME``), which
+    is explicitly *not* guaranteed monotonic — NTP correction or (observed
+    directly while diagnosing lode-t1y, reproduced under 22-way synthetic CPU
+    contention on this WSL2/Hyper-V host) hypervisor clock catch-up after the
+    guest was busy can step it **backward**, including between two back-to-back
+    reads in the same single-threaded loop, milliseconds apart.
+
+    That matters here because :func:`_claim_one`'s ``next_attempt_at <= now``
+    predicate treats any such regression as "nothing is ready yet", and
+    :func:`drain`'s main loop stops at the very first miss — so one backward
+    tick can strand an already-eligible job (one whose ``next_attempt_at`` was
+    stamped, by the schema default or an earlier call here, a moment earlier
+    in *this same pass*) until the next invocation. Reproduced concretely:
+    three jobs inserted with an identical schema-default ``next_attempt_at``;
+    two claimed fine, then a later loop iteration's ``now`` read was *less*
+    than that same timestamp, leaving the third job ``pending`` forever (from
+    that pass's point of view).
+
+    Anchoring to ``time.monotonic()`` (guaranteed non-decreasing by the OS)
+    on first use and deriving every subsequent reading from elapsed monotonic
+    time since that anchor fixes this at the clock-reading layer, for every
+    caller in this module, without touching any comparison logic or
+    relaxing any assertion.
+    """
+    global _now_anchor
+    mono = time.monotonic()
+    if _now_anchor is None:
+        _now_anchor = (datetime.now(UTC), mono)
+    anchor_wall, anchor_mono = _now_anchor
+    return anchor_wall + timedelta(seconds=mono - anchor_mono)
+
+
 def _now_iso() -> str:
-    """Return the current UTC time in the schema's ISO-8601 format."""
-    return _iso(datetime.now(UTC))
+    """Return the current UTC time (monotonic-safe, see :func:`_now`) in the schema's ISO-8601 format."""
+    return _iso(_now())
 
 
 def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
@@ -251,7 +292,7 @@ def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
         settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
         settings.retry_backoff_cap_s,
     )
-    return _iso(datetime.now(UTC) + timedelta(seconds=delay))
+    return _iso(_now() + timedelta(seconds=delay))
 
 
 def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
@@ -315,9 +356,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
 
     Returns the count of jobs reclaimed.
     """
-    cutoff = _iso(
-        datetime.now(UTC) - timedelta(seconds=settings.stale_running_timeout_s)
-    )
+    cutoff = _iso(_now() - timedelta(seconds=settings.stale_running_timeout_s))
     rows = conn.execute(
         "SELECT id, attempts, type, target_version FROM jobs "
         "WHERE status = 'running' AND batch_handle IS NULL "
@@ -727,7 +766,7 @@ def _batch_submit_enrich(
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
         # are retried on the next pass (not immediately — avoids hammering the API).
         delay = min(settings.retry_backoff_base_s, settings.retry_backoff_cap_s)
-        next_at = _iso(datetime.now(UTC) + timedelta(seconds=delay))
+        next_at = _iso(_now() + timedelta(seconds=delay))
         with conn:
             conn.executemany(
                 "UPDATE jobs SET status = 'failed', last_error = ?, "
