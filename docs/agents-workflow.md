@@ -632,64 +632,84 @@ carries the hand-off and something else consumes the label —
 
 ### Delegated destructive git ops (lode-cln)
 
-**A `/code` step-0 rebase pickup's `git push --force-with-lease` cannot be dispatched without a
-per-incident human authorization, and this is a deliberate safety boundary, not a bug to route
-around.** First observed 2026-07-12: dispatching the step-0 rebase pickup for a `needs-rebase`
+**A `/code` step-0 rebase pickup's `git push --force-with-lease` cannot be issued from inside a
+*delegated* Agent-tool dispatch prompt — but it doesn't need to be: the fix is to run it from the
+orchestrating `/code` session itself, which is not blocked.** First observed 2026-07-12: dispatching
+the step-0 rebase pickup for a `needs-rebase`
 ticket was hard-blocked by the Claude Code auto-mode safety classifier, citing "Git Destructive" —
 the delegated Agent-tool prompt instructed `git push --force-with-lease` to rewrite a `land/<id>`
 branch, and no user chat message had named that force-push and target. The pass only proceeded
 because the human running `/code` typed the authorization verbatim in a chat message. That
-converts the advertised self-healing rebase-pickup path (see [above](#the-landing-loop-build-review-land))
-into a manual one every time `/land`'s conflict precheck kicks a branch back — a routine event, not
-an edge case.
+converted the advertised self-healing rebase-pickup path (see
+[above](#the-landing-loop--build-review-land)) into a manual one every time `/land`'s conflict
+precheck kicks a branch back — a routine event, not an edge case. The design below (ruled in by a
+human after a first attempt was escalated at technical review, see next section) removes that
+manual step for a clean rebase or a mechanical conflict.
 
-**Empirically determined (not assumed) root cause and the boundary of what can be fixed:**
+**Empirically determined (not assumed) findings — these still hold under the ruled design below:**
 
 - A **direct** `git push --force-with-lease` to a `land/<id>` branch, run as a plain Bash call by an
-  already-active session (no further delegation), is **not** blocked — `.claude/settings.json`'s
-  `autoMode.allow` consent paragraph for this operation is unnecessary in that path; nothing gated it.
+  already-active session (no further delegation), is **not** blocked. This was observed with
+  `.claude/settings.json`'s `autoMode.allow` consent paragraph for this operation present and
+  unmodified — whether that entry is what permits the push, or the push would go through with or
+  without it, was **not** established either way. Treat the entry as load-bearing, not decorative
+  (see the correction in the next section).
 - An **Agent-tool dispatch prompt** whose own text spells out `git push --force-with-lease` is
   hard-blocked as "Git Destructive," even when the prompt quotes the committed `autoMode.allow`
   consent paragraph verbatim as justification — that additionally gets flagged as "Auto-Mode
-  Bypass" (classifier jailbreaking). The committed consent text is **not honored at this gate**,
-  regardless of wording: the gate's actual bar is a live user chat message naming the specific
-  force-push and target, not a project config file.
-- A dispatch prompt that **never names the destructive command** — instead telling the receiving
-  agent to run its own already-documented cycle (a "Rebase pickup," per its own agent
-  instructions) — is *not* blocked at dispatch time, and the receiving agent's own subsequent
-  **direct** Bash call to `git push --force-with-lease` then succeeds, consistent with the first
-  bullet.
-- **That last option is not an available fix, though.** Editing `.claude/skills/code/SKILL.md` (or
-  any other committed agent/skill instructions) to omit the destructive command from the dispatch
-  prompt *specifically because naming it triggers the safety classifier* was itself hard-blocked —
-  independently, on a separate attempt — as "Auto-Mode Bypass" **and** "Instruction Poisoning":
-  encoding a discovered classifier workaround into standing agent instructions is exactly the
-  pattern that check exists to catch, regardless of how the resulting prompt text reads once
-  written. The classifier's own guidance at that block was explicit: *"document the required human
-  authorization step instead."*
+  Bypass" (classifier jailbreaking). At *that* gate, the bar is a live user chat message naming the
+  specific force-push and target, not a project config file.
+- A dispatch prompt that **never names the destructive command** — because the receiving agent
+  genuinely isn't being asked to run one — is not blocked at dispatch time. The receiving agent's
+  own subsequent **direct** Bash call to `git push --force-with-lease` then succeeds, consistent
+  with the first bullet.
+- Separately, editing committed agent/skill instructions to omit a destructive command from a
+  dispatch prompt **specifically because naming it dodges the classifier** was independently
+  hard-blocked, on its own attempt, as "Auto-Mode Bypass" **and** "Instruction Poisoning": encoding
+  a discovered classifier workaround into standing instructions is exactly the pattern that check
+  exists to catch. **This boundary is real and the ruled design below does not rely on evading
+  it** — the design's dispatch prompt names no destructive command, but not as a workaround; the
+  subagent's job, as redesigned, genuinely contains no destructive step (below).
 
-**Conclusion — this is the second, documentation branch of lode-cln's acceptance, not the first.**
-Delegating a destructive git operation (a force-push, in particular) to a subagent via an
-Agent-tool dispatch **requires a human, in the moment, to name that specific operation and target
-in their own chat message** — no committed config, no rewording, and no amount of indirection in
-the dispatch prompt legitimately closes that gap; the one indirection that does technically avoid
-the block is itself off-limits to encode as instructions. `.claude/settings.json`'s existing
-`autoMode.allow` paragraph for `--force-with-lease` to `land/<id>` is left in place (harmless, and
-possibly useful if a future flow ever executes such a push directly rather than via a delegated
-dispatch), but it does not — and structurally cannot — cover `/code`'s step-0 dispatch as currently
-architected.
+**The ruled design (human decision, 2026-07-12):** a first attempt at fixing this kept the
+force-push inside the delegated dispatch and documented the per-incident chat authorization as a
+standing, permanent requirement. That branch was escalated at technical review rather than landed,
+because it had not considered a third option: **keep the destructive operation in the orchestrating
+`/code` session instead of the delegated prompt.** A human then ruled that option in. Concretely:
 
-**Required human step:** before running `/code` (or letting it fan out) whenever one or more
-tickets carry `needs-rebase`, the human must, in their own chat message, name the force-push and its
-target explicitly for each such ticket — e.g. *"force-push --force-with-lease to
-origin/land/lode-6qh for the rebase pickup"* (one message may name several ids for a fan-out batch).
-Without that, `/code`'s step-0 dispatch for those tickets will be hard-blocked, and `/code` should
-stop and ask for the authorization rather than guess, retry with different phrasing, or silently
-skip the sweep — see [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md) step 0's own
-note. This does not affect a **clean fan-out of fresh builds** (Phase 1) or **technical reviews**
-(Phase 2) — only step 0's rebase-pickup force-push, and (separately, unverified by this ticket, see
-`automode-consent-rules`) any other delegated dispatch that similarly names a destructive git
-command in its own prompt text.
+- `/code` step 0 dispatches the `coding` subagent to fetch `origin/land/<id>`, check it out in its
+  own launch worktree, rebase onto `origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit,
+  and **stop — without pushing.** It reports back its branch name and head SHA. The dispatch prompt
+  names no destructive git command, and that omission is honest rather than concealment: the
+  subagent genuinely performs no destructive operation.
+- The orchestrating `/code` session then runs the force-push itself, as a direct Bash call —
+  `git push --force-with-lease origin <reported-branch>:land/<id>` — which the first empirical
+  finding above establishes is not blocked. Every worktree under this repo shares one `.git` object
+  store, so the orchestrator needs no `git -C` and never enters the subagent's worktree to do this.
+  `/code` then refreshes the head-SHA metadata and swaps `needs-rebase` to `ready-for-land` itself.
+
+**Why this is legitimate, and not a rephrasing of the blocked workaround:**
+`.claude/settings.json`'s `autoMode.allow` entry #3 was written for exactly a direct
+`--force-with-lease` push to `land/*` — this design is the first flow that actually exercises it as
+written, rather than reaching for it and finding the gate keyed on dispatch-prompt text instead. It
+also relocates the one genuinely destructive step in this cycle to the session the human running
+`/code` is actually talking to, where they can see it happen, rather than hiding it inside a
+delegated subagent's dispatch prompt — the same reasoning the blocked "omit the command from the
+prompt" attempt could not claim, because that attempt left the eventual push *inside* the delegated
+subagent (avoiding detection there), whereas here the push is never delegated at all. That
+distinction — relocating the operation vs. concealing it in the same place — is why a human judged
+this option legitimate where the first branch's own documented conclusion had ruled out every
+option it considered.
+
+**Unchanged:** a rebase conflict where the two sides genuinely disagree (not a mechanical,
+independent-addition conflict) still escalates to a human. That boundary was never in question and
+this ruling doesn't touch it — see
+[`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md) step 0's dispatch prompt. This
+also doesn't affect a **clean fan-out of fresh builds** (Phase 1) or **technical reviews**
+(Phase 2) — only step 0's rebase-pickup force-push. Two other `autoMode.allow` entries exist
+alongside this one — permitting ticket-scoped edits to this repo's own agent/skill instruction
+docs, and permitting `/land`'s deletion of already-merged `land/<id>` branches — and neither was
+re-verified by this ticket; treat their effectiveness as still unconfirmed rather than assumed.
 
 ### Mechanics (decided)
 

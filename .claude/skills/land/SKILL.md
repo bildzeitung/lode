@@ -476,10 +476,13 @@ Unlike a bounce, I **do not** supersede, create a rebuild ticket, or drop the br
 escalate there's no question for a human — the producer just replays its own already-reviewed work
 onto the new `trunk`. The ticket stays `in_progress`; the `needs-rebase` label (not `ready-for-land`)
 is now its state. **`/code` picks this up automatically** (lode-wfl): every invocation sweeps
-`bd list --label needs-rebase --status in_progress` first and dispatches a `coding` producer to rebase
-`land/<id>` onto current `trunk`, re-gate, force-push, and swap the label straight back to
-`ready-for-land` — no human nudge needed unless the rebase itself conflicts (that escalates,
-`land-escalated`, same as any other genuine decision).
+`bd list --label needs-rebase --status in_progress` first and dispatches a `coding` producer to
+rebase `land/<id>` onto current `trunk`, re-gate, and commit — the orchestrating `/code` session
+then force-pushes the result itself and swaps the label straight back to `ready-for-land` (lode-cln;
+full mechanics in
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln))
+— no human nudge needed unless the rebase itself conflicts (that escalates, `land-escalated`, same
+as any other genuine decision).
 
 ## Bounce — clear failure
 
