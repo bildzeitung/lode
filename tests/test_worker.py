@@ -161,6 +161,11 @@ def _past_iso(seconds: float = 3600) -> str:
     )[:-3] + "Z"
 
 
+def _parse_iso(ts: str) -> datetime:
+    """Parse the schema's ISO-8601 millisecond-``Z`` timestamp into a datetime."""
+    return datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+
+
 # ---------------------------------------------------------------------------
 # _claim_one — atomic claim
 # ---------------------------------------------------------------------------
@@ -378,12 +383,23 @@ def test_run_transient_error_sets_failed(
 def test_run_transient_error_sets_future_next_attempt_at(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
-    """After a transient failure the next_attempt_at must be in the future."""
+    """After a transient failure, next_attempt_at must reflect the applied backoff.
+
+    Baseline is captured BEFORE run_one() and the assertion is a delta against
+    it, with zero clock reads after the call -- asserting "is it still in the
+    future" two statements later races the 1.0s backoff against however long
+    wall-clock time elapses under load before the assertion runs (lode-vnud,
+    the same defect lode-0x1 fixes for the reclaim-backoff test).
+    """
     job_id = _insert_job(conn)
     _claim_one(conn, ("embed",), _now_iso())
+    before = _now_iso()
     run_one(conn, job_id, db_path, settings, _failing_registry())
     next_at = _job(conn, job_id)["next_attempt_at"]
-    assert next_at > _now_iso(), "next_attempt_at should be in the future"
+    delta = (_parse_iso(next_at) - _parse_iso(before)).total_seconds()
+    assert delta >= settings.retry_backoff_base_s, (
+        "next_attempt_at should reflect the applied backoff"
+    )
 
 
 def test_run_backoff_grows_with_attempts(
