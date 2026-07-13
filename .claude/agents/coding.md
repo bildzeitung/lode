@@ -403,11 +403,12 @@ never comes up.
 (lode-em6v). Reusing `land/<id>` as the local name meant a second cycle on the same ticket (or a
 leftover worktree from an earlier one that never cleaned itself up) collided with an already-checked-
 out `land/<id>` elsewhere, forcing a `git checkout --detach` fallback — and a detached worktree owns no
-branch ref, so every one of `/land`'s branch-name-keyed GC sweeps structurally missed it (that's
-exactly what `/land`'s backstop 4 exists to catch, and each leak made the next cycle more likely to hit
-the same fallback — self-compounding). Suffixing the local name with this worktree's own directory name
-makes that collision structurally impossible, so there is nothing left to guard for and the detaching
-fallback is removed outright:
+branch ref, so back when `/land`'s worktree GC was still branch-name-keyed it structurally missed such a
+worktree, and each leak made the next cycle more likely to hit the same fallback (self-compounding).
+That GC is HEAD-sha-keyed now (lode-jiyk) and would reclaim a detached worktree too, but the collision is
+still worth designing out at the source: suffixing the local name with this worktree's own directory name
+makes it structurally impossible, so there is nothing left to guard for and the detaching fallback is
+removed outright:
 
 ```bash
 rtk git fetch origin land/<id> trunk
@@ -418,8 +419,8 @@ rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<work
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
 all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
-is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree reclaims exactly as
-it always has once my build lands. That name-independence is scoped to the worktree loop only: `/land`'s
+is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree is reclaimed exactly
+as it always was, once my build lands. That name-independence is scoped to the worktree loop only: `/land`'s
 dangling-**ref** backstops still match `land/*` and `worktree-agent-*` by name (they must — `refs/heads/*`
 is shared with human branches), and the `land/*` one strips this suffix before comparing against the
 exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do either way.
