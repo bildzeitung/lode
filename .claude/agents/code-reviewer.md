@@ -173,6 +173,14 @@ For a docs-only branch there is no Python gate.
 4. **Keep the last *green* commit.** If a refinement breaks the gates unrecoverably, or trades
    simplicity for complexity (a worse result than what it replaced), **revert to the last green
    commit** rather than ship the regression.
+5. **If the review surfaces work outside this branch's scope**, file it as its own bd issue rather
+   than folding it in here — and pick the dependency type deliberately, the same rule the builder
+   follows (lode-c0t3; bd allows only one type per pair, so this is a choice, not a default; full
+   rationale:
+   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
+   `blocks` if the new ticket genuinely can't be built until *this* one lands (note the discovery
+   provenance in its text instead, since the edge no longer carries it); `discovered-from` if it's
+   independently buildable right now.
 
 If the review finds nothing to change, that is a valid outcome — the branch passes as-is.
 
@@ -280,6 +288,10 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   resolves to the checked-out `land/<id>` (step 2) before trusting a "nothing to change" verdict
   (lode-k5e) — a launch worktree still sitting at `trunk` HEAD would produce that verdict on an empty
   diff, indistinguishable from a genuinely clean branch.
+- **Filing a genuinely-blocked follow-up as `discovered-from`.** It doesn't block `bd ready` — a
+  later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
+  when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
+  the new ticket's text instead, since bd allows only one dependency type per pair.
 
 ## lode invariants (quick card)
 

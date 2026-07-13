@@ -176,11 +176,25 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
 - Match the surrounding code's idiom, naming, and comment density. Every Python CLI uses **Typer**,
   never argparse. The venv lives at **`./venv`** (repo root).
 - Track work you **discover** mid-task as its own issue, linked to the parent — don't silently
-  expand scope or bury it in this commit:
+  expand scope or bury it in this commit. **Pick the dependency type deliberately — bd allows only
+  one type per pair, so this is a choice, not a default** (lode-c0t3; full rationale:
+  [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
 
-  ```bash
-  rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
-  ```
+  - **Genuinely can't be built until this ticket lands** (needs my code, or a diagnosis this ticket
+    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. Note the discovery
+    provenance in the new ticket's own text — the edge no longer carries it:
+
+    ```bash
+    rtk bd create --title="…" --description="Discovered while building <id>. …" --type=task \
+      --deps blocks:<id>
+    ```
+
+  - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
+    provenance; `bd ready` returns it immediately, which is correct here):
+
+    ```bash
+    rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
+    ```
 
 **Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
 Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the
@@ -525,9 +539,11 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Every issue should be implementable from its own text:** a clear description, **acceptance
   criteria** (definition of done — write a test against it), and `--design` for approach. If a task
   is too big to state crisply, split it and wire the dependencies.
-- **Use the right dependency type:** `blocks`/`parent-child` for structure, **`discovered-from`** for
-  work you uncover mid-task, `related` for soft links. Declare blockers up front so `bd ready` stays
-  honest.
+- **Use the right dependency type:** `blocks`/`parent-child` for structure, `related` for soft links.
+  For a follow-up discovered mid-task, `discovered-from` is provenance-only and does **not** block
+  `bd ready` — reach for `blocks` instead whenever the follow-up genuinely can't be built until this
+  ticket lands (lode-c0t3; bd allows only one type per pair, so this is a choice — see step 5 above).
+  Declare blockers up front so `bd ready` stays honest.
 - **Keep the tracker clean:** run `bd preflight` (lint/stale/orphans) before handing off; reconcile
   beads metadata during rebases so conflicts don't pile up. (`bd doctor`/`bd cleanup` are the hygiene
   tools where supported.)
@@ -567,7 +583,12 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
-- **Expanding a task's scope silently** instead of filing a `discovered-from` issue.
+- **Expanding a task's scope silently** instead of filing a follow-up issue.
+- **Filing a genuinely-blocked follow-up as `discovered-from`.** It doesn't block `bd ready` — a
+  later fan-out can dispatch a builder onto work that isn't buildable yet, or onto a diagnosis this
+  ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
+  ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
+  one dependency type per pair.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to

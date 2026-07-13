@@ -348,6 +348,54 @@ itself stays in the committed skill so it travels to every clone; only the overr
 The skill re-reads the env var fresh at the start of every invocation, so a changed value takes effect
 on the next `/code` run without any other action.
 
+### Filing follow-up work: `blocks` vs `discovered-from` (lode-c0t3)
+
+When a builder or reviewer discovers follow-up work mid-task, the dependency type it files that
+follow-up with decides whether `bd ready` treats it as dispatchable *right now* — get this wrong and
+a later `/code` fan-out can dispatch a builder onto work that is still unbuildable, or onto a root
+cause a subsequent ticket has already superseded (OBSERVED 2026-07-12: five tickets sat in `bd ready`
+this way, unbuildable until `lode-t1y` landed, two of them already based on a diagnosis `lode-t1y`
+had disproven; caught by hand, nothing in the loop would have).
+
+**`discovered-from` does not block `bd ready`.** It is a pure provenance edge — "this ticket was
+found while working that one" — and `bd ready` returns the child immediately regardless of the
+parent's state. `blocks`/`parent-child` *do* block: the child stays out of `bd ready` until the
+parent closes.
+
+**bd allows exactly one dependency type per ordered `(from, to)` pair — the two are not additive**
+(verified empirically: `bd dep add <child> <parent> --type blocks` on a pair that already carries
+`discovered-from` fails with `already exists with type "discovered-from" (requested "blocks")`, and
+the same holds trying to add `relates-to` over an existing edge). So filing a follow-up is a choice,
+not a default, and the choice trades one property for the other:
+
+- **The follow-up genuinely cannot be built or reviewed until the parent lands** (its root-cause
+  diagnosis, its target code, or a decision the parent makes is a hard prerequisite) → file it with
+  **`blocks`** (`rtk bd dep add <child> <parent> --type blocks`, or `--deps blocks:<parent>` on `bd
+  create`). This is the only choice that keeps `bd ready` honest for that pair. Because the edge no
+  longer carries "discovered while working X," say so in the new ticket's own description (e.g.
+  "discovered while building lode-t1y") — that provenance is recoverable from prose, same as any other
+  ticket fact, whereas a missing block edge is not recoverable at all: nothing catches it before a
+  builder is dispatched onto broken work.
+- **The follow-up is independent** — related to the parent but safely buildable on its own, with no
+  code or diagnosis dependency → file it with **`discovered-from`**, as before. This is still the
+  right default for the common case (cleanup noticed in passing, an unrelated bug seen along the way);
+  the fix here is narrowing when it applies, not retiring it.
+
+The test is mechanical: *would implementing this follow-up today, before the parent lands, produce
+correct work?* If no, it blocks. If yes, it's provenance-only.
+
+This rule binds both dispatch-side filers — [`.claude/agents/coding.md`](../.claude/agents/coding.md)
+(step 5, "Implement") and [`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md)
+(step 4, "Technical review") — since a builder or a reviewer can equally discover blocked follow-up
+work mid-task.
+
+**A related limit bd cannot express at all, and this fix does not attempt to:** a dependency edge can
+say "after `<id>`," but it cannot say "when nothing else is running." `lode-mtuy` (an xdist timing
+measurement) is only valid on an otherwise-idle machine — no dependency graph shape encodes that, and
+a `/code` fan-out would dispatch it into a live batch and return a confident, worthless result. That
+class of constraint is documented, not solved: it needs a human to run the ticket by hand in a quiet
+window.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
