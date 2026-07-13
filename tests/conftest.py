@@ -267,25 +267,60 @@ def _cache_cross_encoder_model_load():
     measured as the dominant per-test cost (3-9s each, lode-b4w.6).
 
     The loaded model is stateless inference weights, so caching one instance
-    per model name for the whole test session and handing it to every
+    per cache key for the whole test session and handing it to every
     ``FastEmbedCrossEncoder`` that asks for it changes no test's observable
-    behavior (identical to a production process that reuses one warm
-    reranker across multiple ``ask``s) — it just pays the load cost once
-    instead of once per slow test. Scoped to the session (not narrower) so
-    it survives across test *functions*; under ``pytest-xdist`` each worker
-    is its own process, so the cache is naturally per-worker (loads once per
-    worker, not once per test) rather than shared globally.
+    behavior (identical to a production process that reuses one warm reranker
+    across multiple ``ask``s) — it just pays the load cost once instead of once
+    per slow test. Scoped to the session (not narrower) so it survives across
+    test *functions*; under ``pytest-xdist`` each worker is its own process,
+    so the cache is naturally per-worker (loads once per worker, not once per
+    test) rather than shared globally.
+
+    That "no observable behavior change" claim holds only because the key is
+    ``(model name, TextCrossEncoder class)`` and not the model name alone
+    (lode-vzwn). The cached value is a product of *both*: ``_load`` builds it by
+    calling whichever ``TextCrossEncoder`` is bound on the ``fastembed`` module
+    at call time. So a test that observes a *side effect of the real load* rather
+    than its return value — by monkeypatching that constructor to record its
+    kwargs, the way ``test_load_passes_durable_model_cache_dir`` (in
+    tests/test_retrieval.py) does — is keyed on its own fake class, always
+    MISSES, and always gets a real load whose constructor call actually runs.
+
+    Keying on the model name alone under-keys the cache: that test would take a
+    HIT off whatever slow-tier test already loaded the same model name on that
+    xdist worker, the real constructor would never run, its recorded side effect
+    would never happen, and the assertion would fail with ``KeyError:
+    'cache_dir'`` — a coin flip on test order (``pytest-randomly``). That was
+    the bug. The key, not a convention, is what prevents it: a test that fakes
+    the constructor cannot take a hit even if it uses the default model name.
+
+    Two things this does NOT cover, so don't read it as a blanket guarantee:
+
+    * It only protects a side effect that is observed *through the constructor*.
+      A test that asserted on some other side effect of a real load (a file
+      appearing on disk, say) without faking ``TextCrossEncoder`` would still
+      take a hit and still be order-dependent.
+    * It only applies to ``FastEmbedCrossEncoder``. ``FastEmbedEntailmentScorer``
+      (lode/faithfulness.py) has a near-identical ``_load`` and a near-identical
+      test, but is deliberately *not* cached here — which is the only reason its
+      test is safe. If that load is ever session-cached too, key it the same way,
+      or that test starts flaking exactly as this one did.
     """
     from lode.retrieval import FastEmbedCrossEncoder
 
-    cache: dict[str, object] = {}
+    cache: dict[tuple[str, object], object] = {}
     original_load = FastEmbedCrossEncoder._load
 
     def _cached_load(self: FastEmbedCrossEncoder) -> object:
         if self._model is None:
-            if self._model_name not in cache:
-                cache[self._model_name] = original_load(self)
-            self._model = cache[self._model_name]
+            from fastembed.rerank import cross_encoder
+
+            # The class, not just the name: see the docstring. A monkeypatched
+            # TextCrossEncoder is a different key, so it can never take a hit.
+            key = (self._model_name, cross_encoder.TextCrossEncoder)
+            if key not in cache:
+                cache[key] = original_load(self)
+            self._model = cache[key]
         return self._model
 
     patcher = pytest.MonkeyPatch()
