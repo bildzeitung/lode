@@ -109,12 +109,11 @@ flowchart TD
 `/code` is the **only** sanctioned way to start coding work from the main session (which is
 otherwise told not to spawn agents). The skill resolves the task from its argument and runs each task
 in **two dispatched phases** — a `coding` **builder** (Sonnet), then a `code-reviewer` (Opus). **Bare
-`/code`** fans out across the whole ready frontier; `/code --single` does the top one task (`/code`
-resolves that pick **itself**, from the same filtered frontier as bare `/code` — the subagent never
-re-reads `bd ready` to choose its own ticket);
-`/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N builders in
-parallel** (one per task, each in its own isolated worktree), each followed by its own reviewer. There
-is **no `/code-parallel`**. (Skill:
+`/code`** fans out across the filtered ready frontier; `/code --single` does the top one task of that
+same frontier (`/code` resolves the pick **itself** — the subagent never re-reads `bd ready` to choose
+its own ticket); `/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N
+builders in parallel** (one per task, each in its own isolated worktree), each followed by its own
+reviewer. There is **no `/code-parallel`**. (Skill:
 [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md); agents:
 [`.claude/agents/coding.md`](../.claude/agents/coding.md),
 [`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md).)
@@ -141,7 +140,8 @@ note) as long as no other invocation's sweep is running concurrently with them. 
 Argument resolution:
 
 - **No argument** (the default) / **`--all-ready`** → fan out across the **independent, unblocked**
-  `bd ready` frontier, honoring the dependency graph and the phase-a skeleton order.
+  frontier of the filtered `bd ready --json` read (see the callout below), honoring the dependency
+  graph and the phase-a skeleton order.
 - **`--single`** → one task: `/code` resolves the pick **itself** — the same filtered frontier as
   above, top entry, dispatched as an explicitly-named id. The subagent never re-reads `bd ready` to
   pick its own ticket; `--single` collapses to "bare `/code`, limited to one ticket" — same
