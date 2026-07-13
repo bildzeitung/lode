@@ -466,8 +466,9 @@ rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
 Conflicting paths:
 $CONFLICTS
-Rebase land/<id> onto current trunk in the build worktree, re-gate, force-push the branch, refresh
-metadata.land_head, then swap needs-rebase back to ready-for-land."
+/code's step-0 pickup rebases land/<id> onto current trunk, re-gates, and commits; the orchestrating
+/code session then force-pushes the branch, refreshes metadata.land_head, and swaps needs-rebase back
+to ready-for-land (lode-cln)."
 rtk scripts/bd-dolt-push.sh       # publish the label swap + note over refs/dolt/data
 # The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
 ```

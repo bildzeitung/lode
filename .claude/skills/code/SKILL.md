@@ -116,7 +116,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > it, but **do not push**: `git fetch origin land/lode-ai1 trunk && git checkout -B land/lode-ai1
    > FETCH_HEAD` (`--detach` if that branch name is checked out elsewhere), `git rebase
    > origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
-   > then **stop on a clean rebase** — report back your branch name and head SHA; do **not**
+   > then **stop on a clean rebase** — report back your **head SHA** (and your branch name, if you
+   > aren't detached); do **not**
    > force-push and do **not** swap the ticket to `ready-for-land` yourself (that's the orchestrator's
    > job, below). Do not merge, close, or push trunk. On a rebase conflict: if both sides added
    > independent, non-overlapping content (a **mechanical** conflict), resolve it directly with
@@ -125,17 +126,20 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > that stays a human decision.
 
    **The force-push is the orchestrating `/code` session's own job, never the subagent's (lode-cln).**
-   The dispatch prompt above names no destructive git command, and that's honest rather than
-   concealment — the subagent genuinely performs none. Once a dispatched `coding` agent reports back
-   a clean rebase (its branch name + head SHA), `/code` itself — this session, as a direct Bash
+   Destructive git operations belong to the orchestrating session — so the dispatch prompt above
+   names no destructive command, because the subagent's job contains none. Once a dispatched `coding`
+   agent reports back a clean rebase (its head SHA), `/code` itself — this session, as a direct Bash
    call, not a further delegation — runs:
 
    ```bash
-   rtk git push --force-with-lease origin <reported-branch>:land/lode-ai1
+   rtk git push --force-with-lease origin <reported-sha>:refs/heads/land/lode-ai1
    ```
 
-   No `git -C` and no entering the subagent's worktree is needed: every worktree under this repo
-   shares one `.git` object store, so a ref push from the main checkout reaches the same objects.
+   Push the **reported SHA**, not a branch name — the SHA is always reported, and it is the only
+   handle that exists when the producer had to check out detached. No `git -C` and no entering the
+   subagent's worktree is needed: every worktree under this repo shares one `.git` — the same object
+   store *and* the same refs — so both the producer's commits and the `origin/land/<id>`
+   remote-tracking ref that `--force-with-lease` leases against are already visible from here.
    `/code` then refreshes the head-SHA metadata and swaps `needs-rebase` straight to
    `ready-for-land` itself — per-hit, as each dispatched producer returns, not batched to the end of
    the sweep. No per-incident human authorization is needed for this: full reasoning in
@@ -321,8 +325,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   step 0 above), and refreshes the metadata and label swap itself too. This needs no per-incident
   human authorization — it keeps the one genuinely destructive step in the session the human is
   already talking to, exercising `.claude/settings.json`'s `autoMode.allow` entry for a direct
-  `--force-with-lease` to `land/*` as written, rather than working around its absence at dispatch
-  time. Full empirical background and reasoning:
+  `--force-with-lease` to `land/*` as written. Full reasoning:
   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln).
 - **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
   exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
