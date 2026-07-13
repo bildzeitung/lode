@@ -217,6 +217,28 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    - **Free-text** (e.g. "add a --json flag to search") → one producer; tell the agent that is the
      task — it files the bd issue itself before coding, per its own rules.
 
+   > **Auto-select paths only — exclude `human`-labeled tickets and epics (lode-8pqv).** `bd ready` is
+   > a dependency-satisfaction query, not a build queue: nothing about it guarantees a ticket is
+   > something a producer can actually build. Two categories reach it anyway and must never be
+   > **auto**-selected, on the **no-argument**, **`--all-ready`**, and **`--single`** paths:
+   >
+   > - any ticket carrying the **`human`** label — it exists precisely because an agent cannot resolve
+   >   it (that's what `/sweep` surfaces it for); dispatching a producer at one either invents the
+   >   decision the label exists to prevent, or burns a build cycle re-discovering that a human was
+   >   already asked.
+   > - any ticket with **`issue_type == epic`** — a container with no implementable acceptance
+   >   criteria of its own.
+   >
+   > Filter these out of the frontier before fanning out (or before picking `--single`'s top item), and
+   > **report each one skipped** — id + reason (`human`-labeled or epic) — per step 5; a skip is a
+   > signal to the operator, not noise to drop silently (same principle as `/land`'s "no silent caps").
+   >
+   > This filter applies **only** to auto-selection. **Explicitly-named IDs are an operator override
+   > and are never filtered** — `/code lode-wbv8` (a single named ID) or `/code lode-wbv8 lode-ai1`
+   > (named among several) must keep dispatching exactly as before, `human` label or `epic` type
+   > notwithstanding: the operator named it on purpose, so the ticket's kind is not this skill's call
+   > to second-guess on that path.
+
 3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
    `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a subagent is
    pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own, so the harness must
@@ -302,7 +324,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    `code-reviewer` dispatched, and which were left alone for missing `review_head`. If the concurrency
    cap ever throttled dispatch this invocation (more dispatchable work than free slots at some point),
    say so — which cap value was in effect and roughly how the queue drained — so a fan-out that took
-   longer than the ticket count alone would suggest isn't mistaken for a stall.
+   longer than the ticket count alone would suggest isn't mistaken for a stall. On an auto-select run
+   (no argument, `--all-ready`, or `--single`), also report **every ticket step 2's `human`/epic filter
+   skipped** — id + reason (`human`-labeled or epic) — even when the count is zero; this is the same
+   "no silent caps" principle as the rest of this step, not optional when nothing was skipped.
 
 ## Notes
 
