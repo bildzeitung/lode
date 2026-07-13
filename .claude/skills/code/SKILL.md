@@ -50,10 +50,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
 > **Concurrency cap — one shared budget for every dispatch below (lode-2cf).** 7 concurrent agents
 > (builders + reviewers) crashed the Claude Code host twice on 2026-07-10: each agent's gate is
-> `nox -s tests` with pytest-xdist `-n auto` = 8 workers, each holding a cached ONNX reranker, and
-> 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's memory. Staggering to ~4 concurrent agents
-> ran the identical workload with zero further crashes. **Before step 0**, compute the cap once and
-> hold it for the rest of the invocation:
+> `nox -s tests` with pytest-xdist `-n auto` — **one worker per CPU core** (noxfile.py) — each holding
+> a cached ONNX reranker, and 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's memory.
+> Staggering to ~4 concurrent agents ran the identical workload with zero further crashes. **Before
+> step 0**, compute the cap once and hold it for the rest of the invocation:
 >
 > ```bash
 > CODE_MAX_CONCURRENT_AGENTS="${LODE_CODE_MAX_CONCURRENT_AGENTS:-$(
@@ -61,8 +61,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
 >   nproc_n=$(nproc 2>/dev/null || echo 4)
 >   if [ -n "$mem_kib" ]; then
->     mem_gib=$(( mem_kib / 1024 / 1024 ))
->     by_mem=$(( mem_gib / 3 ))          # ~3GiB per agent gate (8-worker xdist + cached reranker)
+>     # Per-agent gate budget = 2GiB fixed + 0.125GiB/core: -n auto spawns one
+>     # xdist worker per core, so the footprint scales with THIS machine's core
+>     # count, not a flat constant (lode-lwx6 — a flat 3GiB/agent was calibrated
+>     # only for the 8 workers of an 8-core box, and let a 24-core box dispatch
+>     # 9 agents). Measured, not extrapolated; 3GiB/agent @ 8 cores, 5GiB @ 24.
+>     # docs/agents-workflow.md#concurrency-cap-lode-2cf holds the measurements,
+>     # the modelling assumption, and how to re-measure when the suite grows.
+>     per_agent_kib=$(( 2 * 1024 * 1024 + nproc_n * 1024 * 1024 / 8 ))
+>     by_mem=$(( mem_kib / per_agent_kib ))
 >   else
 >     by_mem=4                            # /proc/meminfo unavailable (non-Linux) — conservative fallback
 >   fi
@@ -81,9 +88,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   `"env"` block (gitignored, applied to every session on that machine):
 >   `{"env": {"LODE_CODE_MAX_CONCURRENT_AGENTS": "6"}}` — or export it in the shell that launches
 >   `claude` for a one-off override. The skill re-reads it fresh at the start of every invocation.
-> - **Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`) at ~3GiB per
->   agent's gate footprint, clamped to `[1, nproc/2]`, floored at 1. Resolves to **4** on this
->   15GiB/8-core WSL2 machine without any user action.
+> - **Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`), divided by a
+>   per-agent gate budget that scales with **this machine's core count** — `2 + nproc/8` GiB, since
+>   `-n auto` spawns one xdist worker per core — then capped at `nproc/2` and floored at 1. Resolves to
+>   **4** on the original 15GiB/8-core WSL2 machine (unchanged — `2 + 8/8` = 3GiB/agent, identical to
+>   the old flat constant, so the empirically-stable stagger is preserved) and to **5** on a
+>   31GiB/24-core box (`2 + 24/8` = 5GiB/agent), instead of the old formula's unsafe 9. Both numbers are
+>   backed by a real measurement of the gate's peak memory, recorded in
+>   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf) — the cap is a
+>   throughput heuristic, **not** a worst-case memory bound; don't "tighten" it into one without reading
+>   that section.
 > - **The cap is one shared budget across every dispatch source in this invocation** — step 0's
 >   rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw
 >   from the same count; builders and reviewers are not separate pools. Track how many dispatched
