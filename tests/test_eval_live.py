@@ -64,6 +64,7 @@ ABSTENTION_FLOOR = 0.95
 
 
 @pytest.mark.slow
+@pytest.mark.network
 def test_eval_golden_set_live() -> None:
     """Score the golden Q&A set end-to-end with real seams.
 
@@ -81,6 +82,10 @@ def test_eval_golden_set_live() -> None:
     opt-in var were ever set by mistake in that context; neither
     ``nox -s tests`` (the landing gate) nor ``nox -s eval`` filters on
     markers, so the env-var opt-in above is what actually does the gating.
+
+    Also ``@pytest.mark.network`` (lode-85q): lifts ``tests/conftest.py``'s
+    autouse network/LLM-client guard for this one genuinely live test — the
+    env-var opt-in above is still what actually gates whether it runs.
     """
     if not os.environ.get("LODE_RUN_LIVE_EVAL"):
         pytest.skip(

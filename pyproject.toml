@@ -47,6 +47,7 @@ testpaths = ["tests"]
 addopts = "--strict-markers"
 markers = [
     "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",
+    "network: this test deliberately reaches real, un-mocked Anthropic SDK / network machinery (lode-85q) — the explicit, greppable escape hatch from tests/conftest.py's autouse network+LLM-client guard. Every other test fails loudly, not silently, if it ever falls through to a real network call or a real anthropic.Anthropic() construction.",
 ]
 
 [tool.setuptools_scm]
