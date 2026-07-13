@@ -252,10 +252,13 @@ constant stayed at 3GiB. The old formula therefore resolved to **9** concurrent 
 31GiB/24-core machine: optimistic in exactly the direction that crashed the host on the reference box.
 That is the bug.
 
-The fix budgets per agent as a **fixed cost plus a per-core cost**:
+The fix budgets per agent as a **fixed cost plus a per-worker cost**:
 
 ```
-per_agent_gib  = 2 + nproc / 8          # 3GiB @ 8 cores, 5GiB @ 24 cores
+workers        = LODE_TEST_WORKERS if it is a positive integer, else 8 when unset (lode-bv6y
+                 default), else nproc — "auto", xdist's "logical", or any non-numeric value means
+                 the width is unknowable here, so assume the widest the gate can get (one per core)
+per_agent_gib  = 2 + workers / 8        # 3GiB @ 8 workers, 5GiB @ 24 workers
 by_mem         = MemAvailable_GiB / per_agent_gib
 by_cpu         = nproc / 2
 cap            = max(1, min(by_mem, by_cpu))
@@ -263,6 +266,28 @@ cap            = max(1, min(by_mem, by_cpu))
 
 Read `MemAvailable` from `/proc/meminfo` (falling back to `MemTotal` if absent), divide by
 `per_agent_gib`, take the lower of that and `nproc/2`, floor at 1.
+
+**This term tracks `workers` (the `pytest -n` count the gate actually spawns), not `nproc`
+(lode-bv6y).** When this section was first written (lode-lwx6), the gate always ran `-n auto`, so
+`workers == nproc` and writing `nproc` directly into the formula was equivalent — the two were the same
+number by construction. lode-bv6y (below) broke that equivalence: the gate's default width is now a
+fixed **8** regardless of core count, overridable via `LODE_TEST_WORKERS` (including back to the old
+`auto` behavior). The memory term has to track whichever width is actually in effect — `nproc` would
+silently be the *wrong* number, and wrong in the same optimistic direction as the original bug, the
+moment a wide-core box's gate no longer spawns one worker per core by default. `by_cpu` is unrelated and
+stays on `nproc`: it bounds host-CPU contention across concurrent agent *processes*, independent of how
+many pytest workers each spawns internally.
+
+**A width the cap can't parse must fail *tight*, not optimistic.** `LODE_TEST_WORKERS` is passed
+straight through to `pytest -n`, which accepts more than integers — `auto`, and also `logical` (one
+worker per *logical* core). The cap snippet is shell, and shell arithmetic silently evaluates a
+non-numeric string to **0**, which would collapse `per_agent_gib` to its 2GiB floor and *raise* the cap
+(to 12 on the 24-core box) exactly when the gate is at its widest and heaviest. That is the same
+optimistic-in-the-wrong-direction failure as the original stale constant, and over-dispatch is what
+crashed this host twice. So the snippet treats **anything that is not a positive integer** — `auto`,
+`logical`, a typo, an exported-but-empty var — as one worker per core (`nproc`): the widest the gate can
+plausibly get, hence the tightest cap. An unparseable width may cost throughput; it must never cost
+memory headroom.
 
 **Where those numbers come from (measured 2026-07-12, not extrapolated).** The `2 + nproc/8` shape is
 not a guess — an earlier draft of this fix *was* one (it linearly extrapolated ~0.375GiB/worker from
@@ -298,16 +323,44 @@ factor is real. The `/8` (rather than `/4`) in the formula *is* that factor: it 
 the in-flight agents are inside their gate at any instant. That halving is the one modelling assumption
 left, and it is pinned by two independent empirical anchors rather than by taste:
 
-| Box | measured gate peak | `per_agent_gib` | derived cap | known-good in practice |
-|---|---|---|---|---|
-| 15GiB / 8-core (the crash box) | 6.5 GiB | **3** | **4** | 4 stable, **7 crashed it** |
-| 31GiB / 24-core | 11.4 GiB | **5** | **5** | 5 stable across a full `/code` session |
+| Box | workers spawned | measured gate peak | `per_agent_gib` | derived cap | known-good in practice |
+|---|---|---|---|---|---|
+| 15GiB / 8-core (the crash box) | 8 | 6.5 GiB | **3** | **4** | 4 stable, **7 crashed it** |
+| 31GiB / 24-core | 24 (`-n auto`, before lode-bv6y) | 11.4 GiB | **5** | **5** | 5 stable across a full `/code` session |
 
 The formula reproduces every data point we have: it lands on **4** on the crash box (identical to the
 old flat constant there — `2 + 8/8` = 3GiB — so nothing regresses, and the original calibration is
 re-derived rather than discarded), it would have **refused** the 7 agents that actually crashed that box
-(7 × 3 = 21GiB > the ~14.5GiB available), and it lands on **5** on the 24-core box, matching what a full
-session ran without incident instead of cutting throughput ~40% to 3.
+(7 × 3 = 21GiB > the ~14.5GiB available), and it lands on **5** on the 24-core box **when that box's
+gate spawns 24 workers**, matching what a full session ran without incident instead of cutting
+throughput ~40% to 3.
+
+**That last row is now a historical data point, not the default outcome — lode-bv6y narrowed the
+gate's own default width, and the cap follows it down (up, really) to 9.** SPIKE lode-mtuy measured
+(2026-07-13, idle 24-core/31GiB box, 3 reps/width, round-robin, warmup discarded) whether `-n auto` is
+even *faster* than a narrower width for this suite — nobody had checked:
+
+| xdist workers | median wall-clock | min–max | spread | reds |
+|---|---|---|---|---|
+| 4 | 34s | 32–35s | 3s | 0 |
+| 8 | 23s | 22–24s | 2s | 0 |
+| 12 | 22s | 21–23s | 2s | 1 (known lode-64jn/t1y flake, not a timing artifact) |
+| 16 | 23s | 22–24s | 2s | 0 |
+| 24 (`-n auto`) | 25s | 24–27s | 3s | 0 |
+
+`-n auto` is **not** faster — it is the *slowest* non-trivial width measured, and consistently so
+(every 24-worker run was at or above the worst 8-worker run). The curve knees at 8, is flat through 16,
+and rises past ~12: beyond that, each extra worker costs more in process-startup + model-load time than
+it recovers in parallelism. Paired with the memory table above, `-n auto` loses on **both** axes at once
+— 75% more memory (11.4 vs 6.5 GiB) for an *8% slower* median gate — so lode-bv6y changed the gate's
+default width itself (`noxfile.py`, `LODE_TEST_WORKERS`, default `8`) rather than adding a knob nobody
+would think to set. The concurrency cap, deriving `per_agent_gib` from that same effective width, now
+resolves to `2 + 8/8` = 3GiB/agent on the 24-core box too (its gate no longer spawns 24 workers unless
+someone explicitly sets `LODE_TEST_WORKERS=auto`), so `by_mem = 29/3` ≈ 9, clamped by `by_cpu = 24/2` =
+12 → **cap 9**, not 5. That is not a loosened heuristic — it is the same formula, correctly tracking a
+gate that got cheaper. Setting `LODE_TEST_WORKERS=auto` on a box opts its gate back into one worker per
+core and the cap term reverts to `nproc`-scaled (back toward 5 on this box) — the two knobs are designed
+to move together, never independently.
 
 **Re-measure when the suite grows.** The stale-constant bug this section documents happened because a
 memory number was written down once and never checked again. The measurement above is reproducible in
@@ -323,16 +376,26 @@ while kill -0 $PG 2>/dev/null; do
 done
 ```
 
-If the peak at this machine's `nproc` has drifted well away from `2 + nproc/8` GiB (doubled, say),
-re-fit the two coefficients — don't just nudge the cap.
+If the peak at this machine's effective worker count (`LODE_TEST_WORKERS`, default 8) has drifted well
+away from `2 + workers/8` GiB (doubled, say), re-fit the two coefficients — don't just nudge the cap.
+Re-run the wall-clock side too (lode-mtuy's method, above) if the suite has grown substantially — the
+knee moves with test count, and the specific width `8` was measured on one machine at one suite size.
 
 Two directions were on the table (lode-lwx6's own design note): scale the memory term with the workers
 actually spawned (chosen, above), or pin pytest's `-n` to a fixed number in the nox test session so a
-flat constant would mean something stable across machines. The fixed-`-n` route was rejected because it
-changes the gate for every developer and every CI run, not just this fan-out heuristic, trading suite
-wall-clock time on big machines for a fix that only needed to correct a stale calibration constant — the
-memory-term fix is scoped to the concurrency-cap estimate alone and touches nothing a developer runs
-directly.
+flat constant would mean something stable across machines. The fixed-`-n` route was rejected *at the
+time* because it changes the gate for every developer and every CI run, not just this fan-out heuristic
+— trading suite wall-clock time on big machines for a fix that only needed to correct a stale
+calibration constant looked like scope creep when nobody had checked whether that trade was even real.
+
+**lode-bv6y revisited that rejection once lode-mtuy's spike measured the wall-clock side, and it
+inverted.** The rejected trade assumed `-n auto` was at least *faster* in exchange for the extra memory
+— the SPIKE showed the opposite: `-n auto` is both slower and heavier than `-n 8` on this suite (see the
+wall-clock table above). With no upside left on either axis, pinning the gate's own default off `auto`
+stopped being scope creep and became the actual fix — `noxfile.py` now defaults `-n` to `8`
+(`LODE_TEST_WORKERS`, overridable, including back to `auto`), and the cap formula above was updated to
+track that same effective width rather than `nproc`, so the two knobs can't silently drift apart the way
+a memory-only fix would have allowed (set `-n 4` and the cap would still budget for a 24-worker gate).
 
 **Override — machine-local, no `SKILL.md` edit.** The env var `LODE_CODE_MAX_CONCURRENT_AGENTS`, when
 set, wins outright over the derivation (no clamping — an explicit user choice is trusted as-is). Set
