@@ -539,11 +539,13 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Every issue should be implementable from its own text:** a clear description, **acceptance
   criteria** (definition of done — write a test against it), and `--design` for approach. If a task
   is too big to state crisply, split it and wire the dependencies.
-- **Use the right dependency type:** `blocks`/`parent-child` for structure, `related` for soft links.
-  For a follow-up discovered mid-task, `discovered-from` is provenance-only and does **not** block
-  `bd ready` — reach for `blocks` instead whenever the follow-up genuinely can't be built until this
-  ticket lands (lode-c0t3; bd allows only one type per pair, so this is a choice — see step 5 above).
-  Declare blockers up front so `bd ready` stays honest.
+- **Use the right dependency type — only `blocks` gates dispatch.** `blocks` is the sole edge that
+  keeps an issue out of `bd ready` until its parent closes (i.e. lands). `parent-child` *groups* an
+  epic's children without gating them (a child is dispatchable while the epic is open — by design),
+  `discovered-from` is provenance-only, and `related` is a soft link — **none of those three block
+  `bd ready`.** So for a follow-up discovered mid-task, reach for `blocks` whenever it genuinely can't
+  be built until this ticket lands (lode-c0t3; bd allows only one type per pair, so this is a choice —
+  see step 5 above). Declare blockers up front so `bd ready` stays honest.
 - **Keep the tracker clean:** run `bd preflight` (lint/stale/orphans) before handing off; reconcile
   beads metadata during rebases so conflicts don't pile up. (`bd doctor`/`bd cleanup` are the hygiene
   tools where supported.)

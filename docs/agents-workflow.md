@@ -359,8 +359,20 @@ had disproven; caught by hand, nothing in the loop would have).
 
 **`discovered-from` does not block `bd ready`.** It is a pure provenance edge — "this ticket was
 found while working that one" — and `bd ready` returns the child immediately regardless of the
-parent's state. `blocks`/`parent-child` *do* block: the child stays out of `bd ready` until the
-parent closes.
+parent's state.
+
+**Nor does `parent-child`** — and this trap is worth naming, because "sub-work of that ticket" is a
+natural thing to reach for when you actually mean "sequenced after that ticket." An epic's child is
+dispatchable while the epic is still open, *by design* (an epic only closes once its children do, so
+gating children on it would deadlock every epic). Verified: `lode-kke.1` — status `open`, carrying
+`parent-child -> lode-kke [open]` — is returned by `bd ready` today, despite being titled "DO NOT
+START YET." Filing a blocked follow-up as `parent-child` reproduces the exact bug this rule exists to
+kill: you believe you sequenced the work; you only grouped it.
+
+**`blocks` is the edge that actually gates dispatch:** the child stays out of `bd ready` until the
+parent *closes* — and in this loop a ticket closes only when `/land` merges it to `trunk`, so a
+`blocks` edge means precisely "not dispatchable until the parent lands," which is the property we
+want.
 
 **bd allows exactly one dependency type per ordered `(from, to)` pair — the two are not additive**
 (verified empirically: `bd dep add <child> <parent> --type blocks` on a pair that already carries
