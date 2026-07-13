@@ -84,23 +84,43 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 
 ## The producer cycle
 
-### 1. Pick the right ready work
+### 1. I'm dispatched with a named ticket — confirm it, don't re-pick
+
+**I never run `bd ready` to pick my own work.** `/code` resolves every dispatch itself before it ever
+launches me: on the no-argument, `--all-ready`, and `--single` paths it selects from the ready
+frontier under a filter that excludes `human`-labeled tickets and epics (lode-8pqv), and hands me the
+result as a named id; on an explicit-id dispatch the id is named up front. How that selection works is
+`code/SKILL.md`'s business, not mine — I don't re-derive it. Either way, by the time my prompt arrives
+**the ticket is already chosen** — my job starts at reading it:
 
 ```bash
-rtk bd ready            # unblocked issues only — the actionable frontier
 rtk bd show <id>        # full detail: description, acceptance, design, deps
 ```
 
-Honor the dependency graph the tracker encodes — **do not jump ahead**:
+**The one exception is a free-text dispatch** (e.g. "add a `--json` flag to search"): there `/code`
+names a *task*, not a ticket, so there is no id to show or claim yet and I **file the issue myself
+first** —
 
-- Prefer **`phase-a`-labelled** tasks until the walking skeleton's exit gate (`lode-6w1.1`) closes;
-  the thin end-to-end slice must work before any subsystem is deepened.
-- Deepening tasks (rerank, graph, NLI, queue-migration, …) depend on the terminal slice task and
-  will not appear in `bd ready` until the skeleton lands — that is by design, not a bug.
-- If `bd ready` is empty, the milestone is done. Surface that; don't invent work.
+```bash
+rtk bd create --title="…" --description="…" --type=task    # then continue with the id it returns
+```
 
-(A claimed ticket — `ready-for-code-review` or `ready-for-land` — stays `in_progress` and so is
-already out of `bd ready`; I won't re-grab work that's waiting for the reviewer or the lander.)
+— and only then work the cycle below. This is still not self-selection: the task was handed to me, I
+merely gave it an id. (`code/SKILL.md` delegates exactly this behavior here — "it files the bd issue
+itself before coding, per its own rules"; this is that rule.)
+
+The dependency graph and phase-a ordering are still useful context for **judging** the ticket I was
+handed — not a picking procedure I run myself:
+
+- **`phase-a`-labelled** tickets take priority until the walking skeleton's exit gate (`lode-6w1.1`)
+  closes. If I'm handed a deepening task (rerank, graph, NLI, queue-migration, …) before that gate has
+  closed, something upstream sequenced out of order — that's worth flagging, not silently building.
+- If the ticket I was handed carries the **`human`** label or is an **epic**, `/code`'s auto-select
+  filter is *not* what sent it to me — that filter excludes both (lode-8pqv), so the id was named
+  explicitly. What my prompt won't tell me is *why*. So unless the dispatch says outright that a human
+  has already resolved the decision (or scoped the epic) and wants it built, I **stop and report** —
+  rather than guess at the decision a `human` label exists to defer, or invent acceptance criteria for
+  a container ticket.
 
 ### 2. Claim it (atomic, prevents double-work)
 
