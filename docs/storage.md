@@ -554,7 +554,7 @@ for the rest of the pass. The OS wall clock (`CLOCK_REALTIME`) is not safe to us
 stepped **backward** (NTP correction; hypervisor catch-up after the guest was descheduled — observed
 on this host under load, between two back-to-back reads in the same loop).
 
-`lode.worker._now` is the clock for that comparison, and it guarantees two things, both load-bearing
+`lode.jobs.now` is the clock for that comparison, and it guarantees two things, both load-bearing
 and pulling in opposite directions:
 
 1. **Readings never decrease** — a backward step is absorbed, so no job is spuriously "not ready yet".
@@ -565,11 +565,17 @@ and pulling in opposite directions:
    make every freshly enqueued job look not-yet-due, and strand it exactly as in (1) — trading one bug
    for a worse one.
 
-Guarantee (2) is what makes rows stamped from a raw wall clock — SQLite's column default, another
-process, or `lode.enrich`'s retry backoff — safe to compare against `_now()` without routing every
-writer through it. A monotonic clock alone would **not** have been safe. The cost of absorbing a
-backward step is running slightly ahead of true time until the wall clock catches up: a job retried a
-hair late, which beats a job stranded.
+Guarantee (2) is what makes rows stamped from a raw wall clock — SQLite's column default, or another
+process — safe to compare against `now()` without routing every writer through it. A monotonic clock
+alone would **not** have been safe. The cost of absorbing a backward step is running slightly ahead of
+true time until the wall clock catches up: a job retried a hair late, which beats a job stranded.
+
+The clock lives in `lode.jobs` (moved from `lode.worker` in lode-ajda), not because the worker stopped
+needing it, but so `lode.enrich`'s own retry/backoff transition (`_mark_job_failed`, applied to an
+errored/expired/canceled Batches API result) could share it too instead of reading a second, raw
+`datetime.now(UTC)` of its own — previously a second, independently-drifting copy of both the backoff
+formula and the failed/dead-letter state transition. Both `lode.worker.run_one` and
+`lode.enrich._mark_job_failed` now call the one shared `lode.jobs.record_job_failure`.
 
 ### Crash reclaim: a job stuck in `running` — pinned (lode-aor)
 
