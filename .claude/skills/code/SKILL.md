@@ -229,9 +229,26 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > - any ticket with **`issue_type == epic`** — a container with no implementable acceptance
    >   criteria of its own.
    >
-   > Filter these out of the frontier before fanning out (or before picking `--single`'s top item), and
-   > **report each one skipped** — id + reason (`human`-labeled or epic) — per step 5; a skip is a
-   > signal to the operator, not noise to drop silently (same principle as `/land`'s "no silent caps").
+   > **On the no-argument and `--all-ready` paths — read the frontier as JSON; the `human` label is
+   > invisible otherwise.** (`--single` is different; see below.) Plain `bd ready` prints an `[epic]`
+   > type marker but renders no labels at all, so a `human` ticket is indistinguishable from a
+   > buildable one unless you ask for the fields:
+   >
+   > ```bash
+   > rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+   > ```
+   >
+   > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) Filter the frontier this
+   > way **before** fanning out, and **report each ticket dropped** — id + reason (`human`-labeled or
+   > epic) — per step 5: a skip is a signal to the operator, not noise to drop silently.
+   >
+   > **On `--single`, *you* do not select — so the exclusion has to travel in the prompt.** That path
+   > deliberately leaves the pick to the subagent (bullet above), and the `coding` agent's own
+   > ready-work step carries no `human`/epic filter of its own. So a `--single` dispatch that just says
+   > "pick the top ready item" still lands a producer on exactly the tickets this note excludes. State
+   > the exclusion in the dispatch prompt instead, and have the builder report back what it passed over
+   > (step 3 spells out the wording). Filtering the frontier here would not help: the subagent re-reads
+   > `bd ready` for itself.
    >
    > This filter applies **only** to auto-selection. **Explicitly-named IDs are an operator override
    > and are never filtered** — `/code lode-wbv8` (a single named ID) or `/code lode-wbv8 lode-ai1`
@@ -263,7 +280,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > escalate (revert to green, annotate `land-escalated`, don't hand off) if a clarifying decision is
    > needed during the build; stop and report if a gate fails.
 
-   (For the `--single` case: *"Pick the top ready item from `bd ready` and produce it…"*)
+   For the `--single` case the builder picks its own ticket, so step 2's `human`/epic exclusion must be
+   stated **in the prompt** — it is the only thing enforcing it on this path:
+
+   > Pick the top ready item from `bd ready` and produce it, **skipping any ticket carrying the
+   > `human` label and any ticket with `issue_type == epic`** (read the frontier as
+   > `bd ready --json` — plain `bd ready` does not render labels). Those are not buildable: a `human`
+   > ticket owes a decision, an epic is a container. Take the top item that survives that filter, and
+   > **tell me in your final message which tickets you passed over and why** (id + reason), so I can
+   > relay it. If nothing survives, say so and build nothing rather than falling back to a filtered-out
+   > ticket.
 
 4. **Phase 2 — verify the hand-off, then dispatch a `code-reviewer` per built ticket.** Never trust a
    builder's task-notification alone: a builder that backgrounded its gates and stalled (lode-95o) can
@@ -325,9 +351,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    cap ever throttled dispatch this invocation (more dispatchable work than free slots at some point),
    say so — which cap value was in effect and roughly how the queue drained — so a fan-out that took
    longer than the ticket count alone would suggest isn't mistaken for a stall. On an auto-select run
-   (no argument, `--all-ready`, or `--single`), also report **every ticket step 2's `human`/epic filter
-   skipped** — id + reason (`human`-labeled or epic) — even when the count is zero; this is the same
-   "no silent caps" principle as the rest of this step, not optional when nothing was skipped.
+   (no argument, `--all-ready`, or `--single`), also report **every ticket the `human`/epic filter
+   passed over** — id + reason (`human`-labeled or epic). On the no-argument and `--all-ready` paths
+   you did that filtering yourself (step 2), so report it directly; on `--single` the builder did it
+   (step 3), so relay the skip list from its final message. Say so explicitly **even when nothing was
+   skipped** ("no `human`/epic tickets on the frontier"), so the operator can tell a filter that found
+   nothing from a filter that never ran.
 
 ## Notes
 
