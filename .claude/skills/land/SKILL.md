@@ -582,13 +582,24 @@ done
 # whoever made it. A worktree freshly branched off `trunk` HEAD (or freshly checked out at its
 # origin branch's current tip) is trivially "merged"/"captured" by zero divergence, so uncommitted
 # work in one is NOT protected by either arm of the check — `locked` is the only thing holding this
-# loop off, and only `.claude/agents/coding.md` raises it (lode-oqr) — code-reviewer and coding's
-# rebase pickup raise no lock at all, so the same zero-divergence gap now also applies to the origin
-# arm, not just the trunk arm. Commit (or push, for the origin arm), or `git worktree lock`, or
-# expect to be swept. This residual is PRE-EXISTING for the trunk arm (both unified sweeps already
-# had it) and now extends to the origin arm as well; lode-9hgu tracks fixing it at the root for both:
-# guard on whether the tree is actually DIRTY, rather than on a "merged"/"captured" proxy that reads
-# TRUE at zero divergence.
+# loop off. TWO things raise that lock, and conflating them is what makes this predicate look more
+# dangerous than it is:
+#   1. The Claude Code HARNESS locks every `isolation: worktree` launch worktree for the LIFETIME of
+#      the agent standing in it (reason: `claude agent <name> (pid <n> start <n>)`), released when
+#      the agent exits. Neither `.claude/agents/code-reviewer.md` nor `coding`'s rebase pickup calls
+#      `git worktree lock` itself, but both run in such a worktree — so a LIVE reviewer/pickup
+#      worktree is `locked` and this loop skips it outright, never reaching the predicate. Verified
+#      against a running reviewer (lode-amif's own).
+#   2. `.claude/agents/coding.md` ALSO locks its producer build worktree explicitly (lode-oqr),
+#      because it unlocks again at its first commit — earlier than the harness would.
+# So the zero-divergence residual bites only an EXITED agent's worktree, and only its UNCOMMITTED
+# scratch. On the trunk arm that was a real hazard (it destroyed two builds — see below). On the
+# origin arm it is benign by construction: an exited reviewer/pickup worktree at zero divergence from
+# `origin/land/<id>` holds nothing but ungated, uncommitted scratch from a run that never finished,
+# while the authoritative content is on origin and the ticket gets re-reviewed from there — which is
+# precisely the worktree this widening exists to reclaim. Commit (or push, for the origin arm), or
+# `git worktree lock`, or expect to be swept. lode-9hgu tracks replacing the "merged"/"captured"
+# proxy with a real DIRTY-tree guard for both arms.
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
@@ -641,18 +652,18 @@ git worktree list --porcelain | awk '
   # the ancestor test fails) fall through to `continue` exactly as before — this arm is simply false
   # for them, so builder worktrees are unaffected.
   #
-  # SAME RESIDUAL AS THE TRUNK ARM, NOW ALSO ON THIS ONE (lode-9hgu, not re-litigated here): the
-  # ancestor test is a proxy that reads TRUE at zero divergence. A reviewer/rebase-pickup worktree,
-  # freshly checked out at origin/land/<id>'s current tip, is trivially "an ancestor of" that same
-  # tip from the moment of checkout until its first local commit — during that narrow window this
-  # arm is already true even though nothing new has been pushed yet. Neither `code-reviewer` nor
-  # `coding`'s rebase pickup locks its worktree (only the producer build cycle does, per lode-oqr), so
-  # this widened arm inherits the identical unlocked-zero-divergence gap the trunk arm already has,
-  # just on a different branch shape. lode-9hgu is already the open, general tracking ticket for
-  # "the merged-proxy reads true at zero divergence in an unlocked worktree" and already names
-  # code-reviewer/rebase-pickup worktrees as one of the affected paths — whichever fix it lands
-  # (dirty-tree guard, broader locking, or accept-and-document) covers this arm too; not re-decided
-  # here.
+  # ZERO-DIVERGENCE RESIDUAL, AND WHY IT IS BENIGN ON THIS ARM (lode-9hgu, not re-litigated here):
+  # like the trunk arm, this ancestor test is a proxy that reads TRUE at zero divergence — a
+  # reviewer/pickup worktree freshly checked out at origin/land/<id>'s tip is trivially "an ancestor
+  # of" that same tip until its first local commit. But a LIVE reviewer/pickup worktree is `locked`
+  # for the duration of its agent's run (the harness locks every `isolation: worktree` launch
+  # worktree — see the CONTRACT above), so the awk filter drops it before this predicate ever runs:
+  # this arm CANNOT sweep a running agent. It can only reach an EXITED one, whose worktree at zero
+  # divergence holds nothing but uncommitted, ungated scratch from a run that never finished — the
+  # authoritative content is on origin and the ticket is re-reviewed from there. That is exactly the
+  # worktree this widening exists to reclaim, so the residual is benign HERE, unlike on the trunk arm
+  # (where it once destroyed two live builds, pre-lode-oqr). lode-9hgu still tracks replacing the
+  # proxy with a real dirty-tree guard for both arms.
   git merge-base --is-ancestor "$SHA" trunk \
     || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
     || continue
@@ -821,12 +832,17 @@ the new arm resolves to `origin/land/<id>` regardless of which locally-suffixed 
 checked out under. A detached worktree (no `$BR`) and a builder's own `worktree-agent-*` worktree (never
 pushed to origin, so its origin counterpart doesn't exist and the ancestor test simply fails) are
 unaffected — the new arm is false for both, so they fall through to the unchanged `trunk`-only
-behavior. This inherits the *same* zero-divergence residual the trunk arm already has (see the
-CONTRACT paragraph above and lode-9hgu) rather than introducing a new one: a freshly-checked-out
-reviewer/pickup worktree is trivially "captured on origin" (identical to origin's current tip) until
-its first local commit, and neither `code-reviewer` nor `coding`'s rebase pickup locks its worktree —
-lode-9hgu already names this exact path as affected and is the single tracking ticket for fixing it at
-the root, for both arms.
+behavior. The new arm carries the *same* zero-divergence residual the trunk arm already has (see the
+CONTRACT paragraph above and lode-9hgu) rather than introducing a new one — and on this arm it is
+**benign**. A freshly-checked-out reviewer/pickup worktree is trivially "captured on origin"
+(identical to origin's current tip) until its first local commit, but for that entire window it is
+`locked`: the harness locks every `isolation: worktree` launch worktree for the lifetime of the agent
+standing in it, so the sweep's existing `locked` filter drops a **live** reviewer/pickup worktree
+before the predicate is ever evaluated. What the arm can reach is an **exited** agent's worktree,
+which at zero divergence holds only uncommitted, ungated scratch from a run that never finished —
+authoritative content is on `origin/land/<id>` and the ticket is re-reviewed from there. That is
+precisely the worktree this widening exists to reclaim. lode-9hgu remains the single tracking ticket
+for replacing the proxy with a real dirty-tree guard, for both arms.
 
 ---
 

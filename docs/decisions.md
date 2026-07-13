@@ -526,18 +526,34 @@ are catalogued in [configuration.md](configuration.md).
   counterpart exists, so the ancestor test simply fails) are unaffected by the new arm; it is `false`
   for both, leaving their behavior exactly as before.
 
-  **Accepted, not newly introduced: the origin arm inherits the same zero-divergence residual the
-  trunk arm already has (lode-9hgu).** A reviewer/rebase-pickup worktree, freshly checked out at
-  `origin/land/<id>`'s current tip, is trivially "an ancestor of" that same tip from checkout until its
-  first local commit — during that narrow window the new arm reads true even though nothing new has
-  been pushed. Neither `code-reviewer` nor `coding`'s rebase pickup locks its worktree (only the
-  producer build cycle does, per lode-oqr), so this is the identical unlocked-zero-divergence gap the
-  trunk arm has always had, now also present on the origin arm. **lode-9hgu is already the open,
-  general tracking ticket for exactly this class of flaw** — it explicitly names
-  "code-reviewer / land-review worktrees do not lock" as one of the affected paths, predating this
-  widening — so no new ticket was filed; whichever fix lode-9hgu lands (a dirty-tree guard, broader
-  locking, or accept-and-document) covers the widened predicate for free. This decision does not
-  re-litigate lode-9hgu's open question.
+  **Accepted, not newly introduced — and benign on this arm: the zero-divergence residual (lode-9hgu)
+  cannot reach a *live* reviewer/rebase-pickup worktree, because the harness locks it.** A
+  reviewer/rebase-pickup worktree, freshly checked out at `origin/land/<id>`'s current tip, is trivially
+  "an ancestor of" that same tip from checkout until its first local commit — during that window the new
+  arm's ancestry test reads true even though nothing new has been pushed. What stops the sweep there is
+  the loop's existing `locked` filter: **the Claude Code harness locks every `isolation: worktree` launch
+  worktree for the lifetime of the agent standing in it** (lock reason `claude agent <name> (pid <n>
+  start <n>)`, released when the agent exits). Neither `.claude/agents/code-reviewer.md` nor `coding`'s
+  rebase pickup calls `git worktree lock` itself — that is why an earlier draft of this entry recorded
+  them as "unlocked" — but both *run inside* such a worktree, so a live one is `locked` in practice and
+  the awk filter drops it before the predicate is ever evaluated. (`coding.md` additionally takes an
+  *explicit* lock on its producer build worktree, per lode-oqr, because it unlocks again at its first
+  commit — earlier than the harness would.) Verified against a running reviewer during this ticket's own
+  technical review: `git worktree list --porcelain` reported the reviewer's worktree `locked`, with the
+  harness's pid-keyed reason, though the reviewer never locked anything itself.
+
+  So the widened arm can only reach an **exited** agent's worktree, which at zero divergence holds
+  nothing but uncommitted, ungated scratch from a run that never finished — while the authoritative
+  content sits on `origin/land/<id>` and the ticket is re-reviewed from there. That is *precisely* the
+  worktree this widening exists to reclaim, so the residual is benign here, unlike on the trunk arm
+  (where the same proxy destroyed two live builds before lode-oqr added the explicit lock). **lode-9hgu
+  remains the open, general tracking ticket** for replacing the "merged"/"captured" proxy with a real
+  dirty-tree guard on both arms; no new ticket was filed and this decision does not re-litigate it.
+  Note for whoever takes lode-9hgu: its premise that "code-reviewer / land-review worktrees do not lock"
+  is true only of the *agent docs*, not of the *running system* — do not "fix" it by adding a
+  doc-driven `git worktree lock` to `code-reviewer.md`, which would duplicate the harness lock and,
+  having no pid to key staleness on, would **not** be released if the agent dies — re-opening the very
+  indefinite leak this ticket closes.
 
   Scope: `.claude/skills/land/SKILL.md` Section 4 (backstop 1's loop and its surrounding prose) plus
   this entry. Docs/prompt-only — no Python code changed.
