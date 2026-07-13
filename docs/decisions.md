@@ -312,20 +312,39 @@ are catalogued in [configuration.md](configuration.md).
   (lode-8k3) — undermining `/code`'s "no manual nudge needed" claim.
 
   **Decision: fetch `origin/land/<id>` and check it out into the agent's *own* launch worktree**
-  (`git fetch origin land/<id> trunk && git checkout -B land/<id> FETCH_HEAD`, or `--detach` if that
-  branch name happens to be checked out elsewhere), instead of reaching into the builder's worktree at
-  all. This is safe because no `land/<id>` branch is ever checked out in any worktree in practice
-  (verified 2026-07-09): builders work on `worktree-agent-<hash>` branches and only *push* `land/<id>`
-  as a remote ref. Once checked out locally, `Edit`/`Write`/`nox` all work natively — no guard to work
-  around — and `/code-review high --fix trunk...HEAD` / `/simplify` see the real diff (the explicit
-  `trunk...HEAD` base matters: `checkout -B` leaves no upstream, and `/code-review`'s own fallback base
-  is `main...HEAD`, the wrong default branch for this repo). `coding`'s rebase pickup gets the identical
-  treatment and, as a consequence, gains a real capability: a **mechanical** conflict (both sides add
-  independent, non-overlapping content) is now resolved directly with `Edit` and the rebase continues;
-  a **genuine disagreement** (the two sides changed the same content incompatibly) still aborts and
-  escalates — that remains a deliberate judgment boundary, not a tool-guard consequence, and it should
-  stay that way even though the tooling limitation that used to force *every* conflict down that path is
-  gone.
+  (originally `git fetch origin land/<id> trunk && git checkout -B land/<id> FETCH_HEAD`, or `--detach`
+  if that branch name happened to be checked out elsewhere — see the lode-em6v update below for why the
+  bare name and the detach fallback were retired), instead of reaching into the builder's worktree at
+  all. Builders themselves never contend for the name: they work on `worktree-agent-<hash>` branches and
+  only *push* `land/<id>` as a remote ref. Once checked out locally, `Edit`/`Write`/`nox` all work
+  natively — no guard to work around — and `/code-review high --fix trunk...HEAD` / `/simplify` see the
+  real diff (the explicit `trunk...HEAD` base matters: `checkout -B` leaves no upstream, and
+  `/code-review`'s own fallback base is `main...HEAD`, the wrong default branch for this repo).
+  `coding`'s rebase pickup gets the identical treatment and, as a consequence, gains a real capability: a
+  **mechanical** conflict (both sides add independent, non-overlapping content) is now resolved directly
+  with `Edit` and the rebase continues; a **genuine disagreement** (the two sides changed the same
+  content incompatibly) still aborts and escalates — that remains a deliberate judgment boundary, not a
+  tool-guard consequence, and it should stay that way even though the tooling limitation that used to
+  force *every* conflict down that path is gone.
+
+  **Update (lode-em6v): the "no `land/<id>` branch is ever checked out elsewhere" assumption above held
+  only for a single isolated cycle, not in steady state.** Neither `code-reviewer` nor `coding`'s rebase
+  pickup ever removed its own launch worktree when it finished, so a *second* review/rebase cycle on the
+  same ticket (or one that ran later, after the first cycle's worktree was simply left on disk) found
+  `land/<id>` already checked out and fell back to `git checkout --detach FETCH_HEAD`. A detached
+  worktree owns no branch ref, so `/land`'s branch-name-keyed GC sweeps (which walk `git worktree list
+  --porcelain`'s `branch refs/heads/...` lines, or enumerate branch refs directly) structurally could
+  not see it — the only net that ever caught it was `/land`'s backstop 4, added in lode-mxeu as a
+  by-SHA/by-detached-state sweep specifically because the first three sweeps are all branch-name-keyed.
+  Worse, the leak was self-compounding: every leaked worktree was exactly the "already checked out
+  elsewhere" state that forced the *next* cycle onto the same detaching path. The actual fix is on the
+  agent side, not `/land`'s: `code-reviewer` and `coding`'s rebase pickup now check `land/<id>` out
+  under a local name suffixed with their own launch worktree's directory name (e.g.
+  `land/<id>--agent-<hash>`), which is unique by construction, so the collision — and with it the
+  detaching fallback — can no longer arise. The suffixed name still starts with `land/`, so backstop 1
+  (the primary, branch-name-keyed sweep) reclaims it once merged into trunk exactly as before; no `/land`
+  change was needed. Backstop 4 (the detached-worktree net) stays in place regardless, as defense against
+  a crash mid-cycle, not steady-state operation.
 
   **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)

@@ -643,17 +643,24 @@ git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | whi
 done
 
 # Fourth backstop: catch DETACHED worktrees, invisible to all three sweeps above (lode-mxeu).
-# WHO DETACHES: the `code-reviewer` and the `coding` rebase-pickup, on their "checked out
-# elsewhere" FALLBACK path -- both normally do `git checkout -B land/<id> FETCH_HEAD` into their
-# own launch worktree (lode-k5e/lode-8k3), which leaves a branch-attached worktree the first
-# backstop already catches, but git allows a branch name in only ONE worktree, so when
-# `land/<id>` is still checked out somewhere (e.g. a leaked worktree from an earlier cycle) they
-# fall back to `git checkout --detach FETCH_HEAD` (code-reviewer.md, coding.md) and leave a
-# worktree with NO branch. NOT `land-review`, despite lode-mxeu's description saying so: it only
-# `git fetch`es and diffs remote-tracking refs, and never checks anything out at all. The leak is
-# therefore self-compounding rather than strictly one-per-reviewed-branch-per-pass -- a stale
-# `land/<id>` worktree is what forces the NEXT cycle onto the detaching path -- which is exactly
-# why it must be swept rather than reasoned about. Every net above keys on a BRANCH NAME, by one of
+# WHO USED TO DETACH, STEADY-STATE (fixed by lode-em6v -- this sweep is kept regardless, see below):
+# the `code-reviewer` and the `coding` rebase-pickup used to both do `git checkout -B land/<id>
+# FETCH_HEAD` into their own launch worktree (lode-k5e/lode-8k3), which leaves a branch-attached
+# worktree the first backstop already catches -- but git allows a branch name in only ONE worktree,
+# so when `land/<id>` was still checked out somewhere (e.g. a leaked worktree from an earlier cycle,
+# since neither agent ever removed its own launch worktree on exit) they fell back to `git checkout
+# --detach FETCH_HEAD` and left a worktree with NO branch, invisible to every branch-name-keyed sweep.
+# lode-em6v closed that steady-state leak at the source: both agents now check `land/<id>` out under
+# a local name suffixed with their own launch worktree's directory (unique by construction), so the
+# collision -- and the detach fallback it forced -- can no longer arise in normal operation. This
+# backstop stays anyway, unchanged, as defense-in-depth for a CRASH mid-cycle (a killed process can
+# still leave a detached worktree behind by other means) -- it is no longer load-bearing for the
+# steady-state leak it was originally built to catch, but a crash-safety net regardless costs nothing
+# to keep. NOT `land-review`, despite lode-mxeu's original description saying so: it only
+# `git fetch`es and diffs remote-tracking refs, and never checks anything out at all. The leak used to
+# be self-compounding rather than strictly one-per-reviewed-branch-per-pass -- a stale `land/<id>`
+# worktree was what forced the NEXT cycle onto the detaching path -- which is exactly why it had to be
+# swept rather than reasoned about. Every net above keys on a BRANCH NAME, by one of
 # two routes: the first backstop reads the porcelain 'branch refs/heads/...' line (a detached
 # worktree emits 'detached' instead, so its awk leaves branch="" and both name regexes miss),
 # and the second and third enumerate branch REFS with for-each-ref (a detached worktree owns
@@ -699,11 +706,13 @@ instant it starts building and unlocks it right after its first commit, so this 
 `worktree-agent-*` worktree unlocked once its build has either not started or already diverged from
 `trunk` — never mid-build with uncommitted, unreclaimed-elsewhere work sitting in it (lode-oqr). The
 `land/<id>` half of the match is the reviewer's and a rebase pickup's *own* launch worktree, per the
-lode-k5e/lode-8k3 architecture (they `git fetch origin land/<id> && git checkout -B land/<id>
-FETCH_HEAD` instead of driving the builder's worktree) — a ticket reviewed across more than one cycle
-leaves *extra* such worktrees no single `review_worktree` field can name, so the backstop is the only
-net that ever reclaims them (lode-r78); `merged`+`unlocked` excludes an in-flight one exactly as it
-excludes an in-flight `worktree-agent-*` one. A **separate** pass right after the worktree sweep (see
+lode-k5e/lode-8k3 architecture (they `git fetch origin land/<id>` and check it out into a locally
+uniquely-named branch — `land/<id>--<their-own-worktree-dir>` since lode-em6v, plain `land/<id>` before
+it — instead of driving the builder's worktree; the regex match here is on the `land/` prefix, so the
+naming change doesn't affect this sweep at all) — a ticket reviewed across more than one cycle leaves
+*extra* such worktrees no single `review_worktree` field can name, so the backstop is the only net that
+ever reclaims them (lode-r78); `merged`+`unlocked` excludes an in-flight one exactly as it excludes an
+in-flight `worktree-agent-*` one. A **separate** pass right after the worktree sweep (see
 the script above) deletes any local `land/<id>` **branch ref** whose `origin/land/<id>` counterpart no
 longer exists — the per-ticket removal only deletes a local branch when it also found an attached
 worktree, so a bare ref with no worktree (e.g. `git worktree remove`d by some other path) would
@@ -720,14 +729,20 @@ worktree checked out **detached**, which has **no branch name** — the one thin
 keys on, by either route: the first reads the porcelain `branch refs/heads/...` line (a detached
 worktree emits `detached` instead, so its awk's name regexes match nothing), while the second and
 third enumerate branch *refs* with `for-each-ref` (a detached worktree owns none). It is invisible to
-all three. These come from the `code-reviewer` and the `coding` rebase-pickup on their **fallback**
-path: both normally `git checkout -B land/<id> FETCH_HEAD` (branch-attached, caught by the first
-backstop), but git permits a branch name in only one worktree at a time, so whenever `land/<id>` is
-still checked out somewhere they fall back to `git checkout --detach FETCH_HEAD` and leave a
+all three. These used to come from the `code-reviewer` and the `coding` rebase-pickup on their
+**fallback** path: both normally `git checkout -B land/<id> FETCH_HEAD` (branch-attached, caught by the
+first backstop), but git permits a branch name in only one worktree at a time, so whenever `land/<id>`
+was still checked out somewhere (a leaked worktree from an earlier cycle, since neither agent ever
+removed its own launch worktree) they fell back to `git checkout --detach FETCH_HEAD` and left a
 branchless worktree. (Not `land-review`, despite lode-mxeu's description: it only fetches and diffs
-remote-tracking refs, and never checks anything out.) That makes the leak **self-compounding** — a
-stale `land/<id>` worktree is precisely what pushes the next cycle onto the detaching path — so it
-must be swept, not reasoned about. With no branch name to test, "merged" here is
+remote-tracking refs, and never checks anything out.) That made the leak **self-compounding** — a
+stale `land/<id>` worktree was precisely what pushed the next cycle onto the detaching path.
+**lode-em6v closed this at the source**: both agents now check `land/<id>` out under a local branch
+name suffixed with their own launch worktree's directory (unique by construction), so the collision —
+and the detach fallback it forced — can no longer arise in normal operation. This backstop is
+unchanged and stays in place regardless, as a crash-safety net (a killed process can still leave a
+detached worktree behind by other means), not because the steady-state leak it was built for still
+occurs. With no branch name to test, "merged" here is
 `git merge-base --is-ancestor <HEAD-sha> trunk` against the sha the worktree's own porcelain `HEAD`
 line reports — **not** a `$MERGED` lookup, since `$MERGED` is a list of branch names and a detached
 worktree has none to be in it. `locked` is still the same load-bearing in-use guard as everywhere

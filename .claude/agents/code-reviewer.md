@@ -113,31 +113,28 @@ worktree via `git -C`, I bring the branch to *my own* worktree, where every tool
 rtk git fetch origin land/<id> trunk
 ```
 
-**Guard — is `land/<id>` checked out anywhere else?** Two reviewers should never be dispatched at the
-same ticket, but a stale local branch from an earlier run is cheap to rule out before I try to claim
-the branch name:
+**Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
+(lode-em6v). The bare name collided with an already-checked-out `land/<id>` from a stale earlier run
+(two reviewers are never dispatched at the same ticket concurrently, but a leftover worktree from an
+earlier cycle that never cleaned itself up is exactly this collision), forcing a `git checkout
+--detach` fallback — and a detached worktree owns no branch ref, so every one of `/land`'s
+branch-name-keyed GC sweeps structurally missed it (that's exactly what `/land`'s backstop 4 exists to
+catch, and each leak made the next review more likely to hit the same fallback — self-compounding).
+Suffixing the local name with this worktree's own directory name makes that collision structurally
+impossible, so there is nothing left to guard for and the detaching fallback is removed outright:
 
 ```bash
-rtk git worktree list --porcelain | grep -q "branch refs/heads/land/<id>" && echo elsewhere
+rtk git checkout -B "land/<id>--$(basename "$(rtk git rev-parse --show-toplevel)")" FETCH_HEAD
 ```
 
-- **Not checked out elsewhere (the normal case):**
-
-  ```bash
-  rtk git checkout -B land/<id> FETCH_HEAD     # create/reset my local land/<id> to exactly origin's tip
-  ```
-- **Checked out elsewhere:** a local branch name can't be checked out twice, so I don't fight it —
-
-  ```bash
-  rtk git checkout --detach FETCH_HEAD          # reviews the identical content
-  ```
-
-  and push by explicit refspec in step 7 regardless of what my local `HEAD` is called.
+The suffixed name still starts with `land/`, so `/land`'s existing worktree-GC sweep (which matches
+worktrees by that prefix, once merged into trunk) reclaims it exactly as it always has — no change
+needed on the `/land` side.
 
 **Confirm I'm off `trunk` and check for drift** against the hand-off read in step 1:
 
 ```bash
-rtk git rev-parse --abbrev-ref HEAD     # land/<id>, or (unnamed) if detached — never trunk
+rtk git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
 rtk git rev-parse HEAD                  # compare against metadata.review_head from step 1
 ```
 
@@ -214,9 +211,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 
 ### 7. Re-push the branch
 
-My commits sit on top of the builder's pushed head, so this is normally a fast-forward to the same ref
-(no new branch name — still `land/<id>`); push by explicit refspec regardless of whether step 2 left me
-on a named branch or detached:
+My commits sit on top of the builder's pushed head, so this is normally a fast-forward to the same
+remote ref (still `land/<id>`, even though my own local branch is named differently since step 2);
+push by explicit refspec regardless of what my local branch is named:
 
 ```bash
 rtk git push origin HEAD:land/<id>
@@ -299,7 +296,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 |---|---|
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
-| Reaching the branch | `git fetch origin land/<id> trunk && git checkout -B land/<id> FETCH_HEAD` (`--detach` if checked out elsewhere) |
+| Reaching the branch | `git fetch origin land/<id> trunk && git checkout -B "land/<id>--$(basename $(git rev-parse --show-toplevel))" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |

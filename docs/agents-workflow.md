@@ -847,14 +847,18 @@ the whole reason the pickup is a single self-contained producer job.
 
 Concretely, the whole cycle stays inside the one dispatched `coding` producer, start to finish:
 
-- fetch `origin/land/<id>` and `origin/trunk`, check the branch out into its own launch worktree
-  (`--detach` if that branch name is already checked out elsewhere),
+- fetch `origin/land/<id>` and `origin/trunk`, check the branch out into its own launch worktree under
+  a local name suffixed with that worktree's own directory (`land/<id>--agent-<hash>`), unique by
+  construction — so the name can never already be checked out elsewhere, and the `git checkout --detach`
+  fallback this used to require is retired outright (lode-em6v; see `docs/decisions.md` for why the
+  detach path was itself the root cause of a steady-state leaked-worktree bug),
 - `git merge origin/trunk` (not `git rebase`) — a **mechanical** conflict (independent,
   non-overlapping additions) is resolved directly with `Edit`, `git add`, `git commit`; a **genuine
   disagreement** between the two sides still escalates to a human, unchanged from before,
 - re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
-- `git push origin HEAD:land/<id>` (the head SHA if detached) — an ordinary, non-force push to a ref
-  that already exists on origin, because the merge commit descends from what's already there,
+- `git push origin HEAD:land/<id>` — an ordinary, non-force push by explicit refspec (regardless of
+  what the local branch is named) to a ref that already exists on origin, because the merge commit
+  descends from what's already there,
 - refresh `land_head`/`land_summary` and swap `needs-rebase` straight to `ready-for-land` itself.
 
 **Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
