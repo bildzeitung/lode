@@ -834,11 +834,17 @@ def _mark_job_failed(
     claim predicate reads, and dead-letters at ``retry_max_attempts``). No
     dead-letter hook is invoked here — ``embed``/``enrich`` register none
     (``lode.worker`` module docstring).
+
+    ``record_job_failure``'s ``claim_lost`` (lode-3jte) is ignored here rather
+    than acted on: this caller only ever runs against batch-submitted enrich
+    jobs, and :func:`lode.worker._reclaim_stale_running`'s SELECT excludes any
+    row with ``batch_handle`` set (module docstring), so the CAS race the flag
+    exists to catch is not reachable through this path.
     """
     row = conn.execute("SELECT attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
     current_attempts = row[0] if row else 0
 
-    new_attempts, dead = jobs.record_job_failure(
+    new_attempts, dead, _claim_lost = jobs.record_job_failure(
         conn, job_id, current_attempts, error_msg, settings
     )
     if dead:

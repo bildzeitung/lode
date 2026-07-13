@@ -166,7 +166,7 @@ def record_job_failure(
     current_attempts: int,
     error_msg: str,
     settings: Settings,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, bool]:
     """Apply the shared attempts/backoff/dead-letter transition for job ``job_id``.
 
     Increments ``attempts`` past ``current_attempts``; if the new count reaches
@@ -174,11 +174,35 @@ def record_job_failure(
     otherwise ``status='failed'`` with an exponential-backoff
     ``next_attempt_at`` (:func:`backoff_next_attempt_at`).
 
-    Returns ``(new_attempts, dead_lettered)``. This function owns only the DB
-    state transition — a caller that needs to run a dead-letter hook
-    (:func:`lode.worker.run_one` does; :func:`lode.enrich._mark_job_failed`
-    does not, since ``embed``/``enrich`` register none) or log differently
-    branches on the returned ``dead_lettered`` flag itself.
+    **CAS-guarded (lode-3jte):** both UPDATEs carry ``AND status = 'running'``
+    — the same guard :func:`lode.worker.run_one`'s ``except AuthError`` arm and
+    :func:`lode.worker._reclaim_stale_running` use on their own writes to this
+    table. A caller reaching this function (a handler raised, or a Batches API
+    result came back errored) does not necessarily still hold the claim: e.g.
+    ``cli._enrich_immediately`` reaches :func:`lode.worker.run_one` via
+    ``claim_and_run_one`` with no worker lock held, so a concurrent ``lode
+    work`` drain's ``_reclaim_stale_running`` can reclaim the row as stale
+    mid-handler and drive it straight to a terminal ``'dead'`` (firing its
+    dead-letter hook) before this function's UPDATE runs. Unguarded, that
+    UPDATE would then resurrect the dead-lettered job back to ``'failed'`` (and
+    double-charge ``attempts`` on top) — exactly the resurrection
+    :func:`lode.worker.run_one`'s ``AuthError`` arm was hardened against
+    (lode-9yy), just never mirrored here.
+
+    Returns ``(new_attempts, dead_lettered, claim_lost)``. ``claim_lost`` is
+    True when the CAS guard's rowcount was 0 — the row was no longer
+    ``status='running'`` by the time this ran, so **neither** UPDATE actually
+    took effect; ``new_attempts``/``dead_lettered`` then describe what *would*
+    have been applied, not what's on the row. A caller must check
+    ``claim_lost`` before acting on ``dead_lettered``: it must not run a
+    dead-letter hook when the claim was lost, since whoever won the CAS
+    already ran it (:func:`lode.worker.run_one` does exactly this).
+
+    This function owns only the DB state transition — a caller that needs to
+    run a dead-letter hook (:func:`lode.worker.run_one` does;
+    :func:`lode.enrich._mark_job_failed` does not, since ``embed``/``enrich``
+    register none) or log differently branches on the returned
+    ``dead_lettered``/``claim_lost`` flags itself.
 
     Shared by :func:`lode.worker.run_one` (a job's ``run()`` handler raised)
     and :func:`lode.enrich._mark_job_failed` (an errored/expired/canceled
@@ -187,32 +211,31 @@ def record_job_failure(
 
     **The one caller this does NOT serve** is
     :func:`lode.worker._reclaim_stale_running`, which keeps its own inline
-    UPDATEs: it needs an ``AND status='running'`` CAS guard (the row may no
-    longer be its claim) plus the per-row ``rowcount`` that guard yields, and it
-    batches every reclaimed row into one outer ``with conn:`` — which this
-    function's own ``with conn:`` cannot nest inside (sqlite3's connection
-    context manager doesn't nest; the inner exit would commit the outer's
-    partial work). It shares the backoff *formula* via
-    :func:`backoff_next_attempt_at`, but the attempts increment and the
-    ``>= retry_max_attempts`` dead-letter gate are genuinely duplicated there.
-    **A change to the retry policy has to be made in both places** — the reclaim
-    path promises a crash-reclaimed job obeys the identical max-attempts gate as
-    a cleanly-failed one, and nothing enforces that but this note.
+    UPDATEs: it batches every reclaimed row into one outer ``with conn:`` —
+    which this function's own ``with conn:`` cannot nest inside (sqlite3's
+    connection context manager doesn't nest; the inner exit would commit the
+    outer's partial work). It shares the backoff *formula* via
+    :func:`backoff_next_attempt_at` and now the same CAS guard shape, but the
+    attempts increment and the ``>= retry_max_attempts`` dead-letter gate are
+    genuinely duplicated there. **A change to the retry policy has to be made
+    in both places** — the reclaim path promises a crash-reclaimed job obeys
+    the identical max-attempts gate as a cleanly-failed one, and nothing
+    enforces that but this note.
     """
     new_attempts = current_attempts + 1
     if new_attempts >= settings.retry_max_attempts:
         with conn:
-            conn.execute(
+            cur = conn.execute(
                 "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
-                "WHERE id = ?",
+                "WHERE id = ? AND status = 'running'",
                 (new_attempts, error_msg, job_id),
             )
-        return new_attempts, True
+        return new_attempts, True, cur.rowcount == 0
     next_at = backoff_next_attempt_at(new_attempts, settings)
     with conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE jobs SET status = 'failed', attempts = ?, "
-            "last_error = ?, next_attempt_at = ? WHERE id = ?",
+            "last_error = ?, next_attempt_at = ? WHERE id = ? AND status = 'running'",
             (new_attempts, error_msg, next_at, job_id),
         )
-    return new_attempts, False
+    return new_attempts, False, cur.rowcount == 0

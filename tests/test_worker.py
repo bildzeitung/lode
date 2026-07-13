@@ -693,6 +693,100 @@ def test_dead_letter_hook_exception_does_not_propagate(
 
 
 # ---------------------------------------------------------------------------
+# Transient-failure CAS guard (lode-3jte) — the sibling of the AuthError
+# resurrection guard above (lode-9yy), now applied to run_one's
+# `except Exception` arm via jobs.record_job_failure's own CAS guard.
+# ---------------------------------------------------------------------------
+
+
+def test_run_transient_failure_does_not_resurrect_a_reclaimed_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A transient failure's UPDATE must not resurrect a job a concurrent
+    reclaim already drove to a terminal 'dead' while the handler was in flight.
+
+    ``cli._enrich_immediately`` reaches ``run_one`` via ``claim_and_run_one``
+    with no worker lock held, so a concurrent ``lode work`` drain can hit
+    ``_reclaim_stale_running`` and dead-letter this very row mid-handler.
+    Unguarded, the transient arm's UPDATE would flip that dead job back to
+    'failed' with a fresh backoff and double-charge attempts on top -- exactly
+    the resurrection the AuthError arm was hardened against (lode-9yy), just
+    never mirrored on this arm until lode-3jte. The handler below stands in
+    for that concurrent reclaim: it terminalizes the row (and runs the
+    dead-letter hook itself, as the real reclaim path does) before raising a
+    plain (non-AuthError) exception.
+    """
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+
+    def _reclaimed_then_transient_error(conn_, tv, db, s):
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ?, "
+                "last_error = 'reclaimed' WHERE id = ?",
+                (settings.retry_max_attempts, job_id),
+            )
+        raise RuntimeError("transient blip (test)")
+
+    ok = run_one(
+        conn, job_id, db_path, settings, {"embed": _reclaimed_then_transient_error}
+    )
+
+    assert ok is False
+    row = _job(conn, job_id)
+    assert row["status"] == "dead"  # NOT resurrected to 'failed'
+    assert row["attempts"] == settings.retry_max_attempts  # NOT double-charged
+    assert row["last_error"] == "reclaimed"  # NOT overwritten by run_one's own message
+
+
+def test_run_transient_failure_does_not_run_dead_letter_hook_twice(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The dead-letter hook must fire exactly once (lode-at8) even when the
+    claim was lost to a concurrent reclaim.
+
+    Whoever wins the CAS (the reclaim, here simulated inline) already ran the
+    hook; run_one's own transient arm must see claim_lost=True and skip
+    running it a second time for the same job.
+    """
+    external_id = "https://example.com/reclaimed-mid-handler"
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+
+    hook_calls: list[str] = []
+
+    def _counting_hook(conn_, target_version, last_error, settings_):  # noqa: ARG001
+        hook_calls.append(target_version)
+
+    def _reclaimed_then_transient_error(conn_, tv, db, s):
+        # Stand-in for a concurrent _reclaim_stale_running: terminalize the
+        # row AND run its dead-letter hook, exactly as the real reclaim path
+        # does, before the stalled handler finally raises.
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ?, "
+                "last_error = 'reclaimed' WHERE id = ?",
+                (settings.retry_max_attempts, job_id),
+            )
+        _counting_hook(conn_, external_id, "reclaimed", s)
+        raise RuntimeError("transient blip (test)")
+
+    with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _counting_hook}):
+        ok = run_one(
+            conn,
+            job_id,
+            db_path,
+            settings,
+            {"refresh": _reclaimed_then_transient_error},
+        )
+
+    assert ok is False
+    assert hook_calls == [external_id]  # exactly once, not twice
+
+
+# ---------------------------------------------------------------------------
 # claim_and_run_one — CLI immediate-enrich fast path (lode-npx.2)
 # ---------------------------------------------------------------------------
 
