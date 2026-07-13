@@ -3210,15 +3210,42 @@ def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
     ``except httpx.TransportError`` silently stopping matching and 'lode
     models pull' regressing to a raw traceback on its single most likely
     failure path (no network), with the rest of the suite staying green.
+
+    Scope, stated plainly: this pins huggingface_hub's *declared* core
+    dependency, not its *runtime* behavior. It catches the realistic regression
+    -- a transport swap, which necessarily changes the dependency -- but not the
+    exotic one where huggingface_hub keeps declaring httpx and raises something
+    else anyway. A behavioral canary (point HF's endpoint at a refused loopback
+    port) was deliberately rejected in lode-og3 review as version-sensitive and
+    flaky, and a flaky canary is worse than none.
+
+    Note the ``extra`` filter below is load-bearing, not decoration:
+    huggingface_hub lists httpx *five* times -- once as a core dependency and
+    four more under the ``oauth``/``testing``/``all``/``dev`` extras. A naive
+    substring match over the raw list would keep passing if huggingface_hub
+    moved to another core transport while merely retaining httpx as a test
+    extra, which is exactly the shape a real transport migration takes. That
+    would leave this canary green while the arm it guards was already dead.
     """
     from importlib.metadata import requires
 
-    hub_requires = requires("huggingface_hub") or []
-    assert any(r.startswith("httpx") for r in hub_requires), (
-        "huggingface_hub no longer declares httpx as a dependency "
-        f"({hub_requires!r}). lode.cli._warm()'s `except httpx.TransportError` "
-        "arm depends on huggingface_hub raising httpx exceptions on a network "
-        "failure -- if it has switched transports, that arm silently stops "
-        "matching and 'lode models pull' will traceback on the no-network path "
-        "instead of printing 'no network route to huggingface.co'."
+    from packaging.requirements import Requirement
+
+    hub_requires = [Requirement(r) for r in requires("huggingface_hub") or []]
+    # Core dependencies only -- an ``extra == ...`` requirement is optional, so
+    # it proves nothing about the transport huggingface_hub actually uses.
+    core_requires = [
+        req for req in hub_requires if not (req.marker and "extra" in str(req.marker))
+    ]
+    assert any(req.name == "httpx" for req in core_requires), (
+        "huggingface_hub no longer declares httpx as a core dependency (core "
+        f"deps are now: {sorted(req.name for req in core_requires)!r}). "
+        "lode.cli._warm() catches httpx.TransportError to turn the no-network "
+        "case into 'no network route to huggingface.co' -- and that arm only "
+        "matches because fastembed delegates its downloads to huggingface_hub "
+        "(fastembed itself never declared httpx). If the hub has switched "
+        "transports, that arm is dead and 'lode models pull' now tracebacks on "
+        "the no-network path instead. TO FIX: catch the new transport's "
+        "exception in _warm() (src/lode/cli.py), and re-point this canary at "
+        "the new dependency."
     )
