@@ -407,18 +407,19 @@ branch ref, so every one of `/land`'s branch-name-keyed GC sweeps structurally m
 exactly what `/land`'s backstop 4 exists to catch, and each leak made the next cycle more likely to hit
 the same fallback — self-compounding). Suffixing the local name with this worktree's own directory name
 makes that collision structurally impossible, so there is nothing left to guard for and the detaching
-fallback is removed outright — this is the only place I ever check out `land/<id>` in a pickup, so
-there is no "elsewhere" to collide with:
+fallback is removed outright:
 
 ```bash
 rtk git fetch origin land/<id> trunk
-rtk git checkout -B "land/<id>--$(basename "$(rtk git rev-parse --show-toplevel)")" FETCH_HEAD
+TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
+rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
 rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s existing worktree-GC sweep (which matches
-worktrees by that prefix, once merged into trunk) reclaims it exactly as it always has — no change
-needed on the `/land` side.
+The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
+that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
+sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
+`.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 ### 3. Merge current trunk in
 

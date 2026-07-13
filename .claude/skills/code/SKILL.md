@@ -141,10 +141,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    pickup**, not a fresh build, e.g.:
 
    > lode-ai1 carries `needs-rebase` (kicked back by `/land`'s conflict precheck) — fetch it and
-   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk && git
-   > checkout -B "land/lode-ai1--$(basename $(git rev-parse --show-toplevel))" FETCH_HEAD` (a local
-   > name suffixed with your own launch worktree's directory — unique by construction, so it never
-   > collides with a leftover checkout and the old `--detach` fallback is never needed), `git merge
+   > **merge current `trunk` in** (do not rebase): `git fetch origin land/lode-ai1 trunk`, then
+   > `TOP=$(git rev-parse --show-toplevel)` and `git checkout -B "land/lode-ai1--${TOP##*/}"
+   > FETCH_HEAD` (a local name suffixed with your own launch worktree's directory — unique by
+   > construction, so it never collides with a leftover checkout and the old `--detach` fallback is
+   > never needed), `git merge
    > origin/trunk`, re-gate (`nox -t fix` / `nox -s tests`), commit anything the gate loop produced,
    > then `git push origin HEAD:land/lode-ai1` (an ordinary push by explicit refspec — the merge only
    > appends, it never rewrites what's already on `land/lode-ai1`), refresh `land_head`/`land_summary`,
@@ -329,8 +330,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    Pass the ticket id, e.g.:
 
    > Technically review lode-ai1 (it is `ready-for-code-review`): read `review_head` from bd, `git
-   > fetch origin land/lode-ai1 trunk && git checkout -B "land/lode-ai1--$(basename
-   > $(git rev-parse --show-toplevel))" FETCH_HEAD` (a local name suffixed with your own launch
+   > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
+   > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
    > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
    > own launch worktree, run `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, commit,
    > `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,

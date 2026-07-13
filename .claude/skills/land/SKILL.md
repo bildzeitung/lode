@@ -602,10 +602,21 @@ git worktree prune          # drop any now-stale worktree admin entries
 # land branch is gone" would force-delete every local land ref on a transient network blip.
 # A failed listing therefore skips the sweep; an empty-but-successful one correctly means
 # every local land ref is stale (grep against the empty set matches nothing → all deleted).
+# STRIP THE WORKTREE SUFFIX BEFORE COMPARING (lode-em6v): since lode-em6v the reviewer and
+# the rebase pickup check the branch out under `land/<id>--<their-own-worktree-dir>`, never
+# the bare `land/<id>`, and that suffixed name can NEVER byte-match origin's `land/<id>`.
+# Comparing it raw would make the "remote still exists — keep" arm dead code for every ref
+# this sweep now sees, silently demoting the backstop to "delete every land/* ref not
+# currently checked out" and force-deleting an in-flight ticket's ref (its unpushed commits
+# with it) the moment its worktree goes away by any route. `${BR%%--*}` maps the local name
+# back to the remote one it corresponds to (`land/x--agent-ab12` → `land/x`) and leaves a
+# bare `land/x` untouched, so the ORIGINAL "remote gone ⇒ stale" semantics hold for both
+# shapes. Safe because a bd id never contains `--` (ids are `lode-<slug>`, single hyphens),
+# so the first `--` is always the worktree-suffix delimiter.
 if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
   REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
   git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
-    printf '%s\n' "$REMOTE_LAND" | grep -qxF "$BR" && continue   # remote still exists — keep
+    printf '%s\n' "$REMOTE_LAND" | grep -qxF "${BR%%--*}" && continue   # remote still exists — keep
     git branch -D "$BR" 2>/dev/null || true
   done
 fi
@@ -708,15 +719,19 @@ instant it starts building and unlocks it right after its first commit, so this 
 `land/<id>` half of the match is the reviewer's and a rebase pickup's *own* launch worktree, per the
 lode-k5e/lode-8k3 architecture (they `git fetch origin land/<id>` and check it out into a locally
 uniquely-named branch — `land/<id>--<their-own-worktree-dir>` since lode-em6v, plain `land/<id>` before
-it — instead of driving the builder's worktree; the regex match here is on the `land/` prefix, so the
-naming change doesn't affect this sweep at all) — a ticket reviewed across more than one cycle leaves
+it — instead of driving the builder's worktree; *this* sweep matches on the `land/` **prefix**, so the
+naming change doesn't affect it) — a ticket reviewed across more than one cycle leaves
 *extra* such worktrees no single `review_worktree` field can name, so the backstop is the only net that
 ever reclaims them (lode-r78); `merged`+`unlocked` excludes an in-flight one exactly as it excludes an
 in-flight `worktree-agent-*` one. A **separate** pass right after the worktree sweep (see
 the script above) deletes any local `land/<id>` **branch ref** whose `origin/land/<id>` counterpart no
 longer exists — the per-ticket removal only deletes a local branch when it also found an attached
 worktree, so a bare ref with no worktree (e.g. `git worktree remove`d by some other path) would
-otherwise linger forever once its remote is gone. A **third** pass sweeps the mirror-image gap in the
+otherwise linger forever once its remote is gone. That pass is the one place the lode-em6v renaming
+*does* reach — it keys on an **exact** name match against origin's listing, which a suffixed
+`land/<id>--<worktree-dir>` can never satisfy, so it strips the suffix (`${BR%%--*}`) before comparing;
+the comment above the sweep has the full reasoning and why skipping the strip would silently turn this
+backstop into a ref shredder. A **third** pass sweeps the mirror-image gap in the
 *other* namespace (lode-j5i0): a bare `worktree-agent-*` ref with no worktree attached is invisible to
 both nets above (the first only matches worktree-attached refs; the second only matches `land/*`), so
 it was swept by nothing and accumulated without bound — 17 confirmed orphans on the landing machine,

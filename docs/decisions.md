@@ -342,9 +342,16 @@ are catalogued in [configuration.md](configuration.md).
   under a local name suffixed with their own launch worktree's directory name (e.g.
   `land/<id>--agent-<hash>`), which is unique by construction, so the collision — and with it the
   detaching fallback — can no longer arise. The suffixed name still starts with `land/`, so backstop 1
-  (the primary, branch-name-keyed sweep) reclaims it once merged into trunk exactly as before; no `/land`
-  change was needed. Backstop 4 (the detached-worktree net) stays in place regardless, as defense against
-  a crash mid-cycle, not steady-state operation.
+  (the primary, branch-name-keyed sweep) matches it on that **prefix** and reclaims it once merged into
+  trunk exactly as before. One `/land` sweep did have to follow the rename, though: backstop 2 (the
+  dangling-**ref** sweep) keys on an **exact** name match against `git ls-remote`'s listing to decide
+  "remote gone ⇒ stale", and a suffixed `land/<id>--agent-<hash>` can never equal origin's `land/<id>` —
+  left alone, its keep-the-in-flight-ref arm becomes dead code and the sweep silently degrades into
+  "delete every `land/*` ref not currently checked out", taking an in-flight ticket's unpushed commits
+  with it the moment its worktree goes away by any route. It now strips the suffix (`${BR%%--*}`, safe
+  because a bd id never contains `--`) before comparing, restoring the original semantics for both the
+  suffixed and the bare shape. Backstop 4 (the detached-worktree net) stays in place regardless, as
+  defense against a crash mid-cycle, not steady-state operation.
 
   **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)

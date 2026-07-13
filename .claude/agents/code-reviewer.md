@@ -124,12 +124,14 @@ Suffixing the local name with this worktree's own directory name makes that coll
 impossible, so there is nothing left to guard for and the detaching fallback is removed outright:
 
 ```bash
-rtk git checkout -B "land/<id>--$(basename "$(rtk git rev-parse --show-toplevel)")" FETCH_HEAD
+TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
+rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s existing worktree-GC sweep (which matches
-worktrees by that prefix, once merged into trunk) reclaims it exactly as it always has — no change
-needed on the `/land` side.
+The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
+that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
+sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
+`.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 **Confirm I'm off `trunk` and check for drift** against the hand-off read in step 1:
 
@@ -296,7 +298,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 |---|---|
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
-| Reaching the branch | `git fetch origin land/<id> trunk && git checkout -B "land/<id>--$(basename $(git rev-parse --show-toplevel))" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
+| Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
 | I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
