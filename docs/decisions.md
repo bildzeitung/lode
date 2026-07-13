@@ -380,6 +380,36 @@ are catalogued in [configuration.md](configuration.md).
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
 
+  **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
+  half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
+  "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
+  only in the sense that the worktree is now always branch-attached and hence *reachable* by `/land`'s
+  backstop 1; it was never actually **removed** on a clean run, only left for that backstop to sweep up
+  later, once the branch **merges into `trunk`**. Two gaps followed directly from that: (1) a ticket
+  reviewed or rebase-picked-up N times across N cycles left N such worktrees standing simultaneously,
+  all waiting on the same eventual land; (2) an **escalated** ticket's branch never merges into `trunk`
+  at all, so backstop 1 structurally cannot reach it — that worktree leaked **indefinitely**, until a
+  human resolved the escalation and the branch eventually landed.
+
+  **Fix: `/code`'s own orchestrating session reclaims the worktree, right after the subagent that used
+  it returns — on *either* outcome (`ready-for-land` or `land-escalated`).** Neither `code-reviewer` nor
+  a rebase pickup can `git worktree remove` the worktree it is currently standing in, so each instead
+  **reports** its own launch worktree's path and local branch name in its final message; `/code` (never
+  itself worktree-isolated — it runs from the repo root, the same place `/land`'s own GC already runs
+  its `git worktree remove --force` from) does the actual removal immediately after collecting that
+  agent's result, per ticket, not batched to the end of a fan-out. This is safe on both outcomes because
+  of the same fetch-and-checkout architecture the collision fix relies on: by the time either agent
+  reports its worktree, that worktree holds nothing `origin/land/<id>` doesn't already have — a clean
+  pass pushes before it reports, and an escalation's aborted merge (rebase pickup) or reverted-to-green
+  commit (reviewer) leaves the checkout an exact mirror of what was already on origin. Nothing local is
+  ever lost by removing it. `/land`'s backstops 1-4 are untouched by this — they remain the net for the
+  one case this fix cannot reach: an agent that crashes before it can report its own worktree back.
+  Scope: `.claude/skills/code/SKILL.md` (step 0, step 1, and Phase 2's dispatch instructions each now
+  ask the subagent to report its worktree path + branch, and each immediately reclaims it),
+  `.claude/agents/code-reviewer.md` and `.claude/agents/coding.md`'s rebase-pickup section (both report
+  their own launch worktree in their final message, on either outcome). Docs-only change, no code/tests
+  affected — same shape as lode-em6v.
+
 - **Builder worktree retention — kept as-is; the builder keeps its worktree through the whole
   build → review → land lifecycle, and `/land`'s GC still reclaims it only on a clean land (lode-3ci,
   a follow-up to lode-k5e/lode-8k3 above).** After the reviewer/rebase-pickup architecture change,

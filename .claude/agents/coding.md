@@ -505,13 +505,31 @@ correctly describe the original build (and remain what `/land`'s worktree GC key
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
 opened it this cycle — `/land` GCs it on a clean land, same as always.
 
+**Report my own launch worktree for reclaim (lode-vs7g).** This *is* mine, but I can't `git worktree
+remove` the worktree I'm currently standing in, so instead I state its path and local branch name in
+my final message, and `/code`'s orchestrating session reclaims both right after I return — on
+**either** outcome (`ready-for-land` or `land-escalated`):
+
+```bash
+rtk git rev-parse --show-toplevel        # my own launch worktree's path — state this in my report
+rtk git rev-parse --abbrev-ref HEAD      # my own local branch name (land/<id>--<suffix>) — state too
+```
+
+By the time I report it, this worktree holds nothing `origin/land/<id>` doesn't already have — a clean
+pass pushed first (above), and an escalation's aborted merge leaves the checkout an exact mirror of
+what was already fetched from origin (nothing local, nothing to lose). Reclaiming it costs nothing on
+either outcome.
+
 I **stop** and report: which ticket, that the merge was clean and the gates are green, the refreshed
-head SHA, and that it's back at `ready-for-land` — or, on an escalation, which kind of conflict it was
-and why.
+head SHA, that it's back at `ready-for-land`, and my own launch worktree path + branch (above) for
+`/code` to reclaim — or, on an escalation, which kind of conflict it was and why (plus that same
+worktree path + branch).
 
 An **escalation** is different and stays mine: on a genuine-disagreement conflict I abort, leave the
 branch exactly as it was (no push — nothing changed to push), and set `land-escalated` myself (step
-3). That is a bd write, not a destructive git op.
+3). That is a bd write, not a destructive git op. The branch never merges into `trunk`, so `/land`'s
+backstop 1 can never reclaim my launch worktree here — reporting it so `/code` can reclaim it right
+away is the only route that closes that gap (lode-vs7g).
 
 ### Escalation — only a genuine conflict, not a mechanical one
 
@@ -565,9 +583,15 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Reviewing my own build** — running `/code-review` or `/simplify` on it, or marking
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
-- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer no longer
-  drives it in place, but `/land`'s worktree GC still keys off `review_worktree` — discarding it early
-  strands that bookkeeping.
+- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`) **during a fresh build.**
+  The reviewer no longer drives it in place, but `/land`'s worktree GC still keys off
+  `review_worktree` — discarding it early strands that bookkeeping. (During a **rebase pickup**
+  instead, my own launch worktree is a *different* thing — see the next bullet.)
+- **Trying to `git worktree remove` my own launch worktree during a rebase pickup.** I cannot remove
+  the worktree I am currently standing in — that's why I *report* its path and branch instead (step 5)
+  and let `/code`'s orchestrating session reclaim it after I return (lode-vs7g), on either outcome.
+  Don't wait for `/land`'s backstop 1 on an escalation either — the branch never merges into `trunk`,
+  so that sweep can never reach it.
 - **Marking `ready-for-code-review` on a red build, or on a build-time escalation.** The label means
   *green and ready for the reviewer* — nothing less.
 - **Marking `ready-for-code-review` (or pushing during a rebase pickup) on a dirty tree, or
@@ -624,6 +648,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs `/code-review` + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
+| Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome (`ready-for-land` or `land-escalated`) — since I cannot remove it myself; I just report its path + branch (step 5, lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |

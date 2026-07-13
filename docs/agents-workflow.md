@@ -746,6 +746,11 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    summary), then stops. Its escalation rule mirrors the builder's: a genuine **decision**, or "I'm
    making it worse," reverts to green, swaps the label to `land-escalated`, and surfaces async —
    landing nothing.
+4. **Reports its own launch worktree (path + branch) so `/code` can reclaim it** — on either outcome
+   (lode-vs7g). It cannot remove the worktree it's standing in itself, and neither backstop-1's
+   merged-into-`trunk` sweep nor the end-of-pass GC can reach it on an escalation (that branch never
+   merges), so `/code`'s orchestrating session does the removal immediately after it returns, rather
+   than leaving the worktree to leak indefinitely.
 
 ```mermaid
 flowchart TD
@@ -919,6 +924,21 @@ Two `autoMode.allow` entries in `.claude/settings.json` remain relevant elsewher
 loop — permitting ticket-scoped edits to this repo's own agent/skill instruction docs, and permitting
 `/land`'s deletion of already-merged `land/<id>` branches — and neither was re-verified by this
 ticket; treat their effectiveness as still unconfirmed rather than assumed.
+
+**The pickup's own launch worktree is reclaimed by `/code` itself, right after the pickup returns
+(lode-vs7g).** Eliminating the local-name collision above closes the *invisible*-worktree half of the
+leak (every worktree is now branch-attached, hence reachable by `/land`'s backstop 1), but a clean
+pickup's worktree still wasn't actually **removed** — only left standing until the branch eventually
+merged into `trunk`. Worse, an *escalated* pickup's branch never merges at all, so backstop 1
+structurally could never reach it, and the worktree leaked indefinitely. The pickup cannot
+`git worktree remove` the worktree it's standing in, so it reports its own path and local branch name
+in its final message instead (either outcome); `/code`'s orchestrating session — which runs from the
+repo root, never itself worktree-isolated — reclaims both immediately after collecting that result.
+Safe on both outcomes: by the time the pickup reports, its worktree holds nothing `origin/land/<id>`
+doesn't already have. `/land`'s backstops 1-4 stay untouched, as the net for a pickup that crashes
+before it can report. Same mechanism, same reasoning, applies to `code-reviewer`'s launch worktree
+(Phase 2 and the step-1 stranded-review sweep) — see `.claude/skills/code/SKILL.md` and
+`docs/decisions.md`'s lode-vs7g entry.
 
 ### Stacked land branches (lode-02v)
 

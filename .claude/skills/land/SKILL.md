@@ -553,6 +553,13 @@ done
 # bug. Walk the raw porcelain blocks directly (not the per-ticket review_worktree path), so a worktree
 # with no matching ticket, or a ticket with wrong metadata, still gets reclaimed.
 #
+# NOTE (lode-vs7g): `/code`'s own orchestrating session now reclaims a reviewer's or rebase-pickup's
+# launch worktree proactively, right after that subagent returns (either outcome — ready-for-land or
+# land-escalated) — see `.claude/skills/code/SKILL.md` and docs/decisions.md's lode-vs7g entry. This
+# backstop is UNCHANGED and stays exactly as it was: it's the net for the one case the proactive
+# reclaim cannot reach — an agent that crashes before it can report its own worktree back. Expect it
+# to fire far less often now, not never.
+#
 # ONE loop covers BOTH branch-attached and DETACHED worktrees (lode-jiyk unifies what were formerly
 # two separate WORKTREE sweeps here: a branch-NAME-keyed one, lode-r78, and a later HEAD-sha-keyed
 # one, lode-mxeu, added because the name-keyed one structurally cannot see a detached worktree).
@@ -691,7 +698,10 @@ The worktree GC is **best-effort and machine-local**: builds can happen on sever
 skips any ticket whose worktree isn't registered here — the lander never errors on a worktree it can't
 see, and the build machine's own `/land` (or a later sweep there) reclaims it. I GC a worktree only on
 a clean **land**; a **bounce** drops the branch but the rebuild ticket may still want the tree, and an
-**escalate** keeps everything until the human resolves it. The end-of-pass backstop sweep is a second,
+**escalate** keeps everything until the human resolves it. (This is about the **builder's** worktree,
+tracked by `review_worktree` — the reviewer's or rebase-pickup's *own* launch worktree is a different
+thing, and `/code` already reclaims that one proactively on an escalation too, lode-vs7g.) The
+end-of-pass backstop sweep is a second,
 independent net over the same machine's worktrees: it doesn't consult any ticket's metadata, so it
 also reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
 `land/<id>--<worktree-dir>`, or any other name) or **detached** alike — whose `review_worktree` pointer

@@ -153,7 +153,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > On a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
    > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two
    > sides genuinely **disagree**, abort the merge and escalate yourself (`land-escalated`, leave the
-   > branch as it was) rather than guess — that stays a human decision.
+   > branch as it was) rather than guess — that stays a human decision. Either way, state your own
+   > launch worktree's path (`git rev-parse --show-toplevel`) and local branch name
+   > (`git rev-parse --abbrev-ref HEAD`) in your final message — I reclaim both after you return.
 
    Merging `trunk` into the branch — rather than rebasing the branch onto `trunk` — is what keeps
    this whole cycle inside the one dispatched producer, start to finish: a merge commit appends to
@@ -171,6 +173,28 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    `ready-for-land`, skipping technical review entirely, the same way `/land`'s kick-back skipped
    `land-review` — the content was never judged bad, it only needed to replay onto where `trunk`
    moved. If the sweep finds nothing, say so and move on; it's not an error.
+
+   **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** A rebase-pickup
+   agent cannot `git worktree remove` the worktree it's standing in, so it reports the path + branch
+   instead (above); I do the removal, from my own (repo-root) context, immediately after collecting
+   its result — I don't wait for the whole invocation to finish, and I don't wait for the ticket to
+   land:
+
+   ```bash
+   git worktree list --porcelain | grep -qxF "worktree $WT" && git worktree remove --force "$WT"
+   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
+   ```
+
+   (Plain `git`, not `rtk` — `rtk` reformats `worktree list --porcelain`'s output, which breaks the
+   exact-line match the same way it did for `/land`'s own GC, lode-9j7.) This is safe on **both**
+   outcomes: by the time the agent reports its worktree, everything in it is already on
+   `origin/land/<id>` — a clean pickup pushed first, and an escalation's aborted merge leaves the
+   checkout an exact mirror of what was already fetched, so there is nothing local left to lose either
+   way. Reclaiming right here — rather than waiting for `/land`'s backstop 1 — matters most on an
+   escalation: that branch never merges into `trunk`, so backstop 1 (which only reclaims a
+   *merged*-into-`trunk` worktree) can never reach it, and the worktree would otherwise leak until a
+   human resolves the escalation and the branch eventually lands (lode-vs7g). `/land`'s backstops stay
+   in place regardless, unchanged, as the net for a rebase pickup that crashes before it can report.
 
 1. **Sweep for stranded `ready-for-code-review` re-entries too — same invocation, same reason.** A
    human resolving a `code-reviewer` technical-review escalation or a `coding` build-time escalation
@@ -203,7 +227,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    invocation's own Phase 1 builds, **subject to the same concurrency cap** — a stranded re-entry
    never shares a ticket with a fresh build or rebase pickup, so none of these collide, but all of
    them draw from the one shared budget; queue the overflow and dispatch it as slots free. If the
-   sweep finds nothing, say so and move on; it's not an error.
+   sweep finds nothing, say so and move on; it's not an error. **Reclaim each reviewer's launch
+   worktree the moment it returns**, exactly as Phase 2 does below (lode-vs7g) — this sweep dispatches
+   the identical subagent, so the identical reclaim applies.
 
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
@@ -336,7 +362,27 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > own launch worktree, run `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, commit,
    > `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,
    > close, or push trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready) only
-   > on a clarifying decision or "making it worse."
+   > on a clarifying decision or "making it worse." Either way, state your own launch worktree's path
+   > (`git rev-parse --show-toplevel`) and local branch name (`git rev-parse --abbrev-ref HEAD`) in
+   > your final message — I reclaim both after you return.
+
+   **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** A reviewer
+   cannot `git worktree remove` the worktree it's standing in, so it reports the path + branch instead
+   (above); I do the removal myself, from my own (repo-root) context, right after collecting its
+   result — per ticket, not batched to the end of the fan-out:
+
+   ```bash
+   git worktree list --porcelain | grep -qxF "worktree $WT" && git worktree remove --force "$WT"
+   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
+   ```
+
+   (Plain `git`, not `rtk` — same reformatting hazard as step 0's reclaim above, lode-9j7.) Safe on
+   **both** outcomes: everything in the reviewer's worktree is already on `origin/land/<id>` by the
+   time it reports — the review pushes before it swaps either label (step 7 in `code-reviewer.md`).
+   This matters most on an escalation: that branch never merges into `trunk`, so backstop 1 can never
+   reclaim this worktree, and it would otherwise leak until a human resolves the escalation and the
+   branch eventually lands (lode-vs7g). `/land`'s backstops stay in place regardless, unchanged, as
+   the net for a reviewer that crashes before it can report.
 
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
@@ -357,7 +403,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    passed over** — id + reason (`human`-labeled or epic). You did that filtering yourself in step 2 on
    all three paths, so report it directly. Say so explicitly **even when nothing was
    skipped** ("no `human`/epic tickets on the frontier"), so the operator can tell a filter that found
-   nothing from a filter that never ran.
+   nothing from a filter that never ran. Also note, for every step-0 rebase pickup and every
+   code-reviewer dispatch (Phase 2 and step 1 alike), that its own launch worktree was reclaimed after
+   it returned (lode-vs7g) — this is routine, not a caveat, but it's the thing that keeps `git worktree
+   list` from growing unboundedly across a long fan-out, so it's worth confirming happened.
 
 ## Notes
 
@@ -409,3 +458,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   not this skill's.
 - If an argument is genuinely ambiguous (looks like it might be an ID but isn't one that exists, or a
   fan-out set with hidden dependencies), ask the user before dispatching rather than guessing.
+- **A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns —
+  not left for `/land`'s backstops (lode-vs7g).** Neither subagent can `git worktree remove` the
+  worktree it's standing in, so each reports its path + local branch name in its final message (step
+  0's and Phase 2's dispatch prompts ask for this explicitly), and I remove both immediately —
+  **on either outcome**, `ready-for-land` or `land-escalated`. This closes a gap `/land`'s backstop 1
+  structurally cannot: that sweep only reclaims a worktree whose branch has *merged into `trunk`*, but
+  an escalated ticket's branch never does, so without this step that worktree would leak until a human
+  resolves the escalation and the branch eventually lands. A *fresh build*'s worktree is unaffected and
+  entirely out of scope here — it's deliberately kept through the whole build → review → land lifecycle
+  (`docs/decisions.md`), since `/land`'s own GC still keys off `review_worktree` to reclaim it on a
+  clean land. `/land`'s backstops 1-4 stay exactly as they were: the net for a reviewer or rebase-pickup
+  agent that crashes before it can report back.
