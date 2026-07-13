@@ -50,15 +50,23 @@ Form no opinion until I've read **both sides** — the ticket as written and the
   stacked branch), then diff against the right base:
   - **Unstacked (the common case):**
     `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
-  - **Stacked** (the lander names a live `land/<base>`): diff against the **base's tip directly**,
-    not `trunk` — `git diff origin/land/<base>..origin/land/<id>`. A stacked branch's merge-base
-    with `trunk` **predates** its base branch (the base hasn't landed yet), so a trunk-diff carries
-    the base's own, separately-reviewed work as if it were this branch's — misjudging scope every
-    time, not just on a bad day (OBSERVED: lode-96t read as 529 lines / 8 files against `trunk` when
-    only 290 lines / 3 files were its own). Diffing against the base's tip isolates exactly this
-    branch's own commits. **Never flag scope creep merely for containing the base's commits** —
-    that's the base's own content, under its own ticket's review, not this branch smuggling in
-    unrelated work.
+  - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, in
+    the same merge-base form:
+    `git diff $(git merge-base origin/land/<base> origin/land/<id>)..origin/land/<id>`
+
+    A stacked branch's merge-base with `trunk` **predates** its base branch (the base hasn't landed
+    yet), so a trunk-diff carries the base's own, separately-reviewed work as if it were this
+    branch's — misjudging scope every time, not just on a bad day (OBSERVED: lode-96t read as 529
+    lines / 8 files against `trunk` when only 290 lines / 3 files were its own). The merge-base *with
+    the base* is the point this branch actually took it, so the diff is exactly this branch's own
+    commits. **Never flag scope creep merely for containing the base's commits** — that's the base's
+    own content, under its own ticket's review, not this branch smuggling in unrelated work.
+
+    **Use the merge-base, not the base's tip** (`git diff origin/land/<base>..origin/land/<id>`): a
+    base's tip *moves* after a dependent merges it — its code-reviewer pushes fixes onto it, a
+    `needs-rebase` pickup merges `trunk` in — and a tip-diff renders every such commit the dependent
+    doesn't have as the dependent **reverting the base's work**. That is a phantom finding on the exact
+    axis I'm here to judge.
 
   I read what changed, not what the summary *claims* changed.
 - **The design source of truth:** where the branch touches an architectural fact, I cross-check it

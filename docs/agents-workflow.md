@@ -703,19 +703,32 @@ places at once:
 has happened exactly once. The fix closes the three holes above with the smallest mechanism that
 covers the observed shape; it does not attempt to solve arbitrary multi-way branch dependencies.
 
-**Detection is from git, always — never from producer cooperation or bd metadata.** A branch that
-merged another live land branch contains its commits, tested directly with `git merge-base
---is-ancestor` / `git for-each-ref --contains` over `refs/remotes/origin/land/*` — computed fresh,
-once per `/land` pass, never persisted or trusted from an earlier pass (full mechanics:
+**Detection is from git, always — never from producer cooperation or bd metadata.** Two land branches
+cut independently from `trunk` share nothing *but* `trunk`, so the test is: **is their merge-base off
+`trunk`?** If it is, one was built on the other — that shared commit is the base's tip at the moment
+the dependent merged it. Direction comes from the first-parent spine (the dependent reached that commit
+through a *merge*, so it is not on the dependent's own spine). Computed fresh, once per `/land` pass,
+never persisted or trusted from an earlier pass (full mechanics:
 [`land/SKILL.md` §1a](../.claude/skills/land/SKILL.md#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
-**Known, documented gap — not claimed airtight:** if a base branch's history were ever rewritten and
-force-pushed after a dependent merged it, containment against the base's *current* tip would miss the
-dependent's now-stale copy. Nothing in the current architecture force-pushes a `land/<id>` branch
-automatically (the `needs-rebase` pickup merges and pushes ordinary-fast-forward, lode-cln; the
-code-reviewer's re-push is also ordinary-fast-forward), so this is a defense against future drift or
-a manual force-push, not an actively-triggered gap today. Testing containment of the base's *oldest*
-unique commit as well as its tip narrows the exposure but does not close it completely — this is
-recorded as a known limitation, deliberately, rather than papered over.
+
+**Why the merge-base and not `git merge-base --is-ancestor <base> <dep>`** — i.e. "is the base's tip
+contained in the dependent?" Because **a base's tip moves after a dependent merges it**, by ordinary
+fast-forward and entirely legitimately: the base's code-reviewer pushes review fixes onto it, and a
+`needs-rebase` pickup merges `trunk` into it (lode-cln). Either one leaves the dependent holding the
+base's *older* commits, so the base's current tip is no longer an ancestor of the dependent and a
+tip-based test loses the whole stack — silently. That is the *normal* flow, not a corner case: a
+producer stacks on a base precisely while it is unlanded, and therefore still moving. The merge-base
+test is immune to appends on either side.
+
+**Known, documented gap — not claimed airtight:** the merge-base test survives any *append*, but not a
+**rewrite**. If a base's history were force-pushed after a dependent merged it, the shared commit is
+gone from the base entirely, the merge-base falls back to `trunk`, and the pair reads as unrelated
+while the dependent still carries the base's orphaned commits. Nothing in the current architecture
+force-pushes a `land/<id>` branch — every push on these branches is an ordinary fast-forward — so this
+is a defense against a future change or a manual force-push, not a live trigger today. There is no
+fully general fix short of every dependent re-checking after every base push, which this deliberately
+does not build. **If a `land/<id>` branch is ever force-pushed, that pass's stacked-branch graph is not
+trustworthy** — recorded as a known limitation, deliberately, rather than papered over.
 
 **The three fixes, each keyed to the hole it closes:**
 
@@ -735,16 +748,26 @@ recorded as a known limitation, deliberately, rather than papered over.
   rebuild ticket says explicitly "lift verbatim from `land/<dep>` @ `<sha>`" rather than re-deriving
   the same design — mirroring lode-og3's own FOLD-IN note pattern (`git show`/`git diff` pointers, not
   prose re-derivation). The bounced base's own branch is still dropped either way; folding doesn't
-  rescue the branch that was actually rejected.
+  rescue the branch that was actually rejected. A kept branch is **not** garbage-collected for free —
+  `/land`'s GC only deletes the branches of tickets that *landed*, and a kept branch's ticket was
+  superseded — so the rebuild ticket carries its disposal instruction explicitly ("delete `land/<dep>`
+  once this lands"), as lode-og3's note does.
 - **`land-review` diffs a stacked branch against its base, not `trunk`.** When `/land` tells it the
-  branch is stacked on a live `land/<base>`, it diffs `origin/land/<base>..origin/land/<id>` instead
-  of the usual trunk merge-base — isolating exactly the branch's own commits, and it must not flag
-  scope creep merely for containing the base's own, separately-reviewed content.
-- **`/land`'s merge set is topologically ordered.** Base before dependent, derived from the same git
-  containment graph, restricted to the pass's accepted set. A dependent whose base isn't accepted
-  this pass (bounced, escalated, kicked back, or simply not yet `ready-for-land`) is **held** — pulled
-  out of the merge set entirely rather than merged out of order — and automatically re-evaluated next
-  pass once its base's own outcome resolves.
+  branch is stacked on a live `land/<base>`, it diffs from its **merge-base with that base** instead of
+  the usual trunk merge-base — isolating exactly the branch's own commits, and it must not flag scope
+  creep merely for containing the base's own, separately-reviewed content. (Merge-base, not the base's
+  *tip*, for the same reason detection uses it: a tip that has moved on makes the dependent look like
+  it is reverting the base's work.)
+- **`/land`'s merge set is topologically ordered, and a base that leaves it takes its dependents with
+  it.** Base before dependent, derived from the same git graph, restricted to the pass's accepted set.
+  A dependent whose base isn't accepted this pass (bounced, escalated, kicked back, or simply not yet
+  `ready-for-land`) is **held** — pulled out of the merge set entirely rather than merged out of
+  order — and automatically re-evaluated next pass once its base's own outcome resolves. Ordering
+  up-front is not enough on its own: a base can still drop out *mid-pass*, by conflicting with another
+  branch (kicked back `needs-rebase`) or by turning the re-gate red during isolation (bounced). Its
+  dependents must leave with it, transitively — otherwise the merge loop carries on to a dependent
+  whose base is no longer landing and puts that base's un-landed, just-rejected content on `trunk`
+  under the dependent's ticket name, which is the same hole by another route.
 
 **The producer records `builds_on: [<id>, ...]` in bd metadata — redundancy and intent, never the
 mechanism.** When a `coding` producer discovers it must build on an unlanded `land/<other-id>`

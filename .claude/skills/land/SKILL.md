@@ -105,44 +105,60 @@ branch's *content* announces this — I detect it purely from **git history**. `
 only — I never trust it as the mechanism; a producer that forgets to write it, or writes it wrong,
 must not silently break this section.
 
-**Detection.** A branch that merged another live land branch contains its commits — ancestry, tested
-directly, no heuristics:
+**Detection — shared history off `trunk`, NOT tip-ancestry.** Two land branches cut independently from
+`trunk` have nothing but `trunk` in common. So the relation to test is: **does their merge-base lie off
+`trunk`?** If it does, one of them was built on the other — that shared commit is the base's tip *at
+the moment the dependent merged it*:
 
 ```bash
-rtk git for-each-ref --format='%(refname:short) %(objectname)' 'refs/remotes/origin/land/*'
+rtk git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
 # for every ORDERED pair (X, Y) among the listed refs:
-rtk git merge-base --is-ancestor "origin/land/<X>" "origin/land/<Y>" && echo "<Y> is stacked on <X>"
+MB=$(rtk git merge-base "origin/land/<X>" "origin/land/<Y>")
+rtk git merge-base --is-ancestor "$MB" origin/trunk && continue   # only trunk in common → unrelated
+# MB is off trunk → X and Y share non-trunk history: one is stacked on the other.
+# DIRECTION: the BASE is the one whose own first-parent spine contains MB — the dependent reached MB
+# through a merge (second parent), so MB is not on its spine.
+rtk git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$MB" \
+  && ! rtk git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$MB" \
+  && echo "<Y> is stacked on <X>"
 ```
 
-Build this **once**, right here, as an in-memory map for the rest of the pass — never persisted,
-never trusted from a prior pass (a branch can be bounced, dropped, or landed between passes, changing
-what's live). Two shapes of this same relation get used below:
+**Do NOT reduce this to `git merge-base --is-ancestor origin/land/<X> origin/land/<Y>`** (i.e. "is X's
+current tip contained in Y"). That tests the base's **tip**, and a base's tip *moves after a dependent
+merges it* — by an ordinary, entirely legitimate fast-forward: the code-reviewer pushes review fixes
+onto `land/<base>` ([`code-reviewer.md`](../../agents/code-reviewer.md)), and a `needs-rebase` pickup
+merges `trunk` into it (lode-cln). Both leave the dependent holding the base's *older* commits, so the
+base's current tip is no longer an ancestor of the dependent and **the whole stack goes invisible** —
+silently, with no error. That is not a corner case; it is the *normal* flow, because a producer stacks
+on a base precisely while that base is still unlanded and therefore still moving. A detector that
+misses the stack is worse than no detector, because the rest of this section trusts it and goes right
+back to stranding dependents. The merge-base test above is immune to a fast-forward on either side.
 
-- **Full containment** (X is an ancestor of Y, direct *or* transitive) — used by
-  [Bounce](#bounce--clear-failure) and the [exit-(b)/(c) resolution
-  paths](#resolving-a-land-escalated-branch) to ask "does deleting X strand a live descendant?" A
-  transitively-stacked branch inherits X's content just as much as a directly-stacked one, so the
-  strand check must not reduce to direct edges only.
-- **Direct edges only** (X is Y's *nearest* live ancestor — discard any found base whose tip is
-  itself an ancestor of another found base for the same Y; it's already subsumed) — used by
+Build this **once**, right here, as an in-memory map for the rest of the pass — never persisted, never
+trusted from a prior pass (a branch can be bounced, dropped, or landed between passes, changing what's
+live). Two shapes of the same relation get used below:
+
+- **Full relation** (every base of Y, direct *or* transitive) — used by [Bounce](#bounce--clear-failure)
+  and the [exit-(b)/(c) resolution paths](#resolving-a-land-escalated-branch) to ask "does deleting X
+  strand a live descendant?" A transitively-stacked branch inherits X's content just as much as a
+  directly-stacked one, so the strand check must not reduce to direct edges only.
+- **Direct edges only** (X is Y's *nearest* base: no other base `B'` of Y has X as one of *its* bases —
+  computed from the relation itself, never from tips, which move) — used by
   [2c](#2c-run-the-semantic-gate) to pick the one base `land-review` diffs a stacked branch against,
-  and by [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red) to order the merge
-  set. A standard topological sort only needs direct precedence edges; it handles transitive ordering
-  on its own.
+  and by [Section 3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) to
+  order the merge set. A topological sort needs only direct precedence edges; it handles transitive
+  ordering on its own.
 
-**Known gap — documented, not claimed airtight.** If a base branch's history were ever rewritten and
-force-pushed *after* a dependent merged it, `--is-ancestor` against the base's **current** tip would
-miss: the dependent still carries the base's *old* commits, which a rewritten tip no longer contains.
-Nothing in the current architecture force-pushes a `land/<id>` branch automatically — the rebase
-pickup merges and pushes an ordinary fast-forward (lode-cln), and the code-reviewer's re-push is also
-an ordinary fast-forward — but a manual force-push, or a future change that reintroduces one, would
-open this gap. Testing containment of the **oldest** commit unique to the base
-(`git rev-list origin/trunk..origin/land/<base> | tail -1`) in addition to the tip catches a rewrite
-that only rewrote *later* history, which covers the actually-observed shape of this problem. It is
-**not airtight** against a rewrite of the base's very first commit — there is no fully general fix
-short of every dependent re-checking after every base push, which this ticket deliberately does not
-build (documented-YAGNI: this has happened once; the mitigation covers the observed case, not every
-conceivable one).
+**Known gap — documented, not claimed airtight.** The merge-base test survives any *append* to either
+branch, but not a **rewrite**: if a base's history were force-pushed after a dependent merged it, the
+shared commit is gone from the base's history entirely, the merge-base falls back to `trunk`, and the
+pair reads as unrelated — the dependent still carries the base's old, now-orphaned commits. Nothing in
+the current architecture force-pushes a `land/<id>` branch (every push on these branches is an ordinary
+fast-forward), so this is a defense against a *future* change or a manual force-push, not a
+live trigger today. There is no fully general fix short of every dependent re-checking after every base
+push, which this ticket deliberately does not build (documented-YAGNI: this has happened once). **If a
+`land/<id>` branch is ever force-pushed, the stacked-branch graph for that pass is not trustworthy** —
+that is the honest limit of this mechanism, and it is stated here rather than papered over.
 
 ---
 
@@ -269,6 +285,19 @@ edges**, restricted to `$ACCEPTED`:
 Once ordered (and any orphaned dependents pulled out), `$ACCEPTED` below refers to this **ordered,
 possibly-reduced** set, not the raw land-review output.
 
+**The invariant that outlives this step: a base that leaves the merge set takes its dependents with
+it.** Ordering the set up-front is not sufficient, because a base can still drop *out* of it later in
+Section 3 — by a real merge conflict (kicked back `needs-rebase`, the loop `continue`s) or by turning
+the gate red during isolation (bounced). In both cases the loop would carry straight on to a dependent
+that is still in `$ACCEPTED`, merge it, and land the departed base's un-landed, just-rejected content
+onto `trunk` under the *dependent's* ticket name — hole 3 again, reached through the back door. So
+whenever a branch leaves this pass's merge set **for any reason** — held above, conflict-kicked, or
+bounced during isolation — **drop every dependent of it from `$ACCEPTED` too** (the full relation from
+[1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd), so transitive
+dependents go as well), and leave each one the same HELD note. They are not conflicted and not
+rejected; they simply have no foundation this pass, and they re-enter `land-review` next pass exactly
+as a held dependent does.
+
 **Pre-compute every merge message before the first merge — no `bd` call inside the merge loop.** The
 `<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title),
 and *any* `bd` read regenerates the passive `.beads/issues.jsonl` export and leaves it **staged** — so
@@ -335,6 +364,11 @@ for id in $ACCEPTED; do
     # $CONFLICTS), NOT a land — it leaves this pass's set, so it is excluded from the re-gate, and from
     # the $LANDED that Section 4 closes and GCs. Symmetric with the isolation loop below; without this
     # check merge_one's clean abort would silently drop it into $LANDED and close/delete unlanded work.
+    #
+    # 3a INVARIANT: this branch just LEFT the merge set — so drop its dependents from $ACCEPTED too
+    # (1a's full relation, transitively) and leave each the HELD note. Otherwise the loop merges a
+    # dependent whose base is no longer landing, putting this branch's un-landed content on trunk
+    # under the dependent's name.
     continue
   fi
 done
@@ -351,9 +385,15 @@ rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, co
 
 - **Green** → proceed to [Land the survivors](#4-land-the-survivors).
 - **Red** → **isolate**. The combined merge is bad but I don't yet know which branch. Reset `trunk`
-  back to `origin/trunk` and replay the accepted set **one at a time**, re-gating after each; keep
-  every branch that stays green, and **bounce** the first that turns the gate red (→ new ticket, drop
-  branch), then continue with the rest:
+  back to `origin/trunk` and replay the accepted set **one at a time** (in 3a's order), re-gating after
+  each; keep every branch that stays green, and **bounce** the first that turns the gate red (→ new
+  ticket, drop branch), then continue with the rest — **but if the branch I bounce here is a base, its
+  dependents leave the set with it** ([3a's
+  invariant](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent)): don't
+  replay them, hold them. Replaying a dependent whose base just failed the gate merges the failing
+  content back in under a different ticket's name. (The bounce's own [descendant
+  check](#bounce--clear-failure) fires here too — a live dependent means this bounce **escalates**
+  rather than deleting the branch.)
 
   ```bash
   rtk git reset --hard origin/trunk
@@ -589,21 +629,15 @@ silent scope creep, a violated invariant, a wrong approach — or drift/conflict
 The original ticket is **superseded** by a fresh ticket that carries the `land-review` findings, so a
 producer can rebuild from a clean brief.
 
-**Before doing anything else: check for live descendants (lode-02v).** Bouncing deletes
-`land/<id>`'s branch, and a prior pass had no idea another live branch had already merged it in —
-`land/<id>`'s commits landed anyway, verbatim, under the wrong ticket's name, deleted-and-gone from
-under the dependent's feet only in the sense that the *original* was rejected while its content kept
-living on inside the dependent (OBSERVED: lode-6qh / lode-96t). Using
-[1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s **full
-containment** relation:
-
-```bash
-rtk git for-each-ref --contains "$(rtk git rev-parse origin/land/<id>)" \
-  --format='%(refname:short)' 'refs/remotes/origin/land/*' | grep -v '^origin/land/<id>$'
-# also test the OLDEST commit unique to <id> (the force-push mitigation from 1a):
-rtk git for-each-ref --contains "$(rtk git rev-list origin/trunk..origin/land/<id> | tail -1)" \
-  --format='%(refname:short)' 'refs/remotes/origin/land/*' | grep -v '^origin/land/<id>$'
-```
+**Before doing anything else: check for live descendants (lode-02v).** A bounce **deletes**
+`land/<id>`, and a prior pass did that with no idea another live branch had already merged `land/<id>`
+in. Deleting the branch does not delete its commits from the dependent: the dependent went on carrying
+the rejected content — including the very defect the bounce was rejecting — on a foundation that no
+longer existed and would never land (OBSERVED: lode-6qh / lode-96t). So: **read the descendants of
+`<id>` straight out of [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s
+map** (the *full* relation — a transitive dependent is stranded exactly as badly as a direct one). The
+map is already built for this pass; do **not** re-derive it here with an ad-hoc `--contains` probe
+against `<id>`'s tip — that is the tip test 1a exists to avoid.
 
 - **No descendants** → proceed with the bounce exactly as below.
 - **A live `land/<dep>` descendant found** → I do **not** silently drop `land/<id>`. I escalate
@@ -696,9 +730,18 @@ content **sound on its own** — the branch just couldn't land *because of* some
   design from scratch (mirrors lode-og3's own FOLD-IN note:
   `git show <sha>:<path>` / `git diff <a>..<b>` pointers, not prose re-derivation). The **base's**
   branch (the one actually bounced) is still dropped — it was rejected for a reason, and folding
-  doesn't rescue it. Once the combined rebuild has actually lifted what it needs, the kept branch is
-  dead weight; delete it as part of landing the rebuild (Section 4's normal GC covers this once the
-  rebuild's own ticket lands — nothing extra is needed).
+  doesn't rescue it.
+
+**A kept branch is not GC'd for free — say so in the rebuild ticket.** Section 4's GC deletes
+`land/$id` for each id in `$LANDED`, and a kept `land/<dep>` belongs to a ticket that was *superseded*,
+not landed: it will never appear in `$LANDED`, so nothing deletes it automatically. The rebuild ticket
+must therefore carry the disposal instruction alongside the lift pointers — **"lift verbatim from
+`land/<dep>` @ `<sha>`; delete `land/<dep>` once this ticket lands"** — which is exactly what lode-og3's
+FOLD-IN note does. Until then the branch is inert for landing (its ticket is closed, so it never
+re-enters the queue) but it *does* stay live in `refs/remotes/origin/land/*` and therefore visible to
+[1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd) — which is correct and
+intended: a kept branch really does still contain its base's commits, and 1a enumerating **refs, not
+tickets** is what keeps that visible.
 
 ## Escalate — genuine decision
 
@@ -762,9 +805,9 @@ bounce applies here too).
 
 **Before dropping the branch, run the same descendant check as Bounce (lode-02v):** a `land-escalated`
 branch can have picked up a live stacked dependent while it sat waiting for a human, exactly like an
-ordinary bounce candidate can. Re-run the [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)
-containment check (`git for-each-ref --contains <tip-and-oldest-commit-SHA> … 'refs/remotes/origin/land/*'`)
-against `land/<id>` before the delete below. If it finds a live descendant, do **not** delete —
+ordinary bounce candidate can — and a *stale* graph from the pass that escalated it is no use here, so
+recompute [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s relation
+against the live refs and look `land/<id>` up in it. If it finds a live descendant, do **not** delete —
 apply the same [fold/sequence/drop framing](#bounce--clear-failure) instead of proceeding blind, and
 use the [keep-for-lift disposition](#branch-disposition-on-a-bounce--drop-default-vs-keep-for-lift-lode-02v)
 rule if folding. No descendant found → proceed exactly as below.
@@ -788,8 +831,8 @@ If the human decides the work simply shouldn't happen (overtaken by events, no l
 close the ticket directly and GC the branch.
 
 **Same descendant check before deleting (lode-02v)** — a dropped branch's commits are just as live
-inside a dependent as a bounced branch's would be; run the [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)
-containment check before the delete below. A live descendant found means dropping this branch also
+inside a dependent as a bounced branch's would be; recompute [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s
+relation against the live refs before the delete below. A live descendant found means dropping this branch also
 strands that dependent's foundation — surface that to the human as part of this same decision (does
 the dependent get dropped too, or does it need to be re-founded on something else?) rather than
 deleting silently.
