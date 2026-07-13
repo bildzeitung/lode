@@ -479,12 +479,43 @@ not a default, and the choice trades one property for the other:
 
 - **The follow-up genuinely cannot be built or reviewed until the parent lands** (its root-cause
   diagnosis, its target code, or a decision the parent makes is a hard prerequisite) → file it with
-  **`blocks`** (`rtk bd dep add <child> <parent> --type blocks`, or `--deps blocks:<parent>` on `bd
-  create`). This is the only choice that keeps `bd ready` honest for that pair. Because the edge no
-  longer carries "discovered while working X," say so in the new ticket's own description (e.g.
-  "discovered while building lode-t1y") — that provenance is recoverable from prose, same as any other
-  ticket fact, whereas a missing block edge is not recoverable at all: nothing catches it before a
-  builder is dispatched onto broken work.
+  **`blocks`**. **Direction warning, verified empirically 2026-07-13 (lode-ij24):** `bd create --deps
+  blocks:<parent>` does **not** make the new follow-up blocked by `<parent>` — it inverts. Creating a
+  throwaway issue `B` with `bd create --deps blocks:A` left `A.dependencies = [B]` (i.e. `A` now
+  depends on / is blocked by `B`), never the reverse. In this loop `<parent>` is often the very branch
+  a builder or reviewer is about to certify `ready-for-code-review` / `ready-for-land` — filing a
+  follow-up this way silently drops that parent out of `bd ready` behind its own follow-up. (Two other
+  forms were checked in the same pass and are **not** affected: `bd create --deps discovered-from:X`
+  and bare `bd create --deps X` with no type prefix both give the expected direction — new issue
+  depends on `X`. Only the explicit `blocks:` prefix on `bd create --deps` inverts.)
+
+  The bare form is in fact a correct one-liner — `bd create --deps <parent>` records exactly the edge we
+  want, child blocked by parent, because `blocks` is bd's default dependency type. We still **don't**
+  prescribe it: it is right only by way of an *implicit* default, which is the same class of
+  under-specified `--deps` semantics that produced this bug in the first place, and it would silently
+  become the wrong edge if bd ever changed that default. Spell the edge out at the call site instead.
+
+  **Never write `bd create --deps blocks:<parent>`.** Create the ticket with **no `--deps` at all**,
+  then wire the gate as its own step. Do *not* reach for `--deps discovered-from:<parent>` on the
+  create as a way to keep the provenance: by the one-type-per-pair rule above, that edge occupies the
+  same ordered `(child, parent)` pair, so the `bd dep add … --type blocks` that follows **fails**
+  (`already exists with type "discovered-from" (requested "blocks")`) and leaves the follow-up sitting
+  in `bd ready` *unblocked* — the exact bug this section exists to kill, now with an error message an
+  unattended agent may never read. Provenance goes in the description, not the edge:
+
+  ```bash
+  NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <parent>. …" \
+    --type=task --silent)
+  rtk bd dep add "$NEW_ID" <parent> --type blocks
+  ```
+
+  `bd dep add <child> <parent> --type blocks` (positional args, or the equivalent `--blocked-by
+  <parent>` flag) is verified correct — the child's `.dependencies` gains the parent, i.e. the child is
+  blocked by the parent, never the reverse. This is the only choice that keeps `bd ready` honest for
+  that pair. Because the edge no longer carries "discovered while working X," say so in the new
+  ticket's own description (e.g. "discovered while building lode-t1y") — that provenance is recoverable
+  from prose, same as any other ticket fact, whereas a missing block edge is not recoverable at all:
+  nothing catches it before a builder is dispatched onto broken work.
 - **The follow-up is independent** — related to the parent but safely buildable on its own, with no
   code or diagnosis dependency → file it with **`discovered-from`**, as before. This is still the
   right default for the common case (cleanup noticed in passing, an unrelated bug seen along the way);
