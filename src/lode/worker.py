@@ -424,6 +424,14 @@ def run_one(
     - Handler raises a **transient** error, attempts < max → ``status='failed'``,
       backoff ``next_attempt_at`` set, ``last_error`` recorded
     - Handler raises a **transient** error, attempts == max → ``status='dead'``
+    - Handler raises a **transient** error but a concurrent
+      ``_reclaim_stale_running`` already reclaimed this row mid-handler
+      (lode-3jte) → :func:`lode.jobs.record_job_failure`'s ``AND
+      status='running'`` CAS guard makes the UPDATE above a no-op (reports
+      ``claim_lost``); this function leaves the row exactly as the reclaim
+      left it and does **not** run the dead-letter hook a second time — the
+      same resurrection the ``AuthError`` arm below already guards against
+      (lode-9yy), mirrored here for the transient path.
     - Handler raises a **permanent, user-actionable** error (currently only
       :class:`lode.auth.AuthError` — see ``docs/storage.md`` "Transient vs.
       permanent job failures", lode-9yy) → none of the above: the job is reset
@@ -521,9 +529,28 @@ def run_one(
         # Shared attempts/backoff/dead-letter transition (lode-ajda) — also used
         # by lode.enrich._mark_job_failed for a Batches API result, so there is
         # exactly one implementation of this state machine.
-        new_attempts, dead = jobs.record_job_failure(
+        new_attempts, dead, claim_lost = jobs.record_job_failure(
             conn, job_id, attempts, err, settings
         )
+        if claim_lost:
+            # CAS-guarded (lode-3jte): the row was no longer 'running' by the
+            # time record_job_failure's UPDATE ran — same race run_one's
+            # AuthError arm above already guards against (lode-9yy). A
+            # concurrent `_reclaim_stale_running` reclaimed this job as stale
+            # mid-handler and already drove it to a terminal state (firing its
+            # own dead-letter hook if it dead-lettered); neither UPDATE above
+            # took effect, so there is nothing further to log as dead here and
+            # running the hook again would fire it a second time for the same
+            # job (lode-at8 promises exactly once).
+            log.info(
+                "job %d (%s target=%s) transient failure but the claim was "
+                "lost to a concurrent reclaim — no update applied, no "
+                "dead-letter hook run",
+                job_id,
+                job_type,
+                short,
+            )
+            return False
         if dead:
             log.error(
                 "job %d dead-lettered after %d attempt(s): %s",

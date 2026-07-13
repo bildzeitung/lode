@@ -599,6 +599,24 @@ long-lived `'running'` status is intentional (the prior section's
 resume-on-restart contract, lode-i05.5); reclaiming one here would risk
 resubmitting a Batches API request still in flight.
 
+**Every writer that touches a `'running'` claim is CAS-guarded (`AND
+status = 'running'`) — pinned lode-3jte.** `_reclaim_stale_running`'s own
+UPDATEs always were; `run_one`'s `AuthError` reset got the same guard in
+lode-9yy. `jobs.record_job_failure` — the transient-failure transition shared
+by `run_one`'s generic `except Exception` arm and `enrich._mark_job_failed` —
+did not, even though it writes the identical `'running'` row: a caller can
+reach it with no worker lock held (`cli._enrich_immediately` via
+`claim_and_run_one`), so a concurrent `_reclaim_stale_running` can dead-letter
+the row (firing its dead-letter hook) *while the stalled handler is still in
+flight*. The unguarded UPDATE would then resurrect that dead-lettered job back
+to `'failed'` — double-charging `attempts` and leaving a second, spurious
+dead-letter hook run on the table. `record_job_failure` now reports a third
+value, `claim_lost`, when its own CAS rowcount was 0; `run_one` checks it and,
+when true, leaves the row exactly as the reclaim left it and skips the
+dead-letter hook rather than running it again. `enrich._mark_job_failed`
+ignores `claim_lost` — it only ever runs against batch-submitted jobs, which
+the SELECT above already excludes from this race.
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
