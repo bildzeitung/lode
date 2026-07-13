@@ -617,19 +617,7 @@ def test_load_passes_durable_model_cache_dir(
 
     monkeypatch.setattr(cross_encoder, "TextCrossEncoder", _FakeTextCrossEncoder)
 
-    # A model name unique to this test -- never the Settings() default that
-    # every slow-tier test (@pytest.mark.slow) uses for its real reranker load.
-    # This is the one test in the suite that observes _load()'s side effect
-    # (the kwargs it passes to the real TextCrossEncoder constructor) rather
-    # than just its return value, so it must never be able to take a hit off
-    # the session-scoped model cache in tests/conftest.py
-    # (_cache_cross_encoder_model_load): a hit would skip the real
-    # TextCrossEncoder() call entirely and leave `captured` empty, depending on
-    # whether a slow test already populated the cache for this model name on
-    # this xdist worker (lode-vzwn). A name nothing else uses guarantees a
-    # cache MISS, so the real load -- and this assertion -- runs independent of
-    # test order.
-    encoder = FastEmbedCrossEncoder(Settings(rerank_model="test-only-cache-dir-probe"))
+    encoder = FastEmbedCrossEncoder(Settings())
     encoder._load()
 
     assert captured["cache_dir"] == str(tmp_path / "root" / "models")
