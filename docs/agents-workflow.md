@@ -707,9 +707,16 @@ covers the observed shape; it does not attempt to solve arbitrary multi-way bran
 cut independently from `trunk` share nothing *but* `trunk`, so the test is: **does ANY of their
 merge-bases lie off `trunk`?** A pair can have more than one merge-base (see below), so this
 enumerates all of them (`git merge-base --all`) and discards the ones that are ancestors of `trunk` —
-if any survive, one branch was built on the other, and the surviving off-trunk commit is the base's
-tip at the moment the dependent merged it. Direction comes from the first-parent spine (the dependent
-reached that commit through a *merge*, so it is not on the dependent's own spine). Computed fresh,
+if any survive, the pair **shares non-trunk history**, and the surviving off-trunk commit is a base's
+tip at the moment a dependent merged it.
+
+Shared history is **necessary but not sufficient** for a stack: two dependents that each merged the
+*same* base share that base's commits, so they have an off-trunk merge-base with **each other** while
+neither is stacked on the other. **Direction** is what separates the two cases, and it comes from the
+first-parent spine — a dependent reached the shared commit through a *merge*, so it is not on the
+dependent's own spine. For a real stack that matches in exactly one ordering (edge emitted); for a
+sibling pair it matches in neither (no edge — the correct answer, since neither is the other's base;
+each is still correctly detected against the base itself). Computed fresh,
 once per `/land` pass, never persisted or trusted from an earlier pass (full mechanics:
 [`land/SKILL.md` §1a](../.claude/skills/land/SKILL.md#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
 
@@ -752,9 +759,14 @@ one, which is exactly the shape that reintroduces the miss.
   neither half of its condition and emits no edge — detection still correctly flags the pair as
   related, but direction is silently lost. The sanctioned build flow never produces this shape, so it
   is not a live trigger, but it is an undocumented silent miss if anyone deviates from it — recorded
-  here rather than assumed away.
+  here rather than assumed away. Note it is **indistinguishable by signature from a normal sibling
+  pair** (both read as "related, no edge"), which is why it stays a documented gap rather than a
+  warning: a warning keyed on that signature would fire on every legitimate pair of branches stacked
+  on a common base.
 
-**The three fixes, each keyed to the hole it closes:**
+**The fixes.** Three close the three holes above, one per hole; the fourth (branch disposition) is not
+keyed to a hole — it writes down a rule the lode-96t resolution had already improvised undocumented,
+so the next bounce doesn't silently destroy work worth lifting:
 
 - **Bounce (and the exit-(b)/(c) human-resolution paths, which also delete a branch) check for live
   descendants before deleting.** If a live `land/<dep>` branch already contains the branch about to

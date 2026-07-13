@@ -106,9 +106,22 @@ only — I never trust it as the mechanism; a producer that forgets to write it,
 must not silently break this section.
 
 **Detection — shared history off `trunk`, NOT tip-ancestry.** Two land branches cut independently from
-`trunk` have nothing but `trunk` in common. So the relation to test is: **does their merge-base lie off
-`trunk`?** If it does, one of them was built on the other — that shared commit is the base's tip *at
-the moment the dependent merged it*:
+`trunk` have nothing but `trunk` in common. So the relation to test is: **does any of their merge-bases
+lie off `trunk`?** If one does, the pair **shares non-trunk history** — and that shared commit is a
+base's tip *at the moment a dependent merged it*.
+
+**Shared history is necessary, not sufficient — the direction test is what decides.** An off-trunk
+merge-base means one of *two* things, and only the first is a stack:
+
+- **A stack** — one of the pair merged the other. The direction test below finds the shared commit on
+  the base's first-parent spine but not the dependent's, and emits the edge.
+- **Siblings** — *two dependents that each merged the same third base* also share that base's commits,
+  so they too have an off-trunk merge-base with **each other**, while neither is stacked on the other.
+  Here the shared commit is off *both* spines (each reached it through a merge), the direction test
+  matches neither ordering, and **no edge is emitted — which is the correct answer.** Each sibling is
+  still correctly detected as stacked on the *base* by its own pair. This is a normal, supported shape
+  (two producers may stack on one base); a related pair with no direction between them is not, by
+  itself, a symptom of anything wrong.
 
 ```bash
 rtk git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
@@ -125,7 +138,9 @@ for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do
   rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"
 done
 [ -z "$OFF_TRUNK" ] && continue   # every merge-base is on trunk → unrelated
-# At least one off-trunk merge-base → X and Y share non-trunk history: one is stacked on the other.
+# At least one off-trunk merge-base → X and Y share non-trunk history. That is EITHER a stack OR two
+# siblings on a common base; the direction test below is what tells them apart. Emitting no edge here
+# is a normal outcome (siblings), not a failure.
 # DIRECTION: the BASE is the one whose own first-parent spine contains an off-trunk MB — the
 # dependent reached that commit through a merge (second parent), so it is not on its spine.
 for mb in $OFF_TRUNK; do
@@ -144,12 +159,11 @@ base's current tip is no longer an ancestor of the dependent and **the whole sta
 silently, with no error. That is not a corner case; it is the *normal* flow, because a producer stacks
 on a base precisely while that base is still unlanded and therefore still moving. A detector that
 misses the stack is worse than no detector, because the rest of this section trusts it and goes right
-back to stranding dependents. The merge-base test above is immune to a fast-forward on either side
-**only when every merge-base is considered, not one** — `git merge-base` with no `--all` returns a
-single, arbitrary result when a pair has more than one, and a needs-rebase pickup on the base (the
-exact fast-forward this paragraph is about) is precisely what produces a second, on-trunk merge-base
-that can be the one returned. `--all`, filtering to off-trunk survivors, is the mechanism that makes
-the immunity real rather than assumed.
+back to stranding dependents. But note the merge-base test above is immune to a fast-forward on either
+side **only when every merge-base is considered, not one** — a single-result `git merge-base` walks
+straight back into this same silent miss by a different route, for the reason spelled out in the
+`--all` comment in the snippet above. Immunity comes from `--all` + the off-trunk filter, not from
+using a merge-base per se.
 
 Build this **once**, right here, as an in-memory map for the rest of the pass — never persisted, never
 trusted from a prior pass (a branch can be bounced, dropped, or landed between passes, changing what's
@@ -160,11 +174,14 @@ live). Two shapes of the same relation get used below:
   strand a live descendant?" A transitively-stacked branch inherits X's content just as much as a
   directly-stacked one, so the strand check must not reduce to direct edges only.
 - **Direct edges only** (X is Y's *nearest* base: no other base `B'` of Y has X as one of *its* bases —
-  computed from the relation itself, never from tips, which move) — used by
-  [2c](#2c-run-the-semantic-gate) to pick the one base `land-review` diffs a stacked branch against,
-  and by [Section 3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) to
-  order the merge set. A topological sort needs only direct precedence edges; it handles transitive
-  ordering on its own.
+  computed from the relation itself, never from tips, which move) — needed by
+  [2c](#2c-run-the-semantic-gate) to pick the one base `land-review` diffs a stacked branch against:
+  handing it a *transitive* base would reintroduce hole 2, because the diff would then carry the
+  intermediate branch's work as if it were this branch's. [Section
+  3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) uses the same view
+  to order the merge set, though the topological sort would in fact run correctly off the full relation
+  too (its extra transitive edges are already-implied constraints, not new ones) — the nearest-base
+  pick is the reason this view has to exist.
 
 **Known gap — documented, not claimed airtight.** The merge-base test survives any *append* to either
 branch, but not a **rewrite**: if a base's history were force-pushed after a dependent merged it, the
@@ -187,6 +204,12 @@ correctly flags the pair as related; only the *direction* is silently lost. `cod
 build flow (branch from `trunk`, merge the base in) never produces this shape, so it is not a live
 trigger under the current architecture — same status as the force-push gap above: a defense against a
 future or off-process deviation, not something this ticket builds a general fix for.
+
+**And note it is not distinguishable from a sibling pair by signature alone**: both show up as "related
+(off-trunk merge-base) but no edge." That is exactly why this stays a *documented gap* rather than
+something to detect and warn on — a warning keyed on that signature would fire on every perfectly
+normal sibling pair. If a stack is ever suspected but no edge appears, the thing to check by hand is
+whether the dependent's first-parent spine reaches `trunk` at all, or dead-ends in the base.
 
 ---
 
