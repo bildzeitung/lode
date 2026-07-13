@@ -437,6 +437,14 @@ itself stays in the committed skill so it travels to every clone; only the overr
 The skill re-reads the env var fresh at the start of every invocation, so a changed value takes effect
 on the next `/code` run without any other action.
 
+**Onboarding note (lode-y24n).** Leaving the env var **unset** is the maintenance-free choice: the
+derivation above re-runs on every invocation, so the cap tracks the machine by itself. A **pinned**
+value does not — it is a cached, per-machine constant that will **not** follow a later hardware or
+VM-size change (more RAM, a different box, a raised WSL2 memory limit). There's no command to
+memorize: just ask Claude to recompute it after any such change. The pin is one of the small family of
+deliberately machine-local, non-travelling settings listed in
+[`CLAUDE.md` — New machine setup](../CLAUDE.md#new-machine-setup).
+
 ### Filing follow-up work: `blocks` vs `discovered-from` (lode-c0t3)
 
 When a builder or reviewer discovers follow-up work mid-task, the dependency type it files that
