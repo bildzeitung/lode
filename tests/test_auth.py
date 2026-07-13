@@ -20,6 +20,8 @@ LLM-client-construction guard (lode-85q), which otherwise can't distinguish
 "real construction on purpose" from "real construction because a mock broke".
 """
 
+import importlib
+import sys
 from pathlib import Path
 
 import anthropic
@@ -45,6 +47,31 @@ def test_no_hardcoded_key_in_source() -> None:
     src = Path(auth.__file__).read_text()
     assert "sk-ant" not in src
     assert "api_key=" not in src
+
+
+def test_importing_auth_does_not_import_the_sdk(monkeypatch) -> None:
+    """Importing ``lode.auth`` must NOT import ``anthropic`` (lode-4q97).
+
+    AuthError is a bare RuntimeError subclass precisely so that the many callers
+    that only need to *catch* it -- ``worker.drain`` most importantly, which does
+    so unconditionally on every drain -- can import this module for free. If
+    ``import anthropic`` ever moves back to module level, a credential-free,
+    embed-only drain silently starts paying the ~0.32s SDK import again on every
+    single run, which is the regression this test exists to catch.
+
+    ``monkeypatch.delitem`` restores both original module objects at teardown, so
+    the freshly-imported ``lode.auth`` (and its distinct ``AuthError`` class) does
+    not leak into later tests.
+    """
+    for name in ("lode.auth", "anthropic"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    importlib.import_module("lode.auth")
+
+    assert "anthropic" not in sys.modules, (
+        "importing lode.auth pulled in the Anthropic SDK -- `import anthropic` "
+        "must stay inside build_client()"
+    )
 
 
 @pytest.mark.network

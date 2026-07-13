@@ -927,8 +927,16 @@ def drain(
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
-    # Deferred import (free: the batch pre-steps below import lode.enrich, which
-    # imports lode.auth transitively, on every call anyway).
+    # Deferred import. This one is unconditional -- the `except` clause header
+    # below needs the class on every drain -- so it is only cheap because
+    # `lode.auth` itself does NOT import the Anthropic SDK at module level
+    # (lode-4q97): AuthError is a bare RuntimeError subclass, and `import
+    # anthropic` lives inside build_client(). Were that to regress, EVERY drain
+    # would pay the SDK import here, including a credential-free embed-only one --
+    # which is precisely the cost lode-4q97 removed. (Before lode-4q97 this line
+    # was free for a different reason: the pre-steps below imported lode.enrich,
+    # hence lode.auth, on every call. Moving those imports below the early-return
+    # guards is what stranded this one as the last unconditional SDK import.)
     from lode.auth import AuthError
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.

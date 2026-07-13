@@ -14,8 +14,10 @@ instead of as an opaque error at the first API call.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-import anthropic
+if TYPE_CHECKING:  # annotations only — `from __future__ import annotations` keeps
+    import anthropic  # them strings at runtime, so this costs nothing.
 
 _log = logging.getLogger(__name__)
 
@@ -30,7 +32,17 @@ MISSING_CREDENTIALS_MESSAGE = (
 
 
 class AuthError(RuntimeError):
-    """No Anthropic credentials could be resolved -- raised by :func:`build_client`."""
+    """No Anthropic credentials could be resolved -- raised by :func:`build_client`.
+
+    Deliberately a plain :class:`RuntimeError` subclass with no SDK dependency, so
+    that **importing this module costs nothing** (lode-4q97). Callers that only
+    need to *catch* the error -- ``worker.drain``, ``worker.run_one``, ``cli``,
+    the TUI ask screen -- do ``from lode.auth import AuthError`` on paths that may
+    never touch Anthropic at all (most importantly a credential-free, embed-only
+    drain, whose embeds come from the LOCAL fastembed model). That import must not
+    drag in the ~0.32s Anthropic SDK import, so ``import anthropic`` lives inside
+    :func:`build_client` rather than at module level.
+    """
 
 
 def build_client() -> anthropic.Anthropic:
@@ -47,6 +59,11 @@ def build_client() -> anthropic.Anthropic:
     Both map to :class:`AuthError`; the construction error (when any) is chained
     onto it for debugging.
     """
+    # Deferred so that merely importing `lode.auth` (e.g. for AuthError alone) does
+    # not pay for the SDK -- see the note on AuthError above (lode-4q97). Actually
+    # *building* a client obviously needs it, so it is never a waste here.
+    import anthropic
+
     sdk_error: anthropic.AnthropicError | None = None
     try:
         client = anthropic.Anthropic()

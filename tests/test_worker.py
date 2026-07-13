@@ -1061,28 +1061,47 @@ def test_drain_embed_only_does_not_import_enrich(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An embed-only drain (no enrich jobs pending at all) must never import
-    ``lode.enrich`` -- and therefore never pay the Anthropic SDK import cost
-    (lode-4q97). Both batch pre-steps import ``lode.enrich`` only after their
-    early-return guard, so with zero enrich jobs in the queue neither guard's
-    body (where the import lives) ever executes.
+    """An embed-only drain (no enrich jobs pending at all) must never import the
+    **Anthropic SDK** (lode-4q97) -- embeds come from the LOCAL fastembed model
+    and need no credentials, so an unkeyed user must not pay the ~0.32s SDK
+    import on every drain.
 
-    ``lode.enrich`` is removed from ``sys.modules`` first so this test proves
-    something regardless of whether an earlier test in the suite already
-    imported it (module-level imports elsewhere, e.g. this file's own
-    ``from lode.enrich import ENRICH_PROMPT_VER``, would otherwise make the
-    assertion vacuously true).
+    Two independent import paths could drag it in, and this asserts on the SDK
+    itself rather than on any one proxy for it:
+
+    * the two batch pre-steps import ``lode.enrich`` (which imports
+      ``anthropic``) -- now only *after* their early-return guard, so with zero
+      enrich jobs neither guard's body ever runs; and
+    * ``drain`` itself imports ``AuthError`` from ``lode.auth`` unconditionally
+      (its ``except`` header needs the class) -- which is only cheap because
+      ``lode.auth`` no longer imports ``anthropic`` at module level.
+
+    Asserting only ``"lode.enrich" not in sys.modules`` would pass while the SDK
+    was still fully imported via the second path, so the SDK assertion is the
+    load-bearing one.
+
+    All three modules are dropped from ``sys.modules`` first so the test proves
+    something regardless of what an earlier test in the suite already imported
+    (this file's own module-level ``from lode.enrich import ENRICH_PROMPT_VER``
+    and ``from lode.auth import AuthError`` would otherwise make the assertions
+    vacuously true). ``monkeypatch.delitem`` restores the original module objects
+    at teardown, so no duplicate ``lode.auth`` (and hence no duplicate
+    ``AuthError`` class) leaks into later tests.
     """
-    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+    for name in ("lode.enrich", "lode.auth", "anthropic"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
 
     for i in range(3):
         _insert_job(conn, target_version=f"ver-{i}")
     n = drain(conn, db_path, settings, _registry=_noop_registry())
 
     assert n == 3
+    assert "anthropic" not in sys.modules, (
+        "embed-only drain imported the Anthropic SDK despite having no enrich "
+        "work to do and needing no credentials"
+    )
     assert "lode.enrich" not in sys.modules, (
-        "embed-only drain imported lode.enrich (and therefore anthropic) "
-        "despite having no enrich work to do"
+        "embed-only drain imported lode.enrich despite having no enrich work to do"
     )
 
 
@@ -1641,16 +1660,19 @@ def test_batch_submit_no_pending_enrich_does_not_import_enrich(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_batch_submit_enrich imports ``lode.enrich`` only after its early-return
-    guard (lode-4q97): with no pending enrich rows, the import must not run.
+    """_batch_submit_enrich imports ``lode.enrich`` (and ``lode.auth``) only after
+    its early-return guard (lode-4q97): with no pending enrich rows, neither
+    import runs -- and so the Anthropic SDK is never pulled in.
     """
-    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+    for name in ("lode.enrich", "lode.auth", "anthropic"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
 
     client = _fake_batch_client_worker()
     submitted = _batch_submit_enrich(conn, settings, _client=client)
 
     assert submitted == 0
     assert "lode.enrich" not in sys.modules
+    assert "anthropic" not in sys.modules
 
 
 def test_batch_submit_reverts_on_api_failure(
@@ -1852,15 +1874,18 @@ def test_batch_collect_no_running_batches_does_not_import_enrich(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """_batch_collect_enrich imports ``lode.enrich`` only after its early-return
-    guard (lode-4q97): with no running enrich batches, the import must not run.
+    guard (lode-4q97): with no running enrich batches, the import must not run --
+    and so the Anthropic SDK is never pulled in.
     """
-    monkeypatch.delitem(sys.modules, "lode.enrich", raising=False)
+    for name in ("lode.enrich", "lode.auth", "anthropic"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
 
     client = _fake_batch_client_worker()
     ended = _batch_collect_enrich(conn, settings, _client=client)
 
     assert ended == 0
     assert "lode.enrich" not in sys.modules
+    assert "anthropic" not in sys.modules
 
 
 # ---------------------------------------------------------------------------
