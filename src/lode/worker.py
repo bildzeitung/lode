@@ -51,8 +51,13 @@ before the main claim-run loop:
    ``settings.enrichment_batch_flush_size``), gate out no_egress / tombstone /
    purged versions, and submit the rest to ``client.beta.messages.batches.create``
    (50%-off Batches API). Each submitted job row is updated to ``status='running'``
-   with ``batch_handle`` set. On success returns the count submitted; on API
-   failure marks all newly-claimed jobs ``failed`` and re-raises.
+   with ``batch_handle`` set. On success returns the count submitted; on a
+   **transient** API failure marks all newly-claimed jobs ``failed`` (short
+   backoff, not re-raised — the embed drain continues) and returns 0. On a
+   **permanent** failure (:class:`lode.auth.AuthError` — lode-9yy) resets them
+   to ``pending`` uncharged instead and re-raises, same taxonomy as
+   :func:`run_one` (``docs/storage.md`` "Transient vs. permanent job
+   failures").
 
 **Claim** (``_claim_one``): selects one job with
 ``status='pending' AND next_attempt_at <= now AND type IN (<registered>)``,
@@ -486,13 +491,21 @@ def run_one(
       <short-id>: 3 passages"``) for jobs processed by the main claim/run
       loop, i.e. ``embed`` and any fallback ``enrich`` job that escaped the
       batch pre-step.
-    - Handler raises, attempts < max → ``status='failed'``, backoff
-      ``next_attempt_at`` set, ``last_error`` recorded
-    - Handler raises, attempts == max → ``status='dead'``
+    - Handler raises a **transient** error, attempts < max → ``status='failed'``,
+      backoff ``next_attempt_at`` set, ``last_error`` recorded
+    - Handler raises a **transient** error, attempts == max → ``status='dead'``
+    - Handler raises a **permanent, user-actionable** error (currently only
+      :class:`lode.auth.AuthError` — see ``docs/storage.md`` "Transient vs.
+      permanent job failures", lode-9yy) → none of the above: the job is reset
+      straight back to ``status='pending'`` with ``attempts`` untouched (no
+      backoff, never ``'dead'``) and the exception is **re-raised** rather than
+      absorbed, so it reaches the caller with its actionable message instead of
+      being silently retried forever on something retrying can never fix.
 
-    Returns ``True`` on success (``done``), ``False`` on error (``failed`` or
-    ``dead``).  The registry must contain a handler for the job's type (call
-    sites guarantee this because ``_claim_one`` filters to registered types).
+    Returns ``True`` on success (``done``), ``False`` on a transient error
+    (``failed`` or ``dead``); raises on a permanent error (see above).  The
+    registry must contain a handler for the job's type (call sites guarantee
+    this because ``_claim_one`` filters to registered types).
     """
     row = conn.execute(
         "SELECT type, target_version, attempts FROM jobs WHERE id = ?",
@@ -505,6 +518,10 @@ def run_one(
     job_type, target_version, attempts = row
     handler = registry[job_type]
     short = short_version_id(target_version)
+
+    # Deferred import so the Anthropic SDK stays off this module's import graph;
+    # bound before the `try` because an `except` clause header needs the class.
+    from lode.auth import AuthError
 
     try:
         outcome = handler(conn, target_version, db_path, settings)
@@ -526,6 +543,39 @@ def run_one(
         if outcome is not None and outcomes is not None:
             outcomes.append(outcome)
         return True
+
+    # Permanent, user-actionable failure (lode-9yy, docs/storage.md "Transient
+    # vs. permanent job failures") — retrying can never succeed, so it must not
+    # reach the transient accounting below: no attempts charged, no backoff,
+    # never dead-lettered. Reset the claim to 'pending' (uncharged) and re-raise
+    # so the caller sees build_client's actionable message.
+    #
+    # Ordered ahead of `except Exception` — AuthError is a RuntimeError, so the
+    # generic arm would otherwise swallow it. That swallow IS the bug lode-9yy fixes.
+    except AuthError as exc:
+        # CAS on status='running' (the same guard _reclaim_stale_running uses on
+        # its own UPDATEs): this job is not necessarily still ours.
+        # `cli._enrich_immediately` reaches run_one via claim_and_run_one, which
+        # runs WITHOUT the worker lock, so a concurrent `lode work` drain can
+        # reclaim this row as stale mid-handler and drive it to a terminal
+        # 'dead'. Unguarded, the reset would then resurrect that dead job (whose
+        # dead-letter hook has already fired) back to 'pending'. If we no longer
+        # own the claim, leave the row to whoever does.
+        with conn:
+            conn.execute(
+                "UPDATE jobs SET status = 'pending', last_error = ? "
+                "WHERE id = ? AND status = 'running'",
+                (str(exc), job_id),
+            )
+        log.error(
+            "job %d (%s target=%s) hit a permanent, user-actionable "
+            "failure — reset to 'pending', no retry charged: %s",
+            job_id,
+            job_type,
+            short,
+            exc,
+        )
+        raise
 
     except Exception as exc:  # noqa: BLE001
         new_attempts = attempts + 1
@@ -689,15 +739,27 @@ def _batch_submit_enrich(
     :func:`lode.enrich.submit_enrich_batch`); gated-out jobs are marked ``done``;
     count of submitted requests is returned.
 
-    On API failure: all newly-claimed jobs are reverted to ``failed`` with a
-    short backoff so they are retried on the next drain tick, then the exception
-    is re-raised (logged at WARNING — the embed drain continues).
+    On a **transient** API failure: all newly-claimed jobs are reverted to
+    ``failed`` with a short backoff so they are retried on the next drain tick
+    (logged at WARNING); the exception is *not* re-raised — the embed drain
+    continues. On a **permanent, user-actionable** failure
+    (:class:`lode.auth.AuthError` from :func:`lode.auth.build_client` —
+    lode-9yy) the newly-claimed jobs are instead reset to ``pending`` with
+    ``attempts`` untouched (no backoff charged, never dead-lettered), and the
+    exception *is* re-raised — retrying can never fix a missing credential, so
+    the caller (``lode work``) must see it immediately rather than have it
+    silently absorbed into ordinary retry accounting (``docs/storage.md``
+    "Transient vs. permanent job failures").
 
     Returns the number of jobs included in the submitted batch (0 if no pending
     enrich jobs or all gated out).
 
     ``_client`` is injectable for tests.
     """
+    # Deferred imports (`lode.enrich` pulls in the Anthropic SDK). AuthError is
+    # bound here rather than in the handler because an `except` clause header
+    # needs the class; it is free — `lode.enrich` imports `lode.auth` anyway.
+    from lode.auth import AuthError
     from lode.enrich import submit_enrich_batch
 
     flush_size = settings.enrichment_batch_flush_size
@@ -767,6 +829,28 @@ def _batch_submit_enrich(
             )
         return submitted
 
+    # Permanent, user-actionable failure (lode-9yy, docs/storage.md "Transient
+    # vs. permanent job failures") — retrying can never succeed, so it must not
+    # be folded into the transient revert below: no attempts charged, no backoff,
+    # never dead-lettered. Reset the pre-claimed jobs to 'pending' (uncharged)
+    # and re-raise so `lode work` sees build_client's actionable message.
+    # Ordered ahead of `except Exception` — AuthError is a RuntimeError, so the
+    # generic arm would otherwise swallow it.
+    except AuthError as exc:
+        log.error(
+            "_batch_submit_enrich: permanent, user-actionable failure — "
+            "not retried, resetting %d job(s) to pending: %s",
+            len(job_ids),
+            exc,
+        )
+        with conn:
+            conn.executemany(
+                "UPDATE jobs SET status = 'pending', last_error = ? "
+                "WHERE id = ? AND status = 'running'",
+                [(str(exc), jid) for jid in job_ids],
+            )
+        raise
+
     except Exception as exc:
         log.warning("_batch_submit_enrich: API call failed: %s — reverting jobs", exc)
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
@@ -811,6 +895,17 @@ def drain(
     (including failures and dead-letters). Batch pre-step and reclaim activity
     is logged but not included in the return count.
 
+    **Permanent failures** (:class:`lode.auth.AuthError` — ``docs/storage.md``
+    "Transient vs. permanent job failures", lode-9yy): ``drain`` raises, rather
+    than returning, so ``lode work`` can surface the actionable message and exit
+    non-zero. But it raises **last**, not on the spot: an ``AuthError`` from the
+    enrich batch pre-steps is stashed and re-raised only after the reclaim, the
+    retry reset, and the main claim/run loop have all run. Those do
+    credential-free work — ``embed`` jobs come from the local fastembed model —
+    and must not be starved by a missing Anthropic key. A pending enrich job is
+    essentially always present (every ``add`` enqueues one), so raising from the
+    pre-step would abort every single ``drain`` before the first embed ever ran.
+
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
     tests (passed through to the batch pre-steps).
@@ -827,9 +922,33 @@ def drain(
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
+    # Deferred import (free: the batch pre-steps below import lode.enrich, which
+    # imports lode.auth transitively, on every call anyway).
+    from lode.auth import AuthError
+
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
-    _batch_collect_enrich(conn, settings, _client=_batch_client, outcomes=outcomes)
-    _batch_submit_enrich(conn, settings, _client=_batch_client)
+    #
+    # A permanent, user-actionable failure here (AuthError — docs/storage.md
+    # "Transient vs. permanent job failures") must still reach the caller, but it
+    # must NOT abort the credential-free work below (lode-9yy review). `embed`
+    # jobs are produced by the LOCAL fastembed model and have nothing to do with
+    # Anthropic credentials, yet both pre-steps run BEFORE the main claim/run
+    # loop. Letting the raise unwind drain() from here would mean an unkeyed
+    # user's embed jobs never drain again — every `lode work` would abort on the
+    # enrich pre-step (a pending enrich job is enqueued by every `add`, so one is
+    # essentially always there) before a single embed ran, silently killing the
+    # dense half of retrieval. That trades "enrich is retried forever" for "the
+    # whole queue stops", which is strictly worse.
+    #
+    # So: stash it, finish the work that CAN succeed, and re-raise at the end.
+    # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
+    # so the embeds land before any residual enrich job re-raises out of run_one.
+    permanent: AuthError | None = None
+    try:
+        _batch_collect_enrich(conn, settings, _client=_batch_client, outcomes=outcomes)
+        _batch_submit_enrich(conn, settings, _client=_batch_client)
+    except AuthError as exc:
+        permanent = exc
 
     reclaimed = _reclaim_stale_running(conn, settings)
     if reclaimed:
@@ -848,6 +967,12 @@ def drain(
             break
         run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
         processed += 1
+
+    # The credential-free work is done; now surface the permanent failure the
+    # batch pre-step stashed (if a residual enrich job in the main loop above
+    # didn't already re-raise it out of run_one first).
+    if permanent is not None:
+        raise permanent
 
     return processed
 

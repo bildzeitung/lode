@@ -204,15 +204,30 @@ def _enrich_immediately(
 
     If a concurrent ``lode work`` wins the claim race instead, this is a
     harmless no-op: the note is enriched a moment later via the normal worker
-    path.  A run that raises is handled entirely by :func:`~lode.worker.run_one`'s
-    own attempts/backoff/dead-letter accounting — never re-raised here, and
-    never hand-rolled a second time in this module.
+    path.  A **transient** run failure is handled entirely by
+    :func:`~lode.worker.run_one`'s own attempts/backoff/dead-letter accounting
+    — never re-raised here, and never hand-rolled a second time in this
+    module. A **permanent, user-actionable** failure
+    (:class:`~lode.auth.AuthError`, lode-9yy) is different: ``run_one`` resets
+    the job straight back to ``pending`` (uncharged) and re-raises it, but
+    capture must stay instant regardless of whether Anthropic credentials are
+    configured (``docs/design.md`` §1) — so it is caught and dropped here
+    rather than surfaced on every single ``add``. The job is already back at
+    ``pending``, uncharged, for the next explicit ``lode work`` to report
+    loudly (``docs/storage.md`` "Transient vs. permanent job failures").
     """
+    from lode.auth import AuthError
     from lode.worker import claim_and_run_one
 
-    claim_and_run_one(
-        conn, db_path, settings, types=("enrich",), target_version=version_id
-    )
+    try:
+        claim_and_run_one(
+            conn, db_path, settings, types=("enrich",), target_version=version_id
+        )
+    except AuthError:
+        logging.getLogger(__name__).debug(
+            "immediate-enrich skipped — no Anthropic credentials configured; "
+            "note saved, job left pending for a future 'lode work'"
+        )
 
 
 @app.command()
@@ -1421,6 +1436,7 @@ def work(
         )
         raise typer.Exit(code=1)
 
+    from lode.auth import AuthError
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
@@ -1481,6 +1497,18 @@ def work(
                         time.sleep(interval)
                 except KeyboardInterrupt:
                     typer.echo("worker interrupted", err=True)
+                except AuthError as err:
+                    # Permanent, user-actionable failure (lode-9yy): drain()
+                    # surfaces it once the offending job is reset to 'pending'
+                    # uncharged (docs/storage.md "Transient vs. permanent job
+                    # failures"). Rendered exactly as `ask` does above — see that
+                    # handler for why there is no exc_info.
+                    logging.getLogger(__name__).error(
+                        "work aborted — could not resolve Anthropic credentials: %s",
+                        err.__cause__ or err,
+                    )
+                    typer.echo(str(err), err=True)
+                    raise typer.Exit(code=1) from None
         except LockHeld as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from None

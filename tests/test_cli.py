@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 
 from lode import __version__, cli, config
 from lode.answer import Claim, Support
+from lode.auth import AuthError
 from lode.cli import app
 from lode.cited_answer import CitedAnswer
 from lode.config import load_settings
@@ -378,6 +379,48 @@ def test_add_enrich_failure_is_non_fatal(
     }
     assert jobs_by_type["embed"] == ("pending", 0)
     assert jobs_by_type["enrich"] == ("failed", 1)
+
+
+def test_add_auth_error_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A permanent, missing-credentials failure must not crash capture either
+    (lode-9yy): 'lode add' stays instant regardless of credential state.
+
+    Unlike a transient enrich failure (test_add_enrich_failure_is_non_fatal,
+    which lands the job 'failed' with attempts=1), an AuthError is reset
+    straight back to 'pending' uncharged by run_one and silently swallowed by
+    _enrich_immediately -- the note still saves and 'lode add' still exits 0,
+    with no actionable-message noise on every single capture. The next
+    explicit 'lode work' is what reports it loudly.
+    """
+    import lode.enrich as enrich_mod
+
+    def _no_credentials(conn, version_id, settings, *, client=None):
+        raise AuthError("no credentials (test)")
+
+    monkeypatch.setattr(enrich_mod, "enrich_version", _no_credentials)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "note body", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    note_id = result.stdout.strip()
+    assert note_id
+
+    (version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    jobs_by_type = {
+        r[0]: (r[1], r[2])
+        for r in _rows(
+            db_path,
+            "SELECT type, status, attempts FROM jobs WHERE target_version = ?",
+            (version_id,),
+        )
+    }
+    assert jobs_by_type["embed"] == ("pending", 0)
+    # Uncharged and left claimable, unlike a transient failure's ("failed", 1).
+    assert jobs_by_type["enrich"] == ("pending", 0)
 
 
 def test_add_reads_body_from_stdin_verbatim(
@@ -2409,6 +2452,51 @@ def test_work_drains_pending_embed_jobs(
     finally:
         reader.close()
     assert statuses == {"done"}
+
+
+def test_work_exits_nonzero_with_actionable_message_on_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' fails loud and clean on a permanent AuthError (lode-9yy).
+
+    A handler that raises AuthError (standing in for a real build_client()
+    call with no credentials resolvable) must not be retried or dead-lettered
+    -- 'lode work' exits non-zero with build_client's actionable message on
+    stderr, no raw traceback.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("embed", "ver-1"),
+            )
+    finally:
+        conn.close()
+
+    def _no_credentials(conn, tv, db, s):
+        raise AuthError("no credentials (test)")
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", {"embed": _no_credentials})
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no credentials (test)" in result.stderr
+    # No raw traceback leaked to the user.
+    assert "Traceback" not in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        status, attempts = reader.execute(
+            "SELECT status, attempts FROM jobs WHERE type = 'embed'"
+        ).fetchone()
+    finally:
+        reader.close()
+    assert status == "pending"
+    assert attempts == 0  # uncharged — never retried, never dead-lettered
 
 
 def _embed_outcome_registry() -> dict:
