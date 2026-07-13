@@ -4,9 +4,11 @@ The CLI's ``lode config`` command and the resolver functions it reads from
 (``lode.config.config_path`` / ``lance_dir`` / ``log_dir`` / ``lode_home`` /
 ``model_cache_dir``) already surface the single-root ``$LODE_HOME`` layout
 (``docs/configuration.md``).
-This screen shows the *same* resolved paths — read from those resolvers, never
+This screen shows those resolved paths — read from those resolvers, never
 re-derived — as a thin, read-only surface reachable from the capture screen via
 the app-level ``F2`` binding (:meth:`~lode.tui.app.LodeApp.action_show_config`).
+It carries a deliberately narrower set than the CLI does; :func:`_config_lines`
+names the differences.
 """
 
 from __future__ import annotations
@@ -32,12 +34,13 @@ def _config_lines(db_path: Path) -> list[str]:
     app's already-resolved ``db_path``, not re-derived here), the vector
     store, the model cache dir, the log dir, and the config file's
     present/absent state — mirroring ``lode.cli._config_lines``'s format
-    without importing the Typer-only CLI module. The one remaining,
-    deliberate difference from the CLI's set is the "db lock" row
-    (``lode.lock.lock_path``): left out per lode-3r4's original scoping, and
-    still out after lode-ak6 added "model cache" here, since the CLI is the
-    canonical diagnostics surface and this screen mirrors it, not duplicates
-    it row-for-row.
+    without importing the Typer-only CLI module.
+
+    Two deliberate differences from the CLI's readout remain, both narrowing:
+    there is no "db lock" row (``lode.lock.lock_path``), and the ``LODE_HOME``
+    row omits the CLI's inline ``($LODE_HOME`` vs ``default)`` source
+    annotation. The CLI is the canonical diagnostics surface; this screen
+    mirrors it rather than duplicating it row-for-row (lode-3r4, lode-ak6).
     """
     cfg = config_path()
     config_state = "present" if cfg.exists() else "absent"
