@@ -25,10 +25,15 @@ import pytest
 
 from lode.config import Settings, model_cache_dir
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("LODE_SMOKE_MODELS") != "1",
-    reason="model-download smoke test; set LODE_SMOKE_MODELS=1 to run",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("LODE_SMOKE_MODELS") != "1",
+        reason="model-download smoke test; set LODE_SMOKE_MODELS=1 to run",
+    ),
+    # Real HF Hub downloads on a cold cache -- lifts tests/conftest.py's
+    # autouse network guard (lode-85q).
+    pytest.mark.network,
+]
 
 
 def test_embedder_loads_and_dim_matches_pin() -> None:
