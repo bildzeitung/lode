@@ -513,19 +513,38 @@ exception is **re-raised** rather than absorbed. What happens next depends on th
 caller — the queue mechanism itself has no opinion here, by design; each caller
 decides how loud "surface it" should be:
 
-- `lode work` (`lode.worker.drain`) lets it propagate all the way to the CLI,
-  which prints `build_client`'s actionable message to stderr and exits non-zero —
-  the same clean, traceback-free treatment `lode ask` already gives `AuthError`.
+- `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints
+  `build_client`'s actionable message to stderr and exits non-zero — the same
+  clean, traceback-free treatment `lode ask` already gives `AuthError`.
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether Anthropic credentials are
   configured. The job is already back at `'pending'`, uncharged, for the next
   explicit `lode work` to report loudly.
 - `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
-  request) needs no special case at all: it never wraps its `build_client()` /
+  request) needs no special case of its own: it never wraps its `build_client()` /
   `collect_enrich_batch()` calls in a broad `except`, so an `AuthError` there
-  already propagates untouched — the swallow this section fixes never existed
-  on that path.
+  already propagates out of it — the swallow this section fixes never existed on
+  that path. `drain` handles it identically to `_batch_submit_enrich`'s, below.
+
+**A missing credential must not starve the credential-free work.** Both enrich
+batch pre-steps run *before* `drain`'s reclaim, retry-reset, and main claim/run
+loop — so a pre-step that raised on the spot would abort the entire drain. That
+is not acceptable: `embed` jobs are produced by the **local** fastembed model and
+have nothing to do with Anthropic credentials, and a pending enrich job is
+essentially always present (every `add` enqueues one). Raising from the pre-step
+would therefore abort *every* `lode work` before the first embed ever ran, leaving
+an unkeyed user's embeds pending forever and silently killing the dense half of
+retrieval — trading "enrich is retried forever" for "the whole queue stops",
+which is strictly worse.
+
+So `drain` **stashes** the pre-step's `AuthError`, completes the reclaim, the
+retry-reset and the main claim/run loop, and re-raises it only at the end. The
+main loop drains `embed` ahead of `enrich` (`_claim_one` orders on type), so the
+embeds land before any residual enrich job re-raises out of `run_one`. Net effect
+for an operator with no credentials: embeds keep draining, enrichment stays
+pending and uncharged, and `lode work` still exits non-zero with the actionable
+message.
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 

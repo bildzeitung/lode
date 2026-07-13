@@ -451,25 +451,16 @@ def test_run_auth_error_resets_to_pending_uncharged(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
     """A permanent AuthError must NOT be folded into the transient accounting:
-    no attempts charged, no backoff, job reset straight back to 'pending'."""
+    it is re-raised (not absorbed as a job outcome), and the job is reset straight
+    back to 'pending' — no attempts charged, no backoff."""
     job_id = _insert_job(conn)
     _claim_one(conn, ("embed",), _now_iso())
-    with pytest.raises(AuthError):
+    with pytest.raises(AuthError, match="no creds"):
         run_one(conn, job_id, db_path, settings, _auth_error_registry("no creds"))
     row = _job(conn, job_id)
     assert row["status"] == "pending"
     assert row["attempts"] == 0
     assert "no creds" in row["last_error"]
-
-
-def test_run_auth_error_reraises_instead_of_absorbing(
-    conn: sqlite3.Connection, db_path: Path, settings: Settings
-) -> None:
-    """run_one re-raises AuthError rather than swallowing it as a job outcome."""
-    job_id = _insert_job(conn)
-    _claim_one(conn, ("embed",), _now_iso())
-    with pytest.raises(AuthError, match="no creds"):
-        run_one(conn, job_id, db_path, settings, _auth_error_registry("no creds"))
 
 
 def test_run_auth_error_at_max_attempts_still_does_not_dead_letter(
@@ -485,6 +476,40 @@ def test_run_auth_error_at_max_attempts_still_does_not_dead_letter(
     row = _job(conn, job_id)
     assert row["status"] == "pending"
     assert row["attempts"] == settings.retry_max_attempts - 1  # untouched
+
+
+def test_run_auth_error_reset_does_not_resurrect_a_reclaimed_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The AuthError reset is CAS'd on status='running' — it must never revive a
+    job a concurrent reclaim already drove to a terminal 'dead'.
+
+    ``cli._enrich_immediately`` reaches ``run_one`` via ``claim_and_run_one``,
+    which runs WITHOUT the worker lock, so a concurrent ``lode work`` drain can
+    hit ``_reclaim_stale_running`` and dead-letter this very row while the
+    handler is still in flight. Unguarded, ``run_one``'s reset would then flip
+    that dead job (whose dead-letter hook has already fired) back to 'pending'
+    and re-arm it forever. The handler below stands in for that concurrent
+    reclaim: it terminalizes the row, then raises AuthError.
+    """
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+
+    def _reclaimed_then_auth_error(conn_, tv, db, s):
+        # Stand-in for a concurrent _reclaim_stale_running dead-lettering us.
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ? WHERE id = ?",
+                (settings.retry_max_attempts, job_id),
+            )
+        raise AuthError("no credentials (test)")
+
+    with pytest.raises(AuthError):
+        run_one(conn, job_id, db_path, settings, {"embed": _reclaimed_then_auth_error})
+
+    row = _job(conn, job_id)
+    assert row["status"] == "dead"  # NOT resurrected to 'pending'
+    assert row["attempts"] == settings.retry_max_attempts
 
 
 def test_run_transient_error_unaffected_by_auth_error_carve_out(
@@ -1147,30 +1172,76 @@ def test_drain_enrich_never_dead_lettered(
     conn: sqlite3.Connection,
     db_path: Path,
     settings: Settings,
+) -> None:
+    """An enrich job is never dead-lettered by a repeatedly-failing *transient*
+    batch submission, no matter how many drain passes run.
+
+    This is the TRANSIENT half of the taxonomy (docs/storage.md "Transient vs.
+    permanent job failures") and is deliberately driven by an ordinary
+    ``RuntimeError`` from the Batches API call -- NOT by ``AuthError``, which
+    takes the permanent path and is covered by
+    ``test_drain_raises_auth_error_leaving_job_pending_uncharged`` below.
+
+    The invariant: ``_batch_submit_enrich``'s transient revert sets
+    ``status='failed'`` with a backoff but does **not** increment ``attempts``,
+    so no number of drain passes can walk an enrich job up to
+    ``retry_max_attempts`` and dead-letter it via the batch-submit failure
+    path. Dead-letter only happens inside ``collect_enrich_batch``, when the
+    Batches API itself returns an error result after ``retry_max_attempts``.
+
+    lode-9yy note: this coverage predates lode-9yy and must survive it. The
+    AuthError carve-out added there must not disturb the transient accounting
+    this test pins -- if it ever over-broadens to catch ordinary exceptions,
+    the enrich job here would be reset to 'pending' instead of 'failed' and
+    this test goes red.
+    """
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+
+    # Transient API failure: the batch create raises on every pass.
+    client = mock.MagicMock()
+    client.beta.messages.batches.create.side_effect = RuntimeError("api down")
+
+    for _ in range(5):
+        drain(
+            conn,
+            db_path,
+            settings,
+            _registry=_noop_registry(),
+            _batch_client=client,
+        )
+
+    row = _job(conn, job_id)
+    # Reverted to 'failed' with a backoff, never 'dead', and never charged an
+    # attempt -- so there is no accumulation across passes to dead-letter.
+    assert row["status"] == "failed"
+    assert row["attempts"] == 0
+
+
+def test_drain_raises_auth_error_leaving_job_pending_uncharged(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An enrich job is never dead-lettered by a missing-credentials failure —
-    it isn't retried at all (lode-9yy).
+    """The PERMANENT half: drain() raises AuthError straight through, and the
+    enrich job is left 'pending' and uncharged (lode-9yy).
 
-    Before lode-9yy, a batch-submit failure driven by AuthError (no Anthropic
-    credentials) was folded into the ordinary transient revert-to-'failed'
-    path: no single drain() call raised, so a caller looping `lode work`
-    could in principle burn through retry_max_attempts and dead-letter a job
-    that could never have succeeded regardless of how many times it retried.
-    Post-fix, AuthError is a *permanent* failure (docs/storage.md "Transient
-    vs. permanent job failures"): the very first drain() call raises it
-    straight through, and the job is reset to 'pending' with ``attempts``
-    left untouched -- there is no accumulation across passes to dead-letter
-    in the first place.
+    Before lode-9yy a missing credential was folded into the transient revert
+    above: drain() never raised, so `lode work` reported an ordinary failed job
+    and re-submitted it on every pass forever -- build_client's actionable
+    message never reached the operator, and the job could never succeed. Now
+    the very first drain() surfaces it, with ``attempts`` untouched so the
+    retry budget is not spent on something retrying can never fix.
 
-    The batch-submit failure is driven by a ``build_client`` that *deterministically*
-    raises (lode-85q). It used to be driven by the ambient environment instead --
-    the real, un-mocked ``build_client()`` happening to fail at construction because
+    The failure is driven by a ``build_client`` that *deterministically* raises
+    (lode-85q). It used to be driven by the ambient environment instead -- the
+    real, un-mocked ``build_client()`` happening to fail at construction because
     CI has no ``ANTHROPIC_API_KEY`` -- which made this test prove two different
-    things on two different machines: on a keyed dev box construction would succeed
-    and the submit-failure path under test was never exercised at all. That is
-    precisely the class of bug lode-85q exists to kill, so it is fixed here rather
-    than papered over with an escape-hatch marker.
+    things on two different machines: on a keyed dev box construction would
+    succeed and the submit-failure path under test was never exercised at all.
+    That is precisely the class of bug lode-85q exists to kill, so it is fixed
+    here rather than papered over with an escape-hatch marker.
     """
     import lode.enrich as enrich_mod
 
@@ -1191,6 +1262,53 @@ def test_drain_enrich_never_dead_lettered(
     status, attempts = row
     assert status == "pending"
     assert attempts == 0  # uncharged — never dead, never even 'failed'
+
+
+def test_drain_still_runs_embed_jobs_when_credentials_are_missing(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing Anthropic credential must NOT starve the local embed jobs.
+
+    Regression test for the lode-9yy review. ``embed`` jobs are produced by the
+    LOCAL fastembed model and have nothing to do with Anthropic credentials, but
+    both enrich batch pre-steps run BEFORE drain's main claim/run loop. When the
+    permanent-failure carve-out first raised straight out of ``_batch_submit_enrich``,
+    an unkeyed user's embeds never drained again: every ``add`` enqueues a pending
+    enrich job, so the pre-step aborted every single ``drain`` before the first
+    embed ever ran, and the dense half of retrieval died silently.
+
+    The contract: drain does all the credential-free work it can, THEN raises.
+    """
+    import lode.enrich as enrich_mod
+
+    def _no_credentials() -> object:
+        raise AuthError("no credentials (test)")
+
+    monkeypatch.setattr(enrich_mod, "build_client", _no_credentials)
+
+    # One note → one pending embed job + one pending enrich job.
+    _insert_note_worker(conn)
+    enqueue_derive_jobs(conn, "ver-1")
+
+    embedded: list[str] = []
+
+    def _embed(conn_, tv, db, s):
+        embedded.append(tv)
+        return None
+
+    # The AuthError still surfaces to the caller...
+    with pytest.raises(AuthError):
+        drain(conn, db_path, settings, _registry={"embed": _embed})
+
+    # ...but only AFTER the embed job ran to completion.
+    assert embedded == ["ver-1"], "embed job was starved by the missing credential"
+    states = dict(conn.execute("SELECT type, status FROM jobs").fetchall())
+    assert states["embed"] == "done"
+    # The enrich job is left pending + uncharged, for a later credentialed run.
+    assert states["enrich"] == "pending"
 
 
 def test_drain_returns_count_including_failures(

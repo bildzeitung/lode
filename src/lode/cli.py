@@ -1499,13 +1499,10 @@ def work(
                     typer.echo("worker interrupted", err=True)
                 except AuthError as err:
                     # Permanent, user-actionable failure (lode-9yy): drain()
-                    # lets it propagate straight through once run_one /
-                    # _batch_submit_enrich reset the offending job to
-                    # 'pending' uncharged (docs/storage.md "Transient vs.
-                    # permanent job failures"). Render it the same clean,
-                    # traceback-free way `lode ask` already does — no
-                    # exc_info, since the root logger mirrors to stderr and
-                    # would re-introduce the traceback being suppressed here.
+                    # surfaces it once the offending job is reset to 'pending'
+                    # uncharged (docs/storage.md "Transient vs. permanent job
+                    # failures"). Rendered exactly as `ask` does above — see that
+                    # handler for why there is no exc_info.
                     logging.getLogger(__name__).error(
                         "work aborted — could not resolve Anthropic credentials: %s",
                         err.__cause__ or err,
