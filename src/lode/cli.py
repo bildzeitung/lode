@@ -1232,16 +1232,15 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
       env var itself) and never attempts the network at all, so a failure here
       can only be the cold-cache case; if not, this is a genuine download
       failure after retrying every source. "Every source" is HuggingFace alone
-      for lode's default models (their ``sources.url`` is ``None``, so GCS is
-      never attempted), but a config-overridden, GCS-mirrored model id (e.g.
-      ``BAAI/bge-base-en-v1.5``) also falls back to a GCS mirror on an HF
-      failure (a ``requests`` error there is swallowed by fastembed's own bare
-      ``except Exception`` around the GCS leg -- lode-4hy1 traced this; it
-      cannot escape as a distinct exception), and *that* leg can be the one
-      that actually exhausted. So this branch's message deliberately does not
-      assert HuggingFace itself was the failure -- it names HuggingFace's GCS
-      mirror as an equally possible cause instead of mis-attributing to the
-      cold-cache/HF wording alone.
+      for lode's default models (their ``sources.url`` is ``None``, so no
+      mirror is attempted); but for a config-overridden, GCS-mirrored model id
+      (e.g. ``BAAI/bge-base-en-v1.5``) fastembed also falls back to *its own*
+      GCS mirror (``storage.googleapis.com/qdrant-fastembed`` -- not a
+      HuggingFace host), and swallows that leg's failure just as silently, in a
+      bare ``except Exception``. Both legs therefore collapse into this one
+      ``ValueError``, carrying no signal for which of them exhausted, so the
+      message names both as possible causes rather than blaming HuggingFace
+      alone (lode-4hy1).
 
     Anything else -- a different exception entirely, or a ``ValueError`` that
     doesn't carry fastembed's specific exhausted-sources signature -- propagates
@@ -1273,10 +1272,10 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
         else:
             typer.echo(
                 f"failed to download {model_id} after retrying every "
-                f"configured source: {exc}\nHuggingFace -- or, for a model "
-                "configured with a GCS mirror, that mirror -- may be "
-                "rate-limiting or unavailable: check your connection and "
-                "try again shortly.",
+                f"configured source: {exc}\nHuggingFace (and, for a model "
+                "that has one, fastembed's GCS mirror) may be rate-limiting "
+                "or unavailable -- check your connection and try again "
+                "shortly.",
                 err=True,
             )
         raise typer.Exit(code=1) from None

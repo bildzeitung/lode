@@ -3189,12 +3189,10 @@ def test_models_pull_http_error_exits_cleanly(
     by HF_HUB_OFFLINE being unset here, proving the two really do produce
     different, non-overlapping messages despite sharing an exception type.
 
-    lode-4hy1: this same ValueError is also what a config-overridden,
-    GCS-mirrored model's exhausted-GCS-mirror failure collapses into (fastembed
-    swallows that ``requests`` error too, in a bare ``except Exception`` around
-    the GCS leg -- see :func:`lode.cli._warm`'s docstring). So the message must
-    not assert HuggingFace itself was the failure; it names HuggingFace's GCS
-    mirror as an equally possible cause instead of mis-attributing to
+    lode-4hy1: a GCS-mirrored model's exhausted-mirror failure collapses into
+    this same ValueError too -- fastembed swallows that leg in a bare
+    ``except Exception`` (see :func:`lode.cli._warm`'s docstring) -- so the
+    message must name the mirror as a possible cause rather than blaming
     HuggingFace alone.
     """
     _install_failing_embedder(
@@ -3207,8 +3205,8 @@ def test_models_pull_http_error_exits_cleanly(
     assert result.exit_code == 1, result.output
     assert "failed to download" in result.stderr.lower(), result.stderr
     assert "rate-limiting or unavailable" in result.stderr.lower(), result.stderr
-    # lode-4hy1: does not pin the cause solely on HuggingFace -- a
-    # GCS-mirrored model's failure may be the GCS leg, not HuggingFace itself.
+    # lode-4hy1 (the substance, not the exact copy): the mirror is named as a
+    # possible cause, so the message never pins the blame solely on HuggingFace.
     assert "gcs mirror" in result.stderr.lower(), result.stderr
     # Distinct from the offline/cold-cache message above.
     assert "hf_hub_offline" not in result.stderr.lower(), result.stderr
