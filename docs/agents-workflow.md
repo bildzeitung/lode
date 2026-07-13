@@ -516,6 +516,20 @@ not a default, and the choice trades one property for the other:
   ticket's own description (e.g. "discovered while building lode-t1y") — that provenance is recoverable
   from prose, same as any other ticket fact, whereas a missing block edge is not recoverable at all:
   nothing catches it before a builder is dispatched onto broken work.
+
+  **This rule is now mechanically enforced, not just advisory (lode-0kbq).** A committed
+  `PreToolUse` (matcher `Bash`) hook in [`.claude/settings.json`](../.claude/settings.json) denies any
+  Bash call that invokes `bd create … --deps …blocks:…` and returns the two-step remedy above as the
+  deny reason. It travels with the clone, so every agent on every machine gets it. It covers the
+  `bd new` alias, an `rtk` prefix, and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
+  table is pinned by `tests/test_bd_deps_guard.py`, which executes the hook as shipped.
+
+  Two deliberate boundaries. It matches only at a **command position** (start of line, or after
+  `;`/`&&`/`||`/`|`/`$(`), so prose that merely *quotes* the bad form — a commit message, a `bd` note,
+  this very paragraph — is **not** denied; that matters because this repo's own commits and tickets
+  discuss the bad form constantly, and a guard that denied them would block the loop that ships it.
+  And it is a textual guard, so it cannot see through a shell variable (`--deps "$D"` where
+  `D=blocks:x`). It is a net for the natural typo, not a security boundary.
 - **The follow-up is independent** — related to the parent but safely buildable on its own, with no
   code or diagnosis dependency → file it with **`discovered-from`**, as before. This is still the
   right default for the common case (cleanup noticed in passing, an unrelated bug seen along the way);
