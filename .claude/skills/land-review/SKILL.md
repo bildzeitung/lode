@@ -30,6 +30,13 @@ field, read via `bd show <id> --json`. If I'm handed only an ID, I derive the br
 handed only a branch, I derive the ticket from its name. If either the ticket or the branch is
 genuinely unidentifiable, I report that as an **escalate** rather than guess.
 
+**When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
+because its ticket needed that base's code (see
+[docs/agents-workflow.md#stacked-land-branches-lode-02v](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) —
+the lander also hands me the live **base** branch it detected from git containment. I diff against
+that base instead of `trunk` (below). `/land` derives this from git, never from a bd field; if the
+lander hands me nothing, I assume unstacked and diff against `trunk` as before.
+
 ## What I do
 
 ### 1. Read the whole thing first
@@ -39,9 +46,47 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 - **The ticket:** `bd show <id> --json` — title, description, **acceptance criteria**, `design`,
   notes, parent/links. The acceptance criteria are the contract; the `design` (if a planner or
   `debate` wrote one) is the agreed approach. I read these as the standard, not my own preference.
-- **The branch:** the actual diff against the merge-base with `trunk` —
-  `git fetch origin land/<id>` then `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
-  — and the commit messages. I read what changed, not what the summary *claims* changed.
+- **The branch:** `git fetch origin land/<id>` (and `land/<base>` too if the lander told me this is a
+  stacked branch), then diff against the right base:
+  - **Unstacked (the common case):**
+    `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
+  - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, using
+    the **off-trunk** merge-base with it, never a bare single-result `git merge-base`:
+    ```bash
+    OFF_TRUNK_MB=""
+    for mb in $(rtk git merge-base --all origin/land/<base> origin/land/<id>); do
+      rtk git merge-base --is-ancestor "$mb" origin/trunk || { OFF_TRUNK_MB="$mb"; break; }
+    done
+    # STOP if empty: git resolves an empty rev to HEAD, so `git diff ""..<id>` would silently
+    # produce a WRONG diff with exit 0 rather than erroring. An empty result here means the lander
+    # named a base this branch does not actually contain — surface that, never diff through it.
+    [ -n "$OFF_TRUNK_MB" ] || { echo "NO off-trunk merge-base with land/<base> — do not diff; report this"; exit 1; }
+    rtk git diff "$OFF_TRUNK_MB"..origin/land/<id>
+    ```
+    A pair can have more than one merge-base — e.g. after `land/<base>` takes a needs-rebase
+    trunk-merge pickup (lode-cln) *after* this branch already merged it, the pair acquires a second,
+    on-trunk merge-base (this branch's own trunk cut point). A bare `git merge-base` (no `--all`)
+    returns one of the two **arbitrarily**; if it returns the on-trunk one, the diff silently
+    collapses to the trunk-diff form below and reimports the base's own work into this branch's scope
+    — the exact misjudgement this section exists to prevent. Always enumerate with `--all` and use the
+    off-trunk survivor.
+
+    A stacked branch's merge-base with `trunk` **predates** its base branch (the base hasn't landed
+    yet), so a trunk-diff carries the base's own, separately-reviewed work as if it were this
+    branch's — misjudging scope every time, not just on a bad day (OBSERVED: lode-96t read as 529
+    lines / 8 files against `trunk` when only 290 lines / 3 files were its own). The off-trunk
+    merge-base *with the base* is the point this branch actually took it, so the diff is exactly this
+    branch's own commits. **Never flag scope creep merely for containing the base's commits** — that's
+    the base's own content, under its own ticket's review, not this branch smuggling in unrelated
+    work.
+
+    **Use the merge-base, not the base's tip** (`git diff origin/land/<base>..origin/land/<id>`): a
+    base's tip *moves* after a dependent merges it — its code-reviewer pushes fixes onto it, a
+    `needs-rebase` pickup merges `trunk` in — and a tip-diff renders every such commit the dependent
+    doesn't have as the dependent **reverting the base's work**. That is a phantom finding on the exact
+    axis I'm here to judge.
+
+  I read what changed, not what the summary *claims* changed.
 - **The design source of truth:** where the branch touches an architectural fact, I cross-check it
   against `docs/` (start with `docs/design.md`). A branch that contradicts a settled decision — or
   that *makes* a new decision the branch records only in code or a bd note instead of `docs/` — is a

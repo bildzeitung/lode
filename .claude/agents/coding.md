@@ -182,6 +182,43 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
   rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
   ```
 
+**Building on top of an unlanded `land/<id>` branch (rare — stacked branches, lode-02v).**
+Occasionally a ticket's fix only makes sense once *another* ticket's still-unlanded code exists — the
+code my ticket needs to change/fix lives only on a `land/<other-id>` branch, not yet on `trunk`
+(OBSERVED: lode-96t needed the `lode models pull` command lode-6qh introduced, which was not yet on
+`trunk`). If that's the situation:
+
+1. Merge that branch into my worktree branch — not `trunk`, which doesn't have it yet:
+
+   ```bash
+   rtk git fetch origin land/<other-id>
+   rtk git merge origin/land/<other-id>
+   ```
+
+   Resolve any conflict the normal way; this is my own worktree, so `Edit`/`git add`/`git commit`
+   work natively.
+
+2. Record the intent as bd metadata, alongside my normal hand-off:
+
+   ```bash
+   rtk bd update <id> --set-metadata builds_on='["<other-id>"]'
+   ```
+
+   **This is redundancy and intent, never the mechanism.** `/land` derives the actual stacked-branch
+   graph from git (containment over live `refs/remotes/origin/land/*` refs), never from this field —
+   a producer that forgets to write it, or writes it wrong, must not silently break `/land`'s handling
+   of stacked branches (that's exactly the failure mode this ticket exists to close: "the producer
+   remembers to write it and the lander reads it correctly" is not a mechanism I get to rely on).
+   Write it anyway — it's a cheap, human-readable breadcrumb for anyone reading the ticket later, and
+   costs nothing if `/land` never reads it.
+
+3. Everything else in my cycle is unchanged — gates, push, hand-off. Recognizing the branch is
+   stacked, diffing it correctly, and ordering the merge is `/land`'s and `land-review`'s job, not
+   mine; I don't need to do anything special beyond the merge and the metadata above.
+
+Full contract: [docs/agents-workflow.md — Stacked land
+branches](../../docs/agents-workflow.md#stacked-land-branches-lode-02v).
+
 ### 6. Commit implementation work (granular, attributed)
 
 Commit after each completed unit of work, inside the worktree, with a clear message ending in:
@@ -539,6 +576,10 @@ own guidance); the cycle above already applies them, but the *why*:
   fetch and check the branch out into my own worktree instead, never open the build worktree at all),
   or **dispatching (or letting `/code` dispatch) a `code-reviewer` for a rebase pickup** — it skips
   technical review and goes straight back to `ready-for-land`.
+- **Treating `builds_on` bd metadata as something `/land` depends on.** It's a breadcrumb I write for
+  humans reading the ticket; `/land` always derives the real stacked-branch graph from git containment
+  (lode-02v). Writing it wrong or skipping it never breaks the landing loop, so there's no need to
+  agonize over getting the field's exact shape right — just write the id(s) I actually merged in.
 
 ## lode invariants (quick card)
 
