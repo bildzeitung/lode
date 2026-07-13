@@ -184,9 +184,11 @@ def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
     before = now()
     job_id = _insert_running_job(conn)
 
-    new_attempts, dead = record_job_failure(conn, job_id, 0, "boom", settings)
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, "boom", settings
+    )
 
-    assert (new_attempts, dead) == (1, False)
+    assert (new_attempts, dead, claim_lost) == (1, False, False)
     row = conn.execute(
         "SELECT status, attempts, last_error, next_attempt_at FROM jobs WHERE id = ?",
         (job_id,),
@@ -205,9 +207,11 @@ def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
     job_id = _insert_running_job(conn)
     settings = Settings(retry_max_attempts=2)
 
-    new_attempts, dead = record_job_failure(conn, job_id, 1, "boom", settings)
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 1, "boom", settings
+    )
 
-    assert (new_attempts, dead) == (2, True)
+    assert (new_attempts, dead, claim_lost) == (2, True, False)
     row = conn.execute(
         "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()
@@ -256,3 +260,63 @@ def test_next_failure_state_dead_letters_on_the_last_attempt_not_one_past_it() -
 
     # At the gate: dead, and no next attempt is scheduled.
     assert next_failure_state(2, settings) == (3, True, None)  # 3 >= 3 -> dead
+
+
+# --- record_job_failure CAS guard (lode-3jte) --------------------------------
+#
+# Neither UPDATE may take effect if the row is no longer 'running' by the time
+# this runs -- a concurrent _reclaim_stale_running may have already reclaimed
+# it (e.g. to a terminal 'dead') while the caller's handler was still in
+# flight. Mirrors the same guard run_one's `except AuthError` arm already has
+# (lode-9yy) for exactly this race.
+
+
+def test_record_job_failure_is_a_noop_when_claim_already_lost_below_max(conn) -> None:
+    """If the row moved off 'running' before this call, the 'failed' UPDATE
+    must not apply -- reports claim_lost=True and leaves the row untouched."""
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=5)
+    # Simulate a concurrent reclaim that already terminalized the row.
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'dead', attempts = 9, last_error = 'reclaimed' "
+            "WHERE id = ?",
+            (job_id,),
+        )
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, "boom", settings
+    )
+
+    assert claim_lost is True
+    assert new_attempts == 1  # what WOULD have been applied -- not what's on the row
+    assert dead is False
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    # Untouched by this call -- still exactly what the simulated reclaim left.
+    assert row == ("dead", 9, "reclaimed")
+
+
+def test_record_job_failure_is_a_noop_when_claim_already_lost_at_max(conn) -> None:
+    """Same guard on the dead-lettering branch (new_attempts >= max)."""
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=2)
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'failed', attempts = 9, last_error = 'reclaimed' "
+            "WHERE id = ?",
+            (job_id,),
+        )
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 1, "boom", settings
+    )
+
+    assert claim_lost is True
+    assert new_attempts == 2
+    assert dead is True  # what WOULD have been applied
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("failed", 9, "reclaimed")

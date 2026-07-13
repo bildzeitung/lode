@@ -84,23 +84,43 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 
 ## The producer cycle
 
-### 1. Pick the right ready work
+### 1. I'm dispatched with a named ticket — confirm it, don't re-pick
+
+**I never run `bd ready` to pick my own work.** `/code` resolves every dispatch itself before it ever
+launches me: on the no-argument, `--all-ready`, and `--single` paths it selects from the ready
+frontier under a filter that excludes `human`-labeled tickets and epics (lode-8pqv), and hands me the
+result as a named id; on an explicit-id dispatch the id is named up front. How that selection works is
+`code/SKILL.md`'s business, not mine — I don't re-derive it. Either way, by the time my prompt arrives
+**the ticket is already chosen** — my job starts at reading it:
 
 ```bash
-rtk bd ready            # unblocked issues only — the actionable frontier
 rtk bd show <id>        # full detail: description, acceptance, design, deps
 ```
 
-Honor the dependency graph the tracker encodes — **do not jump ahead**:
+**The one exception is a free-text dispatch** (e.g. "add a `--json` flag to search"): there `/code`
+names a *task*, not a ticket, so there is no id to show or claim yet and I **file the issue myself
+first** —
 
-- Prefer **`phase-a`-labelled** tasks until the walking skeleton's exit gate (`lode-6w1.1`) closes;
-  the thin end-to-end slice must work before any subsystem is deepened.
-- Deepening tasks (rerank, graph, NLI, queue-migration, …) depend on the terminal slice task and
-  will not appear in `bd ready` until the skeleton lands — that is by design, not a bug.
-- If `bd ready` is empty, the milestone is done. Surface that; don't invent work.
+```bash
+rtk bd create --title="…" --description="…" --type=task    # then continue with the id it returns
+```
 
-(A claimed ticket — `ready-for-code-review` or `ready-for-land` — stays `in_progress` and so is
-already out of `bd ready`; I won't re-grab work that's waiting for the reviewer or the lander.)
+— and only then work the cycle below. This is still not self-selection: the task was handed to me, I
+merely gave it an id. (`code/SKILL.md` delegates exactly this behavior here — "it files the bd issue
+itself before coding, per its own rules"; this is that rule.)
+
+The dependency graph and phase-a ordering are still useful context for **judging** the ticket I was
+handed — not a picking procedure I run myself:
+
+- **`phase-a`-labelled** tickets take priority until the walking skeleton's exit gate (`lode-6w1.1`)
+  closes. If I'm handed a deepening task (rerank, graph, NLI, queue-migration, …) before that gate has
+  closed, something upstream sequenced out of order — that's worth flagging, not silently building.
+- If the ticket I was handed carries the **`human`** label or is an **epic**, `/code`'s auto-select
+  filter is *not* what sent it to me — that filter excludes both (lode-8pqv), so the id was named
+  explicitly. What my prompt won't tell me is *why*. So unless the dispatch says outright that a human
+  has already resolved the decision (or scoped the epic) and wants it built, I **stop and report** —
+  rather than guess at the decision a `human` label exists to defer, or invent acceptance criteria for
+  a container ticket.
 
 ### 2. Claim it (atomic, prevents double-work)
 
@@ -181,16 +201,27 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
 
   - **Genuinely can't be built until this ticket lands** (needs my code, or a diagnosis this ticket
-    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. Note the discovery
-    provenance in the new ticket's own text — the edge no longer carries it:
+    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. **Never `bd create --deps
+    blocks:<id>`** — verified empirically (lode-ij24), that specific form *inverts* the edge: it makes
+    `<id>` (the ticket I'm building — possibly the very branch I'm about to certify
+    `ready-for-code-review`) blocked by my *new* follow-up, not the reverse, silently dropping `<id>`
+    out of `bd ready` behind its own follow-up. Create the ticket with **no `--deps` at all** — not even
+    `discovered-from:<id>` to keep the provenance, since that edge occupies the same `(new-id, <id>)`
+    pair and the `bd dep add … --type blocks` below would then *fail*, leaving the follow-up unblocked —
+    then wire the gate as its own step. `bd dep add <new-id> <id> --type blocks` (positional, or the
+    equivalent `--blocked-by` flag) is verified correct: the **first** ID ends up blocked by the second,
+    never the reverse. Note the discovery provenance in the new ticket's own text instead:
 
     ```bash
-    rtk bd create --title="…" --description="Discovered while building <id>. …" --type=task \
-      --deps blocks:<id>
+    NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <id>. …" \
+      --type=task --silent)
+    rtk bd dep add "$NEW_ID" <id> --type blocks
     ```
 
   - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
-    provenance; `bd ready` returns it immediately, which is correct here):
+    provenance; `bd ready` returns it immediately, which is correct here). This direction is verified
+    correct as written — `bd create --deps discovered-from:<id>` makes the *new* ticket depend on
+    `<id>`, exactly as intended, unlike the `blocks:` form above:
 
     ```bash
     rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
@@ -403,11 +434,12 @@ never comes up.
 (lode-em6v). Reusing `land/<id>` as the local name meant a second cycle on the same ticket (or a
 leftover worktree from an earlier one that never cleaned itself up) collided with an already-checked-
 out `land/<id>` elsewhere, forcing a `git checkout --detach` fallback — and a detached worktree owns no
-branch ref, so every one of `/land`'s branch-name-keyed GC sweeps structurally missed it (that's
-exactly what `/land`'s backstop 4 exists to catch, and each leak made the next cycle more likely to hit
-the same fallback — self-compounding). Suffixing the local name with this worktree's own directory name
-makes that collision structurally impossible, so there is nothing left to guard for and the detaching
-fallback is removed outright:
+branch ref, so back when `/land`'s worktree GC was still branch-name-keyed it structurally missed such a
+worktree, and each leak made the next cycle more likely to hit the same fallback (self-compounding).
+That GC is HEAD-sha-keyed now (lode-jiyk) and would reclaim a detached worktree too, but the collision is
+still worth designing out at the source: suffixing the local name with this worktree's own directory name
+makes it structurally impossible, so there is nothing left to guard for and the detaching fallback is
+removed outright:
 
 ```bash
 rtk git fetch origin land/<id> trunk
@@ -416,10 +448,13 @@ rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--age
 rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
-that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
-sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
-`.claude/skills/land/SKILL.md`; nothing for me to do either way.
+The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
+all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
+is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree is reclaimed exactly
+as it always was, once my build lands. That name-independence is scoped to the worktree loop only: `/land`'s
+dangling-**ref** backstops still match `land/*` and `worktree-agent-*` by name (they must — `refs/heads/*`
+is shared with human branches), and the `land/*` one strips this suffix before comparing against the
+exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 ### 3. Merge current trunk in
 
@@ -599,6 +634,9 @@ own guidance); the cycle above already applies them, but the *why*:
   ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
   ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
   one dependency type per pair.
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
+  (lode-ij24), dropping the very ticket I'm about to hand off out of `bd ready`, behind its own
+  follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to
