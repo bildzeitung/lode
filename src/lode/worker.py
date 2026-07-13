@@ -775,8 +775,13 @@ def _batch_submit_enrich(
         log.warning("_batch_submit_enrich: API call failed: %s — reverting jobs", exc)
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
         # are retried on the next pass (not immediately — avoids hammering the API).
-        delay = min(settings.retry_backoff_base_s, settings.retry_backoff_cap_s)
-        next_at = jobs.iso(jobs.now() + timedelta(seconds=delay))
+        # First-failure backoff (min(base * 2**0, cap) == min(base, cap)) via the
+        # shared helper rather than open-coded, so this path inherits any future
+        # change to the retry curve — e.g. jitter, which is exactly what a batch
+        # of jobs reverting together off one API error would want. NOTE: no
+        # attempt is charged here (`attempts` is untouched); the literal 1 selects
+        # the shortest rung of the curve, it is not this job's attempt count.
+        next_at = jobs.backoff_next_attempt_at(1, settings)
         with conn:
             conn.executemany(
                 "UPDATE jobs SET status = 'failed', last_error = ?, "

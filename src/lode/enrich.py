@@ -445,7 +445,13 @@ def enrich_version(
 
     result = _call_haiku(redacted_body, settings, client)
 
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    # Format via jobs.iso (the one definition of the schema's ISO-8601 ms-Z
+    # shape), but stamp from the RAW wall clock, not jobs.now(): this is an
+    # enrichment record's timestamp, not a jobs-queue eligibility timestamp.
+    # jobs.now() deliberately runs *ahead* of true time after absorbing a
+    # backward step — correct for "is this job due yet", wrong for "when was
+    # this enrichment written".
+    ts = jobs.iso(datetime.now(UTC))
     _write_enrichment(
         conn, target.owner_id, version_id, result, settings.enrichment_llm, ts
     )
@@ -697,7 +703,9 @@ def collect_enrich_batch(
         )
         return True
 
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    # Raw wall clock, formatted by jobs.iso — an enrichment record timestamp,
+    # not a queue predicate (see enrich_version above).
+    ts = jobs.iso(datetime.now(UTC))
 
     for result in client.beta.messages.batches.results(batch_id):
         version_id = result.custom_id

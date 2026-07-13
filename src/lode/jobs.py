@@ -34,9 +34,9 @@ both the worker's main claim/run loop and :mod:`lode.enrich`'s Batches-API resul
 handler (:func:`~lode.enrich.collect_enrich_batch`) apply the identical
 attempts/backoff/dead-letter transition to a ``jobs`` row on failure, and this
 module already owns the table both are updating. Centralizing it here (rather
-than, say, having ``lode.enrich`` import ``lode.worker``) means there is exactly
-one implementation of "what happens to a job row when it fails" — see
-:func:`record_job_failure`.
+than, say, having ``lode.enrich`` import ``lode.worker``) collapses those two
+into the single :func:`record_job_failure` — which is *not*, however, the only
+code that fails a job; see its docstring for the one deliberate exception.
 """
 
 import sqlite3
@@ -183,11 +183,21 @@ def record_job_failure(
     Shared by :func:`lode.worker.run_one` (a job's ``run()`` handler raised)
     and :func:`lode.enrich._mark_job_failed` (an errored/expired/canceled
     Batches API result) — previously two independent, drifting copies of this
-    same transition (lode-ajda). :func:`lode.worker._reclaim_stale_running`
-    keeps its own inline copy of the UPDATE (it needs an extra ``AND
-    status='running'`` CAS guard this shared form doesn't have), but already
-    routed through the shared :func:`backoff_next_attempt_at` before this
-    change, so it isn't a third drifting copy of the *formula*.
+    same transition (lode-ajda).
+
+    **The one caller this does NOT serve** is
+    :func:`lode.worker._reclaim_stale_running`, which keeps its own inline
+    UPDATEs: it needs an ``AND status='running'`` CAS guard (the row may no
+    longer be its claim) plus the per-row ``rowcount`` that guard yields, and it
+    batches every reclaimed row into one outer ``with conn:`` — which this
+    function's own ``with conn:`` cannot nest inside (sqlite3's connection
+    context manager doesn't nest; the inner exit would commit the outer's
+    partial work). It shares the backoff *formula* via
+    :func:`backoff_next_attempt_at`, but the attempts increment and the
+    ``>= retry_max_attempts`` dead-letter gate are genuinely duplicated there.
+    **A change to the retry policy has to be made in both places** — the reclaim
+    path promises a crash-reclaimed job obeys the identical max-attempts gate as
+    a cleanly-failed one, and nothing enforces that but this note.
     """
     new_attempts = current_attempts + 1
     if new_attempts >= settings.retry_max_attempts:
