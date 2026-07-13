@@ -50,25 +50,29 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
 > **Concurrency cap — one shared budget for every dispatch below (lode-2cf).** 7 concurrent agents
 > (builders + reviewers) crashed the Claude Code host twice on 2026-07-10: each agent's gate is
-> `nox -s tests` with pytest-xdist `-n auto` — **one worker per CPU core** (noxfile.py) — each holding
-> a cached ONNX reranker, and 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's memory.
-> Staggering to ~4 concurrent agents ran the identical workload with zero further crashes. **Before
-> step 0**, compute the cap once and hold it for the rest of the invocation:
+> `nox -s tests` with pytest-xdist — back then `-n auto`, **one worker per CPU core** (noxfile.py) —
+> each holding a cached ONNX reranker, and 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's
+> memory. Staggering to ~4 concurrent agents ran the identical workload with zero further crashes.
+> **Before step 0**, compute the cap once and hold it for the rest of the invocation:
 >
 > ```bash
 > CODE_MAX_CONCURRENT_AGENTS="${LODE_CODE_MAX_CONCURRENT_AGENTS:-$(
 >   mem_kib=$(awk '/^MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null)
 >   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
 >   nproc_n=$(nproc 2>/dev/null || echo 4)
+>   workers_n="${LODE_TEST_WORKERS:-8}"    # same effective width noxfile.py's gate uses (lode-bv6y)
+>   [ "$workers_n" = "auto" ] && workers_n=$nproc_n
 >   if [ -n "$mem_kib" ]; then
->     # Per-agent gate budget = 2GiB fixed + 0.125GiB/core: -n auto spawns one
->     # xdist worker per core, so the footprint scales with THIS machine's core
->     # count, not a flat constant (lode-lwx6 — a flat 3GiB/agent was calibrated
->     # only for the 8 workers of an 8-core box, and let a 24-core box dispatch
->     # 9 agents). Measured, not extrapolated; 3GiB/agent @ 8 cores, 5GiB @ 24.
+>     # Per-agent gate budget = 2GiB fixed + 0.125GiB/xdist-worker: the gate's
+>     # footprint scales with the WORKER COUNT the gate actually spawns
+>     # (LODE_TEST_WORKERS, default 8 — lode-bv6y), not with this machine's
+>     # core count. (Before lode-bv6y narrowed the default off `-n auto`, worker
+>     # count == nproc, which is why this term used to read `nproc_n` directly;
+>     # lode-lwx6's original fix scaled it with nproc for exactly that reason.)
+>     # Measured, not extrapolated; 3GiB/agent @ 8 workers, 5GiB @ 24 workers.
 >     # docs/agents-workflow.md#concurrency-cap-lode-2cf holds the measurements,
 >     # the modelling assumption, and how to re-measure when the suite grows.
->     per_agent_kib=$(( 2 * 1024 * 1024 + nproc_n * 1024 * 1024 / 8 ))
+>     per_agent_kib=$(( 2 * 1024 * 1024 + workers_n * 1024 * 1024 / 8 ))
 >     by_mem=$(( mem_kib / per_agent_kib ))
 >   else
 >     by_mem=4                            # /proc/meminfo unavailable (non-Linux) — conservative fallback
@@ -89,15 +93,21 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   `{"env": {"LODE_CODE_MAX_CONCURRENT_AGENTS": "6"}}` — or export it in the shell that launches
 >   `claude` for a one-off override. The skill re-reads it fresh at the start of every invocation.
 > - **Unset** → derived from `/proc/meminfo` (`MemAvailable`, falling back to `MemTotal`), divided by a
->   per-agent gate budget that scales with **this machine's core count** — `2 + nproc/8` GiB, since
->   `-n auto` spawns one xdist worker per core — then capped at `nproc/2` and floored at 1. Resolves to
->   **4** on the original 15GiB/8-core WSL2 machine (unchanged — `2 + 8/8` = 3GiB/agent, identical to
->   the old flat constant, so the empirically-stable stagger is preserved) and to **5** on a
->   31GiB/24-core box (`2 + 24/8` = 5GiB/agent), instead of the old formula's unsafe 9. Both numbers are
->   backed by a real measurement of the gate's peak memory, recorded in
->   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf) — the cap is a
->   throughput heuristic, **not** a worst-case memory bound; don't "tighten" it into one without reading
->   that section.
+>   per-agent gate budget that scales with **the effective `pytest -n` worker count** — `LODE_TEST_WORKERS`
+>   if set (mirroring whatever the gate itself uses, `noxfile.py`), else its default of **8** regardless
+>   of core count (SPIKE lode-mtuy: `-n auto` measured *slower* than `-n 8` on this suite, so it is no
+>   longer the default anyone hits by not setting anything) — `2 + workers/8` GiB — then capped at
+>   `nproc/2` and floored at 1. Resolves to **4** on the original 15GiB/8-core WSL2 machine (unchanged —
+>   `2 + 8/8` = 3GiB/agent, identical to before, so the empirically-stable stagger is preserved) and to
+>   **9** on a 31GiB/24-core box now that its gate defaults to 8 workers instead of 24 (`2 + 8/8` =
+>   3GiB/agent; `29 / 3` clamped by `by_cpu = 24/2 = 12` → 9) — up from the prior **5**, which was the
+>   safe number *only* while that box's gate still spawned 24 workers by default. Setting
+>   `LODE_TEST_WORKERS=auto` on a box (opting back into one worker per core) restores the old
+>   nproc-scaled budget and the cap correspondingly drops back toward 5 there — the two knobs are meant
+>   to move together. All of these numbers are backed by a real measurement of the gate's peak memory,
+>   recorded in [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf) —
+>   the cap is a throughput heuristic, **not** a worst-case memory bound; don't "tighten" it into one
+>   without reading that section.
 > - **The cap is one shared budget across every dispatch source in this invocation** — step 0's
 >   rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw
 >   from the same count; builders and reviewers are not separate pools. Track how many dispatched

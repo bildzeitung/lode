@@ -51,18 +51,39 @@ once via ``-e .[dev]``, so re-provisioning it per session would be slow with
 no benefit. Activate the venv first, then run nox.
 
 **Parallelism (lode-b4w.6).** Both ``tests`` and ``unit`` run under
-``pytest-xdist`` (``-n auto``, one worker per CPU core). Measured on an
-8-core dev machine, offline (``ANTHROPIC_API_KEY`` unset — see the ambient-key
-determinism note below and lode-7mq for a related, separately-tracked leak):
-``unit`` 151.8s serial -> 33-41s parallel over repeated runs; the full
-``tests`` suite 126.7-133.9s serial -> 39-60s parallel over repeated runs, all
-green. This suite has no shared on-disk state to race on — every test gets its
-own ``$LODE_HOME`` via the autouse ``_isolate_lode_home`` fixture in
-``tests/conftest.py`` (a fresh ``tmp_path_factory`` directory per test), so
-distributing tests across worker processes is safe; repeated runs stayed green
-with no ordering-sensitive failures. If a future test introduces shared
-on-disk or global state, xdist would surface that as a flake — investigate the
-test's isolation before assuming xdist itself is at fault.
+``pytest-xdist``. Measured on an 8-core dev machine, offline
+(``ANTHROPIC_API_KEY`` unset — see the ambient-key determinism note below and
+lode-7mq for a related, separately-tracked leak): ``unit`` 151.8s serial ->
+33-41s parallel over repeated runs; the full ``tests`` suite 126.7-133.9s
+serial -> 39-60s parallel over repeated runs, all green. This suite has no
+shared on-disk state to race on — every test gets its own ``$LODE_HOME`` via
+the autouse ``_isolate_lode_home`` fixture in ``tests/conftest.py`` (a fresh
+``tmp_path_factory`` directory per test), so distributing tests across worker
+processes is safe; repeated runs stayed green with no ordering-sensitive
+failures. If a future test introduces shared on-disk or global state, xdist
+would surface that as a flake — investigate the test's isolation before
+assuming xdist itself is at fault.
+
+**Worker count defaults to 8, not "one per core" (lode-bv6y, superseding
+lode-b4w.6's original ``-n auto``).** SPIKE lode-mtuy measured, on an idle
+24-core/31GiB box, that ``-n auto`` (24 workers there) is the **slowest**
+width for this suite — median full-suite wall-clock 25s at auto vs 23s at
+``-n 8``, and every 24-worker run was at or above the worst 8-worker run. The
+curve knees at 8, stays flat through 16, and rises past ~12: each additional
+worker beyond the knee pays more in process-startup + model-load cost than it
+recovers in parallelism. Combined with lode-lwx6's measured memory curve
+(11.4 GiB peak PSS at 24 workers vs 6.5 GiB at 8 — see
+``docs/agents-workflow.md#concurrency-cap-lode-2cf``), auto is worse on
+**both** axes, so 8 is the default width here, not a tuned-down compromise.
+Override with the ``LODE_TEST_WORKERS`` env var — a positive integer passed
+straight through to ``pytest -n``, or the literal ``auto`` to opt back into
+one worker per CPU core (the spike's specific knee was measured on one
+machine; the finding that auto isn't free should generalize, but the number
+8 may not — e.g. a machine with very different core/memory characteristics).
+This same effective worker count feeds ``/code``'s concurrency-cap formula
+(``docs/agents-workflow.md#concurrency-cap-lode-2cf``) — the two knobs must
+stay consistent, so change ``LODE_TEST_WORKERS`` rather than assuming the cap
+still means what it used to.
 """
 
 import os
@@ -77,6 +98,16 @@ nox.options.default_venv_backend = "none"
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
 nox.options.sessions = ["fix", "tests"]
+
+
+def _xdist_workers() -> str:
+    """Effective pytest-xdist worker count for ``-n`` (``LODE_TEST_WORKERS``, lode-bv6y).
+
+    Defaults to ``"8"`` — see the module docstring's "Worker count defaults to
+    8" note for why this replaced ``-n auto``. Accepts a positive integer, or
+    the literal ``"auto"`` to opt back into one worker per CPU core.
+    """
+    return os.environ.get("LODE_TEST_WORKERS", "8")
 
 
 @nox.session(tags=["fix"])
@@ -94,10 +125,11 @@ def tests(session: nox.Session) -> None:
     the suite ``/land`` re-gates with, so nothing slow is ever skipped before
     trunk (lode-pql). For a fast code-time inner loop, see ``nox -s unit``.
 
-    Runs under ``pytest-xdist`` (``-n auto``, lode-b4w.6) — no marker filter
-    changes, no test skipped, just distributed across CPU cores.
+    Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
+    ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
+    no test skipped, just distributed across workers.
     """
-    session.run("pytest", "-n", "auto")
+    session.run("pytest", "-n", _xdist_workers())
 
 
 @nox.session
@@ -112,9 +144,10 @@ def unit(session: nox.Session) -> None:
     permanently, it just defers the slow tier to ``nox -s tests``, which
     every merge (and `/land`'s re-gate) still runs in full.
 
-    Runs under ``pytest-xdist`` (``-n auto``, lode-b4w.6).
+    Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
+    ``8``, lode-bv6y — see the module docstring).
     """
-    session.run("pytest", "-m", "not slow", "-n", "auto")
+    session.run("pytest", "-m", "not slow", "-n", _xdist_workers())
 
 
 @nox.session

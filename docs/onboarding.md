@@ -149,9 +149,11 @@ The guard is a net for *accidents*, not an adversary — it cannot reach a conne
 subprocess, and one made off the main thread it can prevent but not fail. `tests/conftest.py`'s
 module docstring is the full account.
 
-Both `tests` and `unit` run under `pytest-xdist` (`-n auto`); every test gets its own
-`$LODE_HOME` via the autouse `_isolate_lode_home` fixture, so there is no shared on-disk
-state to race on.
+Both `tests` and `unit` run under `pytest-xdist` (`-n 8` by default — `LODE_TEST_WORKERS`
+overrides, including back to `-n auto`; see `noxfile.py`'s module docstring and
+[`docs/agents-workflow.md`](agents-workflow.md#concurrency-cap-lode-2cf) for why `auto` stopped
+being the default, lode-bv6y); every test gets its own `$LODE_HOME` via the autouse
+`_isolate_lode_home` fixture, so there is no shared on-disk state to race on.
 
 ### 7. (Optional) Mermaid diagram validation
 
