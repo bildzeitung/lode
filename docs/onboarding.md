@@ -121,6 +121,18 @@ Three opt-in sessions sit outside the default set:
 | `nox -s build` | Builds a wheel + sdist and asserts the shipped package-data is present. |
 | `nox -s eval` | The live eval test (`tests/test_eval_live.py`). Needs `ANTHROPIC_API_KEY` **and** `LODE_RUN_LIVE_EVAL=1`, which only this session sets — so `tests` and `unit` stay offline even where a key is ambient. |
 
+Two pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
+is a collection error, not a silently-ignored no-op):
+
+| Marker | Meaning |
+|---|---|
+| `slow` | Real model-load cost (the `FastEmbedCrossEncoder` reranker, or the live eval Q&A leg) — excluded from `nox -s unit`, always included in `nox -s tests`. Also relaxes the guard's *socket* half (only), so a cold model cache can pull its weights down; the Anthropic-client half still applies. Do **not** reach for `slow` to quiet the guard on a test that is not about a real model load — use `network`, which says what it means. |
+| `network` | The **sole sanctioned** escape hatch from `tests/conftest.py`'s autouse network/LLM-client guard (lode-85q): this test deliberately reaches real, un-mocked Anthropic-SDK / network machinery. Every other test fails **loudly**, not silently, when it falls through to a real `anthropic.Anthropic()` construction, or to a real network call (`slow` excepted, above). |
+
+The guard is a net for *accidents*, not an adversary — it cannot reach a connect made in a
+subprocess, and one made off the main thread it can prevent but not fail. `tests/conftest.py`'s
+module docstring is the full account.
+
 Both `tests` and `unit` run under `pytest-xdist` (`-n auto`); every test gets its own
 `$LODE_HOME` via the autouse `_isolate_lode_home` fixture, so there is no shared on-disk
 state to race on.
