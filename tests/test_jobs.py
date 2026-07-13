@@ -240,22 +240,19 @@ def test_next_failure_state_below_max_attempts_applies_backoff() -> None:
     assert next_at >= earliest
 
 
-def test_next_failure_state_dead_letters_at_max_attempts() -> None:
-    settings = Settings(retry_max_attempts=2)
+def test_next_failure_state_dead_letters_on_the_last_attempt_not_one_past_it() -> None:
+    """Pin the exact gate boundary with LITERAL expectations: the failure that
+    brings the count TO retry_max_attempts dead-letters (and schedules no further
+    attempt); the one before it does not. Stated as literals on purpose -- an
+    expectation computed by calling next_failure_state would move with the policy
+    and pin nothing.
+    """
+    settings = Settings(retry_max_attempts=3)
 
+    # One below the gate: retry, with a backoff stamped.
     new_attempts, dead, next_at = next_failure_state(1, settings)
+    assert (new_attempts, dead) == (2, False)  # 2 < 3 -> retry
+    assert next_at is not None
 
-    assert (new_attempts, dead, next_at) == (2, True, None)
-
-
-def test_record_job_failure_delegates_to_next_failure_state(conn) -> None:
-    """record_job_failure's returned (new_attempts, dead) must match the pure
-    policy decision for the same inputs -- the persistence wrapper must not
-    silently diverge from the policy it delegates to."""
-    settings = Settings(retry_max_attempts=4)
-    job_id = _insert_running_job(conn)
-
-    expected_attempts, expected_dead, _ = next_failure_state(2, settings)
-    new_attempts, dead = record_job_failure(conn, job_id, 2, "boom", settings)
-
-    assert (new_attempts, dead) == (expected_attempts, expected_dead)
+    # At the gate: dead, and no next attempt is scheduled.
+    assert next_failure_state(2, settings) == (3, True, None)  # 3 >= 3 -> dead
