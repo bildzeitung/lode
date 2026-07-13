@@ -233,48 +233,46 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-# Anchor pair (wall-clock reading, monotonic reading) established on first
-# call to :func:`_now` in this process. See :func:`_now` for why this exists.
-_now_anchor: tuple[datetime, float] | None = None
+# Wall-clock time corresponding to ``time.monotonic() == 0``. Ratcheted
+# forward-only, so :func:`_now` can never hand back a decreasing reading.
+_now_epoch: datetime = datetime.min.replace(tzinfo=UTC)
 
 
 def _now() -> datetime:
-    """Return the current UTC time, guaranteed non-decreasing within this process.
+    """Return the current UTC time, with two guarantees this module depends on.
 
-    ``datetime.now(UTC)`` reads the OS wall clock (``CLOCK_REALTIME``), which
-    is explicitly *not* guaranteed monotonic — NTP correction or (observed
-    directly while diagnosing lode-t1y, reproduced under 22-way synthetic CPU
-    contention on this WSL2/Hyper-V host) hypervisor clock catch-up after the
-    guest was busy can step it **backward**, including between two back-to-back
-    reads in the same single-threaded loop, milliseconds apart.
+    1. **Never decreases within this process.** The OS may step
+       ``CLOCK_REALTIME`` (what ``datetime.now(UTC)`` reads) *backward* — NTP
+       correction, or hypervisor catch-up after the guest was descheduled. A
+       backward step is read by :func:`_claim_one`'s ``next_attempt_at <= now``
+       predicate as "nothing is ready yet", and :func:`drain`'s loop breaks on
+       the first miss — stranding an already-eligible job for the rest of the
+       pass.
+    2. **Never reads *behind* ``CLOCK_REALTIME``.** Not every timestamp this
+       clock is compared against comes *from* it: ``jobs.next_attempt_at``
+       defaults to SQLite's own ``strftime('now')`` (``schema.sql``), and a job
+       is typically enqueued by one process and claimed by another. A clock that
+       merely never went backward would lag those writers permanently after a
+       *forward* step and strand jobs just the same — trading one bug for a
+       worse one.
 
-    That matters here because :func:`_claim_one`'s ``next_attempt_at <= now``
-    predicate treats any such regression as "nothing is ready yet", and
-    :func:`drain`'s main loop stops at the very first miss — so one backward
-    tick can strand an already-eligible job (one whose ``next_attempt_at`` was
-    stamped, by the schema default or an earlier call here, a moment earlier
-    in *this same pass*) until the next invocation. Reproduced concretely:
-    three jobs inserted with an identical schema-default ``next_attempt_at``;
-    two claimed fine, then a later loop iteration's ``now`` read was *less*
-    than that same timestamp, leaving the third job ``pending`` forever (from
-    that pass's point of view).
+    Both fall out of ratcheting the monotonic epoch forward only: the epoch
+    never decreases and neither does ``elapsed``, giving (1); the epoch is
+    always ``>= wall - elapsed``, giving (2). Absorbing a backward step means
+    running slightly ahead of true time until the wall clock catches up — the
+    right trade, since a job retried a hair late beats a job stranded.
 
-    Anchoring to ``time.monotonic()`` (guaranteed non-decreasing by the OS)
-    on first use and deriving every subsequent reading from elapsed monotonic
-    time since that anchor fixes this at the clock-reading layer, for every
-    caller in this module, without touching any comparison logic or
-    relaxing any assertion.
+    The version-chain twin of this hazard, and the rule it implies, are in
+    ``docs/storage.md``; the repro is in lode-t1y.
     """
-    global _now_anchor
-    mono = time.monotonic()
-    if _now_anchor is None:
-        _now_anchor = (datetime.now(UTC), mono)
-    anchor_wall, anchor_mono = _now_anchor
-    return anchor_wall + timedelta(seconds=mono - anchor_mono)
+    global _now_epoch
+    elapsed = timedelta(seconds=time.monotonic())
+    _now_epoch = max(_now_epoch, datetime.now(UTC) - elapsed)
+    return _now_epoch + elapsed
 
 
 def _now_iso() -> str:
-    """Return the current UTC time (monotonic-safe, see :func:`_now`) in the schema's ISO-8601 format."""
+    """Return :func:`_now` in the schema's ISO-8601 format."""
     return _iso(_now())
 
 
@@ -408,7 +406,7 @@ def _claim_one(
 
     Selects the highest-priority, oldest ready job — ``status='pending' AND
     next_attempt_at <= now AND type IN types`` — ordered by type priority
-    (``embed`` before ``enrich``) then ``created``, and flips it to
+    (``embed`` before ``enrich``) then ``id`` (insertion order), and flips it to
     ``'running'`` with an asserted CAS update.  Returns the job ``id`` or
     ``None`` if nothing is ready.
 
@@ -431,9 +429,12 @@ def _claim_one(
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
         f"AND type IN ({placeholders}) "
         f"{version_clause}"
+        # Tie-break by ``id``, not ``created``: ``jobs.id`` is INTEGER PRIMARY
+        # KEY (a rowid alias), so it *is* insertion order and cannot go backward
+        # the way the wall-clock ``created`` can (docs/storage.md).
         f"ORDER BY "
         f"CASE type WHEN 'embed' THEN 0 WHEN 'enrich' THEN 1 ELSE 2 END, "
-        f"created "
+        f"id "
         f"LIMIT 1",
         params,
     ).fetchone()
@@ -701,9 +702,14 @@ def _batch_submit_enrich(
 
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
+        # ORDER BY id, not ``created``: ``jobs.id`` is INTEGER PRIMARY KEY (a
+        # rowid alias), so it *is* insertion order, and unlike the wall-clock
+        # ``created`` it cannot go backward (same rule as the version chain --
+        # docs/storage.md). With LIMIT, a mis-ordered ``created`` would not just
+        # reorder the batch but silently drop an older job out of it.
         "SELECT id, target_version FROM jobs "
         "WHERE type = 'enrich' AND status = 'pending' AND next_attempt_at <= ? "
-        "ORDER BY created "
+        "ORDER BY id "
         "LIMIT ?",
         (_now_iso(), flush_size),
     ).fetchall()

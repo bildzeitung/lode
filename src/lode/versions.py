@@ -411,19 +411,12 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
         if row is None:
             raise KeyError(note_id)
         head_version_id, head_op = row
-        # Order by ``rowid`` alone, NOT ``created`` -- even ``ORDER BY created,
-        # rowid`` is not reliable (lode-t1y): ``created`` comes from SQLite's
-        # own ``strftime('now')``, which -- like Python's ``datetime.now(UTC)``
-        # (see worker.py's ``_now``) -- reads the OS wall clock, and the OS is
-        # free to step that clock *backward* (NTP correction / hypervisor
-        # catch-up; confirmed happening on this host under load). A backward
-        # step between two versions' INSERTs makes the later version's
-        # ``created`` sort *before* the earlier one's -- not a tie, so a
-        # rowid tiebreaker never even runs. ``rowid`` (implicit on this table
-        # -- see schema.sql, no WITHOUT ROWID) has no such failure mode: every
-        # version is inserted by exactly one call site (_write_version) and a
-        # child's parent must already exist (FK), so insertion order == chain
-        # order and rowid only ever increases, regardless of wall-clock jitter.
+        # ORDER BY rowid, never ``created`` -- and not ``created, rowid`` either:
+        # ``created`` is wall-clock, and the OS can step that backward, so a later
+        # version can sort *before* its own parent. That is a wrong order, not a
+        # tie, so a tiebreaker never even runs. ``rowid`` is insertion order, and
+        # a child's parent FK must already exist, so insertion order *is* chain
+        # order. Full rule: docs/storage.md, "Ordering a version chain" (lode-t1y).
         version_ids = tuple(
             r[0]
             for r in conn.execute(
