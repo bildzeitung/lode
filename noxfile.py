@@ -84,6 +84,18 @@ This same effective worker count feeds ``/code``'s concurrency-cap formula
 (``docs/agents-workflow.md#concurrency-cap-lode-2cf``) — the two knobs must
 stay consistent, so change ``LODE_TEST_WORKERS`` rather than assuming the cap
 still means what it used to.
+
+**This knob is for throughput, and for nothing else. Narrowing ``-n`` will
+make the known flaky tests fail less often — that is a MUZZLE, NOT A FIX.**
+Those flakes (lode-t1y, lode-9vns, lode-64jn) are CPU-starvation races, and a
+race that stops losing because you gave it a less contended machine is still a
+race: lode-t1y's suspected ``worker._claim_one`` predicate bug can silently
+skip a job **in production**, where no ``-n`` setting protects anyone. So: do
+not reach for this knob to quiet a flake, do not narrow it further on the
+strength of a greener suite, and do not cite a reduced flake rate as evidence
+the default is right — the justification above is wall-clock and memory,
+measured, and that is the only ground this default stands on. A flake that
+went quiet here is a defect that went *unobserved*, not one that went away.
 """
 
 import os
@@ -104,10 +116,21 @@ def _xdist_workers() -> str:
     """Effective pytest-xdist worker count for ``-n`` (``LODE_TEST_WORKERS``, lode-bv6y).
 
     Defaults to ``"8"`` — see the module docstring's "Worker count defaults to
-    8" note for why this replaced ``-n auto``. Accepts a positive integer, or
-    the literal ``"auto"`` to opt back into one worker per CPU core.
+    8" note for why this replaced ``-n auto``. The value is handed straight to
+    ``pytest -n``, so anything xdist accepts works: a positive integer, or the
+    literal ``"auto"`` / ``"logical"`` to opt back into one worker per (logical)
+    CPU core. An unset *or empty* var means the default — an exported-but-empty
+    ``LODE_TEST_WORKERS`` is a "not set" in every shell idiom that produces it,
+    and would otherwise reach pytest as ``-n ''`` and fail the gate on a usage
+    error. Garbage still fails loudly at pytest, by design: this is a developer
+    knob, not user input, and a silent fallback would hide the typo.
+
+    Keep this in step with ``/code``'s concurrency cap, which derives its
+    per-agent memory budget from this same width
+    (``docs/agents-workflow.md#concurrency-cap-lode-2cf``); it treats any
+    non-integer width as one-worker-per-core so that it errs tight.
     """
-    return os.environ.get("LODE_TEST_WORKERS", "8")
+    return os.environ.get("LODE_TEST_WORKERS") or "8"
 
 
 @nox.session(tags=["fix"])

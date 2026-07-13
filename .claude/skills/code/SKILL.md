@@ -61,14 +61,18 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
 >   nproc_n=$(nproc 2>/dev/null || echo 4)
 >   workers_n="${LODE_TEST_WORKERS:-8}"    # same effective width noxfile.py's gate uses (lode-bv6y)
->   [ "$workers_n" = "auto" ] && workers_n=$nproc_n
+>   # Anything that is not a positive integer — `auto`, xdist's `logical`, a typo,
+>   # an exported-empty var — means "we cannot know the width here", and the widest
+>   # the gate can get is one worker per core. Assume that. Bash arithmetic silently
+>   # evaluates a non-numeric string to 0, which would collapse the per-agent budget
+>   # to the 2GiB floor and OVER-dispatch (cap 12 on a 24-core box) — a bad value
+>   # must err tight, never optimistic; over-dispatch is what crashed this host.
+>   case "$workers_n" in ''|*[!0-9]*|0) workers_n=$nproc_n ;; esac
 >   if [ -n "$mem_kib" ]; then
 >     # Per-agent gate budget = 2GiB fixed + 0.125GiB/xdist-worker: the gate's
 >     # footprint scales with the WORKER COUNT the gate actually spawns
 >     # (LODE_TEST_WORKERS, default 8 — lode-bv6y), not with this machine's
->     # core count. (Before lode-bv6y narrowed the default off `-n auto`, worker
->     # count == nproc, which is why this term used to read `nproc_n` directly;
->     # lode-lwx6's original fix scaled it with nproc for exactly that reason.)
+>     # core count.
 >     # Measured, not extrapolated; 3GiB/agent @ 8 workers, 5GiB @ 24 workers.
 >     # docs/agents-workflow.md#concurrency-cap-lode-2cf holds the measurements,
 >     # the modelling assumption, and how to re-measure when the suite grows.
