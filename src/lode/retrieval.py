@@ -267,6 +267,14 @@ class FastEmbedCrossEncoder:
             )
         return self._model
 
+    def warm(self) -> None:
+        """Force the weights download/load now, ahead of any rerank call.
+
+        The public seam ``lode models pull`` (lode-6qh) warms the cache through,
+        so the CLI does not depend on the private :meth:`_load`.
+        """
+        self._load()
+
     def rerank(self, query: str, documents: list[str]) -> list[float]:
         model = self._load()
         # fastembed yields one (numpy) score per document, in input order; coerce

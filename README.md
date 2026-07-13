@@ -46,6 +46,12 @@ are kept local and never sent to the cloud. See [`docs/stack.md`](docs/stack.md)
 rationale (including why a split store over a unified Oracle/Postgres engine) and
 [`docs/externals.md`](docs/externals.md#privacy-consequence-of-aggregation) for the privacy model.
 
+**First run needs the network once.** "Locally" describes *inference*, not the weights: the local
+models (embedder + reranker/NLI, ~500MB of ONNX files) download from HuggingFace on first use.
+Run `lode models pull` right after install to fetch them deliberately — see
+[`docs/configuration.md`](docs/configuration.md#models) — rather than hitting that cost mid-capture.
+After that, indexing and retrieval are fully offline.
+
 ## Status
 
 **Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the overview and a

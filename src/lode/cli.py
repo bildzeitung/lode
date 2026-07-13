@@ -27,7 +27,14 @@ marker (lode-d32.2) rather than rendering it as if live; ``ask``
 source -- flips ``externals.no_egress`` via :func:`lode.externals.set_no_egress`
 so it stays locally retrievable but is excluded from enrich/Q&A cloud egress
 (``docs/externals.md`` "No-egress tier"); ``tui`` (E11,
-lode-mkc.1) launches the Textual TUI shell on the instant capture screen.
+lode-mkc.1) launches the Textual TUI shell on the instant capture screen;
+``models pull`` (lode-og3, rebuilding the bounced lode-6qh) explicitly warms
+the local ``fastembed`` weights cache (embedder + reranker/NLI cross-encoder)
+so the ~500MB first-run download happens as a deliberate one-time setup step
+rather than silently mid-capture, and turns its most likely failure mode --
+no network, or a cold cache under ``HF_HUB_OFFLINE=1`` -- into an actionable
+message instead of a raw traceback -- see ``docs/onboarding.md`` and
+``docs/configuration.md`` ("Models").
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -43,6 +50,7 @@ import tempfile
 import time
 import tomllib
 import uuid
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1145,6 +1153,178 @@ def tui(
     # resolve-once-and-share pattern), rather than each screen falling back to
     # its own bare Settings() default independently.
     run_tui(db_path=db or default_db_path(), settings=_resolve_settings())
+
+
+models_app = typer.Typer(
+    help="Manage the local fastembed model-weights cache.",
+    no_args_is_help=True,
+)
+app.add_typer(models_app, name="models")
+
+
+#: fastembed's own catch-all failure message -- the final ``raise`` in
+#: ``fastembed/common/model_management.py``'s ``download_model``, once every
+#: source and retry is exhausted. It is the one stable signature left to key off
+#: (see :func:`_warm`'s docstring for why fastembed leaves nothing more specific).
+_FASTEMBED_EXHAUSTED_SOURCES = "from any source"
+
+
+def _hf_hub_offline() -> bool:
+    """Mirror fastembed's own ``HF_HUB_OFFLINE`` truthiness check.
+
+    Read directly rather than imported -- fastembed does not expose this as a
+    reusable helper (``fastembed/common/model_management.py:398-401`` inlines it)
+    -- and must stay the same truthy set fastembed itself checks, or
+    :func:`_warm`'s offline/cold-cache branch would misclassify a failure fastembed
+    would not actually have treated as offline.
+    """
+    return os.environ.get("HF_HUB_OFFLINE", "").strip().upper() in {
+        "1",
+        "TRUE",
+        "YES",
+        "ON",
+    }
+
+
+def _warm(warm: Callable[[], None], model_id: str) -> None:
+    """Run one wrapper's ``warm()``, translating a download failure into an
+    actionable ``lode models pull`` message instead of a raw traceback (lode-96t).
+
+    ``lode models pull`` exists precisely to make the first-run network
+    dependency explicit, so its own most likely failure path -- no network, or
+    ``HF_HUB_OFFLINE=1`` against a cold cache -- must not itself be a stack
+    trace. Verified empirically against the installed fastembed/huggingface_hub,
+    not just read from source, because fastembed's actual behavior collapses
+    more than the source alone suggests:
+
+    - **No network reachable at all** escapes fastembed uncaught, as an
+      ``httpx`` transport-level exception (``httpx.TransportError`` --
+      ``ConnectError``, ``TimeoutException``, ...): fastembed's retry loop
+      (``download_model``) only catches ``(EnvironmentError,
+      RepositoryNotFoundError, ValueError)``, none of which an ``httpx``
+      transport failure subclasses, so it is never swallowed.
+    - **``HF_HUB_OFFLINE=1`` against a cold cache** and a **genuine HTTP error**
+      (rate-limited / 5xx) against a reachable network both collapse -- deep
+      inside fastembed's retry loop -- into the exact same generic
+      ``ValueError("Could not load model {id} from any source.")``: fastembed
+      catches ``HfHubHTTPError`` / ``LocalEntryNotFoundError`` /
+      ``RepositoryNotFoundError`` internally on every attempt and never
+      re-raises or chains the original cause, so by the time this ``ValueError``
+      reaches us there is no exception-side signal left to tell the two apart.
+      The only reliable signal is one *we* already have before calling in:
+      whether ``HF_HUB_OFFLINE`` was set (:func:`_hf_hub_offline`). If it was,
+      fastembed forced ``local_files_only=True`` throughout (mirroring the same
+      env var itself) and never attempts the network at all, so a failure here
+      can only be the cold-cache case; if not, this is a genuine download
+      failure after retrying every source.
+
+    Anything else -- a different exception entirely, or a ``ValueError`` that
+    doesn't carry fastembed's specific exhausted-sources signature -- propagates
+    unchanged: a real defect must never read as a network problem.
+    """
+    import httpx
+
+    try:
+        warm()
+    except httpx.TransportError as exc:
+        typer.echo(
+            f"could not reach HuggingFace to download {model_id}: {exc}\n"
+            "No network route to huggingface.co -- connect to the network and "
+            "retry 'lode models pull'.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except ValueError as exc:
+        if _FASTEMBED_EXHAUSTED_SOURCES not in str(exc):
+            raise  # not fastembed's download-failure signature -- a real bug
+        if _hf_hub_offline():
+            typer.echo(
+                f"cache is cold for {model_id} and HF_HUB_OFFLINE=1 is set, so "
+                "no download was attempted: run 'lode models pull' once without "
+                "HF_HUB_OFFLINE to warm the cache, then the offline flag will "
+                "work.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"failed to download {model_id} from HuggingFace after "
+                f"retrying: {exc}\nHuggingFace may be rate-limiting or "
+                "unavailable -- check your connection and try again shortly.",
+                err=True,
+            )
+        raise typer.Exit(code=1) from None
+
+
+@models_app.command("pull")
+def models_pull() -> None:
+    """Warm the local model cache: download the resolved weights once, deliberately.
+
+    lode-6qh: on a cold cache, the first embed call otherwise downloads ~500MB of
+    ONNX weights from HuggingFace mid-capture -- a surprise phone-home rather than
+    a one-time setup cost. This command forces that download now, up front, so a
+    later ``lode work`` / ``lode ask`` never hits the network unexpectedly.
+
+    Warms every ``fastembed``-loaded model named by your *resolved* settings
+    (:func:`_resolve_settings`, so a ``$LODE_HOME/config.toml`` override of
+    ``embedding_model`` / ``rerank_model`` / ``entailment_model`` is honored,
+    lode-40g/lode-og3 -- not the pinned :class:`~lode.config.Settings` defaults)
+    -- the embedder (``embedding_model``) and the reranker/NLI cross-encoder
+    (``rerank_model`` / ``entailment_model``, ``docs/configuration.md`` "Models")
+    -- reusing the same lazy-load wrappers the read/gate paths construct
+    (:class:`lode.embedding.FastEmbedEmbedder`,
+    :class:`lode.retrieval.FastEmbedCrossEncoder`,
+    :class:`lode.faithfulness.FastEmbedEntailmentScorer`), so this pulls into
+    the exact ``cache_dir`` (:func:`lode.config.model_cache_dir`,
+    ``$LODE_HOME/models/``) production reads from -- never ``fastembed``'s own
+    ``tempfile.gettempdir()`` default (lode-gmo). ``rerank_model`` and
+    ``entailment_model`` default to the same pinned id (``BAAI/bge-reranker-base``,
+    lode-txh.6): the second load is a same-model cache hit, so it is skipped
+    rather than re-fetched, unless a config override has genuinely split them.
+
+    Once warmed, every subsequent run is fully offline for indexing/retrieval; to
+    force that even against a cold miss (an air-gapped run against an
+    already-warm cache), set ``HF_HUB_OFFLINE=1`` -- fastembed's own
+    ``local_files_only`` escape hatch (not a lode-specific flag).
+
+    A bad ``config.toml`` gives the same clean stderr message + exit 1 every
+    other command gives (:func:`_resolve_settings`), not a raw traceback.
+
+    On its most likely failure path -- no network, ``HF_HUB_OFFLINE=1`` against a
+    cold cache, or HuggingFace rate-limiting/erroring -- this exits non-zero with
+    a clear, actionable message rather than a raw traceback (lode-96t); see
+    :func:`_warm` for exactly which exceptions are mapped and why anything else
+    still propagates as a real bug.
+    """
+    from lode.embedding import FastEmbedEmbedder
+    from lode.faithfulness import FastEmbedEntailmentScorer
+    from lode.retrieval import FastEmbedCrossEncoder
+
+    # _resolve_settings() (not bare Settings()) so a config-file override of
+    # embedding_model/rerank_model/entailment_model actually reaches this
+    # command (lode-og3) -- otherwise 'models pull' warms the pinned defaults
+    # while 'lode work'/'lode ask' (which DO resolve settings) still hit the
+    # network mid-capture for the user's actual configured models, exactly the
+    # surprise phone-home this command exists to prevent.
+    settings = _resolve_settings()
+    cache_dir = model_cache_dir()
+    typer.echo(f"pulling model weights into {cache_dir} ...")
+
+    typer.echo(f"  embedder: {settings.embedding_model}")
+    _warm(FastEmbedEmbedder(settings).warm, settings.embedding_model)
+
+    typer.echo(f"  reranker: {settings.rerank_model}")
+    _warm(FastEmbedCrossEncoder(settings).warm, settings.rerank_model)
+
+    # rerank_model and entailment_model default to the same pinned id (lode-txh.6),
+    # so the second load would be a pure cache hit -- skip it, but still say so
+    # rather than silently omitting the model from the report.
+    same_as_reranker = settings.entailment_model == settings.rerank_model
+    suffix = " (same model as reranker -- already cached)" if same_as_reranker else ""
+    typer.echo(f"  entailment (NLI): {settings.entailment_model}{suffix}")
+    if not same_as_reranker:
+        _warm(FastEmbedEntailmentScorer(settings).warm, settings.entailment_model)
+
+    typer.echo(f"done: model weights cached at {cache_dir}")
 
 
 @app.command()

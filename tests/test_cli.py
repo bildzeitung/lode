@@ -51,7 +51,8 @@ runner = CliRunner()
 
 # Every subcommand is real: `add` (lode-y42.1), `ask` (lode-y42.2), `status` /
 # `jobs` (lode-y42.3), `egress` (lode-fk8.3), `purge` (lode-7cx), `notes` (lode-1gr.1),
-# `config` (lode-ftc), `work` (lode-i05.3: async work queue drain).
+# `config` (lode-ftc), `work` (lode-i05.3: async work queue drain), `models`
+# (lode-og3: the `models pull` sub-app group, explicit model-weights prefetch).
 # `eval` is NOT a shipped command — it is a maintainer/CI integration test run via
 # `nox -s eval` (see docs/decisions.md, Shape A, lode-5y8.5).
 ALL_SUBCOMMANDS = [
@@ -67,6 +68,7 @@ ALL_SUBCOMMANDS = [
     "config",
     "work",
     "tui",
+    "models",
 ]
 
 
@@ -2820,3 +2822,364 @@ def test_work_uses_default_refresh_ttl_s_without_a_config_file(
     )
     assert result.exit_code == 0, result.output
     assert _refresh_job_statuses(db_path) == []
+
+
+# --- lode models pull (explicit model-weights prefetch, lode-6qh/lode-og3) ---
+#
+# The download itself is opt-in/live-only (tests/test_models_smoke.py,
+# LODE_SMOKE_MODELS=1) -- these tests keep the default gate offline by faking
+# the three lazy-load wrapper classes 'models pull' constructs
+# (lode.embedding.FastEmbedEmbedder, lode.retrieval.FastEmbedCrossEncoder,
+# lode.faithfulness.FastEmbedEntailmentScorer), asserting only that the right
+# ones are warmed -- never that fastembed/HuggingFace is actually reached.
+
+
+def _install_fake_model_loaders(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Fake out the three FastEmbed*-wrapper classes 'models pull' constructs.
+
+    Each fake's ``warm()`` just records a distinguishable tag instead of
+    constructing a real ``fastembed`` model -- offline proof of which models
+    were (or weren't) warmed, and in what order. Faking the *public* ``warm()``
+    (not the private ``_load()`` it delegates to) is deliberate: it pins the
+    seam the CLI actually depends on, so renaming the private loader can never
+    leave these tests green while ``lode models pull`` dies on an AttributeError.
+    """
+    calls: list[str] = []
+
+    def _fake(tag: str) -> type:
+        class _FakeLoader:
+            def __init__(self, settings: object) -> None:
+                pass
+
+            def warm(self) -> None:
+                calls.append(tag)
+
+        return _FakeLoader
+
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _fake("embedder"))
+    monkeypatch.setattr("lode.retrieval.FastEmbedCrossEncoder", _fake("reranker"))
+    monkeypatch.setattr(
+        "lode.faithfulness.FastEmbedEntailmentScorer", _fake("entailment")
+    )
+    return calls
+
+
+def test_models_pull_warms_both_models_and_reports_where_they_landed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode models pull' warms the embedder + reranker and says where they went.
+
+    Acceptance (lode-6qh): one command warms both model caches from a cold start
+    and reports where they went ($LODE_HOME/models). Default settings pin
+    entailment_model == rerank_model (lode-txh.6), so the entailment scorer is a
+    same-model cache hit -- surfaced in the output, not loaded a second time and
+    not silently skipped.
+    """
+    calls = _install_fake_model_loaders(monkeypatch)
+    home = tmp_path / "home"
+
+    result = runner.invoke(app, ["models", "pull"], env={"LODE_HOME": str(home)})
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["embedder", "reranker"]
+    assert str(home / "models") in result.stdout
+    assert "entailment" in result.stdout
+    assert "already cached" in result.stdout
+
+
+def test_models_pull_warms_entailment_separately_when_overridden(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config.toml override that splits entailment_model from rerank_model
+    warms both, driven through a REAL $LODE_HOME/config.toml (the lode-40g
+    pattern, e.g. test_work_honors_config_file_refresh_ttl_s_end_to_end above)
+    -- not a 'lode.cli.Settings' monkeypatch. This is the lode-og3 rebuild's
+    load-bearing test: it proves the override reaches 'models pull' via
+    _resolve_settings() and would fail if models_pull ever reverts to a bare
+    Settings() (lode-cpf's bounce finding against the original lode-6qh
+    branch), since a bare Settings() would silently ignore this file and warm
+    only the pinned default (same model for both, so 'entailment' would never
+    be warmed a second time).
+    """
+    calls = _install_fake_model_loaders(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'entailment_model = "some-other/nli-model"\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["models", "pull"], env={"LODE_HOME": str(home)})
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["embedder", "reranker", "entailment"]
+
+
+def test_models_pull_honors_config_file_embedding_model_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config.toml embedding_model override is the model ACTUALLY warmed --
+    not the pinned default (lode-cpf / lode-og3).
+
+    Regression coverage for the exact bounce finding against the original
+    lode-6qh branch: it constructed a bare 'Settings()', so 'models pull'
+    would warm 'nomic-ai/nomic-embed-text-v1.5' (the pinned default)
+    regardless of what the user's config.toml named, while 'lode work'/
+    'lode ask' (which DO resolve settings via _resolve_settings()) would still
+    warm/download the user's actual configured model mid-capture -- the exact
+    surprise phone-home this command exists to eliminate. Asserting on the
+    printed 'embedder: <model>' line (not just exit_code) is the point: it
+    proves the overridden id, not the default, is what 'models pull' reports
+    (and therefore warms).
+    """
+    _install_fake_model_loaders(monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    overridden_model = "some-other/embedding-model"
+    (home / "config.toml").write_text(
+        f'embedding_model = "{overridden_model}"\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["models", "pull"], env={"LODE_HOME": str(home)})
+
+    assert result.exit_code == 0, result.output
+    assert f"embedder: {overridden_model}" in result.stdout
+    assert "nomic-ai/nomic-embed-text-v1.5" not in result.stdout
+
+
+def test_models_pull_reports_a_bad_config_file_without_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """A malformed config.toml is a clean CLI error, not a crash (lode-cpf).
+
+    Mirrors test_cli_reports_a_bad_config_file_without_a_traceback (lode-40g)
+    for 'models pull' specifically: _resolve_settings() (not a bare
+    Settings(), which never reads the file and so could never fail this way)
+    converts an unusable $LODE_HOME/config.toml into the one-line stderr +
+    exit-1 convention every other command uses.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model =\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["models", "pull"], env={"LODE_HOME": str(home)})
+
+    assert result.exit_code == 1, result.output
+    assert "invalid config file" in result.stderr
+    assert str(home / "config.toml") in result.stderr
+    # The load-bearing assertion, same reasoning as the lode-40g test: proves
+    # _resolve_settings() caught it (typer.Exit / SystemExit) rather than the
+    # raw TOMLDecodeError escaping to the terminal.
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_models_pull_is_listed_under_models_help() -> None:
+    """'lode models --help' lists 'pull' -- the sub-app group is real, not a stub."""
+    result = runner.invoke(app, ["models", "--help"])
+    assert result.exit_code == 0
+    assert "pull" in result.stdout
+
+
+def test_real_model_wrappers_expose_warm() -> None:
+    """The three real wrappers expose the public warm() seam 'models pull' calls.
+
+    The tests above fake the wrapper classes wholesale, so they would stay green
+    even if the real classes lost warm() -- this pins the contract against the
+    genuine articles. Constructing a wrapper only stores the model name (no
+    fastembed import, no download), so this stays offline.
+    """
+    from lode.embedding import FastEmbedEmbedder
+    from lode.faithfulness import FastEmbedEntailmentScorer
+    from lode.retrieval import FastEmbedCrossEncoder
+
+    settings = load_settings()
+    for wrapper in (
+        FastEmbedEmbedder(settings),
+        FastEmbedCrossEncoder(settings),
+        FastEmbedEntailmentScorer(settings),
+    ):
+        assert callable(wrapper.warm)
+
+
+# --- lode-96t: 'models pull''s most likely failure path is a clear message, ---
+# --- not a raw fastembed/huggingface_hub traceback.                        ---
+#
+# fastembed's actual behavior (verified empirically against the installed
+# package, not just read from source) collapses more than the source alone
+# suggests: a genuine HTTP error (rate-limit/5xx) and HF_HUB_OFFLINE=1 against a
+# cold cache both end up as the *same* generic
+# ValueError("Could not load model {id} from any source.") -- fastembed's retry
+# loop swallows HfHubHTTPError/LocalEntryNotFoundError/RepositoryNotFoundError
+# internally and never re-raises the original cause. Only a total network
+# failure (DNS/connect/timeout) escapes fastembed uncaught, as an
+# httpx.TransportError. These tests fake exactly one wrapper's warm() to raise
+# the specific exception each real failure mode produces (never a real network
+# call), and assert 'lode models pull' maps each to its own actionable message
+# -- while a ValueError that doesn't carry fastembed's signature, or any other
+# exception entirely, still propagates raw (the no-broad-except-Exception
+# constraint the design explicitly calls for).
+
+
+def _install_failing_embedder(
+    monkeypatch: pytest.MonkeyPatch, exc: BaseException
+) -> None:
+    """Fake FastEmbedEmbedder.warm() to raise ``exc`` instead of downloading.
+
+    The embedder is warmed first in 'models pull', so a raised exception here
+    never reaches the reranker/entailment warms -- exactly like the CLI's own
+    try/except boundary sees it.
+    """
+
+    class _FailingLoader:
+        def __init__(self, settings: object) -> None:
+            pass
+
+        def warm(self) -> None:
+            raise exc
+
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _FailingLoader)
+
+
+def test_models_pull_no_network_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No network reachable at all -> a clear message and exit 1, not a traceback.
+
+    fastembed's retry loop only catches (EnvironmentError, RepositoryNotFoundError,
+    ValueError) -- none of which an httpx transport failure subclasses -- so this
+    is the one failure mode that escapes fastembed as-is, verified empirically
+    against an unreachable HF_ENDPOINT.
+    """
+    import httpx
+
+    _install_failing_embedder(
+        monkeypatch, httpx.ConnectError("[Errno -2] Name or service not known")
+    )
+
+    result = runner.invoke(app, ["models", "pull"])
+
+    assert result.exit_code == 1, result.output
+    assert "could not reach huggingface" in result.stderr.lower(), result.stderr
+    assert "no network route" in result.stderr.lower(), result.stderr
+    # The load-bearing assertion (mirrors the config-file test's pattern): proves
+    # _warm() caught it (typer.Exit / SystemExit) rather than the raw
+    # httpx.ConnectError escaping to the terminal.
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_models_pull_offline_cold_cache_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HF_HUB_OFFLINE=1 against a cold cache -> exits explaining cache + flag.
+
+    Verified empirically: under HF_HUB_OFFLINE=1, fastembed forces
+    local_files_only=True throughout and never attempts the network at all, so a
+    cold-cache miss surfaces as fastembed's generic
+    ValueError("Could not load model {id} from any source.") with no distinct
+    exception type of its own -- the only way to tell this apart from a genuine
+    HTTP error (below) is the env var lode already knows about.
+    """
+    _install_failing_embedder(
+        monkeypatch,
+        ValueError("Could not load model BAAI/bge-small-en-v1.5 from any source."),
+    )
+
+    result = runner.invoke(app, ["models", "pull"], env={"HF_HUB_OFFLINE": "1"})
+
+    assert result.exit_code == 1, result.output
+    assert "cache is cold" in result.stderr.lower(), result.stderr
+    assert "hf_hub_offline" in result.stderr.lower(), result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_models_pull_http_error_exits_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine HuggingFace HTTP error (rate-limit/5xx) -> its own clear message.
+
+    Same underlying ValueError as the offline/cold-cache case above (fastembed
+    swallows the HfHubHTTPError before it ever reaches us) -- distinguished only
+    by HF_HUB_OFFLINE being unset here, proving the two really do produce
+    different, non-overlapping messages despite sharing an exception type.
+    """
+    _install_failing_embedder(
+        monkeypatch,
+        ValueError("Could not load model BAAI/bge-small-en-v1.5 from any source."),
+    )
+
+    result = runner.invoke(app, ["models", "pull"])
+
+    assert result.exit_code == 1, result.output
+    assert "failed to download" in result.stderr.lower(), result.stderr
+    assert "rate-limiting or unavailable" in result.stderr.lower(), result.stderr
+    # Distinct from the offline/cold-cache message above.
+    assert "hf_hub_offline" not in result.stderr.lower(), result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_models_pull_unexpected_exception_still_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A genuine bug is never read as a network problem (the design's core ask).
+
+    No broad `except Exception` -- an exception type _warm() doesn't map at all
+    escapes exactly as raised, proving the mapping is scoped to the specific
+    fastembed/huggingface_hub failure modes, not a catch-all.
+    """
+    _install_failing_embedder(monkeypatch, RuntimeError("a genuine defect"))
+
+    result = runner.invoke(app, ["models", "pull"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, RuntimeError), repr(result.exception)
+    assert str(result.exception) == "a genuine defect"
+
+
+def test_models_pull_unmatched_value_error_still_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ValueError that doesn't carry fastembed's exhausted-sources signature
+    still propagates -- the message match is deliberately narrow, not a bare
+    `except ValueError` that would also swallow an unrelated bug.
+    """
+    _install_failing_embedder(monkeypatch, ValueError("some unrelated ValueError"))
+
+    result = runner.invoke(app, ["models", "pull"])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError), repr(result.exception)
+    assert str(result.exception) == "some unrelated ValueError"
+
+
+def test_fastembed_still_raises_the_exhausted_sources_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Canary: the REAL fastembed still raises the message ``_warm()`` keys off.
+
+    Every other lode-96t test *fakes* fastembed's
+    ``ValueError("Could not load model ... from any source.")``, so all of them
+    would stay green if a fastembed upgrade reworded that string -- while
+    ``lode models pull`` silently regressed to the raw traceback this ticket
+    exists to remove (the unmatched ValueError would simply propagate). That
+    string is the only signature fastembed leaves us to key off
+    (:data:`lode.cli._FASTEMBED_EXHAUSTED_SOURCES` -- it catches
+    ``HfHubHTTPError``/``LocalEntryNotFoundError`` internally and never chains
+    the cause), so pin it against the *installed* package: an upgrade that
+    rewords it fails here, loudly, instead of in a user's terminal.
+
+    Hermetic and offline: ``HF_HUB_OFFLINE=1`` against a cold ``$LODE_HOME``
+    makes fastembed force ``local_files_only=True`` throughout, so it never
+    touches the network -- it exhausts its sources locally and raises.
+    """
+    from lode.cli import _FASTEMBED_EXHAUSTED_SOURCES
+    from lode.embedding import FastEmbedEmbedder
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+
+    with pytest.raises(ValueError) as excinfo:
+        FastEmbedEmbedder(load_settings()).warm()
+
+    assert _FASTEMBED_EXHAUSTED_SOURCES in str(excinfo.value), (
+        "fastembed reworded its exhausted-sources error; lode.cli._warm() no "
+        f"longer recognizes it and 'lode models pull' will traceback: {excinfo.value!r}"
+    )

@@ -127,6 +127,14 @@ class FastEmbedEmbedder:
                     )
         return self._model
 
+    def warm(self) -> None:
+        """Force the weights download/load now, ahead of any embed call.
+
+        The public seam ``lode models pull`` (lode-6qh) warms the cache through,
+        so the CLI does not depend on the private :meth:`_load`.
+        """
+        self._load()
+
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         model = self._load()
         prefixed = [f"{_DOCUMENT_PREFIX}{text}" for text in texts]

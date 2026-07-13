@@ -170,6 +170,18 @@ All three load through `fastembed`'s model-management path and cache their weigh
 
 These local ids/dim were pinned and **verified to load** on the `fastembed` ONNX runtime in `lode-txh.6` (`fastembed 0.8.0`); the spike's standing proof is `tests/test_models_smoke.py` (opt-in, `LODE_SMOKE_MODELS=1`, since loading downloads the models). Two spike findings shaped the pins: (1) `fastembed` does **not** ship the originally-assumed `bge-reranker-v2-m3`, so the reranker is `BAAI/bge-reranker-base` (the loadable bge-family cross-encoder); (2) `fastembed` ships **no dedicated NLI model**, so the NLI/entailment leg repurposes that same cross-encoder via `TextCrossEncoder` — confirming the docs' "bge-reranker repurposed" option and removing the need for a separate `optimum`/`onnxruntime` loader. The model + threshold remain [open tuning knobs](decisions.md), revisited against the eval harness.
 
+**First run needs the network — make it explicit with `lode models pull` (`lode-og3`, rebuilding the bounced `lode-6qh`).** Inference itself is fully local (ONNX/CPU, no text leaves the box) — but on a cold cache, the *first* call to the embedder or the reranker/NLI cross-encoder downloads ~500MB of ONNX weights from HuggingFace, right in the middle of whatever you were doing (a `lode work` or `lode ask` run). `lode models pull` forces that download deliberately, up front, warming the models named by your **resolved** settings (`$LODE_HOME/config.toml` honored — the pinned defaults above only if you haven't overridden them):
+
+```bash
+lode models pull
+```
+
+It warms all three local models (the embedder, and the reranker/NLI cross-encoder — one download when, as by default, `rerank_model` and `entailment_model` are the same pinned id) into the same durable [model cache directory](#paths--locations) production reads from, and prints where the weights landed. Run it once after install (or after wiping `$LODE_HOME/models/`); every `lode work` / `lode ask` after that is offline for indexing/retrieval.
+
+**Air-gapped run against an already-warm cache:** set `HF_HUB_OFFLINE=1` to force `fastembed`'s own `local_files_only` path (`fastembed/common/model_management.py`), so a load never attempts a network call even to check for updates — a cold cache under this flag fails loudly instead of silently trying to phone home. This is `fastembed`'s env var, not a lode-specific knob; a first-class offline/air-gapped *mode* is out of scope here (`lode-6qh`) — this is just the escape hatch once the cache is already warm.
+
+**Failure surfaces as a clear message, not a traceback (`lode-96t`).** `lode models pull`'s whole job is to make the first-run network dependency explicit, so its own most likely failure paths — no network reachable, `HF_HUB_OFFLINE=1` set against a cold cache, or HuggingFace rate-limiting/erroring — each exit non-zero with a distinct, actionable message instead of a raw `fastembed`/`huggingface_hub` stack trace. This is deliberately **not** a blanket `except Exception`, which would just as readily mask a real defect as a network hiccup; it catches only the specific exception types those two libraries are verified to raise for these cases (`src/lode/cli.py`'s `_warm`), and lets anything else propagate. A bad `config.toml` gives the same clean stderr message + exit 1 every other command gives, not a traceback.
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |
