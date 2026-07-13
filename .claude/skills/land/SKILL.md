@@ -641,6 +641,44 @@ git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | whi
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
   git branch -D "$BR" 2>/dev/null || true
 done
+
+# Fourth backstop: catch DETACHED worktrees, invisible to all three sweeps above (lode-mxeu).
+# WHO DETACHES: the `code-reviewer` and the `coding` rebase-pickup, on their "checked out
+# elsewhere" FALLBACK path -- both normally do `git checkout -B land/<id> FETCH_HEAD` into their
+# own launch worktree (lode-k5e/lode-8k3), which leaves a branch-attached worktree the first
+# backstop already catches, but git allows a branch name in only ONE worktree, so when
+# `land/<id>` is still checked out somewhere (e.g. a leaked worktree from an earlier cycle) they
+# fall back to `git checkout --detach FETCH_HEAD` (code-reviewer.md, coding.md) and leave a
+# worktree with NO branch. NOT `land-review`, despite lode-mxeu's description saying so: it only
+# `git fetch`es and diffs remote-tracking refs, and never checks anything out at all. The leak is
+# therefore self-compounding rather than strictly one-per-reviewed-branch-per-pass -- a stale
+# `land/<id>` worktree is what forces the NEXT cycle onto the detaching path -- which is exactly
+# why it must be swept rather than reasoned about. Every net above keys on a BRANCH NAME, by one of
+# two routes: the first backstop reads the porcelain 'branch refs/heads/...' line (a detached
+# worktree emits 'detached' instead, so its awk leaves branch="" and both name regexes miss),
+# and the second and third enumerate branch REFS with for-each-ref (a detached worktree owns
+# no ref, so they cannot see it at all). Both routes fail for the same underlying reason and
+# a detached worktree is invisible to every one of them -- a third instance of the
+# lode-r78/lode-j5i0 bug family, this time a namespace that was never branch-backed in the
+# first place. There is no branch name
+# to check "merged" against here, so the merged check CANNOT reuse $MERGED (a list of BRANCH
+# NAMES, structurally unable to match a detached worktree) -- it is
+# 'git merge-base --is-ancestor <HEAD-sha> trunk' against the sha the block's own 'HEAD ' line
+# reports. 'locked' stays the load-bearing in-use guard (lode-oqr), unchanged in meaning from
+# every sweep above: a live land-review or rebase-pickup agent's worktree must never be
+# reclaimed mid-run. Scoped to paths under .claude/worktrees/ so this can never touch the main
+# checkout (which is never detached in normal operation, but the path guard costs nothing).
+git worktree list --porcelain | awk '
+  /^worktree / { path=$2; head=""; detached=0; locked=0 }
+  /^HEAD / { head=$2 }
+  /^detached/ { detached=1 }
+  /^locked/ { locked=1 }
+  /^$/ { if (path!="" && detached && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head; path="" }
+' | while IFS=$'\t' read -r WT SHA; do
+  git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight review)
+  git worktree remove --force "$WT"                       # no branch to delete — this is the whole reclaim
+done
+git worktree prune          # drop any now-stale worktree admin entries
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -676,7 +714,25 @@ it was swept by nothing and accumulated without bound — 17 confirmed orphans o
 all already merged. Unlike `land/<id>`, a `worktree-agent-*` branch is never pushed to origin, so
 "remote gone" can't be the guard here (it would fire on every branch, live or not); the guard is
 `merged`-into-`trunk` (reusing the same `$MERGED` set the first sweep computed) plus not currently
-checked out anywhere, mirroring the first backstop's safety invariant rather than the second's.
+checked out anywhere, mirroring the first backstop's safety invariant rather than the second's. A
+**fourth** pass closes a namespace none of the first three ever covered at all (lode-mxeu): a
+worktree checked out **detached**, which has **no branch name** — the one thing every sweep above
+keys on, by either route: the first reads the porcelain `branch refs/heads/...` line (a detached
+worktree emits `detached` instead, so its awk's name regexes match nothing), while the second and
+third enumerate branch *refs* with `for-each-ref` (a detached worktree owns none). It is invisible to
+all three. These come from the `code-reviewer` and the `coding` rebase-pickup on their **fallback**
+path: both normally `git checkout -B land/<id> FETCH_HEAD` (branch-attached, caught by the first
+backstop), but git permits a branch name in only one worktree at a time, so whenever `land/<id>` is
+still checked out somewhere they fall back to `git checkout --detach FETCH_HEAD` and leave a
+branchless worktree. (Not `land-review`, despite lode-mxeu's description: it only fetches and diffs
+remote-tracking refs, and never checks anything out.) That makes the leak **self-compounding** — a
+stale `land/<id>` worktree is precisely what pushes the next cycle onto the detaching path — so it
+must be swept, not reasoned about. With no branch name to test, "merged" here is
+`git merge-base --is-ancestor <HEAD-sha> trunk` against the sha the worktree's own porcelain `HEAD`
+line reports — **not** a `$MERGED` lookup, since `$MERGED` is a list of branch names and a detached
+worktree has none to be in it. `locked` is still the same load-bearing in-use guard as everywhere
+else (lode-oqr): a live `land-review` or rebase-pickup run must never be reclaimed mid-review. There
+is no branch to `git branch -D`, so `git worktree remove --force` is the entire reclaim.
 
 ---
 
