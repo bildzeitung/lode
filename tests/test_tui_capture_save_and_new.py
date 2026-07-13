@@ -259,6 +259,57 @@ class _CountingStubEmbedder:
 def test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """lode-9vns: deterministic replacement for a real-wall-clock race.
+
+    The original version of this test armed the debounce indirectly
+    (``text_area.text = ...``, which posts a ``Changed`` message Textual
+    processes on its own schedule) and raced it against
+    ``await pilot.press("ctrl+n")`` -- itself dispatched through the same
+    message queue -- hoping a 0.3s pause afterwards was long enough to
+    "outlive" the 50ms debounce window regardless of who won. Under
+    ``pytest -n auto`` with a cold model cache, the session-scoped
+    ``_cache_cross_encoder_model_load`` fixture's real ONNX load can stall
+    this worker process's event loop for longer than 50ms *between* those two
+    message-queue hops -- the debounce fires for real, before Ctrl+N's
+    ``reset()`` ever gets a chance to run, and the test fails on a cold-cache
+    timing accident, not a logic bug. Widening the debounce or the
+    post-press pause only lowers the odds of losing that race; it does not
+    remove it.
+
+    The fix drives both halves directly and synchronously instead: arming
+    the real debounce timer via ``panel.update_draft`` (what
+    ``on_text_area_changed`` would otherwise post a message to reach) and
+    triggering the reset via ``CaptureScreen.action_save_and_new`` directly
+    (what the Ctrl+N binding would otherwise post a Key event to reach), with
+    no ``await`` between the two calls. asyncio is cooperative and
+    single-threaded: a scheduled ``Timer`` callback cannot run without an
+    event-loop yield, so with no yield point between arming and cancelling,
+    the timer is provably stopped before its deadline regardless of how much
+    real time elapses anywhere else in the process.
+
+    Driving the action directly means this test no longer presses Ctrl+N, so
+    the binding -> action wiring has to be covered elsewhere or a broken
+    keybinding would ship green. It is:
+    :func:`test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset`
+    presses the *real* Ctrl+N and asserts the related-notes pass was cancelled
+    -- i.e. the whole chain (keybinding -> ``action_save_and_new`` ->
+    ``RelatedNotesPanel`` cancellation) still has end-to-end coverage; it can
+    afford the real keypress because it gates on a ``threading.Event`` the
+    pass itself sets, not on a wall-clock deadline. Further tests in this
+    file (e.g. ``test_ctrl_n_saves_clears_the_buffer_and_does_not_exit``)
+    press Ctrl+N for the save/clear/focus/notify behaviour. What is only
+    covered directly, and deliberately so, is the one assertion that cannot be
+    made against a real keypress without re-introducing the race: that a
+    *pending* (not yet fired) debounce timer is cancelled.
+
+    ``text_area.text = ...`` and ``text_area.clear()`` (inside
+    ``action_save_and_new``) each still post their own ``Changed`` message,
+    but ``on_text_area_changed`` reads ``event.text_area.text`` lazily
+    (current state, not a snapshot) -- by the time either message is
+    actually processed, later in this test, the buffer is already the empty
+    string ``clear()`` left it as, so ``update_draft("")`` just clears the
+    panel again rather than re-arming a stray timer.
+    """
     db_path = tmp_path / "lode.db"
     _CountingStubEmbedder.instances = 0
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
@@ -267,12 +318,18 @@ def test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass(
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            text_area = app.screen.query_one(f"#{BODY_ID}")
+            screen = app.screen
+            assert isinstance(screen, CaptureScreen)
+            text_area = screen.query_one(f"#{BODY_ID}")
             text_area.text = "a note long enough to normally trigger a pass"
-            # The 50ms debounce timer is now pending, not yet fired.
-            await pilot.press("ctrl+n")
-            # Wait well past the debounce window a stray timer would fire on.
-            await pilot.pause(0.3)
+            panel = screen.query_one(f"#{RELATED_ID}", RelatedNotesPanel)
+            panel.update_draft(text_area.text)
+            screen.action_save_and_new()
+            # Cancelled synchronously inside reset(), in the same breath as it
+            # was armed above: nothing awaited the event loop in between, so
+            # the timer structurally cannot have fired first. Not a race.
+            assert panel._related_timer is None
+            await pilot.pause()
             await app.workers.wait_for_complete()
 
     asyncio.run(_drive())
@@ -325,6 +382,15 @@ def test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset(
     """The ``/debate`` review's edge case (b): a slow in-flight pass from the
     just-saved note must not land after the reset and paint its stale result
     into the freshly-cleared panel.
+
+    **Audited for lode-9vns's wall-clock race (not affected):** the arming half
+    is gated on ``_PASS_STARTED`` (a ``threading.Event`` the pass itself sets),
+    not on a deadline, so a stalled event loop cannot make this test start
+    asserting before the pass exists. The ``pilot.pause(0.5)`` is on the far
+    side of the cancel, and losing *that* race is harmless: if a stall let the
+    slow pass land before Ctrl+N was processed, ``reset()`` clears the panel
+    anyway, so the assertions below still hold. A stall can only cost this test
+    discriminating power, never turn it red.
     """
     db_path = tmp_path / "lode.db"
     _PASS_STARTED.clear()
@@ -363,6 +429,11 @@ def test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker(
     lands afterwards and paints the deleted draft's related notes into the
     emptied panel -- the same hazard Ctrl+N's reset guards against, on the plain
     select-all-delete path.
+
+    **Audited for lode-9vns's wall-clock race (not affected):** same shape as
+    :func:`test_ctrl_n_cancels_an_in_flight_related_notes_worker_before_reset`
+    above -- ``_PASS_STARTED``-gated arming, and a post-cancel pause whose loss
+    can only cost discriminating power, not turn the test red.
     """
     db_path = tmp_path / "lode.db"
     _PASS_STARTED.clear()
@@ -414,6 +485,14 @@ def test_on_unmount_cancels_a_pending_related_notes_timer(
     two ways -- ``AttributeError`` (no such method), and, if simulated by
     skipping the call, the debounce timer surviving to actually run a pass
     after the 50ms window elapses.
+
+    **Audited for lode-9vns's wall-clock race (not affected):** ``update_draft``
+    and ``on_unmount`` below are called back-to-back with no ``await`` between
+    them, so -- exactly like
+    :func:`test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass`'s
+    fix -- the real timer cannot fire in that gap regardless of real-world
+    CPU contention elsewhere; the ``pilot.pause(0.3)`` below only proves the
+    cancellation held, it is not "outliving" a race that could still be lost.
     """
     db_path = tmp_path / "lode.db"
     _CountingStubEmbedder.instances = 0
@@ -427,8 +506,11 @@ def test_on_unmount_cancels_a_pending_related_notes_timer(
             panel.update_draft("a note long enough to normally trigger a pass")
             # The 50ms debounce timer is now pending, not yet fired.
             panel.on_unmount()
-            # Outlive the debounce window a not-actually-cancelled timer
-            # would still fire on.
+            assert panel._related_timer is None
+            # The assert above pins the cancellation structurally; this pause
+            # additionally outlives the debounce window, so a timer whose
+            # handle was dropped without its task actually being stopped would
+            # still be caught firing by the instances==0 check below.
             await pilot.pause(0.3)
             await app.workers.wait_for_complete()
 
