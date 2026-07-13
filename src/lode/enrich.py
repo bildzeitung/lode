@@ -60,17 +60,34 @@ wired in :mod:`lode.reconcile`) re-enqueues any head version missing a live enri
 job so gaps are self-healing.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-import anthropic
 from pydantic import BaseModel, Field
 
 from lode import jobs
 from lode.auth import build_client
+
+# The SDK is used ONLY in the `client: anthropic.Anthropic` annotations below --
+# never at runtime in this module (the client is always constructed by
+# lode.auth.build_client, or injected). `from __future__ import annotations` keeps
+# those annotations strings, so guarding the import here keeps `import lode.enrich`
+# cheap: ~0.32s of the SDK import is the entire cost of importing this module.
+#
+# That matters because importing lode.enrich is NOT confined to the enrich path
+# (lode-4q97): lode.reconcile imports ENRICH_PROMPT_VER from here at module level,
+# and `lode work` runs a reconcile pass on EVERY invocation -- so an eager SDK
+# import here made a credential-free, embed-only drain pay for the SDK on every
+# run, to do nothing with it. Keeping this module cheap to import is what fixes
+# that at the source, rather than making each caller remember to defer.
+if TYPE_CHECKING:
+    import anthropic
 from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress

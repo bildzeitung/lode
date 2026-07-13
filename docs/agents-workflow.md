@@ -109,10 +109,11 @@ flowchart TD
 `/code` is the **only** sanctioned way to start coding work from the main session (which is
 otherwise told not to spawn agents). The skill resolves the task from its argument and runs each task
 in **two dispatched phases** — a `coding` **builder** (Sonnet), then a `code-reviewer` (Opus). **Bare
-`/code`** fans out across the whole ready frontier; `/code --single` does the top one task;
-`/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N builders in
-parallel** (one per task, each in its own isolated worktree), each followed by its own reviewer. There
-is **no `/code-parallel`**. (Skill:
+`/code`** fans out across the filtered ready frontier; `/code --single` does the top one task of that
+same frontier (`/code` resolves the pick **itself** — the subagent never re-reads `bd ready` to choose
+its own ticket); `/code <id>` / `/code <id> <id> …` name the work explicitly — in every case it's **N
+builders in parallel** (one per task, each in its own isolated worktree), each followed by its own
+reviewer. There is **no `/code-parallel`**. (Skill:
 [`.claude/skills/code/SKILL.md`](../.claude/skills/code/SKILL.md); agents:
 [`.claude/agents/coding.md`](../.claude/agents/coding.md),
 [`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md).)
@@ -139,11 +140,36 @@ note) as long as no other invocation's sweep is running concurrently with them. 
 Argument resolution:
 
 - **No argument** (the default) / **`--all-ready`** → fan out across the **independent, unblocked**
-  `bd ready` frontier, honoring the dependency graph and the phase-a skeleton order.
-- **`--single`** → one task: the agent picks the top unblocked item from `bd ready` — *the subagent
-  chooses, not the dispatcher*.
-- **A bd issue ID** (`lode-1a8`) / **several IDs** → claim and implement those (one builder each).
+  frontier of the filtered `bd ready --json` read (see the callout below), honoring the dependency
+  graph and the phase-a skeleton order.
+- **`--single`** → one task: `/code` resolves the pick **itself** — the same filtered frontier as
+  above, top entry, dispatched as an explicitly-named id. The subagent never re-reads `bd ready` to
+  pick its own ticket; `--single` collapses to "bare `/code`, limited to one ticket" — same
+  selection, same filter, same skip-reporting, only the fan-out width differs.
+- **A bd issue ID** (`lode-1a8`) / **several IDs** → claim and implement those (one builder each) —
+  an **unfiltered operator override** (see below): the operator named it on purpose, `human` label or
+  `epic` type notwithstanding.
 - **Free text** ("add a `--json` flag to search") → the agent files the bd issue itself, then codes.
+
+**Auto-select paths only — exclude `human`-labeled tickets and epics (lode-8pqv).** `bd ready` is a
+dependency-satisfaction query, not a build queue, and two categories reach it that must never be
+**auto**-selected on the **no-argument**, **`--all-ready`**, and **`--single`** paths: any ticket
+carrying the **`human`** label (it exists precisely because an agent cannot resolve it — that's what
+`/sweep` surfaces it for), and any ticket with **`issue_type == epic`** (a container with no
+implementable acceptance criteria of its own). Plain `bd ready` renders no labels, so the filter reads
+the frontier as JSON — on **every** auto-select path, including `--single`:
+
+```bash
+rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+```
+
+`bd ready` is already priority-ordered, so this list's first entry is the highest-priority buildable
+item — no extra sort needed. `/code` reports **every ticket dropped** (id + reason) rather than
+dropping the skip silently, and if **nothing survives the filter, it dispatches nothing** — never
+falling back to a filtered-out ticket. A frontier of nothing but `human` tickets and epics is a real,
+reachable state (a decision ticket is its own blocker, and bd won't let a task block an epic); it
+means there is no buildable work right now, a signal for `/sweep`, not a build target. This filter
+never applies to explicitly-named IDs — those are an operator override, unfiltered.
 
 Each builder then runs its orderly cycle. The worktree is **handed to it by the harness**
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins
@@ -181,7 +207,7 @@ flowchart TD
     INV["Human: /code &lt;arg&gt;<br>(bare /code fans out — one builder per ready task)"] --> RES{"Resolve arg"}
     RES -->|"bd id(s)"| T1["Claim that issue"]
     RES -->|"free text"| T2["Agent files the issue, then codes"]
-    RES -->|"--single / none"| T3["Agent picks top of bd ready<br>(dependency frontier · phase-a order)"]
+    RES -->|"--single / none / --all-ready"| T3["/code picks from filtered bd ready<br>(human/epic excluded · phase-a order)<br>--single: top entry only"]
 
     T1 --> DISP["Phase 1 — dispatch coding builder<br>(Sonnet · isolation: worktree)"]
     T2 --> DISP
@@ -411,6 +437,14 @@ itself stays in the committed skill so it travels to every clone; only the overr
 The skill re-reads the env var fresh at the start of every invocation, so a changed value takes effect
 on the next `/code` run without any other action.
 
+**Onboarding note (lode-y24n).** Leaving the env var **unset** is the maintenance-free choice: the
+derivation above re-runs on every invocation, so the cap tracks the machine by itself. A **pinned**
+value does not — it is a cached, per-machine constant that will **not** follow a later hardware or
+VM-size change (more RAM, a different box, a raised WSL2 memory limit). There's no command to
+memorize: just ask Claude to recompute it after any such change. The pin is one of the small family of
+deliberately machine-local, non-travelling settings listed in
+[`CLAUDE.md` — New machine setup](../CLAUDE.md#new-machine-setup).
+
 ### Filing follow-up work: `blocks` vs `discovered-from` (lode-c0t3)
 
 When a builder or reviewer discovers follow-up work mid-task, the dependency type it files that
@@ -604,9 +638,11 @@ in (and, for the technical review, "I think I'm making it worse"). Everything el
 There is **no separate `/code-parallel`** — once landing leaves the producer, building one task and
 building five are the same act, just a different count:
 
-- **bare `/code`** / `/code --all-ready` — **N builders in parallel** across the ready frontier.
-- `/code --single` — one builder (top of `bd ready`).
-- `/code <id>` / `/code <id> <id> …` — one builder per named id.
+- **bare `/code`** / `/code --all-ready` — **N builders in parallel** across the filtered ready
+  frontier (`human`-labeled tickets and epics excluded, lode-8pqv).
+- `/code --single` — one builder; `/code` itself resolves the top entry of that same filtered
+  frontier and dispatches it as a named id — not the subagent (lode-c55t).
+- `/code <id>` / `/code <id> <id> …` — one builder per named id (an unfiltered operator override).
 
 Each builder (the `coding` agent, on **Sonnet**), in its worktree:
 
