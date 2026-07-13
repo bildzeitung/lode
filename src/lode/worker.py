@@ -703,9 +703,10 @@ def _batch_collect_enrich(
     if not batch_ids:
         return 0
 
-    # Deferred import (`lode.enrich` pulls in the Anthropic SDK) — placed after
-    # the early-return guard above so an embed-only drain (no running enrich
-    # batches) never pays this cost (lode-4q97).
+    # Below the early-return guard: no reason to import lode.enrich on a drain with
+    # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
+    # keeps an embed-only drain SDK-free is that lode.enrich and lode.auth are both
+    # cheap to import (their `import anthropic` is TYPE_CHECKING-guarded).
     from lode.enrich import collect_enrich_batch
 
     kwargs: dict = {}
@@ -776,11 +777,9 @@ def _batch_submit_enrich(
     if not rows:
         return 0
 
-    # Deferred imports (`lode.enrich` pulls in the Anthropic SDK) — placed
-    # after the early-return guard above so an embed-only drain (no pending
-    # enrich jobs) never pays this cost (lode-4q97). AuthError is bound here
-    # rather than in the handler because an `except` clause header needs the
-    # class; it is free at this point — `lode.enrich` imports `lode.auth` anyway.
+    # Below the early-return guard, same as _batch_collect_enrich (lode-4q97).
+    # AuthError is bound here rather than in the handler because an `except` clause
+    # header needs the class.
     from lode.auth import AuthError
     from lode.enrich import submit_enrich_batch
 
@@ -927,16 +926,8 @@ def drain(
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
-    # Deferred import. This one is unconditional -- the `except` clause header
-    # below needs the class on every drain -- so it is only cheap because
-    # `lode.auth` itself does NOT import the Anthropic SDK at module level
-    # (lode-4q97): AuthError is a bare RuntimeError subclass, and `import
-    # anthropic` lives inside build_client(). Were that to regress, EVERY drain
-    # would pay the SDK import here, including a credential-free embed-only one --
-    # which is precisely the cost lode-4q97 removed. (Before lode-4q97 this line
-    # was free for a different reason: the pre-steps below imported lode.enrich,
-    # hence lode.auth, on every call. Moving those imports below the early-return
-    # guards is what stranded this one as the last unconditional SDK import.)
+    # Unconditional -- the `except` header below needs the class on every drain --
+    # and cheap only because lode.auth does not import the Anthropic SDK (lode-4q97).
     from lode.auth import AuthError
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.

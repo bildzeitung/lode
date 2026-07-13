@@ -20,7 +20,7 @@ LLM-client-construction guard (lode-85q), which otherwise can't distinguish
 "real construction on purpose" from "real construction because a mock broke".
 """
 
-import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,28 +49,52 @@ def test_no_hardcoded_key_in_source() -> None:
     assert "api_key=" not in src
 
 
-def test_importing_auth_does_not_import_the_sdk(monkeypatch) -> None:
-    """Importing ``lode.auth`` must NOT import ``anthropic`` (lode-4q97).
+@pytest.mark.parametrize("module", ["lode.auth", "lode.enrich"])
+def test_importing_module_does_not_import_the_sdk(module: str) -> None:
+    """Importing ``lode.auth`` / ``lode.enrich`` must NOT import ``anthropic``
+    (lode-4q97).
 
-    AuthError is a bare RuntimeError subclass precisely so that the many callers
-    that only need to *catch* it -- ``worker.drain`` most importantly, which does
-    so unconditionally on every drain -- can import this module for free. If
-    ``import anthropic`` ever moves back to module level, a credential-free,
-    embed-only drain silently starts paying the ~0.32s SDK import again on every
-    single run, which is the regression this test exists to catch.
+    This is the **boundary** guard, and it is deliberately stated about the modules
+    rather than about any one caller. Both are imported on paths that never touch
+    Anthropic and may have no credentials at all:
 
-    ``monkeypatch.delitem`` restores both original module objects at teardown, so
-    the freshly-imported ``lode.auth`` (and its distinct ``AuthError`` class) does
-    not leak into later tests.
+    * ``lode.auth`` -- :func:`lode.worker.drain` imports ``AuthError`` from it
+      unconditionally on every drain (its ``except`` header needs the class); and
+    * ``lode.enrich`` -- :mod:`lode.reconcile` imports ``ENRICH_PROMPT_VER`` from it
+      at module level, and ``lode work`` runs a reconcile pass on every invocation.
+
+    So a credential-free, embed-only drain (embeds come from the LOCAL fastembed
+    model) would otherwise pay the ~0.32s SDK import on every single run to do
+    nothing with it. In both modules the SDK is used only in annotations, and the
+    ``import anthropic`` is ``TYPE_CHECKING``-guarded.
+
+    Asserting this at the module boundary -- rather than once per known call site --
+    is what makes it hold for *future* callers too: a new eager
+    ``from lode.enrich import ...`` anywhere in the codebase stays free, and cannot
+    silently reintroduce the cost.
+
+    Runs in a **subprocess** deliberately. A fresh interpreter is the real-world
+    condition this is about, and it is the only way to answer the question honestly:
+    in-process, every one of these modules is already resident (this very file
+    imports two of them), so the assertion would be vacuous -- and evicting them
+    from ``sys.modules`` to un-vacuum it re-imports them, which rebinds the
+    submodule as an attribute of the ``lode`` package and leaves a duplicate module
+    object behind to poison later tests. A subprocess sidesteps both traps.
     """
-    for name in ("lode.auth", "anthropic"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import {module}, sys; print('anthropic' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
-    importlib.import_module("lode.auth")
-
-    assert "anthropic" not in sys.modules, (
-        "importing lode.auth pulled in the Anthropic SDK -- `import anthropic` "
-        "must stay inside build_client()"
+    assert proc.stdout.strip() == "False", (
+        f"importing {module} pulled in the Anthropic SDK -- keep `import anthropic` "
+        "TYPE_CHECKING-guarded (or inside the function that builds a client)"
     )
 
 

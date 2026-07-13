@@ -91,6 +91,7 @@ says what it means.
 
 import ipaddress
 import socket
+import sys
 
 import pytest
 
@@ -164,6 +165,46 @@ def _isolate_lode_home(
     home = tmp_path_factory.mktemp("lode-home")
     (home / "models").symlink_to(durable_models, target_is_directory=True)
     monkeypatch.setenv("LODE_HOME", str(home))
+
+
+#: Every module that must NOT be resident for an "is the SDK imported?" assertion
+#: to mean anything: the SDK itself, plus the two lode modules whose job is to stay
+#: cheap to import so a credential-free drain never pulls it in (lode-4q97).
+_SDK_IMPORT_GRAPH = ("anthropic", "lode.auth", "lode.enrich")
+
+
+@pytest.fixture
+def forget_sdk_imports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Evict the Anthropic import graph from ``sys.modules`` (lode-4q97).
+
+    Tests that assert "this code path did not import the SDK" are **vacuously
+    green** unless the modules are evicted first -- an earlier test in the session
+    (or the asserting test file's own module-level imports) will already have them
+    resident. Centralised here so the eviction set has ONE home: a hand-copied set
+    that misses a newly-added SDK-importing module does not fail, it silently stops
+    guarding, which is the expensive failure mode.
+
+    **Restoring `sys.modules` alone is not enough.** A test using this fixture may
+    still legitimately re-import one of these modules (``worker.drain``, for one,
+    imports ``lode.auth`` unconditionally on every drain). Importing ``lode.X``
+    binds the new module object as an **attribute of the ``lode`` package** as well
+    as into ``sys.modules`` -- and ``monkeypatch.delitem`` only restores the latter.
+    Left unrestored, ``lode.enrich`` (the attribute) and ``sys.modules[...]`` end up
+    as two *different* module objects, and a later test that patches one while the
+    code under test resolves the other silently talks to the real Anthropic SDK.
+    That is not hypothetical: it broke lode-9yy's
+    ``test_drain_still_runs_embed_jobs_when_credentials_are_missing``, which patches
+    ``lode.enrich.build_client``. So record the package attributes too -- setting
+    each to its current value makes monkeypatch restore that value at teardown.
+    """
+    for name in _SDK_IMPORT_GRAPH:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    for name in _SDK_IMPORT_GRAPH:
+        pkg_name, _, attr = name.rpartition(".")
+        pkg = sys.modules.get(pkg_name)
+        if pkg is not None and hasattr(pkg, attr):
+            monkeypatch.setattr(pkg, attr, getattr(pkg, attr))
 
 
 @pytest.fixture(autouse=True)
