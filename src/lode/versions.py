@@ -411,19 +411,23 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
         if row is None:
             raise KeyError(note_id)
         head_version_id, head_op = row
-        # ``created`` alone is not a total order: two versions written inside
-        # the same millisecond tick (schema default has millisecond precision)
-        # tie, and SQLite breaks that tie arbitrarily -- observed directly as
-        # a mis-ordered chain under xdist load (lode-t1y). ``rowid`` (implicit
-        # on this table -- see schema.sql, no WITHOUT ROWID) is a reliable
-        # tiebreaker: every version is inserted by exactly one call site
-        # (_write_version) and a child's parent must already exist (FK), so
-        # insertion order == chain order and rowid only ever increases.
+        # Order by ``rowid`` alone, NOT ``created`` -- even ``ORDER BY created,
+        # rowid`` is not reliable (lode-t1y): ``created`` comes from SQLite's
+        # own ``strftime('now')``, which -- like Python's ``datetime.now(UTC)``
+        # (see worker.py's ``_now``) -- reads the OS wall clock, and the OS is
+        # free to step that clock *backward* (NTP correction / hypervisor
+        # catch-up; confirmed happening on this host under load). A backward
+        # step between two versions' INSERTs makes the later version's
+        # ``created`` sort *before* the earlier one's -- not a tie, so a
+        # rowid tiebreaker never even runs. ``rowid`` (implicit on this table
+        # -- see schema.sql, no WITHOUT ROWID) has no such failure mode: every
+        # version is inserted by exactly one call site (_write_version) and a
+        # child's parent must already exist (FK), so insertion order == chain
+        # order and rowid only ever increases, regardless of wall-clock jitter.
         version_ids = tuple(
             r[0]
             for r in conn.execute(
-                "SELECT version_id FROM versions WHERE note_id = ? "
-                "ORDER BY created, rowid",
+                "SELECT version_id FROM versions WHERE note_id = ? ORDER BY rowid",
                 (note_id,),
             )
         )

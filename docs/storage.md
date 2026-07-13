@@ -82,17 +82,20 @@ flowchart LR
 ```
 
 **Ordering note (lode-t1y):** the chain's *true* total order is `parent_version_id` — walking the
-chain from root to head. `created` (millisecond precision) is a convenience for the common
-"give me the chain oldest-first" query, but it is **not itself a total order**: two versions written
-inside the same millisecond tick tie, and a bare `ORDER BY created` breaks that tie arbitrarily —
-this bit `lode.versions.purge`'s whole-chain sweep, which mis-ordered ties under load (confirmed via
-xdist-parallel testing, not merely a test artifact). Any query that reconstructs chain order from
-`created` alone must tie-break deterministically — `versions.purge` does this with `ORDER BY created,
-rowid` (SQLite's implicit rowid on this table is a safe insertion-order tiebreaker: the only insert
-call site, `_write_version`, is invoked once per version and a child's parent FK must already exist,
-so rowid order == chain order). Prefer walking `parent_version_id` directly wherever the code already
-needs a `version_id → version` map; the `created, rowid` tiebreak is for read-only reporting queries
-where a chain walk is not otherwise wanted.
+chain from root to head. `created` (millisecond precision, from SQLite's own `strftime('now')`) is
+stored for display/lineage purposes but **must never be used to sort a chain**: it reads the OS wall
+clock, and the OS is free to step that clock *backward* (NTP correction / hypervisor catch-up) —
+observed directly on this host, under load, between two back-to-back `INSERT`s — so a later version
+can carry an *earlier* `created` than the version before it. That is not a tie a secondary sort key
+can fix; it is an outright wrong primary order. `lode.versions.purge`'s whole-chain sweep used to sort
+by `ORDER BY created` (mis-ordering ties) and even `ORDER BY created, rowid` (mis-ordering non-tied
+but clock-jumped pairs) before landing on the only reliable option: `ORDER BY rowid` alone. SQLite's
+implicit rowid on this table (see schema.sql, no `WITHOUT ROWID`) is immune to wall-clock jitter by
+construction — the only insert call site, `_write_version`, is invoked once per version and a child's
+parent FK must already exist, so rowid strictly increases in chain order regardless of what the clock
+does. Prefer walking `parent_version_id` directly wherever the code already needs a `version_id →
+version` map; `ORDER BY rowid` is for read-only reporting queries where a chain walk is not otherwise
+wanted. **Never sort a version chain by `created`, with or without a tiebreaker.**
 
 ### Two graphs — do not conflate them
 

@@ -77,7 +77,7 @@ def test_reapply_reparents_buffer_onto_new_head_and_discards_draft(
     assert not draft_path.exists()
     assert _rows(
         db_path,
-        "SELECT body FROM versions WHERE note_id = ? ORDER BY created, rowid",
+        "SELECT body FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-1",),
     ) == [("original body",), ("the edit that got rejected",)]
 
@@ -114,7 +114,7 @@ def test_reapply_returns_fresh_conflict_on_renewed_cas_loss(tmp_path: Path) -> N
     # The live head is untouched by the failed re-apply attempt — no clobber.
     assert _rows(
         db_path,
-        "SELECT body FROM versions WHERE note_id = ? ORDER BY created, rowid",
+        "SELECT body FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-1",),
     ) == [("v1",), ("v3",)]
 

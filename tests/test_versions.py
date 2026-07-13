@@ -297,7 +297,7 @@ def _bodies(conn, note_id: str) -> list[str]:
     return [
         r[0]
         for r in conn.execute(
-            "SELECT body FROM versions WHERE note_id = ? ORDER BY created, rowid",
+            "SELECT body FROM versions WHERE note_id = ? ORDER BY rowid",
             (note_id,),
         )
     ]
