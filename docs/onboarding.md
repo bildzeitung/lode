@@ -121,6 +121,14 @@ Three opt-in sessions sit outside the default set:
 | `nox -s build` | Builds a wheel + sdist and asserts the shipped package-data is present. |
 | `nox -s eval` | The live eval test (`tests/test_eval_live.py`). Needs `ANTHROPIC_API_KEY` **and** `LODE_RUN_LIVE_EVAL=1`, which only this session sets — so `tests` and `unit` stay offline even where a key is ambient. |
 
+Two pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
+is a collection error, not a silently-ignored no-op):
+
+| Marker | Meaning |
+|---|---|
+| `slow` | Real model-load cost (the `FastEmbedCrossEncoder` reranker, or the live eval Q&A leg) — excluded from `nox -s unit`, always included in `nox -s tests`. |
+| `network` | The **sole sanctioned** escape hatch from `tests/conftest.py`'s autouse network/LLM-client guard (lode-85q): this test deliberately reaches real, un-mocked Anthropic-SDK / network machinery. Every other test fails **loudly**, not silently, if it ever falls through to a real network call or a real `anthropic.Anthropic()` construction. |
+
 Both `tests` and `unit` run under `pytest-xdist` (`-n auto`); every test gets its own
 `$LODE_HOME` via the autouse `_isolate_lode_home` fixture, so there is no shared on-disk
 state to race on.

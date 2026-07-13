@@ -110,7 +110,15 @@ are catalogued in [configuration.md](configuration.md).
   offline scorer tests (`tests/test_eval_*.py`, stubbed seams) are unchanged, and
   `lode.eval.harness.score_golden_set` stays a library function shared by both the offline stub tests
   and the live integration test. Knock-on: the Phase-A exit gate (lode-6w1 / lode-6w1.1) wording
-  moves from "`lode eval` runs green" to "the `nox -s eval` integration test runs green." **Pass bar,
+  moves from "`lode eval` runs green" to "the `nox -s eval` integration test runs green." **Mechanical
+  enforcement — added (lode-85q):** the offline/keyless split this entry establishes is no longer
+  just session wiring — `tests/conftest.py`'s autouse `_block_unmocked_network_and_llm_access` fixture
+  fails any test, loudly, that reaches a real `anthropic.Anthropic()`/`AsyncAnthropic()` construction
+  or non-loopback socket egress, with `@pytest.mark.network` as the single explicit, greppable escape
+  hatch. One residual hole is deliberate: `@pytest.mark.slow` additionally relaxes *only* the socket
+  guard (never the client-construction guard), so the cold-cache `FastEmbedCrossEncoder` reranker's
+  one-time HuggingFace Hub download can proceed without weakening the Anthropic-client guard, which
+  still covers every `slow` test. **Pass bar,
   metric weighting, and golden-set curation — settled (lode-7lp).** The harness previously shipped
   with no quality floor (`tests/test_eval_live.py` asserted only that each metric fell in `[0, 1]`, so
   even 0% recall passed); a live baseline is now recorded and enforced. **Weighting: independent
