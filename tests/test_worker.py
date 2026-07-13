@@ -28,9 +28,11 @@ import sqlite3
 import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import lode.worker as worker
 from lode.auth import AuthError
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
@@ -1449,12 +1451,13 @@ class _RacingSelectConn:
         self._raced = False
 
     def execute(self, sql: str, *args):
-        if (
-            not self._raced
-            and "FROM jobs" in sql
-            and "status = 'pending'" in sql
-            and "ORDER BY created" in sql
-        ):
+        # Match the candidate SELECT structurally, not by its ORDER BY clause: a
+        # matcher keyed on the exact sort column silently *disarms* this race (and
+        # the test then passes while asserting nothing) the moment that clause is
+        # edited — which is exactly what happened when it read `ORDER BY created`
+        # and the sort moved to `id` (lode-t1y). `SELECT ... FROM jobs` is only
+        # emitted by the candidate query here; the per-row CAS is an `UPDATE jobs`.
+        if not self._raced and "FROM jobs" in sql and "status = 'pending'" in sql:
             rows = self._real.execute(sql, *args).fetchall()
             self._raced = True
             with self._real:
@@ -1702,3 +1705,109 @@ def test_drain_batch_steps_run_before_main_loop(
     ).fetchone()
     # Enrich was claimed by the batch step — 'running', not 'pending' or 'dead'.
     assert enrich_status == "running"
+
+
+# ---------------------------------------------------------------------------
+# _now — the queue's clock (lode-t1y)
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """Drives worker's two clock sources independently.
+
+    ``wall`` stands in for ``CLOCK_REALTIME`` (which the OS may step in *either*
+    direction); ``mono`` for ``time.monotonic()`` (which never decreases).
+    """
+
+    def __init__(self) -> None:
+        self.wall = datetime(2026, 7, 12, 12, 0, 0, tzinfo=UTC)
+        self.mono = 1000.0
+
+    def tick(self, seconds: float) -> None:
+        """Time passes, no clock event: both sources advance together."""
+        self.wall += timedelta(seconds=seconds)
+        self.mono += seconds
+
+    def step_wall(self, seconds: float) -> None:
+        """The OS steps the wall clock alone (NTP / hypervisor catch-up)."""
+        self.wall += timedelta(seconds=seconds)
+
+
+@pytest.fixture()
+def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
+    """Put worker's clock under test control and reset its anchor."""
+    fake = _FakeClock()
+
+    class _SteppableDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return fake.wall
+
+    # Rebind the *names* inside lode.worker only — the real time/datetime
+    # modules are untouched, so nothing else in the process sees a fake clock.
+    monkeypatch.setattr(worker, "_now_epoch", datetime.min.replace(tzinfo=UTC))
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: fake.mono))
+    monkeypatch.setattr(worker, "datetime", _SteppableDatetime)
+    return fake
+
+
+def test_now_does_not_go_backward_when_the_wall_clock_steps_back(
+    clock: _FakeClock,
+) -> None:
+    """A backward wall-clock step must not rewind _now (the lode-t1y strand).
+
+    _claim_one reads 'next_attempt_at <= now' as "nothing is ready yet" and
+    drain's loop breaks on the first miss, so one backward tick would strand an
+    already-eligible job for the rest of the pass.
+    """
+    first = worker._now()
+    clock.tick(0.010)
+    clock.step_wall(-5)  # OS yanks CLOCK_REALTIME back, mid-drain
+
+    second = worker._now()
+
+    assert second >= first
+    # ...and it still advanced by the time that genuinely elapsed.
+    assert second == first + timedelta(seconds=0.010)
+
+
+def test_now_adopts_a_forward_wall_clock_step_instead_of_lagging_forever(
+    clock: _FakeClock,
+) -> None:
+    """_now must never read *behind* the wall clock.
+
+    Not every timestamp _now is compared against comes from _now:
+    jobs.next_attempt_at defaults to SQLite's own (unanchored) strftime('now'),
+    and other processes stamp rows from their own wall clocks. A clock anchored
+    once at first use would lag CLOCK_REALTIME permanently after a forward step,
+    making every freshly enqueued job look not-yet-due — the same stranded job,
+    from the opposite direction.
+    """
+    worker._now()  # establish the anchor
+    clock.tick(0.010)
+    clock.step_wall(5)  # NTP correction / hypervisor catch-up, forward
+
+    assert worker._now() >= clock.wall
+
+
+def test_now_never_decreases_across_a_forward_step_then_a_correction_back(
+    clock: _FakeClock,
+) -> None:
+    """The two guarantees must hold *together*, not one at a time.
+
+    Simply returning max(monotonic estimate, wall clock) would satisfy each
+    guarantee alone but still hand back a *decreasing* reading here: the reading
+    taken during the forward excursion could not be un-seen once the wall clock
+    was corrected back. Ratcheting the anchor forward is what closes that.
+    """
+    readings = [worker._now()]
+    clock.tick(0.001)
+    clock.step_wall(30)  # big forward excursion...
+    readings.append(worker._now())
+    clock.tick(0.001)
+    clock.step_wall(-30)  # ...corrected straight back again
+    readings.append(worker._now())
+    clock.tick(0.001)
+    readings.append(worker._now())
+
+    assert readings == sorted(readings)

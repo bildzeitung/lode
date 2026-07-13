@@ -411,10 +411,16 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
         if row is None:
             raise KeyError(note_id)
         head_version_id, head_op = row
+        # ORDER BY rowid, never ``created`` -- and not ``created, rowid`` either:
+        # ``created`` is wall-clock, and the OS can step that backward, so a later
+        # version can sort *before* its own parent. That is a wrong order, not a
+        # tie, so a tiebreaker never even runs. ``rowid`` is insertion order, and
+        # a child's parent FK must already exist, so insertion order *is* chain
+        # order. Full rule: docs/storage.md, "Ordering a version chain" (lode-t1y).
         version_ids = tuple(
             r[0]
             for r in conn.execute(
-                "SELECT version_id FROM versions WHERE note_id = ? ORDER BY created",
+                "SELECT version_id FROM versions WHERE note_id = ? ORDER BY rowid",
                 (note_id,),
             )
         )

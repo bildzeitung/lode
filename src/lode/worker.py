@@ -120,6 +120,7 @@ resubmitting a request already in flight.
 
 import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -232,9 +233,47 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+# Wall-clock time corresponding to ``time.monotonic() == 0``. Ratcheted
+# forward-only, so :func:`_now` can never hand back a decreasing reading.
+_now_epoch: datetime = datetime.min.replace(tzinfo=UTC)
+
+
+def _now() -> datetime:
+    """Return the current UTC time, with two guarantees this module depends on.
+
+    1. **Never decreases within this process.** The OS may step
+       ``CLOCK_REALTIME`` (what ``datetime.now(UTC)`` reads) *backward* — NTP
+       correction, or hypervisor catch-up after the guest was descheduled. A
+       backward step is read by :func:`_claim_one`'s ``next_attempt_at <= now``
+       predicate as "nothing is ready yet", and :func:`drain`'s loop breaks on
+       the first miss — stranding an already-eligible job for the rest of the
+       pass.
+    2. **Never reads *behind* ``CLOCK_REALTIME``.** Not every timestamp this
+       clock is compared against comes *from* it: ``jobs.next_attempt_at``
+       defaults to SQLite's own ``strftime('now')`` (``schema.sql``), and a job
+       is typically enqueued by one process and claimed by another. A clock that
+       merely never went backward would lag those writers permanently after a
+       *forward* step and strand jobs just the same — trading one bug for a
+       worse one.
+
+    Both fall out of ratcheting the monotonic epoch forward only: the epoch
+    never decreases and neither does ``elapsed``, giving (1); the epoch is
+    always ``>= wall - elapsed``, giving (2). Absorbing a backward step means
+    running slightly ahead of true time until the wall clock catches up — the
+    right trade, since a job retried a hair late beats a job stranded.
+
+    The version-chain twin of this hazard, and the rule it implies, are in
+    ``docs/storage.md``; the repro is in lode-t1y.
+    """
+    global _now_epoch
+    elapsed = timedelta(seconds=time.monotonic())
+    _now_epoch = max(_now_epoch, datetime.now(UTC) - elapsed)
+    return _now_epoch + elapsed
+
+
 def _now_iso() -> str:
-    """Return the current UTC time in the schema's ISO-8601 format."""
-    return _iso(datetime.now(UTC))
+    """Return :func:`_now` in the schema's ISO-8601 format."""
+    return _iso(_now())
 
 
 def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
@@ -251,7 +290,7 @@ def _backoff_next_attempt_at(new_attempts: int, settings: Settings) -> str:
         settings.retry_backoff_base_s * (2 ** (new_attempts - 1)),
         settings.retry_backoff_cap_s,
     )
-    return _iso(datetime.now(UTC) + timedelta(seconds=delay))
+    return _iso(_now() + timedelta(seconds=delay))
 
 
 def _reset_retryable(conn: sqlite3.Connection, now: str) -> int:
@@ -315,9 +354,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
 
     Returns the count of jobs reclaimed.
     """
-    cutoff = _iso(
-        datetime.now(UTC) - timedelta(seconds=settings.stale_running_timeout_s)
-    )
+    cutoff = _iso(_now() - timedelta(seconds=settings.stale_running_timeout_s))
     rows = conn.execute(
         "SELECT id, attempts, type, target_version FROM jobs "
         "WHERE status = 'running' AND batch_handle IS NULL "
@@ -369,7 +406,7 @@ def _claim_one(
 
     Selects the highest-priority, oldest ready job — ``status='pending' AND
     next_attempt_at <= now AND type IN types`` — ordered by type priority
-    (``embed`` before ``enrich``) then ``created``, and flips it to
+    (``embed`` before ``enrich``) then ``id`` (insertion order), and flips it to
     ``'running'`` with an asserted CAS update.  Returns the job ``id`` or
     ``None`` if nothing is ready.
 
@@ -392,9 +429,12 @@ def _claim_one(
         f"WHERE status = 'pending' AND next_attempt_at <= ? "
         f"AND type IN ({placeholders}) "
         f"{version_clause}"
+        # Tie-break by ``id``, not ``created``: ``jobs.id`` is INTEGER PRIMARY
+        # KEY (a rowid alias), so it *is* insertion order and cannot go backward
+        # the way the wall-clock ``created`` can (docs/storage.md).
         f"ORDER BY "
         f"CASE type WHEN 'embed' THEN 0 WHEN 'enrich' THEN 1 ELSE 2 END, "
-        f"created "
+        f"id "
         f"LIMIT 1",
         params,
     ).fetchone()
@@ -662,9 +702,14 @@ def _batch_submit_enrich(
 
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
+        # ORDER BY id, not ``created``: ``jobs.id`` is INTEGER PRIMARY KEY (a
+        # rowid alias), so it *is* insertion order, and unlike the wall-clock
+        # ``created`` it cannot go backward (same rule as the version chain --
+        # docs/storage.md). With LIMIT, a mis-ordered ``created`` would not just
+        # reorder the batch but silently drop an older job out of it.
         "SELECT id, target_version FROM jobs "
         "WHERE type = 'enrich' AND status = 'pending' AND next_attempt_at <= ? "
-        "ORDER BY created "
+        "ORDER BY id "
         "LIMIT ?",
         (_now_iso(), flush_size),
     ).fetchall()
@@ -727,7 +772,7 @@ def _batch_submit_enrich(
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
         # are retried on the next pass (not immediately — avoids hammering the API).
         delay = min(settings.retry_backoff_base_s, settings.retry_backoff_cap_s)
-        next_at = _iso(datetime.now(UTC) + timedelta(seconds=delay))
+        next_at = _iso(_now() + timedelta(seconds=delay))
         with conn:
             conn.executemany(
                 "UPDATE jobs SET status = 'failed', last_error = ?, "

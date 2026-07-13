@@ -80,7 +80,7 @@ def test_saving_an_edit_appends_a_version_not_a_new_note(tmp_path: Path) -> None
 
     assert _rows(
         db_path,
-        "SELECT note_id, body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT note_id, body, op FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [
         ("note-a", "original body", "create"),
@@ -204,7 +204,7 @@ def test_confirm_save_saves_and_returns_to_the_list(tmp_path: Path) -> None:
     assert back_to_list
     assert _rows(
         db_path,
-        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [("original body", "create"), ("saved via the confirm dialog", "update")]
 
@@ -358,6 +358,6 @@ def test_cas_reject_on_save_shows_reconcile_then_returns_to_the_list(
     # rejected buffer never became a third version.
     assert _rows(
         db_path,
-        "SELECT body FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [("original body",), ("someone else's concurrent edit",)]

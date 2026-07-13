@@ -81,6 +81,36 @@ flowchart LR
     class A_USER usr;
 ```
 
+### Ordering a version chain — never by `created` (lode-t1y)
+
+**The wall clock is not a total order.** `created` (and every other wall-clock column) comes from
+SQLite's `strftime('now')`, which reads `CLOCK_REALTIME` — and the OS is free to step that clock
+**backward** (NTP correction, or hypervisor catch-up after the guest was descheduled; observed
+directly on this host, under load, between two back-to-back `INSERT`s). So a *later* version can
+carry an *earlier* `created` than its own parent. That is not a tie a secondary sort key can break —
+it is an outright wrong primary order, and `ORDER BY created, rowid` is just as broken as
+`ORDER BY created`. **Never sort a version chain by `created`, with or without a tiebreaker.**
+`created` is for display and lineage, not for ordering.
+
+The chain's real total order is **insertion order**, and there are exactly two sound ways to read it:
+
+- **`ORDER BY rowid`** — the sanctioned form for a whole-chain sweep, and what `lode.versions.purge`
+  uses. `versions` is not `WITHOUT ROWID` (see `schema.sql`), so it has SQLite's implicit rowid, and
+  insertion order *is* chain order: a child's `parent_version_id` FK must already exist, so a parent
+  is always inserted before its child. It stays correct under any future change to the table, because
+  SQLite assigns a new rowid as `max(rowid) + 1` — an inserted row outranks every row still present,
+  even if rows are ever deleted (today none are: `purge` overwrites bodies in place). *Caveat:* the
+  rowid here is **implicit** (the PK is `version_id TEXT`), and SQLite reserves the right to renumber
+  implicit rowids during `VACUUM`. In practice `VACUUM` rewrites rows in rowid order, so *relative*
+  order survives, and nothing in lode runs `VACUUM` today — but if a `lode vacuum` ever lands, revisit
+  this.
+- **Walking `parent_version_id`** root-to-head — use this where the code already holds a
+  `version_id → version` map and a sort would be redundant.
+
+The same rule applies to the **jobs queue**, and there it is free: `jobs.id` is `INTEGER PRIMARY KEY`
+— a true rowid alias — so `ORDER BY id` is insertion order by construction. `lode.worker`'s claim and
+batch-submit queries use it. Never order the queue by `created` either.
+
 ### Two graphs — do not conflate them
 
 - **Version lineage** — per-note history. With the decisions below, this is a **linear chain**,
@@ -457,6 +487,31 @@ pending -> running -> done                    (success)
 *transient* last-error state that retries reset from. They are distinct so the
 worker can distinguish "retry me" from "give up", and the UI surfaces `dead` rows
 as dead-letters (not `failed` rows).
+
+### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
+
+The eligibility predicate is `next_attempt_at <= now`, and `drain`'s loop stops at the **first** miss —
+so a `now` that reads even momentarily low doesn't just delay one job, it strands every job behind it
+for the rest of the pass. The OS wall clock (`CLOCK_REALTIME`) is not safe to use directly: it can be
+stepped **backward** (NTP correction; hypervisor catch-up after the guest was descheduled — observed
+on this host under load, between two back-to-back reads in the same loop).
+
+`lode.worker._now` is the clock for that comparison, and it guarantees two things, both load-bearing
+and pulling in opposite directions:
+
+1. **Readings never decrease** — a backward step is absorbed, so no job is spuriously "not ready yet".
+2. **Readings are never *behind* `CLOCK_REALTIME`** — because *not every timestamp it is compared
+   against comes from it.* `jobs.next_attempt_at` defaults to SQLite's own `strftime('now')`, and a
+   job is typically enqueued by one process (CLI/TUI) and claimed by another (`lode work`). A clock
+   that merely never went backward would fall permanently behind those writers after a *forward* step,
+   make every freshly enqueued job look not-yet-due, and strand it exactly as in (1) — trading one bug
+   for a worse one.
+
+Guarantee (2) is what makes rows stamped from a raw wall clock — SQLite's column default, another
+process, or `lode.enrich`'s retry backoff — safe to compare against `_now()` without routing every
+writer through it. A monotonic clock alone would **not** have been safe. The cost of absorbing a
+backward step is running slightly ahead of true time until the wall clock catches up: a job retried a
+hair late, which beats a job stranded.
 
 ### Crash reclaim: a job stuck in `running` — pinned (lode-aor)
 

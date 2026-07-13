@@ -88,7 +88,7 @@ def test_save_edit_appends_a_new_version_not_a_new_note(tmp_path: Path) -> None:
     assert not result.deduped
     assert _rows(
         db_path,
-        "SELECT note_id, body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT note_id, body, op FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [
         ("note-a", "original body", "create"),
@@ -158,7 +158,7 @@ def test_save_edit_cas_reject_writes_draft_and_does_not_clobber(tmp_path: Path) 
     # No clobber, no auto-merge: the winning edit is untouched.
     assert _rows(
         db_path,
-        "SELECT body FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [("original body",), ("someone else's edit",)]
 
@@ -174,7 +174,7 @@ def test_delete_note_appends_a_delete_tombstone(tmp_path: Path) -> None:
     assert result.op == "delete"
     assert _rows(
         db_path,
-        "SELECT note_id, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT note_id, op FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [("note-a", "create"), ("note-a", "delete")]
     assert _rows(
@@ -200,7 +200,7 @@ def test_delete_note_cas_reject_raises_head_conflict(tmp_path: Path) -> None:
     # No tombstone was written -- the rejected delete left the chain untouched.
     assert _rows(
         db_path,
-        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY created",
+        "SELECT body, op FROM versions WHERE note_id = ? ORDER BY rowid",
         ("note-a",),
     ) == [("original body", "create"), ("someone else's edit", "update")]
 
