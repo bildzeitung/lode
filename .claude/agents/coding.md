@@ -398,17 +398,19 @@ rtk nox -s tests                                     # pytest
 scripts/validate-mermaid.sh                          # only if a docs/ diagram is in the branch
 ```
 
-If `nox -t fix` reformats anything, or step 3's mechanical-conflict resolution touched anything,
-commit that as part of the merge. **Gates must be green before I re-mark the ticket** — same bar as a
-fresh build.
+If `nox -t fix` reformats anything, commit it — step 3 already completed the merge commit, so this is
+an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
+re-mark the ticket** — same bar as a fresh build.
 
 ### 5. Push and swap the label myself, then STOP
 
 Because I merged `trunk` into the branch instead of rebasing onto it, my push back to `land/<id>`
 never rewrites a commit that's already on origin — it's an ordinary fast-forward, so the whole cycle
-stays mine to finish, start to end: no destructive git operation, nothing to relocate to any other
-session (lode-cln, full reasoning in
-[`docs/agents-workflow.md`](../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln)).
+stays mine to finish, start to end (lode-cln, full reasoning in
+[`docs/agents-workflow.md`](../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln)).
+This holds even when the merge conflicted and I resolved it: resolving changes the merge commit's
+*tree*, never its ancestry, so the branch's already-pushed tip is still an ancestor and the push is
+still a fast-forward.
 
 **Before pushing, assert my worktree is clean — same rule as the build cycle's hand-off (lode-tpt):**
 
@@ -432,7 +434,7 @@ Then refresh the hand-off metadata and swap the label myself:
 HEAD_SHA=$(rtk git rev-parse HEAD)
 rtk bd update <id> --remove-label needs-rebase --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
-  --set-metadata land_summary="Merged onto trunk @ $(rtk git rev-parse --short origin/trunk)"
+  --set-metadata land_summary="Merged trunk @ $(rtk git rev-parse --short origin/trunk) into the branch"
 rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs/dolt/data
 ```
 

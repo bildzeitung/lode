@@ -480,7 +480,7 @@ is now its state. **`/code` picks this up automatically** (lode-wfl): every invo
 merge current `trunk` into `land/<id>`, re-gate, commit, and push the result itself — an ordinary,
 non-force push, since the merge only appends and never rewrites what's already on `land/<id>` — then
 swap the label straight back to `ready-for-land` itself (lode-cln; full mechanics in
-[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln))
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln))
 — no human nudge needed unless the merge itself conflicts and the two sides genuinely disagree (that
 escalates, `land-escalated`, same as any other genuine decision).
 

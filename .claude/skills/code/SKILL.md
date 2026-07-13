@@ -127,8 +127,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    Merging `trunk` into the branch — rather than rebasing the branch onto `trunk` — is what keeps
    this whole cycle inside the one dispatched producer, start to finish: a merge commit appends to
    history, it never rewrites what `land/<id>` already carries on origin, so the push back is an
-   ordinary fast-forward with nothing to relocate to this orchestrating session. Full reasoning:
-   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln).
+   ordinary fast-forward. Expect the merge to **conflict** — a branch only carries `needs-rebase`
+   because it already failed `/land`'s clean-merge precheck — and resolving it keeps the push a
+   fast-forward all the same. Full reasoning:
+   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln).
 
    Dispatch every hit **concurrently** with each other and with any Phase 1 builds below
    (`run_in_background: true`), **subject to the concurrency cap** (`CODE_MAX_CONCURRENT_AGENTS`,
@@ -295,7 +297,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 - **Step 0's rebase pickup is a third mode, not a phase.** It reuses the `coding` subagent (its
   "Rebase pickup" cycle, distinct from its normal build cycle) but skips Phase 2 entirely — a
   `needs-rebase` ticket already passed technical review before `/land` kicked it back, so it goes
-  straight to `ready-for-land` once it's replayed onto current `trunk`. Never dispatch a
+  straight to `ready-for-land` once current `trunk` is merged in. Never dispatch a
   `code-reviewer` for one. **Self-healing covers a clean merge and a *mechanical* conflict**
   (independent, non-overlapping additions the pickup resolves directly with `Edit`, since it works
   from its own checked-out worktree — lode-8k3); a conflict where the two sides *genuinely disagree*
@@ -304,9 +306,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   cases, but a real disagreement still needs a manual nudge, and always will. **The whole cycle —
   fetch, merge, re-gate, commit, push, label swap — is the dispatched `coding` producer's own job,
   start to finish (lode-cln):** it merges `origin/trunk` into the branch rather than rebasing onto
-  it, so its push back to `land/<id>` is an ordinary fast-forward, never a rewrite — nothing here
-  needs relocating to this orchestrating session. Full reasoning:
-  [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#delegated-destructive-git-ops-lode-cln).
+  it, so its push back to `land/<id>` is an ordinary fast-forward, never a rewrite — and that stays
+  true after a conflict is resolved, since resolving changes the merge commit's tree, not its
+  ancestry. Full reasoning:
+  [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#the-step-0-pickup-merges-it-never-rebases-lode-cln).
 - **Step 1's stranded-review sweep is Phase 2 pulled forward, not a fourth mode.** It dispatches the
   exact same `code-reviewer` subagent, the same way, for the same reason — the only difference is the
   ticket was left `ready-for-code-review` by a *previous* invocation (a human's exit-(a) re-entry)
