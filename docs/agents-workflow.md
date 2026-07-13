@@ -704,11 +704,13 @@ has happened exactly once. The fix closes the three holes above with the smalles
 covers the observed shape; it does not attempt to solve arbitrary multi-way branch dependencies.
 
 **Detection is from git, always — never from producer cooperation or bd metadata.** Two land branches
-cut independently from `trunk` share nothing *but* `trunk`, so the test is: **is their merge-base off
-`trunk`?** If it is, one was built on the other — that shared commit is the base's tip at the moment
-the dependent merged it. Direction comes from the first-parent spine (the dependent reached that commit
-through a *merge*, so it is not on the dependent's own spine). Computed fresh, once per `/land` pass,
-never persisted or trusted from an earlier pass (full mechanics:
+cut independently from `trunk` share nothing *but* `trunk`, so the test is: **does ANY of their
+merge-bases lie off `trunk`?** A pair can have more than one merge-base (see below), so this
+enumerates all of them (`git merge-base --all`) and discards the ones that are ancestors of `trunk` —
+if any survive, one branch was built on the other, and the surviving off-trunk commit is the base's
+tip at the moment the dependent merged it. Direction comes from the first-parent spine (the dependent
+reached that commit through a *merge*, so it is not on the dependent's own spine). Computed fresh,
+once per `/land` pass, never persisted or trusted from an earlier pass (full mechanics:
 [`land/SKILL.md` §1a](../.claude/skills/land/SKILL.md#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
 
 **Why the merge-base and not `git merge-base --is-ancestor <base> <dep>`** — i.e. "is the base's tip
@@ -717,18 +719,40 @@ fast-forward and entirely legitimately: the base's code-reviewer pushes review f
 `needs-rebase` pickup merges `trunk` into it (lode-cln). Either one leaves the dependent holding the
 base's *older* commits, so the base's current tip is no longer an ancestor of the dependent and a
 tip-based test loses the whole stack — silently. That is the *normal* flow, not a corner case: a
-producer stacks on a base precisely while it is unlanded, and therefore still moving. The merge-base
-test is immune to appends on either side.
+producer stacks on a base precisely while it is unlanded, and therefore still moving.
 
-**Known, documented gap — not claimed airtight:** the merge-base test survives any *append*, but not a
-**rewrite**. If a base's history were force-pushed after a dependent merged it, the shared commit is
-gone from the base entirely, the merge-base falls back to `trunk`, and the pair reads as unrelated
-while the dependent still carries the base's orphaned commits. Nothing in the current architecture
-force-pushes a `land/<id>` branch — every push on these branches is an ordinary fast-forward — so this
-is a defense against a future change or a manual force-push, not a live trigger today. There is no
-fully general fix short of every dependent re-checking after every base push, which this deliberately
-does not build. **If a `land/<id>` branch is ever force-pushed, that pass's stacked-branch graph is not
-trustworthy** — recorded as a known limitation, deliberately, rather than papered over.
+**Why `--all`, not a single `git merge-base` call.** The naive fix — "just use the merge-base instead
+of the tip" — is *not* immune to the trunk-merge pickup on its own. When a base takes a needs-rebase
+pickup *after* a dependent has already merged it, the pair acquires **two** merge-bases: the base's
+old tip (off `trunk` — the one that proves the stack) and the dependent's own `trunk` cut point (on
+`trunk`). A single, no-`--all` `git merge-base` call returns **one of the two, arbitrarily** — and
+when it happens to return the on-trunk one, the pair reads as unrelated and the whole stack goes
+undetected, in both ordered pairs, silently. This was reproduced deterministically: over 40
+randomized histories of exactly this flow, the single-result form missed the stack in 8/40; `--all`,
+keeping any off-trunk survivor, missed it in 0/40. **The merge-base test is immune to appends and to a
+base's trunk-merge pickup only when all merge-bases are considered** — not with a single arbitrary
+one, which is exactly the shape that reintroduces the miss.
+
+**Known, documented gaps — not claimed airtight.** Two, in the same honest register:
+
+- **Rewrite, not append.** The merge-base test (with `--all`) survives any *append* to either branch,
+  but not a **rewrite**: if a base's history were force-pushed after a dependent merged it, the shared
+  commit is gone from the base entirely, every merge-base falls back to `trunk`, and the pair reads as
+  unrelated while the dependent still carries the base's orphaned commits. Nothing in the current
+  architecture force-pushes a `land/<id>` branch — every push on these branches is an ordinary
+  fast-forward — so this is a defense against a future change or a manual force-push, not a live
+  trigger today. There is no fully general fix short of every dependent re-checking after every base
+  push, which this deliberately does not build. **If a `land/<id>` branch is ever force-pushed, that
+  pass's stacked-branch graph is not trustworthy** — recorded as a known limitation, deliberately,
+  rather than papered over.
+- **Branched-from-base, not merged-base.** The direction test assumes the dependent *merged* the base,
+  putting the shared commit on the base's first-parent spine but not the dependent's. A producer that
+  instead branches directly off `land/<base>` (rather than branching from `trunk` and merging the base
+  in, as `coding.md` instructs) puts that commit on *both* spines, so the direction test matches
+  neither half of its condition and emits no edge — detection still correctly flags the pair as
+  related, but direction is silently lost. The sanctioned build flow never produces this shape, so it
+  is not a live trigger, but it is an undocumented silent miss if anyone deviates from it — recorded
+  here rather than assumed away.
 
 **The three fixes, each keyed to the hole it closes:**
 
@@ -753,11 +777,13 @@ trustworthy** — recorded as a known limitation, deliberately, rather than pape
   superseded — so the rebuild ticket carries its disposal instruction explicitly ("delete `land/<dep>`
   once this lands"), as lode-og3's note does.
 - **`land-review` diffs a stacked branch against its base, not `trunk`.** When `/land` tells it the
-  branch is stacked on a live `land/<base>`, it diffs from its **merge-base with that base** instead of
-  the usual trunk merge-base — isolating exactly the branch's own commits, and it must not flag scope
-  creep merely for containing the base's own, separately-reviewed content. (Merge-base, not the base's
-  *tip*, for the same reason detection uses it: a tip that has moved on makes the dependent look like
-  it is reverting the base's work.)
+  branch is stacked on a live `land/<base>`, it diffs from its **off-trunk merge-base with that base**
+  (`--all`, same enumeration as detection above — never a single-result `git merge-base`, which can
+  hand back the on-trunk one and silently re-import the base's own work into the diff) instead of the
+  usual trunk merge-base — isolating exactly the branch's own commits, and it must not flag scope creep
+  merely for containing the base's own, separately-reviewed content. (Merge-base, not the base's *tip*,
+  for the same reason detection uses it: a tip that has moved on makes the dependent look like it is
+  reverting the base's work.)
 - **`/land`'s merge set is topologically ordered, and a base that leaves it takes its dependents with
   it.** Base before dependent, derived from the same git graph, restricted to the pass's accepted set.
   A dependent whose base isn't accepted this pass (bounced, escalated, kicked back, or simply not yet

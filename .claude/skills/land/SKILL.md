@@ -113,14 +113,26 @@ the moment the dependent merged it*:
 ```bash
 rtk git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
 # for every ORDERED pair (X, Y) among the listed refs:
-MB=$(rtk git merge-base "origin/land/<X>" "origin/land/<Y>")
-rtk git merge-base --is-ancestor "$MB" origin/trunk && continue   # only trunk in common → unrelated
-# MB is off trunk → X and Y share non-trunk history: one is stacked on the other.
-# DIRECTION: the BASE is the one whose own first-parent spine contains MB — the dependent reached MB
-# through a merge (second parent), so MB is not on its spine.
-rtk git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$MB" \
-  && ! rtk git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$MB" \
-  && echo "<Y> is stacked on <X>"
+# ENUMERATE ALL merge-bases — a pair can have more than one (see below) — and keep only the
+# off-trunk ones. A base branch that later takes a needs-rebase trunk-merge pickup (lode-cln)
+# AFTER a dependent has already merged it acquires a SECOND merge-base: the dependent's own
+# trunk cut point, which IS an ancestor of trunk. The single-result `git merge-base` picks one
+# of the two ARBITRARILY, and when it happens to return the on-trunk one, the pair reads as
+# unrelated and the stack goes undetected. `--all` sees every candidate; discarding the
+# on-trunk ones and keeping any survivor is what makes this immune to that flow.
+OFF_TRUNK=""
+for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do
+  rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"
+done
+[ -z "$OFF_TRUNK" ] && continue   # every merge-base is on trunk → unrelated
+# At least one off-trunk merge-base → X and Y share non-trunk history: one is stacked on the other.
+# DIRECTION: the BASE is the one whose own first-parent spine contains an off-trunk MB — the
+# dependent reached that commit through a merge (second parent), so it is not on its spine.
+for mb in $OFF_TRUNK; do
+  rtk git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$mb" \
+    && ! rtk git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$mb" \
+    && echo "<Y> is stacked on <X>" && break
+done
 ```
 
 **Do NOT reduce this to `git merge-base --is-ancestor origin/land/<X> origin/land/<Y>`** (i.e. "is X's
@@ -132,7 +144,12 @@ base's current tip is no longer an ancestor of the dependent and **the whole sta
 silently, with no error. That is not a corner case; it is the *normal* flow, because a producer stacks
 on a base precisely while that base is still unlanded and therefore still moving. A detector that
 misses the stack is worse than no detector, because the rest of this section trusts it and goes right
-back to stranding dependents. The merge-base test above is immune to a fast-forward on either side.
+back to stranding dependents. The merge-base test above is immune to a fast-forward on either side
+**only when every merge-base is considered, not one** — `git merge-base` with no `--all` returns a
+single, arbitrary result when a pair has more than one, and a needs-rebase pickup on the base (the
+exact fast-forward this paragraph is about) is precisely what produces a second, on-trunk merge-base
+that can be the one returned. `--all`, filtering to off-trunk survivors, is the mechanism that makes
+the immunity real rather than assumed.
 
 Build this **once**, right here, as an in-memory map for the rest of the pass — never persisted, never
 trusted from a prior pass (a branch can be bounced, dropped, or landed between passes, changing what's
@@ -159,6 +176,17 @@ live trigger today. There is no fully general fix short of every dependent re-ch
 push, which this ticket deliberately does not build (documented-YAGNI: this has happened once). **If a
 `land/<id>` branch is ever force-pushed, the stacked-branch graph for that pass is not trustworthy** —
 that is the honest limit of this mechanism, and it is stated here rather than papered over.
+
+**A second known gap, same honest register: branched-from-base, not merged-base.** The direction test
+assumes the dependent *merged* the base, so the shared commit sits on the base's first-parent spine
+but not the dependent's. A producer that instead **branches directly off `land/<base>`** (rather than
+branching from `trunk` and merging the base in, as `coding.md` instructs) puts that shared commit on
+*both* branches' first-parent spines — the direction test finds it on both sides, matches neither
+half of the `&&` condition, and emits no edge at all. Detection (the off-trunk-merge-base test) still
+correctly flags the pair as related; only the *direction* is silently lost. `coding.md`'s sanctioned
+build flow (branch from `trunk`, merge the base in) never produces this shape, so it is not a live
+trigger under the current architecture — same status as the force-push gap above: a defense against a
+future or off-process deviation, not something this ticket builds a general fix for.
 
 ---
 

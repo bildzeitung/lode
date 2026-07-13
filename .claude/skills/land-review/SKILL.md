@@ -50,17 +50,30 @@ Form no opinion until I've read **both sides** — the ticket as written and the
   stacked branch), then diff against the right base:
   - **Unstacked (the common case):**
     `git diff $(git merge-base origin/trunk origin/land/<id>)..origin/land/<id>`
-  - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, in
-    the same merge-base form:
-    `git diff $(git merge-base origin/land/<base> origin/land/<id>)..origin/land/<id>`
+  - **Stacked** (the lander names a live `land/<base>`) — diff against the **base**, not `trunk`, using
+    the **off-trunk** merge-base with it, never a bare single-result `git merge-base`:
+    ```bash
+    for mb in $(rtk git merge-base --all origin/land/<base> origin/land/<id>); do
+      rtk git merge-base --is-ancestor "$mb" origin/trunk || { OFF_TRUNK_MB="$mb"; break; }
+    done
+    rtk git diff "$OFF_TRUNK_MB"..origin/land/<id>
+    ```
+    A pair can have more than one merge-base — e.g. after `land/<base>` takes a needs-rebase
+    trunk-merge pickup (lode-cln) *after* this branch already merged it, the pair acquires a second,
+    on-trunk merge-base (this branch's own trunk cut point). A bare `git merge-base` (no `--all`)
+    returns one of the two **arbitrarily**; if it returns the on-trunk one, the diff silently
+    collapses to the trunk-diff form below and reimports the base's own work into this branch's scope
+    — the exact misjudgement this section exists to prevent. Always enumerate with `--all` and use the
+    off-trunk survivor.
 
     A stacked branch's merge-base with `trunk` **predates** its base branch (the base hasn't landed
     yet), so a trunk-diff carries the base's own, separately-reviewed work as if it were this
     branch's — misjudging scope every time, not just on a bad day (OBSERVED: lode-96t read as 529
-    lines / 8 files against `trunk` when only 290 lines / 3 files were its own). The merge-base *with
-    the base* is the point this branch actually took it, so the diff is exactly this branch's own
-    commits. **Never flag scope creep merely for containing the base's commits** — that's the base's
-    own content, under its own ticket's review, not this branch smuggling in unrelated work.
+    lines / 8 files against `trunk` when only 290 lines / 3 files were its own). The off-trunk
+    merge-base *with the base* is the point this branch actually took it, so the diff is exactly this
+    branch's own commits. **Never flag scope creep merely for containing the base's commits** — that's
+    the base's own content, under its own ticket's review, not this branch smuggling in unrelated
+    work.
 
     **Use the merge-base, not the base's tip** (`git diff origin/land/<base>..origin/land/<id>`): a
     base's tip *moves* after a dependent merges it — its code-reviewer pushes fixes onto it, a
