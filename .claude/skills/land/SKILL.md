@@ -609,6 +609,28 @@ if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
     git branch -D "$BR" 2>/dev/null || true
   done
 fi
+
+# Third backstop: dangling local worktree-agent-* refs with no worktree attached at all
+# (lode-j5i0 — the same bug as lode-r78, but the OTHER ref namespace: the second backstop
+# above only ever swept refs/heads/land/*, so a worktree-agent-* ref orphaned by any route
+# other than the first backstop's worktree-attached loop was swept by nothing and
+# accumulated without bound — 17 confirmed on the landing machine). This namespace needs a
+# DIFFERENT guard than land/*: a worktree-agent-* branch is never pushed to origin, so it
+# has no remote counterpart, ever — "remote gone" is meaningless here and would delete a
+# LIVE, still-building branch (every producer branch would read as "remote gone" the
+# instant it's created). The correct guard is the same one the first backstop already
+# applies to worktree-attached refs: merged into `trunk` (the work is safely captured
+# elsewhere) AND not currently checked out in any worktree. Reuse $MERGED (already computed
+# above, before any removal in this pass) rather than recompute it. `git branch -D` itself
+# also refuses harmlessly if the branch is still checked out somewhere, but that alone is
+# not the guard being relied on — the explicit merged check is what keeps an in-flight,
+# not-yet-merged build ref from ever being a candidate in the first place.
+CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
+git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | while read -r BR; do
+  printf '%s\n' "$CHECKED_OUT" | grep -qxF "$BR" && continue   # still checked out somewhere — keep
+  printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
+  git branch -D "$BR" 2>/dev/null || true
+done
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
@@ -637,7 +659,14 @@ excludes an in-flight `worktree-agent-*` one. A **separate** pass right after th
 the script above) deletes any local `land/<id>` **branch ref** whose `origin/land/<id>` counterpart no
 longer exists — the per-ticket removal only deletes a local branch when it also found an attached
 worktree, so a bare ref with no worktree (e.g. `git worktree remove`d by some other path) would
-otherwise linger forever once its remote is gone.
+otherwise linger forever once its remote is gone. A **third** pass sweeps the mirror-image gap in the
+*other* namespace (lode-j5i0): a bare `worktree-agent-*` ref with no worktree attached is invisible to
+both nets above (the first only matches worktree-attached refs; the second only matches `land/*`), so
+it was swept by nothing and accumulated without bound — 17 confirmed orphans on the landing machine,
+all already merged. Unlike `land/<id>`, a `worktree-agent-*` branch is never pushed to origin, so
+"remote gone" can't be the guard here (it would fire on every branch, live or not); the guard is
+`merged`-into-`trunk` (reusing the same `$MERGED` set the first sweep computed) plus not currently
+checked out anywhere, mirroring the first backstop's safety invariant rather than the second's.
 
 ---
 
