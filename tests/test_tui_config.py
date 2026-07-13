@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from textual.widgets import Static
 
-from lode.config import config_path, lance_dir, lode_home, log_dir
+from lode.config import config_path, lance_dir, lode_home, log_dir, model_cache_dir
 from lode.tui.app import LodeApp
 from lode.tui.screens.config import ROWS_ID, ConfigScreen
 
@@ -25,8 +25,9 @@ def test_app_registers_config_screen() -> None:
 def test_f2_reaches_the_config_screen_with_resolved_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Acceptance: resolved $LODE_HOME, DB, vector store, and log dir are all
-    # reachable in the TUI, read from lode.config rather than re-derived.
+    # Acceptance: resolved $LODE_HOME, DB, vector store, model cache, and log
+    # dir are all reachable in the TUI, read from lode.config rather than
+    # re-derived (lode-ak6 added the model cache row to match `lode config`).
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
     db_path = home / "lode.db"
@@ -40,6 +41,7 @@ def test_f2_reaches_the_config_screen_with_resolved_paths(
             assert str(lode_home()) in text
             assert str(db_path) in text
             assert str(lance_dir(db_path)) in text
+            assert str(model_cache_dir()) in text
             assert str(log_dir()) in text
             assert str(config_path()) in text
             assert "(absent)" in text
