@@ -3183,3 +3183,42 @@ def test_fastembed_still_raises_the_exhausted_sources_signature(
         "fastembed reworded its exhausted-sources error; lode.cli._warm() no "
         f"longer recognizes it and 'lode models pull' will traceback: {excinfo.value!r}"
     )
+
+
+def test_huggingface_hub_still_declares_httpx_as_its_transport() -> None:
+    """Canary: ``_warm()``'s ``except httpx.TransportError`` arm still has a
+    library underneath it that can actually raise one (lode-iadh).
+
+    The ValueError canary above pins fastembed's exhausted-sources *message*;
+    this pins the other arm's *exception type*, which is a transitive coupling
+    rather than a direct one: fastembed itself declares ``requests``, not
+    ``httpx`` (``pip show fastembed`` / its own dependency metadata never
+    mentions httpx). The ``httpx.TransportError`` ``_warm()`` catches is raised
+    by **huggingface_hub**, which fastembed delegates model downloads to.
+
+    The obvious cheap guard -- "if the transport changes, our own `import
+    httpx` breaks" -- does NOT work: httpx is a *direct* lode dependency
+    (``pyproject.toml``, for the unrelated web draw-down client) and is also
+    required independently by ``anthropic``, so ``import httpx`` keeps
+    succeeding no matter what fastembed/huggingface_hub do. There is no
+    ImportError to key off.
+
+    So this pins the actual coupling via package metadata instead of behavior:
+    if huggingface_hub ever drops httpx for another transport (it has swapped
+    transports once before, requests -> httpx), this fails here, loudly and
+    hermetically -- no network, no loopback port, nothing flaky -- rather than
+    ``except httpx.TransportError`` silently stopping matching and 'lode
+    models pull' regressing to a raw traceback on its single most likely
+    failure path (no network), with the rest of the suite staying green.
+    """
+    from importlib.metadata import requires
+
+    hub_requires = requires("huggingface_hub") or []
+    assert any(r.startswith("httpx") for r in hub_requires), (
+        "huggingface_hub no longer declares httpx as a dependency "
+        f"({hub_requires!r}). lode.cli._warm()'s `except httpx.TransportError` "
+        "arm depends on huggingface_hub raising httpx exceptions on a network "
+        "failure -- if it has switched transports, that arm silently stops "
+        "matching and 'lode models pull' will traceback on the no-network path "
+        "instead of printing 'no network route to huggingface.co'."
+    )
