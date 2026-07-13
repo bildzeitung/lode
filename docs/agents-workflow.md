@@ -230,12 +230,13 @@ frontier at once.
 
 **Why.** On 2026-07-10 the Claude Code host process crashed twice, each time with **7** concurrent
 `/code` agents in flight (builders + reviewers), orphaning the whole fleet mid-run. Each agent's gate
-is `nox -s tests` with pytest-xdist `-n auto` = **8 workers**, each holding a cached ONNX cross-encoder
-(the [reranker](configuration.md#retrieval-and-ranking)) in memory — 7 agents × 8 workers on a
-15GiB/8-core WSL2 VM is the prime suspect for the crash (no `dmesg` OOM lines survived, since WSL2
-restarts the whole VM on a crash, so the memory hypothesis is strong but not conclusively proven —
-the cap is cheap insurance regardless). After manually staggering to **~4** concurrent agents, the
-identical workload completed with zero further crashes.
+is `nox -s tests` with pytest-xdist `-n auto` — **one worker per CPU core** (noxfile.py) — = **8
+workers** on that box, each holding a cached ONNX cross-encoder (the
+[reranker](configuration.md#retrieval-and-ranking)) in memory — 7 agents × 8 workers on a 15GiB/8-core
+WSL2 VM is the prime suspect for the crash (no `dmesg` OOM lines survived, since WSL2 restarts the
+whole VM on a crash, so the memory hypothesis is strong but not conclusively proven — the cap is cheap
+insurance regardless). After manually staggering to **~4** concurrent agents, the identical workload
+completed with zero further crashes.
 
 **What.** `.claude/skills/code/SKILL.md` computes `CODE_MAX_CONCURRENT_AGENTS` once, at the start of
 every invocation, before its step-0 sweep. **Never** more than that many agents — builders and
@@ -243,12 +244,39 @@ reviewers combined, across every dispatch source (step 0's rebase pickups, step 
 pickups, Phase 1 builders, Phase 2 reviewers) — run concurrently; the rest of the resolved task set
 queues and dispatches as running agents complete and free a slot.
 
-**Default derivation (deliberately simple — a static per-machine number the user sets beats a clever
-heuristic that guesses wrong, per this ticket's own design note).** Read `MemAvailable` from
-`/proc/meminfo` (falling back to `MemTotal` if `MemAvailable` is absent), divide by an estimated
-**~3GiB per-agent gate footprint** (an 8-worker xdist run holding a cached reranker), then clamp to
-`[1, nproc/2]` and floor at 1. On the 15GiB/8-core WSL2 machine the crash occurred on, this resolves to
-**4** with no user action — matching the empirically-stable stagger count.
+**Default derivation — memory term scales with workers actually spawned, not a flat constant
+(lode-lwx6).** The original derivation budgeted a flat ~3GiB per agent, calibrated on the 8 workers
+`-n auto` spawned on the 8-core reference box above. Because `-n auto` spawns one worker **per CPU
+core**, that flat constant silently undercounted on higher-core machines: on a 24-core box `-n auto`
+spawns 24 workers per agent, not 8, so a formula that still assumed 3GiB/agent resolved to **9**
+concurrent agents there — each running ~3x the memory footprint the constant assumed, i.e. optimistic
+in exactly the direction that crashed the host on the reference box. Read `MemAvailable` from
+`/proc/meminfo` (falling back to `MemTotal` if `MemAvailable` is absent); derive a **per-worker**
+memory estimate from the original calibration data point (3GiB budgeted for 8 workers on the reference
+box ⇒ ~0.375GiB/worker), multiply by *this machine's* `nproc` (matching what `-n auto` will actually
+spawn per agent here) to get the real per-agent gate footprint, divide `MemAvailable` by that, then
+clamp to `[1, nproc/2]` and floor at 1:
+
+```
+per_agent_gib  = 0.375 GiB/worker × nproc
+by_mem         = MemAvailable_GiB / per_agent_gib
+by_cpu         = nproc / 2
+cap            = clamp(min(by_mem, by_cpu), 1, ∞)
+```
+
+On the 15GiB/8-core WSL2 machine the crash occurred on, `per_agent_gib` is still 0.375×8 = **3GiB** —
+identical to the old flat constant — so this resolves to the same **4** with no user action, matching
+the empirically-stable stagger count and regressing nothing there. On a 31GiB/24-core machine,
+`per_agent_gib` becomes 0.375×24 = **9GiB**, so `by_mem` = 29/9 = **3** — a safe number, not the old
+formula's unsafe 9.
+
+Two directions were on the table (lode-lwx6's own design note): scale the memory term with workers
+actually spawned (chosen, above), or pin pytest's `-n` to a fixed number in the nox test session so
+the flat constant would mean something stable across machines. The fixed-`-n` route was rejected here
+because it changes the gate for every developer and every CI run, not just this fan-out heuristic,
+trading suite wall-clock time on big machines for a fix that only needed to correct a stale calibration
+constant — the memory-term fix is scoped to the concurrency-cap estimate alone and touches nothing a
+developer runs directly.
 
 **Override — machine-local, no `SKILL.md` edit.** The env var `LODE_CODE_MAX_CONCURRENT_AGENTS`, when
 set, wins outright over the derivation (no clamping — an explicit user choice is trusted as-is). Set
