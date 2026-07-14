@@ -760,8 +760,8 @@ nobody), whereas guarding the *job row's* `status='done'` transition trades off 
 nor prejudges how that one is settled.
 
 **The check is atomic with the write (lode-elc8) — this is now closed, not merely narrowed.**
-lode-uda1's original shape was a read-then-write: `externals.head_snapshot_info` read the head as a
-plain, unprotected `SELECT` *before* the hook ever called `ingest_snapshot`, which then opened its
+lode-uda1's original shape was a read-then-write: the hook read the head as a
+plain, unprotected `SELECT` *before* ever calling `ingest_snapshot`, which then opened its
 *own*, independent `with conn:` transaction to write the tombstone. A handler committing its real
 snapshot in the gap between that read and that write was still clobbered — the residual window this
 section used to describe as "narrowed, not closed" (a few microseconds of one `SELECT` plus a hash and

@@ -196,38 +196,6 @@ def _external_head(
     return True, row[0]
 
 
-def head_snapshot_info(
-    conn: sqlite3.Connection, external_id: str
-) -> tuple[SnapshotStatus, str] | None:
-    """Return ``(status, fetched_at)`` for ``external_id``'s current head snapshot.
-
-    ``None`` if ``external_id`` has no ``externals`` row yet, or (the narrow,
-    transient window inside :func:`ingest_snapshot`'s own transaction) its
-    ``head_snapshot_id`` is still NULL — never observable to another caller
-    outside that transaction.
-
-    Exposed (unlike the private, id-only :func:`_external_head`) for callers
-    that need to know not just *that* a head exists but *when* it was
-    fetched and whether it is real content — originally added for
-    :func:`lode.worker._refresh_dead_letter_hook`'s late-success guard
-    (lode-uda1). As of lode-elc8 that hook no longer calls this directly: it
-    passes its guard timestamp into :func:`ingest_snapshot`'s
-    ``skip_if_head_at_or_after`` instead, so the check runs *inside*
-    ``ingest_snapshot``'s own transaction (atomic with the write) rather
-    than as a separate, unprotected read beforehand. This function stays as
-    a general-purpose, independently-tested read of the same information.
-    """
-    row = conn.execute(
-        "SELECT s.status, s.fetched_at FROM externals e "
-        "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
-        "WHERE e.external_id = ?",
-        (external_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    return row[0], row[1]
-
-
 def _index_snapshot_fts(
     conn: sqlite3.Connection,
     external_id: str,
@@ -331,12 +299,12 @@ def ingest_snapshot(
 
     Exists for exactly one caller: :func:`lode.worker._refresh_dead_letter_hook`'s
     late-success guard (``lode-uda1``). That guard originally read the head
-    via a separate, unprotected ``SELECT`` (:func:`head_snapshot_info`)
-    *before* ever calling this function, which opens its own independent
-    transaction — so a real snapshot committed in the gap between that read
-    and this write was still clobbered (``docs/storage.md`` "A dead-letter
-    hook's write can race a late success too"). Passing the guard in here
-    instead closes that gap outright, with **no new transaction-control
+    via a separate, unprotected ``SELECT`` *before* ever calling this
+    function, which opens its own independent transaction — so a real
+    snapshot committed in the gap between that read and this write was
+    still clobbered (``docs/storage.md`` "A dead-letter hook's write can
+    race a late success too"). Passing the guard in here instead closes
+    that gap outright, with **no new transaction-control
     primitive** (no ``BEGIN IMMEDIATE``): the externals-row upsert just below
     is made *unconditional* (rather than only ``if not exists``) precisely
     so it is always this transaction's first statement. Under SQLite's
