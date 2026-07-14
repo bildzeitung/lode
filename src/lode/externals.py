@@ -196,6 +196,33 @@ def _external_head(
     return True, row[0]
 
 
+def head_snapshot_info(
+    conn: sqlite3.Connection, external_id: str
+) -> tuple[SnapshotStatus, str] | None:
+    """Return ``(status, fetched_at)`` for ``external_id``'s current head snapshot.
+
+    ``None`` if ``external_id`` has no ``externals`` row yet, or (the narrow,
+    transient window inside :func:`ingest_snapshot`'s own transaction) its
+    ``head_snapshot_id`` is still NULL — never observable to another caller
+    outside that transaction.
+
+    Exposed (unlike the private, id-only :func:`_external_head`) for
+    :func:`lode.worker._refresh_dead_letter_hook` (lode-uda1), which needs to
+    know not just *that* a head exists but *when* it was fetched and whether
+    it is real content — to tell a dead-letter verdict apart from a fact that
+    already supersedes it.
+    """
+    row = conn.execute(
+        "SELECT s.status, s.fetched_at FROM externals e "
+        "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return row[0], row[1]
+
+
 def _index_snapshot_fts(
     conn: sqlite3.Connection,
     external_id: str,

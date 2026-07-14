@@ -26,6 +26,7 @@ from lode.hashing import content_snapshot_id
 from lode.externals import (
     IngestResult,
     gate_reenrich,
+    head_snapshot_info,
     ingest_fetch_result,
     ingest_snapshot,
     set_no_egress,
@@ -214,6 +215,37 @@ def test_tombstone_ingest_enqueues_no_embed_job(conn) -> None:
     )
 
     assert _jobs_for(conn, result.snapshot_id) == []
+
+
+# --- head_snapshot_info (lode-uda1) --------------------------------------
+
+
+def test_head_snapshot_info_none_when_no_externals_row(conn) -> None:
+    assert head_snapshot_info(conn, _EXTERNAL_ID) is None
+
+
+def test_head_snapshot_info_reflects_current_head(conn) -> None:
+    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+
+    info = head_snapshot_info(conn, _EXTERNAL_ID)
+    assert info is not None
+    status, fetched_at = info
+    assert status == "ok"
+    (expected_fetched_at,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (result.snapshot_id,),
+    ).fetchone()
+    assert fetched_at == expected_fetched_at
+
+
+def test_head_snapshot_info_reflects_tombstone_head(conn) -> None:
+    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+    ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_410"), status="tombstone"
+    )
+
+    status, _fetched_at = head_snapshot_info(conn, _EXTERNAL_ID)
+    assert status == "tombstone"
 
 
 # --- ingest_fetch_result adapter (webfetch.FetchResult -> ingest_snapshot) ---

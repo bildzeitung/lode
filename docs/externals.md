@@ -316,6 +316,22 @@ needed. **JS-rendered pages are a permanent tombstone by this rule, deliberately
 rendering them (headless browser / JS execution) is an explicit deferred follow-on (`lode-oni`),
 not first-connector scope.
 
+**A `dead` job's tombstone write must not beat an already-succeeded fetch (settled, `lode-uda1`).**
+The TRANSIENT row's "on `dead`, the caller writes a tombstone" is unconditional *only* with respect
+to content that predates the dead-lettering job's own claim. `lode.worker._reclaim_stale_running`'s
+crash-reclaim gate can dead-letter a `refresh` job that is not actually crashed, merely stalled past
+`stale_running_timeout_s` — and if its handler's own fetch then succeeds and commits a real snapshot
+before (or racing) the reclaim's dead-letter hook, the hook must not overwrite that real, current
+content with a tombstone. The hook is guarded on the job's `claimed_at`: it skips the tombstone write
+when the external's head is already a non-tombstone snapshot fetched at or after that claim (see
+`docs/storage.md` "A dead-letter hook's write can race a late success too" for the full race and
+rationale). This guard is orthogonal to — and neither depends on nor prejudges — the separate question
+of whether a late `status='done'` job-row write should itself be guarded (`docs/storage.md` "Crash
+reclaim: a job stuck in `running`"). Note it narrows the race rather than closing it outright: the
+head read and the tombstone write are not one transaction, so a real snapshot committing between them
+is still overwritten — see `docs/storage.md` for the residual window and why closing it is left as its
+own decision.
+
 ---
 
 ## Link-rot immunity (the payoff that justifies draw-down)

@@ -660,6 +660,61 @@ The `batch_handle` exemption covers *some* but not all of the remaining
 So the open decision covers `run_one`'s two sites *and* this one; only
 `collect_enrich_batch`'s two are genuinely out of scope.
 
+### A dead-letter hook's write can race a late success too — settled (lode-uda1)
+
+The paragraphs above are about a job's own `status` transition racing a reclaim. There is a
+**second, distinct** race, in the `refresh` **dead-letter hook** itself
+(`lode.worker._refresh_dead_letter_hook`, lode-at8): the hook doesn't just flip a status column, it
+**writes a snapshot** (`lode.externals.ingest_snapshot`, `status='tombstone'`) that moves the
+external's `head_snapshot_id`. That write can race the still-in-flight handler's own real snapshot
+write, independently of which job-status update ends up winning:
+
+1. `_reclaim_stale_running` selects the row (still `'running'`, `claimed_at` past
+   `stale_running_timeout_s`) and dead-letters it, firing the hook.
+2. Meanwhile the original handler — genuinely mid-fetch, not crashed — finishes and commits its
+   **real** snapshot via `ingest_snapshot`.
+
+Whichever of these two `ingest_snapshot` calls lands *last* wins the head. The bad ordering — the
+handler's real snapshot lands first, then the hook's tombstone overwrites it — leaves
+`head_snapshot_id` pointing at a tombstone **even though the fetch succeeded**, and this is not a
+transient wrong reading: reconcile's refresh sweep and embed sweep both filter
+`AND s.status != 'tombstone'` (deliberately, for a genuine permanent failure — see "Fetch-outcome
+taxonomy" in `docs/externals.md`), so nothing ever revisits that external again. **Absorbing**, not
+self-correcting.
+
+**Settled: a fact beats a verdict, same principle as the job-status races above.** The hook is
+passed the dead-lettered job's own `claimed_at` and skips its tombstone write when the external's
+current head is already a non-tombstone snapshot fetched **at or after** that claim — that can only
+mean a real fetch (this job's own racing handler, or some other refresh) already landed content
+newer than the point at which the dead-letter verdict was decided, so the verdict is stale and must
+not clobber it. A head fetched *before* the claim is unaffected — that is the pre-existing,
+intentional case where a *later* refresh (the staleness policy, not this race) exhausts its retries
+and correctly tombstones over older, still-referenced content regardless (no "unless there's prior
+content" carve-out — see the hook's own docstring).
+
+This is deliberately narrower than, and independent of, the `run_one` success-UPDATE question above:
+guarding the hook's *snapshot write* on a fact/verdict basis is uncontroversial once stated (the
+tombstone is documentation of a fetch outcome, and documenting a stale outcome over a real one serves
+nobody), whereas guarding the *job row's* `status='done'` transition trades off against the enrich
+`prompt_ver` receipt (see the note above) and needed its own ticket. This guard neither depends on
+nor prejudges how that one is settled.
+
+**What this guard does *not* do: it narrows the window, it does not close it.** The check is a
+read-then-write — `externals.head_snapshot_info` reads the head, and `ingest_snapshot` then opens its
+*own* `with conn:` transaction to write the tombstone — so the read is not atomic with respect to the
+write. A handler committing its real snapshot in the gap *between* the hook's read and the hook's
+write is still clobbered. That residual window is the few microseconds of one `SELECT` plus a hash
+and an `INSERT`, against the seconds-wide window it replaces (the whole span from the handler's
+snapshot commit through to `run_one`'s terminal `UPDATE`), so this is strictly better rather than a
+race merely moved — but it is a narrowing, not a proof. Closing it outright means holding the write
+lock across the read (`BEGIN IMMEDIATE`), which would be this codebase's first use of explicit
+transaction control and would couple the hook to `ingest_snapshot`'s internal transaction boundary;
+that is deliberately left as its own decision rather than smuggled into this fix. In practice the
+exposure is small for a second reason: `refresh` handlers only ever run inside `worker.drain`, which
+holds the single-instance `lock.WorkerLock`, so a *live* handler racing a reclaim needs two live
+workers on one DB — which the lock prevents in the normal single-machine case, though it explicitly
+disclaims being a data-integrity guard ("CAS + SQLite serialization own correctness").
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a

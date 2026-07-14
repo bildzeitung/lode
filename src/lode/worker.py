@@ -107,6 +107,14 @@ crash between the two commits leaves a job ``'dead'`` with no dead-letter
 side effect recorded yet — a narrow, accepted gap (the job row itself already
 carries the diagnostic in ``last_error``; nothing sweeps this gap today). See
 ``docs/decisions.md`` for the (a)-vs-(b) mechanism choice and rationale.
+**Late-success guard (lode-uda1):** the hook is passed the dead-lettered
+job's own ``claimed_at`` and skips its tombstone write when the external's
+head is already a non-tombstone snapshot fetched at or after that claim — a
+real, successful fetch (this job's own still-in-flight handler racing
+:func:`_reclaim_stale_running`, or another refresh) beat the dead-letter
+verdict, and the verdict must not overwrite that fact. See
+``docs/externals.md`` "Fetch-outcome taxonomy" / ``docs/storage.md`` "Crash
+recovery" for the settled semantics.
 
 **Crash recovery** (lode-aor): if the worker (or the CLI's inline
 immediate-enrich fast path) crashes mid-run, a job can be left in
@@ -167,14 +175,20 @@ def registered_types() -> tuple[str, ...]:
     return tuple(_REGISTRY)
 
 
-#: Dead-letter hook signature: (conn, target_version, last_error, settings) -> None
+#: Dead-letter hook signature:
+#: (conn, target_version, last_error, claimed_at, settings) -> None
 #:
 #: Invoked once, immediately after a job of the registered ``type`` reaches
 #: the terminal ``'dead'`` status — never on a transient ``'failed'`` that
 #: still has a retry coming. See the module docstring's "Dead-letter hook"
 #: section for the transaction-composition contract (own transaction,
-#: sequential not nested).
-DeadLetterFn = Callable[[sqlite3.Connection, str, str, Settings], None]
+#: sequential not nested). ``claimed_at`` (lode-uda1) is the dead-lettered
+#: job's own claim timestamp — the last point at which its dead-letter
+#: verdict was known to still be true; a hook needing to tell that verdict
+#: apart from a fact that has since superseded it (e.g. the handler's own
+#: fetch actually succeeded before a crash-reclaim dead-lettered it) compares
+#: against this rather than "now".
+DeadLetterFn = Callable[[sqlite3.Connection, str, str, str | None, Settings], None]
 
 #: Module-level dead-letter hook registry — maps ``jobs.type`` → hook.
 #:
@@ -194,6 +208,7 @@ def _run_dead_letter_hook(
     job_type: str,
     target_version: str,
     last_error: str,
+    claimed_at: str | None,
     settings: Settings,
 ) -> None:
     """Invoke ``job_type``'s registered dead-letter hook, if any (no-op otherwise).
@@ -208,12 +223,15 @@ def _run_dead_letter_hook(
     external's tombstone is simply not written yet, its diagnostic still on the
     job row's ``last_error``) rather than taking down the worker. The failure
     is logged at ``error`` level so it stays observable.
+
+    ``claimed_at`` is the dead-lettered job's own claim timestamp (lode-uda1)
+    — passed through unchanged to whatever hook is registered.
     """
     hook = _DEAD_LETTER_HOOKS.get(job_type)
     if hook is None:
         return
     try:
-        hook(conn, target_version, last_error, settings)
+        hook(conn, target_version, last_error, claimed_at, settings)
     except Exception:  # noqa: BLE001
         log.exception(
             "dead-letter hook for job type %r (target=%s) failed; job remains "
@@ -314,7 +332,11 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
         return 0
 
     reclaimed = 0
-    newly_dead: list[tuple[str, str]] = []  # (job_type, target_version)
+    # (job_type, target_version, claimed_at) -- claimed_at (lode-uda1) is the
+    # exact claim this reclaim just dead-lettered, passed through to the
+    # dead-letter hook so it can tell its own verdict apart from a fact
+    # (a real snapshot fetched_at at-or-after this claim) that supersedes it.
+    newly_dead: list[tuple[str, str, str | None]] = []
     err = "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
     with conn:
         for job_id, attempts, job_type, target_version, claimed_at in rows:
@@ -332,7 +354,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                     (new_attempts, err),
                 )
                 if claim_held:
-                    newly_dead.append((job_type, target_version))
+                    newly_dead.append((job_type, target_version, claimed_at))
             else:
                 claim_held = jobs.cas_update_running(
                     conn,
@@ -343,8 +365,8 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                 )
             reclaimed += 1 if claim_held else 0
 
-    for job_type, target_version in newly_dead:
-        _run_dead_letter_hook(conn, job_type, target_version, err, settings)
+    for job_type, target_version, claimed_at in newly_dead:
+        _run_dead_letter_hook(conn, job_type, target_version, err, claimed_at, settings)
 
     return reclaimed
 
@@ -589,7 +611,12 @@ def run_one(
             # Own, separate transaction — after the dead-status UPDATE inside
             # record_job_failure above has committed, never nested in the same
             # `with conn:` (lode-at8, module docstring "Dead-letter hook").
-            _run_dead_letter_hook(conn, job_type, target_version, err, settings)
+            # claimed_at is this job's own claim (read at the top of run_one,
+            # lode-uda1): the hook uses it to tell this dead-letter verdict
+            # apart from a fact that has since superseded it.
+            _run_dead_letter_hook(
+                conn, job_type, target_version, err, claimed_at, settings
+            )
         return False
 
 
@@ -1120,6 +1147,7 @@ def _refresh_dead_letter_hook(
     conn: sqlite3.Connection,
     target_external_id: str,
     last_error: str,
+    claimed_at: str | None,
     settings: Settings,
 ) -> None:
     """Tombstone ``target_external_id`` when its 'refresh' job dead-letters (lode-at8).
@@ -1143,22 +1171,66 @@ def _refresh_dead_letter_hook(
     ticket's "carrying the failure and its last error" acceptance criterion
     without a schema change — no new column, no new table.
 
-    If ``target_external_id`` already has an ``ok`` head snapshot (i.e. a
-    *later* refresh — ``lode-w0h.6``'s staleness policy, not the
-    paste-triggered first draw-down — is the one that exhausted retries),
-    this still moves the head to a tombstone: the dead-letter terminal means
-    "retrying will not help right now", and docs/externals.md's
-    TRANSIENT-failure row commits to writing a tombstone on ``dead``
-    unconditionally, with no "unless there's prior content" carve-out. See
-    ``docs/decisions.md`` for the rationale (recorded alongside the (a)
-    worker-hook vs (b) reconcile-sweep mechanism choice).
+    If ``target_external_id`` already has an ``ok`` head snapshot **older**
+    than ``claimed_at`` (i.e. a *later* refresh — ``lode-w0h.6``'s staleness
+    policy, not the paste-triggered first draw-down — is the one that
+    exhausted retries), this still moves the head to a tombstone: the
+    dead-letter terminal means "retrying will not help right now", and
+    docs/externals.md's TRANSIENT-failure row commits to writing a tombstone
+    on ``dead`` unconditionally, with no "unless there's prior content"
+    carve-out. See ``docs/decisions.md`` for the rationale (recorded
+    alongside the (a) worker-hook vs (b) reconcile-sweep mechanism choice).
+
+    **Late-success guard (lode-uda1):** the one case that carve-out does NOT
+    cover, and where this hook must NOT tombstone: ``target_external_id``'s
+    head is already an ``ok`` snapshot fetched *at or after* ``claimed_at``.
+    That can only mean a fetch that started at-or-after this exact job's
+    claim already landed real content — either this same job's own handler,
+    still in flight when :func:`_reclaim_stale_running` dead-lettered it out
+    from under itself (the race lode-uda1 exists to close: the reclaim's
+    SELECT and this hook interleave between the handler's snapshot commit and
+    its own terminal ``UPDATE``), or some other refresh that has since
+    succeeded. Either way the dead-letter verdict is now stale — a guess that
+    a fact has already overtaken — and tombstoning would silently replace
+    successfully-fetched content with an absorbing tombstone head that
+    reconcile's refresh/embed sweeps (both ``AND s.status != 'tombstone'``)
+    would then never revisit. ``claimed_at`` of ``None`` (a legacy/never-
+    stamped job row) disables the guard entirely — matches the unconditional
+    behavior this hook always had before lode-uda1, since there is no claim
+    timestamp to compare against.
+
+    **The guard narrows this race; it does not close it.** The head read below
+    and :func:`~lode.externals.ingest_snapshot`'s write are not one
+    transaction (``ingest_snapshot`` opens its own ``with conn:``), so a real
+    snapshot committed in the gap between them is still overwritten. The
+    residual window is the microseconds of one ``SELECT`` + hash + ``INSERT``,
+    versus the seconds-wide window it replaces (the handler's snapshot commit
+    through ``run_one``'s terminal ``UPDATE``) — strictly better, not merely
+    moved, but not a proof. Closing it outright needs the write lock held
+    across the read (``BEGIN IMMEDIATE``), which would couple this hook to
+    ``ingest_snapshot``'s transaction boundary; see ``docs/storage.md``.
 
     Deferred import mirrors :func:`_refresh_handler`: keeps the
     httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
     cost off code paths where no ``refresh`` job has ever dead-lettered.
     """
     from lode.drawdown import SOURCE_TYPE_WEB
-    from lode.externals import ingest_snapshot, tombstone_body
+    from lode.externals import head_snapshot_info, ingest_snapshot, tombstone_body
+
+    if claimed_at is not None:
+        head = head_snapshot_info(conn, target_external_id)
+        if head is not None:
+            head_status, head_fetched_at = head
+            if head_status != "tombstone" and head_fetched_at >= claimed_at:
+                log.info(
+                    "refresh dead-letter hook for %s skipped: head snapshot "
+                    "already 'ok' and fetched (%s) at-or-after this job's "
+                    "claim (%s) -- a real fetch beat the dead-letter verdict",
+                    target_external_id,
+                    head_fetched_at,
+                    claimed_at,
+                )
+                return
 
     ingest_snapshot(
         conn,
