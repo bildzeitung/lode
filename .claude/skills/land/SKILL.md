@@ -817,8 +817,9 @@ the deleted loop was their only GC consumer, the backstop discovers worktrees di
 `git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
 rather than trusting a recorded path (lode-vs7g) — so the fields were pure dead weight and `coding.md`
 stopped recording them (see lode-2m89's `docs/decisions.md` entry). Discovering worktrees live instead
-of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can happen on several machines, and a worktree on another machine simply
-isn't in this machine's `git worktree list`, so it's invisible to this sweep and that other machine's
+of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can
+happen on several machines, and a worktree on another machine simply isn't in this machine's
+`git worktree list`, so it's invisible to this sweep and that other machine's
 own `/land` (or a later sweep there) reclaims it. The sweep only reclaims a worktree that is
 `merged`+`unlocked`+clean, which for a just-landed ticket's builder worktree is true precisely *because*
 this pass just `--no-ff` merged it into trunk a few lines above. Its **HEAD-ancestry** gate is what
@@ -833,8 +834,9 @@ and is not a guarantee about the sweep as a whole.) This backstop sweep
 is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
 it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
 `land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of whether any
-ticket ever pointed at it (no ticket does, since lode-2m89). lode-jiyk unified what were originally two separate **worktree**
-sweeps here: an early one keyed on branch **name** (`lode-r78`), and a later one keyed directly on
+ticket ever pointed at it (no ticket does, since lode-2m89). lode-jiyk unified what were originally
+two separate **worktree** sweeps here: an early one keyed on branch **name** (`lode-r78`), and a
+later one keyed directly on
 **HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
 sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
 trunk" — so now there is one loop: it requires the worktree to be **unlocked** (no in-flight agent owns

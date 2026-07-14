@@ -895,8 +895,14 @@ are catalogued in [configuration.md](configuration.md).
   that works" principle argues against, and the risk the ticket named — a future reader "restoring" a
   phantom consumer because the fields are still there, looking load-bearing — is real precisely because
   they *were* load-bearing once, under the deleted per-ticket loop. Retiring the write is the more
-  legible signal: no field, no expectation. `review_head` stays exactly as-is — it is live, read by both
-  the code-reviewer and `/land`'s drift precheck, and this ticket does not touch it.
+  legible signal: no field, no expectation. `review_head` stays exactly as-is — it is live and this
+  ticket does not touch it. Its two real readers, named precisely so this entry does not repeat one
+  field over the very mistake it records: the **code-reviewer** (it is what the reviewer checks out and
+  compares against for drift, `code-reviewer.md`) and **`/code`'s step-1 stranded-review guard**, which
+  refuses to dispatch a reviewer at a ticket whose `metadata.review_head` is empty
+  (`.claude/skills/code/SKILL.md`, lode-k5e/lode-t83). **`/land` is *not* a reader** — its 2a drift
+  precheck reads `land_head` (written by the code-reviewer and refreshed by a rebase pickup);
+  `.claude/skills/land/SKILL.md` never mentions `review_head` at all.
 
   **What changed:** `coding.md`'s hand-off (step 9, both the green path and the build-time-escalation
   path) no longer calls `--set-metadata review_worktree=…` / `--set-metadata review_branch=…` — only

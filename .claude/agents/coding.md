@@ -569,9 +569,11 @@ rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
-precheck reads. I leave `review_head` untouched — it still correctly describes the original build,
-and it's live: the reviewer and `/land`'s drift precheck read it. (`review_worktree`/`review_branch`
-no longer exist as of lode-2m89 — nothing writes or reads them.)
+precheck reads. I leave `review_head` untouched — it still correctly describes the original build, and
+it's live, but its readers are *not* `/land`: they are the **code-reviewer** (which checks it out and
+diffs it for drift) and **`/code`'s step-1 stranded-review guard** (which refuses a ticket whose
+`review_head` is empty). `/land`'s 2a precheck reads `land_head`, the field I just refreshed above.
+(`review_worktree`/`review_branch` no longer exist as of lode-2m89 — nothing writes or reads them.)
 
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
 opened it this cycle — `/land` GCs it on a clean land, same as always.
