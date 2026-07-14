@@ -567,6 +567,117 @@ a `/code` fan-out would dispatch it into a live batch and return a confident, wo
 class of constraint is documented, not solved: it needs a human to run the ticket by hand in a quiet
 window.
 
+### Never write to an external tracker under the user's identity (lode-o29m)
+
+**USER RULE (hard):** an agent must never WRITE to an external tracker — GitHub, an upstream repo, any
+third-party — under the user's identity. The `gh` CLI (and any other external-tracker CLI available to
+an agent) is authed **as the user**, so anything an agent files, comments, closes, reopens, merges, or
+reviews there goes out **publicly under the user's own name**. The user does not want their public
+identity spent by an agent, ever — even when the ticket driving the work explicitly calls for it.
+
+**TRIGGER.** `lode-s1uz`'s ask was literally "report this ambiguity upstream to beads." Its builder
+followed that instruction faithfully and filed
+[beads#4766](https://github.com/gastownhall/beads/issues/4766) under the user's GitHub account. This
+was **not** a misbehaviour bug — the agent did exactly what its ticket said — it was a **missing
+guardrail**: nothing in `coding.md` / `code-reviewer.md` / `CLAUDE.md` forbade it, so a well-behaved
+agent following its ticket faithfully will do it again the next time a ticket says "ask upstream." A
+ticket's author can scope the *work*; they cannot grant the *user's identity* to spend on a public
+platform — that authorisation belongs to the user alone, and a bd ticket is never it.
+
+**Scope — confirmed explicitly with the user, deliberately narrow:**
+
+- **Forbidden:** any WRITE to an external tracker under the user's identity — `gh issue create`, `gh pr
+  create`, `gh issue comment`, `gh pr comment`, `gh pr review`, `gh issue/pr close|reopen|edit|delete|
+  lock|unlock|merge|transfer|pin|unpin`, `gh api` with a non-GET method (`-X`/`--method`
+  `POST`/`PUT`/`PATCH`/`DELETE`, **or the *implicit* POST that `-f`/`-F`/`--field`/`--raw-field`/
+  `--input` triggers with no method flag at all** — see the guard section below), and the equivalent
+  write operation on any non-GitHub tracker. Also forbidden, on the same "do not spend the user's
+  public identity" logic: `gh release create`, `gh gist create`, `gh repo create|fork`.
+- **Allowed and unchanged: read-only external calls.** `gh issue view`, `gh pr view`, `gh api` GET,
+  `WebFetch` all stay legal and unrestricted — `lode-s1uz`'s **reviewer** used exactly this class of
+  call to verify the cited URL, which was correct behaviour and must remain so. This rule is about
+  *writing* under the user's name, not about looking things up.
+- **Allowed and unchanged: internal bd tickets.** Agents keep filing bd follow-ups freely, exactly as
+  [the `blocks` vs `discovered-from` rule above](#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)
+  already governs. bd's `created_by: bildzeitung` is just the local git identity, not a public act —
+  this rule is about the user's **public** identity, not about bd's internal bookkeeping. Four bd
+  follow-ups filed in the same `/code` pass that produced beads#4766 (`lode-qyd3`, `lode-2vsc`,
+  `lode-h1vn`, `lode-37gg`) were all fine, and remain the model to follow.
+
+**Required behaviour: draft, mark PENDING A HUMAN, and stop.** When a ticket's scope genuinely needs
+something filed upstream, the agent **drafts** the issue/PR/comment text (title + body) into its
+hand-off report, records that the upstream filing is **PENDING A HUMAN**, and stops. It does not file.
+The human files it manually and, if useful, pastes the resulting URL back into the ticket. "The ticket
+told me to" is never authorisation — the ticket's author could not grant the user's identity in the
+first place, so there is nothing for the agent's compliance with its own ticket to have unlocked.
+
+**Mechanical guard, same "fence not fix" framing as `lode-0kbq`'s `blocks:` guard.** Docs alone are
+advisory — that is the entire lesson of `lode-s1uz` (an agent read a ticket, followed it, and filed
+publicly under the user's name because nothing said not to). A committed `PreToolUse(Bash)` hook in
+[`.claude/settings.json`](../.claude/settings.json) denies the `gh` write surface and returns the
+draft-and-surface protocol above as the deny reason:
+
+- **tracker writes** — `gh issue|pr
+  create|comment|edit|close|reopen|delete|merge|review|lock|unlock|transfer|pin|unpin|ready|develop|update-branch`,
+  and `gh label create|edit|delete|clone` (labels are tracker state);
+- **other writes that publish under the user's public name** — `gh release create|edit|delete|upload`,
+  `gh gist create|edit|delete`, `gh repo create|fork|edit|delete|sync`;
+- **`gh api` with an explicit non-GET method** (`-X`/`--method` `POST`/`PUT`/`PATCH`/`DELETE`, matched
+  case-insensitively — `-X post` is the same request);
+- **`gh api` with an *implicit* POST** — see below.
+
+It matches `gh` at a *command position*: after `;`/`&&`/`||`/`|`/`(`/`` ` ``/`{` or at line start,
+through the `rtk` prefix, a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
+`if`/`then`, …), an absolute or relative path to the binary (`/usr/bin/gh`), and `gh`'s global
+`-R`/`--repo`/`--hostname` flags inserted before the subcommand (the same shape of gap the `blocks:`
+guard already closes for bd's `-C`/`--directory`/`--db`). The deny/allow table is pinned by
+`tests/test_gh_write_guard.py`, which executes the hook as shipped, mirroring
+`tests/test_bd_deps_guard.py`.
+
+**The implicit POST is denied too — this one is not optional.** `gh api` switches to `POST`
+automatically as soon as a body field is supplied; from `gh api --help`: *"adding request parameters
+will automatically switch the request method to POST."* So `gh api repos/o/r/issues -f title=… -f
+body=…` files an issue with **no `-X`/`--method` anywhere on the line**. That is the *ordinary*,
+documented way to POST with `gh` — not an exotic evasion — and it is the route an agent denied at `gh
+issue create` would naturally reach for next, since the deny reason itself names `gh api`. A guard that
+caught only the *explicit* method would therefore not enforce the rule it claims to; the exemption
+would have swallowed the rule. The hook instead matches the **field flags**
+(`-f`/`-F`/`--field`/`--raw-field`/`--input`), exempting an explicit `-X GET`/`--method GET` so the
+legal read-with-params form (`gh api search/issues -X GET -f q=…`, gh's documented way to send a GET
+query string) still works. `gh api graphql -f query=…` is denied as a side effect: GraphQL is always an
+HTTP POST and the same command shape carries a mutation, so the guard **fails closed** there and the
+read must go through a REST `GET` or a human.
+
+Residual gaps that remain, same character as the `blocks:` guard's own (a guard that reads only the
+command *string* cannot see through indirection):
+
+- **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
+  Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
+  own prose about the rule (`rtk grep "gh issue create" docs/`, a commit message quoting the verb) — a
+  worse trade than the residual.
+- **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
+  different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
+- **gh's repo-*admin* surface** (`gh secret set`, `gh workflow run`, `gh ssh-key add`, …) — a different
+  risk class from a tracker write, and one no plausible lode ticket asks an agent to touch; tracked
+  separately in `lode-9l3d`.
+
+None of these is a reason to skip the guard — and, crucially, none of them is a route an *obedient*
+agent takes. That is the distinction that matters when judging where the fence is high enough: the
+guard must close every path a well-behaved agent following its ticket would actually walk down (which
+is why the implicit POST had to be closed, and why the residuals above may stay open), the same way the
+`blocks:` guard closes the common case of the inverted edge without claiming to catch `bd create
+--graph <file>`.
+
+**Do not touch `beads#4766` itself** — it is already filed and open on the real upstream tracker.
+Whether to leave, edit, or close it is the user's call, not any agent's; this rule governs future
+writes, not a retroactive cleanup of the one write that already happened.
+
+This rule binds every dispatch-side writer of external calls — the main session (`CLAUDE.md` — General
+Directives), the builder ([`.claude/agents/coding.md`](../.claude/agents/coding.md) — Non-negotiables +
+Anti-patterns), and the reviewer
+([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
+Anti-patterns) — since any of the three can reach a `gh` call mid-task.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
@@ -584,6 +695,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagram changes — never hand off / mark ready on a failing gate |
 | Clean tree | `git status --short` empty before gating and before hand-off — `nox` gates the working tree, not `HEAD`, so the tree that gated green must be the tree committed and pushed; a dirty tree at either point silently drops uncommitted work (lode-tpt) |
 | CLI framework | **Typer** (never argparse); venv at `./venv` |
+| External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record it PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal ([full rationale above](#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m); lode-o29m) |
 | Done (coding loop) | builder hands off at `ready-for-code-review` (worktree kept); code-reviewer reviews, re-gates, swaps to `ready-for-land` (`bd dolt push`); `/land` does the merge/close |
 
 ---

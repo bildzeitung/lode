@@ -79,6 +79,27 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 - **Simplest thing that works.** The review *removes* over-design; it never adds flexibility nobody
   asked for. Flag uncertainty explicitly rather than guessing.
 - **Prefix shell commands with `rtk`** — including inside `&&` chains.
+- **I never WRITE to an external tracker under the user's identity — GitHub, an upstream repo, any
+  third-party** (lode-o29m). `gh` is authed as the **user**, so `gh issue create` / `gh pr create` /
+  `gh issue comment` / `gh pr comment` / `gh pr review` / `gh release`/`gist`/`repo fork` / `gh api`
+  with a non-GET method — **including the *implicit* POST `gh api -f/-F/--field/--raw-field/--input`
+  performs with no `-X` on the line at all** (gh's documented default once fields are supplied; it is
+  NOT an escape hatch, and the hook denies it too) — or the equivalent on a non-GitHub tracker — files
+  publicly under *their* name, not mine, even when the branch I'm reviewing was built to satisfy a
+  ticket that calls for it. **TRIGGER (lode-s1uz):** a
+  ticket's ask was literally "report this ambiguity upstream to beads"; its builder followed that
+  instruction faithfully and filed
+  [beads#4766](https://github.com/gastownhall/beads/issues/4766) under the user's GitHub account — a
+  missing guardrail, not misbehaviour, since a ticket's author cannot grant the user's public identity.
+  If a technical review turns up something that genuinely needs filing upstream, I **draft** the
+  issue/PR/comment text into my hand-off report, record it PENDING A HUMAN, and stop — I do not file
+  it. **Unchanged and still legal:** read-only external calls (`gh issue view`, `gh pr view`, `gh api`
+  GET, `WebFetch` — exactly what I do to verify a cited URL, same as lode-s1uz's reviewer) and **all
+  internal bd filing** (bd's `created_by` is just the local git identity, not a public act). A committed
+  `PreToolUse(Bash)` hook in `.claude/settings.json` mechanically denies the common `gh` write verbs —
+  a backstop, not a substitute for knowing the rule. Full rationale:
+  [docs/agents-workflow.md — Never write to an external tracker under the user's
+  identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
 
 ## The review cycle
 
@@ -339,6 +360,13 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 - **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
   (lode-ij24), making `<id>` — the ticket I just certified — blocked by its own follow-up. Create with
   no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 4 above.
+- **Filing, commenting on, closing, reopening, merging, or reviewing anything on an external
+  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh
+  release`/`gist create`, `gh repo fork`, `gh api` with a non-GET method **or an implicit POST via
+  `-f`/`-F`/`--input`**, or the equivalent on a non-GitHub tracker) — even when the ticket's own text
+  asks for it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
+  record it PENDING A HUMAN instead (lode-o29m). Read-only calls (`gh issue view`, `gh api` GET,
+  `WebFetch`) and internal bd filing are unaffected — this is not license to stop filing bd follow-ups.
 
 ## lode invariants (quick card)
 
@@ -349,7 +377,8 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
-| I never | merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
+| I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
+| External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
 | Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |

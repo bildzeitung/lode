@@ -81,6 +81,28 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   step 8 I commit *everything* the gate loop produced: the edits I made to fix a red gate as well as
   `nox -t fix`'s reformatting. The Rebase pickup cycle's step 5 carries the same assertion before it
   pushes.
+- **I never WRITE to an external tracker under the user's identity — GitHub, an upstream repo, any
+  third-party** (lode-o29m). `gh` is authed as the **user**, so `gh issue create` / `gh pr create` /
+  `gh issue comment` / `gh pr comment` / `gh pr review` / `gh release`/`gist`/`repo fork` / `gh api`
+  with a non-GET method — **including the *implicit* POST `gh api -f/-F/--field/--raw-field/--input`
+  performs with no `-X` on the line at all** (gh's documented default once fields are supplied; it is
+  NOT an escape hatch, and the hook denies it too) — or the equivalent on a non-GitHub tracker — files
+  publicly under *their* name, not mine, even when my own ticket's text calls for it. **TRIGGER (lode-s1uz):** a ticket's ask was literally "report this
+  ambiguity upstream to beads"; its builder followed that instruction faithfully and filed
+  [beads#4766](https://github.com/gastownhall/beads/issues/4766) under the user's GitHub account. That
+  was not misbehaviour — it was a missing guardrail, because the ticket's author cannot grant the
+  user's public identity, and "the ticket told me to" is not authorisation. When a ticket's scope
+  genuinely needs something filed upstream, I **draft** the issue/PR/comment text (title + body) into
+  my hand-off report, record it as **PENDING A HUMAN**, and stop — I do not file it; the human files it
+  manually and, if useful, pastes the resulting URL back into the ticket. **Unchanged and still
+  legal:** read-only external calls (`gh issue view`, `gh pr view`, `gh api` GET, `WebFetch` — exactly
+  what lode-s1uz's *reviewer* correctly did to verify the cited URL) and **all internal bd filing**
+  (bd's `created_by` is just the local git identity, not a public act — I keep filing bd follow-ups
+  freely, per step 5 below). A committed `PreToolUse(Bash)` hook in `.claude/settings.json`
+  mechanically denies the common `gh` write verbs, the same "fence, not fix" pattern as lode-0kbq's
+  `blocks:` guard — it is a backstop, not a substitute for knowing the rule. Full rationale and the
+  draft-and-surface protocol: [docs/agents-workflow.md — Never write to an external tracker under the
+  user's identity](../../docs/agents-workflow.md#never-write-to-an-external-tracker-under-the-users-identity-lode-o29m).
 
 ## The producer cycle
 
@@ -666,6 +688,13 @@ own guidance); the cycle above already applies them, but the *why*:
   (lode-ij24), dropping the very ticket I'm about to hand off out of `bd ready`, behind its own
   follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
+- **Filing, commenting on, closing, reopening, merging, or reviewing anything on an external
+  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh
+  release`/`gist create`, `gh repo fork`, `gh api` with a non-GET method **or an implicit POST via
+  `-f`/`-F`/`--input`**, or the equivalent on a non-GitHub tracker) — even when the ticket's own text
+  asks for it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
+  record it PENDING A HUMAN instead (lode-o29m). Read-only calls (`gh issue view`, `gh api` GET,
+  `WebFetch`) and internal bd filing are unaffected — this is not license to stop filing bd follow-ups.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to
   resolve directly — a real disagreement is a judgment call for a human, not a tooling limitation to
@@ -687,7 +716,8 @@ own guidance); the cycle above already applies them, but the *why*:
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is what the reviewer actually uses; worktree path + branch are recorded too, for `/land`'s GC (bd metadata, read via `bd show --json`) |
-| I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
+| I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
+| External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs `/code-review` + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
