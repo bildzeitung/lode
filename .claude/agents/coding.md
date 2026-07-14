@@ -319,17 +319,17 @@ A docs-only change has no Python gate — skip nox, but still validate mermaid i
 I hand off only a green branch.)
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
-invalid** (distinct from exit 1, a real syntax failure). The one cause found so far is Docker
-Desktop's engine being stopped (Resource Saver mode, or WSL integration switched off for this
-distro): `command -v docker` alone can't detect this, because the Windows shim left on PATH still
-satisfies it and then fails every container run with a message that reads like "docker is absent" —
-it isn't (lode-9i2p). **I do NOT retry with `dangerouslyDisableSandbox: true`** — that was tried and
-made no measurable difference (lode-9i2p: sandboxed and unsandboxed subagents behaved identically;
-the sandbox was never the cause). An exit-2 gate is an **escalation, not a skip**: I never
-hand-verify the diagram, never hand off with the gate silently skipped, and never read "docker not
-found" as a green light to proceed without it. I revert to the last green commit, push, and follow
-the build-time escalation path below with the exact exit-2 message as the decision a human needs to
-resolve (start Docker Desktop / fix WSL integration on the build machine).
+invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
+cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
+inventing a plausible machine-level story is precisely the bug that created this exit code
+(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
+so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
+`dangerouslyDisableSandbox: true`** — that was tried and made no measurable difference (lode-9i2p:
+sandboxed and unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2
+gate is an **escalation, not a skip**: I never hand-verify the diagram, never hand off with the gate
+silently skipped, and never read a docker complaint as a green light to proceed without it. Only a
+human can fix the machine. I revert to the last green commit, push, and follow the build-time
+escalation path below, passing the exact exit-2 message through as the decision a human needs.
 
 ### 8. Push the branch to origin
 

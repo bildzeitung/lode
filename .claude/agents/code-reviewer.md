@@ -222,16 +222,17 @@ non-negotiable above; `nox -s tests` fits well under `Bash`'s 600000ms timeout c
 green before I mark `ready-for-land`.** Fix and re-run.
 
 **Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
-invalid** (distinct from exit 1, a real syntax failure). The known cause is Docker Desktop's engine
-being stopped (Resource Saver mode, or WSL integration switched off for this distro): the Windows
-shim left on PATH satisfies a bare `command -v docker` check and then fails every container run with
-a message that reads like "docker is absent" — it isn't (lode-9i2p). **I do NOT retry with
+invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
+cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
+inventing a plausible machine-level story is precisely the bug that created this exit code
+(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
+so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
 `dangerouslyDisableSandbox: true`** — tried already, made no measurable difference (sandboxed and
 unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2 gate is an
 **escalation, not a skip**: I never hand-verify the diagram in its place, never swap to
-`ready-for-land` with the gate silently skipped, and never read "docker not found" as license to
-proceed without it. I follow the escalation rule below with the exact exit-2 message as the decision
-a human needs to resolve.
+`ready-for-land` with the gate silently skipped, and never read a docker complaint as license to
+proceed without it. Only a human can fix the machine. I follow the escalation rule below, passing the
+exact exit-2 message through as the decision a human needs to resolve.
 
 ### 6. Commit my refinements
 

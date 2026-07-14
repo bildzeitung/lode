@@ -434,6 +434,14 @@ set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a
 rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
 
+**`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
+an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
+mermaid. The distinction exists precisely because a broken tool used to be indistinguishable from
+broken content (lode-9i2p). On exit 2 I do **not** isolate, do **not** bounce, and do **not** land the
+docs set with the diagram unverified: I stop the pass and surface the script's own exit-2 message
+verbatim as a human decision — it names the cause and the remedy, and only a human can fix the
+machine. A red gate is content; exit 2 is the machine.
+
 - **Green** → proceed to [Land the survivors](#4-land-the-survivors).
 - **Red** → **isolate**. The combined merge is bad but I don't yet know which branch. Reset `trunk`
   back to `origin/trunk` and replay the accepted set **one at a time** (in 3a's order), re-gating after

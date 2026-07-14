@@ -21,11 +21,33 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # failures (lode-9i2p). Guard on the INVARIANT instead: can docker actually
 # reach a running engine? `docker info` is the cheapest such probe. Exit 2
 # (distinct from exit 1's "invalid mermaid") and print NO per-doc FAIL
-# lines — a stopped engine is a machine fault, not content, and only a
+# lines — an unusable engine is a machine fault, not content, and only a
 # human can fix it.
+#
+# Both failure shapes exit 2, but they get DIFFERENT messages: naming one
+# confident cause for every possible failure is the same bug this fix exists
+# to kill, just relocated. `docker info` also fails when docker isn't
+# installed at all, or when the socket denies permission — telling that user
+# to "check Resource Saver mode" is exactly the plausible-but-false
+# machine-level story that started this ticket.
+#
+# SCOPE: this is a PRE-FLIGHT probe only. A docker-level failure *inside* the
+# per-doc loop below (image missing with no network, engine dies mid-run) still
+# surfaces as a per-doc FAIL, i.e. a broken tool still looks like broken content
+# in that window. Narrowing that needs the loop to tell `docker run`'s own
+# failures apart from mmdc's parse failures — deliberately out of scope here,
+# tracked separately (see lode-9i2p's follow-up).
 if ! docker info >/dev/null 2>&1; then
-  echo "GATE COULD NOT RUN: docker engine unreachable — Docker Desktop is not" >&2
-  echo "running (check Resource Saver mode / WSL integration for this distro)." >&2
+  if command -v docker >/dev/null 2>&1; then
+    echo "GATE COULD NOT RUN: docker engine unreachable — a docker binary is on" >&2
+    echo "PATH but cannot reach a running engine. Usual causes: Docker Desktop is" >&2
+    echo "stopped (Resource Saver mode), WSL integration is off for this distro," >&2
+    echo "or the docker socket denies permission. Diagnose with: docker info" >&2
+  else
+    echo "GATE COULD NOT RUN: no docker on PATH — mermaid validation runs the" >&2
+    echo "parser in a container and needs Docker installed. See CLAUDE.md and" >&2
+    echo "scripts/update-images.sh." >&2
+  fi
   echo "This is a machine fault a human must fix, not a mermaid syntax error —" >&2
   echo "do not hand-verify diagrams or hand off in place of this gate." >&2
   exit 2
