@@ -1205,14 +1205,14 @@ def _refresh_dead_letter_hook(
     which does the head check *after* its own transaction has already taken
     SQLite's write lock — see that function's docstring for the mechanism
     and ``docs/storage.md`` for the empirical verification. Before lode-elc8
-    this hook read the head via a separate, unprotected ``SELECT``
-    (:func:`~lode.externals.head_snapshot_info`) *before* ever calling
-    ``ingest_snapshot`` (which opens its own independent transaction), so a
-    real snapshot committed in the gap between that read and this write was
-    still clobbered — a residual window lode-uda1's own writeup correctly
-    flagged as narrowed, not closed. It is now closed outright, with no new
-    transaction-control primitive (``BEGIN IMMEDIATE`` was considered and
-    rejected as unnecessary — see ``ingest_snapshot``'s docstring).
+    this hook read the head via a separate, unprotected ``SELECT`` *before*
+    ever calling ``ingest_snapshot`` (which opens its own independent
+    transaction), so a real snapshot committed in the gap between that read
+    and this write was still clobbered — a residual window lode-uda1's own
+    writeup correctly flagged as narrowed, not closed. It is now closed
+    outright, with no new transaction-control primitive (``BEGIN IMMEDIATE``
+    was considered and rejected as unnecessary — see ``ingest_snapshot``'s
+    docstring).
 
     **Both sides of that comparison are the same clock (lode-bmg9).** The
     comparison itself no longer lives in this function — since lode-elc8 it

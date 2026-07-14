@@ -27,7 +27,6 @@ from lode.hashing import content_snapshot_id
 from lode.externals import (
     IngestResult,
     gate_reenrich,
-    head_snapshot_info,
     ingest_fetch_result,
     ingest_snapshot,
     set_no_egress,
@@ -297,45 +296,15 @@ def test_tombstone_ingest_enqueues_no_embed_job(conn) -> None:
     assert _jobs_for(conn, result.snapshot_id) == []
 
 
-# --- head_snapshot_info (lode-uda1) --------------------------------------
-
-
-def test_head_snapshot_info_none_when_no_externals_row(conn) -> None:
-    assert head_snapshot_info(conn, _EXTERNAL_ID) is None
-
-
-def test_head_snapshot_info_reflects_current_head(conn) -> None:
-    result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
-
-    info = head_snapshot_info(conn, _EXTERNAL_ID)
-    assert info is not None
-    status, fetched_at = info
-    assert status == "ok"
-    (expected_fetched_at,) = conn.execute(
-        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
-        (result.snapshot_id,),
-    ).fetchone()
-    assert fetched_at == expected_fetched_at
-
-
-def test_head_snapshot_info_reflects_tombstone_head(conn) -> None:
-    ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
-    ingest_snapshot(
-        conn, _EXTERNAL_ID, "web", tombstone_body("http_410"), status="tombstone"
-    )
-
-    status, _fetched_at = head_snapshot_info(conn, _EXTERNAL_ID)
-    assert status == "tombstone"
-
-
 # --- skip_if_head_at_or_after guard (lode-elc8) ------------------------------
 #
 # ingest_snapshot's atomic replacement for the old, separate
-# head_snapshot_info-then-ingest_snapshot read-then-write (lode-uda1's
-# original guard shape, which docs/storage.md records as narrowed but not
-# closed). These are single-connection, synchronous tests of the guard's
-# boolean logic; the genuinely-concurrent proof that the check is atomic
-# with the write lives in tests/test_worker.py
+# read-then-write (lode-uda1's original guard shape, which docs/storage.md
+# records as narrowed but not closed: a separate, unprotected SELECT before
+# the write, rather than a check inside the write's own transaction). These
+# are single-connection, synchronous tests of the guard's boolean logic; the
+# genuinely-concurrent proof that the check is atomic with the write lives
+# in tests/test_worker.py
 # (test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency).
 
 

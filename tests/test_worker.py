@@ -798,10 +798,9 @@ def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
     """lode-elc8: closes the residual read-then-write window lode-uda1's own
     guard left open (docs/storage.md "A dead-letter hook's write can race a
     late success too"). The PREVIOUS guard read the head via a separate,
-    unprotected ``SELECT`` (``externals.head_snapshot_info``) *before*
-    calling ``ingest_snapshot`` (which opens its own independent
-    transaction) -- so a real snapshot committed in the gap between that
-    read and the write was still clobbered. The test above
+    unprotected ``SELECT`` *before* calling ``ingest_snapshot`` (which opens
+    its own independent transaction) -- so a real snapshot committed in the
+    gap between that read and the write was still clobbered. The test above
     (``test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot``) only
     proves correctness for ONE hand-picked call order (the real snapshot
     fully commits, THEN the reclaim runs) -- it cannot, by construction,
