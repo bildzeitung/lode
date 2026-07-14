@@ -501,3 +501,59 @@ are catalogued in [configuration.md](configuration.md).
   implements the same recovery twice. If a *third* job type's dead-letter needs recovery, the fork is
   this: "is the underlying content still valid and cheap to retry?" → sweep; "is retrying pointless and
   the interesting fact is that it's permanently dead?" → terminal-transition hook.
+
+- **`/land`'s worktree-reclaim backstop now guards on the ACTUAL invariant (dirty tree), not just the
+  "merged into trunk" proxy that reads TRUE at zero divergence (lode-9hgu, decided/built 2026-07-13,
+  cross-referencing lode-oqr/lode-jiyk/lode-amif).** lode-jiyk's unified backstop (`.claude/skills/land/SKILL.md`
+  Section 4) reclaims any unlocked worktree under `.claude/worktrees/` whose HEAD-sha is an ancestor of
+  `trunk`. That predicate is a *proxy* for the real safety question ("is this work captured
+  elsewhere"), and the proxy is exactly wrong at zero divergence: a worktree freshly branched off
+  `trunk` HEAD is trivially "merged" before a single commit exists, so its live, uncommitted working
+  tree reads as safe to `--force`-remove. lode-oqr closed this gap only for the `coding` producer
+  (which locks its worktree before writing and unlocks after its first commit) — nothing else in the
+  system raises `locked`: not an interactive `EnterWorktree` session, not a human's hand-made worktree
+  (which `CLAUDE.md` *mandates* for all work), not an exited agent's leftover scratch. Each of those,
+  sitting at trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode
+  (which destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute
+  loop).
+
+  **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
+  path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
+  re-introduces a name dependency lode-jiyk exists to eliminate, and does not protect an *interactive*
+  `agent-*` worktree, the likelier victim; (c) require every worktree-creating path to raise
+  `git worktree lock` (spread lode-oqr's protocol beyond `coding.md`) — rejected, most places to keep
+  in sync and cannot cover a human's manual `git worktree add`; (d) accept and document only —
+  rejected, leaves a P1 that destroys uncommitted work. **Chose (a).**
+
+  **Fix:** the generalized backstop loop now checks `git -C "$WT" status --porcelain` immediately
+  after the existing `merge-base --is-ancestor` check, and skips (keeps) the worktree unless that
+  command both succeeds AND prints nothing. Scoped to *that* loop only — the per-ticket removal loop
+  earlier in the same section is a structurally different case (its `--force` rests on
+  `metadata.review_worktree` naming a worktree for a ticket that *just landed this pass*, so the
+  content is provably on trunk already; it cannot reach an interactive or hand-made worktree at all,
+  since nothing ever writes those paths into a ticket's metadata) and was deliberately left untouched.
+
+  **Fail-safe, not fail-open — the same class of bug this decision exists to fix, one level down.**
+  `git -C "$WT" status --porcelain` prints nothing both when the tree is clean and when the command
+  itself errors (missing directory, corrupt worktree admin entry, unreadable `.git` file, …). A naive
+  emptiness test alone would therefore fail *open* on error and reclaim anyway — exactly the "the
+  proxy reads the wrong way at the edge" mistake this decision exists to close. The guard captures the
+  command's own exit status separately from the emptiness test
+  (`STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue` — a command
+  substitution assignment inherits the command's exit code), so an error is treated identically to
+  "dirty": skip, keep the worktree.
+
+  **Accepted residual, unchanged from before this fix:** a *clean* worktree at trunk HEAD with a live
+  agent standing in it is still reclaimed by the ancestry+clean predicate — nothing is destroyed (the
+  tree is clean), the directory simply vanishes out from under whoever is standing in it. The failure
+  direction this decision moves the whole backstop to is "remove an empty checkout, never destroy
+  uncommitted work" — that trade is intentional and not being chased further here.
+
+  **Open, not settled by this ticket [Likely, not Certain]:** whether a hard crash of the Claude Code
+  host process leaves stale pid-keyed `git worktree lock`s behind. If it does, the harness's own lock
+  (held for the lifetime of an `isolation: worktree` agent, released on exit — verified live against a
+  reviewer's own worktree during lode-amif's review) would cause backstop 1 to skip those worktrees
+  entirely, and the crash-mid-fan-out leak lode-amif targets would still not be reached by this
+  backstop (though the dirty-tree guard above would still hold if the crashed worktree also happens to
+  be dirty, which is the common case for a build that crashed mid-edit). Confirm empirically if this
+  ever needs chasing further; not a blocker for this decision.
