@@ -833,8 +833,9 @@ escalated branch never merges. So "an escalate reclaims nothing" is true of the 
 and is not a guarantee about the sweep as a whole.) This backstop sweep
 is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
 it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
-`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — whose `review_worktree` pointer
-went stale or was never recorded. lode-jiyk unified what were originally two separate **worktree**
+`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of what any
+ticket's now-vestigial `review_worktree` pointer claims (see above: nothing reads that field). lode-jiyk
+unified what were originally two separate **worktree**
 sweeps here: an early one keyed on branch **name** (`lode-r78`), and a later one keyed directly on
 **HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
 sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
@@ -853,13 +854,15 @@ sitting in it (lode-oqr). Dropping the branch-name filter makes the sweep's **co
 it used to be incidental: *any* worktree under `.claude/worktrees/` that is unlocked and has not
 diverged from `trunk` is reclaimable, whoever created it — and a tree freshly branched off `trunk` HEAD
 is trivially "merged" by zero divergence, so uncommitted work in one is **not** protected by the merged
-check. `locked` is the only thing holding this loop off, and only the producer raises it — a hand-made
-worktree under `.claude/worktrees/` must be committed or locked. This residual is **pre-existing, not
-new** (both unified sweeps already had it: the old name-keyed one matched `worktree-agent-*`, which is
-exactly what an interactive session gets, and the old detached one was already name-blind); dropping
-the name filter just makes it impossible to overlook. **lode-9hgu** tracks fixing it at the root —
-guard on the real invariant (is the tree dirty?) rather than the zero-divergence-vulnerable
-"merged" proxy. A branch-attached candidate here is typically the reviewer's or a rebase
+check. At the time this loop was written, `locked` was the only thing holding it off, and only the
+producer raises it — a hand-made worktree under `.claude/worktrees/` had to be committed or locked to
+survive. This residual is **pre-existing, not new** (both unified sweeps already had it: the old
+name-keyed one matched `worktree-agent-*`, which is exactly what an interactive session gets, and the
+old detached one was already name-blind); dropping the name filter just makes it impossible to
+overlook. **lode-9hgu** has since fixed this at the root (see below) — it added a real guard on the
+actual invariant (is the tree dirty?) alongside the ancestry checks, rather than relying solely on the
+zero-divergence-vulnerable "merged" proxy; today a hand-made dirty worktree survives even unlocked and
+merged-by-zero-divergence. A branch-attached candidate here is typically the reviewer's or a rebase
 pickup's *own* launch worktree, per the lode-k5e/lode-8k3 architecture (they `git fetch origin
 land/<id>` and check it out into a locally **uniquely-named** branch — `land/<id>--<their-own-worktree-dir>`
 since **lode-em6v**, plain `land/<id>` before it. Before lode-em6v this reused the bare `land/<id>` name,
