@@ -185,10 +185,68 @@ def next_failure_state(
     return new_attempts, False, backoff_next_attempt_at(new_attempts, settings)
 
 
+def cas_update_running(
+    conn: sqlite3.Connection,
+    job_id: int,
+    claimed_at: str | None,
+    set_clause: str,
+    set_params: tuple,
+) -> bool:
+    """Execute one CAS-guarded UPDATE against a specific ``'running'`` claim (lode-nggm).
+
+    The single shared primitive behind every writer in this module and
+    :mod:`lode.worker` that needs to confirm it still holds a ``'running'``
+    claim before mutating it — closing hole 3 from lode-nggm (the
+    ``UPDATE ... WHERE id = ? AND status = 'running'`` + check-rowcount idiom
+    was hand-rolled at four call sites; a change to the guard shape had to be
+    made by hand in each).
+
+    Guards on ``id`` + ``status = 'running'`` + ``claimed_at`` — not
+    ``status`` alone. ``status='running'`` is not a unique claim identity, it
+    is a state a row can cycle back through: reclaimed to ``'failed'``, reset
+    to ``'pending'``, and re-claimed to ``'running'`` (with a *new*
+    ``claimed_at``) by a different worker, all inside one stall exceeding
+    ``settings.stale_running_timeout_s`` — before the original, still-stalled
+    caller finally writes using the STALE ``claimed_at`` it read at claim
+    time. A status-only guard cannot tell that later claim from its own and
+    would clobber it (lode-nggm hole 2, this ABA case). Comparing
+    ``claimed_at`` too closes it: the exact claim has to still be in place,
+    not just *a* claim.
+
+    ``claimed_at IS ?`` (not ``= ?``) is SQLite's NULL-safe equality — needed
+    because a ``'running'`` row that predates the ``claimed_at`` column, or
+    one a migration never got a chance to stamp, reads back NULL, and SQL's
+    ``= NULL`` never matches (including against a NULL parameter).
+
+    ``set_clause`` is interpolated into the SQL, so it must always be a
+    **literal** written at the call site (every current one is); only
+    ``set_params`` may carry runtime values, bound as parameters. Never pass
+    caller- or user-derived text as ``set_clause``.
+
+    No transaction management here — the caller wraps this in whatever
+    transaction shape it needs: a lone ``with conn:`` around a single call
+    (:func:`record_job_failure` below, :func:`lode.worker.run_one`'s
+    ``AuthError`` arm), or one outer ``with conn:`` batching several calls
+    (:func:`lode.worker._reclaim_stale_running`, which cannot nest a second
+    ``with conn:`` inside its own — sqlite3's connection context manager
+    doesn't nest).
+
+    Returns True if the row matched and was updated (the claim was still
+    held), False if the claim was already lost (rowcount 0).
+    """
+    cur = conn.execute(
+        f"UPDATE jobs SET {set_clause} WHERE id = ? AND status = 'running' "
+        f"AND claimed_at IS ?",
+        (*set_params, job_id, claimed_at),
+    )
+    return cur.rowcount == 1
+
+
 def record_job_failure(
     conn: sqlite3.Connection,
     job_id: int,
     current_attempts: int,
+    claimed_at: str | None,
     error_msg: str,
     settings: Settings,
 ) -> tuple[int, bool, bool]:
@@ -200,26 +258,34 @@ def record_job_failure(
     ``next_attempt_at`` (:func:`next_failure_state` /
     :func:`backoff_next_attempt_at`).
 
-    **CAS-guarded (lode-3jte):** both UPDATEs carry ``AND status = 'running'``
-    — the same guard :func:`lode.worker.run_one`'s ``except AuthError`` arm and
+    **CAS-guarded on the exact claim (lode-3jte, tightened lode-nggm):** both
+    UPDATEs go through :func:`cas_update_running`, which guards on ``id`` +
+    ``status = 'running'`` + ``claimed_at`` — the same guard
+    :func:`lode.worker.run_one`'s ``except AuthError`` arm and
     :func:`lode.worker._reclaim_stale_running` use on their own writes to this
-    table. A caller reaching this function (a handler raised, or a Batches API
-    result came back errored) does not necessarily still hold the claim: e.g.
-    ``cli._enrich_immediately`` reaches :func:`lode.worker.run_one` via
-    ``claim_and_run_one`` with no worker lock held, so a concurrent ``lode
-    work`` drain's ``_reclaim_stale_running`` can reclaim the row as stale
-    mid-handler and drive it straight to a terminal ``'dead'`` (firing its
-    dead-letter hook) before this function's UPDATE runs. Unguarded, that
-    UPDATE would then resurrect the dead-lettered job back to ``'failed'`` (and
-    double-charge ``attempts`` on top) — exactly the resurrection
-    :func:`lode.worker.run_one`'s ``AuthError`` arm was hardened against
-    (lode-9yy), just never mirrored here.
+    table. ``claimed_at`` is the value the *caller* read when it first claimed
+    this job (see the ``claimed_at`` parameter below) — not re-read here,
+    since by the time this runs the row may already belong to someone else's
+    claim. A caller reaching this function (a handler raised, or a Batches API
+    result came back errored) does not necessarily still hold the claim it
+    started with: e.g. ``cli._enrich_immediately`` reaches
+    :func:`lode.worker.run_one` via ``claim_and_run_one`` with no worker lock
+    held, so a concurrent ``lode work`` drain's ``_reclaim_stale_running`` can
+    reclaim the row as stale mid-handler and drive it straight to a terminal
+    ``'dead'`` (firing its dead-letter hook) before this function's UPDATE
+    runs. A status-only guard would then resurrect the dead-lettered job back
+    to ``'failed'`` (and double-charge ``attempts`` on top) — exactly the
+    resurrection :func:`lode.worker.run_one`'s ``AuthError`` arm was hardened
+    against (lode-9yy). Guarding on ``claimed_at`` too additionally closes the
+    ABA case where the row cycles all the way back to a *different*
+    ``'running'`` claim before this write lands (lode-nggm hole 2) — a
+    status-only guard cannot tell that claim from this call's own.
 
     Returns ``(new_attempts, dead_lettered, claim_lost)``. ``claim_lost`` is
-    True when the CAS guard's rowcount was 0 — the row was no longer
-    ``status='running'`` by the time this ran, so **neither** UPDATE actually
-    took effect; ``new_attempts``/``dead_lettered`` then describe what *would*
-    have been applied, not what's on the row. A caller must check
+    True when :func:`cas_update_running`'s rowcount was 0 — the row was no
+    longer this exact claim by the time this ran, so **neither** UPDATE
+    actually took effect; ``new_attempts``/``dead_lettered`` then describe
+    what *would* have been applied, not what's on the row. A caller must check
     ``claim_lost`` before acting on ``dead_lettered``: it must not run a
     dead-letter hook when the claim was lost, since whoever won the CAS
     already ran it (:func:`lode.worker.run_one` does exactly this).
@@ -235,35 +301,37 @@ def record_job_failure(
     Batches API result) — previously two independent, drifting copies of this
     same transition (lode-ajda).
 
-    **The one caller this does NOT serve** is
-    :func:`lode.worker._reclaim_stale_running`, which keeps its own inline
-    CAS-guarded UPDATEs: it needs an ``AND status='running'`` guard (the row
-    may no longer be its claim) plus the per-row ``rowcount`` that guard
-    yields, and it batches every reclaimed row into one outer ``with conn:``
-    — which this function's own ``with conn:`` cannot nest inside (sqlite3's
-    connection context manager doesn't nest; the inner exit would commit the
-    outer's partial work). **It now shares the policy decision** via
-    :func:`next_failure_state` (lode-yb9t) — the attempts increment and the
-    ``>= retry_max_attempts`` dead-letter gate live in exactly one place, so
-    only the SQL/persistence shape is duplicated there, not the policy: a
-    crash-reclaimed job is *structurally* guaranteed to obey the identical
-    max-attempts gate as a cleanly-failed one.
+    **The one caller that doesn't call this function directly** is
+    :func:`lode.worker._reclaim_stale_running`: it batches every reclaimed row
+    into one outer ``with conn:``, which this function's own ``with conn:``
+    cannot nest inside (sqlite3's connection context manager doesn't nest; the
+    inner exit would commit the outer's partial work). It shares the same
+    policy (:func:`next_failure_state`, lode-yb9t) and the same
+    :func:`cas_update_running` primitive this function calls (lode-nggm) —
+    calling the bare primitive itself, inside its own transaction, rather than
+    this function's transaction-wrapping shell. So the SQL guard shape and the
+    retry policy are both centralized now; only the transaction-batching shell
+    is genuinely duplicated there.
     """
     new_attempts, dead_lettered, next_at = next_failure_state(
         current_attempts, settings
     )
     if dead_lettered:
         with conn:
-            cur = conn.execute(
-                "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
-                "WHERE id = ? AND status = 'running'",
-                (new_attempts, error_msg, job_id),
+            claim_held = cas_update_running(
+                conn,
+                job_id,
+                claimed_at,
+                "status = 'dead', attempts = ?, last_error = ?",
+                (new_attempts, error_msg),
             )
-        return new_attempts, True, cur.rowcount == 0
+        return new_attempts, True, not claim_held
     with conn:
-        cur = conn.execute(
-            "UPDATE jobs SET status = 'failed', attempts = ?, "
-            "last_error = ?, next_attempt_at = ? WHERE id = ? AND status = 'running'",
-            (new_attempts, error_msg, next_at, job_id),
+        claim_held = cas_update_running(
+            conn,
+            job_id,
+            claimed_at,
+            "status = 'failed', attempts = ?, last_error = ?, next_attempt_at = ?",
+            (new_attempts, error_msg, next_at),
         )
-    return new_attempts, False, cur.rowcount == 0
+    return new_attempts, False, not claim_held
