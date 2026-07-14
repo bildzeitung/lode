@@ -793,17 +793,45 @@ are catalogued in [configuration.md](configuration.md).
   whatever cause, present or future, can never zero out the sweep on its own; the coupling is *dissolved*,
   not merely documented. Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
   staged") turns out to be the overstatement that produced the apparent contradiction in the first place:
-  measured a third time, independently, a bare `bd` read/write still leaves a worktree clean. The
-  precisely-scoped real cause of Section 3's staged-jsonl risk is `bd dolt pull` (Section 1's very first
-  command each pass — see [bd-sync discipline](../.claude/skills/land/SKILL.md#bd-sync-discipline-non-negotiable)),
-  not a per-iteration `bd show`; Section 3's text is corrected accordingly rather than deleting its
-  restore (which stays necessary for the `bd dolt pull` case). Verified end-to-end against a real scratch
-  worktree at `trunk` HEAD: an otherwise-clean worktree with only a staged `.beads/issues.jsonl` diff is
-  now correctly reclaimed (previously would have been silently skipped — the exact regression this entry
-  flagged), while a worktree with genuine additional uncommitted content is still correctly kept. The
-  sweep also now emits one summary line per pass (`worktree GC: reclaimed X of Y candidate(s) …
-  (skipped: locked=.., not-merged=.., dirty=..)`), so a regression that zeroes out GC reads as visibly
-  different from "nothing to do," closing the observability gap this entry also flagged.
+  measured a third time, independently (a bare `bd show`/`bd ready` **and** a real `bd update` write),
+  a worktree still reads clean — bd writes go to Dolt, and the tracked jsonl is regenerated+staged by
+  the **pre-commit hook at commit time**, not at `bd`-call time. Section 3's text is corrected
+  accordingly, and its restore is **kept**, not deleted.
+
+  **The positive cause remains UNESTABLISHED, and the record says so deliberately.** The obvious next
+  move — name `bd dolt pull` as "the real cause" and move on — was tried and **rejected at review**:
+  bd-sync discipline names `bd dolt pull` only as an explicit *defensive assumption* ("on the assumption
+  it may be staged even when `git diff` says otherwise"), never as a measurement, and a direct attempt to
+  reproduce it staged nothing. Replacing one confidently-wrong causal story with another — in prose about
+  a `--force`-wielding loop — is the very defect this entry exists to close, one step removed (the
+  lode-9i2p pattern: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
+  **nothing depends on the answer**: the export is by invariant never work (`import.auto: false`,
+  lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
+  why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
+
+  Verified end-to-end against a real scratch worktree at `trunk` HEAD: an otherwise-clean worktree with
+  only a staged `.beads/issues.jsonl` diff is now correctly reclaimed (previously would have been silently
+  skipped — the exact regression this entry flagged), while a worktree with genuine additional uncommitted
+  content is still correctly kept. The two paths are restored in **separate** `git restore` calls, not one
+  two-pathspec call: `git restore` aborts wholesale on an unmatched pathspec and would restore *neither*
+  file for a candidate worktree sitting at a commit predating one of them — a silent no-op reintroduced
+  inside the very line that closes silent no-ops (caught at review). The sweep also now emits one summary
+  line per pass (`worktree GC: reclaimed X of Y candidate(s) … (skipped: locked=.., not-merged=..,
+  dirty=..)`), so a regression that zeroes out GC reads as visibly different from "nothing to do," closing
+  the observability gap this entry also flagged.
+
+  **Also caught at review — a `--force` hole the observability change itself opened.** Counting the
+  `locked` skips meant moving the `locked` test out of `awk` (where it had been a filter) into the shell
+  loop, reading four tab-separated fields. Tab is IFS *whitespace*, so `read` collapses adjacent tabs and
+  does **not** preserve an empty *middle* field — and `branch` is empty for a **detached** worktree (a case
+  the loop explicitly supports). A detached worktree's line therefore shifted every field left: `$BR`
+  swallowed the locked flag, `$LOCKED` read empty, `[ "$LOCKED" = "1" ]` was false, and a **locked, live
+  agent's worktree would have sailed past the locked gate into `git worktree remove --force`** — the exact
+  rip-it-out-from-under-a-running-agent harm of the pre-lode-oqr disaster, reopened by a change whose only
+  goal was observability. Fixed by ordering the fields so the one possibly-empty field (`branch`) is
+  **last**, where an empty value is a harmless trailing delimiter. Recorded because the lesson generalizes:
+  a purely "additive" observability change reached into a destructive gate's control flow, and the bug was
+  invisible to reading — it took executing the actual `read` against a synthetic detached-worktree line.
 
   **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
   the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one

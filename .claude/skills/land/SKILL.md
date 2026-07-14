@@ -351,19 +351,32 @@ as a held dependent does.
 
 **Pre-compute every merge message before the first merge — no `bd` call inside the merge loop.** The
 `<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title).
-**Reconciled (lode-bns3):** the staged-jsonl risk this restore guards against is **not** "any `bd`
-read," despite how the previous wording here read. Measured twice now — once during lode-h1vn's
-review, once independently by lode-bns3, both inside a live agent worktree — a bare `bd show` /
-`bd update` leaves `git status --porcelain` **empty**. The real, precisely-scoped cause is
-[bd-sync discipline](#bd-sync-discipline-non-negotiable) below's own claim: `bd dolt pull` (this
-pass's very first command, in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)) can
-leave `.beads/issues.jsonl` **staged** (index != `HEAD`, worktree == index) — invisible to `git diff`
-— before this loop ever runs. The restore immediately below still exists to clear exactly that, not
-a per-iteration `bd show` dirtying anything. Hoisting every `bd show` out of the loop and caching it
-stays worth doing regardless — one read pass beats N subprocess calls, and it costs nothing to not
-depend on future `bd` versions behaving as measured today. (The Section 4 GC loop no longer needs
-this same caution taken on faith either way — as of lode-bns3 it restores the export defensively
-before judging cleanliness, so it never has to assume anything about what does or doesn't dirty it.)
+**Reconciled (lode-bns3), and note what is and is not established.** The previous wording here —
+"*any* `bd` read regenerates the passive export and leaves it **staged**" — is **not** what happens.
+Measured three times now, independently (lode-h1vn's review, lode-bns3's build, lode-bns3's review),
+each inside a live agent worktree: a bare `bd show` / `bd ready` (reads) **and** a real `bd update`
+(a write) each leave `git status --porcelain` **empty**. bd writes go to Dolt; the tracked
+`.beads/issues.jsonl` is regenerated and staged by the **pre-commit hook at commit time**, not at
+`bd`-call time. So the per-iteration `bd show` this section hoists out of the loop is **not** what
+re-dirties the tree, and no claim here should say it is.
+
+**What has NOT been established is the positive cause.** [bd-sync
+discipline](#bd-sync-discipline-non-negotiable) below names `bd dolt pull` as the suspected trigger —
+but read it closely: it states that as an explicit *defensive assumption* ("on the assumption it may
+be staged even when `git diff` says otherwise"), not as a measurement, and a direct attempt to
+reproduce it during lode-bns3's review did **not** stage anything. Do not upgrade that hedge into a
+settled fact — swapping one confidently-wrong cause for another is the failure this reconciliation
+exists to end, and a wrong causal story about a destructive path is worse than an admitted gap.
+
+**The restore below stays regardless, and its justification does not depend on knowing the cause.**
+The staged-jsonl failure is real and observed (a merge refusing with "Your local changes … would be
+overwritten"); the export is **by invariant never work** (`import.auto: false`, lode-6ra); so
+restoring it unconditionally is free, correct whatever the trigger turns out to be, and precisely the
+right move *because* the trigger is unestablished. Hoisting `bd show` out of the loop stays worth
+doing on its own merits — one read pass beats N subprocess calls, and it costs nothing to avoid
+depending on future `bd` versions behaving as measured today. (The Section 4 GC loop takes none of
+this on faith either way — as of lode-bns3 it restores the export defensively before judging
+cleanliness, so it never has to assume anything about what does or doesn't dirty it.)
 
 ```bash
 declare -A MSG
@@ -373,8 +386,9 @@ for id in $ACCEPTED; do
 done
 ```
 
-Before merging anything, unstage the passive jsonl export — the reads above can re-dirty it exactly
-like `bd dolt pull` (Section 1) does. `.beads/issues.jsonl` staged means its index blob differs from
+Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
+what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
+suspicion is unverified). `.beads/issues.jsonl` staged means its index blob differs from
 `HEAD` while the worktree matches the index — `git diff` / `git diff --quiet` read **clean** in that
 state (they compare worktree to index, not index to `HEAD`), so the drift is invisible right up until
 `git merge --no-ff` refuses with "Your local changes to the following files would be overwritten by
@@ -573,10 +587,14 @@ done
 #      reads dirty.
 # (CLOSED, lode-bns3) bd export churn used to be a SECOND unenforced coupling — this comment used to
 #   say the gate ASSUMES a `bd` write never dirties the tree, contradicted by Section 3 (~line 354,
-#   now reconciled) asserting the opposite for its own merge path. Measured twice (lode-h1vn's review,
-#   lode-bns3 itself): neither a bare `bd` read nor write dirties a worktree by itself — the real
-#   cause, precisely scoped, is `bd dolt pull` (see Section 3's reconciled note and bd-sync discipline
-#   below). But this loop no longer needs that premise settled either way: it now restores
+#   now reconciled) asserting the opposite for its own merge path. Measured three times (lode-h1vn's
+#   review, lode-bns3's build, lode-bns3's review): neither a bare `bd` read nor a `bd` write dirties a
+#   worktree by itself. The positive cause of the staged export is NOT established — `bd dolt pull` is
+#   the suspected trigger, but bd-sync discipline below states that as a defensive assumption, not a
+#   measurement, and it did not reproduce when tried (see Section 3's reconciled note; do not restate
+#   the suspicion as fact). None of that matters to this loop, which no longer needs the premise
+#   settled in EITHER direction — the whole point of the restore is that it is correct whatever the
+#   trigger turns out to be, since the export is by invariant never work. It now restores
 #   `.beads/issues.jsonl` / `.beads/interactions.jsonl` to `HEAD` immediately before judging
 #   cleanliness (mirroring Section 3's own restore) — see the dirty-tree guard below — so a staged
 #   export, from whatever cause, present or future, can never zero out this sweep on its own.
@@ -704,8 +722,18 @@ done
 # to do" apart from "reclaimed 0 of N, everything was skipped" (a regression that zeroes out GC must be
 # visible here, not silent). `locked` is counted in the loop body now rather than filtered inside awk,
 # so every candidate under .claude/worktrees/ reaches the summary, whichever bucket it lands in.
+#
+# FIELD ORDER IS LOAD-BEARING — DO NOT REORDER (`$BR` must stay LAST). Tab is IFS *whitespace*, so
+# `read` collapses adjacent tabs into a single delimiter and does NOT preserve an empty MIDDLE field.
+# `branch` is the one field that can be empty (a DETACHED worktree — a case this loop explicitly
+# supports, see the `git branch -D` note above). With `branch` in the middle, a detached worktree's
+# line (`path\thead\t\tlocked`) shifts every later field left: `$BR` swallows the locked flag and
+# `$LOCKED` reads EMPTY, so `[ "$LOCKED" = "1" ]` is FALSE and a LOCKED, LIVE agent's worktree sails
+# past the locked gate into the `--force` below — precisely the "rip a worktree out from under a
+# running agent" harm the gate exists to prevent (the pre-lode-oqr disaster). Keeping `branch` last
+# makes its empty case a TRAILING delimiter, which `read` discards harmlessly ($BR="").
 RECLAIMED=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0
-while IFS=$'\t' read -r WT SHA BR LOCKED; do
+while IFS=$'\t' read -r WT SHA LOCKED BR; do
   if [ "$LOCKED" = "1" ]; then
     SKIP_LOCKED=$((SKIP_LOCKED + 1))
     continue
@@ -750,7 +778,15 @@ while IFS=$'\t' read -r WT SHA BR LOCKED; do
   # reconciled note). Mirrors Section 3's own restore, for the identical reason. A worktree with any
   # OTHER dirt still falls straight through to the dirty bucket below, unaffected — this only ever
   # discards these two regenerable export files, never anything else.
-  git -C "$WT" restore --staged --worktree .beads/issues.jsonl .beads/interactions.jsonl 2>/dev/null || true
+  #
+  # ONE RESTORE PER PATH, ON PURPOSE — do not fold these into a single two-pathspec call. `git restore`
+  # aborts WHOLESALE on an unmatched pathspec ("did not match any file(s) known to git") and restores
+  # NEITHER file, and the `|| true` here would swallow that silently. A candidate worktree can sit at
+  # an OLD commit (a stale leftover is exactly what this backstop exists to reclaim), and a commit that
+  # predates one of these files being tracked would therefore turn the whole restore into a silent
+  # no-op — reintroducing, in the very line that closes it, the silent-no-op failure mode of lode-bns3.
+  git -C "$WT" restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true
+  git -C "$WT" restore --staged --worktree .beads/interactions.jsonl 2>/dev/null || true
   # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
   # Gates BOTH arms: a worktree captured on trunk or captured on origin but left dirty must still be
   # KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. Success and emptiness are
@@ -771,7 +807,7 @@ done < <(git worktree list --porcelain | awk '
   /^HEAD / { head=$2 }
   /^branch refs\/heads\// { branch=substr($0,19) }
   /^locked/ { locked=1 }
-  /^$/ { if (path!="" && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch"\t"locked; path="" }
+  /^$/ { if (path!="" && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"locked"\t"branch; path="" }
 ')
 git worktree prune          # drop any now-stale worktree admin entries
 # lode-bns3 (observability): always emit one line. "reclaimed 0 of 0" (nothing to do) reads differently
