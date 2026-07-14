@@ -1,38 +1,45 @@
-"""The committed PreToolUse(Bash) guard against filing on an external tracker (lode-o29m).
+"""The committed PreToolUse(Bash) guard against writing to an external tracker (lode-o29m),
+now DEFAULT-DENY with a read-only ALLOWLIST (lode-9mbt) rather than a write-verb denylist.
 
 USER RULE: an agent must never WRITE to an external tracker (GitHub, upstream repos, any
 third-party) under the user's identity. The `gh` CLI is authed as the user, so `gh issue
 create` / `gh pr comment` / etc. go out publicly under the user's name -- lode-s1uz's builder
 did exactly this (filed https://github.com/gastownhall/beads/issues/4766) because its ticket's
 own scope asked for it. The ticket's own scope is never authorisation for spending the user's
-public identity. `.claude/settings.json` carries a PreToolUse hook that denies the gh write
-verbs and points the agent at the draft-and-surface protocol instead (coding.md /
-code-reviewer.md / docs/agents-workflow.md).
+public identity. `.claude/settings.json` carries a PreToolUse hook that denies any `gh` call
+that does not match a small, explicit read-only allowlist, and returns the draft-and-surface
+protocol as the deny reason.
+
+WHY DEFAULT-DENY, NOT A DENYLIST (lode-9mbt). The original guard enumerated write verbs and
+denied only those -- a LIST OF VERBS, NOT A CATEGORY. lode-9l3d's technical review demonstrated
+empirically that this shape rots: every `gh` release can add a write verb, and the guard
+silently gets weaker with nothing in this repo changing (`gh codespace create`, `gh repo
+rename`, `gh repo archive`, `gh repo deploy-key add` all fell through even after lode-9l3d
+widened the alternation -- see lode-9rim, superseded by this ticket). The asymmetry settles it:
+a FALSE ALLOW is a public write under the user's identity, unrecoverable in the sense that
+matters (the notification already went out); a FALSE DENY blocks a read, which an agent
+reports and a human unblocks in seconds. Default-deny puts the cheap failure on the common
+path. The read surface is small, stable, and enumerable (view/list/status/checks/diff); the
+write surface is none of those things.
 
 These tests execute the hook *as shipped* -- extracted from the real settings.json and run
 exactly as the harness runs it (payload on stdin) -- following the same rationale as
 test_bd_deps_guard.py: prose alone is advisory, and a regex guard's failure mode is silent
 under- or over-matching. Nothing but a test table catches that here either.
 
-IMPLICIT POST IS DENIED TOO. `gh api` switches to POST automatically whenever a body field is
-supplied -- gh's own help: "adding request parameters will automatically switch the request
-method to POST". So `gh api repos/o/r/issues -f title=x -f body=y` files an issue with no
-`-X`/`--method` anywhere on the line. That is the *ordinary* documented way to POST with gh, not
-an exotic evasion, and an agent denied `gh issue create` would reach for it next -- the deny
-reason even names `gh api`. A guard that missed it would not enforce the rule it claims to. It
-is therefore matched on the FIELD FLAGS (`-f`/`-F`/`--field`/`--raw-field`/`--input`), with an
-explicit `-X GET` / `--method GET` exempted so the legal read-with-params form
-(`gh api search/issues -X GET -f q=...`) still works.
-
-gh's repo-ADMIN write verbs are covered too (lode-9l3d) -- the ENUMERATED ones, not the category:
-`gh secret set|delete`, `gh variable set|delete`, `gh workflow run|enable|disable`, `gh run
-rerun|cancel|delete`, `gh ssh-key add|delete`, `gh gpg-key add|delete`, `gh cache delete` (see the
-residual list below for the admin-ish verbs still outside it). This is a different risk class from a
-tracker write -- it mutates the remote (secrets, workflow triggers, keys, CI runs) rather than
-filing on a tracker -- but it is cheap to add to the same verb alternation, and the same guard is
-the natural home for it. The read-only forms of each (`gh run list|view`, `gh workflow
-list|view`, `gh secret list`, `gh cache list`) are pinned ALLOWED below, same as the tracker
-read-only forms.
+THE "api" SUBCOMMAND IS THE HARD PART. It is read-or-write depending on flags, so it cannot be
+allowed merely by matching a verb -- it needs a POSITIVE read test. Allowed only when:
+  - an explicit `-X GET` / `--method GET` is present (regardless of whether fields are also
+    present -- fields on an explicit GET are a documented way to send a query string), OR
+  - no `-f`/`-F`/`--field`/`--raw-field`/`--input` field flag is present AND no explicit
+    non-GET method is present (the plain, bodyless form defaults to GET).
+Any other shape -- an explicit non-GET method, or field flags with no explicit GET -- is
+denied. `gh api` switches to POST automatically as soon as a body field is supplied ("adding
+request parameters will automatically switch the request method to POST", per `gh api
+--help`), so `gh api repos/o/r/issues -f title=x -f body=y` files an issue with no
+`-X`/`--method` anywhere on the line. That is the *ordinary*, documented way to POST with `gh`,
+not an exotic evasion, and the route a denied agent would reach for next -- the deny reason
+even names `gh api`. A guard that missed it would not enforce the rule it claims to.
 
 Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz for the
 `blocks:` guard). A guard that reads only the command STRING cannot see through:
@@ -41,12 +48,11 @@ Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz 
     false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
     commit message quoting the verb) -- a worse trade than the residual.
   - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
-  - `gh` write verbs the alternation does not enumerate: `gh codespace create|delete` (compute,
-    not tracker/repo state) and the `repo` verbs left off the list (`gh repo rename|archive`,
-    `gh repo deploy-key add`). The alternation is a LIST OF VERBS, NOT A CATEGORY -- lode-9l3d
-    covered the enumerated admin verbs, not "the admin surface" wholesale. Tracked in lode-9rim.
-Those residual gaps rely on the prose rule in coding.md / code-reviewer.md, same as the
-`blocks:` guard relies on prose for `bd create --graph`.
+Both residuals are honest, structural, and unaffected by the denylist -> allowlist inversion --
+neither a wider denylist nor a narrower allowlist can see through them. They rely on the prose
+rule in coding.md / code-reviewer.md, same as the `blocks:` guard relies on prose for `bd
+create --graph`. What the inversion DOES close, structurally rather than by enumeration: any
+`gh` write verb not on the read-only allowlist -- including ones nobody has thought to name yet.
 """
 
 from __future__ import annotations
@@ -122,7 +128,9 @@ def _reason(command: str, *, path: str | None = None) -> str:
     return out["permissionDecisionReason"]
 
 
-# Commands that WRITE to an external tracker under the user's identity. Every one MUST be denied.
+# Commands that WRITE to an external tracker under the user's identity, or otherwise mutate a
+# remote gh surface. Every one MUST be denied. This is a regression pin (AC3): everything the
+# OLD denylist-shaped guard denied must still be denied under the new default-deny allowlist.
 DENIED = [
     "gh issue create --title x --body y",
     "gh pr create --title x --body y",
@@ -156,8 +164,7 @@ DENIED = [
     "gh repo create a-new-public-repo --public",
     "gh label create bug --color f00",  # labels are issue-tracker state
     # -- gh's repo-ADMIN surface (lode-9l3d): a different risk class (mutates the remote --
-    #    secrets, workflow triggers, keys, CI runs -- rather than filing on a tracker), but
-    #    cheap to add to the same alternation.
+    #    secrets, workflow triggers, keys, CI runs -- rather than filing on a tracker).
     "gh secret set TOKEN --body x",
     "gh secret delete TOKEN",
     "gh variable set X --body y",
@@ -173,6 +180,15 @@ DENIED = [
     "gh gpg-key add key.asc",
     "gh gpg-key delete 123",
     "gh cache delete 123",
+    # -- gh's write verbs the OLD alternation never enumerated (lode-9rim, superseded by this
+    #    ticket): NOW denied structurally, because none of them is on the read-only allowlist --
+    #    not because anyone added them to a list. This is the proof the inversion bought
+    #    something a wider denylist would not have (AC4).
+    "gh codespace create -r o/r",
+    "gh codespace delete -c my-cs",
+    "gh repo rename newname",
+    "gh repo archive o/r",
+    "gh repo deploy-key add k.pub",
     # -- gh api, EXPLICIT write method --
     "gh api repos/x/y/issues -X POST -f title=x",
     "gh api repos/x/y/issues -XPOST -f title=x",
@@ -183,6 +199,9 @@ DENIED = [
     "gh api repos/x/y/issues -X PUT -f body=x",
     "gh api repos/x/y/issues -X post -f title=x",  # gh does not care about case; nor may we
     "gh api repos/x/y/issues --method patch -f body=x",
+    # -- gh api, explicit non-GET method, NO fields at all (AC2's second direction: the
+    #    method alone is enough to deny, independent of whether fields are present).
+    "gh api repos/x/y/issues -X POST",
     # -- gh api, IMPLICIT POST: fields alone flip the method. The ordinary way to POST with
     #    gh, and the route a denied agent reaches for next. See the module docstring.
     "gh api repos/x/y/issues -f title=x -f body=y",
@@ -217,11 +236,12 @@ DENIED = [
 
 # Commands that must NOT be denied. Three families, all load-bearing:
 #   1. read-only gh calls -- explicitly required to stay legal (lode-s1uz's reviewer verified a
-#      cited URL this way).
+#      cited URL this way). This IS the allowlist (AC5/AC1) -- every one of these is the reason
+#      the guard emits no decision at all, not an exemption bolted onto a denylist.
 #   2. prose that merely QUOTES the bad form -- this repo's own commits/tickets/docs discuss it.
 #   3. legitimate internal bd usage -- this rule is about the user's PUBLIC identity, not bd.
 ALLOWED = [
-    # -- read-only gh, must stay legal --
+    # -- read-only gh, the allowlist itself --
     "gh issue view 123",
     "gh pr view 123",
     "gh issue list",
@@ -235,9 +255,8 @@ ALLOWED = [
     "gh repo view owner/repo",
     "gh label list",
     # -- read-only forms of the repo-ADMIN surface (lode-9l3d), must stay legal. Every noun the
-    #    alternation denies a verb on is pinned here, so a future widening of that alternation
-    #    cannot start false-denying the noun's READ form unnoticed. (`gh run list` is already
-    #    pinned above.)
+    #    allowlist permits a read verb on is pinned here, so a future narrowing cannot start
+    #    false-denying it unnoticed. (`gh run list` is already pinned above.)
     "gh run view 123",
     "gh workflow list",
     "gh workflow view deploy.yml",
@@ -281,7 +300,7 @@ def test_everything_else_falls_through_silently(command: str) -> None:
 
 
 def test_guard_never_emits_an_allow_decision() -> None:
-    """The settings.json guard must contain no "allow" decision at all."""
+    """The settings.json guard must contain no "allow" decision at all (AC8: no bypass)."""
     assert '"allow"' not in _hook_command()
 
 
@@ -307,15 +326,18 @@ def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
     assert "PENDING A HUMAN" in reason
     assert "Read-only gh calls" in reason
     assert "internal bd filing" in reason
-    # The reason names `gh api` as denied; it must also say the implicit-POST form is denied,
-    # or it reads as a signpost toward the very route an agent would try next.
+    # The reason names `gh api`'s implicit-POST trap; it must also say the guard is
+    # default-deny / allowlist-shaped, or it still reads like a denylist to whoever hits it.
     assert "IMPLICIT POST" in reason
+    assert "DEFAULT-DENY" in reason
+    assert "ALLOWLIST" in reason
 
 
 # lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
 # CLOSED rather than silently fall through when it is missing -- see docs/decisions.md for why.
 # This is the exact scenario named in lode-oii9's own discovery: with PATH=/nonexistent, `gh
-# issue create --title x` was NOT denied before this fix.
+# issue create --title x` was NOT denied before this fix. The default-deny inversion (lode-9mbt)
+# does not change this: the fail-closed check runs BEFORE any command parsing at all.
 def test_fails_closed_when_jq_is_missing() -> None:
     decision = _run("gh issue create --title x", path="/nonexistent")
     assert decision == "deny", (
@@ -333,3 +355,26 @@ def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
     # walks an agent into an infinite deny loop. It must say to install from OUTSIDE Claude Code.
     assert "OUTSIDE Claude Code" in reason
     assert "surface this to the human" in reason
+
+
+# --- Mutation tests (AC7): reverting the inversion must turn these RED, not just "pass green". ---
+#
+# These assert the SPECIFIC mechanism, not merely the outcome, by checking properties that only
+# hold for a default-deny allowlist and would NOT hold for a write-verb denylist: a verb nobody
+# enumerated (`gh codespace create`, `gh repo deploy-key add`) is denied. A denylist can only
+# deny verbs someone thought to list; reverting to a denylist (dropping the allowlist R
+# alternation and going back to matching only known write verbs) makes these fall through
+# (None) instead of deny, since no denylist entry above ever named `codespace` or `deploy-key`.
+def test_unenumerated_write_verb_is_denied_by_the_allowlist_not_a_list() -> None:
+    # `gh codespace create` was never in any DENIED verb list; it is denied here only because
+    # `codespace create` does not appear on the read-only allowlist. A denylist-shaped guard
+    # (reverting lode-9mbt) would fall through this with no decision at all.
+    assert _run("gh codespace create -r o/r") == "deny"
+    assert _run("gh repo deploy-key add k.pub") == "deny"
+
+
+def test_read_only_noun_with_unlisted_verb_is_still_denied() -> None:
+    # `gh issue` is a noun the allowlist recognizes (view/list/status) -- but `gh issue develop`
+    # is not one of the allowed verbs, so it must still be denied. This is the allowlist actually
+    # discriminating per-verb, not just per-noun.
+    assert _run("gh issue develop 123") == "deny"

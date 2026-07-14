@@ -611,36 +611,52 @@ The human files it manually and, if useful, pastes the resulting URL back into t
 told me to" is never authorisation — the ticket's author could not grant the user's identity in the
 first place, so there is nothing for the agent's compliance with its own ticket to have unlocked.
 
-**Mechanical guard, same "fence not fix" framing as `lode-0kbq`'s `blocks:` guard.** Docs alone are
-advisory — that is the entire lesson of `lode-s1uz` (an agent read a ticket, followed it, and filed
-publicly under the user's name because nothing said not to). A committed `PreToolUse(Bash)` hook in
-[`.claude/settings.json`](../.claude/settings.json) denies the `gh` write surface and returns the
-draft-and-surface protocol above as the deny reason:
+**Mechanical guard, same "fence not fix" framing as `lode-0kbq`'s `blocks:` guard — DEFAULT-DENY with
+a read-only ALLOWLIST (`lode-9mbt`), not a write-verb denylist.** Docs alone are advisory — that is the
+entire lesson of `lode-s1uz` (an agent read a ticket, followed it, and filed publicly under the user's
+name because nothing said not to). A committed `PreToolUse(Bash)` hook in
+[`.claude/settings.json`](../.claude/settings.json) denies **any `gh` invocation that does not match a
+small, explicit read-only allowlist**, and returns the draft-and-surface protocol above as the deny
+reason.
 
-- **tracker writes** — `gh issue|pr
-  create|comment|edit|close|reopen|delete|merge|review|lock|unlock|transfer|pin|unpin|ready|develop|update-branch`,
-  and `gh label create|edit|delete|clone` (labels are tracker state);
-- **other writes that publish under the user's public name** — `gh release create|edit|delete|upload`,
-  `gh gist create|edit|delete`, `gh repo create|fork|edit|delete|sync`;
-- **gh's repo-*admin* surface** (lode-9l3d) — `gh secret set|delete`, `gh variable set|delete`, `gh
-  workflow run|enable|disable`, `gh run rerun|cancel|delete`, `gh ssh-key add|delete`, `gh gpg-key
-  add|delete`, `gh cache delete`. A different risk class from a tracker write — it mutates the remote
-  (secrets, workflow triggers, keys, CI runs) rather than filing on a tracker — but cheap to add to the
-  same verb alternation, so the same guard is the natural home. The read-only form of every noun it
-  denies a verb on (`gh run list|view`, `gh workflow list|view`, `gh secret|variable|ssh-key|gpg-key|cache
-  list`) stays legal, each pinned in `tests/test_gh_write_guard.py`'s `ALLOWED` table so a later widening
-  of the alternation cannot start false-denying the reads unnoticed;
-- **`gh api` with an explicit non-GET method** (`-X`/`--method` `POST`/`PUT`/`PATCH`/`DELETE`, matched
-  case-insensitively — `-X post` is the same request);
-- **`gh api` with an *implicit* POST** — see below.
+**Why default-deny, not a denylist (`lode-9mbt`).** The guard originally enumerated write verbs and
+denied only those — a **list of verbs, not a category**. `lode-9l3d`'s technical review demonstrated
+empirically that this shape rots: every `gh` release can add a write verb, and the guard silently gets
+weaker with nothing in this repo changing. Probed live against the shipped hook, `gh codespace
+create|delete`, `gh repo rename`, `gh repo archive`, and `gh repo deploy-key add` all fell through even
+after `lode-9l3d` widened the alternation — the same inconsistency `lode-9l3d` itself flagged (`gh repo
+edit` was denied; `gh repo rename`, equally destructive, was not) predates it and traces to `lode-o29m`'s
+original alternation. `lode-9rim` was filed to widen the list again — the exact treadmill this ticket
+gets off. The asymmetry settles the direction: a **false allow** is a public write under the user's
+identity, unrecoverable in the sense that matters (the notification already went out); a **false deny**
+blocks a read, which an agent reports and a human unblocks in seconds. Default-deny puts the cheap
+failure on the common path. It's also cheaper to build than it looks: the guard already maintained an
+`ALLOWED` read-only table as a regression pin — inverting it largely means *promoting that table to be
+the decision*, not inventing a new one.
+
+The read-only allowlist:
+
+- **tracker reads** — `gh issue|pr view|list`, `gh issue status`, `gh pr checks|diff`, `gh release
+  list|view`, `gh repo view`, `gh label list`;
+- **gh's repo-*admin* surface, read-only forms** (`lode-9l3d`) — `gh run list|view`, `gh workflow
+  list|view`, `gh secret|variable|ssh-key|gpg-key|cache list`;
+- **`gh api`, allowed only on a positive read test** — see below.
+
+Everything else that reaches `gh` at a command position is denied **because it is absent from this
+list**, not because a write verb was enumerated. That is what closes `gh codespace create|delete`, `gh
+repo rename|archive|deploy-key add`, and any future `gh` write verb — structurally, without anyone
+having to notice the release note and widen an alternation. `lode-9rim` (widen the alternation to cover
+exactly those verbs) is **superseded, closed, not built** — reopen it only if this ticket's inversion is
+ever abandoned, since the gaps it names are real and this is the only thing currently closing them.
 
 It matches `gh` at a *command position*: after `;`/`&&`/`||`/`|`/`(`/`` ` ``/`{` or at line start,
 through the `rtk` prefix, a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
 `if`/`then`, …), an absolute or relative path to the binary (`/usr/bin/gh`), and `gh`'s global
 `-R`/`--repo`/`--hostname` flags inserted before the subcommand (the same shape of gap the `blocks:`
-guard already closes for bd's `-C`/`--directory`/`--db`). The deny/allow table is pinned by
+guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table is pinned by
 `tests/test_gh_write_guard.py`, which executes the hook as shipped, mirroring
-`tests/test_bd_deps_guard.py`.
+`tests/test_bd_deps_guard.py` — including mutation tests that assert reverting the inversion turns the
+new denies (`gh codespace create`, `gh repo deploy-key add`, …) red, not merely that the suite is green.
 
 **Both this guard and the `blocks:` guard shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
 `jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, both guards used to
@@ -650,22 +666,24 @@ before attempting to parse `tool_input.command` at all; `docs/onboarding.md` doc
 required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
 [`docs/decisions.md`](decisions.md).
 
-**The implicit POST is denied too — this one is not optional.** `gh api` switches to `POST`
-automatically as soon as a body field is supplied; from `gh api --help`: *"adding request parameters
-will automatically switch the request method to POST."* So `gh api repos/o/r/issues -f title=… -f
-body=…` files an issue with **no `-X`/`--method` anywhere on the line**. That is the *ordinary*,
-documented way to POST with `gh` — not an exotic evasion — and it is the route an agent denied at `gh
-issue create` would naturally reach for next, since the deny reason itself names `gh api`. A guard that
-caught only the *explicit* method would therefore not enforce the rule it claims to; the exemption
-would have swallowed the rule. The hook instead matches the **field flags**
-(`-f`/`-F`/`--field`/`--raw-field`/`--input`), exempting an explicit `-X GET`/`--method GET` so the
-legal read-with-params form (`gh api search/issues -X GET -f q=…`, gh's documented way to send a GET
-query string) still works. `gh api graphql -f query=…` is denied as a side effect: GraphQL is always an
-HTTP POST and the same command shape carries a mutation, so the guard **fails closed** there and the
-read must go through a REST `GET` or a human.
+**`gh api` is the hard case: it is read-or-write depending on flags, so it cannot be allowed merely by
+matching a verb — it needs a positive read test.** Allowed only when an explicit `-X GET`/`--method GET`
+is present (regardless of whether fields are also present — fields on an explicit GET are gh's
+documented way to send a query string), **or** no field flag (`-f`/`-F`/`--field`/`--raw-field`/
+`--input`) and no explicit non-GET method are present at all (the plain, bodyless form defaults to
+GET). Any other shape is denied. **The implicit POST is denied too — this one is not optional.** `gh
+api` switches to `POST` automatically as soon as a body field is supplied; from `gh api --help`:
+*"adding request parameters will automatically switch the request method to POST."* So `gh api
+repos/o/r/issues -f title=… -f body=…` files an issue with **no `-X`/`--method` anywhere on the line**.
+That is the *ordinary*, documented way to POST with `gh` — not an exotic evasion — and it is the route
+an agent denied at `gh issue create` would naturally reach for next, since the deny reason itself names
+`gh api`. A guard that caught only the *explicit* method would therefore not enforce the rule it claims
+to; the exemption would have swallowed the rule. `gh api graphql -f query=…` is denied as a side effect:
+GraphQL is always an HTTP POST and the same command shape carries a mutation, so the guard **fails
+closed** there and the read must go through a REST `GET` or a human.
 
-Residual gaps that remain, same character as the `blocks:` guard's own (a guard that reads only the
-command *string* cannot see through indirection):
+Residual gaps that remain — honest about what the inversion does **not** close, same character as the
+`blocks:` guard's own (a guard that reads only the command *string* cannot see through indirection):
 
 - **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
@@ -673,19 +691,20 @@ command *string* cannot see through indirection):
   worse trade than the residual.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
-- **`gh` write verbs the alternation still does not enumerate** — `gh codespace create|delete|…` (a
-  compute/billing surface rather than tracker or repo state), and the `repo` verbs left out of the list
-  above (`gh repo rename|archive`, `gh repo deploy-key add|delete`). `lode-9l3d` folded the *enumerated*
-  repo-admin verbs (secrets, variables, workflows, runs, SSH/GPG keys, caches) into the alternation, so
-  those are covered — but the alternation is a **list of verbs, not a category**, and anything absent
-  from it falls through. Widening it is cheap; tracked in `lode-9rim`.
 
-None of these is a reason to skip the guard — and, crucially, none of them is a route an *obedient*
-agent takes. That is the distinction that matters when judging where the fence is high enough: the
-guard must close every path a well-behaved agent following its ticket would actually walk down (which
-is why the implicit POST had to be closed, and why the residuals above may stay open), the same way the
-`blocks:` guard closes the common case of the inverted edge without claiming to catch `bd create
---graph <file>`.
+Both are structural: neither a wider denylist nor a narrower allowlist can see through them, and the
+`lode-9mbt` inversion does not claim to. **What the inversion *does* close, and the old denylist did
+not:** any `gh` write verb absent from the read-only allowlist, including ones nobody has thought to
+name yet — `gh codespace create|delete`, `gh repo rename|archive|deploy-key add`, and whatever the next
+`gh` release adds. That gap is now closed by construction, not by enumeration, which is the entire
+point of doing this as an inversion rather than another widening pass.
+
+None of the two residuals above is a reason to skip the guard — and, crucially, neither is a route an
+*obedient* agent takes. That is the distinction that matters when judging where the fence is high
+enough: the guard must close every path a well-behaved agent following its ticket would actually walk
+down (which is why the implicit POST had to be closed, and why the two residuals above may stay open),
+the same way the `blocks:` guard closes the common case of the inverted edge without claiming to catch
+`bd create --graph <file>`.
 
 **Do not touch `beads#4766` itself** — it is already filed and open on the real upstream tracker.
 Whether to leave, edit, or close it is the user's call, not any agent's; this rule governs future

@@ -1040,4 +1040,76 @@ are catalogued in [configuration.md](configuration.md).
   present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
   design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
   `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
-  exemptions) is unchanged.
+  exemptions) is unchanged. **Superseded for the matching *shape* (not the `jq` question) by the
+  `lode-9mbt` entry below**, which inverts that surface from a denylist to an allowlist.
+
+- **The `gh`-write guard (`lode-o29m`) is inverted from a write-verb DENYLIST to a read-only
+  ALLOWLIST, default-deny (`lode-9mbt`).** The original guard enumerated write verbs and denied only
+  those — a **list of verbs, not a category**. `lode-9l3d`'s technical review demonstrated this rots
+  empirically, not just theoretically: every `gh` release can add a write verb, and probed live
+  against the shipped hook, `gh codespace create|delete`, `gh repo rename`, `gh repo archive`, and `gh
+  repo deploy-key add` all fell through even after `lode-9l3d` widened the alternation. The same
+  inconsistency predates `lode-9l3d` — `gh repo edit` was denied, `gh repo rename` (same noun, same
+  identity, comparable destructiveness) was not — purely because of which verbs someone thought to
+  enumerate. `lode-9rim` was filed to widen the alternation again; that ticket is the treadmill this
+  decision gets off, and is now **closed as superseded**, not built (reopen it only if this inversion
+  is ever abandoned — the gaps it names are real and this is the only thing currently closing them).
+
+  **The asymmetry that settles the direction.** A **false allow** is a public write to GitHub under
+  the user's identity — the exact harm the guard exists to prevent, and unrecoverable in the sense
+  that matters (the notification already went out; see `lode-o29m` above and `CLAUDE.md` General
+  Directive 8). A **false deny** blocks a read; the agent reports it and a human unblocks it in
+  seconds. Default-deny puts the cheap failure on the common path — that is the whole argument, and it
+  generalizes past `gh` to any external-tracker CLI this repo might add a guard for later.
+
+  **Why this was cheaper than a rewrite:** the guard already maintained an `ALLOWED` table of
+  read-only forms as a regression pin against over-matching. Inverting the guard largely meant
+  *promoting that table to be the decision*, instead of keeping it as a check against a denylist —
+  not inventing a new mechanism from scratch.
+
+  **The hard part: the `api` subcommand**, the one form that is read-or-write depending on flags, and
+  therefore cannot be allowed merely by matching a verb. Per `CLAUDE.md` General Directive 8, `gh
+  api`'s default with `-f`/`-F`/`--field`/`--raw-field`/`--input` and no `-X` at all is an **implicit
+  POST** (`gh api --help`: "adding request parameters will automatically switch the request method to
+  POST"). The allowlist therefore allows `api` only on a **positive** read test — an explicit `-X
+  GET`/`--method GET` (regardless of whether fields are also present, since fields on an explicit GET
+  are gh's documented way to send a query string), **or** no field flag and no explicit non-GET method
+  at all (the plain, bodyless form defaults to GET). Any other shape — an explicit non-GET method, or
+  field flags with no explicit GET — is denied; getting this backwards (allowing on the mere *absence*
+  of a known write verb, which is what a denylist does) would invert the guard's meaning for the
+  single most dangerous subcommand it has to classify.
+
+  **The escape hatch is the human, out of band — deliberately no bypass token, env var, or "just this
+  once" flag an agent can invoke.** That would hand the whole guard back the moment an agent decided
+  it needed it. If a legitimate read is denied, the correct behavior is: the agent surfaces it and
+  stops; a human edits the allowlist. Same wording pattern as `lode-oii9`'s fail-closed deny reason
+  above — name the remedy, tell the agent to surface and stop, never tell it to retry.
+
+  **The accepted cost: some false denies early, by design, not a defect.** The read surface is small,
+  stable, and enumerable (`view`/`list`/`status`/`checks`/`diff`); the write surface is none of those
+  things. A `gh` read form nobody has used yet against this repo (e.g. `gh gist list`, `gh repo
+  deploy-key list`) is denied until a human widens the allowlist — that is the design working exactly
+  as intended, the mirror image of the old denylist's failure mode (a write form nobody had *listed*
+  falling through unnoticed). The allowlist was seeded from the `ALLOWED` table that already existed
+  in `tests/test_gh_write_guard.py`, plus a sweep of `gh`'s read subcommands, and is meant to widen
+  from real denials rather than from speculative completeness up front.
+
+  **What this does NOT close — honest residuals, unaffected by the inversion.** Composes with, and
+  does not touch, `lode-oii9`'s fail-closed-without-`jq` probe (both guards keep failing closed when
+  `jq` is missing, per the entry above). Two structural gaps remain, the same character as the
+  `blocks:` guard's own residuals: **quoted indirection** (`sh -c "gh issue create …"`, or the command
+  held in a shell variable — closing this would mean treating a quote as a command boundary, which
+  would false-deny this repo's own prose about the rule) and **non-`gh` routes** (a raw `curl` against
+  a tracker's REST API, a different CLI, a non-GitHub tracker's own tool). Neither a wider denylist nor
+  a narrower allowlist can see through either gap — the inversion does not claim to close them, and
+  saying otherwise would overstate what a command-string guard can ever do.
+
+  **Regression and mutation testing (verified, not assumed).** `tests/test_gh_write_guard.py` pins
+  every command the *old* denylist denied as still denied under the new allowlist (no dropped deny),
+  adds the previously-falling-through verbs (`gh codespace create|delete`, `gh repo
+  rename|archive|deploy-key add`) as newly-denied cases, and adds mutation tests that assert reverting
+  the inversion turns those specific new denies **red** — not merely that the suite stays green.
+  Executed live: reverting to the pre-`lode-9mbt` hook made exactly the expected 7 cases fail (the 5
+  unenumerated-verb denies, the reason-text markers naming the new mechanism, and the
+  mechanism-discriminating mutation test itself), confirming the tests exercise the allowlist's actual
+  behavior rather than a copy of its regex.
