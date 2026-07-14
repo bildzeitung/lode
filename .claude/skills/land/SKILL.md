@@ -537,29 +537,48 @@ done
 rtk scripts/bd-dolt-push.sh               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
 
 for id in $LANDED; do
-  rtk git push origin --delete "land/$id"   # GC the merged remote branch
-
-  # GC the local builder worktree (best-effort — only on the machine that built it).
-  # The builder records review_worktree/review_branch; once the work is on trunk the
-  # worktree and its branch are dead weight (this is the accumulation cleanup).
-  # NOTE: plain git here, not rtk — rtk reformats `worktree list --porcelain`, so an
-  # rtk-piped guard never byte-matches "worktree $WT" and silently no-ops forever (lode-9j7).
-  WT=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_worktree // empty')
-  if [ -n "$WT" ] && git worktree list --porcelain | grep -qxF "worktree $WT"; then
-    BR=$(rtk bd show "$id" --json | jq -r '.[0].metadata.review_branch // empty')
-    git worktree remove --force "$WT"            # the build artifact is on trunk now — force is safe
-    [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
-  fi
+  rtk git push origin --delete "land/$id"   # GC the merged remote branch — a bare ref delete, not a
+                                             # worktree/uncommitted-work risk, so this stays per-ticket
+                                             # regardless of the local worktree-GC decision below.
 done
 
-# Backstop: catch any dangling worktree the per-ticket loop above missed — a stale/missing
+# Local worktree + branch GC is NOT done per-ticket (lode-h1vn — see docs/decisions.md's lode-h1vn
+# entry for the full record). It used to be: a loop here read metadata.review_worktree/review_branch
+# off each just-landed ticket and force-removed unconditionally — no `locked` check, no dirty-tree
+# check — even though it shared the exact same destructive primitive (`git worktree remove --force`)
+# and risk class (destroy uncommitted work) as the backstop below, which lode-9hgu had already guarded.
+# Deleted outright rather than given its own copy of those guards: the backstop already subsumes its
+# candidate set. Every ticket this pass closed was just `--no-ff` merged into trunk (above), so each
+# one's builder-worktree HEAD is, by construction, already an ancestor of the new trunk tip by the time
+# the backstop's loop runs a few lines below — same pass, same script invocation. Relying on
+# review_worktree/review_branch metadata here was also strictly worse than what the backstop already
+# does: it trusts per-ticket bookkeeping that can drift, where the backstop discovers the worktree and
+# its branch directly from `git worktree list --porcelain`, so there is nothing to keep in sync.
+# MEASURED before deciding (lode-h1vn AC1, folded in from the duplicate lode-ux1n): `git -C $WT status
+# --porcelain` against a REAL post-build builder worktree and a REAL post-review reviewer worktree
+# (both for the then-live lode-amif, on .claude/worktrees/ at measurement time) came back EMPTY in
+# both cases. A finished worktree is clean in practice — a `bd update` (label, claim) writes only to
+# the Dolt DB, never to the tracked `.beads/issues.jsonl` file on disk; that file is regenerated,
+# staged, and committed only by the beads pre-commit hook, at commit time, so nothing is left dirty
+# between a producer's or reviewer's last commit and hand-off. The one dirty worktree found among 8
+# live worktrees at measurement time was a currently LOCKED, live, mid-merge-conflict one — already
+# excluded by `locked` before a dirty check would ever run. So a dirty-tree guard here would not have
+# silently no-op'd this cleanup; deleting the loop is strictly simpler than adding one. The one
+# accepted behavior change: a landed ticket's worktree that happens to be `locked` at GC time is no
+# longer force-reclaimed (previously this loop ignored lock entirely) — this is believed unreachable
+# in the current architecture (coding.md unlocks right after its first commit and never re-locks; a
+# ticket's builder worktree has no live agent left in it by the time it reaches ready-for-code-review),
+# and even if it somehow occurred, leaving a locked worktree alone is the correct, non-destructive call.
+
+# Backstop: now the ONLY local worktree/branch reclaim in this pass — catches every just-landed
+# builder worktree (per the reasoning above) plus whatever it always caught: a stale/missing
 # review_worktree pointer, a build that never got GC'd on its own machine, a reviewer/rebase-pickup
 # worktree from a multi-cycle review that no ticket's single review_worktree field can point at
 # (lode-r78 — the reviewer and a rebase pickup each check `land/<id>` out into their OWN fresh
 # worktree per lode-k5e/lode-8k3, so a ticket reviewed more than once leaves extra land/<id>-branched
-# worktrees the per-ticket net never sees), or (historically) this section's own rtk-mangled-porcelain
-# bug. Walk the raw porcelain blocks directly (not the per-ticket review_worktree path), so a worktree
-# with no matching ticket, or a ticket with wrong metadata, still gets reclaimed.
+# worktrees a per-ticket net could never see anyway), or (historically) this section's own
+# rtk-mangled-porcelain bug. Walks the raw porcelain blocks directly, so a worktree with no matching
+# ticket, or a ticket with stale/wrong metadata, still gets reclaimed.
 #
 # NOTE (lode-vs7g): `/code`'s own orchestrating session now reclaims a reviewer's or rebase-pickup's
 # launch worktree proactively, right after that subagent returns (either outcome — ready-for-land or
@@ -617,9 +636,9 @@ done
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
 # "merged" into trunk by content identity, so `locked` must gate this even though `merged` alone
-# looks sufficient. `merged` is the same safety invariant the per-ticket removal above already relies
-# on ("the build artifact is on trunk now — force is safe") — for a `land/<id>` worktree
-# specifically, `merged` is what proves the ticket already landed (an in-flight
+# looks sufficient. `merged` is the same safety invariant that made "the build artifact is on trunk
+# now — force is safe" true of the old per-ticket loop this backstop now fully subsumes (lode-h1vn) —
+# for a `land/<id>` worktree specifically, `merged` is what proves the ticket already landed (an in-flight
 # `ready-for-code-review`/`ready-for-land` ticket's branch has not merged into trunk yet, so its
 # worktree is excluded regardless of lock state). This `locked` check used to be a no-op in practice:
 # nothing on the producer side ever raised it, so every producer build was "merged" (trivially, by
@@ -662,8 +681,8 @@ done
 git worktree prune          # drop any now-stale worktree admin entries
 
 # Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
-# loop above never even considered them) and no remote counterpart left (lode-r78). The
-# per-ticket removal above only runs `git branch -D` when it also found a matching
+# worktree-GC loop above never even considered them) and no remote counterpart left (lode-r78). That
+# loop only runs `git branch -D` when it also found a matching
 # worktree; a local land/<id> branch that already lost its worktree by some other path (or
 # never had one materialize beyond the fetch+checkout in coding.md's rebase pickup /
 # code-reviewer.md) is invisible to it. "Remote gone" is sufficient signal on its own: an
@@ -729,17 +748,22 @@ done
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
 ticket frees the next layer of `bd ready`. Closing is mine because the merge decision is mine.
 
-The worktree GC is **best-effort and machine-local**: builds can happen on several machines, but
-`review_worktree` is an absolute path on the *build* machine, so the `git worktree list` guard simply
-skips any ticket whose worktree isn't registered here — the lander never errors on a worktree it can't
-see, and the build machine's own `/land` (or a later sweep there) reclaims it. I GC a worktree only on
-a clean **land**; a **bounce** drops the branch but the rebuild ticket may still want the tree, and an
-**escalate** keeps everything until the human resolves it. (This is about the **builder's** worktree,
-tracked by `review_worktree` — the reviewer's or rebase-pickup's *own* launch worktree is a different
-thing, and `/code` already reclaims that one proactively on an escalation too, lode-vs7g.) The
-end-of-pass backstop sweep is a second,
-independent net over the same machine's worktrees: it doesn't consult any ticket's metadata, so it
-also reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
+The worktree GC is **best-effort and machine-local**, and (since **lode-h1vn**) entirely the
+end-of-pass backstop sweep's job — there is no separate per-ticket removal step any more. Builds can
+happen on several machines; `review_worktree` is still recorded per ticket (`/land`'s worktree-GC and
+`/code`'s own reclaim both still read it elsewhere), but the backstop sweep below never consults it —
+it discovers worktrees directly off `git worktree list --porcelain` — so a ticket built on a different
+machine is simply invisible to this machine's sweep, and that other machine's own `/land` (or a later
+sweep there) reclaims it. The sweep only reclaims a worktree that is `merged`+`unlocked`+clean, which
+for a just-landed ticket's builder worktree is true precisely *because* this pass just `--no-ff` merged
+it into trunk a few lines above — so, same net effect as the old per-ticket step, nothing is reclaimed
+on a **bounce** (branch dropped, but the rebuild ticket may still want the tree — its worktree's HEAD
+was never merged, so the ancestry predicate excludes it) or an **escalate** (the branch never merges,
+so the predicate is never satisfied; everything is kept until a human resolves it). (This is about the
+**builder's** worktree — the reviewer's or rebase-pickup's *own* launch worktree is a different thing,
+and `/code` already reclaims that one proactively on an escalation too, lode-vs7g.) This backstop sweep
+is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
+it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
 `land/<id>--<worktree-dir>`, or any other name) or **detached** alike — whose `review_worktree` pointer
 went stale or was never recorded. lode-jiyk unified what were originally two separate **worktree**
 sweeps here: an early one keyed on branch **name** (`lode-r78`), and a later one keyed directly on
@@ -784,7 +808,7 @@ only net that ever reclaims them (lode-r78, lode-mxeu); `merged`+`unlocked` excl
 regardless of whether it has a branch. If the worktree has a branch, this backstop deletes it too
 (`git branch -D`); a detached worktree has none, so worktree removal alone is the entire reclaim. A
 **separate** pass right after the worktree sweep (see the script above) deletes any local `land/<id>`
-**branch ref** whose `origin/land/<id>` counterpart no longer exists — the per-ticket removal only
+**branch ref** whose `origin/land/<id>` counterpart no longer exists — the worktree sweep above only
 deletes a local branch when it also found an attached worktree, so a bare ref with no worktree (e.g.
 `git worktree remove`d by some other path) would otherwise linger forever once its remote is gone. That
 pass is the one place the **lode-em6v** renaming *does* reach: it keys on an **exact** name match

@@ -601,7 +601,9 @@ are catalogued in [configuration.md](configuration.md).
   neither a `locked` check nor a dirty check, so it force-removes unconditionally. Same primitive, same
   risk class, only one loop fails safe. The fix there is not simply "add the same guard" (a dirty-guard
   could silently no-op the per-ticket cleanup entirely, re-opening the very leak Section 4 exists to
-  close), which is exactly why it is its own ticket.
+  close), which is exactly why it is its own ticket. **Resolved by lode-h1vn (below): the per-ticket
+  loop was deleted outright rather than guarded — see that entry for the measurement that ruled out the
+  silent-no-op risk and the reasoning for why deletion, not guarding, was the simpler correct fix.**
 
   **The guard is coupled to `.gitignore`, and that coupling is load-bearing.** `status --porcelain`
   reports *untracked* files too, and a finished builder worktree is full of them: `venv/` (every
@@ -642,3 +644,91 @@ are catalogued in [configuration.md](configuration.md).
   backstop (though the dirty-tree guard above would still hold if the crashed worktree also happens to
   be dirty, which is the common case for a build that crashed mid-edit). Confirm empirically if this
   ever needs chasing further; not a blocker for this decision.
+
+- **`/land`'s per-ticket worktree GC loop was DELETED, not guarded — the generalized backstop now owns
+  all local worktree/branch reclaim (lode-h1vn, decided/built 2026-07-14; folds in lode-ux1n's
+  acceptance criteria as a duplicate).** lode-9hgu (above) added a dirty-tree guard to the *generalized*
+  backstop but deliberately left `/land`'s separate **per-ticket** GC loop (`.claude/skills/land/SKILL.md`
+  Section 4, ~line 539 before this change) untouched — it read `metadata.review_worktree`/`review_branch`
+  off each just-landed ticket and ran `git worktree remove --force` unconditionally, with neither a
+  `locked` check nor a dirty check, sharing the exact destructive primitive and risk class the
+  generalized backstop had just been guarded against. lode-9hgu's own justification for the exemption
+  ("the content is provably on trunk already") answered a different question than the one that
+  matters: that claim is about the *branch tip* that merged, not the *current working-tree state* of
+  that same directory at GC time.
+
+  **The ticket named three options:** (1) add lock+dirty guards to the per-ticket loop; (2) delete the
+  loop outright and let the generalized backstop own all worktree GC (flagged by the ticket itself as
+  "probably right," since the backstop's candidate set already subsumes the per-ticket loop's — same
+  `.claude/worktrees/` path prefix, and a landed ticket's worktree HEAD is by construction an ancestor
+  of trunk the moment this pass's `--no-ff` merge lands); (3) accept and document.
+
+  **MEASUREMENT BEFORE THE DECISION (lode-ux1n's AC1, binding):** the standing worry — stated explicitly
+  in lode-9hgu's own decision record — was that a dirty-tree guard here could *silently no-op the entire
+  per-ticket cleanup*, because this repo's beads pre-commit hook re-exports and re-stages
+  `.beads/issues.jsonl` on every commit, and a producer's/reviewer's final `bd update` (labels, claim)
+  happens *after* their last commit. If that write routinely left the working tree dirty, a naive
+  `status --porcelain` guard would match *every* worktree and convert a cleanup into a permanent leak
+  while looking like it worked — a guard that leaks everything is not a guard. This was checked against
+  real state rather than reasoned out: `git -C "$WT" status --porcelain` was run against the **real**,
+  live builder worktree for lode-amif (`metadata.review_worktree`, post-build, at the time still
+  `needs-rebase`) and the **real** reviewer worktree for the same ticket (`land/lode-amif--<dir>`, one
+  commit ahead — the reviewer's own fix already applied). **Both came back empty (clean).** Scanning all
+  8 worktrees live on the build machine at measurement time, the *only* dirty one was a currently
+  **locked**, live, mid-merge-conflict worktree — already excluded by the `locked` check before a dirty
+  check would ever run. Root cause of why the feared jsonl-drift scenario doesn't materialize in
+  practice: a `bd update` writes to the Dolt DB only; `.beads/issues.jsonl` on disk is regenerated,
+  staged, and committed *only* by the pre-commit hook, which fires at commit time, not at bd-write time
+  — so a bd write with no subsequent commit leaves the tracked file exactly as it was at the last
+  commit (stale relative to the DB, but byte-identical to what git already has), and `git status` reads
+  clean. This measurement is what makes option (1)'s guard — and by extension option (2)'s deletion,
+  which relies on the *same* already-guarded backstop — safe rather than a leak waiting to happen.
+
+  **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
+  the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one
+  the generalized backstop already carries, and no per-ticket `review_worktree`/`review_branch` metadata
+  trust (which can drift) where the backstop already does better — it discovers the worktree and its
+  branch directly from `git worktree list --porcelain`, live, every pass. The `git push origin --delete
+  "land/$id"` remote-branch cleanup that lived in the same per-ticket loop was **kept**, unchanged and
+  still per-ticket: deleting a remote ref carries none of the destroy-uncommitted-work risk this ticket
+  is about, so it never needed a guard and isn't the generalized backstop's job (it doesn't touch remote
+  refs at all).
+
+  **Verification that the cleanup is not neutered (lode-ux1n AC3):** since no ticket happened to land
+  during this build to observe an actual reclaim, the exact backstop predicate (`locked` → skip;
+  `merge-base --is-ancestor $SHA trunk` → keep if false; `status --porcelain` → skip if non-empty or
+  erroring; else reclaim) was evaluated read-only against all 8 live worktrees. It correctly kept every
+  not-yet-merged and every locked worktree, and the lode-amif builder worktree — clean, unlocked, and
+  blocked from reclaim *only* by not yet being merged (it was mid-`needs-rebase`, not landed) — would
+  satisfy every remaining condition (unlocked, clean) the instant its ancestry condition is met by
+  landing. No live-fire test of an actual `--force` removal was performed, deliberately: destructively
+  reclaiming another concurrent agent's real, in-use worktree to manufacture a positive case was not an
+  acceptable price for this verification, and none was needed — lode-9hgu's own landing already
+  regression-tested the backstop loop itself (mutation-tested against every acceptance case); this
+  ticket only had to confirm the *candidate set* now includes what the per-ticket loop used to cover,
+  which the dry-run against real worktrees does.
+
+  **The `locked`-worktree question, answered (lode-ux1n AC5):** yes, deleting the per-ticket loop means
+  a landed ticket's worktree that happens to be `locked` at GC time is no longer force-reclaimed — this
+  *is* a real, deliberate behavior change (the old per-ticket loop ignored lock state entirely). Is it
+  reachable in practice? **Believed unreachable under the current architecture, not proven impossible:**
+  `coding.md` unlocks a builder's worktree immediately after its first commit and never re-locks it, and
+  the harness's own lock is scoped to a *live* `isolation: worktree` agent — the producer that built a
+  ticket has already exited (its task ended) by the time that ticket reaches `ready-for-code-review`,
+  let alone `ready-for-land`. The only way a landed ticket's *builder* worktree could be locked at GC
+  time is if some other agent were later re-entered into that exact worktree, which nothing in the
+  current design does (every task gets its own fresh worktree). If this residual is ever hit in
+  practice, the correct behavior is the one this change produces anyway: leave a locked, in-use worktree
+  alone rather than force-remove it out from under whoever holds the lock — per the ticket's own
+  framing, "arguably the correct behavior."
+
+  **Why the per-ticket loop and the generalized backstop deliberately used different predicates before
+  this change — so a future reader does not "unify" them back into a silent leak by re-adding a
+  metadata-trusting fast path:** the per-ticket loop's predicate (`review_worktree` metadata lookup,
+  unconditional force) was never a *safety* predicate at all — it was a *convenience* shortcut trusting
+  bookkeeping the backstop doesn't need. It looked different from the backstop's guarded predicate
+  because it was solving a narrower, seemingly-safer-by-construction problem ("this exact ticket just
+  landed, so its exact recorded worktree must be safe") that turned out to share the *same* underlying
+  risk (destroy uncommitted work) the moment that assumption's premise — "nothing ever re-dirties a
+  just-landed worktree between build and GC" — went unstated and unverified. There is no longer a
+  second predicate to keep in sync: this is now the fix, not a design tension to preserve.
