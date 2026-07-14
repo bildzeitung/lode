@@ -373,10 +373,11 @@ separate **`code-reviewer`** agent (on Opus), so the technical review is done by
 write the code. It does **not** drive my worktree at all: it fetches `origin/land/<id>` and checks the
 branch out into **its own** launch worktree, where `Edit`/`Write`/`nox` all work natively
 (`docs/decisions.md`). What it actually needs from my hand-off is the **pushed head SHA**
-(`review_head`) — I still record the worktree path too (`review_worktree`/`review_branch`), but as of
-**lode-h1vn** nothing reads them any more: `/land`'s per-ticket GC loop (their only consumer) is gone,
-and its backstop sweep discovers worktrees live off `git worktree list`. They are vestigial
-bookkeeping, kept for forensics; the reviewer never opens the worktree either.
+(`review_head`) — that is the only metadata field this hand-off writes. **I no longer record
+`review_worktree`/`review_branch`** (retired by lode-2m89: `/land`'s per-ticket GC loop was their only
+consumer and lode-h1vn deleted it; the backstop sweep discovers worktrees live off `git worktree list`,
+and `/code`'s own reclaim derives its target from the ticket id, per lode-vs7g). The reviewer never
+opens the worktree either.
 
 **Immediately before applying the label, assert the tree is clean — one last time:**
 
@@ -393,8 +394,6 @@ So I go back to **step 6** (commit, re-gate, re-push) rather than push them stra
 ```bash
 HEAD_SHA=$(rtk git rev-parse HEAD)
 rtk bd update <id> --add-label ready-for-code-review \
-  --set-metadata review_worktree="$(rtk git rev-parse --show-toplevel)" \
-  --set-metadata review_branch="$(rtk git rev-parse --abbrev-ref HEAD)" \
   --set-metadata review_head="$HEAD_SHA"
 rtk scripts/bd-dolt-push.sh   # publish claim + ready-for-code-review over refs/dolt/data — durable, cross-machine
 ```
@@ -423,16 +422,14 @@ genuinely needed during the build (an ambiguous acceptance criterion, a design f
 settle), I:
 
 - **revert to the last green commit** and push the branch (so the work isn't stranded),
-- **record the worktree hand-off even though I'm not marking `ready-for-code-review` yet.** Exit (a)
+- **record `review_head` even though I'm not marking `ready-for-code-review` yet.** Exit (a)
   for this exact escalation source re-enters at `ready-for-code-review` (`docs/agents-workflow.md`),
   and `/code`'s step-1 stranded-review sweep refuses a ticket with no `metadata.review_head` — leaving
-  it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same fields
+  it unset here strands that re-entry the moment a human resolves the decision (lode-t83). Same field
   as the green hand-off, captured now while the reverted-to-green tree and its push are still current:
 
   ```bash
-  rtk bd update <id> --set-metadata review_worktree="$(rtk git rev-parse --show-toplevel)" \
-    --set-metadata review_branch="$(rtk git rev-parse --abbrev-ref HEAD)" \
-    --set-metadata review_head="$(rtk git rev-parse HEAD)"
+  rtk bd update <id> --set-metadata review_head="$(rtk git rev-parse HEAD)"
   ```
 - **do not** set `ready-for-code-review`; instead `rtk bd update <id> --add-label land-escalated
   --append-notes "ESCALATION: <the decision needed>"`, then `rtk scripts/bd-dolt-push.sh`, and
@@ -461,12 +458,12 @@ never kicked back), I stop and report — nothing to pick up.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree — never `EnterWorktree`, never the old build worktree
 
-The build worktree recorded in `metadata.review_worktree` is a leftover of an earlier `git -C`
-architecture (`docs/decisions.md`) — I don't need it, and I don't open it. I bring the branch to *my
-own* launch worktree instead, exactly like the code-reviewer now does, so `Edit`/`Write`/`nox` all work
-natively and the whole guard question — the isolation guard refuses to run any command resolved into a
-*path-entered* worktree (`"commands from a worktree-isolated agent must run inside its worktree"`) —
-never comes up.
+The original build worktree (a leftover of an earlier `git -C` architecture, `docs/decisions.md`) is
+not something I need or open — no metadata points at it any more since lode-2m89 retired
+`review_worktree`/`review_branch`. I bring the branch to *my own* launch worktree instead, exactly like
+the code-reviewer now does, so `Edit`/`Write`/`nox` all work natively and the whole guard question —
+the isolation guard refuses to run any command resolved into a *path-entered* worktree (`"commands from
+a worktree-isolated agent must run inside its worktree"`) — never comes up.
 
 **Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
 (lode-em6v). Reusing `land/<id>` as the local name meant a second cycle on the same ticket (or a
@@ -572,10 +569,11 @@ rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs
 
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
-precheck reads. I leave `review_worktree`/`review_branch`/`review_head` untouched — they still
-correctly describe the original build. (`review_head` is live — the reviewer and `/land`'s drift
-precheck read it. `review_worktree`/`review_branch` are vestigial since **lode-h1vn** deleted `/land`'s
-per-ticket GC loop, their last reader; I keep recording them as forensic bookkeeping.)
+precheck reads. I leave `review_head` untouched — it still correctly describes the original build, and
+it's live, but its readers are *not* `/land`: they are the **code-reviewer** (which checks it out and
+diffs it for drift) and **`/code`'s step-1 stranded-review guard** (which refuses a ticket whose
+`review_head` is empty). `/land`'s 2a precheck reads `land_head`, the field I just refreshed above.
+(`review_worktree`/`review_branch` no longer exist as of lode-2m89 — nothing writes or reads them.)
 
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
 opened it this cycle — `/land` GCs it on a clean land, same as always.
@@ -720,7 +718,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
-| Review context | head SHA (`review_head`) is what the reviewer actually uses; worktree path + branch are recorded too, for `/land`'s GC (bd metadata, read via `bd show --json`) |
+| Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs `/code-review` + `/simplify` there |
