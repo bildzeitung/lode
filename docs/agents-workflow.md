@@ -715,17 +715,17 @@ Residual gaps that remain — honest about what the inversion does **not** close
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
 
-Both are structural: neither a wider denylist nor a narrower allowlist can see through them, and the
+Each of these is structural: neither a wider denylist nor a narrower allowlist can see through them, and the
 `lode-9mbt` inversion does not claim to. **What the inversion *does* close, and the old denylist did
 not:** any `gh` write verb absent from the read-only allowlist, including ones nobody has thought to
 name yet — `gh codespace create|delete`, `gh repo rename|archive|deploy-key add`, and whatever the next
 `gh` release adds. That gap is now closed by construction, not by enumeration, which is the entire
 point of doing this as an inversion rather than another widening pass.
 
-None of the two residuals above is a reason to skip the guard — and, crucially, neither is a route an
+None of the residuals above is a reason to skip the guard — and, crucially, none is a route an
 *obedient* agent takes. That is the distinction that matters when judging where the fence is high
 enough: the guard must close every path a well-behaved agent following its ticket would actually walk
-down (which is why the implicit POST had to be closed, and why the two residuals above may stay open),
+down (which is why the implicit POST had to be closed, and why the residuals above may stay open),
 the same way the `blocks:` guard closes the common case of the inverted edge without claiming to catch
 `bd create --graph <file>`.
 
