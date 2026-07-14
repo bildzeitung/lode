@@ -336,14 +336,14 @@ are catalogued in [configuration.md](configuration.md).
   `git worktree list --porcelain`'s `branch refs/heads/...` lines, or enumerating branch refs directly)
   it structurally could not see it — at the time, the only net that ever caught it was a separate
   by-SHA/by-detached-state sweep, added in lode-mxeu specifically because the name-keyed sweep couldn't
-  see a worktree with no branch. (lode-jiyk later **unified** that by-SHA/detached sweep with the
-  name-keyed one into a single loop keyed on HEAD-sha ancestry — see below — so today there is one
-  worktree-GC loop, not two or four; this paragraph's "structurally could not see it" describes the
-  state *before* that unification, not the current system.) Worse, the leak was self-compounding: every
-  leaked worktree was exactly the "already checked out elsewhere" state that forced the *next* cycle
-  onto the same detaching path. The actual fix is on the agent side, not `/land`'s: `code-reviewer` and
-  `coding`'s rebase pickup now check `land/<id>` out under a local name suffixed with their own launch
-  worktree's directory name (e.g. `land/<id>--agent-<hash>`), which is unique by construction, so the
+  see a worktree with no branch. (lode-jiyk has since **unified** those *two* worktree sweeps — and only
+  those two — into a single loop keyed on HEAD-sha ancestry, which is why both are described here in the
+  past tense.) Worse, the leak was self-compounding: every leaked worktree was exactly the "already
+  checked out elsewhere" state that forced the *next* cycle onto the same detaching path.
+
+  The actual fix is on the agent side, not `/land`'s: `code-reviewer` and `coding`'s rebase pickup now
+  check `land/<id>` out under a local name suffixed with their own launch worktree's directory name
+  (e.g. `land/<id>--agent-<hash>`), which is unique by construction, so the
   collision — and with it the detaching fallback — can no longer arise. The suffixed name still starts
   with `land/`, but `/land`'s worktree GC (lode-jiyk) doesn't match on that prefix, or on any branch
   name at all, any more: it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and
@@ -358,10 +358,11 @@ are catalogued in [configuration.md](configuration.md).
   the sweep silently degrades into "delete every `land/*` ref not currently checked out", taking an
   in-flight ticket's unpushed commits with it the moment its worktree goes away by any route. It now
   strips the suffix (`${BR%%--*}`, safe because a bd id never contains `--`) before comparing, restoring
-  the original semantics for both the suffixed and the bare shape. The unified worktree-GC loop
-  (lode-jiyk) still catches a detached worktree via the same HEAD-sha-ancestry test — that capability
-  didn't go away, it just now lives in the one loop rather than a separate sweep — as defense against a
-  crash mid-cycle, not steady-state operation.
+  the original semantics for both the suffixed and the bare shape. A detached worktree is still caught,
+  by that same HEAD-sha-ancestry test — as defense against a crash mid-cycle, not steady-state
+  operation, since the rename means the detach fallback no longer fires at all. The mechanism of record
+  for all of the above is [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors)
+  §4 — check this prose against it, not the other way round.
 
   **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
