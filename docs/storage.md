@@ -692,11 +692,28 @@ intentional case where a *later* refresh (the staleness policy, not this race) e
 and correctly tombstones over older, still-referenced content regardless (no "unless there's prior
 content" carve-out — see the hook's own docstring).
 
-This is deliberately narrower than, and does not resolve, the still-open `run_one` success-UPDATE
-question above: guarding the hook's *snapshot write* on a fact/verdict basis is uncontroversial once
-stated (the tombstone is documentation of a fetch outcome, and documenting a stale outcome over a
-real one serves nobody), whereas guarding the *job row's* `status='done'` transition trades off
-against the enrich `prompt_ver` receipt (see the note above) and needed its own ticket.
+This is deliberately narrower than, and independent of, the `run_one` success-UPDATE question above:
+guarding the hook's *snapshot write* on a fact/verdict basis is uncontroversial once stated (the
+tombstone is documentation of a fetch outcome, and documenting a stale outcome over a real one serves
+nobody), whereas guarding the *job row's* `status='done'` transition trades off against the enrich
+`prompt_ver` receipt (see the note above) and needed its own ticket. This guard neither depends on
+nor prejudges how that one is settled.
+
+**What this guard does *not* do: it narrows the window, it does not close it.** The check is a
+read-then-write — `externals.head_snapshot_info` reads the head, and `ingest_snapshot` then opens its
+*own* `with conn:` transaction to write the tombstone — so the read is not atomic with respect to the
+write. A handler committing its real snapshot in the gap *between* the hook's read and the hook's
+write is still clobbered. That residual window is the few microseconds of one `SELECT` plus a hash
+and an `INSERT`, against the seconds-wide window it replaces (the whole span from the handler's
+snapshot commit through to `run_one`'s terminal `UPDATE`), so this is strictly better rather than a
+race merely moved — but it is a narrowing, not a proof. Closing it outright means holding the write
+lock across the read (`BEGIN IMMEDIATE`), which would be this codebase's first use of explicit
+transaction control and would couple the hook to `ingest_snapshot`'s internal transaction boundary;
+that is deliberately left as its own decision rather than smuggled into this fix. In practice the
+exposure is small for a second reason: `refresh` handlers only ever run inside `worker.drain`, which
+holds the single-instance `lock.WorkerLock`, so a *live* handler racing a reclaim needs two live
+workers on one DB — which the lock prevents in the normal single-machine case, though it explicitly
+disclaims being a data-integrity guard ("CAS + SQLite serialization own correctness").
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 

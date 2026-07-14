@@ -325,9 +325,12 @@ before (or racing) the reclaim's dead-letter hook, the hook must not overwrite t
 content with a tombstone. The hook is guarded on the job's `claimed_at`: it skips the tombstone write
 when the external's head is already a non-tombstone snapshot fetched at or after that claim (see
 `docs/storage.md` "A dead-letter hook's write can race a late success too" for the full race and
-rationale). This guard is orthogonal to — and does not depend on — the separate, still-open question
+rationale). This guard is orthogonal to — and neither depends on nor prejudges — the separate question
 of whether a late `status='done'` job-row write should itself be guarded (`docs/storage.md` "Crash
-reclaim: a job stuck in `running`").
+reclaim: a job stuck in `running`"). Note it narrows the race rather than closing it outright: the
+head read and the tombstone write are not one transaction, so a real snapshot committing between them
+is still overwritten — see `docs/storage.md` for the residual window and why closing it is left as its
+own decision.
 
 ---
 

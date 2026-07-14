@@ -1199,6 +1199,17 @@ def _refresh_dead_letter_hook(
     behavior this hook always had before lode-uda1, since there is no claim
     timestamp to compare against.
 
+    **The guard narrows this race; it does not close it.** The head read below
+    and :func:`~lode.externals.ingest_snapshot`'s write are not one
+    transaction (``ingest_snapshot`` opens its own ``with conn:``), so a real
+    snapshot committed in the gap between them is still overwritten. The
+    residual window is the microseconds of one ``SELECT`` + hash + ``INSERT``,
+    versus the seconds-wide window it replaces (the handler's snapshot commit
+    through ``run_one``'s terminal ``UPDATE``) — strictly better, not merely
+    moved, but not a proof. Closing it outright needs the write lock held
+    across the read (``BEGIN IMMEDIATE``), which would couple this hook to
+    ``ingest_snapshot``'s transaction boundary; see ``docs/storage.md``.
+
     Deferred import mirrors :func:`_refresh_handler`: keeps the
     httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
     cost off code paths where no ``refresh`` job has ever dead-lettered.
