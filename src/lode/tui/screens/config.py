@@ -1,14 +1,10 @@
 """Config/diagnostics screen (lode-3r4) — the TUI half of ``lode config``.
 
-Renders the exact same row set as the CLI's ``lode config`` command, via the
-ONE shared row-builder (:func:`lode.config.config_lines`, lode-u5gh) — a
-read-only surface reachable from the capture screen via the app-level ``F2``
-binding (:meth:`~lode.tui.app.LodeApp.action_show_config`). Before lode-u5gh
-this screen built its own, independently-scoped row list, which had already
-drifted from the CLI's once (lode-ak6 added a model-cache row to the CLI by
-hand; nothing connected the two lists so this screen missed it). Collapsing
-onto one shared builder closes that gap structurally: a row added to
-:func:`~lode.config.config_lines` reaches both surfaces.
+A read-only surface reachable from the capture screen via the app-level ``F2``
+binding (:meth:`~lode.tui.app.LodeApp.action_show_config`). It renders the exact
+same rows as the CLI's ``lode config``, because both call the ONE shared
+row-builder :func:`lode.config.config_lines` — which is where the rows, and why
+they are shared rather than mirrored by hand, are documented (lode-u5gh).
 """
 
 from __future__ import annotations

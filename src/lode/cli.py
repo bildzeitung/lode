@@ -1082,16 +1082,6 @@ def no_egress_(
     typer.echo(f"{state} no_egress: {external_id}")
 
 
-def _config_lines(db: Path | None) -> list[str]:
-    """Resolve ``--db`` (else the ``$LODE_HOME`` default), then render via the
-    shared row-builder (:func:`lode.config.config_lines`) both this command and
-    the TUI's F2 diagnostics screen render from (lode-u5gh) — a ``--db``
-    override shifts the displayed DB and its co-located lock + vector store.
-    """
-    db_path = db or default_db_path()
-    return config_lines(db_path)
-
-
 @app.command()
 def config(
     db: Path | None = _DB_OPTION,
@@ -1102,12 +1092,13 @@ def config(
     so you can find, back up, or inspect lode's state: the root, the SQLite DB and
     its sibling lock, the LanceDB vector store, the model-weights cache, the log
     directory, and the optional ``config.toml`` (shown present/absent) — the same
-    set ``docs/configuration.md`` "Paths & locations" documents. Reads the
-    resolved paths from
-    :mod:`lode.config` rather than re-deriving them; ``--db`` shifts the displayed
-    DB (and its lock + co-located vector store) to an explicit override.
+    set ``docs/configuration.md`` "Paths & locations" documents. The rows come
+    from the shared row-builder (:func:`lode.config.config_lines`) that the TUI's
+    F2 diagnostics screen renders from too, so the two cannot drift (lode-u5gh);
+    ``--db`` shifts the displayed DB (and its lock + co-located vector store) to
+    an explicit override.
     """
-    for line in _config_lines(db):
+    for line in config_lines(db or default_db_path()):
         typer.echo(line)
 
 

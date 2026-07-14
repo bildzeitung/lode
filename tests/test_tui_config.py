@@ -19,7 +19,14 @@ from textual.widgets import Static
 from typer.testing import CliRunner
 
 from lode.cli import app as cli_app
-from lode.config import config_path, lance_dir, lock_path, log_dir, model_cache_dir
+from lode.config import (
+    config_path,
+    default_db_path,
+    lance_dir,
+    lock_path,
+    log_dir,
+    model_cache_dir,
+)
 from lode.tui.app import LodeApp
 from lode.tui.screens.config import ROWS_ID, ConfigScreen
 
@@ -108,11 +115,17 @@ def test_cli_and_tui_render_identical_rows(
     # surface's list can no longer happen because there is only one list
     # (lode.config.config_lines) -- this test would catch a regression back to
     # two independently-built row sets even if neither list itself changed.
+    #
+    # Both sides are fed the SAME input on purpose: one $LODE_HOME (monkeypatch,
+    # which the CliRunner subprocess-less invoke inherits) and, for the TUI, the
+    # very db_path the no---db CLI resolves to. Any difference in the output is
+    # then a difference in the RENDERING -- i.e. real drift -- and never an
+    # artifact of the two sides having been handed different paths.
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
-    db_path = home / "lode.db"
+    db_path = default_db_path()
 
-    cli_result = runner.invoke(cli_app, ["config"], env={"LODE_HOME": str(home)})
+    cli_result = runner.invoke(cli_app, ["config"])
     assert cli_result.exit_code == 0
     cli_lines = cli_result.stdout.splitlines()
 
