@@ -943,8 +943,8 @@ flowchart TD
     ONE --> BUILD["coding builder (Sonnet):<br>claim · build (simplest thing) ·<br>nox -t fix / nox -s tests green"]
     FAN --> BUILD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
-    BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_worktree ·<br>land-escalated · surface async"]
-    BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(worktree path · SHA) · KEEP worktree"]
+    BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
+    BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(review_head SHA) · KEEP worktree"]
     PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
@@ -1048,12 +1048,13 @@ not that the branch is finished — the `code-reviewer` can still escalate a hal
 closed by lode-t83):** re-entering at `ready-for-code-review` is only a real re-entry if something
 carries the hand-off and something else consumes the label —
 
-1. A `coding` build-time escalation used to skip recording `review_worktree`/`review_branch`/
-   `review_head` entirely (it only wrote that metadata in the green hand-off path). A re-entered
-   ticket therefore had no worktree for `code-reviewer` to drive. **Fixed:** the build-time escalation
-   now records those three metadata fields against the reverted-to-green commit at escalation time,
-   even though it doesn't set the label itself — so the fields are already there the moment a human
-   applies `ready-for-code-review`.
+1. A `coding` build-time escalation used to skip recording `review_head` entirely (it only wrote that
+   metadata in the green hand-off path). A re-entered ticket therefore had nothing for `code-reviewer`
+   to check out. **Fixed:** the build-time escalation now records `review_head` against the
+   reverted-to-green commit at escalation time, even though it doesn't set the label itself — so the
+   field is already there the moment a human applies `ready-for-code-review`. (At the time this fix
+   landed the escalation also recorded `review_worktree`/`review_branch`; both are retired outright as
+   of lode-2m89 — nothing ever read them, `review_head` was always the field that mattered here.)
 2. Neither `bd ready` (the ticket stays `in_progress`) nor `/code`'s Phase 2 (which only reviews a
    ticket its *own* Phase 1 just built) ever picked the re-entered ticket back up — it was worse off
    than a `land-escalated` ticket, which at least `/sweep` surfaces. **Fixed:** `/code`'s step-0
@@ -1281,12 +1282,14 @@ assumption would not have closed it.
   (A claimed ticket already drops out of `bd ready`, so a producer won't re-grab work waiting to review
   or land.)
 - **Hand-off context is minimal — head SHA + a one-line summary** (small JSON in bd fields, read via
-  `bd show --json`). The builder's worktree path is recorded too, but the code-reviewer no longer
-  drives it: it fetches `origin/land/<id>` and checks the branch out into its **own** launch worktree
-  instead, so the head SHA (`review_head`) is the field it actually depends on; the worktree path
-  survives only for `/land`'s worktree GC (below). The lander re-reviews and re-gates, so stored
-  gate-results would be decorative; the SHA exists only to detect drift (a push onto the branch
-  *after* it was marked ready). The branch name isn't stored — it's derived (below).
+  `bd show --json`). The code-reviewer no longer drives the builder's worktree at all: it fetches
+  `origin/land/<id>` and checks the branch out into its **own** launch worktree instead, so the head
+  SHA (`review_head`) is the only field it depends on. The builder's worktree path used to be recorded
+  too (`review_worktree`/`review_branch`), on the theory that `/land`'s worktree GC might need it; it
+  never did (the backstop sweep discovers worktrees live off `git worktree list`, lode-h1vn), so both
+  fields are retired outright (lode-2m89) — nothing writes or reads them. The lander re-reviews and
+  re-gates, so stored gate-results would be decorative; the SHA exists only to detect drift (a push
+  onto the branch *after* it was marked ready). The branch name isn't stored — it's derived (below).
 - **Branches are `land/<ticket-id>` on origin** (`git push -u origin HEAD:land/<id>`) — derivable from
   the ticket, no opaque `worktree-agent-<hash>` refs on the remote. **GC:** delete `origin/land/<id>`
   on a successful land *or* a bounce (a rebuild gets a fresh `land/<new-id>`); keep it for an

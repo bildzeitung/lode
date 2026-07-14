@@ -846,16 +846,15 @@ are catalogued in [configuration.md](configuration.md).
   `.gitignore` regression now silently disables *all* local worktree GC at once, where before it only
   degraded the backstop.
 
-  **`review_worktree`/`review_branch` are now VESTIGIAL — written by `coding.md`, read by nobody.** The
-  deleted loop was their only GC consumer; the backstop discovers worktrees live off
+  **`review_worktree`/`review_branch` were VESTIGIAL at this point — written by `coding.md`, read by
+  nobody.** The deleted loop was their only GC consumer; the backstop discovers worktrees live off
   `git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
-  rather than trusting a recorded path (lode-vs7g). They are still recorded (harmless, and useful
-  forensically), and the stale cross-references that claimed `/land`'s GC "keys off `review_worktree`"
-  were corrected at review across `.claude/skills/code/SKILL.md`, `.claude/agents/coding.md`,
-  `.claude/agents/code-reviewer.md`, and `docs/agents-workflow.md` — the *guarantee* those docs protect
-  (the builder must not remove its own worktree; `/land` reclaims it on a clean land) is unchanged; only
-  the mechanism is. Whether to stop writing them is **lode-2m89** (filed at review; the decision record
-  promised such a ticket but none had been created), not folded in here.
+  rather than trusting a recorded path (lode-vs7g). The stale cross-references that claimed `/land`'s
+  GC "keys off `review_worktree`" were corrected at review across `.claude/skills/code/SKILL.md`,
+  `.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`, and `docs/agents-workflow.md` — the
+  *guarantee* those docs protect (the builder must not remove its own worktree; `/land` reclaims it on
+  a clean land) is unchanged; only the mechanism is. Whether to stop writing them was deferred to
+  **lode-2m89** — resolved below, at the end of this file: the fields are retired outright.
 
   **The `locked`-worktree question, answered (lode-ux1n AC5):** yes, deleting the per-ticket loop means
   a landed ticket's worktree that happens to be `locked` at GC time is no longer force-reclaimed — this
@@ -881,6 +880,39 @@ are catalogued in [configuration.md](configuration.md).
   risk (destroy uncommitted work) the moment that assumption's premise — "nothing ever re-dirties a
   just-landed worktree between build and GC" — went unstated and unverified. There is no longer a
   second predicate to keep in sync: this is now the fix, not a design tension to preserve.
+
+- **`review_worktree`/`review_branch` metadata — RETIRED, not merely deprecated (lode-2m89, follow-up
+  to lode-h1vn above).** lode-h1vn deleted `/land`'s per-ticket worktree-GC loop, the last consumer of
+  these two bd metadata fields; every remaining reader was already gone by construction — the backstop
+  sweep discovers worktrees live off `git worktree list --porcelain`, `/code`'s own reclaim derives its
+  target from the ticket id rather than trusting a recorded path (lode-vs7g), and the code-reviewer
+  reads only `review_head` (live — it's what it actually checks out and diffs for drift). Confirmed by
+  grep at the time this ticket was built: zero readers of either field anywhere in `.claude/` or
+  `docs/`.
+
+  **Decision: (a) stop writing them**, not (b) keep them as documented forensic bookkeeping. Two fields
+  maintained forever for a dead consumer is exactly the kind of orphaned machinery the "simplest thing
+  that works" principle argues against, and the risk the ticket named — a future reader "restoring" a
+  phantom consumer because the fields are still there, looking load-bearing — is real precisely because
+  they *were* load-bearing once, under the deleted per-ticket loop. Retiring the write is the more
+  legible signal: no field, no expectation. `review_head` stays exactly as-is — it is live and this
+  ticket does not touch it. Its two real readers, named precisely so this entry does not repeat one
+  field over the very mistake it records: the **code-reviewer** (it is what the reviewer checks out and
+  compares against for drift, `code-reviewer.md`) and **`/code`'s step-1 stranded-review guard**, which
+  refuses to dispatch a reviewer at a ticket whose `metadata.review_head` is empty
+  (`.claude/skills/code/SKILL.md`, lode-k5e/lode-t83). **`/land` is *not* a reader** — its 2a drift
+  precheck reads `land_head` (written by the code-reviewer and refreshed by a rebase pickup);
+  `.claude/skills/land/SKILL.md` never mentions `review_head` at all.
+
+  **What changed:** `coding.md`'s hand-off (step 9, both the green path and the build-time-escalation
+  path) no longer calls `--set-metadata review_worktree=…` / `--set-metadata review_branch=…` — only
+  `review_head` is written. `code-reviewer.md`, `.claude/skills/code/SKILL.md`, and
+  `.claude/skills/land/SKILL.md` had their cross-references updated: passages describing the fields as
+  "still recorded" or "vestigial-but-written" now say they no longer exist; passages describing the
+  *historical* per-ticket loop that used to key off them are left as history (they are still accurate
+  descriptions of what the old, deleted loop did). The worktree-must-not-be-removed-by-its-builder
+  invariant, and `/land`'s backstop-sweep-reclaims-it-on-a-clean-land invariant, are both **unchanged**
+  — this ticket only removes a write nobody was reading, not any part of the reclaim mechanism itself.
 
 - **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
   when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented

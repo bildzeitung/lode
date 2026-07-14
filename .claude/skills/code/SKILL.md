@@ -336,7 +336,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    Pass the resolved task in each prompt, e.g.:
 
    > Implement lode-ai1 as a producer following your cycle (claim → worktree → gates → push
-   > `origin/land/<id>` → mark `ready-for-code-review`, recording `review_worktree`/`review_head` →
+   > `origin/land/<id>` → mark `ready-for-code-review`, recording `review_head` →
    > keep the worktree → stop). Do **not** review your own work, merge, close, or push trunk. Stop and
    > escalate (revert to green, annotate `land-escalated`, don't hand off) if a clarifying decision is
    > needed during the build; stop and report if a gate fails.
