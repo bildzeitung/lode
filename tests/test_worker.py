@@ -808,6 +808,14 @@ def test_run_transient_failure_does_not_clobber_a_job_reclaimed_to_a_new_claim(
     job_id = _insert_job(conn)
     _claim_one(conn, ("embed",), _now_iso())
     new_claimants_attempts = 9
+    # Must be unmistakably DIFFERENT from the claimed_at _claim_one just
+    # stamped, or the guard matches and this test silently stops testing the
+    # ABA case. Not `_future_iso(0)`: that is a raw wall-clock read at
+    # millisecond precision, while _claim_one stamps jobs.now_iso() — a
+    # different clock (jobs.now() deliberately runs *ahead* of the wall clock,
+    # see its docstring) at the same precision, only a SELECT/UPDATE/SELECT
+    # earlier. The two can collide on the same millisecond. An hour out cannot.
+    new_claimants_claimed_at = _future_iso()
 
     def _cycled_to_a_new_claim_then_transient_error(conn_, tv, db, s):
         # Stand-in for the FULL cycle a concurrent reclaim + reset + re-claim
@@ -819,7 +827,7 @@ def test_run_transient_failure_does_not_clobber_a_job_reclaimed_to_a_new_claim(
             conn_.execute(
                 "UPDATE jobs SET status = 'running', attempts = ?, "
                 "last_error = NULL, claimed_at = ? WHERE id = ?",
-                (new_claimants_attempts, _future_iso(0), job_id),
+                (new_claimants_attempts, new_claimants_claimed_at, job_id),
             )
         raise RuntimeError("transient blip (test)")
 
@@ -838,6 +846,8 @@ def test_run_transient_failure_does_not_clobber_a_job_reclaimed_to_a_new_claim(
     assert row["status"] == "running"
     assert row["attempts"] == new_claimants_attempts
     assert row["last_error"] is None
+    # It is specifically the NEW claim that survived, not merely *a* running row.
+    assert row["claimed_at"] == new_claimants_claimed_at
 
 
 def test_run_auth_error_reset_does_not_clobber_a_job_reclaimed_to_a_new_claim(
@@ -847,13 +857,16 @@ def test_run_auth_error_reset_does_not_clobber_a_job_reclaimed_to_a_new_claim(
     job_id = _insert_job(conn)
     _claim_one(conn, ("embed",), _now_iso())
     new_claimants_attempts = 9
+    # An hour out, for the same reason as the transient test above: a raw
+    # `_future_iso(0)` can land on the same millisecond as _claim_one's stamp.
+    new_claimants_claimed_at = _future_iso()
 
     def _cycled_to_a_new_claim_then_auth_error(conn_, tv, db, s):
         with conn_:
             conn_.execute(
                 "UPDATE jobs SET status = 'running', attempts = ?, "
                 "last_error = NULL, claimed_at = ? WHERE id = ?",
-                (new_claimants_attempts, _future_iso(0), job_id),
+                (new_claimants_attempts, new_claimants_claimed_at, job_id),
             )
         raise AuthError("no credentials (test)")
 
@@ -871,6 +884,8 @@ def test_run_auth_error_reset_does_not_clobber_a_job_reclaimed_to_a_new_claim(
     assert row["status"] == "running"
     assert row["attempts"] == new_claimants_attempts
     assert row["last_error"] is None
+    # It is specifically the NEW claim that survived, not merely *a* running row.
+    assert row["claimed_at"] == new_claimants_claimed_at
 
 
 # ---------------------------------------------------------------------------

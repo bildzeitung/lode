@@ -218,6 +218,11 @@ def cas_update_running(
     one a migration never got a chance to stamp, reads back NULL, and SQL's
     ``= NULL`` never matches (including against a NULL parameter).
 
+    ``set_clause`` is interpolated into the SQL, so it must always be a
+    **literal** written at the call site (every current one is); only
+    ``set_params`` may carry runtime values, bound as parameters. Never pass
+    caller- or user-derived text as ``set_clause``.
+
     No transaction management here — the caller wraps this in whatever
     transaction shape it needs: a lone ``with conn:`` around a single call
     (:func:`record_job_failure` below, :func:`lode.worker.run_one`'s

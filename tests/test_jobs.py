@@ -442,3 +442,10 @@ def test_cas_update_running_rejects_when_status_is_not_running(conn) -> None:
     )
 
     assert matched is False
+    row = conn.execute(
+        "SELECT status, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    # Untouched — claimed_at matches, so it is the status half of the guard
+    # that held here. Without this, the test would pass on the return value
+    # alone even if the UPDATE had written the row.
+    assert row == ("done", None)

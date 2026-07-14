@@ -638,14 +638,27 @@ hook already fired back to `'done'`. Whether a late success should instead
 be made to lose to the reclaim's verdict is a real design decision — the work
 *did* complete, so `'done'` is arguably the truthful terminal state, but a
 fired dead-letter hook implies the job is gone, which a subsequent `'done'`
-contradicts — not settled here. **`collect_enrich_batch`'s two `status =
-'done'` UPDATEs are *not* actually exposed to this race**, despite writing the
-same-shaped unguarded UPDATE: like `_mark_job_failed` above, they only ever
-run against rows selected by `batch_handle`, which
-`_reclaim_stale_running` excludes for life. Narrowing this scope (an earlier
-version of this document, and of lode-nggm, grouped both success paths
-together) matters for whoever picks up the follow-up: only `run_one`'s two
-sites need a decision.
+contradicts — not settled here.
+
+The `batch_handle` exemption covers *some* but not all of the remaining
+`'done'` writers, and the distinction is what the follow-up is scoped on:
+
+- **`collect_enrich_batch`'s two `status = 'done'` UPDATEs are *not* exposed to
+  this race**, despite writing the same-shaped unguarded UPDATE: like
+  `_mark_job_failed` above, they only ever run against rows selected by
+  `batch_handle = ?`, which `_reclaim_stale_running` excludes for life.
+- **`submit_enrich_batch`'s gated-out `skip_ids` UPDATE *is* exposed**, and the
+  `batch_handle` argument does **not** cover it: those rows were pre-claimed to
+  `'running'` by `_batch_submit_enrich`, but their `batch_handle` is still
+  `NULL` at that point (nothing has been submitted yet), so they sit squarely
+  inside `_reclaim_stale_running`'s `batch_handle IS NULL` SELECT. Its window is
+  far narrower than `run_one`'s — the gated-out write happens in-process,
+  before the network call, so reaching it takes a `stale_running_timeout_s`
+  stall between the pre-claim and a purely local gating step — but "narrow" is
+  not "excluded", and it is the same unguarded-success decision.
+
+So the open decision covers `run_one`'s two sites *and* this one; only
+`collect_enrich_batch`'s two are genuinely out of scope.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
