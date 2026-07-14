@@ -642,6 +642,14 @@ guard already closes for bd's `-C`/`--directory`/`--db`). The deny/allow table i
 `tests/test_gh_write_guard.py`, which executes the hook as shipped, mirroring
 `tests/test_bd_deps_guard.py`.
 
+**Both this guard and the `blocks:` guard shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
+`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, both guards used to
+silently fall through — verified live during this guard's own land review, `gh issue create` was
+**not** denied under `PATH=/nonexistent`. Both hooks now deny outright when `jq` is unreachable,
+before attempting to parse `tool_input.command` at all; `docs/onboarding.md` documents `jq` as a
+required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
+[`docs/decisions.md`](decisions.md).
+
 **The implicit POST is denied too — this one is not optional.** `gh api` switches to `POST`
 automatically as soon as a body field is supplied; from `gh api --help`: *"adding request parameters
 will automatically switch the request method to POST."* So `gh api repos/o/r/issues -f title=… -f
