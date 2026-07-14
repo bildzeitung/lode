@@ -199,8 +199,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    needs no cooperation from the agent, so it works even when the agent crashed, escalated, or returned
    a garbled path — and it reclaims **every** worktree that ticket accumulated (a ticket reviewed or
    picked up across N cycles leaves N of them), not just the last one. It cannot touch the **builder's**
-   worktree: that one is branch-named `worktree-agent-*`, never `land/<id>--*`, so it stays for `/land`'s
-   `review_worktree` GC exactly as before.
+   worktree: that one is branch-named `worktree-agent-*`, never `land/<id>--*`, so it stays for `/land`
+   to reclaim on a clean land — via `/land`'s end-of-pass backstop sweep, which since **lode-h1vn** owns
+   *all* local worktree GC (it discovers worktrees live off `git worktree list --porcelain`; the old
+   per-ticket loop that keyed off `review_worktree` is gone).
 
    Two details that are load-bearing, both verified against live `git` behaviour:
    - **Plain `git`, not `rtk`** — `rtk` reformats `worktree list --porcelain`, which breaks the field
@@ -477,5 +479,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   reclaim block](#reclaim). The one thing worth repeating here is what it must **not** touch — a *fresh
   build*'s worktree, which is branch-named `worktree-agent-*` (never `land/<id>--*`, so the derived
   reclaim skips it by construction) and is deliberately kept through the whole build → review → land
-  lifecycle (`docs/decisions.md`), since `/land`'s GC still keys off `review_worktree` to reclaim it on
-  a clean land. `/land`'s backstops 1-4 stay exactly as they were.
+  lifecycle (`docs/decisions.md`), since `/land` reclaims it on a clean land — via its end-of-pass
+  backstop sweep, which since **lode-h1vn** owns all local worktree GC (the per-ticket `review_worktree`
+  loop is deleted; a landed builder worktree's HEAD is an ancestor of `trunk`, so the backstop catches
+  it). `/land`'s backstops stay exactly as they were.

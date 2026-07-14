@@ -686,7 +686,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Thing | Rule |
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; removed after land) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
@@ -1285,9 +1285,13 @@ assumption would not have closed it.
   *escalated* ticket until the human resolves it, which always removes `land-escalated` — see
   "Resolving `land-escalated`" above (a sweep to surface long-abandoned escalations, rather than
   resolve them, is a later hygiene task).
-  On a clean land the lander **also removes the builder's local worktree** (and its branch), keyed off
-  the `review_worktree` metadata — best-effort and machine-local: the `git worktree list` guard skips a
-  worktree that lives on another machine, so the build machine reclaims its own.
+  On a clean land the lander **also removes the builder's local worktree** (and its branch) — since
+  **lode-h1vn** via its end-of-pass backstop sweep, which discovers worktrees directly from
+  `git worktree list` rather than from the ticket's `review_worktree` metadata (the per-ticket loop that
+  read it is deleted; a landed builder worktree's HEAD is an ancestor of `trunk`, so the sweep catches
+  it). Still best-effort and machine-local: a worktree on another machine isn't in this machine's
+  `git worktree list` at all, so the build machine reclaims its own. The sweep declines to reclaim a
+  **dirty** or **locked** worktree — leaking a directory beats destroying uncommitted work.
 - **Single-lander lock (v1): a local "skip if already running" guard + the convention that the
   `/land` loop runs on one machine.** The guard stops a `/loop 5m /land` tick from overlapping a
   still-running land on the same machine; the one-machine convention covers cross-machine. A

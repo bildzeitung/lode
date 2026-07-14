@@ -41,9 +41,9 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 - **One task per worktree, one worktree per task.** The harness creates mine from **local `trunk`
   HEAD** (not `origin/trunk`, which may be stale). I don't `git worktree add` it — and I do **not**
   remove it either: even though the code-reviewer no longer drives it in place (it fetches `land/<id>`
-  into its own worktree instead — `docs/decisions.md`), `/land`'s worktree GC still keys off the
-  `review_worktree` metadata I record, so retiring this worktree here is out of scope for me (a
-  worktree with commits is not auto-removed anyway). In a fan-out batch I am one of N independent
+  into its own worktree instead — `docs/decisions.md`), reclaiming it is **`/land`'s** job, not mine —
+  its end-of-pass backstop sweep takes it once the ticket lands (lode-h1vn), so retiring this worktree
+  here is out of scope for me (a worktree with commits is not auto-removed anyway). In a fan-out batch I am one of N independent
   producers; I never block a sibling — I return my own result (handed off, or escalated) promptly.
 - **bd is the only task tracker.** No TodoWrite, no markdown checklists, no `MEMORY.md`. If a piece
   of work will take more than ~2 minutes, it is a bd issue *before* I start coding.
@@ -373,8 +373,10 @@ separate **`code-reviewer`** agent (on Opus), so the technical review is done by
 write the code. It does **not** drive my worktree at all: it fetches `origin/land/<id>` and checks the
 branch out into **its own** launch worktree, where `Edit`/`Write`/`nox` all work natively
 (`docs/decisions.md`). What it actually needs from my hand-off is the **pushed head SHA**
-(`review_head`) — I still record the worktree path too (`review_worktree`), because `/land`'s worktree
-GC reads it later, but the reviewer itself no longer opens it.
+(`review_head`) — I still record the worktree path too (`review_worktree`/`review_branch`), but as of
+**lode-h1vn** nothing reads them any more: `/land`'s per-ticket GC loop (their only consumer) is gone,
+and its backstop sweep discovers worktrees live off `git worktree list`. They are vestigial
+bookkeeping, kept for forensics; the reviewer never opens the worktree either.
 
 **Immediately before applying the label, assert the tree is clean — one last time:**
 
@@ -406,8 +408,9 @@ reviewer's machine. I never commit the passive jsonl export, never touch the mai
 merge, never `bd close`.
 
 **I must NOT remove my worktree.** The reviewer no longer drives it (it works from its own checkout of
-the pushed branch instead), but `/land`'s worktree GC still keys off the `review_worktree` metadata I
-record, so it must still survive my exit (a worktree with commits is not auto-removed anyway). I just
+the pushed branch instead), and reclaiming it is **`/land`'s** job — its end-of-pass backstop sweep
+takes it once the ticket lands (lode-h1vn) — so it must still survive my exit (a worktree with commits
+is not auto-removed anyway). I just
 **stop and leave it in place** — no `git worktree remove`, no `ExitWorktree --remove`. (The **lander**
 removes the worktree after a successful land; reclaiming it is never mine.)
 
@@ -570,7 +573,9 @@ rtk scripts/bd-dolt-push.sh   # publish the label swap + refreshed SHA over refs
 `land_head`/`land_summary` is the one field-name convention the whole loop uses — the same keys
 `code-reviewer` sets when it first marks a ticket `ready-for-land`, and what `/land`'s 2a drift
 precheck reads. I leave `review_worktree`/`review_branch`/`review_head` untouched — they still
-correctly describe the original build (and remain what `/land`'s worktree GC keys off).
+correctly describe the original build. (`review_head` is live — the reviewer and `/land`'s drift
+precheck read it. `review_worktree`/`review_branch` are vestigial since **lode-h1vn** deleted `/land`'s
+per-ticket GC loop, their last reader; I keep recording them as forensic bookkeeping.)
 
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
 opened it this cycle — `/land` GCs it on a clean land, same as always.
@@ -647,8 +652,8 @@ own guidance); the cycle above already applies them, but the *why*:
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
 - **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`) **during a fresh build.**
-  The reviewer no longer drives it in place, but `/land`'s worktree GC still keys off
-  `review_worktree` — discarding it early strands that bookkeeping. (During a **rebase pickup**
+  The reviewer no longer drives it in place, but reclaiming it is `/land`'s job, not mine — its backstop
+  sweep takes it once the ticket lands (lode-h1vn). (During a **rebase pickup**
   instead, my own launch worktree is a *different* thing — see the next bullet.)
 - **Trying to `git worktree remove` my own launch worktree during a rebase pickup.** I cannot remove
   the worktree I am currently standing in. `/code` reclaims it after I return, deriving it from the
@@ -712,7 +717,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Thing | Value |
 |---|---|
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — but `/land`'s worktree GC still keys off it; not auto-removed) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is what the reviewer actually uses; worktree path + branch are recorded too, for `/land`'s GC (bd metadata, read via `bd show --json`) |
