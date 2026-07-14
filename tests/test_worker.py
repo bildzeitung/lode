@@ -934,6 +934,123 @@ def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
     assert snapshot_count == 1
 
 
+def test_reclaim_dead_letter_hook_deduped_success_is_atomic_under_genuine_concurrency(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-9tj4, the concurrent half: a successful-but-DEDUPED refresh must
+    survive the tombstone winning the write lock, exactly as a
+    content-CHANGED one does (the test above).
+
+    ``test_reclaim_dead_letter_hook_recognizes_a_deduped_success`` only proves
+    the SEQUENTIAL order (the dedup fully commits, THEN the reclaim runs). That
+    is the ticket's stated scenario, but it is not the only reachable one, and
+    the dedup path is *uniquely* fragile in the other order:
+
+    A content-CHANGED refresh SELF-HEALS when the tombstone lands first --
+    ``ingest_snapshot`` sees a head it does not match, inserts its snapshot and
+    drags ``externals.head_snapshot_id`` back onto it (this is precisely what
+    lode-elc8 verified empirically: the real snapshot "waits the lock out, lands
+    cleanly and becomes head"). A DEDUPED refresh has no such recovery: it only
+    bumps ``fetched_at`` and NEVER moves the head. So if it decides "this is a
+    dedup" from a head read taken BEFORE it holds the write lock, a tombstone
+    committing in that gap stays head **forever** -- and reconcile's refresh
+    sweep skips tombstoned heads, so nothing ever revisits it. That is lode-uda1's
+    absorbing corruption, reached through the one door lode-9tj4 opened by making
+    the dedup path a writer.
+
+    The fix is that ``ingest_snapshot``'s lock-taking ``externals`` upsert now
+    runs first for EVERY caller, not just the guarded one, so the dedup decision
+    is made under the write lock and can never rest on a stale head.
+
+    Mirror-image of the elc8 test above: the holder thread stands in for the
+    dead-letter hook's guarded write (which legitimately did NOT fire its guard
+    -- at the moment it read, the head's ``fetched_at`` genuinely predated the
+    claim), while the REAL, deduping ``ingest_snapshot`` runs on the primary
+    connection. Mutation-tested: revert the "upsert first for every caller"
+    ordering and this fails with head == 'tombstone' over a successful fetch.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot, tombstone_body
+
+    external_id = "https://example.com/deduped-success-concurrent-race"
+    body = "stable, unchanging body"
+    hold_seconds = 0.3
+
+    # An existing 'ok' head whose fetched_at PREDATES the job's claim -- the
+    # production shape (a refresh job only exists for an already-drawn-down
+    # external) and the precondition for the guard's blind spot: the hook,
+    # reading this head, correctly sees nothing newer than its own claim.
+    seeded = ingest_snapshot(conn, external_id, SOURCE_TYPE_WEB, body)
+    conn.execute(
+        "UPDATE snapshots SET fetched_at = ? WHERE snapshot_id = ?",
+        ("2000-01-01T00:00:00.000000Z", seeded.snapshot_id),
+    )
+    conn.commit()
+
+    # The dead-letter hook's tombstone write, holding its transaction OPEN --
+    # i.e. it WON the write lock. Written directly (mirroring the hook's write
+    # shape) for the same reason the elc8 test above does so: the property under
+    # test is what the OTHER side does while this lock is held.
+    lock_acquired = threading.Event()
+
+    def hold_tombstone_write_open() -> None:
+        conn2 = sqlite3.connect(db_path, timeout=5.0)
+        conn2.execute("BEGIN")
+        conn2.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, status, fetched_at) "
+            "VALUES (?, ?, ?, 'tombstone', ?)",
+            (
+                "tombstone-snapshot-id",
+                external_id,
+                tombstone_body("timeout"),
+                _now_iso(),
+            ),
+        )
+        conn2.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            ("tombstone-snapshot-id", external_id),
+        )
+        lock_acquired.set()
+        time.sleep(hold_seconds)
+        conn2.commit()
+        conn2.close()
+
+    holder = threading.Thread(target=hold_tombstone_write_open)
+    holder.start()
+    assert lock_acquired.wait(timeout=5.0), (
+        "holder thread never acquired its write lock"
+    )
+
+    # The handler's successful refetch: identical content. Pre-fix, its head
+    # read ran in autocommit (unblocked by conn2's open write txn -- WAL readers
+    # do not block), saw the still-'ok' head, committed to the dedup path, and
+    # then only bumped fetched_at on a row that was no longer head by the time
+    # the UPDATE landed.
+    started_at = time.monotonic()
+    ingest_snapshot(conn, external_id, SOURCE_TYPE_WEB, body)
+    elapsed = time.monotonic() - started_at
+    holder.join()
+
+    # It genuinely waited on conn2's write lock rather than racing past a stale
+    # read -- the lock-taking upsert is its first statement now.
+    assert elapsed >= hold_seconds - 0.1, (
+        f"deduping ingest returned after only {elapsed:.3f}s -- expected it to "
+        f"block for roughly {hold_seconds}s waiting on conn2's write lock"
+    )
+
+    # THE PROPERTY: the successfully re-verified content is still head. (Pre-fix
+    # this is 'tombstone' -- the absorbing corruption.)
+    status, head_body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "ok"
+    assert head_body == body
+
+
 def test_run_refresh_dead_letter_still_tombstones_over_older_content(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
