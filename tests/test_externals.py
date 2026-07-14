@@ -129,6 +129,85 @@ def test_dedup_does_not_touch_existing_externals_row(conn) -> None:
     assert n_before == n_after == 1
 
 
+def test_ok_dedup_bumps_fetched_at_forward(conn, monkeypatch) -> None:
+    """lode-9tj4: a successful identical refetch must revalidate, not no-op.
+
+    Before the fix, ``ingest_snapshot``'s dedup branch left the existing
+    head row's ``fetched_at`` untouched -- so
+    ``worker._refresh_dead_letter_hook``'s late-success guard
+    (``head_fetched_at >= claimed_at``) had nothing recent to see for the
+    single most common refresh outcome (unchanged content), and could
+    tombstone a source that had just been successfully re-verified. The
+    fix bumps ``fetched_at`` on the existing row to ``jobs.now_iso()`` --
+    the one deliberate exception to ``snapshots``' otherwise-immutable
+    columns (``docs/storage.md`` "The guard's blind spot").
+
+    The clock is monkeypatched to a fixed, unambiguously-later value for
+    the dedup call -- a plain ``>=`` against two real-clock readings taken
+    microseconds apart would pass trivially even with NO bump at all
+    (equal timestamps satisfy ``>=``), so this pins the assertion to an
+    exact, deterministic value that can only appear if the ``UPDATE`` ran.
+    """
+    first = ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+    (fetched_at_before,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+
+    later = "2099-01-01T00:00:00.000000Z"
+    assert later != fetched_at_before
+    monkeypatch.setattr("lode.externals.jobs.now_iso", lambda: later)
+    second = ingest_snapshot(conn, _EXTERNAL_ID, "web", "hello world")
+
+    assert second.deduped
+    assert second.snapshot_id == first.snapshot_id
+    (fetched_at_after,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+    assert fetched_at_after == later
+    # Still exactly one row -- the bump mutates the EXISTING row in place,
+    # it does not insert a new one.
+    assert _count_snapshots(conn, _EXTERNAL_ID) == 1
+
+
+def test_repeated_tombstone_dedup_does_not_bump_fetched_at(conn, monkeypatch) -> None:
+    """The lode-9tj4 bump is deliberately scoped to a successful ('ok')
+    dedup only. A repeated identical tombstone reason is a re-verification
+    that the source is STILL dead, not a revalidation -- and the guard
+    already ignores a tombstone head outright, so bumping it here would buy
+    nothing. This pins the boundary so it can't silently widen.
+
+    Same deterministic-clock technique as the 'ok' test above: if a future
+    change mistakenly widened the bump to tombstone dedups too,
+    ``fetched_at_after`` would equal ``later`` instead of staying at
+    ``fetched_at_before``, catching the regression precisely rather than
+    relying on real-clock timing.
+    """
+    first = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_404"), status="tombstone"
+    )
+    (fetched_at_before,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+
+    later = "2099-01-01T00:00:00.000000Z"
+    assert later != fetched_at_before
+    monkeypatch.setattr("lode.externals.jobs.now_iso", lambda: later)
+    second = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("http_404"), status="tombstone"
+    )
+
+    assert second.deduped
+    (fetched_at_after,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (first.snapshot_id,),
+    ).fetchone()
+    assert fetched_at_after == fetched_at_before
+    assert fetched_at_after != later
+
+
 # --- changed body moves the head ----------------------------------------------
 
 

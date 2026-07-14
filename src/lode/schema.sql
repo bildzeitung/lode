@@ -64,7 +64,10 @@ CREATE TABLE IF NOT EXISTS externals (
         DEFERRABLE INITIALLY DEFERRED
 );
 
--- snapshots — immutable mirrored external content (UNUSED until connectors).
+-- snapshots — immutable mirrored external content (UNUSED until connectors),
+-- with ONE deliberate exception: fetched_at (see below, lode-9tj4). Every
+-- other column (snapshot_id, external_id, body, raw_payload, status) is
+-- write-once for the row's lifetime.
 -- snapshot_id = H(framed: external_id, body). body is the extracted text;
 -- raw_payload is the original fetched bytes/markup; status tombstones link rot.
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -81,6 +84,14 @@ CREATE TABLE IF NOT EXISTS snapshots (
     -- a backward clock step and lets a tombstone clobber a successful fetch.
     -- The DEFAULT is retained for test/ad-hoc inserts; a NEW production writer
     -- of snapshots must pass fetched_at=jobs.now_iso() explicitly.
+    --
+    -- fetched_at is ALSO the one column ingest_snapshot mutates on an
+    -- EXISTING row (lode-9tj4): a successful ("ok") dedup -- an identical
+    -- refetch of the current head -- bumps this forward to jobs.now_iso()
+    -- rather than leaving it pinned at the original fetch time. Every other
+    -- column, and this one for a "tombstone" row, stays write-once. See
+    -- docs/storage.md "The guard's blind spot" for why and
+    -- src/lode/externals.py's ingest_snapshot docstring for the mechanism.
     fetched_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     status      TEXT NOT NULL CHECK (status IN ('ok', 'tombstone')),
     FOREIGN KEY (external_id) REFERENCES externals (external_id)

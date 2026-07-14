@@ -277,9 +277,22 @@ def ingest_snapshot(
     (dedup on ``external_id`` — one canonical node per source, never one row
     per citing note, ``docs/externals.md``). Computes ``snapshot_id =
     H(external_id, body)``; if it equals the current head, this is an
-    identical refetch and is a no-op (no row, no enqueue, no FTS write,
-    ``deduped=True``). Otherwise inserts the new snapshot row and moves
-    ``externals.head_snapshot_id`` to it; an ``"ok"`` snapshot also enqueues
+    identical refetch: no new row, no enqueue, no FTS write, ``deduped=True``
+    — but for a successful (``"ok"``) refetch, the existing head row's
+    ``fetched_at`` is bumped forward to :func:`lode.jobs.now_iso` (``lode-
+    9tj4``): this is the one deliberate, forward-only exception to
+    ``snapshots``' otherwise-immutable columns, and it exists so :func:`lode.
+    worker._refresh_dead_letter_hook`'s late-success guard has *something to
+    see* when a refresh successfully revalidates unchanged content — see
+    ``docs/storage.md``'s "The guard's blind spot" section for the full
+    story and the immutability ruling. A repeated identical ``"tombstone"``
+    dedup is unaffected and remains a byte-for-byte no-op — a persistently-
+    dead source re-verified as still dead is not a revalidation, and the
+    guard already excludes a tombstone head outright.
+
+    Otherwise (``snapshot_id`` differs from the current head) inserts the
+    new snapshot row and moves ``externals.head_snapshot_id`` to it; an
+    ``"ok"`` snapshot also enqueues
     one ``embed`` job keyed on the new ``snapshot_id`` (see the module
     docstring — ``enrich`` is not enqueued here) and drives the synchronous
     FTS leg (:func:`_index_snapshot_fts`). A ``"tombstone"`` snapshot does
@@ -351,10 +364,15 @@ def ingest_snapshot(
     connection settings (``PRAGMA journal_mode = WAL``, default deferred
     ``isolation_level``) — see ``docs/storage.md``'s updated "A dead-letter
     hook's write can race a late success too" section for the experiment.
-    Unguarded callers (every other one) are byte-for-byte unaffected: the
-    externals-row creation stays conditional (``if not exists``), so a
-    dedup-only ingest still never touches the write lock in the common
-    no-op case.
+    Unguarded callers (every other one) are unaffected by *this* mechanism —
+    the externals-row creation stays conditional (``if not exists``), so it
+    contributes no DML on a dedup. They are, however, affected by the
+    separate ``lode-9tj4`` fix above: an ``"ok"`` dedup now issues one
+    ``UPDATE`` of its own (bumping the head row's ``fetched_at``), so it is
+    no longer a total no-op the way a ``"tombstone"`` dedup still is. That
+    ``UPDATE`` briefly takes the write lock too, but contends against
+    nothing new — every caller already ran inside SQLite's single-writer
+    serialization before this change.
     """
     settings = settings or Settings()
     with conn:
@@ -406,6 +424,23 @@ def ingest_snapshot(
                 )
         snapshot_id = content_snapshot_id(external_id, body, settings)
         if snapshot_id == head_snapshot_id:
+            if status != "tombstone":
+                # lode-9tj4: a successful ("ok") dedup is a real revalidation
+                # of the head's content, not a no-op that leaves nothing for
+                # worker._refresh_dead_letter_hook's late-success guard to
+                # see. Bump the EXISTING row's fetched_at forward -- the one
+                # deliberate exception to snapshots' otherwise-immutable
+                # columns (docs/storage.md "The guard's blind spot"). A
+                # 'tombstone' dedup (a persistently-dead source re-verified
+                # as still dead) is deliberately excluded: it is not a
+                # successful fetch, and the guard already ignores a
+                # tombstone head outright (`head_status != "tombstone"`), so
+                # bumping it here would touch the write lock for no reader
+                # that will ever look.
+                conn.execute(
+                    "UPDATE snapshots SET fetched_at = ? WHERE snapshot_id = ?",
+                    (jobs.now_iso(), snapshot_id),
+                )
             return IngestResult(external_id, snapshot_id, status, deduped=True)
         conn.execute(
             "INSERT INTO snapshots "

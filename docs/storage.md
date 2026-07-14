@@ -802,9 +802,11 @@ sequence, precisely because the property being proven (atomicity) cannot be obse
 
 `ingest_snapshot`'s own docstring (`src/lode/externals.py`) carries the implementation-level version
 of this explanation; this section is the design-level record of what changed and why. Unguarded
-callers of `ingest_snapshot` (every one except this hook) are byte-for-byte unaffected: the
-externals-row creation for them stays conditional (`if not exists`), so a dedup-only ingest still
-never touches the write lock in the common no-op case.
+callers of `ingest_snapshot` (every one except this hook) are unaffected by *this* mechanism: the
+externals-row creation for them stays conditional (`if not exists`), so it contributes no DML on a
+dedup. **They are, however, affected by the separate lode-9tj4 fix below** — a successful (`"ok"`)
+dedup now issues its own `UPDATE` (bumping the head row's `fetched_at`), so it is no longer a total
+no-op the way a `"tombstone"` dedup still is. See "The guard's blind spot" below.
 
 As before, the exposure was already small for an independent reason: `refresh` handlers only ever run
 inside `worker.drain`, which holds the single-instance `lock.WorkerLock`, so a *live* handler racing a
@@ -856,6 +858,69 @@ and re-anchors on its next read). The refresh delay is therefore bounded by the 
 revalidation and arriving late costs nothing but staleness; but it is **not** self-correcting, and a
 record that claimed otherwise would be exactly the confidently-wrong-about-concurrency doc this section
 exists to prevent.
+
+### The guard's blind spot: a successful-but-deduped refresh — closed (lode-9tj4)
+
+The two sections above close a race (lode-elc8) and a clock-domain mismatch (lode-bmg9) in
+lode-uda1's late-success guard. A **third, distinct** residual survived both: the guard is blind to
+the single most common refresh outcome — content that hasn't changed.
+
+`ingest_snapshot`'s dedup path (`snapshot_id == head_snapshot_id`) used to be a total no-op: no new
+row, no enqueue, no FTS write, and — the gap — **no touch of the existing head row's `fetched_at`
+either**. So a refresh that successfully re-verified unchanged content left `fetched_at` pinned at
+the *original* fetch time, arbitrarily far in the past. The guard's `head_fetched_at >=
+skip_if_head_at_or_after` test has nothing recent to compare against, reads as stale, and does not
+fire — exactly the failure mode lode-uda1 exists to prevent, just reached by a different door than
+the race or the clock skew: **content unchanged is not a corner case, it's the common case**, so the
+guard was blind in the likely path, not merely a rare one.
+
+Reproduction (deterministic, `tests/test_worker.py::
+test_reclaim_dead_letter_hook_recognizes_a_deduped_success`):
+
+1. An external already has an `"ok"` head snapshot.
+2. A `refresh` job for it is claimed (`jobs.claimed_at = T_claim`).
+3. The fetch succeeds but returns content **identical** to the current head —
+   `ingest_snapshot`'s dedup early return: no new row, `fetched_at` (pre-fix) untouched.
+4. The job stalls past `stale_running_timeout_s` (lode-uda1's exact window) and
+   `_reclaim_stale_running` dead-letters it, firing the hook with `claimed_at = T_claim`.
+5. Pre-fix: `head_fetched_at >= T_claim` reads **false** (the timestamp predates the claim) — the
+   guard does not fire, and the hook writes a tombstone over content it had just re-confirmed was
+   fine. Worse, reconcile's refresh sweep excludes tombstoned heads (`s.status != 'tombstone'`), so
+   the external is never revisited — lode-uda1's exact "permanently absorbing" corruption, reopened.
+
+**Fix — option (a) from the ticket, the cheap one:** `ingest_snapshot`'s dedup branch now bumps the
+existing head row's `fetched_at` to `jobs.now_iso()` whenever the dedup is a successful (`"ok"`)
+refetch. The guard then sees a timestamp at-or-after the refresh's own claim, fires correctly, and
+no tombstone is written. A repeated identical **`"tombstone"`** dedup is deliberately excluded — a
+persistently-dead source re-verified as still dead is not a revalidation, and the guard already
+ignores a tombstone head outright (`head_status != "tombstone"`), so bumping it would take the write
+lock for no reader that will ever consult it.
+
+This also gives `fetched_at` a second, welcome reading for the *unguarded* case: it now means "last
+time this content was confirmed current," not just "first time it was ever seen" — which is closer
+to what the refresh-staleness sweep (`s.fetched_at <= now - refresh_ttl_s`) already wants the column
+to mean, and stops a never-changing source from being needlessly re-fetched every TTL forever once
+its next dedup lands (the sweep only fires while `fetched_at` is stale; a bump pushes that out).
+
+**The immutability question, settled explicitly (acceptance criterion 3):** `snapshots` is still
+documented as immutable mirrored content (`schema.sql`), and every column but one still is —
+`snapshot_id`, `external_id`, `body`, `raw_payload`, and `status` are write-once for a row's
+lifetime, never touched again after the `INSERT`. **`fetched_at` is now the one deliberate
+exception.** It may be mutated forward, in place, on an *existing* row — but only by
+`ingest_snapshot`, only on its dedup path, only when the incoming fetch's outcome is `"ok"`, and only
+to `jobs.now_iso()` (the same forward-ratcheted, monotonically-nondecreasing clock every other
+`fetched_at` stamp already uses, `lode-bmg9`) — never backward, and never onto a different row than
+the one just re-verified. A separate `last_revalidated_at` column (the ticket's option (b)-adjacent
+alternative) was considered and rejected: it would need its own plumbing through the guard's
+comparison (`fetched_at` OR `last_revalidated_at`, whichever is later) for no behavioral difference,
+since nothing else in the schema currently needs to distinguish "first fetched" from "last
+revalidated" for a snapshot whose *content* — the thing immutability is actually protecting — never
+changes either way.
+
+This is orthogonal to, and unaffected by, lode-elc8's atomicity fix: elc8 makes the guard's *read*
+atomic with its *write*; lode-9tj4 makes sure the *read* has something recent to see in the first
+place. Together they cover the guard's three residuals — race (elc8), clock domain (bmg9), and blind
+spot (9tj4) — none of which depends on or invalidates either of the others.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
@@ -921,6 +986,9 @@ externals    external_id, source_type, head_snapshot_id, no_egress,    # logical
              created
 snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
+                                                                        # (fetched_at excepted: bumped
+                                                                        # forward on an "ok" dedup,
+                                                                        # lode-9tj4)
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),

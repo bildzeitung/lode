@@ -714,6 +714,84 @@ def test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot(
     assert snapshot_count == 1
 
 
+def test_reclaim_dead_letter_hook_recognizes_a_deduped_success(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings, monkeypatch
+) -> None:
+    """lode-9tj4: a successful-but-content-IDENTICAL refetch must also beat
+    the reclaim dead-letter hook's tombstone -- not just a content-CHANGED
+    one (the case the test above already covers).
+
+    Before this fix, ``ingest_snapshot``'s dedup early return
+    (``snapshot_id == head_snapshot_id``) wrote nothing at all -- crucially,
+    it never bumped the existing head row's ``fetched_at`` -- so a refresh
+    that successfully re-verified UNCHANGED content left the guard nothing
+    recent to see: ``head_fetched_at`` stayed pinned at the original fetch
+    time, always older than a job claimed afterward. Since "content
+    unchanged" is the common refresh outcome, this made the guard blind in
+    the likely case, not merely a rare one. Reproduces the ticket's exact
+    steps: an external with an existing 'ok' head; a refresh job claimed
+    against it; the handler's fetch succeeds but dedups (identical body);
+    the job then stalls and is reclaimed past the staleness timeout.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot
+
+    external_id = "https://example.com/unchanged-on-reclaim"
+    # The external's ORIGINAL fetch happened long ago -- pin it far in the
+    # past (year 2000) so it unambiguously PREDATES the job's claim below.
+    # Without pinning this, the original ingest's real-clock fetched_at
+    # would already land after claimed_at (which is only
+    # stale_running_timeout_s + 60 seconds in the past) regardless of
+    # whether the dedup bump works at all -- masking exactly the blind spot
+    # this test exists to catch. Production shape: a refresh job only
+    # exists for an already-drawn-down external, so the head predates it.
+    with monkeypatch.context() as m:
+        m.setattr("lode.externals.jobs.now_iso", lambda: "2000-01-01T00:00:00.000000Z")
+        ingest_snapshot(conn, external_id, SOURCE_TYPE_WEB, "stable, unchanging body")
+
+    job_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version=external_id,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+
+    # The handler's fetch SUCCEEDS but returns content IDENTICAL to the
+    # current head -- ingest_snapshot's dedup path, not a new snapshot.
+    # Runs on the REAL clock (restored by the monkeypatch context above),
+    # which is after the job's claimed_at set just above -- this is the
+    # moment that must bump fetched_at forward for the guard to have
+    # anything recent to see.
+    result = ingest_snapshot(
+        conn, external_id, SOURCE_TYPE_WEB, "stable, unchanging body"
+    )
+    assert result is not None
+    assert result.deduped is True
+
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "dead"
+
+    # Head must still be the real 'ok' snapshot -- NOT overwritten by a
+    # tombstone from the reclaim's dead-letter hook.
+    status, body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "ok"
+    assert body == "stable, unchanging body"
+    # Only the one real snapshot row exists -- the dedup never inserted a
+    # second one, and no tombstone was written either.
+    (snapshot_count,) = conn.execute(
+        "SELECT COUNT(*) FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert snapshot_count == 1
+
+
 def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
