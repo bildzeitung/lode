@@ -31,26 +31,44 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # to "check Resource Saver mode" is exactly the plausible-but-false
 # machine-level story that started this ticket.
 #
-# SCOPE: this is a PRE-FLIGHT probe only. A docker-level failure *inside* the
-# per-doc loop below (image missing with no network, engine dies mid-run) still
-# surfaces as a per-doc FAIL, i.e. a broken tool still looks like broken content
-# in that window. Narrowing that needs the loop to tell `docker run`'s own
-# failures apart from mmdc's parse failures — deliberately out of scope here,
-# tracked separately (see lode-9i2p's follow-up).
-if ! docker info >/dev/null 2>&1; then
-  if command -v docker >/dev/null 2>&1; then
-    echo "GATE COULD NOT RUN: docker engine unreachable — a docker binary is on" >&2
-    echo "PATH but cannot reach a running engine. Usual causes: Docker Desktop is" >&2
-    echo "stopped (Resource Saver mode), WSL integration is off for this distro," >&2
-    echo "or the docker socket denies permission. Diagnose with: docker info" >&2
-  else
-    echo "GATE COULD NOT RUN: no docker on PATH — mermaid validation runs the" >&2
-    echo "parser in a container and needs Docker installed. See CLAUDE.md and" >&2
-    echo "scripts/update-images.sh." >&2
-  fi
+# NOTE ON STRUCTURE: this probe is NOT what enforces the invariant — the
+# per-doc exit-code check in the loop below is, and it subsumes this one (an
+# engine that is down before the loop also makes `docker run` fail, which that
+# check catches). This probe is a MESSAGE-QUALITY + FAIL-FAST layer on top: it
+# can tell "no docker at all" apart from "binary present, engine unreachable",
+# which the loop check — seeing only an integer — structurally cannot, and that
+# distinction is the whole lode-9i2p lesson. It also aborts before the setup
+# work below. Add new gate-could-not-run conditions to the LOOP check; add to
+# this probe only to say something the exit code alone cannot.
+
+# The ONE owner of the gate-could-not-run contract: the banner callers key on,
+# the caller's cause lines, the standing instruction to a reader, and exit 2.
+# Callers supply only the cause — the part that genuinely differs. Keeping the
+# banner and the exit code here means a new call site cannot accidentally emit
+# half the contract (.claude/agents/coding.md, code-reviewer.md and
+# .claude/skills/land/SKILL.md all key on exactly this stderr).
+gate_could_not_run() {
+  echo "GATE COULD NOT RUN: $1" >&2
+  shift
+  for line in "$@"; do echo "$line" >&2; done
   echo "This is a machine fault a human must fix, not a mermaid syntax error —" >&2
   echo "do not hand-verify diagrams or hand off in place of this gate." >&2
   exit 2
+}
+
+if ! docker info >/dev/null 2>&1; then
+  if command -v docker >/dev/null 2>&1; then
+    gate_could_not_run \
+      "docker engine unreachable — a docker binary is on" \
+      "PATH but cannot reach a running engine. Usual causes: Docker Desktop is" \
+      "stopped (Resource Saver mode), WSL integration is off for this distro," \
+      "or the docker socket denies permission. Diagnose with: docker info"
+  else
+    gate_could_not_run \
+      "no docker on PATH — mermaid validation runs the" \
+      "parser in a container and needs Docker installed. See CLAUDE.md and" \
+      "scripts/update-images.sh."
+  fi
 fi
 
 # The image ships chromium at /usr/bin/chromium-browser, but puppeteer hunts for
@@ -64,6 +82,39 @@ printf '{"executablePath":"/usr/bin/chromium-browser","args":["--no-sandbox","--
 chmod 755 "$CFG"
 chmod 644 "$CFG/puppeteer.json"
 
+# THIS is where the invariant "a broken tool is never mistakable for broken
+# content" is enforced. The partition is drawn around mmdc's ONE content
+# verdict, not around docker's failure codes: exit 1 means "mmdc ran, parsed,
+# and rejected the diagram" — the only exit allowed to print FAIL — and EVERY
+# other nonzero exit means the gate could not run.
+#
+# Inverting it that way is the point. It fails SAFE (an exit code nobody
+# anticipated escalates to a human rather than silently blaming an innocent
+# doc), and it needs no list of docker's codes kept in sync as docker evolves.
+# An allowlist of docker's 125-127 was this fix's first pass and was WRONG: the
+# engine dying mid-run — the very flake that opened the ticket — kills a RUNNING
+# container, which exits 128+SIGKILL = 137, not a pre-start code, so the
+# allowlist printed FAIL for exactly the case it was written to catch.
+#
+# Measured 2026-07-14 against a live engine, not assumed (this fix's earlier
+# pass — lode-9i2p — was itself a plausible structural theory that measurement
+# dissolved):
+#
+#   CONTENT (exit 1 — the only verdict that may print FAIL):
+#     a genuine mermaid syntax error, through mmdc              -> 1
+#     mmdc handed a missing input file                          -> 1
+#   TOOL (everything else — gate could not run, exit 2):
+#     docker run <image absent, pull denied>                    -> 125
+#     docker run <bad docker CLI flag>                          -> 125
+#     docker run --entrypoint <not executable>                  -> 126
+#     docker run --entrypoint <nonexistent cmd>                 -> 127
+#     engine kills the container (docker kill / Resource Saver) -> 137
+#     container OOM-killed (chromium is memory-hungry)          -> 137
+#
+# Docker does not *reserve* 125-127 either — a contained command exiting 125
+# itself has that code passed through verbatim (also measured). Under this
+# partition that ambiguity is harmless: it lands on the tool side, where a human
+# looks, instead of being pinned on a doc.
 fail=0
 found=0
 for f in "$REPO"/docs/*.md; do
@@ -74,6 +125,17 @@ for f in "$REPO"/docs/*.md; do
        -p /cfg/puppeteer.json -i "$rel" -o /tmp/out.md --quiet; then
     echo "OK    $rel"
   else
+    rc=$?
+    if [ "$rc" -ne 1 ]; then
+      gate_could_not_run \
+        "docker run failed with exit $rc while validating" \
+        "$rel. mmdc reports invalid mermaid as exit 1 and nothing else, so this" \
+        "is a tool failure, not a syntax error — the diagram was never judged." \
+        "Usual causes: the image is missing and the network is unreachable (125)," \
+        "or the engine killed the container mid-run — Docker Desktop stopping" \
+        "(Resource Saver mode), or an out-of-memory kill (137). Diagnose with:" \
+        "docker info"
+    fi
     echo "FAIL  $rel"
     fail=1
   fi
