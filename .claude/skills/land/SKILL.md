@@ -812,13 +812,12 @@ ticket frees the next layer of `bd ready`. Closing is mine because the merge dec
 
 The worktree GC is **best-effort and machine-local**, and (since **lode-h1vn**) entirely the
 end-of-pass backstop sweep's job — there is no separate per-ticket removal step any more. **Nothing in
-`/land` reads `review_worktree`/`review_branch` any more**: the deleted loop was their only GC consumer,
-and the backstop discovers worktrees directly off `git worktree list --porcelain`. The builder still
-records both (`coding.md`), and `/code`'s own reclaim *derives* its target from the ticket id rather
-than trusting them (lode-vs7g), so as of lode-h1vn the two fields are **vestigial — written, read by
-nobody** (see lode-h1vn's `docs/decisions.md` entry; whether to stop writing them is its own ticket).
-Discovering worktrees live instead of trusting recorded paths is strictly better anyway: there is no
-bookkeeping to drift. Builds can happen on several machines, and a worktree on another machine simply
+`/land` reads `review_worktree`/`review_branch`**, and as of **lode-2m89** nothing writes them either:
+the deleted loop was their only GC consumer, the backstop discovers worktrees directly off
+`git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
+rather than trusting a recorded path (lode-vs7g) — so the fields were pure dead weight and `coding.md`
+stopped recording them (see lode-2m89's `docs/decisions.md` entry). Discovering worktrees live instead
+of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can happen on several machines, and a worktree on another machine simply
 isn't in this machine's `git worktree list`, so it's invisible to this sweep and that other machine's
 own `/land` (or a later sweep there) reclaims it. The sweep only reclaims a worktree that is
 `merged`+`unlocked`+clean, which for a just-landed ticket's builder worktree is true precisely *because*
@@ -833,8 +832,8 @@ escalated branch never merges. So "an escalate reclaims nothing" is true of the 
 and is not a guarantee about the sweep as a whole.) This backstop sweep
 is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
 it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
-`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — whose `review_worktree` pointer
-went stale or was never recorded. lode-jiyk unified what were originally two separate **worktree**
+`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of whether any
+ticket ever pointed at it (no ticket does, since lode-2m89). lode-jiyk unified what were originally two separate **worktree**
 sweeps here: an early one keyed on branch **name** (`lode-r78`), and a later one keyed directly on
 **HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
 sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
