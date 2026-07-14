@@ -509,6 +509,21 @@ are catalogued in [configuration.md](configuration.md).
   ref is still checked out in some worktree. See
   [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors).
 
+  **Update (lode-jiyk): the branch-name-match half of the fix above was superseded.** lode-jiyk
+  unified this backstop's worktree-sweep branch-name match (`^worktree-agent-`/`^land/`) with
+  lode-mxeu's separate by-SHA/detached-worktree sweep into a single loop keyed on **HEAD-sha
+  ancestry** (`git merge-base --is-ancestor <HEAD-sha> trunk`) plus `unlocked` — the worktree sweep
+  matches no branch-name pattern any more. The **second backstop** decided here — deleting a dangling
+  local `land/<id>` ref whose `origin/land/<id>` counterpart is gone — is a separate, bare-**ref**
+  sweep, unaffected by that unification: it still matches `refs/heads/land/*` by name, and must, since
+  `refs/heads/*` is shared with human branches. It was, however, amended by **lode-em6v**: it keys on
+  an *exact* name match against origin's listing, so it now strips the worktree suffix
+  (`${BR%%--*}`) before comparing — the "remote gone ⇒ stale" semantics decided here are unchanged.
+  The lode-em6v update above has both stories in full (the unification, and why skipping that strip
+  would turn this backstop into a ref shredder). Mechanism of record:
+  [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors) §4 — verify
+  any new claim against it, not against this entry.
+
 - **Dead-lettered `refresh` jobs tombstone their external: a `worker.py` terminal-transition hook, not
   a reconcile sweep (lode-at8, decided 2026-07-09).** The gap: a `refresh` job that exhausts its
   retries and reaches `dead` left no record against the external at all — `head_snapshot_id` stayed
@@ -568,6 +583,62 @@ are catalogued in [configuration.md](configuration.md).
   implements the same recovery twice. If a *third* job type's dead-letter needs recovery, the fork is
   this: "is the underlying content still valid and cheap to retry?" → sweep; "is retrying pointless and
   the interesting fact is that it's permanently dead?" → terminal-transition hook.
+
+- **`/land`'s worktree backstop 1 predicate widened from "merged into trunk" to "merged into trunk OR
+  captured on origin" (lode-amif, a residual gap surfaced by lode-vs7g's own review).** lode-vs7g made
+  `/code`'s orchestrating session eagerly reclaim a reviewer's / rebase-pickup's launch worktree right
+  after the subagent returns, on either outcome (`ready-for-land` or `land-escalated`) — closing the
+  steady-state leak. What it explicitly could not close: backstop 1's own predicate
+  (`.claude/skills/land/SKILL.md` Section 4), `unlocked AND HEAD-sha is-ancestor-of trunk`, is never
+  satisfied by an **escalated** branch (it never merges into `trunk` by definition — that's what
+  "escalated, held for a human" means). So if the `/code` session itself dies **before** it can run its
+  own eager reclaim (a crash mid-fan-out), the worktree leaks **indefinitely** — the same failure
+  lode-vs7g exists to prevent, one level up, and structurally unreachable by the trunk-only backstop.
+
+  **Decision: widen the predicate's real invariant from "merged into trunk" to "already captured
+  elsewhere," and test it via a second arm.** "Merged into trunk" was always a stand-in for "this
+  worktree's content is safely captured elsewhere, so removing it loses nothing" — never the goal
+  itself. A reviewer/rebase-pickup worktree satisfies that real invariant by construction the moment it
+  has pushed to `origin/land/<id>` (lode-k5e/lode-8k3), regardless of whether the branch ever lands.
+  Backstop 1's loop now reclaims a candidate if `git merge-base --is-ancestor "$SHA" trunk` **or** — for
+  a branch-attached worktree — `git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}"` (the `${BR%%--*}`
+  strip maps the lode-em6v worktree-uniqueness suffix `land/<id>--<worktree-dir>` back to the bare
+  `origin/land/<id>` ref, the same mapping backstop 2 already applies). A detached worktree (no branch
+  name to resolve) and a builder's own `worktree-agent-*` worktree (never pushed to origin — no origin
+  counterpart exists, so the ancestor test simply fails) are unaffected by the new arm; it is `false`
+  for both, leaving their behavior exactly as before.
+
+  **Accepted, not newly introduced — and benign on this arm: the zero-divergence residual (lode-9hgu)
+  cannot reach a *live* reviewer/rebase-pickup worktree, because the harness locks it.** A
+  reviewer/rebase-pickup worktree, freshly checked out at `origin/land/<id>`'s current tip, is trivially
+  "an ancestor of" that same tip from checkout until its first local commit — during that window the new
+  arm's ancestry test reads true even though nothing new has been pushed. What stops the sweep there is
+  the loop's existing `locked` filter: **the Claude Code harness locks every `isolation: worktree` launch
+  worktree for the lifetime of the agent standing in it** (lock reason `claude agent <name> (pid <n>
+  start <n>)`, released when the agent exits). Neither `.claude/agents/code-reviewer.md` nor `coding`'s
+  rebase pickup calls `git worktree lock` itself — that is why an earlier draft of this entry recorded
+  them as "unlocked" — but both *run inside* such a worktree, so a live one is `locked` in practice and
+  the awk filter drops it before the predicate is ever evaluated. (`coding.md` additionally takes an
+  *explicit* lock on its producer build worktree, per lode-oqr, because it unlocks again at its first
+  commit — earlier than the harness would.) Verified against a running reviewer during this ticket's own
+  technical review: `git worktree list --porcelain` reported the reviewer's worktree `locked`, with the
+  harness's pid-keyed reason, though the reviewer never locked anything itself.
+
+  So the widened arm can only reach an **exited** agent's worktree, which at zero divergence holds
+  nothing but uncommitted, ungated scratch from a run that never finished — while the authoritative
+  content sits on `origin/land/<id>` and the ticket is re-reviewed from there. That is *precisely* the
+  worktree this widening exists to reclaim, so the residual is benign here, unlike on the trunk arm
+  (where the same proxy destroyed two live builds before lode-oqr added the explicit lock). **lode-9hgu
+  remains the open, general tracking ticket** for replacing the "merged"/"captured" proxy with a real
+  dirty-tree guard on both arms; no new ticket was filed and this decision does not re-litigate it.
+  Note for whoever takes lode-9hgu: its premise that "code-reviewer / land-review worktrees do not lock"
+  is true only of the *agent docs*, not of the *running system* — do not "fix" it by adding a
+  doc-driven `git worktree lock` to `code-reviewer.md`, which would duplicate the harness lock and,
+  having no pid to key staleness on, would **not** be released if the agent dies — re-opening the very
+  indefinite leak this ticket closes.
+
+  Scope: `.claude/skills/land/SKILL.md` Section 4 (backstop 1's loop and its surrounding prose) plus
+  this entry. Docs/prompt-only — no Python code changed.
 
 - **`/land`'s worktree-reclaim backstop now guards on the ACTUAL invariant (dirty tree), not just the
   "merged into trunk" proxy that reads TRUE at zero divergence (lode-9hgu, decided/built 2026-07-13,
