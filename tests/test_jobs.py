@@ -414,8 +414,11 @@ def test_cas_update_running_rejects_a_mismatched_claimed_at(conn) -> None:
     job_id = _insert_running_job(conn, claimed_at="2026-07-13T10:00:00.000Z")
 
     matched = cas_update_running(
-        conn, job_id, "2026-07-13T09:00:00.000Z",
-        "status = 'failed', last_error = ?", ("boom",),
+        conn,
+        job_id,
+        "2026-07-13T09:00:00.000Z",
+        "status = 'failed', last_error = ?",
+        ("boom",),
     )
 
     assert matched is False
