@@ -1123,10 +1123,11 @@ are catalogued in [configuration.md](configuration.md).
   so this is inherited from `lode-o29m`, neither introduced nor widened here. It is left as a residual
   rather than patched, because the only non-enumerating generalization ("allow any leading tokens")
   false-denies the prose cases the `ALLOWED` table pins on purpose; moving that fence is a real trade,
-  tracked as `lode-bxow`, not a regex tweak to slip into a security guard during review. None of the
-  three is a route an *obedient* agent walks — that is the line the fence is drawn on. Neither a wider
-  denylist nor a narrower allowlist can see through any of them; the inversion does not claim to close
-  them, and saying otherwise would overstate what a command-string guard can ever do.
+  **resolved in `lode-bxow` (entry below) as a permanent residual**, not a regex tweak to slip into a
+  security guard during review. None of the three is a route an *obedient* agent walks — that is the
+  line the fence is drawn on. Neither a wider denylist nor a narrower allowlist can see through any of
+  them; the inversion does not claim to close them, and saying otherwise would overstate what a
+  command-string guard can ever do.
 
   **Regression and mutation testing (verified, not assumed).** `tests/test_gh_write_guard.py` pins
   every command the *old* denylist denied as still denied under the new allowlist (no dropped deny),
@@ -1137,3 +1138,40 @@ are catalogued in [configuration.md](configuration.md).
   unenumerated-verb denies, the reason-text markers naming the new mechanism, and the
   mechanism-discriminating mutation test itself), confirming the tests exercise the allowlist's actual
   behavior rather than a copy of its regex.
+
+- **The `gh` guard's command-position residual (`lode-bxow`) is accepted as a PERMANENT residual —
+  the same standing as quoted indirection and non-`gh` routes, not a temporarily-tracked gap awaiting
+  a fix.** `lode-9mbt`'s inversion (above) is default-deny on the *subcommand*; the separate, prior
+  question of whether a line is examined at all still rests on an enumeration of command-position
+  wrappers (`env`, `sudo`, `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`, `rtk`, a
+  leading `VAR=x`, a path, `gh`'s global `-R`/`--repo`/`--hostname`). Probed against the shipped hook,
+  an unrecognized wrapper (`timeout 5 gh …`, `nice gh …`, `stdbuf -o0 gh …`, `exec gh …`) and a
+  shell-escaped or quoted binary name (`\gh …`, `'gh' …`) fall through unseen. This predates both
+  `lode-o29m` and `lode-9mbt` — neither introduced nor widened it.
+
+  **Why permanent, not a widened enumeration.** Adding `timeout`/`nice`/`stdbuf`/`exec` to the wrapper
+  list is the exact treadmill `lode-9mbt` exists to get off — the next release, or the next wrapper
+  nobody thought to name, reopens the identical gap. The only non-enumerating generalization —
+  matching `gh` at *any* leading command position, dropping the wrapper list entirely — was
+  considered and **rejected**: it false-denies the prose cases the allowlist's `ALLOWED` table exists
+  to protect on purpose (a `rtk grep "gh issue create" docs/`, a commit message quoting the verb), the
+  same trade `lode-9mbt` already declined for quoted indirection. The other considered alternative —
+  match `gh` at a command position whenever no quote character precedes it on the segment — trades
+  this false-deny class for a different one (paths such as `/home/gh`), with no clear net improvement
+  in coverage against an evasion class that risk analysis (below) judges not worth the new false
+  denies it would buy.
+
+  **The asymmetry that decides it.** None of these shapes is a route an *obedient* agent walks — a
+  builder following its ticket writes the plain form, or the plain form behind the `rtk` prefix, both
+  of which are already denied. `timeout 5 gh …`, a backslash-escaped binary name, and the rest are
+  deliberate-evasion shapes, the same class `lode-o29m` already accepted as structural residuals for
+  quoted indirection (`sh -c "gh issue create …"`) and non-`gh` routes (`curl` against a tracker's
+  REST API). Risk is judged **LOW** on that basis, and the fix's downside (new false denies on
+  ordinary paths and prose) is judged to cost more than the residual it would close.
+
+  **No code change.** `.claude/settings.json`'s guard is unmodified by this decision; the wrapper
+  enumeration in `docs/agents-workflow.md`'s guard section is reworded to state permanence rather than
+  imply a pending fix (`lode-bxow` acceptance criterion 2), and the prose `ALLOWED` cases it protects
+  (`tests/test_gh_write_guard.py`) are untouched and still pass. If a future `gh` release, or a new
+  observed evasion pattern, changes this risk calculus, reopen this entry rather than silently
+  widening the wrapper list.

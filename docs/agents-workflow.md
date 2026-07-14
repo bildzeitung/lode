@@ -710,8 +710,12 @@ Residual gaps that remain — honest about what the inversion does **not** close
   (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the two
   above and it predates the inversion (`lode-o29m`'s original matcher, unchanged here): generalizing it
   to "any leading tokens" would false-deny the prose cases in the bullet above, which is why it is a
-  fence rather than a fix. Tracked as its own decision in `lode-bxow` — do **not** widen it by adding
-  verbs to the wrapper list, which is the treadmill this ticket exists to get off.
+  fence rather than a fix. **Accepted as a PERMANENT residual (`lode-bxow`)** — the same standing as
+  quoted indirection above and the non-`gh` route below, not a gap awaiting a future fix. Do **not**
+  widen it by adding verbs to the wrapper list; that is the exact treadmill the `lode-9mbt` inversion
+  exists to get off, and it would reopen on the next release regardless. Full risk analysis and the
+  rejected alternatives (dropping the wrapper list entirely; matching on an absent preceding quote
+  character): `docs/decisions.md`.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
 
