@@ -624,13 +624,16 @@ are catalogued in [configuration.md](configuration.md).
   content sits on `origin/land/<id>` and the ticket is re-reviewed from there. That is *precisely* the
   worktree this widening exists to reclaim, so the residual is benign here, unlike on the trunk arm
   (where the same proxy destroyed two live builds before lode-oqr added the explicit lock). **lode-9hgu
-  remains the open, general tracking ticket** for replacing the "merged"/"captured" proxy with a real
-  dirty-tree guard on both arms; no new ticket was filed and this decision does not re-litigate it.
-  Note for whoever takes lode-9hgu: its premise that "code-reviewer / land-review worktrees do not lock"
-  is true only of the *agent docs*, not of the *running system* — do not "fix" it by adding a
-  doc-driven `git worktree lock` to `code-reviewer.md`, which would duplicate the harness lock and,
-  having no pid to key staleness on, would **not** be released if the agent dies — re-opening the very
-  indefinite leak this ticket closes.
+  has since landed (6591ba9)**. It did not *replace* the "merged"/"captured" proxy — both ancestry arms
+  still run, and still decide candidacy — it added a real dirty-tree guard (`git -C "$WT" status
+  --porcelain`) directly below them in the loop, gating **both**: a worktree that is captured yet dirty
+  is KEPT, not reclaimed. See the entry below and the loop itself in
+  `.claude/skills/land/SKILL.md`. lode-9hgu's build correctly relied on the harness lock rather than
+  duplicating it: "code-reviewer / land-review worktrees do not lock" is true only of the *agent docs*,
+  not of the *running system*, so lode-9hgu did not add a doc-driven `git worktree lock` to
+  `code-reviewer.md` — that would have duplicated the harness lock and, having no pid to key staleness
+  on, would not have been released if the agent died, reopening the very indefinite leak lode-amif (this
+  entry) closes.
 
   Scope: `.claude/skills/land/SKILL.md` Section 4 (backstop 1's loop and its surrounding prose) plus
   this entry. Docs/prompt-only — no Python code changed.

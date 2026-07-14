@@ -889,8 +889,11 @@ standing in it, so the sweep's existing `locked` filter drops a **live** reviewe
 before the predicate is ever evaluated. What the arm can reach is an **exited** agent's worktree,
 which at zero divergence holds only uncommitted, ungated scratch from a run that never finished —
 authoritative content is on `origin/land/<id>` and the ticket is re-reviewed from there. That is
-precisely the worktree this widening exists to reclaim. lode-9hgu remains the single tracking ticket
-for replacing the proxy with a real dirty-tree guard, for both arms.
+precisely the worktree this widening exists to reclaim. lode-9hgu has since landed (6591ba9). It did
+not *remove* the ancestry proxies — both arms still run, and still decide candidacy — it added a real
+dirty-tree guard (`git -C "$WT" status --porcelain`) immediately below them, gating **both**: a worktree
+captured on `trunk` or on `origin` but left dirty is now KEPT, not reclaimed. See the CONTRACT paragraph
+above and the guard itself in the loop.
 
 ---
 
