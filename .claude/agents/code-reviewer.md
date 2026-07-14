@@ -99,9 +99,10 @@ reviewed, escalated, or never built), I **stop and report** — I land nothing a
 
 The field that matters to me is **`review_head`** — I fetch and check out `origin/land/<id>` directly
 (step 2), so I never need to locate or open the builder's worktree at all. `metadata.review_worktree`
-is vestigial for my purposes now — a leftover of the earlier `git -C` architecture, kept only because
-`/land`'s worktree GC still reads it later (unchanged by this fix; out of scope here, see
-`docs/decisions.md`).
+is vestigial — a leftover of the earlier `git -C` architecture. As of **lode-h1vn** it is vestigial
+*outright*, not just for me: `/land`'s per-ticket GC loop, its last consumer, is deleted, and the
+backstop sweep that replaced it discovers worktrees live off `git worktree list` (see
+`docs/decisions.md`). The builder still records it; nobody reads it.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree
 
@@ -286,8 +287,9 @@ have, so removing it can never lose work.
 Then I **stop** and report: which ticket, that the technical review + gates are green, the `land/<id>`
 branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes. I
 never opened the builder's worktree this cycle, so there's nothing of mine to clean up there; `/land`
-still GCs the builder's local worktree and the merged branch on a clean land, keyed off the
-`review_worktree` metadata the builder recorded (unchanged by this fix — see `docs/decisions.md`).
+still GCs the builder's local worktree and the merged branch on a clean land — since **lode-h1vn** via
+its end-of-pass backstop sweep (which discovers worktrees live off `git worktree list`), not via the
+old `review_worktree`-keyed per-ticket loop, which is deleted (see `docs/decisions.md`).
 
 ### Escalation rule — the only thing that pulls a human in
 

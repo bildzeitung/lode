@@ -368,7 +368,10 @@ are catalogued in [configuration.md](configuration.md).
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
   `metadata.review_worktree` is now vestigial for the reviewer and the rebase pickup — neither opens it
   — but it is **not** removed from the hand-off: `/land`'s worktree GC still keys off it to reclaim the
-  builder's local worktree after a clean land, so the builder keeps recording it. `/code`'s step-1
+  builder's local worktree after a clean land, so the builder keeps recording it. **(Superseded by
+  lode-h1vn, below: that GC loop is deleted, so `review_worktree` is now vestigial outright — recorded
+  by the builder, read by nobody. The builder's worktree is still reclaimed after a clean land, but by
+  the backstop sweep, which discovers it from `git worktree list` instead.)** `/code`'s step-1
   stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
   actually consumes). (3) Uncommitted work left in the builder's worktree is now structurally invisible
   to the reviewer (it never opens that worktree at all) — accepted because the builder's hand-off
@@ -422,7 +425,9 @@ are catalogued in [configuration.md](configuration.md).
   not just the last one, and it removes the trust boundary (and the path-validation guard that boundary
   would otherwise need). It cannot touch the **builder's** worktree: that is branch-named
   `worktree-agent-*`, never `land/<id>--*`, so the filter skips it by construction and `/land`'s
-  `review_worktree` GC still finds it.
+  `review_worktree` GC still finds it. **(Superseded by lode-h1vn, below: `/land` reclaims the
+  builder's worktree via its backstop sweep now — the `review_worktree`-keyed loop is deleted. The
+  guarantee is unchanged; only the mechanism is.)**
 
   Two `git` behaviours this depends on, both verified live: `rtk` reformats `worktree list --porcelain`
   and breaks the field parse, so the reclaim uses **plain `git`** (same hazard as lode-9j7); and the
@@ -684,6 +689,30 @@ are catalogued in [configuration.md](configuration.md).
   clean. This measurement is what makes option (1)'s guard — and by extension option (2)'s deletion,
   which relies on the *same* already-guarded backstop — safe rather than a leak waiting to happen.
 
+  **RE-VERIFIED AT REVIEW, because this claim is the linchpin and the repo contradicts itself about it.**
+  The builder's measurement observed that finished worktrees *are* clean; it did not, on its own, prove
+  *why* — and "the file matches HEAD" is equally consistent with a competing explanation (that `bd` does
+  churn the export, but something scrubs it). Those two were separated directly: inside an agent worktree,
+  a `bd` **read** and then a real `bd` **write** were each followed immediately by `git status --porcelain`
+  **in the same shell invocation** — so no `Stop` hook could intervene — and the tree was **empty both
+  times**, while the write itself was confirmed to have landed in Dolt. The stated root cause therefore
+  **holds**: a bd write goes to Dolt and does not touch the tracked `.beads/issues.jsonl`.
+
+  **But the claim is CONTESTED elsewhere in this repo, and that is now a live coupling rather than
+  trivia.** `/land`'s own SKILL.md Section 3 (~line 354) asserts the opposite — *"any `bd` read
+  regenerates the passive `.beads/issues.jsonl` export and leaves it **staged**"* — and defensively runs
+  `git restore --staged --worktree .beads/issues.jsonl` before every merge; `.claude/skills/release/SKILL.md`
+  has a whole section for a recurring lone `M .beads/issues.jsonl`; and `.claude/settings.json` carries a
+  `Stop` hook whose entire job is *"Discarding passive bd export churn."* Either those are **stale** (bd's
+  behavior changed) or the churn is version/config/path dependent. It matters because the clean-tree gate
+  is the **only** thing standing between a finished builder worktree and reclaim, and — since this ticket
+  deletes the per-ticket loop — there is no second net and no alarm: if `bd` ever *does* leave a staged
+  export in a builder worktree, **every** worktree reads dirty, the sweep reclaims **nothing**, and it
+  does so silently. Not resolved here (the deletion is safe under measured behavior); tracked by
+  **lode-bns3**, whose deeper fix dissolves the coupling rather than documenting it — exclude the passive
+  export from the gate outright, since by invariant (`import.auto: false`, lode-6ra) it is *never* work,
+  and every other clean-tree check in the repo already excludes it.
+
   **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
   the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one
   the generalized backstop already carries, and no per-ticket `review_worktree`/`review_branch` metadata
@@ -707,6 +736,52 @@ are catalogued in [configuration.md](configuration.md).
   regression-tested the backstop loop itself (mutation-tested against every acceptance case); this
   ticket only had to confirm the *candidate set* now includes what the per-ticket loop used to cover,
   which the dry-run against real worktrees does.
+
+  **"Subsumes" is true of the CANDIDATE set, NOT the RECLAIMED set — the cleanup is strictly WEAKER
+  than before, and that must not be glossed.** The backstop *considers* every worktree the per-ticket
+  loop did (confirmed at review: a landed ticket's builder worktree is always under
+  `.claude/worktrees/`, is unlocked by then, and its HEAD — the recorded `review_head` — is by
+  construction an ancestor of `trunk` once the pass merges the branch; verified against four really
+  landed tickets, lode-9hgu/nggm/vs7g/9i2p, all YES). But the backstop then applies three gates the old
+  loop did not — `locked`, clean-tree, and HEAD-ancestry — so what it actually *removes* is a strict
+  **subset** of what the old loop removed. Worktrees **can now accumulate in cases where they
+  previously did not**. Three cases, all failing in the safe direction (leak a directory rather than
+  destroy uncommitted work):
+  1. **DIRTY** — a landed builder worktree with uncommitted state is now **kept**; the old loop
+     force-removed it. This is a **permanent** leak, not a deferred one: the tree stays dirty, so every
+     later pass skips it too and nothing else ever reclaims it — it needs a human to inspect and remove.
+     Measured to be rare (see the measurement above), and keeping it is the *correct* call: a dirty tree
+     holds work captured nowhere else. This is the trade lode-9hgu already made; it is only *new* here
+     in that the per-ticket loop used to be exempt from it.
+  2. **LOCKED** — a landed ticket's worktree that is `locked` at GC time is no longer force-reclaimed;
+     see the dedicated paragraph below.
+  3. **NOT-ANCESTOR** — a landed ticket's builder worktree whose HEAD carries commits that never
+     reached `origin/land/<id>` is now kept. Strictly speaking this one is a **bug fix wearing the
+     costume of a regression**: the old loop removed such a worktree *and* `git branch -D`'d its branch,
+     destroying those unpushed commits outright. It is listed here only because it is a case where GC no
+     longer reclaims — nobody should "restore" it.
+
+  Note the weakening is intrinsic to the **guards**, not to the deletion: option (1) — add lock+dirty
+  guards to the per-ticket loop — produces the identical weakening. Only option (3), accept+document,
+  preserved the old reclaim behavior, and it does so by keeping a P2 that destroys uncommitted work.
+
+  **This RAISES the stakes of the `.gitignore` coupling lode-9hgu recorded.** The clean-tree gate reads
+  clean on a finished builder worktree *only* because its untracked build junk (`venv/`, `.nox/`,
+  `__pycache__/`) is ignored. Un-ignore any one of them and every worktree reads dirty, so the backstop
+  reclaims **nothing** — and there is no longer a per-ticket loop as an unguarded second net. A
+  `.gitignore` regression now silently disables *all* local worktree GC at once, where before it only
+  degraded the backstop.
+
+  **`review_worktree`/`review_branch` are now VESTIGIAL — written by `coding.md`, read by nobody.** The
+  deleted loop was their only GC consumer; the backstop discovers worktrees live off
+  `git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
+  rather than trusting a recorded path (lode-vs7g). They are still recorded (harmless, and useful
+  forensically), and the stale cross-references that claimed `/land`'s GC "keys off `review_worktree`"
+  were corrected at review across `.claude/skills/code/SKILL.md`, `.claude/agents/coding.md`,
+  `.claude/agents/code-reviewer.md`, and `docs/agents-workflow.md` — the *guarantee* those docs protect
+  (the builder must not remove its own worktree; `/land` reclaims it on a clean land) is unchanged; only
+  the mechanism is. Whether to stop writing them is **lode-2m89** (filed at review; the decision record
+  promised such a ticket but none had been created), not folded in here.
 
   **The `locked`-worktree question, answered (lode-ux1n AC5):** yes, deleting the per-ticket loop means
   a landed ticket's worktree that happens to be `locked` at GC time is no longer force-reclaimed — this
