@@ -31,10 +31,12 @@ THE "api" SUBCOMMAND IS THE HARD PART. It is read-or-write depending on flags, s
 allowed merely by matching a verb -- it needs a POSITIVE read test. Allowed only when:
   - an explicit `-X GET` / `--method GET` is present (regardless of whether fields are also
     present -- fields on an explicit GET are a documented way to send a query string), OR
-  - no `-f`/`-F`/`--field`/`--raw-field`/`--input` field flag is present AND no explicit
-    non-GET method is present (the plain, bodyless form defaults to GET).
-Any other shape -- an explicit non-GET method, or field flags with no explicit GET -- is
-denied. `gh api` switches to POST automatically as soon as a body field is supplied ("adding
+  - no `-f`/`-F`/`--field`/`--raw-field`/`--input` field flag is present AND no explicit method
+    is present at all (the plain, bodyless form defaults to GET).
+Any other shape is denied -- and note the second arm denies on the mere PRESENCE of a method
+that is not an explicit GET, so the guard contains no `POST|PUT|PATCH|DELETE` list to keep up
+to date: an HTTP method nobody enumerated is denied for the same structural reason `gh
+codespace create` is. `gh api` switches to POST automatically as soon as a body field is supplied ("adding
 request parameters will automatically switch the request method to POST", per `gh api
 --help`), so `gh api repos/o/r/issues -f title=x -f body=y` files an issue with no
 `-X`/`--method` anywhere on the line. That is the *ordinary*, documented way to POST with `gh`,
@@ -212,6 +214,28 @@ DENIED = [
     "gh api graphql -f query=x",  # graphql is ALWAYS a POST and can carry a mutation
     "gh api -f title=x repos/x/y/issues",  # flags BEFORE the endpoint; gh accepts either order
     "gh api -X POST repos/x/y/issues",
+    # -- gh api, IMPLICIT POST with the field value ATTACHED to the shorthand flag. gh is a
+    #    cobra/pflag CLI, and pflag accepts a shorthand flag's value with no separator at all:
+    #    `-ftitle=x` IS `--raw-field title=x`. Verified against the real binary -- `gh issue list
+    #    -L0` fails with "invalid limit: 0" (the VALUE was parsed) while `-Z0` fails with "unknown
+    #    shorthand flag", so the attached form is genuinely how gh parses. This is an ordinary,
+    #    fully-supported spelling of the implicit POST, NOT an exotic evasion, and a guard that
+    #    demanded a space or `=` after `-f` would wave it straight through (it did: this shape fell
+    #    through both the old denylist AND the first cut of this allowlist -- caught in review).
+    "gh api repos/x/y/issues -ftitle=x -fbody=y",
+    "gh api -ftitle=x repos/x/y/issues",
+    "gh api repos/x/y/issues -Ftitle=x",
+    "gh api graphql -fquery=mutation",
+    "gh api repos/x/y/issues --field=title=x",
+    "gh api repos/x/y/issues --raw-field=title=x",
+    "gh api repos/x/y/issues --input=body.json",
+    # -- gh api, an explicit method that is simply NOT GET. The guard does not enumerate the write
+    #    methods (no POST|PUT|PATCH|DELETE list anywhere): anything other than an explicit GET is
+    #    denied because it is not the positive read test. This is the api arm's own AC4 -- a method
+    #    nobody listed is still denied. (`HEAD` is harmless in HTTP terms; denying it is a cheap
+    #    false deny, and exactly the trade the inversion is built on.)
+    "gh api repos/x/y/issues -X HEAD",
+    "gh api repos/x/y/issues --method OPTIONS",
     # A read-then-write chain must not let the read half's `-X GET` exempt the write half. The
     # GET exemption is scoped to the SAME command segment that supplied the fields.
     "gh api repos/x/y/issues -X GET && gh api repos/x/y/issues -f title=x -f body=y",
@@ -371,6 +395,31 @@ def test_unenumerated_write_verb_is_denied_by_the_allowlist_not_a_list() -> None
     # (reverting lode-9mbt) would fall through this with no decision at all.
     assert _run("gh codespace create -r o/r") == "deny"
     assert _run("gh repo deploy-key add k.pub") == "deny"
+
+
+def test_api_implicit_post_is_denied_however_the_field_flag_is_SPELLED() -> None:
+    """The implicit POST must be denied in every spelling gh actually accepts, not just the
+    space-separated one.
+
+    CLAUDE.md General Directive 8 names the implicit POST by name as the thing that must never
+    slip through. gh is cobra/pflag, so a shorthand flag's value may be attached with no
+    separator (`-ftitle=x` == `--raw-field title=x`), and a long flag's may be joined with `=`.
+    A field-flag pattern that required a space or `=` *after* the flag caught only one of the
+    three, and allowed a real, ordinary issue-filing POST under the user's identity.
+    """
+    spellings = [
+        "gh api repos/o/r/issues -f title=x",  # separated (the obvious one)
+        "gh api repos/o/r/issues -ftitle=x",  # attached shorthand
+        "gh api repos/o/r/issues -Ftitle=x",  # attached shorthand, the other field flag
+        "gh api repos/o/r/issues --field=title=x",  # long flag, joined with =
+        "gh api repos/o/r/issues --input=body.json",
+    ]
+    for command in spellings:
+        assert _run(command) == "deny", f"implicit POST slipped through as: {command}"
+
+    # ...and the explicit-GET exemption still holds for every one of them, so the fix above did
+    # not simply deny anything containing an `-f`.
+    assert _run("gh api search/issues -X GET -fq=repo:o/r") is None
 
 
 def test_read_only_noun_with_unlisted_verb_is_still_denied() -> None:

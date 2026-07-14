@@ -1077,7 +1077,20 @@ are catalogued in [configuration.md](configuration.md).
   at all (the plain, bodyless form defaults to GET). Any other shape — an explicit non-GET method, or
   field flags with no explicit GET — is denied; getting this backwards (allowing on the mere *absence*
   of a known write verb, which is what a denylist does) would invert the guard's meaning for the
-  single most dangerous subcommand it has to classify.
+  single most dangerous subcommand it has to classify. Two details of that test are load-bearing, and
+  both were tightened during this ticket's technical review:
+
+  - **The method arm enumerates no HTTP verbs.** It denies on the *presence* of any explicit method
+    that is not GET, rather than on a `POST|PUT|PATCH|DELETE` list — otherwise the guard would have
+    smuggled a denylist back in through the one subcommand that most needed not to have one.
+  - **The field arm matches every spelling `gh` actually parses.** `gh` is cobra/pflag, so a shorthand
+    flag's value may be *attached* with no separator: `-ftitle=x` **is** `--raw-field title=x` (check
+    it against the binary — `gh issue list -L0` fails with `invalid limit: 0`, i.e. the value parsed,
+    while `-Z0` fails with `unknown shorthand flag`). The first cut of the allowlist required a space
+    or `=` *after* `-f`, and so allowed `gh api repos/o/r/issues -ftitle=x -fbody=y` — a real,
+    ordinary, issue-filing implicit POST under the user's identity. The old denylist allowed it too;
+    it had simply never been probed. This is the whole ticket's central claim in miniature: the
+    dangerous spelling is not the exotic one, it is the *documented* one nobody tested.
 
   **The escape hatch is the human, out of band — deliberately no bypass token, env var, or "just this
   once" flag an agent can invoke.** That would hand the whole guard back the moment an agent decided
@@ -1096,13 +1109,24 @@ are catalogued in [configuration.md](configuration.md).
 
   **What this does NOT close — honest residuals, unaffected by the inversion.** Composes with, and
   does not touch, `lode-oii9`'s fail-closed-without-`jq` probe (both guards keep failing closed when
-  `jq` is missing, per the entry above). Two structural gaps remain, the same character as the
+  `jq` is missing, per the entry above). Three structural gaps remain, the same character as the
   `blocks:` guard's own residuals: **quoted indirection** (`sh -c "gh issue create …"`, or the command
   held in a shell variable — closing this would mean treating a quote as a command boundary, which
-  would false-deny this repo's own prose about the rule) and **non-`gh` routes** (a raw `curl` against
-  a tracker's REST API, a different CLI, a non-GitHub tracker's own tool). Neither a wider denylist nor
-  a narrower allowlist can see through either gap — the inversion does not claim to close them, and
-  saying otherwise would overstate what a command-string guard can ever do.
+  would false-deny this repo's own prose about the rule); **non-`gh` routes** (a raw `curl` against
+  a tracker's REST API, a different CLI, a non-GitHub tracker's own tool); and — the one it is easiest
+  to overstate away — **`gh` reached from a command position the matcher does not recognize.** The
+  inversion is default-deny on the *subcommand*, but the prior question of whether a line is examined
+  at all still rests on an *enumeration*: a fixed wrapper list (`env`, `sudo`, `command`, `xargs`,
+  `time`, `nohup`, `if`/`then`, `rtk`), a leading `VAR=x`, a path, and gh's global `-R`/`--repo`/
+  `--hostname`. `timeout 5 gh issue create`, `nice gh …`, `exec gh …`, `\gh …` and `'gh' …` therefore
+  still fall through — verified against the shipped hook, and **identical on the pre-inversion guard**,
+  so this is inherited from `lode-o29m`, neither introduced nor widened here. It is left as a residual
+  rather than patched, because the only non-enumerating generalization ("allow any leading tokens")
+  false-denies the prose cases the `ALLOWED` table pins on purpose; moving that fence is a real trade,
+  tracked as `lode-bxow`, not a regex tweak to slip into a security guard during review. None of the
+  three is a route an *obedient* agent walks — that is the line the fence is drawn on. Neither a wider
+  denylist nor a narrower allowlist can see through any of them; the inversion does not claim to close
+  them, and saying otherwise would overstate what a command-string guard can ever do.
 
   **Regression and mutation testing (verified, not assumed).** `tests/test_gh_write_guard.py` pins
   every command the *old* denylist denied as still denied under the new allowlist (no dropped deny),

@@ -670,8 +670,11 @@ required prerequisite, and the full fail-closed-vs-fail-open reasoning is record
 matching a verb — it needs a positive read test.** Allowed only when an explicit `-X GET`/`--method GET`
 is present (regardless of whether fields are also present — fields on an explicit GET are gh's
 documented way to send a query string), **or** no field flag (`-f`/`-F`/`--field`/`--raw-field`/
-`--input`) and no explicit non-GET method are present at all (the plain, bodyless form defaults to
-GET). Any other shape is denied. **The implicit POST is denied too — this one is not optional.** `gh
+`--input`) and no explicit method at all are present (the plain, bodyless form defaults to
+GET). Any other shape is denied. Note the second arm keys on the *presence* of a method that is not an
+explicit GET, so **the guard enumerates no HTTP verbs either** — there is no `POST|PUT|PATCH|DELETE`
+list to keep current, and a method nobody listed is denied for the same structural reason `gh codespace
+create` is. **The implicit POST is denied too — this one is not optional.** `gh
 api` switches to `POST` automatically as soon as a body field is supplied; from `gh api --help`:
 *"adding request parameters will automatically switch the request method to POST."* So `gh api
 repos/o/r/issues -f title=… -f body=…` files an issue with **no `-X`/`--method` anywhere on the line**.
@@ -682,6 +685,15 @@ to; the exemption would have swallowed the rule. `gh api graphql -f query=…` i
 GraphQL is always an HTTP POST and the same command shape carries a mutation, so the guard **fails
 closed** there and the read must go through a REST `GET` or a human.
 
+The field-flag test matches **every spelling gh actually parses**, not just the space-separated one.
+`gh` is a cobra/pflag CLI, so a shorthand flag's value may be attached with no separator at all —
+`-ftitle=x` *is* `--raw-field title=x` (confirm against the binary: `gh issue list -L0` fails with
+`invalid limit: 0`, i.e. the value parsed, whereas `-Z0` fails with `unknown shorthand flag`). A
+pattern that required a space or `=` *after* `-f` therefore let a perfectly ordinary issue-filing POST
+straight through; both the old denylist and the first cut of this allowlist did exactly that, and it was
+caught in `lode-9mbt`'s technical review. `tests/test_gh_write_guard.py` pins all three spellings
+(`-f x=y`, `-fx=y`, `--field=x=y`).
+
 Residual gaps that remain — honest about what the inversion does **not** close, same character as the
 `blocks:` guard's own (a guard that reads only the command *string* cannot see through indirection):
 
@@ -689,6 +701,17 @@ Residual gaps that remain — honest about what the inversion does **not** close
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
   own prose about the rule (`rtk grep "gh issue create" docs/`, a commit message quoting the verb) — a
   worse trade than the residual.
+- **`gh` reached from a command position the matcher does not recognize.** The *inversion* is
+  default-deny on the **subcommand** — but the decision to look at a line at all still rests on
+  matching `gh` at a command position, and that matcher is an enumeration: a leading `VAR=x`, a path
+  (`/usr/bin/gh`), gh's global `-R`/`--repo`/`--hostname`, and a fixed wrapper list (`env`, `sudo`,
+  `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`, `rtk`). A wrapper *outside* that list
+  (`timeout 5 gh issue create`, `nice gh …`, `exec gh …`) or a shell-escaped/quoted binary name
+  (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the two
+  above and it predates the inversion (`lode-o29m`'s original matcher, unchanged here): generalizing it
+  to "any leading tokens" would false-deny the prose cases in the bullet above, which is why it is a
+  fence rather than a fix. Tracked as its own decision in `lode-bxow` — do **not** widen it by adding
+  verbs to the wrapper list, which is the treadmill this ticket exists to get off.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
 
