@@ -652,6 +652,107 @@ def test_reclaim_refresh_dead_letter_writes_tombstone_snapshot(
     assert status == "tombstone"
 
 
+def test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-uda1: a late-succeeding handler's real snapshot must beat the
+    reclaim dead-letter hook's tombstone, not the other way around.
+
+    Forces the exact bad interleaving the ticket describes: the still-in-
+    flight handler's real 'ok' snapshot commits FIRST (standing in for the
+    fetch actually succeeding), and only THEN does
+    ``_reclaim_stale_running`` dead-letter the row (still 'running',
+    ``claimed_at`` older than the staleness timeout) and fire the hook.
+    Before the lode-uda1 guard this hook unconditionally tombstoned,
+    clobbering the successful fetch and leaving the external permanently
+    absorbing (reconcile's refresh/embed sweeps both exclude a tombstoned
+    head, ``reconcile.py`` "AND s.status != 'tombstone'"). The guard must
+    recognize the head is already 'ok' and fetched at-or-after this job's
+    claim, and skip the tombstone write.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot
+
+    external_id = "https://example.com/raced-success"
+    job_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version=external_id,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+
+    # The bad interleaving: the handler's real snapshot lands BEFORE the
+    # reclaim runs (fetched_at is "now" -- strictly after the stale claimed_at
+    # above), simulating the fetch having actually succeeded while the row
+    # was already reclaim-eligible.
+    ingest_snapshot(
+        conn, external_id, SOURCE_TYPE_WEB, "the real, successfully-fetched body"
+    )
+
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "dead"
+
+    # Head must still be the real 'ok' snapshot -- NOT overwritten by a
+    # tombstone from the reclaim's dead-letter hook.
+    status, body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "ok"
+    assert body == "the real, successfully-fetched body"
+    # Only the one real snapshot exists -- no tombstone row was inserted.
+    (snapshot_count,) = conn.execute(
+        "SELECT COUNT(*) FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert snapshot_count == 1
+
+
+def test_run_refresh_dead_letter_still_tombstones_over_older_content(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The lode-uda1 guard must NOT block the pre-existing, intentional case:
+    a LATER refresh job (lode-w0h.6's staleness policy) that exhausts its
+    retries still tombstones even though the external already has OLDER 'ok'
+    content from an earlier, successful refresh. The guard only exempts a
+    head fetched AT OR AFTER *this* job's own claim -- content that predates
+    the claim is exactly the case the hook's docstring already commits to
+    tombstoning unconditionally, unaffected by lode-uda1.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot
+
+    external_id = "https://example.com/staleness-refresh"
+    # Prior, older successful content -- fetched_at is "now", strictly BEFORE
+    # the claim stamped below.
+    ingest_snapshot(conn, external_id, SOURCE_TYPE_WEB, "the old, still-live body")
+
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    # Claimed strictly after the ingest above (an hour out, like the existing
+    # ABA-guard tests use, to unmistakably clear it).
+    _claim_one(conn, ("refresh",), _future_iso())
+    ok = run_one(
+        conn, job_id, db_path, settings, _always_raising_refresh_registry("timeout")
+    )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"
+
+    status, body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "tombstone"
+    assert "timeout" in body
+
+
 def test_dead_letter_hook_exception_does_not_propagate(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -669,7 +770,7 @@ def test_dead_letter_hook_exception_does_not_propagate(
     )
     _claim_one(conn, ("refresh",), _now_iso())
 
-    def _boom(conn, target_version, last_error, settings):  # noqa: ARG001
+    def _boom(conn, target_version, last_error, claimed_at, settings):  # noqa: ARG001
         raise RuntimeError("hook blew up")
 
     with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _boom}):
@@ -757,7 +858,7 @@ def test_run_transient_failure_does_not_run_dead_letter_hook_twice(
 
     hook_calls: list[str] = []
 
-    def _counting_hook(conn_, target_version, last_error, settings_):  # noqa: ARG001
+    def _counting_hook(conn_, target_version, last_error, claimed_at, settings_):  # noqa: ARG001
         hook_calls.append(target_version)
 
     def _reclaimed_then_transient_error(conn_, tv, db, s):
@@ -770,7 +871,7 @@ def test_run_transient_failure_does_not_run_dead_letter_hook_twice(
                 "last_error = 'reclaimed' WHERE id = ?",
                 (settings.retry_max_attempts, job_id),
             )
-        _counting_hook(conn_, external_id, "reclaimed", s)
+        _counting_hook(conn_, external_id, "reclaimed", None, s)
         raise RuntimeError("transient blip (test)")
 
     with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _counting_hook}):
