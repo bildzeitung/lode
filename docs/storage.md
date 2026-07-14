@@ -774,6 +774,36 @@ holds the single-instance `lock.WorkerLock`, so a *live* handler racing a reclai
 workers on one DB — which the lock prevents in the normal single-machine case, though it explicitly
 disclaims being a data-integrity guard ("CAS + SQLite serialization own correctness").
 
+**A second residual — a clock-domain mismatch, not a race — has since been closed (lode-bmg9).** The
+guard's `head_fetched_at >= claimed_at` compared two *different* clocks: `snapshots.fetched_at` came
+from the schema's raw SQLite `DEFAULT strftime('now')` (`CLOCK_REALTIME`), while `jobs.claimed_at` is
+always stamped from `jobs.now_iso()`, the forward-ratcheted queue clock (`lode-t1y`) that — by its own
+documented guarantee — deliberately runs *ahead* of `CLOCK_REALTIME` after a backward NTP/hypervisor
+step, until real time catches up. For every other comparison in the queue that bias is the safe
+direction (`jobs.now()`'s own docstring: it is only ever compared against a raw-stamped column as an
+*upper* bound, e.g. `next_attempt_at <= now()`). This comparison needed the opposite: it reads a
+raw-stamped column (`fetched_at`) against a *historical* ratchet reading (`claimed_at`), not a live
+one, so a claim taken while the ratchet was running ahead could out-read a real, later fetch's raw
+timestamp — exactly reproducing this guard's own clobber, just via a clock-skew precondition instead
+of a read/write race. **Fix:** `ingest_snapshot` now stamps `fetched_at` explicitly from
+`jobs.now_iso()` instead of falling through to the DEFAULT, so both sides of the guard's comparison
+are the same clock — closed outright, not narrowed (`src/lode/externals.py`'s `ingest_snapshot`
+docstring carries the same cross-reference). Regression test:
+`test_reclaim_dead_letter_hook_survives_a_backward_clock_step` (`tests/test_worker.py`) forces a
+backward wall-clock step between the claim and the ingest and asserts the guard still recognizes the
+real fetch.
+
+*The one deliberate ripple this leaves:* `reconcile.py`'s refresh-staleness sweep (`_refresh_stale_step`,
+around `cutoff = jobs.iso(datetime.now(UTC) - ...)`) still computes its cutoff from the **raw** wall
+clock, on purpose (its own comment: "a backward wall-clock step here only refreshes an external late;
+it cannot strand one"). Now that `fetched_at` is ratchet-stamped, a row written during an active
+backward-step skew can read slightly *ahead* of true real time, same direction `jobs.now()` always
+biases in — so `s.fetched_at <= cutoff` becomes marginally less likely to fire in that narrow,
+self-correcting window (skew clears once real elapsed time exceeds the step's magnitude). That is the
+exact "refreshes late, cannot strand" outcome the sweep's own comment already accepts, not a new
+instance of the tombstone-clobber bug class this section exists to close — so it is left as-is rather
+than folded into this fix.
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
