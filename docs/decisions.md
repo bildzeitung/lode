@@ -788,10 +788,19 @@ are catalogued in [configuration.md](configuration.md).
   and every other clean-tree check in the repo already excludes it.
 
   **RESOLVED by lode-bns3.** Reconciled, not just patched: the generalized backstop's clean-tree gate
-  (`SKILL.md` Section 4) now restores `.beads/issues.jsonl` / `.beads/interactions.jsonl` to `HEAD`
-  immediately before judging cleanliness — mirroring Section 3's own restore — so a staged export, from
-  whatever cause, present or future, can never zero out the sweep on its own; the coupling is *dissolved*,
-  not merely documented. Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
+  (`SKILL.md` Section 4) now **excludes** `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the
+  cleanliness judgment outright (`:(exclude)` pathspecs on the `status --porcelain` guard), so a staged
+  or modified export, from whatever cause, present or future, can never zero out the sweep on its own;
+  the coupling is *dissolved*, not merely documented. It **excludes** rather than restoring (the build's
+  first cut mirrored Section 3's restore; changed at review): Section 3 must genuinely *clean* the index
+  or its `git merge --no-ff` refuses to run, whereas the GC loop only needs to *judge*. Restoring would
+  have made a read-only judgment **write into candidate worktrees — including the dirty ones it then
+  decides to KEEP**, silently discarding their export churn as a side effect of merely looking at them;
+  exclusion has zero blast radius, which is the right posture for a loop that ends in `--force`. It also
+  sidesteps a trap the restore form walked into: `git restore` aborts *wholesale* on an unmatched pathspec
+  and would restore *neither* file (silently, under `|| true`) for a candidate sitting at a commit that
+  predates one of these paths — a stale leftover worktree being exactly what this backstop reclaims.
+  Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
   staged") turns out to be the overstatement that produced the apparent contradiction in the first place:
   measured a third time, independently (a bare `bd show`/`bd ready` **and** a real `bd update` write),
   a worktree still reads clean — bd writes go to Dolt, and the tracked jsonl is regenerated+staged by
@@ -809,16 +818,19 @@ are catalogued in [configuration.md](configuration.md).
   lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
   why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
 
-  Verified end-to-end against a real scratch worktree at `trunk` HEAD: an otherwise-clean worktree with
-  only a staged `.beads/issues.jsonl` diff is now correctly reclaimed (previously would have been silently
-  skipped — the exact regression this entry flagged), while a worktree with genuine additional uncommitted
-  content is still correctly kept. The two paths are restored in **separate** `git restore` calls, not one
-  two-pathspec call: `git restore` aborts wholesale on an unmatched pathspec and would restore *neither*
-  file for a candidate worktree sitting at a commit predating one of them — a silent no-op reintroduced
-  inside the very line that closes silent no-ops (caught at review). The sweep also now emits one summary
-  line per pass (`worktree GC: reclaimed X of Y candidate(s) … (skipped: locked=.., not-merged=..,
-  dirty=..)`), so a regression that zeroes out GC reads as visibly different from "nothing to do," closing
-  the observability gap this entry also flagged.
+  Verified end-to-end by **executing the loop** against a synthetic five-worktree fixture set (not by
+  reading it): a worktree whose only dirt is a staged `.beads/issues.jsonl` is now correctly reclaimed
+  (previously silently skipped — the exact regression this entry flagged); one with genuine uncommitted
+  content is still correctly KEPT (exclusion narrows what counts as dirt, it does not mask real dirt);
+  not-merged and locked worktrees are still kept; and the buckets partition the candidates exactly.
+
+  The sweep also now emits one summary line per pass (`worktree GC: reclaimed X of Y candidate(s) …
+  (skipped: locked=.., not-merged=.., dirty=..; failed=..)`), so a regression that zeroes out GC reads as
+  visibly different from "nothing to do," closing the observability gap this entry also flagged. `failed`
+  is a bucket of its own because the count is taken from `git worktree remove`'s **actual exit status**:
+  incrementing `reclaimed` merely for *attempting* the removal (the build's first cut) would let the
+  summary report "reclaimed N" when every removal had failed and nothing was reclaimed at all — the
+  observability feature lying in precisely the direction it exists to expose.
 
   **Also caught at review — a `--force` hole the observability change itself opened.** Counting the
   `locked` skips meant moving the `locked` test out of `awk` (where it had been a filter) into the shell
