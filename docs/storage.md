@@ -630,35 +630,83 @@ ignores `claim_lost` — it only ever runs against batch-submitted jobs, which
 (nothing ever clears `batch_handle` back to `NULL`, so a row that reaches it
 is excluded for life).
 
-The *success* transitions are a **deliberately separate, still-open question**
-(lode-nggm hole 1 — narrowed to a follow-up ticket rather than decided here):
-`run_one`'s own two `status = 'done'` UPDATEs are unguarded, so the same
-race above can let a late-succeeding handler resurrect a job whose dead-letter
-hook already fired back to `'done'`. Whether a late success should instead
-be made to lose to the reclaim's verdict is a real design decision — the work
-*did* complete, so `'done'` is arguably the truthful terminal state, but a
-fired dead-letter hook implies the job is gone, which a subsequent `'done'`
-contradicts — not settled here.
+**The *success* transitions are deliberately left unguarded — a late success
+WINS over a reclaim's dead-letter verdict (settled, lode-nggm hole 1 →
+lode-37gg).** Three sites write an unguarded `status = 'done'`: `run_one`'s two
+(`worker.py:495`, stamping `prompt_ver`, and `worker.py:499`) and
+`submit_enrich_batch`'s gated-out `skip_ids` write (`enrich.py:616`). The same
+race described above can let a late-succeeding handler resurrect a job whose
+dead-letter hook already fired — and that is intentional, not a hole left
+open.
 
-The `batch_handle` exemption covers *some* but not all of the remaining
-`'done'` writers, and the distinction is what the follow-up is scoped on:
+**Why: success is monotonic; a dead-letter is a verdict.** "This work
+completed" is a fact about the world that no later event invalidates. A
+reclaim's dead-letter is a *prediction* that the work never will complete.
+When the prediction and the fact disagree, the fact wins — which is exactly
+what the unguarded success UPDATE already does.
 
-- **`collect_enrich_batch`'s two `status = 'done'` UPDATEs are *not* exposed to
-  this race**, despite writing the same-shaped unguarded UPDATE: like
+**The obvious "symmetry with the failure path" fix was considered and
+rejected.** CAS-guarding all three success writers with
+`jobs.cas_update_running`, for consistency with the guard the failure path
+now has, sounds tidy but conflates two different things. A late *failure*
+write clobbers a *different* claim's state (the ABA case above) or
+double-fires the dead-letter hook — genuine corruptions, correctly guarded. A
+late *success* write instead replaces the reclaim's pessimistic guess with
+ground truth. Guarding it wouldn't prevent a corruption; it would suppress a
+true fact in favor of a stale prediction.
+
+**The decisive fact: for enrich, the success UPDATE *is* the idempotency
+receipt.** `prompt_ver` is stamped only on the success path (`worker.py:495`).
+reconcile's enrich gap query (`reconcile.py:331-338`) re-enqueues any live
+head version with no pending/running/failed enrich job *and* no `'done'`
+enrich job carrying a matching `prompt_ver` — a `'dead'` row satisfies both.
+So CAS-guarding the success write would mean: the Haiku call completes, the
+enrichment is durably written (the handler commits its side effects *before*
+`run_one`'s `with conn:` opens), the guard no-ops the status write, the row
+stays `'dead'`, the `prompt_ver` receipt never lands, and reconcile — unable
+to see the work was done — re-enqueues and pays Haiku a **second time** for a
+result already sitting in the database. The guard would not prevent a
+corruption; it would destroy the record of a completed, paid-for API call.
+
+`embed` is the same shape, cheaper: `reconcile.py:239` is `NOT EXISTS (embed
+job WHERE status != 'dead')`, so a guarded-out embed success would leave
+`'dead'` → re-enqueued → redundantly re-embedded. `refresh` is unaffected
+either way — its sweep is purely TTL-driven (`s.fetched_at <= now -
+refresh_ttl_s`, `reconcile.py:438`) with no dead-job arm, so a guarded-out
+refresh success would leave only an inert lie in the job row, not a re-fetch.
+
+**The ABA case is benign for success**, unlike for failure: a stale success
+stamping `'done'` on a row a *different* claim now holds just means that
+second claim redundantly redoes work that already succeeded; if it later
+fails, its CAS-guarded failure write correctly no-ops against `status =
+'done'`. Nothing breaks. Contrast the failure path, where ABA is a real
+corruption — that is what the `claimed_at` guard above exists to close.
+
+Site-by-site, all three land the same way:
+
+- **`run_one`'s two `status = 'done'` UPDATEs** (`worker.py:495`,
+  `worker.py:499`) are exposed to the race and intentionally unguarded, per
+  the reasoning above.
+- **`submit_enrich_batch`'s gated-out `skip_ids` UPDATE** (`enrich.py:616`) is
+  also exposed — those rows were pre-claimed to `'running'` by
+  `_batch_submit_enrich` with `batch_handle` still `NULL` at that point
+  (nothing has been submitted yet), so they sit squarely inside
+  `_reclaim_stale_running`'s `batch_handle IS NULL` SELECT. Its window is far
+  narrower than `run_one`'s — the gated-out write happens in-process, before
+  the network call, so reaching it takes a `stale_running_timeout_s` stall
+  between the pre-claim and a purely local gating step — but "narrow" is not
+  "excluded", and the same settled rule applies: unguarded, intentionally.
+- **`collect_enrich_batch`'s two `status = 'done'` UPDATEs are *not* exposed**
+  to this race at all, despite writing the same-shaped unguarded UPDATE: like
   `_mark_job_failed` above, they only ever run against rows selected by
   `batch_handle = ?`, which `_reclaim_stale_running` excludes for life.
-- **`submit_enrich_batch`'s gated-out `skip_ids` UPDATE *is* exposed**, and the
-  `batch_handle` argument does **not** cover it: those rows were pre-claimed to
-  `'running'` by `_batch_submit_enrich`, but their `batch_handle` is still
-  `NULL` at that point (nothing has been submitted yet), so they sit squarely
-  inside `_reclaim_stale_running`'s `batch_handle IS NULL` SELECT. Its window is
-  far narrower than `run_one`'s — the gated-out write happens in-process,
-  before the network call, so reaching it takes a `stale_running_timeout_s`
-  stall between the pre-claim and a purely local gating step — but "narrow" is
-  not "excluded", and it is the same unguarded-success decision.
 
-So the open decision covers `run_one`'s two sites *and* this one; only
-`collect_enrich_batch`'s two are genuinely out of scope.
+A genuine, separate corruption exists in the same neighborhood — the refresh
+dead-letter hook's tombstone can race the handler's real snapshot and leave a
+permanently-absorbing tombstone for a fetch that succeeded — but CAS-guarding
+the success write above would **not** have fixed it (the tombstone is already
+written by the time the guard would run); it is tracked as its own ticket
+(lode-uda1), not folded into this decision.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
