@@ -834,12 +834,24 @@ def _mark_job_failed(
     claim predicate reads, and dead-letters at ``retry_max_attempts``). No
     dead-letter hook is invoked here — ``embed``/``enrich`` register none
     (``lode.worker`` module docstring).
-    """
-    row = conn.execute("SELECT attempts FROM jobs WHERE id = ?", (job_id,)).fetchone()
-    current_attempts = row[0] if row else 0
 
-    new_attempts, dead = jobs.record_job_failure(
-        conn, job_id, current_attempts, error_msg, settings
+    ``record_job_failure``'s ``claim_lost`` (lode-3jte, and the ``claimed_at``
+    identity it now also guards on — lode-nggm) is ignored here rather than
+    acted on: this caller only ever runs against batch-submitted enrich jobs,
+    and :func:`lode.worker._reclaim_stale_running`'s SELECT excludes any row
+    with ``batch_handle`` set (module docstring) — the codebase's single
+    writer of ``batch_handle`` only ever sets it, never clears it, so such a
+    row is excluded from that race for the rest of its life. ``claimed_at`` is
+    still read and passed through below (the function's signature requires
+    it), it just can never be the thing that decides ``claim_lost`` here.
+    """
+    row = conn.execute(
+        "SELECT attempts, claimed_at FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    current_attempts, claimed_at = row if row else (0, None)
+
+    new_attempts, dead, _claim_lost = jobs.record_job_failure(
+        conn, job_id, current_attempts, claimed_at, error_msg, settings
     )
     if dead:
         log.error(

@@ -16,8 +16,10 @@ import pytest
 from lode.config import Settings
 from lode.jobs import (
     DERIVE_JOB_TYPES,
+    cas_update_running,
     enqueue_derive_jobs,
     iso,
+    next_failure_state,
     now,
     record_job_failure,
 )
@@ -164,10 +166,12 @@ def test_dead_status_accepted_by_schema(conn) -> None:
 # result) — previously two independent, drifting copies of this same logic.
 
 
-def _insert_running_job(conn) -> int:
+def _insert_running_job(conn, *, claimed_at: str | None = None) -> int:
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', 'ver-1', 'running')"
+            "INSERT INTO jobs (type, target_version, status, claimed_at) "
+            "VALUES ('embed', 'ver-1', 'running', ?)",
+            (claimed_at,),
         )
     return cur.lastrowid
 
@@ -183,9 +187,11 @@ def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
     before = now()
     job_id = _insert_running_job(conn)
 
-    new_attempts, dead = record_job_failure(conn, job_id, 0, "boom", settings)
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, None, "boom", settings
+    )
 
-    assert (new_attempts, dead) == (1, False)
+    assert (new_attempts, dead, claim_lost) == (1, False, False)
     row = conn.execute(
         "SELECT status, attempts, last_error, next_attempt_at FROM jobs WHERE id = ?",
         (job_id,),
@@ -204,12 +210,242 @@ def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
     job_id = _insert_running_job(conn)
     settings = Settings(retry_max_attempts=2)
 
-    new_attempts, dead = record_job_failure(conn, job_id, 1, "boom", settings)
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 1, None, "boom", settings
+    )
 
-    assert (new_attempts, dead) == (2, True)
+    assert (new_attempts, dead, claim_lost) == (2, True, False)
     row = conn.execute(
         "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()
     assert row[0] == "dead"
     assert row[1] == 2
     assert row[2] == "boom"
+
+
+# --- next_failure_state (lode-yb9t) ------------------------------------------
+#
+# The pure policy decision factored out of record_job_failure so that
+# worker._reclaim_stale_running (which cannot call record_job_failure itself —
+# see its docstring) shares this decision instead of duplicating it. No conn,
+# no SQL, no txn — record_job_failure's persistence is exercised by the tests
+# above; these test the decision in isolation.
+
+
+def test_next_failure_state_below_max_attempts_applies_backoff() -> None:
+    settings = Settings(retry_max_attempts=5)
+    before = now()
+
+    new_attempts, dead, next_at = next_failure_state(0, settings)
+
+    assert (new_attempts, dead) == (1, False)
+    assert next_at is not None
+    # Same tight-backoff assertion style as
+    # test_record_job_failure_applies_backoff_below_max_attempts: >= a full
+    # retry_backoff_base_s ahead of a pre-call anchor.
+    earliest = iso(before + timedelta(seconds=settings.retry_backoff_base_s))
+    assert next_at >= earliest
+
+
+def test_next_failure_state_dead_letters_on_the_last_attempt_not_one_past_it() -> None:
+    """Pin the exact gate boundary with LITERAL expectations: the failure that
+    brings the count TO retry_max_attempts dead-letters (and schedules no further
+    attempt); the one before it does not. Stated as literals on purpose -- an
+    expectation computed by calling next_failure_state would move with the policy
+    and pin nothing.
+    """
+    settings = Settings(retry_max_attempts=3)
+
+    # One below the gate: retry, with a backoff stamped.
+    new_attempts, dead, next_at = next_failure_state(1, settings)
+    assert (new_attempts, dead) == (2, False)  # 2 < 3 -> retry
+    assert next_at is not None
+
+    # At the gate: dead, and no next attempt is scheduled.
+    assert next_failure_state(2, settings) == (3, True, None)  # 3 >= 3 -> dead
+
+
+# --- record_job_failure CAS guard (lode-3jte) --------------------------------
+#
+# Neither UPDATE may take effect if the row is no longer 'running' by the time
+# this runs -- a concurrent _reclaim_stale_running may have already reclaimed
+# it (e.g. to a terminal 'dead') while the caller's handler was still in
+# flight. Mirrors the same guard run_one's `except AuthError` arm already has
+# (lode-9yy) for exactly this race.
+
+
+def test_record_job_failure_is_a_noop_when_claim_already_lost_below_max(conn) -> None:
+    """If the row moved off 'running' before this call, the 'failed' UPDATE
+    must not apply -- reports claim_lost=True and leaves the row untouched."""
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=5)
+    # Simulate a concurrent reclaim that already terminalized the row.
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'dead', attempts = 9, last_error = 'reclaimed' "
+            "WHERE id = ?",
+            (job_id,),
+        )
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, None, "boom", settings
+    )
+
+    assert claim_lost is True
+    assert new_attempts == 1  # what WOULD have been applied -- not what's on the row
+    assert dead is False
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    # Untouched by this call -- still exactly what the simulated reclaim left.
+    assert row == ("dead", 9, "reclaimed")
+
+
+def test_record_job_failure_is_a_noop_when_claim_already_lost_at_max(conn) -> None:
+    """Same guard on the dead-lettering branch (new_attempts >= max)."""
+    job_id = _insert_running_job(conn)
+    settings = Settings(retry_max_attempts=2)
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'failed', attempts = 9, last_error = 'reclaimed' "
+            "WHERE id = ?",
+            (job_id,),
+        )
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 1, None, "boom", settings
+    )
+
+    assert claim_lost is True
+    assert new_attempts == 2
+    assert dead is True  # what WOULD have been applied
+    row = conn.execute(
+        "SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("failed", 9, "reclaimed")
+
+
+# --- record_job_failure ABA guard (lode-nggm hole 2) -------------------------
+#
+# A status-only CAS guard cannot tell a STALE claim from a NEWER one: the row
+# can cycle running -> failed -> pending -> running (a different claimed_at,
+# possibly a different worker) inside one stall that already exceeded
+# stale_running_timeout_s, entirely before the ORIGINAL stalled caller's write
+# finally lands. Guarding on claimed_at too closes this -- the guard must see
+# the row is not just 'running', but *this exact* running claim.
+
+
+def test_record_job_failure_is_a_noop_when_the_row_cycled_to_a_new_claim(conn) -> None:
+    """status='running' matches, but claimed_at does not -- the row already
+    moved on to a DIFFERENT claim (failed -> pending -> re-claimed) since this
+    caller first read its own claimed_at. A status-only guard would wrongly
+    match this and clobber the new claimant; the claimed_at guard must not."""
+    stale_claimed_at = "2026-07-13T10:00:00.000Z"
+    job_id = _insert_running_job(conn, claimed_at=stale_claimed_at)
+    settings = Settings(retry_max_attempts=5)
+    # Simulate the full cycle a concurrent reclaim + re-claim already ran
+    # through while this caller's handler was still stalled: reclaimed to
+    # 'failed', reset to 'pending', then re-claimed to 'running' again with a
+    # FRESH claimed_at -- status is 'running' again, exactly what a
+    # status-only guard would accept.
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'running', attempts = 9, "
+            "last_error = NULL, claimed_at = '2026-07-13T11:00:00.000Z' "
+            "WHERE id = ?",
+            (job_id,),
+        )
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, stale_claimed_at, "boom", settings
+    )
+
+    assert claim_lost is True
+    row = conn.execute(
+        "SELECT status, attempts, claimed_at FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    # Untouched -- still the NEW claimant's row, not clobbered by the stale write.
+    assert row == ("running", 9, "2026-07-13T11:00:00.000Z")
+
+
+def test_record_job_failure_applies_when_claimed_at_still_matches(conn) -> None:
+    """The claim identity check is additive, not stricter than necessary --
+    a caller whose claimed_at still matches the live row succeeds exactly as
+    before."""
+    claimed_at = "2026-07-13T10:00:00.000Z"
+    job_id = _insert_running_job(conn, claimed_at=claimed_at)
+    settings = Settings(retry_max_attempts=5)
+
+    new_attempts, dead, claim_lost = record_job_failure(
+        conn, job_id, 0, claimed_at, "boom", settings
+    )
+
+    assert claim_lost is False
+    assert (new_attempts, dead) == (1, False)
+    row = conn.execute(
+        "SELECT status, attempts FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("failed", 1)
+
+
+# --- cas_update_running (lode-nggm hole 3) -----------------------------------
+#
+# The shared primitive itself, in isolation from record_job_failure's
+# attempts/backoff policy -- exercises the NULL-safe claimed_at comparison
+# directly (a 'running' row that predates the column, or one a migration never
+# stamped, reads back NULL, and SQL's plain `= NULL` never matches).
+
+
+def test_cas_update_running_matches_a_null_claimed_at(conn) -> None:
+    job_id = _insert_running_job(conn, claimed_at=None)
+
+    matched = cas_update_running(
+        conn, job_id, None, "status = 'failed', last_error = ?", ("boom",)
+    )
+
+    assert matched is True
+    row = conn.execute(
+        "SELECT status, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("failed", "boom")
+
+
+def test_cas_update_running_rejects_a_mismatched_claimed_at(conn) -> None:
+    job_id = _insert_running_job(conn, claimed_at="2026-07-13T10:00:00.000Z")
+
+    matched = cas_update_running(
+        conn,
+        job_id,
+        "2026-07-13T09:00:00.000Z",
+        "status = 'failed', last_error = ?",
+        ("boom",),
+    )
+
+    assert matched is False
+    row = conn.execute(
+        "SELECT status, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert row == ("running", None)  # untouched
+
+
+def test_cas_update_running_rejects_when_status_is_not_running(conn) -> None:
+    job_id = _insert_running_job(conn, claimed_at="2026-07-13T10:00:00.000Z")
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'done' WHERE id = ?", (job_id,))
+
+    matched = cas_update_running(
+        conn,
+        job_id,
+        "2026-07-13T10:00:00.000Z",
+        "status = 'failed', last_error = ?",
+        ("boom",),
+    )
+
+    assert matched is False
+    row = conn.execute(
+        "SELECT status, last_error FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    # Untouched — claimed_at matches, so it is the status half of the guard
+    # that held here. Without this, the test would pass on the return value
+    # alone even if the UPDATE had written the row.
+    assert row == ("done", None)

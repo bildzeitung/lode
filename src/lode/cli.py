@@ -60,19 +60,18 @@ from pydantic import ValidationError
 
 from lode import __version__, versions
 from lode.config import (
-    LODE_HOME_ENV,
     Settings,
+    config_lines,
     config_path,
     default_db_path,
     lance_dir,
     load_settings,
-    lode_home,
     log_dir,
     model_cache_dir,
 )
 from lode.enrichment_view import EnrichmentItem, ExternalView, enrichment_view_conn
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
-from lode.lock import LockHeld, WorkerLock, lock_path
+from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
 from lode.notes_read import list_deleted_notes, list_notes
@@ -1083,35 +1082,6 @@ def no_egress_(
     typer.echo(f"{state} no_egress: {external_id}")
 
 
-def _config_lines(db: Path | None) -> list[str]:
-    """Render the resolved on-disk locations as aligned ``label  path`` lines.
-
-    The root, model cache, log dir, and ``config.toml`` come from ``$LODE_HOME``
-    (lode.config); the DB, its sibling lock, and the vector store reflect a
-    ``--db`` override when given — the lock and store are derived beside the
-    chosen DB, matching the "co-locate beside the DB" layout
-    (``docs/configuration.md``). Whether ``$LODE_HOME`` is set in the
-    environment (vs the ``~/.lode`` default) and whether the optional
-    ``config.toml`` is present are surfaced inline.
-    """
-    db_path = db or default_db_path()
-    lock_file = lock_path(db_path)
-    cfg = config_path()
-    home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
-    config_state = "present" if cfg.exists() else "absent"
-    rows = [
-        ("LODE_HOME", f"{lode_home()}  ({home_source})"),
-        ("database", str(db_path)),
-        ("db lock", str(lock_file)),
-        ("vector store", str(lance_dir(db_path))),
-        ("model cache", str(model_cache_dir())),
-        ("logs", str(log_dir())),
-        ("config", f"{cfg}  ({config_state})"),
-    ]
-    width = max(len(label) for label, _ in rows)
-    return [f"{label:<{width}}  {value}" for label, value in rows]
-
-
 @app.command()
 def config(
     db: Path | None = _DB_OPTION,
@@ -1122,12 +1092,13 @@ def config(
     so you can find, back up, or inspect lode's state: the root, the SQLite DB and
     its sibling lock, the LanceDB vector store, the model-weights cache, the log
     directory, and the optional ``config.toml`` (shown present/absent) — the same
-    set ``docs/configuration.md`` "Paths & locations" documents. Reads the
-    resolved paths from
-    :mod:`lode.config` rather than re-deriving them; ``--db`` shifts the displayed
-    DB (and its lock + co-located vector store) to an explicit override.
+    set ``docs/configuration.md`` "Paths & locations" documents. The rows come
+    from the shared row-builder (:func:`lode.config.config_lines`) that the TUI's
+    F2 diagnostics screen renders from too, so the two cannot drift (lode-u5gh);
+    ``--db`` shifts the displayed DB (and its lock + co-located vector store) to
+    an explicit override.
     """
-    for line in _config_lines(db):
+    for line in config_lines(db or default_db_path()):
         typer.echo(line)
 
 

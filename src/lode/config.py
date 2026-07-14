@@ -30,6 +30,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from lode.lock import lock_path
+
 
 class Kind(str, Enum):
     """How a knob may change — mirrors the Kind column in docs/configuration.md."""
@@ -495,3 +497,40 @@ def config_path() -> Path:
     re-deriving it.
     """
     return lode_home() / "config.toml"
+
+
+def config_lines(db_path: Path) -> list[str]:
+    """Render the resolved on-disk locations as aligned ``label  path`` lines.
+
+    The ONE shared row-builder behind both ``lode config`` (:mod:`lode.cli`) and
+    the TUI's F2 diagnostics screen (:mod:`lode.tui.screens.config`) — lode-u5gh
+    collapsed what used to be two independently-maintained copies (lode-3r4,
+    lode-ak6) after they had already drifted once (lode-ak6 added the model-cache
+    row to the CLI by hand; the TUI's mirrored screen did not get it, because
+    nothing connected the two lists). The human decision on lode-u5gh: there is
+    no product reason for the TUI to show fewer rows than the CLI, so this is a
+    single list both views render — a row added here reaches both, structurally,
+    not by remembering to update two places.
+
+    Takes an **already-resolved** ``db_path`` — callers own their own ``--db``
+    (CLI) / ``self.app.db_path`` (TUI) resolution; this only derives the lock
+    and vector-store paths that live beside it. The root, model cache, log dir,
+    and ``config.toml`` come from ``$LODE_HOME``. Whether ``$LODE_HOME`` is set
+    in the environment (vs the ``~/.lode`` default) and whether the optional
+    ``config.toml`` is present are surfaced inline.
+    """
+    lock_file = lock_path(db_path)
+    cfg = config_path()
+    home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
+    config_state = "present" if cfg.exists() else "absent"
+    rows = [
+        ("LODE_HOME", f"{lode_home()}  ({home_source})"),
+        ("database", str(db_path)),
+        ("db lock", str(lock_file)),
+        ("vector store", str(lance_dir(db_path))),
+        ("model cache", str(model_cache_dir())),
+        ("logs", str(log_dir())),
+        ("config", f"{cfg}  ({config_state})"),
+    ]
+    width = max(len(label) for label, _ in rows)
+    return [f"{label:<{width}}  {value}" for label, value in rows]

@@ -332,26 +332,37 @@ are catalogued in [configuration.md](configuration.md).
   pickup ever removed its own launch worktree when it finished, so a *second* review/rebase cycle on the
   same ticket (or one that ran later, after the first cycle's worktree was simply left on disk) found
   `land/<id>` already checked out and fell back to `git checkout --detach FETCH_HEAD`. A detached
-  worktree owns no branch ref, so `/land`'s branch-name-keyed GC sweeps (which walk `git worktree list
-  --porcelain`'s `branch refs/heads/...` lines, or enumerate branch refs directly) structurally could
-  not see it — the only net that ever caught it was `/land`'s backstop 4, added in lode-mxeu as a
-  by-SHA/by-detached-state sweep specifically because the first three sweeps are all branch-name-keyed.
-  Worse, the leak was self-compounding: every leaked worktree was exactly the "already checked out
-  elsewhere" state that forced the *next* cycle onto the same detaching path. The actual fix is on the
-  agent side, not `/land`'s: `code-reviewer` and `coding`'s rebase pickup now check `land/<id>` out
-  under a local name suffixed with their own launch worktree's directory name (e.g.
-  `land/<id>--agent-<hash>`), which is unique by construction, so the collision — and with it the
-  detaching fallback — can no longer arise. The suffixed name still starts with `land/`, so backstop 1
-  (the primary, branch-name-keyed sweep) matches it on that **prefix** and reclaims it once merged into
-  trunk exactly as before. One `/land` sweep did have to follow the rename, though: backstop 2 (the
-  dangling-**ref** sweep) keys on an **exact** name match against `git ls-remote`'s listing to decide
-  "remote gone ⇒ stale", and a suffixed `land/<id>--agent-<hash>` can never equal origin's `land/<id>` —
-  left alone, its keep-the-in-flight-ref arm becomes dead code and the sweep silently degrades into
-  "delete every `land/*` ref not currently checked out", taking an in-flight ticket's unpushed commits
-  with it the moment its worktree goes away by any route. It now strips the suffix (`${BR%%--*}`, safe
-  because a bd id never contains `--`) before comparing, restoring the original semantics for both the
-  suffixed and the bare shape. Backstop 4 (the detached-worktree net) stays in place regardless, as
-  defense against a crash mid-cycle, not steady-state operation.
+  worktree owns no branch ref, so back when `/land`'s worktree GC was still branch-name-keyed (walking
+  `git worktree list --porcelain`'s `branch refs/heads/...` lines, or enumerating branch refs directly)
+  it structurally could not see it — at the time, the only net that ever caught it was a separate
+  by-SHA/by-detached-state sweep, added in lode-mxeu specifically because the name-keyed sweep couldn't
+  see a worktree with no branch. (lode-jiyk has since **unified** those *two* worktree sweeps — and only
+  those two — into a single loop keyed on HEAD-sha ancestry, which is why both are described here in the
+  past tense.) Worse, the leak was self-compounding: every leaked worktree was exactly the "already
+  checked out elsewhere" state that forced the *next* cycle onto the same detaching path.
+
+  The actual fix is on the agent side, not `/land`'s: `code-reviewer` and `coding`'s rebase pickup now
+  check `land/<id>` out under a local name suffixed with their own launch worktree's directory name
+  (e.g. `land/<id>--agent-<hash>`), which is unique by construction, so the
+  collision — and with it the detaching fallback — can no longer arise. The suffixed name still starts
+  with `land/`, but `/land`'s worktree GC (lode-jiyk) doesn't match on that prefix, or on any branch
+  name at all, any more: it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and
+  whose **HEAD commit** is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this
+  worktree is reclaimed exactly as it always was, once merged into trunk. That name-independence is
+  scoped to the worktree loop only — `/land`'s dangling-**ref** backstops still match `land/*` and
+  `worktree-agent-*` by name (they must: `refs/heads/*` is shared with human branches, so a name-blind
+  "delete any merged local ref" would eat them too). One `/land` sweep did have to follow the rename,
+  though: the dangling-**ref** sweep over `land/*` keys on an **exact** name match against `git
+  ls-remote`'s listing to decide "remote gone ⇒ stale", and a suffixed `land/<id>--agent-<hash>` can
+  never equal origin's `land/<id>` — left alone, its keep-the-in-flight-ref arm becomes dead code and
+  the sweep silently degrades into "delete every `land/*` ref not currently checked out", taking an
+  in-flight ticket's unpushed commits with it the moment its worktree goes away by any route. It now
+  strips the suffix (`${BR%%--*}`, safe because a bd id never contains `--`) before comparing, restoring
+  the original semantics for both the suffixed and the bare shape. A detached worktree is still caught,
+  by that same HEAD-sha-ancestry test — as defense against a crash mid-cycle, not steady-state
+  operation, since the rename means the detach fallback no longer fires at all. The mechanism of record
+  for all of the above is [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors)
+  §4 — check this prose against it, not the other way round.
 
   **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
@@ -379,6 +390,57 @@ are catalogued in [configuration.md](configuration.md).
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
+
+  **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
+  half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
+  "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
+  only in the sense that the worktree is now always branch-attached and hence *reachable* by `/land`'s
+  backstop 1; it was never actually **removed** on a clean run, only left for that backstop to sweep up
+  later, once the branch **merges into `trunk`**. Two gaps followed directly from that: (1) a ticket
+  reviewed or rebase-picked-up N times across N cycles left N such worktrees standing simultaneously,
+  all waiting on the same eventual land; (2) an **escalated** ticket's branch never merges into `trunk`
+  at all, so backstop 1 structurally cannot reach it — that worktree leaked **indefinitely**, until a
+  human resolved the escalation and the branch eventually landed.
+
+  **Fix: `/code`'s own orchestrating session reclaims the worktree, right after the subagent that used
+  it returns — on *either* outcome (`ready-for-land` or `land-escalated`) — and *derives* which worktree
+  that was, rather than being told.** Neither `code-reviewer` nor a rebase pickup can `git worktree
+  remove` the worktree it is currently standing in, so `/code` (never itself worktree-isolated — it runs
+  from the repo root, the same place `/land`'s own GC already runs its `git worktree remove --force`
+  from) does the removal immediately after collecting that agent's result, per ticket, not batched to
+  the end of a fan-out.
+
+  The derivation is the load-bearing choice, and it falls straight out of lode-em6v: the agent's branch
+  is always `land/<id>--<its-own-worktree-dir>`, so the **ticket id alone** recovers both the worktree
+  path and the branch name from `git worktree list --porcelain`. An earlier draft had each agent
+  *report* its path and branch in its final message and had `/code` act on that string; deriving instead
+  is strictly better on the cases that actually leak. It needs no cooperation from the agent, so it
+  still fires when the agent **crashed**, **escalated**, or returned a garbled path — whereas a reported
+  string is exactly what a crashed agent never sends, leaving the very case this ticket exists to close
+  (an escalated branch, which never merges into `trunk`, so backstop 1 can never reach it) uncovered a
+  second time. It also reclaims **every** worktree a ticket accumulated across N review/pickup cycles,
+  not just the last one, and it removes the trust boundary (and the path-validation guard that boundary
+  would otherwise need). It cannot touch the **builder's** worktree: that is branch-named
+  `worktree-agent-*`, never `land/<id>--*`, so the filter skips it by construction and `/land`'s
+  `review_worktree` GC still finds it.
+
+  Two `git` behaviours this depends on, both verified live: `rtk` reformats `worktree list --porcelain`
+  and breaks the field parse, so the reclaim uses **plain `git`** (same hazard as lode-9j7); and the
+  agent harness **locks** a launch worktree while its agent runs (`locked claude agent <name> (pid …)`)
+  and unlocks it on exit, so a **single** `--force` removes a finished agent's worktree but *refuses* a
+  still-locked one — it fails safe. `-f -f` must not be used: it would override the lock and rip a
+  worktree out from under a live agent.
+
+  Safe on both outcomes, for the same reason the fetch-and-checkout architecture is: by the time either
+  agent returns, its worktree holds nothing `origin/land/<id>` doesn't already have — a clean pass
+  pushes first, and an escalation's aborted merge (rebase pickup) or reverted-to-green commit (reviewer)
+  leaves the checkout an exact mirror of what is already on origin. `/land`'s backstops 1-4 are untouched
+  and remain a *partial* net — they still only reach a worktree whose branch eventually merges into
+  `trunk`, which is precisely why the reclaim above must not depend on the agent saying anything.
+  Scope: `.claude/skills/code/SKILL.md` (one reclaim block, defined at step 0 and referenced by step 1
+  and Phase 2), `.claude/agents/code-reviewer.md` and `.claude/agents/coding.md`'s rebase-pickup section
+  (both now say plainly that they neither remove nor report their own launch worktree). Docs-only
+  change, no code/tests affected — same shape as lode-em6v.
 
 - **Builder worktree retention — kept as-is; the builder keeps its worktree through the whole
   build → review → land lifecycle, and `/land`'s GC still reclaims it only on a clean land (lode-3ci,
@@ -557,3 +619,82 @@ are catalogued in [configuration.md](configuration.md).
 
   Scope: `.claude/skills/land/SKILL.md` Section 4 (backstop 1's loop and its surrounding prose) plus
   this entry. Docs/prompt-only — no Python code changed.
+
+- **`/land`'s worktree-reclaim backstop now guards on the ACTUAL invariant (dirty tree), not just the
+  "merged into trunk" proxy that reads TRUE at zero divergence (lode-9hgu, decided/built 2026-07-13,
+  cross-referencing lode-oqr/lode-jiyk/lode-amif).** lode-jiyk's unified backstop (`.claude/skills/land/SKILL.md`
+  Section 4) reclaims any unlocked worktree under `.claude/worktrees/` whose HEAD-sha is an ancestor of
+  `trunk`. That predicate is a *proxy* for the real safety question ("is this work captured
+  elsewhere"), and the proxy is exactly wrong at zero divergence: a worktree freshly branched off
+  `trunk` HEAD is trivially "merged" before a single commit exists, so its live, uncommitted working
+  tree reads as safe to `--force`-remove. lode-oqr closed this gap only for the `coding` producer
+  (which locks its worktree before writing and unlocks after its first commit). The system has exactly
+  **two** lock sources, and between them they leave three worktree classes holding no lock at all by the
+  time the sweep sees them: the harness locks a *live* `isolation: worktree` agent's worktree for that
+  agent's lifetime and *releases it on exit*, and `coding.md` locks the pre-first-commit window — so an
+  interactive `EnterWorktree` session, a human's hand-made worktree (which `CLAUDE.md` *mandates* for
+  all work), and an **exited** agent's leftover scratch are all unlocked. Each of those, sitting at
+  trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode (which
+  destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute loop).
+
+  **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
+  path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
+  re-introduces a name dependency lode-jiyk exists to eliminate, and does not protect an *interactive*
+  `agent-*` worktree, the likelier victim; (c) require every worktree-creating path to raise
+  `git worktree lock` (spread lode-oqr's protocol beyond `coding.md`) — rejected, most places to keep
+  in sync and cannot cover a human's manual `git worktree add`; (d) accept and document only —
+  rejected, leaves a P1 that destroys uncommitted work. **Chose (a).**
+
+  **Fix:** the generalized backstop loop now checks `git -C "$WT" status --porcelain` immediately
+  after the existing `merge-base --is-ancestor` check, and skips (keeps) the worktree unless that
+  command both succeeds AND prints nothing. Scoped to *that* loop only — the per-ticket removal loop
+  earlier in the same section reaches a much narrower candidate set (its `--force` is keyed to
+  `metadata.review_worktree` on a ticket that *just landed this pass*, and nothing ever writes an
+  interactive or hand-made worktree's path into a ticket's metadata, so it cannot reach one), and the
+  P1 was deliberately not made to carry a rider. **That exemption is narrower than it first reads, and
+  is tracked in lode-h1vn:** "the content is provably on trunk" is a claim about the *branch tip* that
+  merged, not about the *working-tree state of that directory* at GC time — and the per-ticket loop has
+  neither a `locked` check nor a dirty check, so it force-removes unconditionally. Same primitive, same
+  risk class, only one loop fails safe. The fix there is not simply "add the same guard" (a dirty-guard
+  could silently no-op the per-ticket cleanup entirely, re-opening the very leak Section 4 exists to
+  close), which is exactly why it is its own ticket.
+
+  **The guard is coupled to `.gitignore`, and that coupling is load-bearing.** `status --porcelain`
+  reports *untracked* files too, and a finished builder worktree is full of them: `venv/` (every
+  producer runs `scripts/python-init.sh` in its own worktree), plus `.nox/`, `__pycache__/`,
+  `.pytest_cache/`, `.ruff_cache/` and setuptools-scm's generated `src/lode/_version.py`. All of those
+  are gitignored today, so a real, finished builder worktree reads *clean* and is still reclaimed —
+  verified against every live worktree on the build machine when this landed. But if a build artifact
+  ever stops being ignored, **every** worktree reads dirty, and this backstop silently stops reclaiming
+  anything at all (it fails safe, so it leaks worktrees rather than destroying work — the failure is
+  quiet, not dangerous). If worktrees ever start accumulating with no explanation, suspect `.gitignore`
+  before suspecting this loop.
+
+  **Fail-safe, not fail-open — the same class of bug this decision exists to fix, one level down.**
+  `git -C "$WT" status --porcelain` prints nothing both when the tree is clean and when the command
+  itself errors (missing directory, corrupt worktree admin entry, unreadable `.git` file, …). A naive
+  emptiness test alone would therefore fail *open* on error and reclaim anyway — exactly the "the
+  proxy reads the wrong way at the edge" mistake this decision exists to close. The guard captures the
+  command's own exit status separately from the emptiness test
+  (`STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue` — a command
+  substitution assignment inherits the command's exit code), so an error is treated identically to
+  "dirty": skip, keep the worktree.
+
+  **Accepted residual, unchanged from before this fix:** a *clean* worktree at trunk HEAD that raises
+  no lock — a human's hand-made worktree they happen to be sitting in, or an exited agent's clean
+  leftovers — is still reclaimed by the ancestry+clean predicate; nothing is destroyed (the tree is
+  clean), the directory simply vanishes out from under whoever is standing in it. This does *not*
+  extend to a **live** harness agent's worktree, which the harness locks for the agent's lifetime (see
+  the paragraph below) and which the backstop's `!locked` filter therefore drops before the predicate
+  is ever evaluated. The failure direction this decision moves the whole backstop to is "remove an
+  empty checkout, never destroy uncommitted work" — that trade is intentional and not being chased
+  further here.
+
+  **Open, not settled by this ticket [Likely, not Certain]:** whether a hard crash of the Claude Code
+  host process leaves stale pid-keyed `git worktree lock`s behind. If it does, the harness's own lock
+  (held for the lifetime of an `isolation: worktree` agent, released on exit — verified live against a
+  reviewer's own worktree during lode-amif's review) would cause backstop 1 to skip those worktrees
+  entirely, and the crash-mid-fan-out leak lode-amif targets would still not be reached by this
+  backstop (though the dirty-tree guard above would still hold if the crashed worktree also happens to
+  be dirty, which is the common case for a build that crashed mid-edit). Confirm empirically if this
+  ever needs chasing further; not a blocker for this decision.

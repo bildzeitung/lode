@@ -383,12 +383,23 @@ def test_run_transient_error_sets_failed(
 def test_run_transient_error_sets_future_next_attempt_at(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
-    """After a transient failure the next_attempt_at must be in the future."""
+    """After a transient failure, next_attempt_at must reflect the applied backoff.
+
+    Baseline is captured BEFORE run_one() and the assertion is a delta against
+    it, with zero clock reads after the call -- asserting "is it still in the
+    future" two statements later races the 1.0s backoff against however long
+    wall-clock time elapses under load before the assertion runs (lode-vnud,
+    the same defect lode-0x1 fixes for the reclaim-backoff test).
+    """
     job_id = _insert_job(conn)
     _claim_one(conn, ("embed",), _now_iso())
+    before = _now_iso()
     run_one(conn, job_id, db_path, settings, _failing_registry())
     next_at = _job(conn, job_id)["next_attempt_at"]
-    assert next_at > _now_iso(), "next_attempt_at should be in the future"
+    delta = (_parse_iso(next_at) - _parse_iso(before)).total_seconds()
+    assert delta >= settings.retry_backoff_base_s, (
+        "next_attempt_at should reflect the applied backoff"
+    )
 
 
 def test_run_backoff_grows_with_attempts(
@@ -682,6 +693,202 @@ def test_dead_letter_hook_exception_does_not_propagate(
 
 
 # ---------------------------------------------------------------------------
+# Transient-failure CAS guard (lode-3jte) — the sibling of the AuthError
+# resurrection guard above (lode-9yy), now applied to run_one's
+# `except Exception` arm via jobs.record_job_failure's own CAS guard.
+# ---------------------------------------------------------------------------
+
+
+def test_run_transient_failure_does_not_resurrect_a_reclaimed_job(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A transient failure's UPDATE must not resurrect a job a concurrent
+    reclaim already drove to a terminal 'dead' while the handler was in flight.
+
+    ``cli._enrich_immediately`` reaches ``run_one`` via ``claim_and_run_one``
+    with no worker lock held, so a concurrent ``lode work`` drain can hit
+    ``_reclaim_stale_running`` and dead-letter this very row mid-handler.
+    Unguarded, the transient arm's UPDATE would flip that dead job back to
+    'failed' with a fresh backoff and double-charge attempts on top -- exactly
+    the resurrection the AuthError arm was hardened against (lode-9yy), just
+    never mirrored on this arm until lode-3jte. The handler below stands in
+    for that concurrent reclaim: it terminalizes the row (and runs the
+    dead-letter hook itself, as the real reclaim path does) before raising a
+    plain (non-AuthError) exception.
+    """
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+
+    def _reclaimed_then_transient_error(conn_, tv, db, s):
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ?, "
+                "last_error = 'reclaimed' WHERE id = ?",
+                (settings.retry_max_attempts, job_id),
+            )
+        raise RuntimeError("transient blip (test)")
+
+    ok = run_one(
+        conn, job_id, db_path, settings, {"embed": _reclaimed_then_transient_error}
+    )
+
+    assert ok is False
+    row = _job(conn, job_id)
+    assert row["status"] == "dead"  # NOT resurrected to 'failed'
+    assert row["attempts"] == settings.retry_max_attempts  # NOT double-charged
+    assert row["last_error"] == "reclaimed"  # NOT overwritten by run_one's own message
+
+
+def test_run_transient_failure_does_not_run_dead_letter_hook_twice(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """The dead-letter hook must fire exactly once (lode-at8) even when the
+    claim was lost to a concurrent reclaim.
+
+    Whoever wins the CAS (the reclaim, here simulated inline) already ran the
+    hook; run_one's own transient arm must see claim_lost=True and skip
+    running it a second time for the same job.
+    """
+    external_id = "https://example.com/reclaimed-mid-handler"
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+
+    hook_calls: list[str] = []
+
+    def _counting_hook(conn_, target_version, last_error, settings_):  # noqa: ARG001
+        hook_calls.append(target_version)
+
+    def _reclaimed_then_transient_error(conn_, tv, db, s):
+        # Stand-in for a concurrent _reclaim_stale_running: terminalize the
+        # row AND run its dead-letter hook, exactly as the real reclaim path
+        # does, before the stalled handler finally raises.
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'dead', attempts = ?, "
+                "last_error = 'reclaimed' WHERE id = ?",
+                (settings.retry_max_attempts, job_id),
+            )
+        _counting_hook(conn_, external_id, "reclaimed", s)
+        raise RuntimeError("transient blip (test)")
+
+    with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _counting_hook}):
+        ok = run_one(
+            conn,
+            job_id,
+            db_path,
+            settings,
+            {"refresh": _reclaimed_then_transient_error},
+        )
+
+    assert ok is False
+    assert hook_calls == [external_id]  # exactly once, not twice
+
+
+# ---------------------------------------------------------------------------
+# ABA guard (lode-nggm hole 2) — the CAS on `status = 'running'` alone cannot
+# tell a job's OWN stale claim from a NEWER one on the same row: the row can
+# cycle running -> failed -> pending -> running (a different claimed_at,
+# possibly a different worker) inside a single stall that already exceeded
+# stale_running_timeout_s, entirely before the original, still-stalled caller
+# below finally writes. Guarding on claimed_at too (not just status) closes
+# this: run_one read claimed_at once, at the top, before the handler ran.
+# ---------------------------------------------------------------------------
+
+
+def test_run_transient_failure_does_not_clobber_a_job_reclaimed_to_a_new_claim(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """A status-only guard would wrongly match a *different*, newer 'running'
+    claim on the same row and clobber it. The claimed_at guard must not: it
+    compares against the value run_one read at the top, before the handler
+    (here standing in for an arbitrarily long stall) ran.
+    """
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    new_claimants_attempts = 9
+    # Must be unmistakably DIFFERENT from the claimed_at _claim_one just
+    # stamped, or the guard matches and this test silently stops testing the
+    # ABA case. Not `_future_iso(0)`: that is a raw wall-clock read at
+    # millisecond precision, while _claim_one stamps jobs.now_iso() — a
+    # different clock (jobs.now() deliberately runs *ahead* of the wall clock,
+    # see its docstring) at the same precision, only a SELECT/UPDATE/SELECT
+    # earlier. The two can collide on the same millisecond. An hour out cannot.
+    new_claimants_claimed_at = _future_iso()
+
+    def _cycled_to_a_new_claim_then_transient_error(conn_, tv, db, s):
+        # Stand-in for the FULL cycle a concurrent reclaim + reset + re-claim
+        # already ran through while this handler was stalled: reclaimed to
+        # 'failed', reset to 'pending', re-claimed to 'running' again with a
+        # FRESH claimed_at by a different worker. status is 'running' again —
+        # exactly what a status-only guard would accept as still its own.
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'running', attempts = ?, "
+                "last_error = NULL, claimed_at = ? WHERE id = ?",
+                (new_claimants_attempts, new_claimants_claimed_at, job_id),
+            )
+        raise RuntimeError("transient blip (test)")
+
+    ok = run_one(
+        conn,
+        job_id,
+        db_path,
+        settings,
+        {"embed": _cycled_to_a_new_claim_then_transient_error},
+    )
+
+    assert ok is False
+    row = _job(conn, job_id)
+    # Untouched — still exactly the new claimant's row, not overwritten by
+    # this call's stale attempts/claimed_at.
+    assert row["status"] == "running"
+    assert row["attempts"] == new_claimants_attempts
+    assert row["last_error"] is None
+    # It is specifically the NEW claim that survived, not merely *a* running row.
+    assert row["claimed_at"] == new_claimants_claimed_at
+
+
+def test_run_auth_error_reset_does_not_clobber_a_job_reclaimed_to_a_new_claim(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """Same ABA guard on the AuthError reset arm."""
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    new_claimants_attempts = 9
+    # An hour out, for the same reason as the transient test above: a raw
+    # `_future_iso(0)` can land on the same millisecond as _claim_one's stamp.
+    new_claimants_claimed_at = _future_iso()
+
+    def _cycled_to_a_new_claim_then_auth_error(conn_, tv, db, s):
+        with conn_:
+            conn_.execute(
+                "UPDATE jobs SET status = 'running', attempts = ?, "
+                "last_error = NULL, claimed_at = ? WHERE id = ?",
+                (new_claimants_attempts, new_claimants_claimed_at, job_id),
+            )
+        raise AuthError("no credentials (test)")
+
+    with pytest.raises(AuthError):
+        run_one(
+            conn,
+            job_id,
+            db_path,
+            settings,
+            {"embed": _cycled_to_a_new_claim_then_auth_error},
+        )
+
+    row = _job(conn, job_id)
+    # Untouched — NOT reset to 'pending' over the new claimant's row.
+    assert row["status"] == "running"
+    assert row["attempts"] == new_claimants_attempts
+    assert row["last_error"] is None
+    # It is specifically the NEW claim that survived, not merely *a* running row.
+    assert row["claimed_at"] == new_claimants_claimed_at
+
+
+# ---------------------------------------------------------------------------
 # claim_and_run_one — CLI immediate-enrich fast path (lode-npx.2)
 # ---------------------------------------------------------------------------
 
@@ -890,6 +1097,72 @@ def test_reclaim_dead_letters_at_max_attempts(
     row = _job(conn, job_id)
     assert row["status"] == "dead"
     assert row["attempts"] == settings.retry_max_attempts
+
+
+def test_reclaim_and_record_job_failure_agree_on_the_dead_letter_gate(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """_reclaim_stale_running and jobs.record_job_failure must dead-letter at
+    the SAME attempts count (lode-yb9t) -- a crash-reclaimed job is supposed to
+    obey the identical max-attempts gate as a cleanly-failed one, and prior to
+    this ticket nothing but a docstring note enforced that. Both now delegate
+    to jobs.next_failure_state, so this test catches either path silently
+    reimplementing its own (possibly drifted) gate again in the future.
+
+    The sweep is DERIVED from settings.retry_max_attempts rather than hard-coded,
+    so its last iteration always lands exactly ON the dead-letter boundary. With
+    hard-coded params, retuning that setting would slide the whole sweep below
+    the gate and leave this test asserting False == False -- green, and no longer
+    covering the one thing it exists for.
+    """
+    observed_dead: list[bool] = []
+
+    for attempts_before in range(settings.retry_max_attempts):
+        stale_job = _insert_job(
+            conn,
+            target_version=f"stale-{attempts_before}",
+            status="running",
+            attempts=attempts_before,
+            claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+        )
+        # The control row must be a FRESH claim, not a stale one: the reclaim
+        # selects `claimed_at IS NULL OR claimed_at <= cutoff`, so a claimed_at of
+        # NULL (the _insert_job default) would put this row in the reclaim's own
+        # sweep and it would be failed by the reclaim path before
+        # record_job_failure ever saw it -- leaving this test comparing the
+        # reclaim path against itself.
+        control_claimed_at = _now_iso()
+        control_job = _insert_job(
+            conn,
+            target_version=f"control-{attempts_before}",
+            status="running",
+            attempts=attempts_before,
+            claimed_at=control_claimed_at,
+        )
+
+        _reclaim_stale_running(conn, settings)
+        reclaimed_row = _job(conn, stale_job)
+
+        _, record_dead, _ = jobs.record_job_failure(
+            conn, control_job, attempts_before, control_claimed_at, "boom", settings
+        )
+        reclaimed_dead = reclaimed_row["status"] == "dead"
+
+        # The two paths agree with each other...
+        assert reclaimed_dead == record_dead
+        assert reclaimed_row["attempts"] == _job(conn, control_job)["attempts"]
+        # ...and both agree with an INDEPENDENTLY stated gate. Mutual agreement
+        # alone is structurally guaranteed now that both call next_failure_state,
+        # so it would survive a >= -> > drift *inside* that shared function; this
+        # line is what pins the gate's actual value.
+        assert record_dead == (attempts_before + 1 >= settings.retry_max_attempts)
+        observed_dead.append(reclaimed_dead)
+
+    # Vacuity guard: the sweep must have exercised BOTH sides of the gate.
+    assert observed_dead[-1] is True, "sweep never reached the dead-letter gate"
+    assert False in observed_dead, "sweep never exercised the retry side of the gate"
 
 
 def test_reclaim_excludes_batch_backed_enrich_jobs(

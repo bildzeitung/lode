@@ -117,21 +117,25 @@ rtk git fetch origin land/<id> trunk
 (lode-em6v). The bare name collided with an already-checked-out `land/<id>` from a stale earlier run
 (two reviewers are never dispatched at the same ticket concurrently, but a leftover worktree from an
 earlier cycle that never cleaned itself up is exactly this collision), forcing a `git checkout
---detach` fallback — and a detached worktree owns no branch ref, so every one of `/land`'s
-branch-name-keyed GC sweeps structurally missed it (that's exactly what `/land`'s backstop 4 exists to
-catch, and each leak made the next review more likely to hit the same fallback — self-compounding).
-Suffixing the local name with this worktree's own directory name makes that collision structurally
-impossible, so there is nothing left to guard for and the detaching fallback is removed outright:
+--detach` fallback — and a detached worktree owns no branch ref, so back when `/land`'s worktree GC was
+still branch-name-keyed it structurally missed such a worktree, and each leak made the next review more
+likely to hit the same fallback (self-compounding). That GC is HEAD-sha-keyed now (lode-jiyk) and would
+reclaim a detached worktree too, but the collision is still worth designing out at the source:
+suffixing the local name with this worktree's own directory name makes it structurally impossible, so
+there is nothing left to guard for and the detaching fallback is removed outright:
 
 ```bash
 TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
 rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
-that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
-sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
-`.claude/skills/land/SKILL.md`; nothing for me to do either way.
+The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
+all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
+is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree is reclaimed exactly
+as it always was, once the branch lands. That name-independence is scoped to the worktree loop only: `/land`'s
+dangling-**ref** backstops still match `land/*` and `worktree-agent-*` by name (they must — `refs/heads/*`
+is shared with human branches), and the `land/*` one strips this suffix before comparing against the
+exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 **Confirm I'm off `trunk` and check for drift** against the hand-off read in step 1:
 
@@ -179,7 +183,21 @@ For a docs-only branch there is no Python gate.
    [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
    `blocks` if the new ticket genuinely can't be built until *this* one lands (note the discovery
    provenance in its text instead, since the edge no longer carries it); `discovered-from` if it's
-   independently buildable right now.
+   independently buildable right now. **Never `bd create --deps blocks:<id>`** — that form *inverts* the
+   edge (lode-ij24), making `<id>` (the ticket I'm reviewing) blocked by my new follow-up. For a
+   `blocks` follow-up: create it with **no `--deps` at all** — not even `discovered-from:<id>` for the
+   provenance, since that edge occupies the same `(new-id, <id>)` pair and makes the next command *fail*
+   — then wire the gate as its own step:
+
+   ```bash
+   NEW_ID=$(rtk bd create --title="…" --description="Discovered while reviewing <id>. …" \
+     --type=task --silent)
+   rtk bd dep add "$NEW_ID" <id> --type blocks     # first ID ends up blocked by the second
+   ```
+
+   Provenance goes in the description, not the edge. Full verification and the `discovered-from` case:
+   [`.claude/agents/coding.md`](coding.md#5-implement) and
+   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3).
 
 If the review finds nothing to change, that is a valid outcome — the branch passes as-is.
 
@@ -202,6 +220,19 @@ rtk nox -s tests                      # pytest
 anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
 non-negotiable above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap. **Gates must be
 green before I mark `ready-for-land`.** Fix and re-run.
+
+**Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
+invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
+cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
+inventing a plausible machine-level story is precisely the bug that created this exit code
+(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
+so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
+`dangerouslyDisableSandbox: true`** — tried already, made no measurable difference (sandboxed and
+unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2 gate is an
+**escalation, not a skip**: I never hand-verify the diagram in its place, never swap to
+`ready-for-land` with the gate silently skipped, and never read a docker complaint as license to
+proceed without it. Only a human can fix the machine. I follow the escalation rule below, passing the
+exact exit-2 message through as the decision a human needs to resolve.
 
 ### 6. Commit my refinements
 
@@ -243,6 +274,15 @@ rtk scripts/bd-dolt-push.sh   # publish the label swap over refs/dolt/data — d
 `scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
 transient embedded-mode lock — an *expected* outcome under `/code` fan-out, not corruption (lode-83d).
 
+**I never clean up my own launch worktree — and I never need to report it either (lode-vs7g).** I
+cannot `git worktree remove` the worktree I am standing in, so I don't try. `/code`'s orchestrating
+session reclaims it for me right after I return, on **either** outcome (`ready-for-land` or
+`land-escalated`), and it *derives* which worktree was mine from the ticket id alone — my branch is
+`land/<id>--<my-own-worktree-dir>` (step 2), so nothing has to be handed back for the reclaim to find
+it. That's deliberate: it still works if I crash, escalate, or never get to speak. All I owe it is the
+push (step 7) — by the time I return, my worktree holds nothing `origin/land/<id>` doesn't already
+have, so removing it can never lose work.
+
 Then I **stop** and report: which ticket, that the technical review + gates are green, the `land/<id>`
 branch and head SHA, the one-line summary — or, on escalation, exactly what decision the human owes. I
 never opened the builder's worktree this cycle, so there's nothing of mine to clean up there; `/land`
@@ -262,7 +302,9 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   `rtk scripts/bd-dolt-push.sh`,
 - **re-push the branch** (`git push origin HEAD:land/<id>`) so the (green) work is never stranded, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
-  human. The missing `ready-for-land` label keeps the lander from grabbing it.
+  human. The missing `ready-for-land` label keeps the lander from grabbing it. My launch worktree is
+  reclaimed by `/code` on this path too (lode-vs7g) — it must be: an escalated branch never merges into
+  `trunk`, so `/land`'s backstop 1 structurally cannot reach it.
 
 ## Anti-patterns (do not do these)
 
@@ -291,6 +333,12 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
+- **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
+  currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
+  — I neither remove it nor need to report it.
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
+  (lode-ij24), making `<id>` — the ticket I just certified — blocked by its own follow-up. Create with
+  no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 4 above.
 
 ## lode invariants (quick card)
 
@@ -306,5 +354,6 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
 | Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
+| My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |

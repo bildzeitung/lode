@@ -479,12 +479,57 @@ not a default, and the choice trades one property for the other:
 
 - **The follow-up genuinely cannot be built or reviewed until the parent lands** (its root-cause
   diagnosis, its target code, or a decision the parent makes is a hard prerequisite) → file it with
-  **`blocks`** (`rtk bd dep add <child> <parent> --type blocks`, or `--deps blocks:<parent>` on `bd
-  create`). This is the only choice that keeps `bd ready` honest for that pair. Because the edge no
-  longer carries "discovered while working X," say so in the new ticket's own description (e.g.
-  "discovered while building lode-t1y") — that provenance is recoverable from prose, same as any other
-  ticket fact, whereas a missing block edge is not recoverable at all: nothing catches it before a
-  builder is dispatched onto broken work.
+  **`blocks`**. **Direction warning, verified empirically 2026-07-13 (lode-ij24):** `bd create --deps
+  blocks:<parent>` does **not** make the new follow-up blocked by `<parent>` — it inverts. Creating a
+  throwaway issue `B` with `bd create --deps blocks:A` left `A.dependencies = [B]` (i.e. `A` now
+  depends on / is blocked by `B`), never the reverse. In this loop `<parent>` is often the very branch
+  a builder or reviewer is about to certify `ready-for-code-review` / `ready-for-land` — filing a
+  follow-up this way silently drops that parent out of `bd ready` behind its own follow-up. (Two other
+  forms were checked in the same pass and are **not** affected: `bd create --deps discovered-from:X`
+  and bare `bd create --deps X` with no type prefix both give the expected direction — new issue
+  depends on `X`. Only the explicit `blocks:` prefix on `bd create --deps` inverts.)
+
+  The bare form is in fact a correct one-liner — `bd create --deps <parent>` records exactly the edge we
+  want, child blocked by parent, because `blocks` is bd's default dependency type. We still **don't**
+  prescribe it: it is right only by way of an *implicit* default, which is the same class of
+  under-specified `--deps` semantics that produced this bug in the first place, and it would silently
+  become the wrong edge if bd ever changed that default. Spell the edge out at the call site instead.
+
+  **Never write `bd create --deps blocks:<parent>`.** Create the ticket with **no `--deps` at all**,
+  then wire the gate as its own step. Do *not* reach for `--deps discovered-from:<parent>` on the
+  create as a way to keep the provenance: by the one-type-per-pair rule above, that edge occupies the
+  same ordered `(child, parent)` pair, so the `bd dep add … --type blocks` that follows **fails**
+  (`already exists with type "discovered-from" (requested "blocks")`) and leaves the follow-up sitting
+  in `bd ready` *unblocked* — the exact bug this section exists to kill, now with an error message an
+  unattended agent may never read. Provenance goes in the description, not the edge:
+
+  ```bash
+  NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <parent>. …" \
+    --type=task --silent)
+  rtk bd dep add "$NEW_ID" <parent> --type blocks
+  ```
+
+  `bd dep add <child> <parent> --type blocks` (positional args, or the equivalent `--blocked-by
+  <parent>` flag) is verified correct — the child's `.dependencies` gains the parent, i.e. the child is
+  blocked by the parent, never the reverse. This is the only choice that keeps `bd ready` honest for
+  that pair. Because the edge no longer carries "discovered while working X," say so in the new
+  ticket's own description (e.g. "discovered while building lode-t1y") — that provenance is recoverable
+  from prose, same as any other ticket fact, whereas a missing block edge is not recoverable at all:
+  nothing catches it before a builder is dispatched onto broken work.
+
+  **This rule is now mechanically enforced, not just advisory (lode-0kbq).** A committed
+  `PreToolUse` (matcher `Bash`) hook in [`.claude/settings.json`](../.claude/settings.json) denies any
+  Bash call that invokes `bd create … --deps …blocks:…` and returns the two-step remedy above as the
+  deny reason. It travels with the clone, so every agent on every machine gets it. It covers the
+  `bd new` alias, an `rtk` prefix, and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
+  table is pinned by `tests/test_bd_deps_guard.py`, which executes the hook as shipped.
+
+  Two deliberate boundaries. It matches only at a **command position** (start of line, or after
+  `;`/`&&`/`||`/`|`/`$(`), so prose that merely *quotes* the bad form — a commit message, a `bd` note,
+  this very paragraph — is **not** denied; that matters because this repo's own commits and tickets
+  discuss the bad form constantly, and a guard that denied them would block the loop that ships it.
+  And it is a textual guard, so it cannot see through a shell variable (`--deps "$D"` where
+  `D=blocks:x`). It is a net for the natural typo, not a security boundary.
 - **The follow-up is independent** — related to the parent but safely buildable on its own, with no
   code or diagnosis dependency → file it with **`discovered-from`**, as before. This is still the
   right default for the common case (cleanup noticed in passing, an unrelated bug seen along the way);
@@ -497,6 +542,23 @@ This rule binds both dispatch-side filers — [`.claude/agents/coding.md`](../.c
 (step 5, "Implement") and [`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md)
 (step 4, "Technical review") — since a builder or a reviewer can equally discover blocked follow-up
 work mid-task.
+
+**Mechanical guard + upstream report (lode-0kbq, lode-s1uz).** Docs alone are advisory, and this
+section is the proof: it had already landed on `trunk` when, six hours later, a `/code` fan-out wired
+2 of 7 follow-ups backwards (`lode-3jte`, `lode-yb9t` — `lode-ij24`). The agent was *following* this
+section — it reached for `blocks:` precisely because the rule above told it to — and inverted the edge
+anyway. A rule that is read, obeyed, and *still* silently miswired a third of the time is the exact
+profile where a mechanical guard pays. So `lode-0kbq` added a repo-local mitigation: a committed
+`PreToolUse(Bash)` hook in `.claude/settings.json` that denies any `bd create ... --deps
+...blocks:...` (and its `bd new` alias) and points the caller at the two-step `bd dep add … --type
+blocks` form above. It's a fence, not a fix — a regex over the Bash command string can't see through
+shell variable indirection, and can't reach `bd create --graph <plan.json>`, which can express the same
+inverted edge through a JSON file no string-level guard ever inspects. The real fix is upstream, in
+`bd`'s own `--help` text and/or CLI surface: reported as
+[beads#4766](https://github.com/gastownhall/beads/issues/4766) (lode-s1uz) — `bd create --deps`'s help
+never states each prefix's direction (unlike `bd dep add --help`, which does), asking upstream to
+document it explicitly and/or accept a `blocked-by:` prefix, and noting `new` is a live alias for
+`create` that any doc fix needs to cover too. Revisit the local guard's scope once upstream responds.
 
 **A related limit bd cannot express at all, and this fix does not attempt to:** a dependency edge can
 say "after `<id>`," but it cannot say "when nothing else is running." `lode-mtuy` (an xdist timing
@@ -746,6 +808,12 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    summary), then stops. Its escalation rule mirrors the builder's: a genuine **decision**, or "I'm
    making it worse," reverts to green, swaps the label to `land-escalated`, and surfaces async —
    landing nothing.
+4. **Leaves its own launch worktree for `/code` to reclaim** — on either outcome (lode-vs7g). It
+   cannot remove the worktree it is standing in, and `/land`'s backstop 1 (merged-into-`trunk`) can
+   never reach it on an escalation, since that branch never merges. So `/code`'s orchestrating session
+   removes it immediately after the agent returns, *deriving* which worktree was the agent's from the
+   ticket id alone — the branch is `land/<id>--<worktree-dir>` — so the reclaim needs nothing handed
+   back and still fires if the agent crashed or escalated.
 
 ```mermaid
 flowchart TD
@@ -919,6 +987,26 @@ Two `autoMode.allow` entries in `.claude/settings.json` remain relevant elsewher
 loop — permitting ticket-scoped edits to this repo's own agent/skill instruction docs, and permitting
 `/land`'s deletion of already-merged `land/<id>` branches — and neither was re-verified by this
 ticket; treat their effectiveness as still unconfirmed rather than assumed.
+
+**The pickup's own launch worktree is reclaimed by `/code` itself, right after the pickup returns
+(lode-vs7g).** Eliminating the local-name collision above closes the *invisible*-worktree half of the
+leak (every worktree is now branch-attached, hence reachable by `/land`'s backstop 1), but a clean
+pickup's worktree still wasn't actually **removed** — only left standing until the branch eventually
+merged into `trunk`. Worse, an *escalated* pickup's branch never merges at all, so backstop 1
+structurally could never reach it, and the worktree leaked indefinitely. The pickup cannot
+`git worktree remove` the worktree it's standing in, so `/code`'s orchestrating session — which runs
+from the repo root, never itself worktree-isolated — removes it immediately after the pickup returns,
+on either outcome. It **derives** the worktree rather than being told it: the local-name suffix above
+guarantees the branch is `land/<id>--<worktree-dir>`, so the ticket id alone recovers both the path and
+the branch (`git worktree list --porcelain`, filtered on that prefix). That derivation is what makes
+the fix hold in the cases that actually leak — it needs no cooperation from the agent, so it still
+fires when the agent crashed, escalated, or returned a garbled report, and it reclaims **every**
+worktree the ticket accumulated across N cycles, not just the last one. It cannot touch the builder's
+worktree, which is branch-named `worktree-agent-*` and so never matches. Safe on both outcomes: by the
+time the pickup returns, its worktree holds nothing `origin/land/<id>` doesn't already have. `/land`'s
+backstops 1-4 stay untouched as a partial net (they still only reach a branch that eventually merges).
+Same mechanism, same reasoning, applies to `code-reviewer`'s launch worktree (Phase 2 and the step-1
+stranded-review sweep) — see `.claude/skills/code/SKILL.md` and `docs/decisions.md`'s lode-vs7g entry.
 
 ### Stacked land branches (lode-02v)
 

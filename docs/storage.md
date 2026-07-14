@@ -599,6 +599,67 @@ long-lived `'running'` status is intentional (the prior section's
 resume-on-restart contract, lode-i05.5); reclaiming one here would risk
 resubmitting a Batches API request still in flight.
 
+**Every writer that *fails or resets* a `'running'` claim is CAS-guarded on the
+exact claim — `AND status = 'running' AND claimed_at IS <the value read at
+claim time>` — pinned lode-3jte, tightened lode-nggm.** All four sites —
+`jobs.record_job_failure`'s two UPDATEs, `_reclaim_stale_running`'s two
+UPDATEs, and `run_one`'s `AuthError` reset — go through one shared primitive,
+`jobs.cas_update_running` (lode-nggm hole 3: this idiom used to be hand-rolled
+at each site, so a change to the guard shape had to be made by hand in every
+one). A caller can reach these writers with no worker lock held
+(`cli._enrich_immediately` via `claim_and_run_one`), so a concurrent
+`_reclaim_stale_running` can dead-letter the row (firing its dead-letter hook)
+*while the stalled handler is still in flight*; a status-only guard would then
+resurrect that dead-lettered job back to `'failed'` — double-charging
+`attempts` and leaving a second, spurious dead-letter hook run on the table
+(the race lode-3jte closed for `record_job_failure`). Guarding on `claimed_at`
+too (not just `status`) additionally closes the **ABA case** lode-3jte left
+open: `status='running'` is not a unique claim identity, it is a state a row
+can cycle back through — reclaimed to `'failed'`, reset to `'pending'`, and
+re-claimed to `'running'` again (a *different* `claimed_at`, possibly a
+different worker) — all inside one stall that already exceeds
+`stale_running_timeout_s`, before the *original* stalled caller's write, still
+holding its now-stale `claimed_at`, finally lands. A status-only guard cannot
+tell that later claim from its own and would clobber it; comparing the exact
+`claimed_at` means it no longer matches. `record_job_failure` reports a third
+value, `claim_lost`, when `cas_update_running`'s rowcount was 0; `run_one`
+checks it and, when true, leaves the row exactly as it found it and skips the
+dead-letter hook rather than running it again. `enrich._mark_job_failed`
+ignores `claim_lost` — it only ever runs against batch-submitted jobs, which
+`_reclaim_stale_running`'s SELECT above already excludes from this race
+(nothing ever clears `batch_handle` back to `NULL`, so a row that reaches it
+is excluded for life).
+
+The *success* transitions are a **deliberately separate, still-open question**
+(lode-nggm hole 1 — narrowed to a follow-up ticket rather than decided here):
+`run_one`'s own two `status = 'done'` UPDATEs are unguarded, so the same
+race above can let a late-succeeding handler resurrect a job whose dead-letter
+hook already fired back to `'done'`. Whether a late success should instead
+be made to lose to the reclaim's verdict is a real design decision — the work
+*did* complete, so `'done'` is arguably the truthful terminal state, but a
+fired dead-letter hook implies the job is gone, which a subsequent `'done'`
+contradicts — not settled here.
+
+The `batch_handle` exemption covers *some* but not all of the remaining
+`'done'` writers, and the distinction is what the follow-up is scoped on:
+
+- **`collect_enrich_batch`'s two `status = 'done'` UPDATEs are *not* exposed to
+  this race**, despite writing the same-shaped unguarded UPDATE: like
+  `_mark_job_failed` above, they only ever run against rows selected by
+  `batch_handle = ?`, which `_reclaim_stale_running` excludes for life.
+- **`submit_enrich_batch`'s gated-out `skip_ids` UPDATE *is* exposed**, and the
+  `batch_handle` argument does **not** cover it: those rows were pre-claimed to
+  `'running'` by `_batch_submit_enrich`, but their `batch_handle` is still
+  `NULL` at that point (nothing has been submitted yet), so they sit squarely
+  inside `_reclaim_stale_running`'s `batch_handle IS NULL` SELECT. Its window is
+  far narrower than `run_one`'s — the gated-out write happens in-process,
+  before the network call, so reaching it takes a `stale_running_timeout_s`
+  stall between the pre-claim and a purely local gating step — but "narrow" is
+  not "excluded", and it is the same unguarded-success decision.
+
+So the open decision covers `run_one`'s two sites *and* this one; only
+`collect_enrich_batch`'s two are genuinely out of scope.
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a

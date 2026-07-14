@@ -84,23 +84,43 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 
 ## The producer cycle
 
-### 1. Pick the right ready work
+### 1. I'm dispatched with a named ticket — confirm it, don't re-pick
+
+**I never run `bd ready` to pick my own work.** `/code` resolves every dispatch itself before it ever
+launches me: on the no-argument, `--all-ready`, and `--single` paths it selects from the ready
+frontier under a filter that excludes `human`-labeled tickets and epics (lode-8pqv), and hands me the
+result as a named id; on an explicit-id dispatch the id is named up front. How that selection works is
+`code/SKILL.md`'s business, not mine — I don't re-derive it. Either way, by the time my prompt arrives
+**the ticket is already chosen** — my job starts at reading it:
 
 ```bash
-rtk bd ready            # unblocked issues only — the actionable frontier
 rtk bd show <id>        # full detail: description, acceptance, design, deps
 ```
 
-Honor the dependency graph the tracker encodes — **do not jump ahead**:
+**The one exception is a free-text dispatch** (e.g. "add a `--json` flag to search"): there `/code`
+names a *task*, not a ticket, so there is no id to show or claim yet and I **file the issue myself
+first** —
 
-- Prefer **`phase-a`-labelled** tasks until the walking skeleton's exit gate (`lode-6w1.1`) closes;
-  the thin end-to-end slice must work before any subsystem is deepened.
-- Deepening tasks (rerank, graph, NLI, queue-migration, …) depend on the terminal slice task and
-  will not appear in `bd ready` until the skeleton lands — that is by design, not a bug.
-- If `bd ready` is empty, the milestone is done. Surface that; don't invent work.
+```bash
+rtk bd create --title="…" --description="…" --type=task    # then continue with the id it returns
+```
 
-(A claimed ticket — `ready-for-code-review` or `ready-for-land` — stays `in_progress` and so is
-already out of `bd ready`; I won't re-grab work that's waiting for the reviewer or the lander.)
+— and only then work the cycle below. This is still not self-selection: the task was handed to me, I
+merely gave it an id. (`code/SKILL.md` delegates exactly this behavior here — "it files the bd issue
+itself before coding, per its own rules"; this is that rule.)
+
+The dependency graph and phase-a ordering are still useful context for **judging** the ticket I was
+handed — not a picking procedure I run myself:
+
+- **`phase-a`-labelled** tickets take priority until the walking skeleton's exit gate (`lode-6w1.1`)
+  closes. If I'm handed a deepening task (rerank, graph, NLI, queue-migration, …) before that gate has
+  closed, something upstream sequenced out of order — that's worth flagging, not silently building.
+- If the ticket I was handed carries the **`human`** label or is an **epic**, `/code`'s auto-select
+  filter is *not* what sent it to me — that filter excludes both (lode-8pqv), so the id was named
+  explicitly. What my prompt won't tell me is *why*. So unless the dispatch says outright that a human
+  has already resolved the decision (or scoped the epic) and wants it built, I **stop and report** —
+  rather than guess at the decision a `human` label exists to defer, or invent acceptance criteria for
+  a container ticket.
 
 ### 2. Claim it (atomic, prevents double-work)
 
@@ -181,16 +201,27 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
   [docs/agents-workflow.md](../../docs/agents-workflow.md#filing-follow-up-work-blocks-vs-discovered-from-lode-c0t3)):
 
   - **Genuinely can't be built until this ticket lands** (needs my code, or a diagnosis this ticket
-    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. Note the discovery
-    provenance in the new ticket's own text — the edge no longer carries it:
+    makes) → `blocks`, so `bd ready` doesn't hand it to a builder too early. **Never `bd create --deps
+    blocks:<id>`** — verified empirically (lode-ij24), that specific form *inverts* the edge: it makes
+    `<id>` (the ticket I'm building — possibly the very branch I'm about to certify
+    `ready-for-code-review`) blocked by my *new* follow-up, not the reverse, silently dropping `<id>`
+    out of `bd ready` behind its own follow-up. Create the ticket with **no `--deps` at all** — not even
+    `discovered-from:<id>` to keep the provenance, since that edge occupies the same `(new-id, <id>)`
+    pair and the `bd dep add … --type blocks` below would then *fail*, leaving the follow-up unblocked —
+    then wire the gate as its own step. `bd dep add <new-id> <id> --type blocks` (positional, or the
+    equivalent `--blocked-by` flag) is verified correct: the **first** ID ends up blocked by the second,
+    never the reverse. Note the discovery provenance in the new ticket's own text instead:
 
     ```bash
-    rtk bd create --title="…" --description="Discovered while building <id>. …" --type=task \
-      --deps blocks:<id>
+    NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <id>. …" \
+      --type=task --silent)
+    rtk bd dep add "$NEW_ID" <id> --type blocks
     ```
 
   - **Independent — safely buildable on its own right now** → `discovered-from`, as before (pure
-    provenance; `bd ready` returns it immediately, which is correct here):
+    provenance; `bd ready` returns it immediately, which is correct here). This direction is verified
+    correct as written — `bd create --deps discovered-from:<id>` makes the *new* ticket depend on
+    `<id>`, exactly as intended, unlike the `blocks:` form above:
 
     ```bash
     rtk bd create --title="…" --description="…" --type=task --deps discovered-from:<id>
@@ -286,6 +317,19 @@ scripts/validate-mermaid.sh                          # parse every ```mermaid bl
 A docs-only change has no Python gate — skip nox, but still validate mermaid if a diagram changed.
 **Gates must be green before I hand off.** Fix and re-run. (The reviewer re-gates after its fixes, but
 I hand off only a green branch.)
+
+**Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
+invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
+cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
+inventing a plausible machine-level story is precisely the bug that created this exit code
+(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
+so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
+`dangerouslyDisableSandbox: true`** — that was tried and made no measurable difference (lode-9i2p:
+sandboxed and unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2
+gate is an **escalation, not a skip**: I never hand-verify the diagram, never hand off with the gate
+silently skipped, and never read a docker complaint as a green light to proceed without it. Only a
+human can fix the machine. I revert to the last green commit, push, and follow the build-time
+escalation path below, passing the exact exit-2 message through as the decision a human needs.
 
 ### 8. Push the branch to origin
 
@@ -403,11 +447,12 @@ never comes up.
 (lode-em6v). Reusing `land/<id>` as the local name meant a second cycle on the same ticket (or a
 leftover worktree from an earlier one that never cleaned itself up) collided with an already-checked-
 out `land/<id>` elsewhere, forcing a `git checkout --detach` fallback — and a detached worktree owns no
-branch ref, so every one of `/land`'s branch-name-keyed GC sweeps structurally missed it (that's
-exactly what `/land`'s backstop 4 exists to catch, and each leak made the next cycle more likely to hit
-the same fallback — self-compounding). Suffixing the local name with this worktree's own directory name
-makes that collision structurally impossible, so there is nothing left to guard for and the detaching
-fallback is removed outright:
+branch ref, so back when `/land`'s worktree GC was still branch-name-keyed it structurally missed such a
+worktree, and each leak made the next cycle more likely to hit the same fallback (self-compounding).
+That GC is HEAD-sha-keyed now (lode-jiyk) and would reclaim a detached worktree too, but the collision is
+still worth designing out at the source: suffixing the local name with this worktree's own directory name
+makes it structurally impossible, so there is nothing left to guard for and the detaching fallback is
+removed outright:
 
 ```bash
 rtk git fetch origin land/<id> trunk
@@ -416,10 +461,13 @@ rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--age
 rtk git rev-parse --abbrev-ref HEAD     # confirm off trunk — land/<id>--<worktree-suffix>
 ```
 
-The suffixed name still starts with `land/`, so `/land`'s worktree-GC sweep (which matches worktrees by
-that **prefix**, once merged into trunk) reclaims it exactly as it always has. `/land`'s dangling-**ref**
-sweep matches on the *exact* remote name instead, so it strips this suffix before comparing — see
-`.claude/skills/land/SKILL.md`; nothing for me to do either way.
+The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
+all — it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and whose **HEAD commit**
+is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this worktree is reclaimed exactly
+as it always was, once my build lands. That name-independence is scoped to the worktree loop only: `/land`'s
+dangling-**ref** backstops still match `land/*` and `worktree-agent-*` by name (they must — `refs/heads/*`
+is shared with human branches), and the `land/*` one strips this suffix before comparing against the
+exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do either way.
 
 ### 3. Merge current trunk in
 
@@ -505,13 +553,24 @@ correctly describe the original build (and remain what `/land`'s worktree GC key
 **I still do not remove the original build worktree.** It was never mine to remove, and I never even
 opened it this cycle — `/land` GCs it on a clean land, same as always.
 
+**My own launch worktree: I neither remove it nor report it (lode-vs7g).** This one *is* mine, but I
+can't `git worktree remove` the worktree I'm standing in, so I don't try. `/code`'s orchestrating
+session reclaims it right after I return — on **either** outcome (`ready-for-land` or
+`land-escalated`) — and it *derives* which worktree was mine from the ticket id alone, since my branch
+is `land/<id>--<my-own-worktree-dir>` (step 2). Nothing has to be handed back, which is the point: the
+reclaim still works if I crash or escalate. By then this worktree holds nothing `origin/land/<id>`
+doesn't already have — a clean pass pushed first (above), and an escalation's aborted merge leaves the
+checkout an exact mirror of what was fetched — so removing it can never lose work.
+
 I **stop** and report: which ticket, that the merge was clean and the gates are green, the refreshed
 head SHA, and that it's back at `ready-for-land` — or, on an escalation, which kind of conflict it was
 and why.
 
 An **escalation** is different and stays mine: on a genuine-disagreement conflict I abort, leave the
 branch exactly as it was (no push — nothing changed to push), and set `land-escalated` myself (step
-3). That is a bd write, not a destructive git op.
+3). That is a bd write, not a destructive git op. It's also exactly why `/code` must reclaim my
+worktree without my help: an escalated branch never merges into `trunk`, so `/land`'s backstop 1 can
+never reach it (lode-vs7g).
 
 ### Escalation — only a genuine conflict, not a mechanical one
 
@@ -565,9 +624,13 @@ own guidance); the cycle above already applies them, but the *why*:
 - **Reviewing my own build** — running `/code-review` or `/simplify` on it, or marking
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
-- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`). The reviewer no longer
-  drives it in place, but `/land`'s worktree GC still keys off `review_worktree` — discarding it early
-  strands that bookkeeping.
+- **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`) **during a fresh build.**
+  The reviewer no longer drives it in place, but `/land`'s worktree GC still keys off
+  `review_worktree` — discarding it early strands that bookkeeping. (During a **rebase pickup**
+  instead, my own launch worktree is a *different* thing — see the next bullet.)
+- **Trying to `git worktree remove` my own launch worktree during a rebase pickup.** I cannot remove
+  the worktree I am currently standing in. `/code` reclaims it after I return, deriving it from the
+  ticket id (lode-vs7g) — I neither remove it nor need to report it, on either outcome.
 - **Marking `ready-for-code-review` on a red build, or on a build-time escalation.** The label means
   *green and ready for the reviewer* — nothing less.
 - **Marking `ready-for-code-review` (or pushing during a rebase pickup) on a dirty tree, or
@@ -599,6 +662,9 @@ own guidance); the cycle above already applies them, but the *why*:
   ticket has since superseded (lode-c0t3). Use `blocks` when the follow-up can't be built until this
   ticket lands; note the discovery provenance in the new ticket's text instead, since bd allows only
   one dependency type per pair.
+- **Writing `bd create --deps blocks:<id>` for a discovered blocked follow-up.** It inverts the edge
+  (lode-ij24), dropping the very ticket I'm about to hand off out of `bd ready`, behind its own
+  follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of
   escalating it.** Only a *mechanical* conflict (independent, non-overlapping additions) is mine to
@@ -624,6 +690,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | I never | review my own work, merge, `bd close`, push `trunk`, or commit the `.beads/*.jsonl` export |
 | Technical review | **not mine** — the separate `code-reviewer` agent (Opus) fetches `land/<id>` into its own worktree and runs `/code-review` + `/simplify` there |
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
+| Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
