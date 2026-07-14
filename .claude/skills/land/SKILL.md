@@ -590,38 +590,61 @@ done
 # if you add one, audit those two, not this one. (lode-j5i0's sweep is the THIRD backstop below; it is
 # alive and untouched — it was never one of the two unified here.)
 #
-# CONTRACT (lode-9hgu closed the residual this paragraph used to describe): ANY worktree under
-# `.claude/worktrees/` that is unlocked, has not diverged from `trunk`, AND is clean is reclaimable by
-# this loop, whoever made it. A worktree freshly branched off `trunk` HEAD is trivially "merged" by
-# zero divergence — that proxy alone would read TRUE for a live, uncommitted build the instant its
-# worktree is created — so the loop below also tests the ACTUAL invariant directly ("is this work
-# captured anywhere else"): `git -C "$WT" status --porcelain`. A dirty tree is never reclaimed,
-# regardless of lock state, ancestry, or who made the worktree — this is what actually protects the
-# worktree classes that hold NO lock by the time this sweep sees them: an interactive `EnterWorktree`
-# session, a human's hand-made worktree (CLAUDE.md mandates one for all work), and an exited agent's
-# leftover scratch. There are exactly TWO lock sources in this system, and neither covers those three:
-# the harness locks a LIVE `isolation: worktree` agent's worktree for that agent's lifetime, releasing
-# it on exit (`locked claude agent <name> (pid <n> start <n>)`); and `.claude/agents/coding.md` raises
-# an explicit lock across the narrow pre-first-commit window (lode-oqr). The
-# dirty check FAILS SAFE: `git -C "$WT" status --porcelain` prints nothing both when the tree is clean
-# and when the command itself errors (missing dir, corrupt worktree admin, …), so the guard below
-# distinguishes "clean" (proceed) from "could not tell" (skip) rather than treating empty output as
-# always meaning clean. Accepted residual: a CLEAN worktree at trunk HEAD that raises no lock — a
-# human's hand-made worktree they happen to be sitting in, or an exited agent's clean leftovers — is
-# still reclaimable; nothing is destroyed (the tree is clean), the directory just vanishes out from
-# under whoever is standing in it. A LIVE harness agent's worktree is NOT in that set — its harness
-# lock (above) drops it in the awk `!locked` filter below, before the ancestry predicate is ever
-# evaluated. The trade is intentional: the failure direction is now "remove an empty checkout," never
-# "destroy uncommitted work."
+# CONTRACT (lode-9hgu closed the zero-divergence residual this paragraph used to describe; lode-amif
+# widened the ancestry predicate itself, and the dirty-tree guard below gates BOTH arms): ANY
+# worktree under `.claude/worktrees/` that is unlocked, AND EITHER has not diverged from `trunk` OR —
+# for a branch-attached worktree — has not diverged from its own branch's origin counterpart, AND is
+# clean is reclaimable by this loop, whoever made it (lode-amif: the ancestry predicate widened from
+# "merged into trunk" alone to "captured on origin," so an escalated ticket's reviewer/rebase-pickup
+# worktree, whose branch never merges into trunk by definition, is reclaimable too, once its content
+# is safely on `origin/land/<id>`). A worktree freshly branched off `trunk` HEAD (or freshly checked
+# out at its origin branch's current tip) is trivially "merged"/"captured" by zero divergence — that
+# proxy alone would read TRUE for a live, uncommitted build/review the instant its worktree is created
+# — so the loop below also tests the ACTUAL invariant directly ("is this work captured anywhere
+# else"): `git -C "$WT" status --porcelain`. A dirty tree is never reclaimed, regardless of lock
+# state, ancestry, or who made the worktree — this is what actually protects the worktree classes that
+# hold NO lock by the time this sweep sees them: an interactive `EnterWorktree` session, a human's
+# hand-made worktree (CLAUDE.md mandates one for all work), and an exited agent's leftover scratch.
+# There are exactly TWO lock sources in this system, and neither covers those three:
+#   1. The Claude Code HARNESS locks every `isolation: worktree` launch worktree for the LIFETIME of
+#      the agent standing in it (reason: `claude agent <name> (pid <n> start <n>)`), released when
+#      the agent exits. Neither `.claude/agents/code-reviewer.md` nor `coding`'s rebase pickup calls
+#      `git worktree lock` itself, but both run in such a worktree — so a LIVE reviewer/pickup
+#      worktree is `locked` and this loop skips it outright, never reaching the predicate. Verified
+#      against a running reviewer (lode-amif's own).
+#   2. `.claude/agents/coding.md` ALSO locks its producer build worktree explicitly (lode-oqr),
+#      because it unlocks again at its first commit — earlier than the harness would.
+# So the zero-divergence residual bites only an EXITED agent's worktree, and only its UNCOMMITTED
+# scratch — and even there, the dirty-tree guard below is the real backstop, not `locked`: `git -C
+# "$WT" status --porcelain` prints nothing both when the tree is CLEAN and when the command itself
+# errors (missing dir, corrupt worktree admin, …), so the guard distinguishes "clean" (proceed) from
+# "could not tell" (skip) rather than treating empty output as always meaning clean. On the trunk arm
+# an unguarded zero-divergence read was once a real hazard — it destroyed two builds' uncommitted work
+# outright before the dirty guard existed (lode-oqr's explicit lock closed the narrower pre-first-
+# commit window; lode-9hgu's dirty guard closed the rest). On the origin arm the same guard is what
+# keeps a captured-but-dirty reviewer/rebase-pickup worktree from being reclaimed too: content merely
+# pushed to `origin/land/<id>` is captured, but a worktree with additional uncommitted changes on top
+# of that push is not, and must still be KEPT — otherwise this widened arm reopens exactly the hole
+# lode-9hgu just closed. Accepted residual: a CLEAN worktree at zero divergence (trunk arm) or clean at
+# its origin counterpart's tip (origin arm) that raises no lock — a human's hand-made worktree they
+# happen to be sitting in, or an exited agent's clean leftovers — is still reclaimable; nothing is
+# destroyed (the tree is clean), the directory just vanishes out from under whoever is standing in it.
+# A LIVE harness agent's worktree is NOT in that set — its harness lock (above) drops it in the awk
+# `!locked` filter below, before either predicate is ever evaluated. The trade is intentional: the
+# failure direction is now "remove an empty checkout," never "destroy uncommitted work," on either arm.
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
 # "merged" into trunk by content identity, so `locked` must gate this even though `merged` alone
 # looks sufficient. `merged` is the same safety invariant the per-ticket removal above already relies
-# on ("the build artifact is on trunk now — force is safe") — for a `land/<id>` worktree
-# specifically, `merged` is what proves the ticket already landed (an in-flight
-# `ready-for-code-review`/`ready-for-land` ticket's branch has not merged into trunk yet, so its
-# worktree is excluded regardless of lock state). This `locked` check used to be a no-op in practice:
+# on ("the build artifact is on trunk now — force is safe") — for a **builder's own**
+# `worktree-agent-*` worktree specifically, `merged` is what proves the ticket already landed: its
+# branch is never pushed anywhere, so the origin arm added by lode-amif is always false for it, and
+# an in-flight `ready-for-code-review`/`ready-for-land`/`land-escalated` ticket's builder worktree is
+# excluded regardless of lock state, exactly as before. A `land/<id>`-branched **reviewer/rebase-pickup**
+# worktree is different since lode-amif: once its branch is pushed to `origin/land/<id>`, the origin
+# arm can make it reclaimable even though its branch has not (and, if escalated, never will) merge
+# into trunk — that is the gap this ticket exists to close. This `locked` check used to be a no-op in practice:
 # nothing on the producer side ever raised it, so every producer build was "merged" (trivially, by
 # zero divergence) and reclaimable from the moment its worktree was created until its first commit --
 # this destroyed two builds' uncommitted work outright (branch and all, not just the checkout) before
@@ -647,14 +670,47 @@ git worktree list --porcelain | awk '
   /^locked/ { locked=1 }
   /^$/ { if (path!="" && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT SHA BR; do
-  git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight)
-  # lode-9hgu dirty-tree guard — the ACTUAL invariant, not the ancestry proxy above (see CONTRACT).
-  # Success and emptiness are tested SEPARATELY, on purpose: `status --porcelain` prints nothing both
-  # when the tree is CLEAN and when the command ERRORS, and an assignment inherits its command
-  # substitution's exit code — so a failure (missing dir, corrupt worktree admin, …) skips exactly like
-  # a dirty tree instead of failing OPEN into `--force`. Skipping on error costs little: the
-  # `git worktree prune` below still drops a vanished worktree's admin entry, and any leftover branch
-  # ref falls to the bare-ref backstops.
+  # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
+  # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
+  # An ESCALATED branch never merges into trunk (by definition — it's held for a human decision), so
+  # the trunk-only test could never reclaim its reviewer/rebase-pickup worktree even after the /code
+  # session that would otherwise eagerly reclaim it (lode-vs7g) has itself died mid-fan-out — an
+  # indefinite leak one level up from the gap lode-vs7g closed. The real invariant is "captured on
+  # origin," which every reviewer/rebase-pickup worktree satisfies by construction: both push to
+  # origin/land/<id> before returning (lode-k5e/lode-8k3), on EITHER outcome (ready-for-land or
+  # land-escalated). So: reclaim if the worktree's HEAD is an ancestor of trunk, OR — for a
+  # branch-attached worktree only — an ancestor of that branch's origin counterpart. `${BR%%--*}`
+  # strips the lode-em6v worktree-uniqueness suffix (`land/<id>--<worktree-dir>` -> `land/<id>`) the
+  # same way backstop 2 already does, so this reaches origin/land/<id> regardless of which local name
+  # the reviewer/pickup checked the branch out under. A detached worktree (empty $BR) or a builder's
+  # own worktree-agent-* branch (never pushed to origin, so origin/worktree-agent-* doesn't exist and
+  # the ancestor test fails) fall through to `continue` exactly as before — this arm is simply false
+  # for them, so builder worktrees are unaffected.
+  #
+  # ZERO-DIVERGENCE RESIDUAL, AND WHY IT IS BENIGN ON THIS ARM (lode-9hgu, not re-litigated here):
+  # like the trunk arm, this ancestor test is a proxy that reads TRUE at zero divergence — a
+  # reviewer/pickup worktree freshly checked out at origin/land/<id>'s tip is trivially "an ancestor
+  # of" that same tip until its first local commit. But a LIVE reviewer/pickup worktree is `locked`
+  # for the duration of its agent's run (the harness locks every `isolation: worktree` launch
+  # worktree — see the CONTRACT above), so the awk filter drops it before this predicate ever runs:
+  # this arm CANNOT sweep a running agent. It can only reach an EXITED one, whose worktree at zero
+  # divergence holds nothing but uncommitted, ungated scratch from a run that never finished — the
+  # authoritative content is on origin and the ticket is re-reviewed from there. That is exactly the
+  # worktree this widening exists to reclaim, so the residual is benign HERE, unlike on the trunk arm
+  # (where it once destroyed two live builds, pre-lode-oqr). The dirty-tree guard immediately below
+  # (lode-9hgu) is what makes this arm safe even for that exited-agent case: it still keeps a worktree
+  # that has additional uncommitted content on top of a pushed tip, rather than reclaiming it.
+  git merge-base --is-ancestor "$SHA" trunk \
+    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
+    || continue
+  # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
+  # Gates BOTH arms: a worktree captured on trunk or captured on origin but left dirty must still be
+  # KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. Success and emptiness are
+  # tested SEPARATELY, on purpose: `status --porcelain` prints nothing both when the tree is CLEAN and
+  # when the command ERRORS, and an assignment inherits its command substitution's exit code — so a
+  # failure (missing dir, corrupt worktree admin, …) skips exactly like a dirty tree instead of failing
+  # OPEN into `--force`. Skipping on error costs little: the `git worktree prune` below still drops a
+  # vanished worktree's admin entry, and any leftover branch ref falls to the bare-ref backstops.
   STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue
   git worktree remove --force "$WT"
   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
@@ -801,6 +857,40 @@ branch, live or not); the guard is `merged`-into-`trunk` plus not currently chec
 same safety *predicate* the worktree sweep applies, reached by a branch-**name** lookup (`git branch
 --merged trunk`) rather than that sweep's HEAD-sha ancestry test, since a bare ref has no worktree and
 so no HEAD sha to test.
+
+**Update (lode-amif): the worktree sweep's predicate widened from "merged into trunk" alone to
+"merged into trunk OR captured on origin."** Everything above describes the sweep as it stood after
+lode-jiyk: `unlocked` + `HEAD-sha is-ancestor-of trunk`. That predicate structurally cannot reclaim an
+**escalated** ticket's reviewer/rebase-pickup worktree — an escalated branch is, by definition, held
+for a human decision and never merges into `trunk`, so if the `/code` session that would otherwise
+eagerly reclaim it (lode-vs7g) itself dies mid-fan-out before running that reclaim, the worktree leaks
+**indefinitely**: the trunk-ancestry test is never satisfied, so backstop 1 never even considers it a
+candidate. The gap is one level up from what lode-vs7g closed (lode-vs7g handles the normal-exit case,
+including a clean escalation return; this is the crash-before-that-point case).
+
+The fix widens the loop's predicate with a second arm: `git merge-base --is-ancestor "$SHA" trunk ||
+{ [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}"; } || continue` (see the
+script above and its inline comment). The real safety invariant was never "merged into trunk" — that
+was always a stand-in for "this worktree's content already exists safely elsewhere." A
+reviewer/rebase-pickup worktree satisfies that invariant by construction the moment it has pushed to
+`origin/land/<id>` (lode-k5e/lode-8k3), on **either** outcome, `ready-for-land` or `land-escalated` — so
+testing ancestry against that origin ref directly reaches exactly the cases the trunk-only test missed.
+`${BR%%--*}` strips the lode-em6v worktree-uniqueness suffix the same way backstop 2 already does, so
+the new arm resolves to `origin/land/<id>` regardless of which locally-suffixed name the branch was
+checked out under. A detached worktree (no `$BR`) and a builder's own `worktree-agent-*` worktree (never
+pushed to origin, so its origin counterpart doesn't exist and the ancestor test simply fails) are
+unaffected — the new arm is false for both, so they fall through to the unchanged `trunk`-only
+behavior. The new arm carries the *same* zero-divergence residual the trunk arm already has (see the
+CONTRACT paragraph above and lode-9hgu) rather than introducing a new one — and on this arm it is
+**benign**. A freshly-checked-out reviewer/pickup worktree is trivially "captured on origin"
+(identical to origin's current tip) until its first local commit, but for that entire window it is
+`locked`: the harness locks every `isolation: worktree` launch worktree for the lifetime of the agent
+standing in it, so the sweep's existing `locked` filter drops a **live** reviewer/pickup worktree
+before the predicate is ever evaluated. What the arm can reach is an **exited** agent's worktree,
+which at zero divergence holds only uncommitted, ungated scratch from a run that never finished —
+authoritative content is on `origin/land/<id>` and the ticket is re-reviewed from there. That is
+precisely the worktree this widening exists to reclaim. lode-9hgu remains the single tracking ticket
+for replacing the proxy with a real dirty-tree guard, for both arms.
 
 ---
 
