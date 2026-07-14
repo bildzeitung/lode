@@ -622,6 +622,14 @@ draft-and-surface protocol above as the deny reason:
   and `gh label create|edit|delete|clone` (labels are tracker state);
 - **other writes that publish under the user's public name** — `gh release create|edit|delete|upload`,
   `gh gist create|edit|delete`, `gh repo create|fork|edit|delete|sync`;
+- **gh's repo-*admin* surface** (lode-9l3d) — `gh secret set|delete`, `gh variable set|delete`, `gh
+  workflow run|enable|disable`, `gh run rerun|cancel|delete`, `gh ssh-key add|delete`, `gh gpg-key
+  add|delete`, `gh cache delete`. A different risk class from a tracker write — it mutates the remote
+  (secrets, workflow triggers, keys, CI runs) rather than filing on a tracker — but cheap to add to the
+  same verb alternation, so the same guard is the natural home. The read-only form of every noun it
+  denies a verb on (`gh run list|view`, `gh workflow list|view`, `gh secret|variable|ssh-key|gpg-key|cache
+  list`) stays legal, each pinned in `tests/test_gh_write_guard.py`'s `ALLOWED` table so a later widening
+  of the alternation cannot start false-denying the reads unnoticed;
 - **`gh api` with an explicit non-GET method** (`-X`/`--method` `POST`/`PUT`/`PATCH`/`DELETE`, matched
   case-insensitively — `-X post` is the same request);
 - **`gh api` with an *implicit* POST** — see below.
@@ -665,9 +673,12 @@ command *string* cannot see through indirection):
   worse trade than the residual.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
-- **gh's repo-*admin* surface** (`gh secret set`, `gh workflow run`, `gh ssh-key add`, …) — a different
-  risk class from a tracker write, and one no plausible lode ticket asks an agent to touch; tracked
-  separately in `lode-9l3d`.
+- **`gh` write verbs the alternation still does not enumerate** — `gh codespace create|delete|…` (a
+  compute/billing surface rather than tracker or repo state), and the `repo` verbs left out of the list
+  above (`gh repo rename|archive`, `gh repo deploy-key add|delete`). `lode-9l3d` folded the *enumerated*
+  repo-admin verbs (secrets, variables, workflows, runs, SSH/GPG keys, caches) into the alternation, so
+  those are covered — but the alternation is a **list of verbs, not a category**, and anything absent
+  from it falls through. Widening it is cheap; tracked in `lode-9rim`.
 
 None of these is a reason to skip the guard — and, crucially, none of them is a route an *obedient*
 agent takes. That is the distinction that matters when judging where the fence is high enough: the
