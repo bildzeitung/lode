@@ -318,6 +318,19 @@ A docs-only change has no Python gate — skip nox, but still validate mermaid i
 **Gates must be green before I hand off.** Fix and re-run. (The reviewer re-gates after its fixes, but
 I hand off only a green branch.)
 
+**Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
+invalid** (distinct from exit 1, a real syntax failure). The script's own stderr names the specific
+cause and the remedy; I quote that message rather than re-deriving a cause of my own, because
+inventing a plausible machine-level story is precisely the bug that created this exit code
+(lode-9i2p — a docker binary on PATH that cannot reach an engine used to make every doc report FAIL,
+so a broken *tool* was indistinguishable from broken *content*). **I do NOT retry with
+`dangerouslyDisableSandbox: true`** — that was tried and made no measurable difference (lode-9i2p:
+sandboxed and unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2
+gate is an **escalation, not a skip**: I never hand-verify the diagram, never hand off with the gate
+silently skipped, and never read a docker complaint as a green light to proceed without it. Only a
+human can fix the machine. I revert to the last green commit, push, and follow the build-time
+escalation path below, passing the exact exit-2 message through as the decision a human needs.
+
 ### 8. Push the branch to origin
 
 The durable, cross-machine artifact is the branch on **origin** — a *new* branch ref doesn't race
