@@ -920,6 +920,16 @@ are catalogued in [configuration.md](configuration.md).
     fixes it permanently for that machine, and the failure is **loud and immediate** — the very first
     Bash call after a fresh, broken-onboarding clone fails with a message naming the exact missing
     tool and the doc to read, rather than the guard quietly doing nothing for the life of the session.
+
+    **The remedy is only performable from outside Claude Code, and the deny reason says so.** Fail
+    closed means *every* Bash call is denied while `jq` is missing — including `apt-get install jq`
+    itself. A deny reason that said only "install jq and retry" would therefore walk an agent into an
+    infinite loop: it would attempt the install through `Bash`, be denied with that same message, and
+    retry. Both hooks' reasons instead name the install commands, state explicitly that the guard
+    denies every Bash call *including the install*, and instruct an agent to surface the problem to
+    the human and stop. This is the one sharp edge fail-closed genuinely has, and it is a wording
+    obligation on the deny path, not an argument against the policy — a human installs `jq` in their
+    own terminal in one command.
     That is a strictly better failure mode than a security-relevant check disappearing without a
     trace. Because `jq` is genuinely trivial to install (`apt-get install jq` / `brew install jq` /
     `choco install jq`, no compilation, no config), the "worse dev experience" risk named in the
