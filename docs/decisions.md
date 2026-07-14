@@ -332,26 +332,36 @@ are catalogued in [configuration.md](configuration.md).
   pickup ever removed its own launch worktree when it finished, so a *second* review/rebase cycle on the
   same ticket (or one that ran later, after the first cycle's worktree was simply left on disk) found
   `land/<id>` already checked out and fell back to `git checkout --detach FETCH_HEAD`. A detached
-  worktree owns no branch ref, so `/land`'s branch-name-keyed GC sweeps (which walk `git worktree list
-  --porcelain`'s `branch refs/heads/...` lines, or enumerate branch refs directly) structurally could
-  not see it — the only net that ever caught it was `/land`'s backstop 4, added in lode-mxeu as a
-  by-SHA/by-detached-state sweep specifically because the first three sweeps are all branch-name-keyed.
-  Worse, the leak was self-compounding: every leaked worktree was exactly the "already checked out
-  elsewhere" state that forced the *next* cycle onto the same detaching path. The actual fix is on the
-  agent side, not `/land`'s: `code-reviewer` and `coding`'s rebase pickup now check `land/<id>` out
-  under a local name suffixed with their own launch worktree's directory name (e.g.
-  `land/<id>--agent-<hash>`), which is unique by construction, so the collision — and with it the
-  detaching fallback — can no longer arise. The suffixed name still starts with `land/`, so backstop 1
-  (the primary, branch-name-keyed sweep) matches it on that **prefix** and reclaims it once merged into
-  trunk exactly as before. One `/land` sweep did have to follow the rename, though: backstop 2 (the
-  dangling-**ref** sweep) keys on an **exact** name match against `git ls-remote`'s listing to decide
-  "remote gone ⇒ stale", and a suffixed `land/<id>--agent-<hash>` can never equal origin's `land/<id>` —
-  left alone, its keep-the-in-flight-ref arm becomes dead code and the sweep silently degrades into
-  "delete every `land/*` ref not currently checked out", taking an in-flight ticket's unpushed commits
-  with it the moment its worktree goes away by any route. It now strips the suffix (`${BR%%--*}`, safe
-  because a bd id never contains `--`) before comparing, restoring the original semantics for both the
-  suffixed and the bare shape. Backstop 4 (the detached-worktree net) stays in place regardless, as
-  defense against a crash mid-cycle, not steady-state operation.
+  worktree owns no branch ref, so back when `/land`'s worktree GC was still branch-name-keyed (walking
+  `git worktree list --porcelain`'s `branch refs/heads/...` lines, or enumerating branch refs directly)
+  it structurally could not see it — at the time, the only net that ever caught it was a separate
+  by-SHA/by-detached-state sweep, added in lode-mxeu specifically because the name-keyed sweep couldn't
+  see a worktree with no branch. (lode-jiyk later **unified** that by-SHA/detached sweep with the
+  name-keyed one into a single loop keyed on HEAD-sha ancestry — see below — so today there is one
+  worktree-GC loop, not two or four; this paragraph's "structurally could not see it" describes the
+  state *before* that unification, not the current system.) Worse, the leak was self-compounding: every
+  leaked worktree was exactly the "already checked out elsewhere" state that forced the *next* cycle
+  onto the same detaching path. The actual fix is on the agent side, not `/land`'s: `code-reviewer` and
+  `coding`'s rebase pickup now check `land/<id>` out under a local name suffixed with their own launch
+  worktree's directory name (e.g. `land/<id>--agent-<hash>`), which is unique by construction, so the
+  collision — and with it the detaching fallback — can no longer arise. The suffixed name still starts
+  with `land/`, but `/land`'s worktree GC (lode-jiyk) doesn't match on that prefix, or on any branch
+  name at all, any more: it reclaims any worktree under `.claude/worktrees/` that is **unlocked** and
+  whose **HEAD commit** is already an ancestor of `trunk` (`git merge-base --is-ancestor`), so this
+  worktree is reclaimed exactly as it always was, once merged into trunk. That name-independence is
+  scoped to the worktree loop only — `/land`'s dangling-**ref** backstops still match `land/*` and
+  `worktree-agent-*` by name (they must: `refs/heads/*` is shared with human branches, so a name-blind
+  "delete any merged local ref" would eat them too). One `/land` sweep did have to follow the rename,
+  though: the dangling-**ref** sweep over `land/*` keys on an **exact** name match against `git
+  ls-remote`'s listing to decide "remote gone ⇒ stale", and a suffixed `land/<id>--agent-<hash>` can
+  never equal origin's `land/<id>` — left alone, its keep-the-in-flight-ref arm becomes dead code and
+  the sweep silently degrades into "delete every `land/*` ref not currently checked out", taking an
+  in-flight ticket's unpushed commits with it the moment its worktree goes away by any route. It now
+  strips the suffix (`${BR%%--*}`, safe because a bd id never contains `--`) before comparing, restoring
+  the original semantics for both the suffixed and the bare shape. The unified worktree-GC loop
+  (lode-jiyk) still catches a detached worktree via the same HEAD-sha-ancestry test — that capability
+  didn't go away, it just now lives in the one loop rather than a separate sweep — as defense against a
+  crash mid-cycle, not steady-state operation.
 
   **Accepted costs:** (1) the reviewer's launch worktree has no venv, so `./scripts/python-init.sh`
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
