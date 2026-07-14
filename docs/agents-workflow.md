@@ -543,6 +543,23 @@ This rule binds both dispatch-side filers — [`.claude/agents/coding.md`](../.c
 (step 4, "Technical review") — since a builder or a reviewer can equally discover blocked follow-up
 work mid-task.
 
+**Mechanical guard + upstream report (lode-0kbq, lode-s1uz).** Docs alone are advisory, and this
+section is the proof: it had already landed on `trunk` when, six hours later, a `/code` fan-out wired
+2 of 7 follow-ups backwards (`lode-3jte`, `lode-yb9t` — `lode-ij24`). The agent was *following* this
+section — it reached for `blocks:` precisely because the rule above told it to — and inverted the edge
+anyway. A rule that is read, obeyed, and *still* silently miswired a third of the time is the exact
+profile where a mechanical guard pays. So `lode-0kbq` added a repo-local mitigation: a committed
+`PreToolUse(Bash)` hook in `.claude/settings.json` that denies any `bd create ... --deps
+...blocks:...` (and its `bd new` alias) and points the caller at the two-step `bd dep add … --type
+blocks` form above. It's a fence, not a fix — a regex over the Bash command string can't see through
+shell variable indirection, and can't reach `bd create --graph <plan.json>`, which can express the same
+inverted edge through a JSON file no string-level guard ever inspects. The real fix is upstream, in
+`bd`'s own `--help` text and/or CLI surface: reported as
+[beads#4766](https://github.com/gastownhall/beads/issues/4766) (lode-s1uz) — `bd create --deps`'s help
+never states each prefix's direction (unlike `bd dep add --help`, which does), asking upstream to
+document it explicitly and/or accept a `blocked-by:` prefix, and noting `new` is a live alias for
+`create` that any doc fix needs to cover too. Revisit the local guard's scope once upstream responds.
+
 **A related limit bd cannot express at all, and this fix does not attempt to:** a dependency edge can
 say "after `<id>`," but it cannot say "when nothing else is running." `lode-mtuy` (an xdist timing
 measurement) is only valid on an otherwise-idle machine — no dependency graph shape encodes that, and
