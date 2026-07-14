@@ -1,14 +1,15 @@
-"""Regression test for scripts/validate-mermaid.sh's engine-down handling (lode-9i2p).
+"""Regression test for scripts/validate-mermaid.sh's engine-down handling
+(lode-9i2p, lode-2vsc).
 
-Root cause: the old guard was ``command -v docker`` — a PROXY that only proves
-some binary named ``docker`` is on PATH. When Docker Desktop's engine is stopped
-(Resource Saver mode, or WSL integration switched off for a distro), the Windows
-shim left on PATH still satisfies that check, then fails every ``docker run``
-with "The command docker could not be found in this WSL 2 distro" — a message
-indistinguishable, to a caller, from real per-doc mermaid syntax failures. A
-docs-only build (lode-tktc) hit exactly this and handed off with the gate never
-having actually parsed the diagram it touched, because the failure looked like
-"docker absent" rather than "gate broken."
+Root cause (lode-9i2p): the old guard was ``command -v docker`` — a PROXY that
+only proves some binary named ``docker`` is on PATH. When Docker Desktop's
+engine is stopped (Resource Saver mode, or WSL integration switched off for a
+distro), the Windows shim left on PATH still satisfies that check, then fails
+every ``docker run`` with "The command docker could not be found in this WSL 2
+distro" — a message indistinguishable, to a caller, from real per-doc mermaid
+syntax failures. A docs-only build (lode-tktc) hit exactly this and handed off
+with the gate never having actually parsed the diagram it touched, because the
+failure looked like "docker absent" rather than "gate broken."
 
 The fix guards on the INVARIANT instead (``docker info``, i.e. can it reach a
 running engine) and exits 2 — distinct from exit 1's "invalid mermaid" — with a
@@ -27,6 +28,19 @@ confident, plausible, false machine-level story):
 Both assert the gate reports "could not run", never "invalid content". Each runs
 with a PATH built entirely by the test, so the result never depends on whether
 the machine running the suite has a real Docker — in either direction.
+
+lode-2vsc extends this to the *second* half of the same invariant: the
+pre-flight ``docker info`` probe above only proves the engine is reachable
+*before* the loop starts. ``docker run`` can still fail for docker-level
+reasons *inside* the per-doc loop (image missing with no network, engine dies
+mid-run) — that failure must not be reported as a per-doc ``FAIL`` either.
+Docker reserves exit codes 125-127 for its own failures (verified empirically
+against a live engine — see the comment above the loop in
+scripts/validate-mermaid.sh); mmdc's own parse failure exits 1. The two new
+tests below simulate a docker whose ``info`` succeeds (so the pre-flight probe
+passes) but whose ``run`` fails — once with a docker-level code (125-127,
+must still surface as gate-could-not-run) and once with mmdc's own code (1,
+must still surface as a genuine per-doc FAIL).
 """
 
 import os
@@ -70,6 +84,23 @@ def _add_broken_docker(bin_dir: Path) -> None:
     shim.chmod(0o755)
 
 
+def _add_docker_with_run_exit(bin_dir: Path, run_exit: int) -> None:
+    """A fake docker whose `info` succeeds (engine reachable, so the
+    pre-flight probe passes) but whose `run` always exits with a
+    caller-chosen code — simulates a docker-level failure *inside* the
+    per-doc loop (run_exit 125-127: docker itself failed) vs mmdc's own
+    parse failure (run_exit 1) reaching the loop past the pre-flight guard.
+    """
+    shim = bin_dir / "docker"
+    shim.write_text(
+        "#!/bin/bash\n"
+        'if [ "$1" = "info" ]; then exit 0; fi\n'
+        f'if [ "$1" = "run" ]; then exit {run_exit}; fi\n'
+        "exit 0\n"
+    )
+    shim.chmod(0o755)
+
+
 def _run_gate(path_dir: Path) -> subprocess.CompletedProcess:
     """Run the gate with PATH set to exactly ``path_dir`` — so whether docker
     is reachable is decided entirely by what this test put there, never by
@@ -78,6 +109,24 @@ def _run_gate(path_dir: Path) -> subprocess.CompletedProcess:
         [str(SCRIPT)],
         cwd=REPO_ROOT,
         env={**os.environ, "PATH": str(path_dir)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def _run_gate_full_path(path_dir: Path) -> subprocess.CompletedProcess:
+    """Like `_run_gate`, but *prepends* `path_dir` to the real PATH instead of
+    replacing it. The two in-loop tests below run past the pre-flight docker
+    guard and need real `mktemp`/`chmod`/`grep`/`basename` to reach the per-doc
+    loop — `fake_bin` alone (just `dirname`) isn't enough. The fake `docker` in
+    `path_dir` still wins the PATH search (it comes first), so which docker the
+    script actually calls is still decided entirely by the test, never by
+    whether the machine running the suite has a real Docker."""
+    return subprocess.run(
+        [str(SCRIPT)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PATH": f"{path_dir}:{os.environ.get('PATH', '')}"},
         capture_output=True,
         text=True,
         timeout=30,
@@ -121,3 +170,38 @@ def test_docker_absent_is_gate_could_not_run_but_says_so_honestly(fake_bin):
 
     _assert_gate_could_not_run(result, says="no docker on PATH")
     assert "Resource Saver" not in result.stderr
+
+
+@pytest.mark.parametrize("run_exit", [125, 126, 127])
+def test_docker_level_failure_inside_loop_is_gate_could_not_run(fake_bin, run_exit):
+    """`docker info` succeeds (pre-flight passes) but `docker run` itself
+    fails partway through the per-doc loop with one of docker's own reserved
+    exit codes (125: docker couldn't start the container at all — e.g. image
+    missing with no network; 126: contained command not invocable; 127: not
+    found) — the lode-2vsc case: the engine dies *between* the pre-flight
+    probe and a later doc, or the image was never pulled and the network is
+    down. This must NOT be reported as a per-doc FAIL; it must abort with the
+    same gate-could-not-run contract as the pre-flight guard."""
+    _add_docker_with_run_exit(fake_bin, run_exit)
+
+    result = _run_gate_full_path(fake_bin)
+
+    _assert_gate_could_not_run(result, says="docker itself failed")
+    assert f"exit {run_exit}" in result.stderr
+
+
+def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin):
+    """`docker run` fails with mmdc's own exit code (1) — a real mermaid parse
+    failure, not a docker-level one. This must stay on the exit-1,
+    per-doc-FAIL path; the new docker-level check must not swallow genuine
+    content failures into gate-could-not-run."""
+    _add_docker_with_run_exit(fake_bin, 1)
+
+    result = _run_gate_full_path(fake_bin)
+
+    assert result.returncode == 1, (
+        f"expected exit 1 (invalid mermaid), got {result.returncode}\n"
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    assert "GATE COULD NOT RUN" not in result.stderr
+    assert "FAIL" in result.stdout

@@ -31,12 +31,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # to "check Resource Saver mode" is exactly the plausible-but-false
 # machine-level story that started this ticket.
 #
-# SCOPE: this is a PRE-FLIGHT probe only. A docker-level failure *inside* the
-# per-doc loop below (image missing with no network, engine dies mid-run) still
-# surfaces as a per-doc FAIL, i.e. a broken tool still looks like broken content
-# in that window. Narrowing that needs the loop to tell `docker run`'s own
-# failures apart from mmdc's parse failures — deliberately out of scope here,
-# tracked separately (see lode-9i2p's follow-up).
+# This pre-flight probe closes the gap where the engine is down before the
+# loop starts. It does NOT cover the engine dying *during* the loop (image
+# missing with no network, Resource Saver kicking in between docs) — that
+# half is closed by the per-doc exit-code check below (lode-2vsc).
 if ! docker info >/dev/null 2>&1; then
   if command -v docker >/dev/null 2>&1; then
     echo "GATE COULD NOT RUN: docker engine unreachable — a docker binary is on" >&2
@@ -64,6 +62,22 @@ printf '{"executablePath":"/usr/bin/chromium-browser","args":["--no-sandbox","--
 chmod 755 "$CFG"
 chmod 644 "$CFG/puppeteer.json"
 
+# `docker run`'s own failures (it can't even start the container: image
+# missing with no network, engine dies mid-loop) must not be reported as a
+# per-doc FAIL — that's this pre-flight guard's failure mode relocated one
+# loop iteration later. `docker run` reserves specific exit codes for exactly
+# this: 125 when docker itself fails before the container starts, 126 when
+# the containED command can't be invoked, 127 when it can't be found. mmdc's
+# own parse failure (an uncaught Node exception) exits 1, never 125-127.
+#
+# Verified empirically on 2026-07-14, not assumed (this same fix's earlier
+# pass — lode-9i2p — was itself a plausible structural theory that
+# measurement dissolved):
+#   docker run --rm nonexistent-image:latest              -> 125 (pull denied)
+#   docker run --rm --entrypoint /etc/hostname IMAGE       -> 126 (perm denied)
+#   docker run --rm --entrypoint /nonexistent-cmd IMAGE    -> 127 (not found)
+#   docker run --rm IMAGE this-flag-does-not-exist          -> 1   (mmdc's own exit)
+#   a genuine mermaid syntax error, run through mmdc         -> 1   (mmdc's own exit)
 fail=0
 found=0
 for f in "$REPO"/docs/*.md; do
@@ -74,6 +88,16 @@ for f in "$REPO"/docs/*.md; do
        -p /cfg/puppeteer.json -i "$rel" -o /tmp/out.md --quiet; then
     echo "OK    $rel"
   else
+    rc=$?
+    if [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
+      echo "GATE COULD NOT RUN: docker itself failed (exit $rc) partway through" >&2
+      echo "validating $rel — not a mermaid syntax error. Usual causes: the image" >&2
+      echo "is missing and the network is unreachable, or the engine died mid-run" >&2
+      echo "(Resource Saver mode). Diagnose with: docker info" >&2
+      echo "This is a machine fault a human must fix, not a mermaid syntax error —" >&2
+      echo "do not hand-verify diagrams or hand off in place of this gate." >&2
+      exit 2
+    fi
     echo "FAIL  $rel"
     fail=1
   fi
