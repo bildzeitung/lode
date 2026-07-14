@@ -787,6 +787,64 @@ are catalogued in [configuration.md](configuration.md).
   export from the gate outright, since by invariant (`import.auto: false`, lode-6ra) it is *never* work,
   and every other clean-tree check in the repo already excludes it.
 
+  **RESOLVED by lode-bns3.** Reconciled, not just patched: the generalized backstop's clean-tree gate
+  (`SKILL.md` Section 4) now **excludes** `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the
+  cleanliness judgment outright (`:(exclude)` pathspecs on the `status --porcelain` guard), so a staged
+  or modified export, from whatever cause, present or future, can never zero out the sweep on its own;
+  the coupling is *dissolved*, not merely documented. It **excludes** rather than restoring (the build's
+  first cut mirrored Section 3's restore; changed at review): Section 3 must genuinely *clean* the index
+  or its `git merge --no-ff` refuses to run, whereas the GC loop only needs to *judge*. Restoring would
+  have made a read-only judgment **write into candidate worktrees — including the dirty ones it then
+  decides to KEEP**, silently discarding their export churn as a side effect of merely looking at them;
+  exclusion has zero blast radius, which is the right posture for a loop that ends in `--force`. It also
+  sidesteps a trap the restore form walked into: `git restore` aborts *wholesale* on an unmatched pathspec
+  and would restore *neither* file (silently, under `|| true`) for a candidate sitting at a commit that
+  predates one of these paths — a stale leftover worktree being exactly what this backstop reclaims.
+  Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
+  staged") turns out to be the overstatement that produced the apparent contradiction in the first place:
+  measured a third time, independently (a bare `bd show`/`bd ready` **and** a real `bd update` write),
+  a worktree still reads clean — bd writes go to Dolt, and the tracked jsonl is regenerated+staged by
+  the **pre-commit hook at commit time**, not at `bd`-call time. Section 3's text is corrected
+  accordingly, and its restore is **kept**, not deleted.
+
+  **The positive cause remains UNESTABLISHED, and the record says so deliberately.** The obvious next
+  move — name `bd dolt pull` as "the real cause" and move on — was tried and **rejected at review**:
+  bd-sync discipline names `bd dolt pull` only as an explicit *defensive assumption* ("on the assumption
+  it may be staged even when `git diff` says otherwise"), never as a measurement, and a direct attempt to
+  reproduce it staged nothing. Replacing one confidently-wrong causal story with another — in prose about
+  a `--force`-wielding loop — is the very defect this entry exists to close, one step removed (the
+  lode-9i2p pattern: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
+  **nothing depends on the answer**: the export is by invariant never work (`import.auto: false`,
+  lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
+  why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
+
+  Verified end-to-end by **executing the loop** against a synthetic five-worktree fixture set (not by
+  reading it): a worktree whose only dirt is a staged `.beads/issues.jsonl` is now correctly reclaimed
+  (previously silently skipped — the exact regression this entry flagged); one with genuine uncommitted
+  content is still correctly KEPT (exclusion narrows what counts as dirt, it does not mask real dirt);
+  not-merged and locked worktrees are still kept; and the buckets partition the candidates exactly.
+
+  The sweep also now emits one summary line per pass (`worktree GC: reclaimed X of Y candidate(s) …
+  (skipped: locked=.., not-merged=.., dirty=..; failed=..)`), so a regression that zeroes out GC reads as
+  visibly different from "nothing to do," closing the observability gap this entry also flagged. `failed`
+  is a bucket of its own because the count is taken from `git worktree remove`'s **actual exit status**:
+  incrementing `reclaimed` merely for *attempting* the removal (the build's first cut) would let the
+  summary report "reclaimed N" when every removal had failed and nothing was reclaimed at all — the
+  observability feature lying in precisely the direction it exists to expose.
+
+  **Also caught at review — a `--force` hole the observability change itself opened.** Counting the
+  `locked` skips meant moving the `locked` test out of `awk` (where it had been a filter) into the shell
+  loop, reading four tab-separated fields. Tab is IFS *whitespace*, so `read` collapses adjacent tabs and
+  does **not** preserve an empty *middle* field — and `branch` is empty for a **detached** worktree (a case
+  the loop explicitly supports). A detached worktree's line therefore shifted every field left: `$BR`
+  swallowed the locked flag, `$LOCKED` read empty, `[ "$LOCKED" = "1" ]` was false, and a **locked, live
+  agent's worktree would have sailed past the locked gate into `git worktree remove --force`** — the exact
+  rip-it-out-from-under-a-running-agent harm of the pre-lode-oqr disaster, reopened by a change whose only
+  goal was observability. Fixed by ordering the fields so the one possibly-empty field (`branch`) is
+  **last**, where an empty value is a harmless trailing delimiter. Recorded because the lesson generalizes:
+  a purely "additive" observability change reached into a destructive gate's control flow, and the bug was
+  invisible to reading — it took executing the actual `read` against a synthetic detached-worktree line.
+
   **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
   the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one
   the generalized backstop already carries, and no per-ticket `review_worktree`/`review_branch` metadata
