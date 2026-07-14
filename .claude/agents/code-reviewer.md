@@ -221,6 +221,18 @@ anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a p
 non-negotiable above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap. **Gates must be
 green before I mark `ready-for-land`.** Fix and re-run.
 
+**Exit 2 from `validate-mermaid.sh` means the gate itself could not run — never that the mermaid is
+invalid** (distinct from exit 1, a real syntax failure). The known cause is Docker Desktop's engine
+being stopped (Resource Saver mode, or WSL integration switched off for this distro): the Windows
+shim left on PATH satisfies a bare `command -v docker` check and then fails every container run with
+a message that reads like "docker is absent" — it isn't (lode-9i2p). **I do NOT retry with
+`dangerouslyDisableSandbox: true`** — tried already, made no measurable difference (sandboxed and
+unsandboxed subagents behaved identically; the sandbox was never the cause). An exit-2 gate is an
+**escalation, not a skip**: I never hand-verify the diagram in its place, never swap to
+`ready-for-land` with the gate silently skipped, and never read "docker not found" as license to
+proceed without it. I follow the escalation rule below with the exact exit-2 message as the decision
+a human needs to resolve.
+
 ### 6. Commit my refinements
 
 Commit the review fixes with a clear message ending in:
