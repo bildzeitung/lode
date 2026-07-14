@@ -24,9 +24,10 @@ is therefore matched on the FIELD FLAGS (`-f`/`-F`/`--field`/`--raw-field`/`--in
 explicit `-X GET` / `--method GET` exempted so the legal read-with-params form
 (`gh api search/issues -X GET -f q=...`) still works.
 
-gh's repo-ADMIN surface is covered too (lode-9l3d): `gh secret set|delete`, `gh variable
-set|delete`, `gh workflow run|enable|disable`, `gh run rerun|cancel|delete`, `gh ssh-key
-add|delete`, `gh gpg-key add|delete`, `gh cache delete`. This is a different risk class from a
+gh's repo-ADMIN write verbs are covered too (lode-9l3d) -- the ENUMERATED ones, not the category:
+`gh secret set|delete`, `gh variable set|delete`, `gh workflow run|enable|disable`, `gh run
+rerun|cancel|delete`, `gh ssh-key add|delete`, `gh gpg-key add|delete`, `gh cache delete` (see the
+residual list below for the admin-ish verbs still outside it). This is a different risk class from a
 tracker write -- it mutates the remote (secrets, workflow triggers, keys, CI runs) rather than
 filing on a tracker -- but it is cheap to add to the same verb alternation, and the same guard is
 the natural home for it. The read-only forms of each (`gh run list|view`, `gh workflow
@@ -40,6 +41,10 @@ Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz 
     false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
     commit message quoting the verb) -- a worse trade than the residual.
   - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
+  - `gh` write verbs the alternation does not enumerate: `gh codespace create|delete` (compute,
+    not tracker/repo state) and the `repo` verbs left off the list (`gh repo rename|archive`,
+    `gh repo deploy-key add`). The alternation is a LIST OF VERBS, NOT A CATEGORY -- lode-9l3d
+    covered the enumerated admin verbs, not "the admin surface" wholesale. Tracked in lode-9rim.
 Those residual gaps rely on the prose rule in coding.md / code-reviewer.md, same as the
 `blocks:` guard relies on prose for `bd create --graph`.
 """
@@ -208,12 +213,17 @@ ALLOWED = [
     "gh release view v1.0",
     "gh repo view owner/repo",
     "gh label list",
-    # -- read-only forms of the repo-ADMIN surface (lode-9l3d), must stay legal --
-    "gh run list",
+    # -- read-only forms of the repo-ADMIN surface (lode-9l3d), must stay legal. Every noun the
+    #    alternation denies a verb on is pinned here, so a future widening of that alternation
+    #    cannot start false-denying the noun's READ form unnoticed. (`gh run list` is already
+    #    pinned above.)
     "gh run view 123",
     "gh workflow list",
     "gh workflow view deploy.yml",
     "gh secret list",
+    "gh variable list",
+    "gh ssh-key list",
+    "gh gpg-key list",
     "gh cache list",
     "gh api repos/x/y/issues",  # no fields, no method: GET by default
     "gh api repos/x/y/issues -X GET",
