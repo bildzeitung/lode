@@ -796,13 +796,26 @@ real fetch.
 *The one deliberate ripple this leaves:* `reconcile.py`'s refresh-staleness sweep (`_refresh_stale_step`,
 around `cutoff = jobs.iso(datetime.now(UTC) - ...)`) still computes its cutoff from the **raw** wall
 clock, on purpose (its own comment: "a backward wall-clock step here only refreshes an external late;
-it cannot strand one"). Now that `fetched_at` is ratchet-stamped, a row written during an active
-backward-step skew can read slightly *ahead* of true real time, same direction `jobs.now()` always
-biases in — so `s.fetched_at <= cutoff` becomes marginally less likely to fire in that narrow,
-self-correcting window (skew clears once real elapsed time exceeds the step's magnitude). That is the
-exact "refreshes late, cannot strand" outcome the sweep's own comment already accepts, not a new
-instance of the tombstone-clobber bug class this section exists to close — so it is left as-is rather
-than folded into this fix.
+it cannot strand one"). Now that `fetched_at` is ratchet-stamped, a row written after a backward step of
+Δ reads Δ *ahead* of the raw clock the cutoff is computed from — the same direction `jobs.now()` always
+biases in — so `s.fetched_at <= cutoff` fires Δ later than it otherwise would: the external is
+refreshed **late by Δ, and is never stranded**, because the raw clock in the cutoff keeps advancing and
+must eventually pass `fetched_at + refresh_ttl_s`. That is the exact "refreshes late, cannot strand"
+outcome the sweep's own comment already accepts. It also does not interact with the sweep's tombstone
+exclusion: `s.status != 'tombstone'` is a *status* test, and no clock skew can turn an `ok` head into a
+tombstone one — so the skew cannot strand an external down that path either. Left as-is rather than
+folded into this fix.
+
+**Be precise about the bound, though: Δ does _not_ decay with elapsed time.** `jobs.now()` is
+`_now_epoch + elapsed` where `_now_epoch = max(_now_epoch, wall - elapsed)` (`src/lode/jobs.py`), so
+after a backward step the ratchet and the wall clock advance in lockstep and the gap stays exactly Δ for
+the remainder of the **process's lifetime**. It closes only when the wall clock is stepped *forward*
+again (a later NTP correction re-ratchets the epoch) or when the process restarts (`_now_epoch` resets
+and re-anchors on its next read). The refresh delay is therefore bounded by the *magnitude of the step*
+— not by some short window that waiting it out clears. Harmless here, because a refresh is a
+revalidation and arriving late costs nothing but staleness; but it is **not** self-correcting, and a
+record that claimed otherwise would be exactly the confidently-wrong-about-concurrency doc this section
+exists to prevent.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 

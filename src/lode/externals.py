@@ -304,10 +304,16 @@ def ingest_snapshot(
     raw ``CLOCK_REALTIME`` one is only safe in one direction (see ``jobs.now``'s
     own docstring, guarantee 2), and the guard needed the other. Stamping both
     sides from the one clock closes that mismatch outright rather than merely
-    narrowing it. ``docs/storage.md`` records the fix and the one place this
-    ripples (``lode.reconcile``'s refresh-staleness cutoff, deliberately still
-    raw — the ripple there is bounded/self-correcting, not a new instance of
-    the guard's clobber).
+    narrowing it. This function is the **only** production writer of
+    ``snapshots``, so nothing else can reintroduce the raw-clock stamp; the
+    schema's DEFAULT survives for test/ad-hoc inserts only, and a new
+    production writer of this table must stamp ``fetched_at`` the same way (see
+    ``schema.sql``'s note on the column). ``docs/storage.md`` records the fix
+    and the one place this ripples (``lode.reconcile``'s refresh-staleness
+    cutoff, deliberately still raw — a backward step there delays a refresh by
+    the step's magnitude but can never strand one, so it is not a new instance
+    of the guard's clobber; note the skew persists for the process's lifetime
+    rather than self-correcting, which ``docs/storage.md`` spells out).
     """
     settings = settings or Settings()
     with conn:
