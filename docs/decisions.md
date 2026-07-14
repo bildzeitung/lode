@@ -504,6 +504,18 @@ are catalogued in [configuration.md](configuration.md).
   ref is still checked out in some worktree. See
   [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors).
 
+  **Update (lode-jiyk): the branch-name-match half of the fix above was superseded.** lode-jiyk
+  unified this backstop's worktree-sweep branch-name match (`^worktree-agent-`/`^land/`) with
+  lode-mxeu's separate by-SHA/detached-worktree sweep into a single loop keyed on **HEAD-sha
+  ancestry** (`git merge-base --is-ancestor <HEAD-sha> trunk`) plus `unlocked` — no branch-name
+  pattern is matched by the worktree sweep any more (see the lode-em6v update above, which
+  describes the same unification). The **second backstop** decided here — deleting a dangling local
+  `land/<id>` ref whose `origin/land/<id>` counterpart is gone — is a separate, bare-**ref** sweep,
+  unaffected by that unification: it still matches `refs/heads/land/*` by name, and must, since
+  `refs/heads/*` is shared with human branches. Mechanism of record:
+  [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors) §4 — verify
+  any new claim against it, not against this entry.
+
 - **Dead-lettered `refresh` jobs tombstone their external: a `worker.py` terminal-transition hook, not
   a reconcile sweep (lode-at8, decided 2026-07-09).** The gap: a `refresh` job that exhausts its
   retries and reaches `dead` left no record against the external at all — `head_snapshot_id` stayed
