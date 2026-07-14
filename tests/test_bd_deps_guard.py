@@ -46,23 +46,44 @@ def _hook_command() -> str:
     return matching[0]
 
 
-def _run(command: str) -> str | None:
-    """Run the guard against `command`; return its permissionDecision, or None if it fell through."""
+def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
+
+    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
+    machine (lode-oii9) without touching the real PATH of the process running this test. `bash`
+    itself is invoked by absolute path so a stripped PATH cannot make it unresolvable.
+    """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
     proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
+        [shutil.which("bash"), "-c", _hook_command()],
         input=payload,
         capture_output=True,
         text=True,
         timeout=30,
+        env=None if path is None else {"PATH": path},
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
     if not proc.stdout.strip():
         return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+    return json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def _run(command: str, *, path: str | None = None) -> str | None:
+    """The guard's permissionDecision for `command`, or None if it fell through."""
+    out = _hook_output(command, path=path)
+    return None if out is None else out["permissionDecision"]
+
+
+def _reason(command: str, *, path: str | None = None) -> str:
+    """The guard's permissionDecisionReason for `command`. Fails unless it was actually denied."""
+    out = _hook_output(command, path=path)
+    assert out is not None and out["permissionDecision"] == "deny", (
+        f"expected a deny for {command!r}, got {out}"
+    )
+    return out["permissionDecisionReason"]
 
 
 # Commands that would create an inverted edge. Every one of these MUST be denied.
@@ -134,16 +155,30 @@ def test_deny_reason_gives_the_correct_two_step_remedy() -> None:
     `bd dep add <new-id> <id> --type blocks` is the verified-correct direction: it leaves the
     follow-up blocked by the parent, never the reverse.
     """
-    payload = json.dumps(
-        {"tool_input": {"command": 'bd create "x" --deps blocks:lode-1'}}
-    )
-    proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = _reason('bd create "x" --deps blocks:lode-1')
     assert "bd dep add <new-id> <id> --type blocks" in reason
     assert "no --deps" in reason
+
+
+# lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
+# CLOSED rather than silently fall through when it is missing -- see docs/decisions.md for why.
+# `PATH=/nonexistent` reproduces the exact scenario verified live during lode-o29m's land review.
+def test_fails_closed_when_jq_is_missing() -> None:
+    decision = _run(
+        "ls -la", path="/nonexistent"
+    )  # innocuous command; must STILL be denied
+    assert decision == "deny", (
+        "guard fell through silently with jq missing instead of failing closed (lode-oii9)"
+    )
+
+
+def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
+    reason = _reason("ls -la", path="/nonexistent")
+    assert "jq" in reason
+    assert "docs/onboarding.md" in reason
+    assert "Install jq" in reason
+    # The remedy must be performable. Fail-closed denies EVERY Bash call while jq is missing --
+    # including `apt-get install jq` itself -- so a reason that just says "install jq and retry"
+    # walks an agent into an infinite deny loop. It must say to install from OUTSIDE Claude Code.
+    assert "OUTSIDE Claude Code" in reason
+    assert "surface this to the human" in reason
