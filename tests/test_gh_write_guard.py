@@ -14,12 +14,25 @@ exactly as the harness runs it (payload on stdin) -- following the same rational
 test_bd_deps_guard.py: prose alone is advisory, and a regex guard's failure mode is silent
 under- or over-matching. Nothing but a test table catches that here either.
 
+IMPLICIT POST IS DENIED TOO. `gh api` switches to POST automatically whenever a body field is
+supplied -- gh's own help: "adding request parameters will automatically switch the request
+method to POST". So `gh api repos/o/r/issues -f title=x -f body=y` files an issue with no
+`-X`/`--method` anywhere on the line. That is the *ordinary* documented way to POST with gh, not
+an exotic evasion, and an agent denied `gh issue create` would reach for it next -- the deny
+reason even names `gh api`. A guard that missed it would not enforce the rule it claims to. It
+is therefore matched on the FIELD FLAGS (`-f`/`-F`/`--field`/`--raw-field`/`--input`), with an
+explicit `-X GET` / `--method GET` exempted so the legal read-with-params form
+(`gh api search/issues -X GET -f q=...`) still works.
+
 Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz for the
-`blocks:` guard):
-  - `gh api` writes expressed via an implicit POST (e.g. `-f`/`-F`/`--input` with no explicit
-    `-X`/`--method`) -- the guard only catches an *explicit* write method.
-  - non-GitHub trackers reached by something other than the `gh` CLI.
-  - `gh issue create --graph <file>`-style indirection through a file the guard never reads.
+`blocks:` guard). A guard that reads only the command STRING cannot see through:
+  - quoted indirection -- `sh -c "gh issue create ..."`, or the command held in a shell
+    variable. Closing this would mean treating a quote as a command boundary, which would
+    false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
+    commit message quoting the verb) -- a worse trade than the residual.
+  - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
+  - gh's repo-ADMIN surface (`gh secret set`, `gh workflow run`, `gh ssh-key add`, ...) -- a
+    different risk class from a tracker write; tracked in lode-9l3d.
 Those residual gaps rely on the prose rule in coding.md / code-reviewer.md, same as the
 `blocks:` guard relies on prose for `bd create --graph`.
 """
@@ -99,6 +112,17 @@ DENIED = [
     "gh pr merge 123 --squash",
     "gh pr lock 123",
     "gh pr unlock 123",
+    "gh pr ready 123",
+    "gh issue develop 123",
+    "gh pr update-branch 123",
+    # -- other verbs that publish under the user's public identity --
+    "gh release create v1.0 --notes x",
+    "gh release upload v1.0 dist/x.whl",
+    "gh gist create secret.txt --public",
+    "gh repo fork owner/repo",
+    "gh repo create a-new-public-repo --public",
+    "gh label create bug --color f00",  # labels are issue-tracker state
+    # -- gh api, EXPLICIT write method --
     "gh api repos/x/y/issues -X POST -f title=x",
     "gh api repos/x/y/issues -XPOST -f title=x",
     "gh api repos/x/y/issues --method POST -f title=x",
@@ -106,10 +130,35 @@ DENIED = [
     "gh api repos/x/y/issues -X DELETE",
     "gh api repos/x/y/issues -X PATCH -f body=x",
     "gh api repos/x/y/issues -X PUT -f body=x",
+    "gh api repos/x/y/issues -X post -f title=x",  # gh does not care about case; nor may we
+    "gh api repos/x/y/issues --method patch -f body=x",
+    # -- gh api, IMPLICIT POST: fields alone flip the method. The ordinary way to POST with
+    #    gh, and the route a denied agent reaches for next. See the module docstring.
+    "gh api repos/x/y/issues -f title=x -f body=y",
+    "gh api repos/x/y/issues -F title=x",
+    "gh api repos/x/y/issues --field title=x",
+    "gh api repos/x/y/issues --raw-field title=x",
+    "gh api repos/x/y/issues --input body.json",
+    "gh api graphql -f query=x",  # graphql is ALWAYS a POST and can carry a mutation
+    "gh api -f title=x repos/x/y/issues",  # flags BEFORE the endpoint; gh accepts either order
+    "gh api -X POST repos/x/y/issues",
+    # A read-then-write chain must not let the read half's `-X GET` exempt the write half. The
+    # GET exemption is scoped to the SAME command segment that supplied the fields.
+    "gh api repos/x/y/issues -X GET && gh api repos/x/y/issues -f title=x -f body=y",
+    # -- shell shapes: gh still at a command position --
     "rtk gh issue create --title x",  # the repo's mandated rtk prefix
     "rtk gh pr comment 1 -b x",
     "cd /r && gh issue create --title x",  # not the first command on the line
     "echo hi; gh pr comment 1 -b x",
+    "`gh issue create --title x`",  # command substitution, backtick form
+    "$(gh issue create --title x)",
+    "{ gh issue create --title x; }",
+    "env gh issue create --title x",  # command wrapper
+    "xargs gh issue comment 1 -b x",
+    "if gh issue create --title x; then echo ok; fi",
+    "GH_TOKEN=$T gh issue create --title x",  # leading env-var assignment
+    "/usr/bin/gh issue create --title x",  # absolute path to the binary
+    "./gh issue create --title x",
     "gh --repo owner/repo issue create --title x",  # global -R/--repo flag before the subcommand
     "gh -R owner/repo pr comment 1 -b x",
     "gh --hostname github.example.com issue create --title x",
@@ -130,9 +179,16 @@ ALLOWED = [
     "gh pr diff 123",
     "gh issue status",
     "gh run list",
-    "gh api repos/x/y/issues",  # default method is GET
+    "gh release list",
+    "gh release view v1.0",
+    "gh repo view owner/repo",
+    "gh label list",
+    "gh api repos/x/y/issues",  # no fields, no method: GET by default
     "gh api repos/x/y/issues -X GET",
-    "gh api graphql -f query=x",  # not an issue/pr write-verb subcommand
+    # Fields on an EXPLICIT GET are query params, not a body -- gh documents this as the way
+    # to send a GET query string. Read-only, and it must survive the implicit-POST rule.
+    "gh api search/issues -X GET -f q=repo:o/r",
+    "gh api search/issues --method GET -f q=x",
     "rtk gh pr view 123",
     "gh --repo owner/repo issue view 123",
     # -- prose quoting the pattern --
@@ -166,6 +222,22 @@ def test_guard_never_emits_an_allow_decision() -> None:
     assert '"allow"' not in _hook_command()
 
 
+def test_hook_is_syntactically_valid_shell() -> None:
+    """A hook that cannot parse denies NOTHING -- and fails open, silently.
+
+    The deny reason is embedded in a single-quoted shell string, so a stray apostrophe in it
+    (`gh's`) closes the quote and breaks the whole one-liner. `bash -n` catches that directly,
+    without depending on any single command in the table above happening to exercise it.
+    """
+    proc = subprocess.run(
+        ["bash", "-n", "-c", _hook_command()],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"hook is not valid shell: {proc.stderr}"
+
+
 def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
     payload = json.dumps({"tool_input": {"command": "gh issue create --title x"}})
     proc = subprocess.run(
@@ -180,3 +252,6 @@ def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
     assert "PENDING A HUMAN" in reason
     assert "Read-only gh calls" in reason
     assert "internal bd filing" in reason
+    # The reason names `gh api` as denied; it must also say the implicit-POST form is denied,
+    # or it reads as a signpost toward the very route an agent would try next.
+    assert "IMPLICIT POST" in reason

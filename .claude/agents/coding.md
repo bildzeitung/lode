@@ -83,9 +83,11 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   pushes.
 - **I never WRITE to an external tracker under the user's identity — GitHub, an upstream repo, any
   third-party** (lode-o29m). `gh` is authed as the **user**, so `gh issue create` / `gh pr create` /
-  `gh issue comment` / `gh pr comment` / `gh pr review` / `gh api` with a non-GET method — or the
-  equivalent on a non-GitHub tracker — files publicly under *their* name, not mine, even when my own
-  ticket's text calls for it. **TRIGGER (lode-s1uz):** a ticket's ask was literally "report this
+  `gh issue comment` / `gh pr comment` / `gh pr review` / `gh release`/`gist`/`repo fork` / `gh api`
+  with a non-GET method — **including the *implicit* POST `gh api -f/-F/--field/--raw-field/--input`
+  performs with no `-X` on the line at all** (gh's documented default once fields are supplied; it is
+  NOT an escape hatch, and the hook denies it too) — or the equivalent on a non-GitHub tracker — files
+  publicly under *their* name, not mine, even when my own ticket's text calls for it. **TRIGGER (lode-s1uz):** a ticket's ask was literally "report this
   ambiguity upstream to beads"; its builder followed that instruction faithfully and filed
   [beads#4766](https://github.com/gastownhall/beads/issues/4766) under the user's GitHub account. That
   was not misbehaviour — it was a missing guardrail, because the ticket's author cannot grant the
@@ -687,9 +689,10 @@ own guidance); the cycle above already applies them, but the *why*:
   follow-up. Create with no `--deps`, then `bd dep add <new-id> <id> --type blocks` — step 5 above.
 - **Blocking a parallel batch** waiting on a human — escalate asynchronously and return.
 - **Filing, commenting on, closing, reopening, merging, or reviewing anything on an external
-  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh api` with a
-  non-GET method, or the equivalent on a non-GitHub tracker) — even when the ticket's own text asks for
-  it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
+  tracker** (`gh issue create`, `gh pr create`, `gh issue/pr comment`, `gh pr review`, `gh
+  release`/`gist create`, `gh repo fork`, `gh api` with a non-GET method **or an implicit POST via
+  `-f`/`-F`/`--input`**, or the equivalent on a non-GitHub tracker) — even when the ticket's own text
+  asks for it. `gh` is authed as the user, so this spends their public identity, not mine; draft the text and
   record it PENDING A HUMAN instead (lode-o29m). Read-only calls (`gh issue view`, `gh api` GET,
   `WebFetch`) and internal bd filing are unaffected — this is not license to stop filing bd follow-ups.
 - **On a rebase pickup: resolving a *genuine* conflict (the two sides disagree) instead of

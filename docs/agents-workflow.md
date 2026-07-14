@@ -589,7 +589,10 @@ platform — that authorisation belongs to the user alone, and a bd ticket is ne
 - **Forbidden:** any WRITE to an external tracker under the user's identity — `gh issue create`, `gh pr
   create`, `gh issue comment`, `gh pr comment`, `gh pr review`, `gh issue/pr close|reopen|edit|delete|
   lock|unlock|merge|transfer|pin|unpin`, `gh api` with a non-GET method (`-X`/`--method`
-  `POST`/`PUT`/`PATCH`/`DELETE`), and the equivalent write operation on any non-GitHub tracker.
+  `POST`/`PUT`/`PATCH`/`DELETE`, **or the *implicit* POST that `-f`/`-F`/`--field`/`--raw-field`/
+  `--input` triggers with no method flag at all** — see the guard section below), and the equivalent
+  write operation on any non-GitHub tracker. Also forbidden, on the same "do not spend the user's
+  public identity" logic: `gh release create`, `gh gist create`, `gh repo create|fork`.
 - **Allowed and unchanged: read-only external calls.** `gh issue view`, `gh pr view`, `gh api` GET,
   `WebFetch` all stay legal and unrestricted — `lode-s1uz`'s **reviewer** used exactly this class of
   call to verify the cited URL, which was correct behaviour and must remain so. This rule is about
@@ -611,28 +614,59 @@ first place, so there is nothing for the agent's compliance with its own ticket 
 **Mechanical guard, same "fence not fix" framing as `lode-0kbq`'s `blocks:` guard.** Docs alone are
 advisory — that is the entire lesson of `lode-s1uz` (an agent read a ticket, followed it, and filed
 publicly under the user's name because nothing said not to). A committed `PreToolUse(Bash)` hook in
-[`.claude/settings.json`](../.claude/settings.json) denies the common `gh` write verbs — `gh
-issue|pr create|comment|edit|close|reopen|delete|merge|review|lock|unlock|transfer|pin|unpin`, and `gh
-api` with an explicit non-GET method — and returns the draft-and-surface protocol above as the deny
-reason. It covers the `rtk` prefix, command position after `;`/`&&`/`||`/`|`/`(`, and `gh`'s global
+[`.claude/settings.json`](../.claude/settings.json) denies the `gh` write surface and returns the
+draft-and-surface protocol above as the deny reason:
+
+- **tracker writes** — `gh issue|pr
+  create|comment|edit|close|reopen|delete|merge|review|lock|unlock|transfer|pin|unpin|ready|develop|update-branch`,
+  and `gh label create|edit|delete|clone` (labels are tracker state);
+- **other writes that publish under the user's public name** — `gh release create|edit|delete|upload`,
+  `gh gist create|edit|delete`, `gh repo create|fork|edit|delete|sync`;
+- **`gh api` with an explicit non-GET method** (`-X`/`--method` `POST`/`PUT`/`PATCH`/`DELETE`, matched
+  case-insensitively — `-X post` is the same request);
+- **`gh api` with an *implicit* POST** — see below.
+
+It matches `gh` at a *command position*: after `;`/`&&`/`||`/`|`/`(`/`` ` ``/`{` or at line start,
+through the `rtk` prefix, a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
+`if`/`then`, …), an absolute or relative path to the binary (`/usr/bin/gh`), and `gh`'s global
 `-R`/`--repo`/`--hostname` flags inserted before the subcommand (the same shape of gap the `blocks:`
 guard already closes for bd's `-C`/`--directory`/`--db`). The deny/allow table is pinned by
 `tests/test_gh_write_guard.py`, which executes the hook as shipped, mirroring
 `tests/test_bd_deps_guard.py`.
 
-Two deliberate residual gaps, same character as the `blocks:` guard's own (a textual guard cannot see
-through indirection):
+**The implicit POST is denied too — this one is not optional.** `gh api` switches to `POST`
+automatically as soon as a body field is supplied; from `gh api --help`: *"adding request parameters
+will automatically switch the request method to POST."* So `gh api repos/o/r/issues -f title=… -f
+body=…` files an issue with **no `-X`/`--method` anywhere on the line**. That is the *ordinary*,
+documented way to POST with `gh` — not an exotic evasion — and it is the route an agent denied at `gh
+issue create` would naturally reach for next, since the deny reason itself names `gh api`. A guard that
+caught only the *explicit* method would therefore not enforce the rule it claims to; the exemption
+would have swallowed the rule. The hook instead matches the **field flags**
+(`-f`/`-F`/`--field`/`--raw-field`/`--input`), exempting an explicit `-X GET`/`--method GET` so the
+legal read-with-params form (`gh api search/issues -X GET -f q=…`, gh's documented way to send a GET
+query string) still works. `gh api graphql -f query=…` is denied as a side effect: GraphQL is always an
+HTTP POST and the same command shape carries a mutation, so the guard **fails closed** there and the
+read must go through a REST `GET` or a human.
 
-- **`gh api` writes expressed as an *implicit* POST** — `gh api repos/x/y/issues -f title=… -f body=…`
-  defaults to `POST` when a body field is present, with no `-X`/`--method` on the command line for the
-  guard to match. Only an *explicit* write method is caught mechanically; the implicit form relies on
-  the prose rule.
+Residual gaps that remain, same character as the `blocks:` guard's own (a guard that reads only the
+command *string* cannot see through indirection):
+
+- **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
+  Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
+  own prose about the rule (`rtk grep "gh issue create" docs/`, a commit message quoting the verb) — a
+  worse trade than the residual.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
+- **gh's repo-*admin* surface** (`gh secret set`, `gh workflow run`, `gh ssh-key add`, …) — a different
+  risk class from a tracker write, and one no plausible lode ticket asks an agent to touch; tracked
+  separately in `lode-9l3d`.
 
-Neither gap is a reason to skip the guard — it still closes the common case (the exact shape of
-`lode-s1uz`'s incident) the same way the `blocks:` guard closes the common case of the inverted edge
-without claiming to catch `bd create --graph <file>`.
+None of these is a reason to skip the guard — and, crucially, none of them is a route an *obedient*
+agent takes. That is the distinction that matters when judging where the fence is high enough: the
+guard must close every path a well-behaved agent following its ticket would actually walk down (which
+is why the implicit POST had to be closed, and why the residuals above may stay open), the same way the
+`blocks:` guard closes the common case of the inverted edge without claiming to catch `bd create
+--graph <file>`.
 
 **Do not touch `beads#4766` itself** — it is already filed and open on the real upstream tracker.
 Whether to leave, edit, or close it is the user's call, not any agent's; this rule governs future
