@@ -270,14 +270,21 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
     treated as indefinitely stale — there's no way to know its true age, and
     leaving it stuck forever is worse than reclaiming it early.
 
-    **Reclaim:** each selected row is put through exactly the same
-    attempts/backoff/dead-letter accounting :func:`run_one` uses for a
-    transient handler failure — ``attempts += 1``; at ``retry_max_attempts`` →
-    ``status='dead'``; otherwise → ``status='failed'`` with a backoff
-    ``next_attempt_at`` (picked up by :func:`_reset_retryable` once it's due,
-    same as any other retry). Reusing that machinery means a crash-reclaimed
-    job obeys the identical max-attempts gate as one that failed cleanly — no
-    parallel retry policy to keep in sync.
+    **Reclaim:** each selected row is put through exactly the same retry
+    *policy* :func:`run_one` uses for a transient handler failure —
+    ``attempts += 1``; at ``retry_max_attempts`` → ``status='dead'``;
+    otherwise → ``status='failed'`` with a backoff ``next_attempt_at``
+    (picked up by :func:`_reset_retryable` once it's due, same as any other
+    retry). That decision comes from :func:`lode.jobs.next_failure_state`
+    (lode-yb9t) — the same pure function :func:`lode.jobs.record_job_failure`
+    calls — rather than a second, inline copy of the attempts-increment and
+    max-attempts gate: this loop still issues its own CAS-guarded UPDATEs
+    (``AND status='running'``) batched into one outer transaction, which is
+    why it can't call :func:`~lode.jobs.record_job_failure` directly (see that
+    function's docstring), but the *policy* is shared, not duplicated. A
+    crash-reclaimed job is therefore structurally guaranteed to obey the
+    identical max-attempts gate as one that failed cleanly — no parallel
+    retry policy to keep in sync.
 
     Applies uniformly to every job ``type`` (``embed``, ``enrich``, ``refresh``)
     — the staleness signal is the same regardless of what kind of work was
@@ -305,8 +312,12 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
     err = "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
     with conn:
         for job_id, attempts, job_type, target_version in rows:
-            new_attempts = attempts + 1
-            if new_attempts >= settings.retry_max_attempts:
+            # Policy decision shared with jobs.record_job_failure (lode-yb9t)
+            # — only the CAS-guarded persistence below is specific to reclaim.
+            new_attempts, dead_lettered, next_at = jobs.next_failure_state(
+                attempts, settings
+            )
+            if dead_lettered:
                 cur = conn.execute(
                     "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
                     "WHERE id = ? AND status = 'running'",
@@ -315,7 +326,6 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                 if cur.rowcount:
                     newly_dead.append((job_type, target_version))
             else:
-                next_at = jobs.backoff_next_attempt_at(new_attempts, settings)
                 cur = conn.execute(
                     "UPDATE jobs SET status = 'failed', attempts = ?, "
                     "last_error = ?, next_attempt_at = ? "

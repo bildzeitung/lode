@@ -18,6 +18,7 @@ from lode.jobs import (
     DERIVE_JOB_TYPES,
     enqueue_derive_jobs,
     iso,
+    next_failure_state,
     now,
     record_job_failure,
 )
@@ -217,6 +218,48 @@ def test_record_job_failure_dead_letters_at_max_attempts(conn) -> None:
     assert row[0] == "dead"
     assert row[1] == 2
     assert row[2] == "boom"
+
+
+# --- next_failure_state (lode-yb9t) ------------------------------------------
+#
+# The pure policy decision factored out of record_job_failure so that
+# worker._reclaim_stale_running (which cannot call record_job_failure itself —
+# see its docstring) shares this decision instead of duplicating it. No conn,
+# no SQL, no txn — record_job_failure's persistence is exercised by the tests
+# above; these test the decision in isolation.
+
+
+def test_next_failure_state_below_max_attempts_applies_backoff() -> None:
+    settings = Settings(retry_max_attempts=5)
+    before = now()
+
+    new_attempts, dead, next_at = next_failure_state(0, settings)
+
+    assert (new_attempts, dead) == (1, False)
+    assert next_at is not None
+    # Same tight-backoff assertion style as
+    # test_record_job_failure_applies_backoff_below_max_attempts: >= a full
+    # retry_backoff_base_s ahead of a pre-call anchor.
+    earliest = iso(before + timedelta(seconds=settings.retry_backoff_base_s))
+    assert next_at >= earliest
+
+
+def test_next_failure_state_dead_letters_on_the_last_attempt_not_one_past_it() -> None:
+    """Pin the exact gate boundary with LITERAL expectations: the failure that
+    brings the count TO retry_max_attempts dead-letters (and schedules no further
+    attempt); the one before it does not. Stated as literals on purpose -- an
+    expectation computed by calling next_failure_state would move with the policy
+    and pin nothing.
+    """
+    settings = Settings(retry_max_attempts=3)
+
+    # One below the gate: retry, with a backoff stamped.
+    new_attempts, dead, next_at = next_failure_state(1, settings)
+    assert (new_attempts, dead) == (2, False)  # 2 < 3 -> retry
+    assert next_at is not None
+
+    # At the gate: dead, and no next attempt is scheduled.
+    assert next_failure_state(2, settings) == (3, True, None)  # 3 >= 3 -> dead
 
 
 # --- record_job_failure CAS guard (lode-3jte) --------------------------------

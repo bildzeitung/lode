@@ -997,6 +997,71 @@ def test_reclaim_dead_letters_at_max_attempts(
     assert row["attempts"] == settings.retry_max_attempts
 
 
+def test_reclaim_and_record_job_failure_agree_on_the_dead_letter_gate(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """_reclaim_stale_running and jobs.record_job_failure must dead-letter at
+    the SAME attempts count (lode-yb9t) -- a crash-reclaimed job is supposed to
+    obey the identical max-attempts gate as a cleanly-failed one, and prior to
+    this ticket nothing but a docstring note enforced that. Both now delegate
+    to jobs.next_failure_state, so this test catches either path silently
+    reimplementing its own (possibly drifted) gate again in the future.
+
+    The sweep is DERIVED from settings.retry_max_attempts rather than hard-coded,
+    so its last iteration always lands exactly ON the dead-letter boundary. With
+    hard-coded params, retuning that setting would slide the whole sweep below
+    the gate and leave this test asserting False == False -- green, and no longer
+    covering the one thing it exists for.
+    """
+    observed_dead: list[bool] = []
+
+    for attempts_before in range(settings.retry_max_attempts):
+        stale_job = _insert_job(
+            conn,
+            target_version=f"stale-{attempts_before}",
+            status="running",
+            attempts=attempts_before,
+            claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+        )
+        # The control row must be a FRESH claim, not a stale one: the reclaim
+        # selects `claimed_at IS NULL OR claimed_at <= cutoff`, so a claimed_at of
+        # NULL (the _insert_job default) would put this row in the reclaim's own
+        # sweep and it would be failed by the reclaim path before
+        # record_job_failure ever saw it -- leaving this test comparing the
+        # reclaim path against itself.
+        control_job = _insert_job(
+            conn,
+            target_version=f"control-{attempts_before}",
+            status="running",
+            attempts=attempts_before,
+            claimed_at=_now_iso(),
+        )
+
+        _reclaim_stale_running(conn, settings)
+        reclaimed_row = _job(conn, stale_job)
+
+        _, record_dead, _ = jobs.record_job_failure(
+            conn, control_job, attempts_before, "boom", settings
+        )
+        reclaimed_dead = reclaimed_row["status"] == "dead"
+
+        # The two paths agree with each other...
+        assert reclaimed_dead == record_dead
+        assert reclaimed_row["attempts"] == _job(conn, control_job)["attempts"]
+        # ...and both agree with an INDEPENDENTLY stated gate. Mutual agreement
+        # alone is structurally guaranteed now that both call next_failure_state,
+        # so it would survive a >= -> > drift *inside* that shared function; this
+        # line is what pins the gate's actual value.
+        assert record_dead == (attempts_before + 1 >= settings.retry_max_attempts)
+        observed_dead.append(reclaimed_dead)
+
+    # Vacuity guard: the sweep must have exercised BOTH sides of the gate.
+    assert observed_dead[-1] is True, "sweep never reached the dead-letter gate"
+    assert False in observed_dead, "sweep never exercised the retry side of the gate"
+
+
 def test_reclaim_excludes_batch_backed_enrich_jobs(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
