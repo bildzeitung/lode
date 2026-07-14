@@ -573,14 +573,29 @@ done
 # if you add one, audit those two, not this one. (lode-j5i0's sweep is the THIRD backstop below; it is
 # alive and untouched — it was never one of the two unified here.)
 #
-# CONTRACT, stated plainly because the branch-name filter used to hide it: ANY worktree under
-# `.claude/worktrees/` that is unlocked AND has not diverged from `trunk` is reclaimable by this loop,
-# whoever made it. A worktree freshly branched off `trunk` HEAD is trivially "merged" by zero
-# divergence, so uncommitted work in one is NOT protected by the merged check — `locked` is the only
-# thing holding this loop off, and only `.claude/agents/coding.md` raises it (lode-oqr). Commit, or
-# `git worktree lock`, or expect to be swept. This residual is PRE-EXISTING, not new (both unified
-# sweeps already had it), and lode-9hgu tracks fixing it at the root: guard on whether the tree is
-# actually DIRTY, rather than on a "merged" proxy that reads TRUE at zero divergence.
+# CONTRACT (lode-9hgu closed the residual this paragraph used to describe): ANY worktree under
+# `.claude/worktrees/` that is unlocked, has not diverged from `trunk`, AND is clean is reclaimable by
+# this loop, whoever made it. A worktree freshly branched off `trunk` HEAD is trivially "merged" by
+# zero divergence — that proxy alone would read TRUE for a live, uncommitted build the instant its
+# worktree is created — so the loop below also tests the ACTUAL invariant directly ("is this work
+# captured anywhere else"): `git -C "$WT" status --porcelain`. A dirty tree is never reclaimed,
+# regardless of lock state, ancestry, or who made the worktree — this is what actually protects the
+# worktree classes that hold NO lock by the time this sweep sees them: an interactive `EnterWorktree`
+# session, a human's hand-made worktree (CLAUDE.md mandates one for all work), and an exited agent's
+# leftover scratch. There are exactly TWO lock sources in this system, and neither covers those three:
+# the harness locks a LIVE `isolation: worktree` agent's worktree for that agent's lifetime, releasing
+# it on exit (`locked claude agent <name> (pid <n> start <n>)`); and `.claude/agents/coding.md` raises
+# an explicit lock across the narrow pre-first-commit window (lode-oqr). The
+# dirty check FAILS SAFE: `git -C "$WT" status --porcelain` prints nothing both when the tree is clean
+# and when the command itself errors (missing dir, corrupt worktree admin, …), so the guard below
+# distinguishes "clean" (proceed) from "could not tell" (skip) rather than treating empty output as
+# always meaning clean. Accepted residual: a CLEAN worktree at trunk HEAD that raises no lock — a
+# human's hand-made worktree they happen to be sitting in, or an exited agent's clean leftovers — is
+# still reclaimable; nothing is destroyed (the tree is clean), the directory just vanishes out from
+# under whoever is standing in it. A LIVE harness agent's worktree is NOT in that set — its harness
+# lock (above) drops it in the awk `!locked` filter below, before the ancestry predicate is ever
+# evaluated. The trade is intentional: the failure direction is now "remove an empty checkout," never
+# "destroy uncommitted work."
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
@@ -595,11 +610,14 @@ done
 # this destroyed two builds' uncommitted work outright (branch and all, not just the checkout) before
 # the gap was understood (lode-oqr). `.claude/agents/coding.md` now locks the worktree as the
 # producer's first action and unlocks it right after its first commit, closing that window; this
-# loop's `locked` filter needed no change. The one accepted trade-off: a crash strictly between lock
-# and first commit leaves a locked worktree this sweep won't auto-reclaim -- rare (a normal build
-# commits within minutes) and resolved by a manual `git worktree unlock` (or a future cleanup
-# ticket), not by this loop, since correctness (never destroy a live build) matters more here than
-# eagerness.
+# loop's `locked` filter needed no change. `locked` is still checked first (cheapest, and the
+# git-native in-use signal), but as of lode-9hgu it is no longer the ONLY thing standing between a
+# live, uncommitted tree and `--force` removal — the dirty-tree guard below is the backstop for every
+# worktree class that never raises `locked` at all (see the CONTRACT paragraph above). The one
+# accepted trade-off specific to `locked`: a crash strictly between lock and first commit leaves a
+# locked worktree this sweep won't auto-reclaim -- rare (a normal build commits within minutes) and
+# resolved by a manual `git worktree unlock` (or a future cleanup ticket), not by this loop, since
+# correctness (never destroy a live build) matters more here than eagerness.
 #
 # Scoped to paths under .claude/worktrees/ so this can never touch the main checkout (its tip is
 # always merged into itself, so the predicate alone wouldn't exclude it — the path guard is what
@@ -613,6 +631,14 @@ git worktree list --porcelain | awk '
   /^$/ { if (path!="" && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT SHA BR; do
   git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight)
+  # lode-9hgu dirty-tree guard — the ACTUAL invariant, not the ancestry proxy above (see CONTRACT).
+  # Success and emptiness are tested SEPARATELY, on purpose: `status --porcelain` prints nothing both
+  # when the tree is CLEAN and when the command ERRORS, and an assignment inherits its command
+  # substitution's exit code — so a failure (missing dir, corrupt worktree admin, …) skips exactly like
+  # a dirty tree instead of failing OPEN into `--force`. Skipping on error costs little: the
+  # `git worktree prune` below still drops a vanished worktree's admin entry, and any leftover branch
+  # ref falls to the bare-ref backstops.
+  STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue
   git worktree remove --force "$WT"
   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
 done
