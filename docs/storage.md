@@ -656,8 +656,11 @@ ground truth. Guarding it wouldn't prevent a corruption; it would suppress a
 true fact in favor of a stale prediction.
 
 **The decisive fact: for enrich, the success UPDATE *is* the idempotency
-receipt.** `prompt_ver` is stamped only on the success path (`worker.py:495`).
-reconcile's enrich gap query (`reconcile.py:331-338`) re-enqueues any live
+receipt.** `prompt_ver` is only ever stamped by a *success* write — at
+`worker.py:495` here, and at `enrich.py:783` on the batch-collect path (which
+is `batch_handle`-set, so it is exempt from this race entirely). There is no
+other writer: a job that does not succeed never gets a `prompt_ver`.
+reconcile's enrich gap query (`reconcile.py:326-338`) re-enqueues any live
 head version with no pending/running/failed enrich job *and* no `'done'`
 enrich job carrying a matching `prompt_ver` — a `'dead'` row satisfies both.
 So CAS-guarding the success write would mean: the Haiku call completes, the
@@ -670,10 +673,18 @@ corruption; it would destroy the record of a completed, paid-for API call.
 
 `embed` is the same shape, cheaper: `reconcile.py:239` is `NOT EXISTS (embed
 job WHERE status != 'dead')`, so a guarded-out embed success would leave
-`'dead'` → re-enqueued → redundantly re-embedded. `refresh` is unaffected
-either way — its sweep is purely TTL-driven (`s.fetched_at <= now -
-refresh_ttl_s`, `reconcile.py:438`) with no dead-job arm, so a guarded-out
-refresh success would leave only an inert lie in the job row, not a re-fetch.
+`'dead'` → re-enqueued → redundantly re-embedded.
+
+`refresh` is the exception that proves the rule: guarding it would change
+nothing, because its sweep never reads the job row's terminal status at all.
+The refresh sweep keys on the TTL (`s.fetched_at <= now - refresh_ttl_s`,
+`reconcile.py:439`) and suppresses only on an *in-flight* job (`status IN
+('pending', 'running')`) — there is **no dead-job arm**, so a `'dead'` refresh
+row neither blocks nor triggers a re-fetch. A guarded-out refresh success would
+therefore leave only an inert lie in the job row. What the sweep *does* exclude
+is a tombstoned head (`s.status != 'tombstone'`, `reconcile.py:438`) — and that
+exclusion, not the job status, is what makes the separate lode-uda1 corruption
+below permanently absorbing.
 
 **The ABA case is benign for success**, unlike for failure: a stale success
 stamping `'done'` on a row a *different* claim now holds just means that
@@ -682,11 +693,11 @@ fails, its CAS-guarded failure write correctly no-ops against `status =
 'done'`. Nothing breaks. Contrast the failure path, where ABA is a real
 corruption — that is what the `claimed_at` guard above exists to close.
 
-Site-by-site, all three land the same way:
+`run_one`'s two sites are exposed for the obvious reason: the handler stalls
+across a network call, which is exactly the window `_reclaim_stale_running`
+exists to sweep. The two *other* enrich `'done'` writers each need a word,
+because the `batch_handle` exemption covers one of them and not the other:
 
-- **`run_one`'s two `status = 'done'` UPDATEs** (`worker.py:495`,
-  `worker.py:499`) are exposed to the race and intentionally unguarded, per
-  the reasoning above.
 - **`submit_enrich_batch`'s gated-out `skip_ids` UPDATE** (`enrich.py:616`) is
   also exposed — those rows were pre-claimed to `'running'` by
   `_batch_submit_enrich` with `batch_handle` still `NULL` at that point
