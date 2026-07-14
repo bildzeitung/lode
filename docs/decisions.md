@@ -881,3 +881,63 @@ are catalogued in [configuration.md](configuration.md).
   risk (destroy uncommitted work) the moment that assumption's premise — "nothing ever re-dirties a
   just-landed worktree between build and GC" — went unstated and unverified. There is no longer a
   second predicate to keep in sync: this is now the fix, not a design tension to preserve.
+
+- **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
+  when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented
+  as a dependency anywhere — not `docs/onboarding.md`, not `CLAUDE.md`'s new-machine-setup steps, not
+  `scripts/python-init.sh` — yet the two committed `PreToolUse(Bash)` guards in
+  [`.claude/settings.json`](../.claude/settings.json) both shell out to it: the `bd create --deps
+  blocks:` inversion guard (`lode-ij24`) and the external-tracker write guard (`lode-o29m`). Each has
+  the shape `CMD=$(jq -r '.tool_input.command // empty'); ...`. With `jq` absent, that command
+  substitution silently yields empty output, nothing matches the guard's regex, and the hook exits 0
+  — the guard falls through with **no signal at all**. Verified live during `lode-o29m`'s own land
+  review: with `PATH=/nonexistent`, `gh issue create --title x` was **not** denied. Both guards' own
+  test suites (`tests/test_bd_deps_guard.py`, `tests/test_gh_write_guard.py`) `skipif jq is None`, so
+  on a jq-less machine the tests do not fail either — they silently skip. Nothing anywhere goes red.
+
+  **Decision: FAIL CLOSED, for both guards, consistently.** When `jq` is unreachable on `PATH`, each
+  hook now denies the Bash call outright — before it ever tries to parse `tool_input.command` — with
+  a `permissionDecisionReason` naming `jq` as the missing prerequisite and pointing at
+  `docs/onboarding.md`. This is a broader denial than "just the guarded pattern": with `jq` missing,
+  the hook cannot classify the command *at all*, so there is no narrower-but-still-safe deny to fall
+  back to; the choice is between denying every Bash call or falling back to today's silent no-op.
+
+  Options considered, per the ticket's own framing:
+  - **(a) Leave as-is** (prereq documented, hook stays a silent-fallthrough backstop) — rejected. The
+    entire point of these two guards is to catch an agent that is *not* going to stop itself — an
+    obedient agent following a ticket that says "ask upstream" (`lode-s1uz`) or emitting an inverted
+    `bd create --deps blocks:` (`lode-ij24`). A guard whose failure mode is silence is invisible
+    precisely in the unsupervised case it exists to cover; nothing short of an actual deny reaches an
+    agent that would not otherwise notice.
+  - **(c) Loud warning, but allow** — rejected. A warning written to hook stdout/stderr is not
+    guaranteed to reach a human in an unsupervised producer/reviewer pass (the whole scenario `lode-
+    o29m` was filed to close), and an agent has no standing instruction to *stop and read hook output*
+    the way it does for an actual `deny`. A warning that nothing downstream reads is functionally the
+    same as silence.
+  - **(b) Fail closed** — **chosen.** The named downside — "a missing prereq then blocks EVERY Bash
+    call" — is real but bounded and self-correcting: `jq` is now a one-line, documented prerequisite
+    (`docs/onboarding.md` §Prerequisites, `CLAUDE.md` §New machine setup step 0), install-and-retry
+    fixes it permanently for that machine, and the failure is **loud and immediate** — the very first
+    Bash call after a fresh, broken-onboarding clone fails with a message naming the exact missing
+    tool and the doc to read, rather than the guard quietly doing nothing for the life of the session.
+    That is a strictly better failure mode than a security-relevant check disappearing without a
+    trace. Because `jq` is genuinely trivial to install (`apt-get install jq` / `brew install jq` /
+    `choco install jq`, no compilation, no config), the "worse dev experience" risk named in the
+    ticket's own design text is judged not to materialize in practice: a correctly-onboarded machine
+    never reaches this branch at all — it is dead code on every machine that followed the onboarding
+    doc, and an alarm exactly once on any machine that did not.
+
+  **Consistency across both hooks, deliberately (AC3).** They share the identical `jq` dependency and
+  the identical risk shape (a security-relevant guard silently defeated), so they get the identical
+  policy — divergence here (one fails closed, one stays silent) would just relocate the same
+  unnoticed gap to whichever guard chose to stay soft. Implementation: `tests/test_bd_deps_guard.py`
+  and `tests/test_gh_write_guard.py` each gained `test_fails_closed_when_jq_is_missing` and
+  `test_jq_missing_deny_reason_names_jq_and_points_at_the_fix`, run with `PATH=/nonexistent` against
+  the hook exactly as shipped — the same `PATH=/nonexistent` reproduction used during `lode-o29m`'s
+  land review to first discover the gap.
+
+  **Not touched: the guards' matching regex / deny-vs-allow table for commands where `jq` IS
+  present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
+  design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
+  `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
+  exemptions) is unchanged.

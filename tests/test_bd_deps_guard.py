@@ -46,17 +46,24 @@ def _hook_command() -> str:
     return matching[0]
 
 
-def _run(command: str) -> str | None:
-    """Run the guard against `command`; return its permissionDecision, or None if it fell through."""
+def _run(command: str, *, path: str | None = None) -> str | None:
+    """Run the guard against `command`; return its permissionDecision, or None if it fell through.
+
+    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
+    machine (lode-oii9) without touching the real PATH of the process running this test. `bash`
+    itself is invoked by absolute path so a stripped PATH cannot make it unresolvable.
+    """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
+    env = None if path is None else {"PATH": path}
     proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
+        [shutil.which("bash"), "-c", _hook_command()],
         input=payload,
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
@@ -147,3 +154,32 @@ def test_deny_reason_gives_the_correct_two_step_remedy() -> None:
     reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "bd dep add <new-id> <id> --type blocks" in reason
     assert "no --deps" in reason
+
+
+# lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
+# CLOSED rather than silently fall through when it is missing -- see docs/decisions.md for why.
+# `PATH=/nonexistent` reproduces the exact scenario verified live during lode-o29m's land review.
+def test_fails_closed_when_jq_is_missing() -> None:
+    decision = _run(
+        "ls -la", path="/nonexistent"
+    )  # innocuous command; must STILL be denied
+    assert decision == "deny", (
+        "guard fell through silently with jq missing instead of failing closed (lode-oii9)"
+    )
+
+
+def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
+    payload = json.dumps({"tool_input": {"command": "ls -la"}})
+    proc = subprocess.run(
+        [shutil.which("bash"), "-c", _hook_command()],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": "/nonexistent"},
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "jq" in reason
+    assert "docs/onboarding.md" in reason
+    assert "Install jq" in reason

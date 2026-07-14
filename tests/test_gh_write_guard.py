@@ -70,17 +70,24 @@ def _hook_command() -> str:
     return matching[0]
 
 
-def _run(command: str) -> str | None:
-    """Run the guard against `command`; return its permissionDecision, or None if it fell through."""
+def _run(command: str, *, path: str | None = None) -> str | None:
+    """Run the guard against `command`; return its permissionDecision, or None if it fell through.
+
+    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
+    machine (lode-oii9) without touching the real PATH of the process running this test. `bash`
+    itself is invoked by absolute path so a stripped PATH cannot make it unresolvable.
+    """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
+    env = None if path is None else {"PATH": path}
     proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
+        [shutil.which("bash"), "-c", _hook_command()],
         input=payload,
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
@@ -255,3 +262,31 @@ def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
     # The reason names `gh api` as denied; it must also say the implicit-POST form is denied,
     # or it reads as a signpost toward the very route an agent would try next.
     assert "IMPLICIT POST" in reason
+
+
+# lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
+# CLOSED rather than silently fall through when it is missing -- see docs/decisions.md for why.
+# This is the exact scenario named in lode-oii9's own discovery: with PATH=/nonexistent, `gh
+# issue create --title x` was NOT denied before this fix.
+def test_fails_closed_when_jq_is_missing() -> None:
+    decision = _run("gh issue create --title x", path="/nonexistent")
+    assert decision == "deny", (
+        "guard fell through silently with jq missing instead of failing closed (lode-oii9)"
+    )
+
+
+def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
+    payload = json.dumps({"tool_input": {"command": "gh issue create --title x"}})
+    proc = subprocess.run(
+        [shutil.which("bash"), "-c", _hook_command()],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": "/nonexistent"},
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "jq" in reason
+    assert "docs/onboarding.md" in reason
+    assert "Install jq" in reason

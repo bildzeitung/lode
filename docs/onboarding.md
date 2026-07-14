@@ -11,6 +11,7 @@
 | **Python ≥ 3.14** | Runs lode and its tests. | [`.python-version`](../.python-version) pins a known-good version; `pyenv install` matches it. Any CPython ≥ 3.14 on `PATH` works. |
 | **git** | Clone, and branch every change into a worktree. | |
 | **beads (`bd`)** | Issue tracker — *all* task tracking lives here, not in markdown TODOs. | **Required.** The issue database does not arrive with `git clone`; restore it in [§3](#3-restore-the-issue-database-beads). Install from [beads](https://github.com/gastownhall/beads); it bundles Dolt, so no separate Dolt install. |
+| **jq** | Parses tool-call payloads for the committed `PreToolUse(Bash)` guards in [`.claude/settings.json`](../.claude/settings.json) (the `bd create --deps blocks:` inversion guard, `lode-ij24`, and the external-tracker write guard, `lode-o29m`) and for `.claude/statusline.sh`. | **Required.** Without it, both guards **deny every Bash call** rather than silently letting a security-relevant check fall through unchecked — see [`docs/decisions.md`](decisions.md) for why fail-closed was chosen over fail-open. Install: `apt-get install jq` / `brew install jq` / `choco install jq`. |
 | **Docker** | Validates `docs/` Mermaid diagrams via `minlag/mermaid-cli`. | Only if you edit a diagram. No Node/Chromium needed on the host. |
 
 ## Install & setup
