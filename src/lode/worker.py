@@ -278,13 +278,19 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
     retry). That decision comes from :func:`lode.jobs.next_failure_state`
     (lode-yb9t) — the same pure function :func:`lode.jobs.record_job_failure`
     calls — rather than a second, inline copy of the attempts-increment and
-    max-attempts gate: this loop still issues its own CAS-guarded UPDATEs
-    (``AND status='running'``) batched into one outer transaction, which is
-    why it can't call :func:`~lode.jobs.record_job_failure` directly (see that
-    function's docstring), but the *policy* is shared, not duplicated. A
-    crash-reclaimed job is therefore structurally guaranteed to obey the
-    identical max-attempts gate as one that failed cleanly — no parallel
-    retry policy to keep in sync.
+    max-attempts gate. The persistence goes through
+    :func:`lode.jobs.cas_update_running` (lode-nggm) — the same CAS-guarded
+    primitive :func:`~lode.jobs.record_job_failure` uses — but called bare,
+    inside this loop's own outer ``with conn:`` batching every reclaimed row,
+    rather than through that function's transaction-wrapping shell (which
+    can't nest a second ``with conn:`` inside this one). The guard is on the
+    exact ``claimed_at`` this SELECT just read, not ``status`` alone — the row
+    could otherwise have already moved to a *different* ``'running'`` claim by
+    the time this UPDATE runs (this loop's own ``with conn:`` serializes its
+    rows against each other, but not against another process's write between
+    the SELECT above and this transaction opening). A crash-reclaimed job is
+    therefore structurally guaranteed to obey the identical max-attempts gate
+    as one that failed cleanly — no parallel retry policy to keep in sync.
 
     Applies uniformly to every job ``type`` (``embed``, ``enrich``, ``refresh``)
     — the staleness signal is the same regardless of what kind of work was
@@ -298,7 +304,7 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
     """
     cutoff = jobs.iso(jobs.now() - timedelta(seconds=settings.stale_running_timeout_s))
     rows = conn.execute(
-        "SELECT id, attempts, type, target_version FROM jobs "
+        "SELECT id, attempts, type, target_version, claimed_at FROM jobs "
         "WHERE status = 'running' AND batch_handle IS NULL "
         "AND (claimed_at IS NULL OR claimed_at <= ?)",
         (cutoff,),
@@ -311,28 +317,31 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
     newly_dead: list[tuple[str, str]] = []  # (job_type, target_version)
     err = "reclaimed: stuck in 'running' past staleness timeout (possible crash)"
     with conn:
-        for job_id, attempts, job_type, target_version in rows:
+        for job_id, attempts, job_type, target_version, claimed_at in rows:
             # Policy decision shared with jobs.record_job_failure (lode-yb9t)
             # — only the CAS-guarded persistence below is specific to reclaim.
             new_attempts, dead_lettered, next_at = jobs.next_failure_state(
                 attempts, settings
             )
             if dead_lettered:
-                cur = conn.execute(
-                    "UPDATE jobs SET status = 'dead', attempts = ?, last_error = ? "
-                    "WHERE id = ? AND status = 'running'",
-                    (new_attempts, err, job_id),
+                claim_held = jobs.cas_update_running(
+                    conn,
+                    job_id,
+                    claimed_at,
+                    "status = 'dead', attempts = ?, last_error = ?",
+                    (new_attempts, err),
                 )
-                if cur.rowcount:
+                if claim_held:
                     newly_dead.append((job_type, target_version))
             else:
-                cur = conn.execute(
-                    "UPDATE jobs SET status = 'failed', attempts = ?, "
-                    "last_error = ?, next_attempt_at = ? "
-                    "WHERE id = ? AND status = 'running'",
-                    (new_attempts, err, next_at, job_id),
+                claim_held = jobs.cas_update_running(
+                    conn,
+                    job_id,
+                    claimed_at,
+                    "status = 'failed', attempts = ?, last_error = ?, next_attempt_at = ?",
+                    (new_attempts, err, next_at),
                 )
-            reclaimed += cur.rowcount
+            reclaimed += 1 if claim_held else 0
 
     for job_type, target_version in newly_dead:
         _run_dead_letter_hook(conn, job_type, target_version, err, settings)
@@ -436,12 +445,13 @@ def run_one(
     - Handler raises a **transient** error, attempts == max → ``status='dead'``
     - Handler raises a **transient** error but a concurrent
       ``_reclaim_stale_running`` already reclaimed this row mid-handler
-      (lode-3jte) → :func:`lode.jobs.record_job_failure`'s ``AND
-      status='running'`` CAS guard makes the UPDATE above a no-op (reports
-      ``claim_lost``); this function leaves the row exactly as the reclaim
-      left it and does **not** run the dead-letter hook a second time — the
-      same resurrection the ``AuthError`` arm below already guards against
-      (lode-9yy), mirrored here for the transient path.
+      (lode-3jte) → :func:`lode.jobs.record_job_failure`'s CAS guard (on the
+      exact claim — ``id`` + ``status='running'`` + ``claimed_at``, tightened
+      lode-nggm) makes the UPDATE above a no-op (reports ``claim_lost``); this
+      function leaves the row exactly as the reclaim left it and does **not**
+      run the dead-letter hook a second time — the same resurrection the
+      ``AuthError`` arm below already guards against (lode-9yy), mirrored here
+      for the transient path.
     - Handler raises a **permanent, user-actionable** error (currently only
       :class:`lode.auth.AuthError` — see ``docs/storage.md`` "Transient vs.
       permanent job failures", lode-9yy) → none of the above: the job is reset
@@ -456,14 +466,14 @@ def run_one(
     this because ``_claim_one`` filters to registered types).
     """
     row = conn.execute(
-        "SELECT type, target_version, attempts FROM jobs WHERE id = ?",
+        "SELECT type, target_version, attempts, claimed_at FROM jobs WHERE id = ?",
         (job_id,),
     ).fetchone()
     if row is None:
         log.warning("job %d disappeared before run — skipping", job_id)
         return False
 
-    job_type, target_version, attempts = row
+    job_type, target_version, attempts, claimed_at = row
     handler = registry[job_type]
     short = short_version_id(target_version)
 
@@ -501,19 +511,24 @@ def run_one(
     # Ordered ahead of `except Exception` — AuthError is a RuntimeError, so the
     # generic arm would otherwise swallow it. That swallow IS the bug lode-9yy fixes.
     except AuthError as exc:
-        # CAS on status='running' (the same guard _reclaim_stale_running uses on
-        # its own UPDATEs): this job is not necessarily still ours.
-        # `cli._enrich_immediately` reaches run_one via claim_and_run_one, which
-        # runs WITHOUT the worker lock, so a concurrent `lode work` drain can
-        # reclaim this row as stale mid-handler and drive it to a terminal
-        # 'dead'. Unguarded, the reset would then resurrect that dead job (whose
-        # dead-letter hook has already fired) back to 'pending'. If we no longer
-        # own the claim, leave the row to whoever does.
+        # CAS on the exact claim (id + status='running' + claimed_at — lode-nggm
+        # tightened this from status alone): this job is not necessarily still
+        # ours. `cli._enrich_immediately` reaches run_one via claim_and_run_one,
+        # which runs WITHOUT the worker lock, so a concurrent `lode work` drain
+        # can reclaim this row as stale mid-handler and drive it to a terminal
+        # 'dead' -- or cycle it all the way back to a *different* 'running'
+        # claim before this write lands (the ABA case a status-only guard can't
+        # see). Unguarded, the reset would then resurrect that dead job (whose
+        # dead-letter hook has already fired) back to 'pending', or clobber the
+        # new claimant. If we no longer hold this exact claim, leave the row to
+        # whoever does.
         with conn:
-            conn.execute(
-                "UPDATE jobs SET status = 'pending', last_error = ? "
-                "WHERE id = ? AND status = 'running'",
-                (str(exc), job_id),
+            jobs.cas_update_running(
+                conn,
+                job_id,
+                claimed_at,
+                "status = 'pending', last_error = ?",
+                (str(exc),),
             )
         log.error(
             "job %d (%s target=%s) hit a permanent, user-actionable "
@@ -540,18 +555,21 @@ def run_one(
         # by lode.enrich._mark_job_failed for a Batches API result, so there is
         # exactly one implementation of this state machine.
         new_attempts, dead, claim_lost = jobs.record_job_failure(
-            conn, job_id, attempts, err, settings
+            conn, job_id, attempts, claimed_at, err, settings
         )
         if claim_lost:
-            # CAS-guarded (lode-3jte): the row was no longer 'running' by the
-            # time record_job_failure's UPDATE ran — same race run_one's
-            # AuthError arm above already guards against (lode-9yy). A
-            # concurrent `_reclaim_stale_running` reclaimed this job as stale
-            # mid-handler and already drove it to a terminal state (firing its
-            # own dead-letter hook if it dead-lettered); neither UPDATE above
-            # took effect, so there is nothing further to log as dead here and
-            # running the hook again would fire it a second time for the same
-            # job (lode-at8 promises exactly once).
+            # CAS-guarded on the exact claim (lode-3jte, tightened lode-nggm):
+            # the row was no longer this exact claim by the time
+            # record_job_failure's UPDATE ran — same race run_one's AuthError
+            # arm above already guards against (lode-9yy), now also closing the
+            # ABA case where the row cycled back to a *different* 'running'
+            # claim (lode-nggm hole 2). A concurrent `_reclaim_stale_running`
+            # reclaimed this job as stale mid-handler and already drove it to a
+            # terminal state (firing its own dead-letter hook if it
+            # dead-lettered); neither UPDATE above took effect, so there is
+            # nothing further to log as dead here and running the hook again
+            # would fire it a second time for the same job (lode-at8 promises
+            # exactly once).
             log.info(
                 "job %d (%s target=%s) transient failure but the claim was "
                 "lost to a concurrent reclaim — no update applied, no "
