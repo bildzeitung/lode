@@ -367,7 +367,7 @@ def test_skip_if_head_at_or_after_does_not_block_a_tombstone_head(conn) -> None:
     assert _external_row(conn, _EXTERNAL_ID) == ("web", second.snapshot_id)
 
 
-def test_skip_if_head_at_or_after_none_disables_guard_on_no_head_yet(conn) -> None:
+def test_skip_if_head_at_or_after_proceeds_when_no_head_yet(conn) -> None:
     """No externals row yet -- the guard has nothing to compare against, so
     it must not skip; the first-ever ingest for an external_id proceeds
     normally even when a guard timestamp is passed.

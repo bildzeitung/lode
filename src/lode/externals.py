@@ -359,30 +359,44 @@ def ingest_snapshot(
     settings = settings or Settings()
     with conn:
         if skip_if_head_at_or_after is not None:
-            # Force this transaction to become SQLite's sole writer RIGHT
-            # NOW, unconditionally -- see the docstring above. Idempotent
-            # (ON CONFLICT DO NOTHING): external_id almost always already
-            # exists by the time a dead-letter can fire for it, but this
-            # must run whether it does or not, since it is what makes the
-            # guard read below atomic with this transaction's write.
+            # THIS STATEMENT MUST STAY FIRST IN THE TRANSACTION, and must stay
+            # a DML. It is what forces this transaction to become SQLite's sole
+            # writer RIGHT NOW -- unconditionally, hence ON CONFLICT DO NOTHING
+            # rather than the `if not exists` the unguarded branch below uses
+            # (external_id has almost always been created by an earlier ingest
+            # by the time a dead-letter can fire for it, so a conditional
+            # insert would usually execute no DML at all and take no lock).
+            # The guard's read below is atomic with this transaction's write
+            # ONLY because the write lock is already held by the time it runs.
+            # Reordering this below the read, or demoting it to a plain SELECT,
+            # silently reopens the lode-elc8 race -- see the docstring above.
+            # Not merely asserted: tests/test_worker.py::test_reclaim_dead_
+            # letter_hook_guard_is_atomic_under_genuine_concurrency fails with
+            # head == 'tombstone' over a successful fetch if this is broken.
             conn.execute(
                 "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
                 "ON CONFLICT (external_id) DO NOTHING",
                 (external_id, source_type),
             )
-            _, head_snapshot_id = _external_head(conn, external_id)
-            if head_snapshot_id is not None:
-                head_row = conn.execute(
-                    "SELECT status, fetched_at FROM snapshots WHERE snapshot_id = ?",
-                    (head_snapshot_id,),
-                ).fetchone()
-                if head_row is not None:
-                    head_status, head_fetched_at = head_row
-                    if (
-                        head_status != "tombstone"
-                        and head_fetched_at >= skip_if_head_at_or_after
-                    ):
-                        return None
+            # One JOIN for all three values: head_snapshot_id (for the dedup
+            # check below) plus the guard's status/fetched_at. No row means no
+            # head to compare against (never-ingested external, or head_
+            # snapshot_id still NULL), so the guard cannot fire and the
+            # tombstone proceeds -- correct: nothing beat this verdict.
+            head_snapshot_id = None
+            head_row = conn.execute(
+                "SELECT e.head_snapshot_id, s.status, s.fetched_at FROM externals e "
+                "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+                "WHERE e.external_id = ?",
+                (external_id,),
+            ).fetchone()
+            if head_row is not None:
+                head_snapshot_id, head_status, head_fetched_at = head_row
+                if (
+                    head_status != "tombstone"
+                    and head_fetched_at >= skip_if_head_at_or_after
+                ):
+                    return None
         else:
             exists, head_snapshot_id = _external_head(conn, external_id)
             if not exists:

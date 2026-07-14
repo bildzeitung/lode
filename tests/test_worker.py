@@ -756,6 +756,31 @@ def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
     claimed_at = _past_iso(settings.stale_running_timeout_s + 60)
     hold_seconds = 0.3
 
+    # The externals ROW MUST ALREADY EXIST -- this is what makes the test
+    # exercise the interleaving that actually CORRUPTS, and it is also the
+    # production shape (a `refresh` job only exists for an external that was
+    # already drawn down, so its `externals` row was created by that first
+    # ingest). Without this row, the pre-elc8 read-then-write guard does not
+    # silently clobber at all: its unguarded `ingest_snapshot` takes the
+    # `if not exists` branch, tries a plain `INSERT INTO externals`, and --
+    # having read "not exists" BEFORE blocking on conn2's write lock -- hits
+    # `sqlite3.IntegrityError: UNIQUE constraint failed` once conn2's commit
+    # lands the row first. That aborts the whole tombstone transaction, so the
+    # old code fails LOUDLY and the head survives. Mutation-testing this test
+    # against the pre-elc8 guard with no pre-existing row therefore goes red on
+    # a CRASH, not on the corruption -- proving the wrong thing. With the row
+    # present, the old guard's `_external_head` returns (exists=True, head=None)
+    # from its stale pre-lock read, skips the externals INSERT, blocks on the
+    # snapshots INSERT, and then lands the tombstone and repoints the head onto
+    # it AFTER conn2's real snapshot committed: head == 'tombstone' over a
+    # successful fetch, the exact absorbing corruption lode-uda1/lode-elc8 exist
+    # to prevent (verified by mutation: red with head 'tombstone' != 'ok').
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+        (external_id, SOURCE_TYPE_WEB),
+    )
+    conn.commit()
+
     # A second, independent connection to the SAME on-disk database --
     # stands in for the still-in-flight handler's own connection/transaction.
     # Created AND used entirely inside the background thread (sqlite3
@@ -799,7 +824,9 @@ def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
     # Wait for the holder to have actually issued its writes (so it holds
     # the write lock) before starting the guarded call -- deterministic,
     # not a fixed sleep guess.
-    assert lock_acquired.wait(timeout=5.0), "holder thread never acquired its write lock"
+    assert lock_acquired.wait(timeout=5.0), (
+        "holder thread never acquired its write lock"
+    )
 
     started_at = time.monotonic()
     _refresh_dead_letter_hook(conn, external_id, "timeout", claimed_at, settings)
