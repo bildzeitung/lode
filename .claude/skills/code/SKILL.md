@@ -153,7 +153,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > On a merge conflict: if both sides added independent, non-overlapping content (a **mechanical**
    > conflict), resolve it directly with `Edit` and continue, then finish the same way; if the two
    > sides genuinely **disagree**, abort the merge and escalate yourself (`land-escalated`, leave the
-   > branch as it was) rather than guess — that stays a human decision.
+   > branch as it was) rather than guess — that stays a human decision. Don't try to remove your own
+   > launch worktree on the way out — you can't remove the one you're standing in, and I reclaim it for
+   > you after you return.
 
    Merging `trunk` into the branch — rather than rebasing the branch onto `trunk` — is what keeps
    this whole cycle inside the one dispatched producer, start to finish: a merge commit appends to
@@ -171,6 +173,53 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    `ready-for-land`, skipping technical review entirely, the same way `/land`'s kick-back skipped
    `land-review` — the content was never judged bad, it only needed to replay onto where `trunk`
    moved. If the sweep finds nothing, say so and move on; it's not an error.
+
+   <a id="reclaim"></a>
+   **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** A subagent
+   cannot `git worktree remove` the worktree it is standing in, so **I** do it, from my own (repo-root)
+   context, immediately after collecting its result — not batched to the end of the fan-out, and not
+   left for the ticket to land. **This same block is the reclaim referenced by step 1 and Phase 2
+   below; it is the only copy.** I don't need the agent to tell me *which* worktree was its own — since
+   lode-em6v every reviewer / rebase pickup checks the branch out as `land/<id>--<its-own-worktree-dir>`,
+   so the ticket id alone **derives** both the path and the branch:
+
+   ```bash
+   ID=lode-ai1   # the ticket I just dispatched at
+   git worktree list --porcelain | awk '
+     /^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print p"\t"$2}' \
+   | while IFS="$(printf '\t')" read -r WT BR; do
+       case "$BR" in "land/$ID--"*)
+         git worktree remove --force "$WT" 2>/dev/null   # single -f: fails SAFE if still locked
+         git branch -D "$BR" >/dev/null 2>&1 || true ;;  # worktree first — git won't delete a
+       esac                                              # branch that's still checked out
+     done
+   ```
+
+   Deriving rather than trusting a reported string is what makes this **actually** close the leak: it
+   needs no cooperation from the agent, so it works even when the agent crashed, escalated, or returned
+   a garbled path — and it reclaims **every** worktree that ticket accumulated (a ticket reviewed or
+   picked up across N cycles leaves N of them), not just the last one. It cannot touch the **builder's**
+   worktree: that one is branch-named `worktree-agent-*`, never `land/<id>--*`, so it stays for `/land`'s
+   `review_worktree` GC exactly as before.
+
+   Two details that are load-bearing, both verified against live `git` behaviour:
+   - **Plain `git`, not `rtk`** — `rtk` reformats `worktree list --porcelain`, which breaks the field
+     parse, the same way it did for `/land`'s own GC (lode-9j7).
+   - **A single `--force`, never `-f -f`.** The harness *locks* a launch worktree while its agent runs
+     (`locked claude agent <name> (pid …)`) and unlocks it on exit. A single `--force` therefore removes
+     a finished agent's worktree but **refuses** a still-locked one — it fails safe. `-f -f` would
+     override the lock and rip the worktree out from under a live agent; if a reclaim ever looks like a
+     no-op, the agent is still running, and the answer is to wait, not to escalate the flag.
+
+   Safe on **both** outcomes: by the time the agent returns, everything in its worktree is already on
+   `origin/land/<id>` — a clean pickup pushes first, and an escalation's aborted merge leaves the
+   checkout an exact mirror of what was fetched. Reclaiming here rather than leaving it to `/land`
+   matters most on an **escalation**: that branch never merges into `trunk`, so backstop 1 — which only
+   reclaims a *merged*-into-`trunk` worktree — can **never** reach it, and it would otherwise leak until
+   a human resolves the escalation and the branch eventually lands. `/land`'s backstops stay in place,
+   unchanged; note they are a *partial* net, not a total one — they catch a crashed agent whose branch
+   does eventually merge, but a crashed *escalation* is reachable only by the derived reclaim above,
+   which is the other reason it must not depend on the agent reporting anything.
 
 1. **Sweep for stranded `ready-for-code-review` re-entries too — same invocation, same reason.** A
    human resolving a `code-reviewer` technical-review escalation or a `coding` build-time escalation
@@ -203,7 +252,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    invocation's own Phase 1 builds, **subject to the same concurrency cap** — a stranded re-entry
    never shares a ticket with a fresh build or rebase pickup, so none of these collide, but all of
    them draw from the one shared budget; queue the overflow and dispatch it as slots free. If the
-   sweep finds nothing, say so and move on; it's not an error.
+   sweep finds nothing, say so and move on; it's not an error. **Reclaim each reviewer's launch
+   worktree the moment it returns** — [step 0's reclaim block](#reclaim), `ID` set to that ticket
+   (lode-vs7g). This sweep dispatches the identical subagent, so the identical reclaim applies.
 
 2. **Resolve the task set** from the argument:
    - **No argument** (the **default**), or **`--all-ready`** → read the filtered `bd ready --json`
@@ -338,6 +389,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > close, or push trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready) only
    > on a clarifying decision or "making it worse."
 
+   **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** Run [step 0's
+   reclaim block](#reclaim) with `ID` set to this ticket, right after collecting the reviewer's result
+   (per ticket, not batched to the end of the fan-out). Nothing needs to be passed back for this: the
+   reviewer's branch is `land/<id>--<its-own-worktree-dir>`, so the ticket id derives both the worktree
+   and the branch. Everything in that worktree is already on `origin/land/<id>` by the time the reviewer
+   **returns** — a clean pass pushes at step 7 of `code-reviewer.md`, and an escalation re-pushes its
+   reverted-to-green commit too, so nothing local is ever lost. It matters most on an escalation: that
+   branch never merges into `trunk`, so `/land`'s backstop 1 can never reclaim this worktree.
+
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
    re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`**
@@ -357,7 +417,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    passed over** — id + reason (`human`-labeled or epic). You did that filtering yourself in step 2 on
    all three paths, so report it directly. Say so explicitly **even when nothing was
    skipped** ("no `human`/epic tickets on the frontier"), so the operator can tell a filter that found
-   nothing from a filter that never ran.
+   nothing from a filter that never ran. Mention the launch-worktree reclaims (lode-vs7g) only as a
+   one-line tally ("reclaimed N reviewer/pickup worktrees") — it's routine housekeeping, not a caveat;
+   report it *individually* only where one failed to reclaim, which means an agent is somehow still
+   running and is worth surfacing.
 
 ## Notes
 
@@ -409,3 +472,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   not this skill's.
 - If an argument is genuinely ambiguous (looks like it might be an ID but isn't one that exists, or a
   fan-out set with hidden dependencies), ask the user before dispatching rather than guessing.
+- **A reviewer's or rebase-pickup's own launch worktree is reclaimed by me, right after it returns —
+  not left for `/land`'s backstops (lode-vs7g).** Mechanism and rationale live in one place: [step 0's
+  reclaim block](#reclaim). The one thing worth repeating here is what it must **not** touch — a *fresh
+  build*'s worktree, which is branch-named `worktree-agent-*` (never `land/<id>--*`, so the derived
+  reclaim skips it by construction) and is deliberately kept through the whole build → review → land
+  lifecycle (`docs/decisions.md`), since `/land`'s GC still keys off `review_worktree` to reclaim it on
+  a clean land. `/land`'s backstops 1-4 stay exactly as they were.
