@@ -245,9 +245,22 @@ def ingest_snapshot(
     (dedup on ``external_id`` — one canonical node per source, never one row
     per citing note, ``docs/externals.md``). Computes ``snapshot_id =
     H(external_id, body)``; if it equals the current head, this is an
-    identical refetch and is a no-op (no row, no enqueue, no FTS write,
-    ``deduped=True``). Otherwise inserts the new snapshot row and moves
-    ``externals.head_snapshot_id`` to it; an ``"ok"`` snapshot also enqueues
+    identical refetch: no new row, no enqueue, no FTS write, ``deduped=True``
+    — but for a successful (``"ok"``) refetch, the existing head row's
+    ``fetched_at`` is bumped forward to :func:`lode.jobs.now_iso` (``lode-
+    9tj4``): this is the one deliberate, forward-only exception to
+    ``snapshots``' otherwise-immutable columns, and it exists so :func:`lode.
+    worker._refresh_dead_letter_hook`'s late-success guard has *something to
+    see* when a refresh successfully revalidates unchanged content — see
+    ``docs/storage.md``'s "The guard's blind spot" section for the full
+    story and the immutability ruling. A repeated identical ``"tombstone"``
+    dedup is unaffected and remains a byte-for-byte no-op — a persistently-
+    dead source re-verified as still dead is not a revalidation, and the
+    guard already excludes a tombstone head outright.
+
+    Otherwise (``snapshot_id`` differs from the current head) inserts the
+    new snapshot row and moves ``externals.head_snapshot_id`` to it; an
+    ``"ok"`` snapshot also enqueues
     one ``embed`` job keyed on the new ``snapshot_id`` (see the module
     docstring — ``enrich`` is not enqueued here) and drives the synchronous
     FTS leg (:func:`_index_snapshot_fts`). A ``"tombstone"`` snapshot does
@@ -319,61 +332,100 @@ def ingest_snapshot(
     connection settings (``PRAGMA journal_mode = WAL``, default deferred
     ``isolation_level``) — see ``docs/storage.md``'s updated "A dead-letter
     hook's write can race a late success too" section for the experiment.
-    Unguarded callers (every other one) are byte-for-byte unaffected: the
-    externals-row creation stays conditional (``if not exists``), so a
-    dedup-only ingest still never touches the write lock in the common
-    no-op case.
+    That lock-taking upsert is **no longer scoped to the guarded caller**
+    (``lode-9tj4``): it now runs first for *every* caller, so the head read
+    below is atomic for all of them. This is not tidiness — it is load-bearing.
+    lode-elc8 could leave unguarded callers reading the head with an
+    unprotected autocommit ``SELECT`` because the only thing they did with a
+    stale head was *insert a new snapshot and move the head to it*, which
+    self-heals: a tombstone that sneaks in first is simply dragged back off the
+    head by the ``UPDATE externals`` below. The moment ``lode-9tj4`` made the
+    ``"ok"`` **dedup** path a writer, that stopped being true — a dedup bumps
+    ``fetched_at`` but *never moves the head*, so a stale "yes, still a dedup"
+    read leaves a racing tombstone as head **permanently** (and reconcile's
+    refresh sweep skips tombstoned heads, so nothing ever revisits it). A
+    dedup therefore has no self-healing write to fall back on and needs the
+    read itself to be correct. Extending the lock-taking upsert to every caller
+    is what buys that, and it costs almost nothing: every ingest already wrote
+    (and so already serialized) except a dedup, and an ``"ok"`` dedup now writes
+    anyway. The one genuinely new lock acquisition is a repeated identical
+    ``"tombstone"`` dedup — a rare path, and still a no-op on the row itself.
     """
     settings = settings or Settings()
     with conn:
-        if skip_if_head_at_or_after is not None:
-            # THIS STATEMENT MUST STAY FIRST IN THE TRANSACTION, and must stay
-            # a DML. It is what forces this transaction to become SQLite's sole
-            # writer RIGHT NOW -- unconditionally, hence ON CONFLICT DO NOTHING
-            # rather than the `if not exists` the unguarded branch below uses
-            # (external_id has almost always been created by an earlier ingest
-            # by the time a dead-letter can fire for it, so a conditional
-            # insert would usually execute no DML at all and take no lock).
-            # The guard's read below is atomic with this transaction's write
-            # ONLY because the write lock is already held by the time it runs.
-            # Reordering this below the read, or demoting it to a plain SELECT,
-            # silently reopens the lode-elc8 race -- see the docstring above.
-            # Not merely asserted: tests/test_worker.py::test_reclaim_dead_
-            # letter_hook_guard_is_atomic_under_genuine_concurrency fails with
-            # head == 'tombstone' over a successful fetch if this is broken.
-            conn.execute(
-                "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
-                "ON CONFLICT (external_id) DO NOTHING",
-                (external_id, source_type),
-            )
-            # One JOIN for all three values: head_snapshot_id (for the dedup
-            # check below) plus the guard's status/fetched_at. No row means no
-            # head to compare against (never-ingested external, or head_
-            # snapshot_id still NULL), so the guard cannot fire and the
-            # tombstone proceeds -- correct: nothing beat this verdict.
-            head_snapshot_id = None
-            head_row = conn.execute(
-                "SELECT e.head_snapshot_id, s.status, s.fetched_at FROM externals e "
-                "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
-                "WHERE e.external_id = ?",
-                (external_id,),
-            ).fetchone()
-            if head_row is not None:
-                head_snapshot_id, head_status, head_fetched_at = head_row
-                if (
-                    head_status != "tombstone"
-                    and head_fetched_at >= skip_if_head_at_or_after
-                ):
-                    return None
-        else:
-            exists, head_snapshot_id = _external_head(conn, external_id)
-            if not exists:
-                conn.execute(
-                    "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
-                    (external_id, source_type),
-                )
+        # THIS STATEMENT MUST STAY FIRST IN THE TRANSACTION, and must stay a
+        # DML, for EVERY caller -- guarded or not. It is what forces this
+        # transaction to become SQLite's sole writer RIGHT NOW: unconditionally,
+        # hence ON CONFLICT DO NOTHING rather than a conditional `if not exists`
+        # insert (external_id has almost always been created by an earlier
+        # ingest by the time a refresh or a dead-letter fires for it, so a
+        # conditional insert would usually execute no DML at all and take no
+        # lock). The head read below is atomic with this transaction's write
+        # ONLY because the write lock is already held by the time it runs.
+        # Reordering this below the read, or demoting it to a plain SELECT,
+        # silently reopens BOTH races this ordering closes:
+        #
+        #   - lode-elc8, for the guarded caller: a real snapshot committing
+        #     between the guard's read and its tombstone write.
+        #   - lode-9tj4, for the UNGUARDED caller: this used to be a plain
+        #     `_external_head` SELECT in autocommit (Python's sqlite3 issues no
+        #     BEGIN until the first DML), so the dedup decision below rested on
+        #     an UNPROTECTED read. A tombstone committing in that gap left the
+        #     handler still believing it was deduping -- and a dedup only bumps
+        #     fetched_at, it never moves the head, so the tombstone stayed head
+        #     FOREVER. The content-CHANGED path self-heals here (its `UPDATE
+        #     externals SET head_snapshot_id` below drags the head back to the
+        #     real snapshot); the DEDUP path has no such recovery, so it needs
+        #     the head read to be atomic instead.
+        #
+        # Not merely asserted: tests/test_worker.py::test_reclaim_dead_letter_
+        # hook_guard_is_atomic_under_genuine_concurrency and ::test_reclaim_
+        # dead_letter_hook_deduped_success_is_atomic_under_genuine_concurrency
+        # both fail with head == 'tombstone' over a successful fetch if this is
+        # broken.
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
+            "ON CONFLICT (external_id) DO NOTHING",
+            (external_id, source_type),
+        )
+        # One JOIN for all three values: head_snapshot_id (for the dedup check
+        # below) plus the guard's status/fetched_at. No row means no head to
+        # compare against (never-ingested external, or head_snapshot_id still
+        # NULL immediately after the upsert above), so the guard cannot fire and
+        # the write proceeds -- correct: nothing beat this verdict.
+        head_snapshot_id = None
+        head_row = conn.execute(
+            "SELECT e.head_snapshot_id, s.status, s.fetched_at FROM externals e "
+            "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+            "WHERE e.external_id = ?",
+            (external_id,),
+        ).fetchone()
+        if head_row is not None:
+            head_snapshot_id, head_status, head_fetched_at = head_row
+            if (
+                skip_if_head_at_or_after is not None
+                and head_status != "tombstone"
+                and head_fetched_at >= skip_if_head_at_or_after
+            ):
+                return None
         snapshot_id = content_snapshot_id(external_id, body, settings)
         if snapshot_id == head_snapshot_id:
+            if status != "tombstone":
+                # lode-9tj4: a successful ("ok") dedup is a real revalidation
+                # of the head's content, not a no-op that leaves nothing for
+                # worker._refresh_dead_letter_hook's late-success guard to
+                # see. Bump the EXISTING row's fetched_at forward -- the one
+                # deliberate exception to snapshots' otherwise-immutable
+                # columns (docs/storage.md "The guard's blind spot"). A
+                # 'tombstone' dedup (a persistently-dead source re-verified
+                # as still dead) is deliberately excluded: it is not a
+                # successful fetch, and the guard already ignores a
+                # tombstone head outright (`head_status != "tombstone"`), so
+                # bumping it here would write for no reader that will ever look.
+                conn.execute(
+                    "UPDATE snapshots SET fetched_at = ? WHERE snapshot_id = ?",
+                    (jobs.now_iso(), snapshot_id),
+                )
             return IngestResult(external_id, snapshot_id, status, deduped=True)
         conn.execute(
             "INSERT INTO snapshots "

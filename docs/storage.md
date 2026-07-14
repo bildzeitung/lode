@@ -801,10 +801,16 @@ requires genuine multi-connection concurrency rather than a hand-ordered single-
 sequence, precisely because the property being proven (atomicity) cannot be observed any other way.
 
 `ingest_snapshot`'s own docstring (`src/lode/externals.py`) carries the implementation-level version
-of this explanation; this section is the design-level record of what changed and why. Unguarded
-callers of `ingest_snapshot` (every one except this hook) are byte-for-byte unaffected: the
-externals-row creation for them stays conditional (`if not exists`), so a dedup-only ingest still
-never touches the write lock in the common no-op case.
+of this explanation; this section is the design-level record of what changed and why.
+
+When this fix first landed, the lock-taking upsert was scoped to *this* caller alone: unguarded
+callers kept a conditional (`if not exists`) externals-row creation, contributing no DML on a dedup
+and so taking no write lock. That was safe **only** because the sole thing an unguarded caller then
+did with a possibly-stale head read was insert a new snapshot and move the head onto it — which
+self-heals (see the next section). **lode-9tj4 ended that**, by making the `"ok"` dedup path a
+writer. The upsert is now the first statement for *every* caller, guarded or not, so every head read
+is taken under the write lock. See "The guard's blind spot" below for why that is load-bearing and
+not merely tidy.
 
 As before, the exposure was already small for an independent reason: `refresh` handlers only ever run
 inside `worker.drain`, which holds the single-instance `lock.WorkerLock`, so a *live* handler racing a
@@ -856,6 +862,100 @@ and re-anchors on its next read). The refresh delay is therefore bounded by the 
 revalidation and arriving late costs nothing but staleness; but it is **not** self-correcting, and a
 record that claimed otherwise would be exactly the confidently-wrong-about-concurrency doc this section
 exists to prevent.
+
+### The guard's blind spot: a successful-but-deduped refresh — closed (lode-9tj4)
+
+The two sections above close a race (lode-elc8) and a clock-domain mismatch (lode-bmg9) in
+lode-uda1's late-success guard. A **third, distinct** residual survived both: the guard is blind to
+the single most common refresh outcome — content that hasn't changed.
+
+`ingest_snapshot`'s dedup path (`snapshot_id == head_snapshot_id`) used to be a total no-op: no new
+row, no enqueue, no FTS write, and — the gap — **no touch of the existing head row's `fetched_at`
+either**. So a refresh that successfully re-verified unchanged content left `fetched_at` pinned at
+the *original* fetch time, arbitrarily far in the past. The guard's `head_fetched_at >=
+skip_if_head_at_or_after` test has nothing recent to compare against, reads as stale, and does not
+fire — exactly the failure mode lode-uda1 exists to prevent, just reached by a different door than
+the race or the clock skew: **content unchanged is not a corner case, it's the common case**, so the
+guard was blind in the likely path, not merely a rare one.
+
+Reproduction (deterministic, `tests/test_worker.py::
+test_reclaim_dead_letter_hook_recognizes_a_deduped_success`):
+
+1. An external already has an `"ok"` head snapshot.
+2. A `refresh` job for it is claimed (`jobs.claimed_at = T_claim`).
+3. The fetch succeeds but returns content **identical** to the current head —
+   `ingest_snapshot`'s dedup early return: no new row, `fetched_at` (pre-fix) untouched.
+4. The job stalls past `stale_running_timeout_s` (lode-uda1's exact window) and
+   `_reclaim_stale_running` dead-letters it, firing the hook with `claimed_at = T_claim`.
+5. Pre-fix: `head_fetched_at >= T_claim` reads **false** (the timestamp predates the claim) — the
+   guard does not fire, and the hook writes a tombstone over content it had just re-confirmed was
+   fine. Worse, reconcile's refresh sweep excludes tombstoned heads (`s.status != 'tombstone'`), so
+   the external is never revisited — lode-uda1's exact "permanently absorbing" corruption, reopened.
+
+**Fix — option (a) from the ticket, the cheap one:** `ingest_snapshot`'s dedup branch now bumps the
+existing head row's `fetched_at` to `jobs.now_iso()` whenever the dedup is a successful (`"ok"`)
+refetch. The guard then sees a timestamp at-or-after the refresh's own claim, fires correctly, and
+no tombstone is written. A repeated identical **`"tombstone"`** dedup is deliberately excluded — a
+persistently-dead source re-verified as still dead is not a revalidation, and the guard already
+ignores a tombstone head outright (`head_status != "tombstone"`), so bumping it would write for no
+reader that will ever consult it.
+
+This also gives `fetched_at` a second, welcome reading for the *unguarded* case: it now means "last
+time this content was confirmed current," not just "first time it was ever seen" — which is what the
+refresh-staleness sweep (`reconcile.refresh_stale`: `s.fetched_at <= now - refresh_ttl_s`, skipping
+externals that already have a live `refresh` job) has always implicitly wanted the column to mean.
+That fixes a second, quieter bug on the same root cause: because a dedup never advanced `fetched_at`,
+an **unchanging source stayed permanently past its TTL cutoff** — so the sweep re-enqueued a refresh
+for it on *every* tick, the moment the previous job left `pending`/`running`. Not "re-fetched every
+TTL" (that is the intended policy) but re-fetched *continuously*, a treadmill bounded only by the
+sweep cadence. Bumping `fetched_at` on a successful dedup drops the source out of the stale set for a
+full TTL and restores the once-per-TTL cadence the policy was always meant to have.
+
+**The immutability question, settled explicitly (acceptance criterion 3):** `snapshots` is still
+documented as immutable mirrored content (`schema.sql`), and every column but one still is —
+`snapshot_id`, `external_id`, `body`, `raw_payload`, and `status` are write-once for a row's
+lifetime, never touched again after the `INSERT`. **`fetched_at` is now the one deliberate
+exception.** It may be mutated forward, in place, on an *existing* row — but only by
+`ingest_snapshot`, only on its dedup path, only when the incoming fetch's outcome is `"ok"`, and only
+to `jobs.now_iso()` (the same forward-ratcheted, monotonically-nondecreasing clock every other
+`fetched_at` stamp already uses, `lode-bmg9`) — never backward, and never onto a different row than
+the one just re-verified. A separate `last_revalidated_at` column (the ticket's option (b)-adjacent
+alternative) was considered and rejected: it would need its own plumbing through the guard's
+comparison (`fetched_at` OR `last_revalidated_at`, whichever is later) for no behavioral difference,
+since nothing else in the schema currently needs to distinguish "first fetched" from "last
+revalidated" for a snapshot whose *content* — the thing immutability is actually protecting — never
+changes either way.
+
+**Making the dedup path a writer is not free, and this is the part that is easy to get wrong.**
+lode-elc8 makes the *guarded* caller's head read atomic with its write; lode-9tj4 makes sure that
+read has something recent to see. Those are indeed complementary — but they are **not** independent,
+and an early draft of this section wrongly claimed they were. The bump only actually closes the blind
+spot once the *dedup decision itself* is also taken under the write lock:
+
+- Before lode-9tj4, an **unguarded** caller could safely read the head with an unprotected autocommit
+  `SELECT` (Python's `sqlite3` issues no `BEGIN` until the first DML). A stale read cost it nothing,
+  because the only thing it did next was insert a snapshot and `UPDATE externals SET
+  head_snapshot_id` onto it — so a tombstone that snuck in first was simply **dragged back off the
+  head**. It self-heals. (This is exactly what lode-elc8 verified empirically: with the tombstone
+  winning the lock, the real snapshot "waits the lock out, lands cleanly and becomes head.")
+- A **dedup has no such recovery.** It bumps `fetched_at` and *never moves the head*. So a dedup
+  decided from a pre-lock head read is a genuine read-then-write race: if a tombstone commits in the
+  gap, the handler still believes it is deduping, writes only the bump — onto a row that is no longer
+  head — and the tombstone stays head **permanently**. Since the refresh sweep skips tombstoned
+  heads, nothing revisits it. That is lode-uda1's absorbing corruption again, reached through the
+  very door lode-9tj4 opened.
+
+So lode-9tj4 also **extends elc8's lock-taking `externals` upsert to every caller**, not just the
+guarded one: the head read is now always taken under the write lock, so a dedup can never be decided
+against a stale head. The cost is close to zero — every ingest already wrote (and so already
+serialized) except a dedup, and an `"ok"` dedup now writes anyway; the one genuinely new lock
+acquisition is a repeated identical `"tombstone"` dedup, a rare path. Both orderings are pinned by
+`tests/test_worker.py::test_reclaim_dead_letter_hook_deduped_success_is_atomic_under_genuine_concurrency`
+(mutation-tested: revert the ordering and it fails with head `'tombstone'` over a successful fetch).
+
+With that, the guard's three residuals are covered — race (elc8), clock domain (bmg9), and blind spot
+(9tj4) — but note the dependency the list hides: **9tj4's fix is only correct on top of elc8's
+lock-first discipline**, generalized from one caller to all of them.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
@@ -921,6 +1021,9 @@ externals    external_id, source_type, head_snapshot_id, no_egress,    # logical
              created
 snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
+                                                                        # (fetched_at excepted: bumped
+                                                                        # forward on an "ok" dedup,
+                                                                        # lode-9tj4)
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),
