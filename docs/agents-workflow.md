@@ -707,7 +707,7 @@ Residual gaps that remain — honest about what the inversion does **not** close
   (`/usr/bin/gh`), gh's global `-R`/`--repo`/`--hostname`, and a fixed wrapper list (`env`, `sudo`,
   `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`, `rtk`). A wrapper *outside* that list
   (`timeout 5 gh issue create`, `nice gh …`, `exec gh …`) or a shell-escaped/quoted binary name
-  (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the two
+  (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the bullet
   above and it predates the inversion (`lode-o29m`'s original matcher, unchanged here): generalizing it
   to "any leading tokens" would false-deny the prose cases in the bullet above, which is why it is a
   fence rather than a fix. **Accepted as a PERMANENT residual (`lode-bxow`)** — the same standing as
