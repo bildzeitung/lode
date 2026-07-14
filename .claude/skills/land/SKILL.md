@@ -579,17 +579,23 @@ done
 # zero divergence — that proxy alone would read TRUE for a live, uncommitted build the instant its
 # worktree is created — so the loop below also tests the ACTUAL invariant directly ("is this work
 # captured anywhere else"): `git -C "$WT" status --porcelain`. A dirty tree is never reclaimed,
-# regardless of lock state, ancestry, or who made the worktree — this is what actually protects an
-# interactive `EnterWorktree` session, a human's hand-made worktree (CLAUDE.md mandates one for all
-# work), and an exited agent's leftover scratch, none of which ever raise `locked` (only
-# `.claude/agents/coding.md` does, lode-oqr, and only for the narrow pre-first-commit window). The
+# regardless of lock state, ancestry, or who made the worktree — this is what actually protects the
+# worktree classes that hold NO lock by the time this sweep sees them: an interactive `EnterWorktree`
+# session, a human's hand-made worktree (CLAUDE.md mandates one for all work), and an exited agent's
+# leftover scratch. There are exactly TWO lock sources in this system, and neither covers those three:
+# the harness locks a LIVE `isolation: worktree` agent's worktree for that agent's lifetime, releasing
+# it on exit (`locked claude agent <name> (pid <n> start <n>)`); and `.claude/agents/coding.md` raises
+# an explicit lock across the narrow pre-first-commit window (lode-oqr). The
 # dirty check FAILS SAFE: `git -C "$WT" status --porcelain` prints nothing both when the tree is clean
 # and when the command itself errors (missing dir, corrupt worktree admin, …), so the guard below
 # distinguishes "clean" (proceed) from "could not tell" (skip) rather than treating empty output as
-# always meaning clean. Accepted residual: a CLEAN worktree at trunk HEAD with a live agent standing
-# in it is still reclaimable — nothing is destroyed (the tree is clean), the directory just vanishes
-# out from under whoever is standing in it. That trade is intentional: the failure direction is now
-# "remove an empty checkout," never "destroy uncommitted work."
+# always meaning clean. Accepted residual: a CLEAN worktree at trunk HEAD that raises no lock — a
+# human's hand-made worktree they happen to be sitting in, or an exited agent's clean leftovers — is
+# still reclaimable; nothing is destroyed (the tree is clean), the directory just vanishes out from
+# under whoever is standing in it. A LIVE harness agent's worktree is NOT in that set — its harness
+# lock (above) drops it in the awk `!locked` filter below, before the ancestry predicate is ever
+# evaluated. The trade is intentional: the failure direction is now "remove an empty checkout," never
+# "destroy uncommitted work."
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
 # currently-running sibling worktree whose branch hasn't diverged from trunk yet is trivially
@@ -625,12 +631,13 @@ git worktree list --porcelain | awk '
   /^$/ { if (path!="" && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch; path="" }
 ' | while IFS=$'\t' read -r WT SHA BR; do
   git merge-base --is-ancestor "$SHA" trunk || continue   # not merged into trunk — keep (in-flight)
-  # lode-9hgu: dirty-tree guard, testing the ACTUAL invariant ("captured elsewhere") instead of the
-  # "merged into trunk" proxy above, which reads TRUE the instant a worktree is branched off trunk
-  # HEAD, before a single commit exists. FAIL SAFE, not fail open: `status --porcelain` prints nothing
-  # both when the tree is clean and when the command itself errors, so success and emptiness are
-  # checked SEPARATELY ($STATUS's assignment inherits git's own exit code) — an error (bad worktree
-  # admin, missing dir, …) is treated the same as "dirty": keep, don't reclaim.
+  # lode-9hgu dirty-tree guard — the ACTUAL invariant, not the ancestry proxy above (see CONTRACT).
+  # Success and emptiness are tested SEPARATELY, on purpose: `status --porcelain` prints nothing both
+  # when the tree is CLEAN and when the command ERRORS, and an assignment inherits its command
+  # substitution's exit code — so a failure (missing dir, corrupt worktree admin, …) skips exactly like
+  # a dirty tree instead of failing OPEN into `--force`. Skipping on error costs little: the
+  # `git worktree prune` below still drops a vanished worktree's admin entry, and any leftover branch
+  # ref falls to the bare-ref backstops.
   STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue
   git worktree remove --force "$WT"
   [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true

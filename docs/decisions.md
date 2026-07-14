@@ -510,12 +510,14 @@ are catalogued in [configuration.md](configuration.md).
   elsewhere"), and the proxy is exactly wrong at zero divergence: a worktree freshly branched off
   `trunk` HEAD is trivially "merged" before a single commit exists, so its live, uncommitted working
   tree reads as safe to `--force`-remove. lode-oqr closed this gap only for the `coding` producer
-  (which locks its worktree before writing and unlocks after its first commit) — nothing else in the
-  system raises `locked`: not an interactive `EnterWorktree` session, not a human's hand-made worktree
-  (which `CLAUDE.md` *mandates* for all work), not an exited agent's leftover scratch. Each of those,
-  sitting at trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode
-  (which destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute
-  loop).
+  (which locks its worktree before writing and unlocks after its first commit). The system has exactly
+  **two** lock sources, and between them they leave three worktree classes holding no lock at all by the
+  time the sweep sees them: the harness locks a *live* `isolation: worktree` agent's worktree for that
+  agent's lifetime and *releases it on exit*, and `coding.md` locks the pre-first-commit window — so an
+  interactive `EnterWorktree` session, a human's hand-made worktree (which `CLAUDE.md` *mandates* for
+  all work), and an **exited** agent's leftover scratch are all unlocked. Each of those, sitting at
+  trunk HEAD with uncommitted edits, was a live candidate for the lode-oqr failure mode (which
+  destroyed two builds' uncommitted work) every time `/land` ticked (it self-paces on a 5-minute loop).
 
   **Considered:** (a) add a dirty-tree guard testing the actual invariant directly; (b) narrow the
   path guard to a harness-owned directory convention (e.g. `.claude/worktrees/agent-*`) — rejected,
@@ -528,10 +530,27 @@ are catalogued in [configuration.md](configuration.md).
   **Fix:** the generalized backstop loop now checks `git -C "$WT" status --porcelain` immediately
   after the existing `merge-base --is-ancestor` check, and skips (keeps) the worktree unless that
   command both succeeds AND prints nothing. Scoped to *that* loop only — the per-ticket removal loop
-  earlier in the same section is a structurally different case (its `--force` rests on
-  `metadata.review_worktree` naming a worktree for a ticket that *just landed this pass*, so the
-  content is provably on trunk already; it cannot reach an interactive or hand-made worktree at all,
-  since nothing ever writes those paths into a ticket's metadata) and was deliberately left untouched.
+  earlier in the same section reaches a much narrower candidate set (its `--force` is keyed to
+  `metadata.review_worktree` on a ticket that *just landed this pass*, and nothing ever writes an
+  interactive or hand-made worktree's path into a ticket's metadata, so it cannot reach one), and the
+  P1 was deliberately not made to carry a rider. **That exemption is narrower than it first reads, and
+  is tracked in lode-h1vn:** "the content is provably on trunk" is a claim about the *branch tip* that
+  merged, not about the *working-tree state of that directory* at GC time — and the per-ticket loop has
+  neither a `locked` check nor a dirty check, so it force-removes unconditionally. Same primitive, same
+  risk class, only one loop fails safe. The fix there is not simply "add the same guard" (a dirty-guard
+  could silently no-op the per-ticket cleanup entirely, re-opening the very leak Section 4 exists to
+  close), which is exactly why it is its own ticket.
+
+  **The guard is coupled to `.gitignore`, and that coupling is load-bearing.** `status --porcelain`
+  reports *untracked* files too, and a finished builder worktree is full of them: `venv/` (every
+  producer runs `scripts/python-init.sh` in its own worktree), plus `.nox/`, `__pycache__/`,
+  `.pytest_cache/`, `.ruff_cache/` and setuptools-scm's generated `src/lode/_version.py`. All of those
+  are gitignored today, so a real, finished builder worktree reads *clean* and is still reclaimed —
+  verified against every live worktree on the build machine when this landed. But if a build artifact
+  ever stops being ignored, **every** worktree reads dirty, and this backstop silently stops reclaiming
+  anything at all (it fails safe, so it leaks worktrees rather than destroying work — the failure is
+  quiet, not dangerous). If worktrees ever start accumulating with no explanation, suspect `.gitignore`
+  before suspecting this loop.
 
   **Fail-safe, not fail-open — the same class of bug this decision exists to fix, one level down.**
   `git -C "$WT" status --porcelain` prints nothing both when the tree is clean and when the command
@@ -543,11 +562,15 @@ are catalogued in [configuration.md](configuration.md).
   substitution assignment inherits the command's exit code), so an error is treated identically to
   "dirty": skip, keep the worktree.
 
-  **Accepted residual, unchanged from before this fix:** a *clean* worktree at trunk HEAD with a live
-  agent standing in it is still reclaimed by the ancestry+clean predicate — nothing is destroyed (the
-  tree is clean), the directory simply vanishes out from under whoever is standing in it. The failure
-  direction this decision moves the whole backstop to is "remove an empty checkout, never destroy
-  uncommitted work" — that trade is intentional and not being chased further here.
+  **Accepted residual, unchanged from before this fix:** a *clean* worktree at trunk HEAD that raises
+  no lock — a human's hand-made worktree they happen to be sitting in, or an exited agent's clean
+  leftovers — is still reclaimed by the ancestry+clean predicate; nothing is destroyed (the tree is
+  clean), the directory simply vanishes out from under whoever is standing in it. This does *not*
+  extend to a **live** harness agent's worktree, which the harness locks for the agent's lifetime (see
+  the paragraph below) and which the backstop's `!locked` filter therefore drops before the predicate
+  is ever evaluated. The failure direction this decision moves the whole backstop to is "remove an
+  empty checkout, never destroy uncommitted work" — that trade is intentional and not being chased
+  further here.
 
   **Open, not settled by this ticket [Likely, not Certain]:** whether a hard crash of the Claude Code
   host process leaves stale pid-keyed `git worktree lock`s behind. If it does, the harness's own lock
