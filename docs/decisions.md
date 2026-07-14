@@ -787,6 +787,24 @@ are catalogued in [configuration.md](configuration.md).
   export from the gate outright, since by invariant (`import.auto: false`, lode-6ra) it is *never* work,
   and every other clean-tree check in the repo already excludes it.
 
+  **RESOLVED by lode-bns3.** Reconciled, not just patched: the generalized backstop's clean-tree gate
+  (`SKILL.md` Section 4) now restores `.beads/issues.jsonl` / `.beads/interactions.jsonl` to `HEAD`
+  immediately before judging cleanliness — mirroring Section 3's own restore — so a staged export, from
+  whatever cause, present or future, can never zero out the sweep on its own; the coupling is *dissolved*,
+  not merely documented. Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
+  staged") turns out to be the overstatement that produced the apparent contradiction in the first place:
+  measured a third time, independently, a bare `bd` read/write still leaves a worktree clean. The
+  precisely-scoped real cause of Section 3's staged-jsonl risk is `bd dolt pull` (Section 1's very first
+  command each pass — see [bd-sync discipline](../.claude/skills/land/SKILL.md#bd-sync-discipline-non-negotiable)),
+  not a per-iteration `bd show`; Section 3's text is corrected accordingly rather than deleting its
+  restore (which stays necessary for the `bd dolt pull` case). Verified end-to-end against a real scratch
+  worktree at `trunk` HEAD: an otherwise-clean worktree with only a staged `.beads/issues.jsonl` diff is
+  now correctly reclaimed (previously would have been silently skipped — the exact regression this entry
+  flagged), while a worktree with genuine additional uncommitted content is still correctly kept. The
+  sweep also now emits one summary line per pass (`worktree GC: reclaimed X of Y candidate(s) …
+  (skipped: locked=.., not-merged=.., dirty=..)`), so a regression that zeroes out GC reads as visibly
+  different from "nothing to do," closing the observability gap this entry also flagged.
+
   **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
   the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one
   the generalized backstop already carries, and no per-ticket `review_worktree`/`review_branch` metadata
