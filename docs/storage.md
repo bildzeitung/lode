@@ -774,6 +774,49 @@ holds the single-instance `lock.WorkerLock`, so a *live* handler racing a reclai
 workers on one DB — which the lock prevents in the normal single-machine case, though it explicitly
 disclaims being a data-integrity guard ("CAS + SQLite serialization own correctness").
 
+**A second residual — a clock-domain mismatch, not a race — has since been closed (lode-bmg9).** The
+guard's `head_fetched_at >= claimed_at` compared two *different* clocks: `snapshots.fetched_at` came
+from the schema's raw SQLite `DEFAULT strftime('now')` (`CLOCK_REALTIME`), while `jobs.claimed_at` is
+always stamped from `jobs.now_iso()`, the forward-ratcheted queue clock (`lode-t1y`) that — by its own
+documented guarantee — deliberately runs *ahead* of `CLOCK_REALTIME` after a backward NTP/hypervisor
+step, until real time catches up. For every other comparison in the queue that bias is the safe
+direction (`jobs.now()`'s own docstring: it is only ever compared against a raw-stamped column as an
+*upper* bound, e.g. `next_attempt_at <= now()`). This comparison needed the opposite: it reads a
+raw-stamped column (`fetched_at`) against a *historical* ratchet reading (`claimed_at`), not a live
+one, so a claim taken while the ratchet was running ahead could out-read a real, later fetch's raw
+timestamp — exactly reproducing this guard's own clobber, just via a clock-skew precondition instead
+of a read/write race. **Fix:** `ingest_snapshot` now stamps `fetched_at` explicitly from
+`jobs.now_iso()` instead of falling through to the DEFAULT, so both sides of the guard's comparison
+are the same clock — closed outright, not narrowed (`src/lode/externals.py`'s `ingest_snapshot`
+docstring carries the same cross-reference). Regression test:
+`test_reclaim_dead_letter_hook_survives_a_backward_clock_step` (`tests/test_worker.py`) forces a
+backward wall-clock step between the claim and the ingest and asserts the guard still recognizes the
+real fetch.
+
+*The one deliberate ripple this leaves:* `reconcile.py`'s refresh-staleness sweep (`_refresh_stale_step`,
+around `cutoff = jobs.iso(datetime.now(UTC) - ...)`) still computes its cutoff from the **raw** wall
+clock, on purpose (its own comment: "a backward wall-clock step here only refreshes an external late;
+it cannot strand one"). Now that `fetched_at` is ratchet-stamped, a row written after a backward step of
+Δ reads Δ *ahead* of the raw clock the cutoff is computed from — the same direction `jobs.now()` always
+biases in — so `s.fetched_at <= cutoff` fires Δ later than it otherwise would: the external is
+refreshed **late by Δ, and is never stranded**, because the raw clock in the cutoff keeps advancing and
+must eventually pass `fetched_at + refresh_ttl_s`. That is the exact "refreshes late, cannot strand"
+outcome the sweep's own comment already accepts. It also does not interact with the sweep's tombstone
+exclusion: `s.status != 'tombstone'` is a *status* test, and no clock skew can turn an `ok` head into a
+tombstone one — so the skew cannot strand an external down that path either. Left as-is rather than
+folded into this fix.
+
+**Be precise about the bound, though: Δ does _not_ decay with elapsed time.** `jobs.now()` is
+`_now_epoch + elapsed` where `_now_epoch = max(_now_epoch, wall - elapsed)` (`src/lode/jobs.py`), so
+after a backward step the ratchet and the wall clock advance in lockstep and the gap stays exactly Δ for
+the remainder of the **process's lifetime**. It closes only when the wall clock is stepped *forward*
+again (a later NTP correction re-ratchets the epoch) or when the process restarts (`_now_epoch` resets
+and re-anchors on its next read). The refresh delay is therefore bounded by the *magnitude of the step*
+— not by some short window that waiting it out clears. Harmless here, because a refresh is a
+revalidation and arriving late costs nothing but staleness; but it is **not** self-correcting, and a
+record that claimed otherwise would be exactly the confidently-wrong-about-concurrency doc this section
+exists to prevent.
+
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
