@@ -1199,27 +1199,33 @@ def _refresh_dead_letter_hook(
     behavior this hook always had before lode-uda1, since there is no claim
     timestamp to compare against.
 
-    **The guard narrows this race; it does not close it.** The head read below
-    and :func:`~lode.externals.ingest_snapshot`'s write are not one
-    transaction (``ingest_snapshot`` opens its own ``with conn:``), so a real
-    snapshot committed in the gap between them is still overwritten. The
-    residual window is the microseconds of one ``SELECT`` + hash + ``INSERT``,
-    versus the seconds-wide window it replaces (the handler's snapshot commit
-    through ``run_one``'s terminal ``UPDATE``) — strictly better, not merely
-    moved, but not a proof. Closing it outright needs the write lock held
-    across the read (``BEGIN IMMEDIATE``), which would couple this hook to
-    ``ingest_snapshot``'s transaction boundary; see ``docs/storage.md``.
+    **The guard is atomic with the write (lode-elc8), not a separate read.**
+    ``claimed_at`` is passed straight through to
+    :func:`~lode.externals.ingest_snapshot`'s ``skip_if_head_at_or_after``,
+    which does the head check *after* its own transaction has already taken
+    SQLite's write lock — see that function's docstring for the mechanism
+    and ``docs/storage.md`` for the empirical verification. Before lode-elc8
+    this hook read the head via a separate, unprotected ``SELECT``
+    (:func:`~lode.externals.head_snapshot_info`) *before* ever calling
+    ``ingest_snapshot`` (which opens its own independent transaction), so a
+    real snapshot committed in the gap between that read and this write was
+    still clobbered — a residual window lode-uda1's own writeup correctly
+    flagged as narrowed, not closed. It is now closed outright, with no new
+    transaction-control primitive (``BEGIN IMMEDIATE`` was considered and
+    rejected as unnecessary — see ``ingest_snapshot``'s docstring).
 
-    **Both sides of the comparison below are the same clock (lode-bmg9).**
-    ``head_fetched_at`` (``snapshots.fetched_at``) and ``claimed_at``
-    (``jobs.claimed_at``) both come from :func:`lode.jobs.now_iso` —
-    :func:`~lode.externals.ingest_snapshot` stamps ``fetched_at`` explicitly
-    rather than falling through to the schema's raw SQLite DEFAULT. Before
-    lode-bmg9 they did not: ``fetched_at`` was ``CLOCK_REALTIME`` while
-    ``claimed_at`` was the forward-ratcheted queue clock, which after a
-    backward wall-clock step can read *ahead* of real time — making the
-    ``>=`` test below fail to fire for a real snapshot that genuinely landed
-    after the claim, and the tombstone would clobber it. See
+    **Both sides of that comparison are the same clock (lode-bmg9).** The
+    comparison itself no longer lives in this function — since lode-elc8 it
+    is inside :func:`~lode.externals.ingest_snapshot`'s
+    ``skip_if_head_at_or_after`` guard — but its two operands are still
+    ``snapshots.fetched_at`` and ``jobs.claimed_at``, and both come from
+    :func:`lode.jobs.now_iso`: ``ingest_snapshot`` stamps ``fetched_at``
+    explicitly rather than falling through to the schema's raw SQLite
+    DEFAULT. Before lode-bmg9 they did not: ``fetched_at`` was
+    ``CLOCK_REALTIME`` while ``claimed_at`` was the forward-ratcheted queue
+    clock, which after a backward wall-clock step can read *ahead* of real
+    time — making the ``>=`` test fail to fire for a real snapshot that
+    genuinely landed after the claim, and the tombstone would clobber it. See
     ``docs/storage.md`` for the closed-residual writeup.
 
     Deferred import mirrors :func:`_refresh_handler`: keeps the
@@ -1227,31 +1233,27 @@ def _refresh_dead_letter_hook(
     cost off code paths where no ``refresh`` job has ever dead-lettered.
     """
     from lode.drawdown import SOURCE_TYPE_WEB
-    from lode.externals import head_snapshot_info, ingest_snapshot, tombstone_body
+    from lode.externals import ingest_snapshot, tombstone_body
 
-    if claimed_at is not None:
-        head = head_snapshot_info(conn, target_external_id)
-        if head is not None:
-            head_status, head_fetched_at = head
-            if head_status != "tombstone" and head_fetched_at >= claimed_at:
-                log.info(
-                    "refresh dead-letter hook for %s skipped: head snapshot "
-                    "already 'ok' and fetched (%s) at-or-after this job's "
-                    "claim (%s) -- a real fetch beat the dead-letter verdict",
-                    target_external_id,
-                    head_fetched_at,
-                    claimed_at,
-                )
-                return
-
-    ingest_snapshot(
+    result = ingest_snapshot(
         conn,
         target_external_id,
         SOURCE_TYPE_WEB,
         tombstone_body(f"dead: {last_error}"),
         status="tombstone",
         settings=settings,
+        skip_if_head_at_or_after=claimed_at,
     )
+    if result is None:
+        # Can only happen when claimed_at was not None (ingest_snapshot's
+        # guard only activates then) -- i.e. the guard fired.
+        log.info(
+            "refresh dead-letter hook for %s skipped: head snapshot already "
+            "'ok' and fetched at-or-after this job's claim (%s) -- a real "
+            "fetch beat the dead-letter verdict",
+            target_external_id,
+            claimed_at,
+        )
 
 
 # Register the refresh dead-letter hook on module load.
