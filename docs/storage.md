@@ -719,7 +719,7 @@ the success write above would **not** have fixed it (the tombstone is already
 written by the time the guard would run); it is tracked as its own ticket
 (lode-uda1), not folded into this decision.
 
-### A dead-letter hook's write can race a late success too — settled (lode-uda1)
+### A dead-letter hook's write can race a late success too — closed (lode-uda1, lode-elc8)
 
 The paragraphs above are about a job's own `status` transition racing a reclaim. There is a
 **second, distinct** race, in the `refresh` **dead-letter hook** itself
@@ -741,15 +741,16 @@ transient wrong reading: reconcile's refresh sweep and embed sweep both filter
 taxonomy" in `docs/externals.md`), so nothing ever revisits that external again. **Absorbing**, not
 self-correcting.
 
-**Settled: a fact beats a verdict, same principle as the job-status races above.** The hook is
-passed the dead-lettered job's own `claimed_at` and skips its tombstone write when the external's
-current head is already a non-tombstone snapshot fetched **at or after** that claim — that can only
-mean a real fetch (this job's own racing handler, or some other refresh) already landed content
-newer than the point at which the dead-letter verdict was decided, so the verdict is stale and must
-not clobber it. A head fetched *before* the claim is unaffected — that is the pre-existing,
-intentional case where a *later* refresh (the staleness policy, not this race) exhausts its retries
-and correctly tombstones over older, still-referenced content regardless (no "unless there's prior
-content" carve-out — see the hook's own docstring).
+**A fact beats a verdict, same principle as the job-status races above.** The hook passes the
+dead-lettered job's own `claimed_at` through to `ingest_snapshot`'s `skip_if_head_at_or_after`
+parameter, which skips the whole write when the external's current head is already a non-tombstone
+snapshot fetched **at or after** that claim — that can only mean a real fetch (this job's own racing
+handler, or some other refresh) already landed content newer than the point at which the dead-letter
+verdict was decided, so the verdict is stale and must not clobber it. A head fetched *before* the
+claim is unaffected — that is the pre-existing, intentional case where a *later* refresh (the
+staleness policy, not this race) exhausts its retries and correctly tombstones over older,
+still-referenced content regardless (no "unless there's prior content" carve-out — see the hook's own
+docstring).
 
 This is deliberately narrower than, and independent of, the `run_one` success-UPDATE question above:
 guarding the hook's *snapshot write* on a fact/verdict basis is uncontroversial once stated (the
@@ -758,21 +759,60 @@ nobody), whereas guarding the *job row's* `status='done'` transition trades off 
 `prompt_ver` receipt (see the note above) and needed its own ticket. This guard neither depends on
 nor prejudges how that one is settled.
 
-**What this guard does *not* do: it narrows the window, it does not close it.** The check is a
-read-then-write — `externals.head_snapshot_info` reads the head, and `ingest_snapshot` then opens its
-*own* `with conn:` transaction to write the tombstone — so the read is not atomic with respect to the
-write. A handler committing its real snapshot in the gap *between* the hook's read and the hook's
-write is still clobbered. That residual window is the few microseconds of one `SELECT` plus a hash
-and an `INSERT`, against the seconds-wide window it replaces (the whole span from the handler's
-snapshot commit through to `run_one`'s terminal `UPDATE`), so this is strictly better rather than a
-race merely moved — but it is a narrowing, not a proof. Closing it outright means holding the write
-lock across the read (`BEGIN IMMEDIATE`), which would be this codebase's first use of explicit
-transaction control and would couple the hook to `ingest_snapshot`'s internal transaction boundary;
-that is deliberately left as its own decision rather than smuggled into this fix. In practice the
-exposure is small for a second reason: `refresh` handlers only ever run inside `worker.drain`, which
-holds the single-instance `lock.WorkerLock`, so a *live* handler racing a reclaim needs two live
-workers on one DB — which the lock prevents in the normal single-machine case, though it explicitly
-disclaims being a data-integrity guard ("CAS + SQLite serialization own correctness").
+**The check is atomic with the write (lode-elc8) — this is now closed, not merely narrowed.**
+lode-uda1's original shape was a read-then-write: `externals.head_snapshot_info` read the head as a
+plain, unprotected `SELECT` *before* the hook ever called `ingest_snapshot`, which then opened its
+*own*, independent `with conn:` transaction to write the tombstone. A handler committing its real
+snapshot in the gap between that read and that write was still clobbered — the residual window this
+section used to describe as "narrowed, not closed" (a few microseconds of one `SELECT` plus a hash and
+an `INSERT`, versus the seconds-wide window it replaced).
+
+lode-elc8 closes that gap by moving the check *inside* `ingest_snapshot`'s own transaction instead of
+leaving it as a separate caller-side read: the hook now passes `claimed_at` in as
+`skip_if_head_at_or_after`, and `ingest_snapshot` reads the head only *after* that transaction has
+already taken SQLite's write lock. The mechanism needs **no new transaction-control primitive** — no
+`BEGIN IMMEDIATE`, no explicit `isolation_level` change, nothing this codebase didn't already rely on
+for every other write. It works because the externals-row upsert that already opens every guarded
+call is made *unconditional* (`INSERT ... ON CONFLICT (external_id) DO NOTHING`, run whether or not
+the row already exists) rather than only `if not exists` — so it is always the transaction's first
+statement. Under SQLite's single-writer model, executing *any* DML — even one that changes zero rows
+— forces the transaction to acquire the (only) write lock right then. A second connection's real
+snapshot commit for the same `external_id` can therefore never land in the few lines between that
+first statement and the head read a few lines later: it either already landed before the guarded
+transaction got there (the guard sees it and correctly skips), or it is still blocked waiting for the
+guarded transaction to finish, and lands cleanly — becoming head — the instant it does. Either way the
+final state is correct, regardless of which side's wall-clock timing "wins".
+
+This was verified empirically against this repo's actual connection settings (`PRAGMA journal_mode =
+WAL`, schema.sql; default deferred `isolation_level`, no argument passed to `sqlite3.connect`) rather
+than assumed from SQLite's documentation alone, because the two settings interact in a way worth
+spelling out: under WAL, a **plain autocommit `SELECT`** — the shape lode-uda1's original guard used —
+is genuinely *not* blocked by another connection's still-open write transaction; it reads the
+last-committed snapshot immediately, which is exactly what let a concurrent real-snapshot commit slip
+through the old guard's read undetected. A DML statement is different: even a no-op `ON CONFLICT DO
+NOTHING` forces the executing connection to hold the (only) write lock for the remainder of its
+transaction, blocking any other writer's commit until it releases — confirmed with two live
+`sqlite3` connections against one on-disk WAL database, one holding an open write transaction while
+the other's conflicting commit was shown to block for the full duration and land only after the first
+released. `tests/test_worker.py::test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency`
+encodes the same proof as a regression test, using a second real connection to hold a real snapshot
+commit open while the guarded call runs concurrently — this is the one test in the suite that
+requires genuine multi-connection concurrency rather than a hand-ordered single-connection call
+sequence, precisely because the property being proven (atomicity) cannot be observed any other way.
+
+`ingest_snapshot`'s own docstring (`src/lode/externals.py`) carries the implementation-level version
+of this explanation; this section is the design-level record of what changed and why. Unguarded
+callers of `ingest_snapshot` (every one except this hook) are byte-for-byte unaffected: the
+externals-row creation for them stays conditional (`if not exists`), so a dedup-only ingest still
+never touches the write lock in the common no-op case.
+
+As before, the exposure was already small for an independent reason: `refresh` handlers only ever run
+inside `worker.drain`, which holds the single-instance `lock.WorkerLock`, so a *live* handler racing a
+reclaim needs two live workers on one DB — which the lock prevents in the normal single-machine case,
+though it explicitly disclaims being a data-integrity guard ("CAS + SQLite serialization own
+correctness"). lode-elc8 removes the remaining, narrower dependency on that disclaimer: correctness
+here no longer rests on the lock being held at all, only on SQLite's own write-serialization, which is
+unconditional.
 
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 

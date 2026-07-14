@@ -206,11 +206,16 @@ def head_snapshot_info(
     ``head_snapshot_id`` is still NULL — never observable to another caller
     outside that transaction.
 
-    Exposed (unlike the private, id-only :func:`_external_head`) for
-    :func:`lode.worker._refresh_dead_letter_hook` (lode-uda1), which needs to
-    know not just *that* a head exists but *when* it was fetched and whether
-    it is real content — to tell a dead-letter verdict apart from a fact that
-    already supersedes it.
+    Exposed (unlike the private, id-only :func:`_external_head`) for callers
+    that need to know not just *that* a head exists but *when* it was
+    fetched and whether it is real content — originally added for
+    :func:`lode.worker._refresh_dead_letter_hook`'s late-success guard
+    (lode-uda1). As of lode-elc8 that hook no longer calls this directly: it
+    passes its guard timestamp into :func:`ingest_snapshot`'s
+    ``skip_if_head_at_or_after`` instead, so the check runs *inside*
+    ``ingest_snapshot``'s own transaction (atomic with the write) rather
+    than as a separate, unprotected read beforehand. This function stays as
+    a general-purpose, independently-tested read of the same information.
     """
     row = conn.execute(
         "SELECT s.status, s.fetched_at FROM externals e "
@@ -264,7 +269,8 @@ def ingest_snapshot(
     raw_payload: str | None = None,
     status: SnapshotStatus = "ok",
     settings: Settings | None = None,
-) -> IngestResult:
+    skip_if_head_at_or_after: str | None = None,
+) -> IngestResult | None:
     """Create/dedup one snapshot of ``external_id`` and move its head, atomically.
 
     Creates the ``externals`` row on first sight of ``external_id``
@@ -294,15 +300,76 @@ def ingest_snapshot(
     write's atomic scope, but the embed enqueue stays inside it since
     nothing currently re-discovers a snapshot with no derive job the way
     :func:`lode.reconcile._embed_gap_step` does for notes.
+
+    ``skip_if_head_at_or_after`` (lode-elc8) makes the whole write
+    conditional and **atomic with the check**: when given, and
+    ``external_id``'s current head — read *after* this transaction has
+    already taken SQLite's write lock, below — is already a non-
+    ``"tombstone"`` snapshot fetched at-or-after this timestamp, the call is
+    a total no-op (no snapshot row inserted, no head move, no enqueue) and
+    returns ``None`` instead of an :class:`IngestResult`.
+
+    Exists for exactly one caller: :func:`lode.worker._refresh_dead_letter_hook`'s
+    late-success guard (``lode-uda1``). That guard originally read the head
+    via a separate, unprotected ``SELECT`` (:func:`head_snapshot_info`)
+    *before* ever calling this function, which opens its own independent
+    transaction — so a real snapshot committed in the gap between that read
+    and this write was still clobbered (``docs/storage.md`` "A dead-letter
+    hook's write can race a late success too"). Passing the guard in here
+    instead closes that gap outright, with **no new transaction-control
+    primitive** (no ``BEGIN IMMEDIATE``): the externals-row upsert just below
+    is made *unconditional* (rather than only ``if not exists``) precisely
+    so it is always this transaction's first statement. Under SQLite's
+    single-writer model, executing any DML — even a no-op ``ON CONFLICT DO
+    NOTHING`` — forces the transaction to acquire the (only) write lock
+    right then; a second connection's real snapshot commit for the same
+    ``external_id`` can therefore never land in the few lines between that
+    first statement and the head read below — it either already landed
+    before we got here (the guard sees it and skips) or is still blocked
+    waiting for us to finish (and lands cleanly afterward, becoming head,
+    the instant we do). Verified empirically against this repo's actual
+    connection settings (``PRAGMA journal_mode = WAL``, default deferred
+    ``isolation_level``) — see ``docs/storage.md``'s updated "A dead-letter
+    hook's write can race a late success too" section for the experiment.
+    Unguarded callers (every other one) are byte-for-byte unaffected: the
+    externals-row creation stays conditional (``if not exists``), so a
+    dedup-only ingest still never touches the write lock in the common
+    no-op case.
     """
     settings = settings or Settings()
     with conn:
-        exists, head_snapshot_id = _external_head(conn, external_id)
-        if not exists:
+        if skip_if_head_at_or_after is not None:
+            # Force this transaction to become SQLite's sole writer RIGHT
+            # NOW, unconditionally -- see the docstring above. Idempotent
+            # (ON CONFLICT DO NOTHING): external_id almost always already
+            # exists by the time a dead-letter can fire for it, but this
+            # must run whether it does or not, since it is what makes the
+            # guard read below atomic with this transaction's write.
             conn.execute(
-                "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+                "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
+                "ON CONFLICT (external_id) DO NOTHING",
                 (external_id, source_type),
             )
+            _, head_snapshot_id = _external_head(conn, external_id)
+            if head_snapshot_id is not None:
+                head_row = conn.execute(
+                    "SELECT status, fetched_at FROM snapshots WHERE snapshot_id = ?",
+                    (head_snapshot_id,),
+                ).fetchone()
+                if head_row is not None:
+                    head_status, head_fetched_at = head_row
+                    if (
+                        head_status != "tombstone"
+                        and head_fetched_at >= skip_if_head_at_or_after
+                    ):
+                        return None
+        else:
+            exists, head_snapshot_id = _external_head(conn, external_id)
+            if not exists:
+                conn.execute(
+                    "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+                    (external_id, source_type),
+                )
         snapshot_id = content_snapshot_id(external_id, body, settings)
         if snapshot_id == head_snapshot_id:
             return IngestResult(external_id, snapshot_id, status, deduped=True)

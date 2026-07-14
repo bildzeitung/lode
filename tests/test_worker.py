@@ -26,6 +26,8 @@ tests inject ``_batch_client`` (a MagicMock) so no real Anthropic calls are made
 
 import sqlite3
 import sys
+import threading
+import time
 import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -697,6 +699,121 @@ def test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot(
 
     # Head must still be the real 'ok' snapshot -- NOT overwritten by a
     # tombstone from the reclaim's dead-letter hook.
+    status, body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "ok"
+    assert body == "the real, successfully-fetched body"
+    # Only the one real snapshot exists -- no tombstone row was inserted.
+    (snapshot_count,) = conn.execute(
+        "SELECT COUNT(*) FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert snapshot_count == 1
+
+
+def test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-elc8: closes the residual read-then-write window lode-uda1's own
+    guard left open (docs/storage.md "A dead-letter hook's write can race a
+    late success too"). The PREVIOUS guard read the head via a separate,
+    unprotected ``SELECT`` (``externals.head_snapshot_info``) *before*
+    calling ``ingest_snapshot`` (which opens its own independent
+    transaction) -- so a real snapshot committed in the gap between that
+    read and the write was still clobbered. The test above
+    (``test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot``) only
+    proves correctness for ONE hand-picked call order (the real snapshot
+    fully commits, THEN the reclaim runs) -- it cannot, by construction,
+    exercise the narrow gap between a read and a later write on the SAME
+    connection, since there is only one connection involved.
+
+    This test forces GENUINE two-connection concurrency instead: a second,
+    independent ``sqlite3`` connection to the same on-disk database plays
+    the still-in-flight handler, holding its real snapshot's write
+    transaction OPEN (uncommitted) while the dead-letter hook's guarded call
+    runs concurrently on the primary connection. Under this repo's actual
+    settings (``PRAGMA journal_mode = WAL``, default deferred
+    ``isolation_level``), a *plain autocommit* ``SELECT`` is NOT blocked by
+    another connection's still-open write transaction -- it happily reads
+    the last-committed state (verified empirically, see ``docs/storage.md``)
+    -- so the old, separate-read guard would see "no head yet", proceed past
+    its check, and only contend for the write lock inside its own
+    ``ingest_snapshot`` call, landing its tombstone right after the real
+    snapshot commits and clobbering it. The new guard
+    (``ingest_snapshot``'s ``skip_if_head_at_or_after``) closes exactly this
+    gap: forcing the write lock as its OWN transaction's very first
+    statement means its head-read can only run once any earlier writer has
+    fully committed (or while a later one is still blocked waiting on us) --
+    never in the gap between someone else's read and write.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.worker import _refresh_dead_letter_hook
+
+    external_id = "https://example.com/genuinely-concurrent-race"
+    claimed_at = _past_iso(settings.stale_running_timeout_s + 60)
+    hold_seconds = 0.3
+
+    # A second, independent connection to the SAME on-disk database --
+    # stands in for the still-in-flight handler's own connection/transaction.
+    # Created AND used entirely inside the background thread (sqlite3
+    # connections are thread-affine by default) -- writes the real snapshot
+    # directly (mirroring ingest_snapshot's own write shape) and holds the
+    # transaction open, uncommitted, for `hold_seconds`, long enough that the
+    # guarded call below can only finish by genuinely waiting on this
+    # connection's write lock, not by racing past a stale read.
+    lock_acquired = threading.Event()
+
+    def hold_real_snapshot_write_open() -> None:
+        conn2 = sqlite3.connect(db_path, timeout=5.0)
+        conn2.execute("BEGIN")
+        conn2.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?) "
+            "ON CONFLICT (external_id) DO NOTHING",
+            (external_id, SOURCE_TYPE_WEB),
+        )
+        conn2.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, status, fetched_at) "
+            "VALUES (?, ?, ?, 'ok', ?)",
+            (
+                "real-snapshot-id",
+                external_id,
+                "the real, successfully-fetched body",
+                _now_iso(),
+            ),
+        )
+        conn2.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            ("real-snapshot-id", external_id),
+        )
+        lock_acquired.set()
+        time.sleep(hold_seconds)
+        conn2.commit()
+        conn2.close()
+
+    holder = threading.Thread(target=hold_real_snapshot_write_open)
+    holder.start()
+    # Wait for the holder to have actually issued its writes (so it holds
+    # the write lock) before starting the guarded call -- deterministic,
+    # not a fixed sleep guess.
+    assert lock_acquired.wait(timeout=5.0), "holder thread never acquired its write lock"
+
+    started_at = time.monotonic()
+    _refresh_dead_letter_hook(conn, external_id, "timeout", claimed_at, settings)
+    elapsed = time.monotonic() - started_at
+    holder.join()
+
+    # The guarded call was genuinely blocked on conn2's write lock, not
+    # merely lucky in a race: it could not have completed before conn2
+    # released it. (Slack under hold_seconds for scheduling noise.)
+    assert elapsed >= hold_seconds - 0.1, (
+        f"guarded call returned after only {elapsed:.3f}s -- expected it to "
+        f"block for roughly {hold_seconds}s waiting on conn2's write lock"
+    )
+
     status, body = conn.execute(
         "SELECT s.status, s.body FROM snapshots s "
         "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "

@@ -16,6 +16,7 @@ index; a ``tombstone`` gets neither the FTS write nor the ``embed`` enqueue.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -246,6 +247,142 @@ def test_head_snapshot_info_reflects_tombstone_head(conn) -> None:
 
     status, _fetched_at = head_snapshot_info(conn, _EXTERNAL_ID)
     assert status == "tombstone"
+
+
+# --- skip_if_head_at_or_after guard (lode-elc8) ------------------------------
+#
+# ingest_snapshot's atomic replacement for the old, separate
+# head_snapshot_info-then-ingest_snapshot read-then-write (lode-uda1's
+# original guard shape, which docs/storage.md records as narrowed but not
+# closed). These are single-connection, synchronous tests of the guard's
+# boolean logic; the genuinely-concurrent proof that the check is atomic
+# with the write lives in tests/test_worker.py
+# (test_reclaim_dead_letter_hook_guard_is_atomic_under_genuine_concurrency).
+
+
+def _iso_plus(ts: str, seconds: float) -> str:
+    """``ts`` (the schema's millisecond ISO-8601 format) shifted by ``seconds``."""
+    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    return (dt + timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def test_skip_if_head_at_or_after_skips_when_head_at_the_boundary(conn) -> None:
+    """The guard is inclusive (">="): a head fetched EXACTLY at the guard
+    timestamp still counts as "a real fetch beat the verdict" and the whole
+    write -- no snapshot row, no head move -- is skipped.
+    """
+    ok_result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "the real content")
+    (head_fetched_at,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (ok_result.snapshot_id,),
+    ).fetchone()
+
+    guarded = ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        tombstone_body("dead: timeout"),
+        status="tombstone",
+        skip_if_head_at_or_after=head_fetched_at,
+    )
+
+    assert guarded is None
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", ok_result.snapshot_id)
+    assert _count_snapshots(conn, _EXTERNAL_ID) == 1
+
+
+def test_skip_if_head_at_or_after_skips_when_head_strictly_after(conn) -> None:
+    """The intended case: the head was fetched some time AFTER the guard
+    timestamp (a real, later fetch already landed) -- still skipped.
+    """
+    ok_result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "the real content")
+    (head_fetched_at,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (ok_result.snapshot_id,),
+    ).fetchone()
+    earlier_claim = _iso_plus(head_fetched_at, -60)
+
+    guarded = ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        tombstone_body("dead: timeout"),
+        status="tombstone",
+        skip_if_head_at_or_after=earlier_claim,
+    )
+
+    assert guarded is None
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", ok_result.snapshot_id)
+    assert _count_snapshots(conn, _EXTERNAL_ID) == 1
+
+
+def test_skip_if_head_at_or_after_does_not_block_when_head_predates_guard(conn) -> None:
+    """The pre-existing, intentional case the guard must NOT affect: a LATER
+    dead-letter (claimed_at after the head's own fetch) still tombstones
+    even though the external already has OLDER 'ok' content -- unaffected
+    by lode-uda1/lode-elc8 (docs/externals.md "Fetch-outcome taxonomy").
+    """
+    ok_result = ingest_snapshot(conn, _EXTERNAL_ID, "web", "the old, still-live body")
+    (head_fetched_at,) = conn.execute(
+        "SELECT fetched_at FROM snapshots WHERE snapshot_id = ?",
+        (ok_result.snapshot_id,),
+    ).fetchone()
+    later_claim = _iso_plus(head_fetched_at, 3600)
+
+    tombstoned = ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        tombstone_body("dead: timeout"),
+        status="tombstone",
+        skip_if_head_at_or_after=later_claim,
+    )
+
+    assert tombstoned is not None
+    assert tombstoned.status == "tombstone"
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", tombstoned.snapshot_id)
+    assert _count_snapshots(conn, _EXTERNAL_ID) == 2
+
+
+def test_skip_if_head_at_or_after_does_not_block_a_tombstone_head(conn) -> None:
+    """A tombstone head never satisfies the guard (only a non-'tombstone'
+    head fetched at-or-after the claim does) -- a second dead-letter must
+    still write over an existing tombstone.
+    """
+    first = ingest_snapshot(
+        conn, _EXTERNAL_ID, "web", tombstone_body("dead: first"), status="tombstone"
+    )
+
+    second = ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        tombstone_body("dead: second"),
+        status="tombstone",
+        skip_if_head_at_or_after="1970-01-01T00:00:00.000Z",
+    )
+
+    assert second is not None
+    assert second.snapshot_id != first.snapshot_id
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", second.snapshot_id)
+
+
+def test_skip_if_head_at_or_after_none_disables_guard_on_no_head_yet(conn) -> None:
+    """No externals row yet -- the guard has nothing to compare against, so
+    it must not skip; the first-ever ingest for an external_id proceeds
+    normally even when a guard timestamp is passed.
+    """
+    result = ingest_snapshot(
+        conn,
+        _EXTERNAL_ID,
+        "web",
+        tombstone_body("dead: first ever"),
+        status="tombstone",
+        skip_if_head_at_or_after="2020-01-01T00:00:00.000Z",
+    )
+
+    assert result is not None
+    assert _external_row(conn, _EXTERNAL_ID) == ("web", result.snapshot_id)
 
 
 # --- ingest_fetch_result adapter (webfetch.FetchResult -> ingest_snapshot) ---

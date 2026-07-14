@@ -1199,47 +1199,47 @@ def _refresh_dead_letter_hook(
     behavior this hook always had before lode-uda1, since there is no claim
     timestamp to compare against.
 
-    **The guard narrows this race; it does not close it.** The head read below
-    and :func:`~lode.externals.ingest_snapshot`'s write are not one
-    transaction (``ingest_snapshot`` opens its own ``with conn:``), so a real
-    snapshot committed in the gap between them is still overwritten. The
-    residual window is the microseconds of one ``SELECT`` + hash + ``INSERT``,
-    versus the seconds-wide window it replaces (the handler's snapshot commit
-    through ``run_one``'s terminal ``UPDATE``) — strictly better, not merely
-    moved, but not a proof. Closing it outright needs the write lock held
-    across the read (``BEGIN IMMEDIATE``), which would couple this hook to
-    ``ingest_snapshot``'s transaction boundary; see ``docs/storage.md``.
+    **The guard is atomic with the write (lode-elc8), not a separate read.**
+    ``claimed_at`` is passed straight through to
+    :func:`~lode.externals.ingest_snapshot`'s ``skip_if_head_at_or_after``,
+    which does the head check *after* its own transaction has already taken
+    SQLite's write lock — see that function's docstring for the mechanism
+    and ``docs/storage.md`` for the empirical verification. Before lode-elc8
+    this hook read the head via a separate, unprotected ``SELECT``
+    (:func:`~lode.externals.head_snapshot_info`) *before* ever calling
+    ``ingest_snapshot`` (which opens its own independent transaction), so a
+    real snapshot committed in the gap between that read and this write was
+    still clobbered — a residual window lode-uda1's own writeup correctly
+    flagged as narrowed, not closed. It is now closed outright, with no new
+    transaction-control primitive (``BEGIN IMMEDIATE`` was considered and
+    rejected as unnecessary — see ``ingest_snapshot``'s docstring).
 
     Deferred import mirrors :func:`_refresh_handler`: keeps the
     httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
     cost off code paths where no ``refresh`` job has ever dead-lettered.
     """
     from lode.drawdown import SOURCE_TYPE_WEB
-    from lode.externals import head_snapshot_info, ingest_snapshot, tombstone_body
+    from lode.externals import ingest_snapshot, tombstone_body
 
-    if claimed_at is not None:
-        head = head_snapshot_info(conn, target_external_id)
-        if head is not None:
-            head_status, head_fetched_at = head
-            if head_status != "tombstone" and head_fetched_at >= claimed_at:
-                log.info(
-                    "refresh dead-letter hook for %s skipped: head snapshot "
-                    "already 'ok' and fetched (%s) at-or-after this job's "
-                    "claim (%s) -- a real fetch beat the dead-letter verdict",
-                    target_external_id,
-                    head_fetched_at,
-                    claimed_at,
-                )
-                return
-
-    ingest_snapshot(
+    result = ingest_snapshot(
         conn,
         target_external_id,
         SOURCE_TYPE_WEB,
         tombstone_body(f"dead: {last_error}"),
         status="tombstone",
         settings=settings,
+        skip_if_head_at_or_after=claimed_at,
     )
+    if result is None:
+        # Can only happen when claimed_at was not None (ingest_snapshot's
+        # guard only activates then) -- i.e. the guard fired.
+        log.info(
+            "refresh dead-letter hook for %s skipped: head snapshot already "
+            "'ok' and fetched at-or-after this job's claim (%s) -- a real "
+            "fetch beat the dead-letter verdict",
+            target_external_id,
+            claimed_at,
+        )
 
 
 # Register the refresh dead-letter hook on module load.
