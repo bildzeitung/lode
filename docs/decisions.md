@@ -507,12 +507,15 @@ are catalogued in [configuration.md](configuration.md).
   **Update (lode-jiyk): the branch-name-match half of the fix above was superseded.** lode-jiyk
   unified this backstop's worktree-sweep branch-name match (`^worktree-agent-`/`^land/`) with
   lode-mxeu's separate by-SHA/detached-worktree sweep into a single loop keyed on **HEAD-sha
-  ancestry** (`git merge-base --is-ancestor <HEAD-sha> trunk`) plus `unlocked` — no branch-name
-  pattern is matched by the worktree sweep any more (see the lode-em6v update above, which
-  describes the same unification). The **second backstop** decided here — deleting a dangling local
-  `land/<id>` ref whose `origin/land/<id>` counterpart is gone — is a separate, bare-**ref** sweep,
-  unaffected by that unification: it still matches `refs/heads/land/*` by name, and must, since
-  `refs/heads/*` is shared with human branches. Mechanism of record:
+  ancestry** (`git merge-base --is-ancestor <HEAD-sha> trunk`) plus `unlocked` — the worktree sweep
+  matches no branch-name pattern any more. The **second backstop** decided here — deleting a dangling
+  local `land/<id>` ref whose `origin/land/<id>` counterpart is gone — is a separate, bare-**ref**
+  sweep, unaffected by that unification: it still matches `refs/heads/land/*` by name, and must, since
+  `refs/heads/*` is shared with human branches. It was, however, amended by **lode-em6v**: it keys on
+  an *exact* name match against origin's listing, so it now strips the worktree suffix
+  (`${BR%%--*}`) before comparing — the "remote gone ⇒ stale" semantics decided here are unchanged.
+  The lode-em6v update above has both stories in full (the unification, and why skipping that strip
+  would turn this backstop into a ref shredder). Mechanism of record:
   [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md#4-land-the-survivors) §4 — verify
   any new claim against it, not against this entry.
 
