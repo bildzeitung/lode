@@ -350,12 +350,35 @@ rejected; they simply have no foundation this pass, and they re-enter `land-revi
 as a held dependent does.
 
 **Pre-compute every merge message before the first merge — no `bd` call inside the merge loop.** The
-`<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title),
-and *any* `bd` read regenerates the passive `.beads/issues.jsonl` export and leaves it **staged** — so
-a per-iteration `bd show` re-dirties the tree after the very first merge, and every merge from the
-second one on hits the same staged-jsonl failure the pre-loop restore below exists to prevent. One
-`bd` read pass over the accepted set, cached, keeps every `bd` call **outside** the loop that follows
-(the same rule already applies to the Section 4 GC loop's per-iteration `bd show`):
+`<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title).
+**Reconciled (lode-bns3), and note what is and is not established.** The previous wording here —
+"*any* `bd` read regenerates the passive export and leaves it **staged**" — is **not** what happens.
+Measured three times now, independently (lode-h1vn's review, lode-bns3's build, lode-bns3's review),
+each inside a live agent worktree: a bare `bd show` / `bd ready` (reads) **and** a real `bd update`
+(a write) each leave `git status --porcelain` **empty**. bd writes go to Dolt; the tracked
+`.beads/issues.jsonl` is regenerated and staged by the **pre-commit hook at commit time**, not at
+`bd`-call time. So the per-iteration `bd show` this section hoists out of the loop is **not** what
+re-dirties the tree, and no claim here should say it is.
+
+**What has NOT been established is the positive cause.** [bd-sync
+discipline](#bd-sync-discipline-non-negotiable) below names `bd dolt pull` as the suspected trigger —
+but read it closely: it states that as an explicit *defensive assumption* ("on the assumption it may
+be staged even when `git diff` says otherwise"), not as a measurement, and a direct attempt to
+reproduce it during lode-bns3's review did **not** stage anything. Do not upgrade that hedge into a
+settled fact — swapping one confidently-wrong cause for another is the failure this reconciliation
+exists to end, and a wrong causal story about a destructive path is worse than an admitted gap.
+
+**The restore below stays regardless, and its justification does not depend on knowing the cause.**
+The staged-jsonl failure is real and observed (a merge refusing with "Your local changes … would be
+overwritten"); the export is **by invariant never work** (`import.auto: false`, lode-6ra); so
+restoring it unconditionally is free, correct whatever the trigger turns out to be, and precisely the
+right move *because* the trigger is unestablished. Hoisting `bd show` out of the loop stays worth
+doing on its own merits — one read pass beats N subprocess calls, and it costs nothing to avoid
+depending on future `bd` versions behaving as measured today. (The Section 4 GC loop takes none of
+this on faith either way — as of lode-bns3 it *excludes* the export from its cleanliness judgment
+outright, so it never has to assume anything about what does or doesn't dirty it. It excludes rather
+than restores because it only needs to **judge**, whereas this section must actually **clean** the
+index or the merge below refuses to run — the same invariant, two different jobs.)
 
 ```bash
 declare -A MSG
@@ -365,8 +388,9 @@ for id in $ACCEPTED; do
 done
 ```
 
-Before merging anything, unstage the passive jsonl export — the reads above can re-dirty it exactly
-like `bd dolt pull` (Section 1) does. `.beads/issues.jsonl` staged means its index blob differs from
+Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
+what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
+suspicion is unverified). `.beads/issues.jsonl` staged means its index blob differs from
 `HEAD` while the worktree matches the index — `git diff` / `git diff --quiet` read **clean** in that
 state (they compare worktree to index, not index to `HEAD`), so the drift is invisible right up until
 `git merge --no-ff` refuses with "Your local changes to the following files would be overwritten by
@@ -558,18 +582,25 @@ done
 # the trade lode-9hgu already made: leak a directory rather than destroy uncommitted work. Measured to be
 # rare — real post-build/post-review worktrees read clean.
 #
-# TWO UNENFORCED COUPLINGS keep this loop reclaiming anything at all; if either breaks it silently
+# ONE UNENFORCED COUPLING keeps this loop reclaiming anything at all; if it breaks it silently
 # reclaims NOTHING, and since the per-ticket loop is gone there is no second net and no alarm:
 #   1. `.gitignore` (lode-9hgu) — a finished worktree is full of untracked build junk (`venv/`, `.nox/`,
 #      `__pycache__/`); it reads clean ONLY because those are ignored. Un-ignore one and every worktree
 #      reads dirty.
-#   2. bd export churn — the gate assumes a `bd` write does not dirty the tree. Verified by measurement
-#      (a bd read AND a bd write both leave `status --porcelain` empty: bd writes go to Dolt, not to the
-#      tracked `.beads/issues.jsonl`). But Section 3 above (~line 354) asserts the OPPOSITE for its own
-#      merge path, and `.claude/settings.json` carries a `Stop` hook that scrubs the export — so the
-#      claim is contested. See docs/decisions.md's lode-h1vn entry; lode-bns3 tracks reconciling it
-#      (and excluding the passive export from this gate outright, which dissolves the coupling).
-# If you touch `.gitignore` or bd's export behavior, re-check that this loop still reclaims.
+# (CLOSED, lode-bns3) bd export churn used to be a SECOND unenforced coupling — this comment used to
+#   say the gate ASSUMES a `bd` write never dirties the tree, contradicted by Section 3 (~line 354,
+#   now reconciled) asserting the opposite for its own merge path. Measured three times (lode-h1vn's
+#   review, lode-bns3's build, lode-bns3's review): neither a bare `bd` read nor a `bd` write dirties a
+#   worktree by itself. The positive cause of the staged export is NOT established — `bd dolt pull` is
+#   the suspected trigger, but bd-sync discipline below states that as a defensive assumption, not a
+#   measurement, and it did not reproduce when tried (see Section 3's reconciled note; do not restate
+#   the suspicion as fact). None of that matters to this loop, which no longer needs the premise
+#   settled in EITHER direction — the whole point is that the gate is correct whatever the trigger
+#   turns out to be, since the export is by invariant never work. It now EXCLUDES
+#   `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the cleanliness judgment outright, via
+#   `:(exclude)` pathspecs on the dirty-tree guard below — so a staged or modified export, from
+#   whatever cause, present or future, can never zero out this sweep on its own.
+# If you touch `.gitignore`, re-check that this loop still reclaims.
 #
 # Full record — the three options, the measurement, why deletion beat guarding: docs/decisions.md,
 # lode-h1vn entry.
@@ -652,8 +683,8 @@ done
 # its origin counterpart's tip (origin arm) that raises no lock — a human's hand-made worktree they
 # happen to be sitting in, or an exited agent's clean leftovers — is still reclaimable; nothing is
 # destroyed (the tree is clean), the directory just vanishes out from under whoever is standing in it.
-# A LIVE harness agent's worktree is NOT in that set — its harness lock (above) drops it in the awk
-# `!locked` filter below, before either predicate is ever evaluated. The trade is intentional: the
+# A LIVE harness agent's worktree is NOT in that set — its harness lock (above) drops it in the
+# `locked` check below, before either predicate is ever evaluated. The trade is intentional: the
 # failure direction is now "remove an empty checkout," never "destroy uncommitted work," on either arm.
 #
 # Skip anything `locked` — that's the git-native in-use signal, and it's load-bearing here: a
@@ -688,13 +719,27 @@ done
 # always merged into itself, so the predicate alone wouldn't exclude it — the path guard is what
 # does, and it costs nothing). If the worktree has a branch, delete it too (`git branch -D`); a
 # detached worktree has none, so worktree removal alone is the entire reclaim.
-git worktree list --porcelain | awk '
-  /^worktree / { path=$2; head=""; branch=""; locked=0 }
-  /^HEAD / { head=$2 }
-  /^branch refs\/heads\// { branch=substr($0,19) }
-  /^locked/ { locked=1 }
-  /^$/ { if (path!="" && !locked && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"branch; path="" }
-' | while IFS=$'\t' read -r WT SHA BR; do
+# lode-bns3 (observability): count each candidate into exactly one bucket — reclaimed, or skipped for
+# locked / not-merged / dirty — so the summary line after the loop can tell "reclaimed 0 of 0, nothing
+# to do" apart from "reclaimed 0 of N, everything was skipped" (a regression that zeroes out GC must be
+# visible here, not silent). `locked` is counted in the loop body now rather than filtered inside awk,
+# so every candidate under .claude/worktrees/ reaches the summary, whichever bucket it lands in.
+#
+# FIELD ORDER IS LOAD-BEARING — DO NOT REORDER (`$BR` must stay LAST). Tab is IFS *whitespace*, so
+# `read` collapses adjacent tabs into a single delimiter and does NOT preserve an empty MIDDLE field.
+# `branch` is the one field that can be empty (a DETACHED worktree — a case this loop explicitly
+# supports, see the `git branch -D` note above). With `branch` in the middle, a detached worktree's
+# line (`path\thead\t\tlocked`) shifts every later field left: `$BR` swallows the locked flag and
+# `$LOCKED` reads EMPTY, so `[ "$LOCKED" = "1" ]` is FALSE and a LOCKED, LIVE agent's worktree sails
+# past the locked gate into the `--force` below — precisely the "rip a worktree out from under a
+# running agent" harm the gate exists to prevent (the pre-lode-oqr disaster). Keeping `branch` last
+# makes its empty case a TRAILING delimiter, which `read` discards harmlessly ($BR="").
+RECLAIMED=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
+while IFS=$'\t' read -r WT SHA LOCKED BR; do
+  if [ "$LOCKED" = "1" ]; then
+    SKIP_LOCKED=$((SKIP_LOCKED + 1))
+    continue
+  fi
   # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
   # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
   # An ESCALATED branch never merges into trunk (by definition — it's held for a human decision), so
@@ -717,7 +762,7 @@ git worktree list --porcelain | awk '
   # reviewer/pickup worktree freshly checked out at origin/land/<id>'s tip is trivially "an ancestor
   # of" that same tip until its first local commit. But a LIVE reviewer/pickup worktree is `locked`
   # for the duration of its agent's run (the harness locks every `isolation: worktree` launch
-  # worktree — see the CONTRACT above), so the awk filter drops it before this predicate ever runs:
+  # worktree — see the CONTRACT above), so the `locked` check above drops it before this predicate ever runs:
   # this arm CANNOT sweep a running agent. It can only reach an EXITED one, whose worktree at zero
   # divergence holds nothing but uncommitted, ungated scratch from a run that never finished — the
   # authoritative content is on origin and the ticket is re-reviewed from there. That is exactly the
@@ -727,7 +772,7 @@ git worktree list --porcelain | awk '
   # that has additional uncommitted content on top of a pushed tip, rather than reclaiming it.
   git merge-base --is-ancestor "$SHA" trunk \
     || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
-    || continue
+    || { SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1)); continue; }
   # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
   # Gates BOTH arms: a worktree captured on trunk or captured on origin but left dirty must still be
   # KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. Success and emptiness are
@@ -736,11 +781,54 @@ git worktree list --porcelain | awk '
   # failure (missing dir, corrupt worktree admin, …) skips exactly like a dirty tree instead of failing
   # OPEN into `--force`. Skipping on error costs little: the `git worktree prune` below still drops a
   # vanished worktree's admin entry, and any leftover branch ref falls to the bare-ref backstops.
-  STATUS=$(git -C "$WT" status --porcelain 2>&1) && [ -z "$STATUS" ] || continue
-  git worktree remove --force "$WT"
-  [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
-done
+  #
+  # lode-bns3: the passive bd export is EXCLUDED from this judgment via `:(exclude)` pathspecs, so a
+  # staged/modified `.beads/*.jsonl` can never read as "dirty" and zero out the sweep. It is BY
+  # INVARIANT never real work (import.auto: false, lode-6ra), and this gate must not depend on
+  # something ELSE having scrubbed it first (the Stop hook in .claude/settings.json, an explicit
+  # `bd export`, or the now-reconciled "bd reads never dirty it" premise — see the coupling note above
+  # and Section 3's reconciled note). A worktree with any OTHER dirt still lands in the dirty bucket
+  # below and is KEPT, untouched — exclusion narrows what counts as dirt, nothing else.
+  #
+  # EXCLUDE, DON'T RESTORE — the difference matters here even though Section 3 restores. Section 3 must
+  # genuinely CLEAN the index (its `git merge --no-ff` refuses to run otherwise); this loop only has to
+  # JUDGE. Restoring would make a read-only judgment WRITE into candidate worktrees — including the
+  # dirty ones it then decides to KEEP, silently discarding their export churn as a side effect of
+  # merely looking at them. Excluding has zero blast radius, which is the right posture for a loop that
+  # ends in `--force`. It also sidesteps a real trap: `git restore` aborts WHOLESALE on an unmatched
+  # pathspec and would restore NEITHER file (silently, under `|| true`) for a candidate sitting at a
+  # commit that predates one of these paths — a stale leftover worktree being exactly what this backstop
+  # exists to reclaim. `git status` with `:(exclude)` simply exits 0 in that case.
+  #
+  # COUNT THE REMOVE'S ACTUAL EXIT STATUS, not merely the fact that we attempted it. An unconditional
+  # `RECLAIMED=$((RECLAIMED + 1))` here would let the summary line report "reclaimed N" when every
+  # `worktree remove` FAILED and nothing was reclaimed at all — the observability half of lode-bns3
+  # lying in exactly the direction it exists to expose (a total GC failure reading as a healthy sweep).
+  # `failed` is its own bucket so the buckets still partition the candidates exactly.
+  if STATUS=$(git -C "$WT" status --porcelain -- . \
+       ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$STATUS" ]; then
+    if git worktree remove --force "$WT"; then
+      [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
+      RECLAIMED=$((RECLAIMED + 1))
+    else
+      FAILED=$((FAILED + 1))    # git printed its own error; surface it in the summary too
+    fi
+  else
+    SKIP_DIRTY=$((SKIP_DIRTY + 1))
+  fi
+done < <(git worktree list --porcelain | awk '
+  /^worktree / { path=$2; head=""; branch=""; locked=0 }
+  /^HEAD / { head=$2 }
+  /^branch refs\/heads\// { branch=substr($0,19) }
+  /^locked/ { locked=1 }
+  /^$/ { if (path!="" && path ~ /\/\.claude\/worktrees\//) print path"\t"head"\t"locked"\t"branch; path="" }
+')
 git worktree prune          # drop any now-stale worktree admin entries
+# lode-bns3 (observability): always emit one line. "reclaimed 0 of 0" (nothing to do) reads differently
+# from "reclaimed 0 of N" (everything was skipped — worth investigating), and the reason breakdown
+# makes a regression that silently zeroes out GC visible here instead of indistinguishable from idle.
+TOTAL=$((RECLAIMED + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
+echo "worktree GC: reclaimed $RECLAIMED of $TOTAL candidate(s) under .claude/worktrees/ (skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
 
 # Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
 # worktree-GC loop above never even considered them) and no remote counterpart left (lode-r78). That
@@ -812,14 +900,14 @@ ticket frees the next layer of `bd ready`. Closing is mine because the merge dec
 
 The worktree GC is **best-effort and machine-local**, and (since **lode-h1vn**) entirely the
 end-of-pass backstop sweep's job — there is no separate per-ticket removal step any more. **Nothing in
-`/land` reads `review_worktree`/`review_branch` any more**: the deleted loop was their only GC consumer,
-and the backstop discovers worktrees directly off `git worktree list --porcelain`. The builder still
-records both (`coding.md`), and `/code`'s own reclaim *derives* its target from the ticket id rather
-than trusting them (lode-vs7g), so as of lode-h1vn the two fields are **vestigial — written, read by
-nobody** (see lode-h1vn's `docs/decisions.md` entry; whether to stop writing them is its own ticket).
-Discovering worktrees live instead of trusting recorded paths is strictly better anyway: there is no
-bookkeeping to drift. Builds can happen on several machines, and a worktree on another machine simply
-isn't in this machine's `git worktree list`, so it's invisible to this sweep and that other machine's
+`/land` reads `review_worktree`/`review_branch`**, and as of **lode-2m89** nothing writes them either:
+the deleted loop was their only GC consumer, the backstop discovers worktrees directly off
+`git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
+rather than trusting a recorded path (lode-vs7g) — so the fields were pure dead weight and `coding.md`
+stopped recording them (see lode-2m89's `docs/decisions.md` entry). Discovering worktrees live instead
+of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can
+happen on several machines, and a worktree on another machine simply isn't in this machine's
+`git worktree list`, so it's invisible to this sweep and that other machine's
 own `/land` (or a later sweep there) reclaims it. The sweep only reclaims a worktree that is
 `merged`+`unlocked`+clean, which for a just-landed ticket's builder worktree is true precisely *because*
 this pass just `--no-ff` merged it into trunk a few lines above. Its **HEAD-ancestry** gate is what
@@ -833,9 +921,10 @@ escalated branch never merges. So "an escalate reclaims nothing" is true of the 
 and is not a guarantee about the sweep as a whole.) This backstop sweep
 is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
 it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
-`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — whose `review_worktree` pointer
-went stale or was never recorded. lode-jiyk unified what were originally two separate **worktree**
-sweeps here: an early one keyed on branch **name** (`lode-r78`), and a later one keyed directly on
+`land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of whether any
+ticket ever pointed at it (no ticket does, since lode-2m89). lode-jiyk unified what were originally
+two separate **worktree** sweeps here: an early one keyed on branch **name** (`lode-r78`), and a
+later one keyed directly on
 **HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
 sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
 trunk" — so now there is one loop: it requires the worktree to be **unlocked** (no in-flight agent owns

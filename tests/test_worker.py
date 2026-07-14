@@ -2601,3 +2601,89 @@ def test_now_never_decreases_across_a_forward_step_then_a_correction_back(
     readings.append(jobs.now())
 
     assert readings == sorted(readings)
+
+
+def test_reclaim_dead_letter_hook_survives_a_backward_clock_step(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    clock: _FakeClock,
+) -> None:
+    """lode-bmg9: the lode-uda1 guard's two timestamps must come from the SAME
+    clock, or a backward CLOCK_REALTIME step defeats it.
+
+    Before this fix, `_refresh_dead_letter_hook` compared `snapshots.fetched_at`
+    (the schema's raw SQLite `strftime('now')` DEFAULT -- CLOCK_REALTIME)
+    against `jobs.claimed_at` (always stamped from the forward-ratcheted
+    `jobs.now_iso()`, which by its own documented guarantee (lode-t1y) can run
+    *ahead* of CLOCK_REALTIME after a backward NTP/hypervisor step, until real
+    time catches up). A claim taken while the ratchet is running ahead can
+    therefore out-read a real, *later* fetch's raw timestamp, so the guard's
+    `>=` test fails to fire and the tombstone clobbers content that genuinely
+    landed after the claim -- lode-uda1's exact corruption, reopened via a
+    clock-skew precondition instead of a read/write race.
+
+    Anchors the fake clock far in the future (2030) so the assertion below --
+    that a *raw*, real-wall-clock fetched_at (what `ingest_snapshot` produced
+    before this fix) would land strictly BEFORE `claimed_at` -- holds
+    regardless of when this test actually runs, proving this really is the
+    bug's precondition. `ingest_snapshot`'s fix (stamping `fetched_at` from
+    the same ratchet `claimed_at` came from) is what keeps the guard's
+    comparison single-domain and lets it fire correctly despite the
+    intervening backward step.
+    """
+    from lode.drawdown import SOURCE_TYPE_WEB
+    from lode.externals import ingest_snapshot
+
+    external_id = "https://example.com/clock-skew"
+
+    # Anchor the fake clock safely in the future relative to the real wall
+    # clock, so the "would a raw stamp have landed before claimed_at" proof
+    # below can never accidentally pass for the wrong reason.
+    clock.wall = datetime(2030, 1, 1, tzinfo=UTC)
+
+    claimed_at = jobs.now_iso()
+    job_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version=external_id,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=claimed_at,
+    )
+
+    # Genuine real time passes -- enough to clear the staleness timeout --
+    # then the OS steps CLOCK_REALTIME backward (NTP/hypervisor correction),
+    # the exact hazard jobs.now()'s ratchet exists to absorb (lode-t1y).
+    clock.tick(settings.stale_running_timeout_s + 60)
+    clock.step_wall(-90)
+
+    # This really is the bug's precondition: a raw, real-wall-clock fetched_at
+    # (the old SQLite DEFAULT) would land strictly BEFORE claimed_at, since
+    # claimed_at is anchored in 2030 and the real clock is nowhere near that.
+    assert jobs.iso(datetime.now(UTC)) < claimed_at
+
+    # The handler's real snapshot lands now -- genuinely after the claim in
+    # elapsed real terms, despite the intervening backward step.
+    ingest_snapshot(
+        conn, external_id, SOURCE_TYPE_WEB, "the real, successfully-fetched body"
+    )
+
+    count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "dead"
+
+    # Head must still be the real 'ok' snapshot -- NOT overwritten by the
+    # reclaim's dead-letter tombstone.
+    status, body = conn.execute(
+        "SELECT s.status, s.body FROM snapshots s "
+        "JOIN externals e ON e.head_snapshot_id = s.snapshot_id "
+        "WHERE e.external_id = ?",
+        (external_id,),
+    ).fetchone()
+    assert status == "ok"
+    assert body == "the real, successfully-fetched body"
+    (snapshot_count,) = conn.execute(
+        "SELECT COUNT(*) FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert snapshot_count == 1

@@ -72,6 +72,15 @@ CREATE TABLE IF NOT EXISTS snapshots (
     external_id TEXT NOT NULL,
     body        TEXT NOT NULL,
     raw_payload TEXT,
+    -- fetched_at: production MUST NOT fall through to this DEFAULT (lode-bmg9).
+    -- lode.externals.ingest_snapshot -- currently the only production writer of
+    -- this table -- stamps it from jobs.now_iso(), the forward-ratcheted queue
+    -- clock, because worker._refresh_dead_letter_hook's late-success guard
+    -- (lode-uda1) compares this column against the always-ratcheted
+    -- jobs.claimed_at. A raw CLOCK_REALTIME value here defeats that guard after
+    -- a backward clock step and lets a tombstone clobber a successful fetch.
+    -- The DEFAULT is retained for test/ad-hoc inserts; a NEW production writer
+    -- of snapshots must pass fetched_at=jobs.now_iso() explicitly.
     fetched_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     status      TEXT NOT NULL CHECK (status IN ('ok', 'tombstone')),
     FOREIGN KEY (external_id) REFERENCES externals (external_id)

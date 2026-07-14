@@ -112,18 +112,18 @@ technical-review decision (exit (a), `docs/agents-workflow.md`; lode-t83). Eithe
 same: the hand-off lives in bd metadata, recorded by whichever `coding` run last touched the ticket:
 
 ```bash
-rtk bd show <id> --json     # read labels + metadata.review_head (review_worktree/review_branch too)
+rtk bd show <id> --json     # read labels + metadata.review_head
 ```
 
 **Guard:** the ticket **must** carry the `ready-for-code-review` label. If it doesn't (already
 reviewed, escalated, or never built), I **stop and report** — I land nothing and review nothing.
 
 The field that matters to me is **`review_head`** — I fetch and check out `origin/land/<id>` directly
-(step 2), so I never need to locate or open the builder's worktree at all. `metadata.review_worktree`
-is vestigial — a leftover of the earlier `git -C` architecture. As of **lode-h1vn** it is vestigial
-*outright*, not just for me: `/land`'s per-ticket GC loop, its last consumer, is deleted, and the
-backstop sweep that replaced it discovers worktrees live off `git worktree list` (see
-`docs/decisions.md`). The builder still records it; nobody reads it.
+(step 2), so I never need to locate or open the builder's worktree at all.
+`metadata.review_worktree`/`review_branch` no longer exist as of **lode-2m89**: they were a leftover of
+the earlier `git -C` architecture, and once lode-h1vn deleted `/land`'s per-ticket GC loop (their last
+consumer — the backstop sweep that replaced it discovers worktrees live off `git worktree list`, see
+`docs/decisions.md`) nothing read them any more, so the builder stopped writing them too.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree
 

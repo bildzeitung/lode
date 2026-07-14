@@ -70,23 +70,44 @@ def _hook_command() -> str:
     return matching[0]
 
 
-def _run(command: str) -> str | None:
-    """Run the guard against `command`; return its permissionDecision, or None if it fell through."""
+def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
+
+    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
+    machine (lode-oii9) without touching the real PATH of the process running this test. `bash`
+    itself is invoked by absolute path so a stripped PATH cannot make it unresolvable.
+    """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
     proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
+        [shutil.which("bash"), "-c", _hook_command()],
         input=payload,
         capture_output=True,
         text=True,
         timeout=30,
+        env=None if path is None else {"PATH": path},
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
     if not proc.stdout.strip():
         return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+    return json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def _run(command: str, *, path: str | None = None) -> str | None:
+    """The guard's permissionDecision for `command`, or None if it fell through."""
+    out = _hook_output(command, path=path)
+    return None if out is None else out["permissionDecision"]
+
+
+def _reason(command: str, *, path: str | None = None) -> str:
+    """The guard's permissionDecisionReason for `command`. Fails unless it was actually denied."""
+    out = _hook_output(command, path=path)
+    assert out is not None and out["permissionDecision"] == "deny", (
+        f"expected a deny for {command!r}, got {out}"
+    )
+    return out["permissionDecisionReason"]
 
 
 # Commands that WRITE to an external tracker under the user's identity. Every one MUST be denied.
@@ -239,15 +260,7 @@ def test_hook_is_syntactically_valid_shell() -> None:
 
 
 def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
-    payload = json.dumps({"tool_input": {"command": "gh issue create --title x"}})
-    proc = subprocess.run(
-        ["bash", "-c", _hook_command()],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    reason = json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = _reason("gh issue create --title x")
     assert "DRAFT" in reason
     assert "PENDING A HUMAN" in reason
     assert "Read-only gh calls" in reason
@@ -255,3 +268,26 @@ def test_deny_reason_states_the_draft_and_surface_protocol() -> None:
     # The reason names `gh api` as denied; it must also say the implicit-POST form is denied,
     # or it reads as a signpost toward the very route an agent would try next.
     assert "IMPLICIT POST" in reason
+
+
+# lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
+# CLOSED rather than silently fall through when it is missing -- see docs/decisions.md for why.
+# This is the exact scenario named in lode-oii9's own discovery: with PATH=/nonexistent, `gh
+# issue create --title x` was NOT denied before this fix.
+def test_fails_closed_when_jq_is_missing() -> None:
+    decision = _run("gh issue create --title x", path="/nonexistent")
+    assert decision == "deny", (
+        "guard fell through silently with jq missing instead of failing closed (lode-oii9)"
+    )
+
+
+def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
+    reason = _reason("gh issue create --title x", path="/nonexistent")
+    assert "jq" in reason
+    assert "docs/onboarding.md" in reason
+    assert "Install jq" in reason
+    # The remedy must be performable. Fail-closed denies EVERY Bash call while jq is missing --
+    # including `apt-get install jq` itself -- so a reason that just says "install jq and retry"
+    # walks an agent into an infinite deny loop. It must say to install from OUTSIDE Claude Code.
+    assert "OUTSIDE Claude Code" in reason
+    assert "surface this to the human" in reason

@@ -787,6 +787,64 @@ are catalogued in [configuration.md](configuration.md).
   export from the gate outright, since by invariant (`import.auto: false`, lode-6ra) it is *never* work,
   and every other clean-tree check in the repo already excludes it.
 
+  **RESOLVED by lode-bns3.** Reconciled, not just patched: the generalized backstop's clean-tree gate
+  (`SKILL.md` Section 4) now **excludes** `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the
+  cleanliness judgment outright (`:(exclude)` pathspecs on the `status --porcelain` guard), so a staged
+  or modified export, from whatever cause, present or future, can never zero out the sweep on its own;
+  the coupling is *dissolved*, not merely documented. It **excludes** rather than restoring (the build's
+  first cut mirrored Section 3's restore; changed at review): Section 3 must genuinely *clean* the index
+  or its `git merge --no-ff` refuses to run, whereas the GC loop only needs to *judge*. Restoring would
+  have made a read-only judgment **write into candidate worktrees — including the dirty ones it then
+  decides to KEEP**, silently discarding their export churn as a side effect of merely looking at them;
+  exclusion has zero blast radius, which is the right posture for a loop that ends in `--force`. It also
+  sidesteps a trap the restore form walked into: `git restore` aborts *wholesale* on an unmatched pathspec
+  and would restore *neither* file (silently, under `|| true`) for a candidate sitting at a commit that
+  predates one of these paths — a stale leftover worktree being exactly what this backstop reclaims.
+  Separately, Section 3's own claim ("any `bd` read regenerates … and leaves it
+  staged") turns out to be the overstatement that produced the apparent contradiction in the first place:
+  measured a third time, independently (a bare `bd show`/`bd ready` **and** a real `bd update` write),
+  a worktree still reads clean — bd writes go to Dolt, and the tracked jsonl is regenerated+staged by
+  the **pre-commit hook at commit time**, not at `bd`-call time. Section 3's text is corrected
+  accordingly, and its restore is **kept**, not deleted.
+
+  **The positive cause remains UNESTABLISHED, and the record says so deliberately.** The obvious next
+  move — name `bd dolt pull` as "the real cause" and move on — was tried and **rejected at review**:
+  bd-sync discipline names `bd dolt pull` only as an explicit *defensive assumption* ("on the assumption
+  it may be staged even when `git diff` says otherwise"), never as a measurement, and a direct attempt to
+  reproduce it staged nothing. Replacing one confidently-wrong causal story with another — in prose about
+  a `--force`-wielding loop — is the very defect this entry exists to close, one step removed (the
+  lode-9i2p pattern: inventing a plausible machine-level cause is worse than an admitted gap). Crucially,
+  **nothing depends on the answer**: the export is by invariant never work (`import.auto: false`,
+  lode-6ra), so restoring it unconditionally is correct *whatever* the trigger is — which is precisely
+  why the restore is the right fix for an unestablished cause, rather than a reason to keep hunting one.
+
+  Verified end-to-end by **executing the loop** against a synthetic five-worktree fixture set (not by
+  reading it): a worktree whose only dirt is a staged `.beads/issues.jsonl` is now correctly reclaimed
+  (previously silently skipped — the exact regression this entry flagged); one with genuine uncommitted
+  content is still correctly KEPT (exclusion narrows what counts as dirt, it does not mask real dirt);
+  not-merged and locked worktrees are still kept; and the buckets partition the candidates exactly.
+
+  The sweep also now emits one summary line per pass (`worktree GC: reclaimed X of Y candidate(s) …
+  (skipped: locked=.., not-merged=.., dirty=..; failed=..)`), so a regression that zeroes out GC reads as
+  visibly different from "nothing to do," closing the observability gap this entry also flagged. `failed`
+  is a bucket of its own because the count is taken from `git worktree remove`'s **actual exit status**:
+  incrementing `reclaimed` merely for *attempting* the removal (the build's first cut) would let the
+  summary report "reclaimed N" when every removal had failed and nothing was reclaimed at all — the
+  observability feature lying in precisely the direction it exists to expose.
+
+  **Also caught at review — a `--force` hole the observability change itself opened.** Counting the
+  `locked` skips meant moving the `locked` test out of `awk` (where it had been a filter) into the shell
+  loop, reading four tab-separated fields. Tab is IFS *whitespace*, so `read` collapses adjacent tabs and
+  does **not** preserve an empty *middle* field — and `branch` is empty for a **detached** worktree (a case
+  the loop explicitly supports). A detached worktree's line therefore shifted every field left: `$BR`
+  swallowed the locked flag, `$LOCKED` read empty, `[ "$LOCKED" = "1" ]` was false, and a **locked, live
+  agent's worktree would have sailed past the locked gate into `git worktree remove --force`** — the exact
+  rip-it-out-from-under-a-running-agent harm of the pre-lode-oqr disaster, reopened by a change whose only
+  goal was observability. Fixed by ordering the fields so the one possibly-empty field (`branch`) is
+  **last**, where an empty value is a harmless trailing delimiter. Recorded because the lesson generalizes:
+  a purely "additive" observability change reached into a destructive gate's control flow, and the bug was
+  invisible to reading — it took executing the actual `read` against a synthetic detached-worktree line.
+
   **Chose (2), not (1).** Once the measurement ruled out the silent-no-op risk, (1) and (2) are safe in
   the same way, but (2) is strictly simpler: no new guard to write, test, or keep in sync with the one
   the generalized backstop already carries, and no per-ticket `review_worktree`/`review_branch` metadata
@@ -846,16 +904,15 @@ are catalogued in [configuration.md](configuration.md).
   `.gitignore` regression now silently disables *all* local worktree GC at once, where before it only
   degraded the backstop.
 
-  **`review_worktree`/`review_branch` are now VESTIGIAL — written by `coding.md`, read by nobody.** The
-  deleted loop was their only GC consumer; the backstop discovers worktrees live off
+  **`review_worktree`/`review_branch` were VESTIGIAL at this point — written by `coding.md`, read by
+  nobody.** The deleted loop was their only GC consumer; the backstop discovers worktrees live off
   `git worktree list --porcelain`, and `/code`'s own reclaim *derives* its target from the ticket id
-  rather than trusting a recorded path (lode-vs7g). They are still recorded (harmless, and useful
-  forensically), and the stale cross-references that claimed `/land`'s GC "keys off `review_worktree`"
-  were corrected at review across `.claude/skills/code/SKILL.md`, `.claude/agents/coding.md`,
-  `.claude/agents/code-reviewer.md`, and `docs/agents-workflow.md` — the *guarantee* those docs protect
-  (the builder must not remove its own worktree; `/land` reclaims it on a clean land) is unchanged; only
-  the mechanism is. Whether to stop writing them is **lode-2m89** (filed at review; the decision record
-  promised such a ticket but none had been created), not folded in here.
+  rather than trusting a recorded path (lode-vs7g). The stale cross-references that claimed `/land`'s
+  GC "keys off `review_worktree`" were corrected at review across `.claude/skills/code/SKILL.md`,
+  `.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`, and `docs/agents-workflow.md` — the
+  *guarantee* those docs protect (the builder must not remove its own worktree; `/land` reclaims it on
+  a clean land) is unchanged; only the mechanism is. Whether to stop writing them was deferred to
+  **lode-2m89** — resolved below, at the end of this file: the fields are retired outright.
 
   **The `locked`-worktree question, answered (lode-ux1n AC5):** yes, deleting the per-ticket loop means
   a landed ticket's worktree that happens to be `locked` at GC time is no longer force-reclaimed — this
@@ -881,3 +938,106 @@ are catalogued in [configuration.md](configuration.md).
   risk (destroy uncommitted work) the moment that assumption's premise — "nothing ever re-dirties a
   just-landed worktree between build and GC" — went unstated and unverified. There is no longer a
   second predicate to keep in sync: this is now the fix, not a design tension to preserve.
+
+- **`review_worktree`/`review_branch` metadata — RETIRED, not merely deprecated (lode-2m89, follow-up
+  to lode-h1vn above).** lode-h1vn deleted `/land`'s per-ticket worktree-GC loop, the last consumer of
+  these two bd metadata fields; every remaining reader was already gone by construction — the backstop
+  sweep discovers worktrees live off `git worktree list --porcelain`, `/code`'s own reclaim derives its
+  target from the ticket id rather than trusting a recorded path (lode-vs7g), and the code-reviewer
+  reads only `review_head` (live — it's what it actually checks out and diffs for drift). Confirmed by
+  grep at the time this ticket was built: zero readers of either field anywhere in `.claude/` or
+  `docs/`.
+
+  **Decision: (a) stop writing them**, not (b) keep them as documented forensic bookkeeping. Two fields
+  maintained forever for a dead consumer is exactly the kind of orphaned machinery the "simplest thing
+  that works" principle argues against, and the risk the ticket named — a future reader "restoring" a
+  phantom consumer because the fields are still there, looking load-bearing — is real precisely because
+  they *were* load-bearing once, under the deleted per-ticket loop. Retiring the write is the more
+  legible signal: no field, no expectation. `review_head` stays exactly as-is — it is live and this
+  ticket does not touch it. Its two real readers, named precisely so this entry does not repeat one
+  field over the very mistake it records: the **code-reviewer** (it is what the reviewer checks out and
+  compares against for drift, `code-reviewer.md`) and **`/code`'s step-1 stranded-review guard**, which
+  refuses to dispatch a reviewer at a ticket whose `metadata.review_head` is empty
+  (`.claude/skills/code/SKILL.md`, lode-k5e/lode-t83). **`/land` is *not* a reader** — its 2a drift
+  precheck reads `land_head` (written by the code-reviewer and refreshed by a rebase pickup);
+  `.claude/skills/land/SKILL.md` never mentions `review_head` at all.
+
+  **What changed:** `coding.md`'s hand-off (step 9, both the green path and the build-time-escalation
+  path) no longer calls `--set-metadata review_worktree=…` / `--set-metadata review_branch=…` — only
+  `review_head` is written. `code-reviewer.md`, `.claude/skills/code/SKILL.md`, and
+  `.claude/skills/land/SKILL.md` had their cross-references updated: passages describing the fields as
+  "still recorded" or "vestigial-but-written" now say they no longer exist; passages describing the
+  *historical* per-ticket loop that used to key off them are left as history (they are still accurate
+  descriptions of what the old, deleted loop did). The worktree-must-not-be-removed-by-its-builder
+  invariant, and `/land`'s backstop-sweep-reclaims-it-on-a-clean-land invariant, are both **unchanged**
+  — this ticket only removes a write nobody was reading, not any part of the reclaim mechanism itself.
+
+- **`jq` is a hard prerequisite, and both `PreToolUse(Bash)` jq-shelling guards now FAIL CLOSED
+  when it is missing, rather than silently falling through (lode-oii9).** `jq` was never documented
+  as a dependency anywhere — not `docs/onboarding.md`, not `CLAUDE.md`'s new-machine-setup steps, not
+  `scripts/python-init.sh` — yet the two committed `PreToolUse(Bash)` guards in
+  [`.claude/settings.json`](../.claude/settings.json) both shell out to it: the `bd create --deps
+  blocks:` inversion guard (`lode-ij24`) and the external-tracker write guard (`lode-o29m`). Each has
+  the shape `CMD=$(jq -r '.tool_input.command // empty'); ...`. With `jq` absent, that command
+  substitution silently yields empty output, nothing matches the guard's regex, and the hook exits 0
+  — the guard falls through with **no signal at all**. Verified live during `lode-o29m`'s own land
+  review: with `PATH=/nonexistent`, `gh issue create --title x` was **not** denied. Both guards' own
+  test suites (`tests/test_bd_deps_guard.py`, `tests/test_gh_write_guard.py`) `skipif jq is None`, so
+  on a jq-less machine the tests do not fail either — they silently skip. Nothing anywhere goes red.
+
+  **Decision: FAIL CLOSED, for both guards, consistently.** When `jq` is unreachable on `PATH`, each
+  hook now denies the Bash call outright — before it ever tries to parse `tool_input.command` — with
+  a `permissionDecisionReason` naming `jq` as the missing prerequisite and pointing at
+  `docs/onboarding.md`. This is a broader denial than "just the guarded pattern": with `jq` missing,
+  the hook cannot classify the command *at all*, so there is no narrower-but-still-safe deny to fall
+  back to; the choice is between denying every Bash call or falling back to today's silent no-op.
+
+  Options considered, per the ticket's own framing:
+  - **(a) Leave as-is** (prereq documented, hook stays a silent-fallthrough backstop) — rejected. The
+    entire point of these two guards is to catch an agent that is *not* going to stop itself — an
+    obedient agent following a ticket that says "ask upstream" (`lode-s1uz`) or emitting an inverted
+    `bd create --deps blocks:` (`lode-ij24`). A guard whose failure mode is silence is invisible
+    precisely in the unsupervised case it exists to cover; nothing short of an actual deny reaches an
+    agent that would not otherwise notice.
+  - **(c) Loud warning, but allow** — rejected. A warning written to hook stdout/stderr is not
+    guaranteed to reach a human in an unsupervised producer/reviewer pass (the whole scenario `lode-
+    o29m` was filed to close), and an agent has no standing instruction to *stop and read hook output*
+    the way it does for an actual `deny`. A warning that nothing downstream reads is functionally the
+    same as silence.
+  - **(b) Fail closed** — **chosen.** The named downside — "a missing prereq then blocks EVERY Bash
+    call" — is real but bounded and self-correcting: `jq` is now a one-line, documented prerequisite
+    (`docs/onboarding.md` §Prerequisites, `CLAUDE.md` §New machine setup step 0), install-and-retry
+    fixes it permanently for that machine, and the failure is **loud and immediate** — the very first
+    Bash call after a fresh, broken-onboarding clone fails with a message naming the exact missing
+    tool and the doc to read, rather than the guard quietly doing nothing for the life of the session.
+
+    **The remedy is only performable from outside Claude Code, and the deny reason says so.** Fail
+    closed means *every* Bash call is denied while `jq` is missing — including `apt-get install jq`
+    itself. A deny reason that said only "install jq and retry" would therefore walk an agent into an
+    infinite loop: it would attempt the install through `Bash`, be denied with that same message, and
+    retry. Both hooks' reasons instead name the install commands, state explicitly that the guard
+    denies every Bash call *including the install*, and instruct an agent to surface the problem to
+    the human and stop. This is the one sharp edge fail-closed genuinely has, and it is a wording
+    obligation on the deny path, not an argument against the policy — a human installs `jq` in their
+    own terminal in one command.
+    That is a strictly better failure mode than a security-relevant check disappearing without a
+    trace. Because `jq` is genuinely trivial to install (`apt-get install jq` / `brew install jq` /
+    `choco install jq`, no compilation, no config), the "worse dev experience" risk named in the
+    ticket's own design text is judged not to materialize in practice: a correctly-onboarded machine
+    never reaches this branch at all — it is dead code on every machine that followed the onboarding
+    doc, and an alarm exactly once on any machine that did not.
+
+  **Consistency across both hooks, deliberately (AC3).** They share the identical `jq` dependency and
+  the identical risk shape (a security-relevant guard silently defeated), so they get the identical
+  policy — divergence here (one fails closed, one stays silent) would just relocate the same
+  unnoticed gap to whichever guard chose to stay soft. Implementation: `tests/test_bd_deps_guard.py`
+  and `tests/test_gh_write_guard.py` each gained `test_fails_closed_when_jq_is_missing` and
+  `test_jq_missing_deny_reason_names_jq_and_points_at_the_fix`, run with `PATH=/nonexistent` against
+  the hook exactly as shipped — the same `PATH=/nonexistent` reproduction used during `lode-o29m`'s
+  land review to first discover the gap.
+
+  **Not touched: the guards' matching regex / deny-vs-allow table for commands where `jq` IS
+  present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
+  design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
+  `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
+  exemptions) is unchanged.

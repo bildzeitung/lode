@@ -1214,6 +1214,20 @@ def _refresh_dead_letter_hook(
     transaction-control primitive (``BEGIN IMMEDIATE`` was considered and
     rejected as unnecessary — see ``ingest_snapshot``'s docstring).
 
+    **Both sides of that comparison are the same clock (lode-bmg9).** The
+    comparison itself no longer lives in this function — since lode-elc8 it
+    is inside :func:`~lode.externals.ingest_snapshot`'s
+    ``skip_if_head_at_or_after`` guard — but its two operands are still
+    ``snapshots.fetched_at`` and ``jobs.claimed_at``, and both come from
+    :func:`lode.jobs.now_iso`: ``ingest_snapshot`` stamps ``fetched_at``
+    explicitly rather than falling through to the schema's raw SQLite
+    DEFAULT. Before lode-bmg9 they did not: ``fetched_at`` was
+    ``CLOCK_REALTIME`` while ``claimed_at`` was the forward-ratcheted queue
+    clock, which after a backward wall-clock step can read *ahead* of real
+    time — making the ``>=`` test fail to fire for a real snapshot that
+    genuinely landed after the claim, and the tombstone would clobber it. See
+    ``docs/storage.md`` for the closed-residual writeup.
+
     Deferred import mirrors :func:`_refresh_handler`: keeps the
     httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
     cost off code paths where no ``refresh`` job has ever dead-lettered.

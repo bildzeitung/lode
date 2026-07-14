@@ -301,6 +301,26 @@ def ingest_snapshot(
     nothing currently re-discovers a snapshot with no derive job the way
     :func:`lode.reconcile._embed_gap_step` does for notes.
 
+    ``fetched_at`` is stamped explicitly from :func:`lode.jobs.now_iso` rather
+    than left to the schema's raw SQLite ``strftime('now')`` DEFAULT
+    (``lode-bmg9``): :func:`lode.worker._refresh_dead_letter_hook`'s
+    late-success guard (``lode-uda1``) compares this column against
+    ``jobs.claimed_at``, which is *always* stamped from the same
+    forward-ratcheted queue clock — comparing a ratcheted reading against a
+    raw ``CLOCK_REALTIME`` one is only safe in one direction (see ``jobs.now``'s
+    own docstring, guarantee 2), and the guard needed the other. Stamping both
+    sides from the one clock closes that mismatch outright rather than merely
+    narrowing it. This function is the **only** production writer of
+    ``snapshots``, so nothing else can reintroduce the raw-clock stamp; the
+    schema's DEFAULT survives for test/ad-hoc inserts only, and a new
+    production writer of this table must stamp ``fetched_at`` the same way (see
+    ``schema.sql``'s note on the column). ``docs/storage.md`` records the fix
+    and the one place this ripples (``lode.reconcile``'s refresh-staleness
+    cutoff, deliberately still raw — a backward step there delays a refresh by
+    the step's magnitude but can never strand one, so it is not a new instance
+    of the guard's clobber; note the skew persists for the process's lifetime
+    rather than self-correcting, which ``docs/storage.md`` spells out).
+
     ``skip_if_head_at_or_after`` (lode-elc8) makes the whole write
     conditional and **atomic with the check**: when given, and
     ``external_id``'s current head — read *after* this transaction has
@@ -374,9 +394,10 @@ def ingest_snapshot(
         if snapshot_id == head_snapshot_id:
             return IngestResult(external_id, snapshot_id, status, deduped=True)
         conn.execute(
-            "INSERT INTO snapshots (snapshot_id, external_id, body, raw_payload, status) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (snapshot_id) DO NOTHING",
-            (snapshot_id, external_id, body, raw_payload, status),
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, raw_payload, status, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (snapshot_id) DO NOTHING",
+            (snapshot_id, external_id, body, raw_payload, status, jobs.now_iso()),
         )
         conn.execute(
             "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
