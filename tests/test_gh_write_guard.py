@@ -24,6 +24,15 @@ is therefore matched on the FIELD FLAGS (`-f`/`-F`/`--field`/`--raw-field`/`--in
 explicit `-X GET` / `--method GET` exempted so the legal read-with-params form
 (`gh api search/issues -X GET -f q=...`) still works.
 
+gh's repo-ADMIN surface is covered too (lode-9l3d): `gh secret set|delete`, `gh variable
+set|delete`, `gh workflow run|enable|disable`, `gh run rerun|cancel|delete`, `gh ssh-key
+add|delete`, `gh gpg-key add|delete`, `gh cache delete`. This is a different risk class from a
+tracker write -- it mutates the remote (secrets, workflow triggers, keys, CI runs) rather than
+filing on a tracker -- but it is cheap to add to the same verb alternation, and the same guard is
+the natural home for it. The read-only forms of each (`gh run list|view`, `gh workflow
+list|view`, `gh secret list`, `gh cache list`) are pinned ALLOWED below, same as the tracker
+read-only forms.
+
 Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz for the
 `blocks:` guard). A guard that reads only the command STRING cannot see through:
   - quoted indirection -- `sh -c "gh issue create ..."`, or the command held in a shell
@@ -31,8 +40,6 @@ Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz 
     false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
     commit message quoting the verb) -- a worse trade than the residual.
   - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
-  - gh's repo-ADMIN surface (`gh secret set`, `gh workflow run`, `gh ssh-key add`, ...) -- a
-    different risk class from a tracker write; tracked in lode-9l3d.
 Those residual gaps rely on the prose rule in coding.md / code-reviewer.md, same as the
 `blocks:` guard relies on prose for `bd create --graph`.
 """
@@ -122,6 +129,24 @@ DENIED = [
     "gh repo fork owner/repo",
     "gh repo create a-new-public-repo --public",
     "gh label create bug --color f00",  # labels are issue-tracker state
+    # -- gh's repo-ADMIN surface (lode-9l3d): a different risk class (mutates the remote --
+    #    secrets, workflow triggers, keys, CI runs -- rather than filing on a tracker), but
+    #    cheap to add to the same alternation.
+    "gh secret set TOKEN --body x",
+    "gh secret delete TOKEN",
+    "gh variable set X --body y",
+    "gh variable delete X",
+    "gh workflow run deploy.yml",
+    "gh workflow enable deploy.yml",
+    "gh workflow disable deploy.yml",
+    "gh run rerun 123",
+    "gh run cancel 123",
+    "gh run delete 123",
+    "gh ssh-key add key.pub",
+    "gh ssh-key delete 123",
+    "gh gpg-key add key.asc",
+    "gh gpg-key delete 123",
+    "gh cache delete 123",
     # -- gh api, EXPLICIT write method --
     "gh api repos/x/y/issues -X POST -f title=x",
     "gh api repos/x/y/issues -XPOST -f title=x",
@@ -183,6 +208,13 @@ ALLOWED = [
     "gh release view v1.0",
     "gh repo view owner/repo",
     "gh label list",
+    # -- read-only forms of the repo-ADMIN surface (lode-9l3d), must stay legal --
+    "gh run list",
+    "gh run view 123",
+    "gh workflow list",
+    "gh workflow view deploy.yml",
+    "gh secret list",
+    "gh cache list",
     "gh api repos/x/y/issues",  # no fields, no method: GET by default
     "gh api repos/x/y/issues -X GET",
     # Fields on an EXPLICIT GET are query params, not a body -- gh documents this as the way

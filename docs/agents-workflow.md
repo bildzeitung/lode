@@ -622,6 +622,13 @@ draft-and-surface protocol above as the deny reason:
   and `gh label create|edit|delete|clone` (labels are tracker state);
 - **other writes that publish under the user's public name** — `gh release create|edit|delete|upload`,
   `gh gist create|edit|delete`, `gh repo create|fork|edit|delete|sync`;
+- **gh's repo-*admin* surface** (lode-9l3d) — `gh secret set|delete`, `gh variable set|delete`, `gh
+  workflow run|enable|disable`, `gh run rerun|cancel|delete`, `gh ssh-key add|delete`, `gh gpg-key
+  add|delete`, `gh cache delete`. A different risk class from a tracker write — it mutates the remote
+  (secrets, workflow triggers, keys, CI runs) rather than filing on a tracker — but cheap to add to the
+  same verb alternation, so the same guard is the natural home. The read-only forms (`gh run
+  list|view`, `gh workflow list|view`, `gh secret list`, `gh cache list`) stay legal, pinned in
+  `tests/test_gh_write_guard.py`'s `ALLOWED` table;
 - **`gh api` with an explicit non-GET method** (`-X`/`--method` `POST`/`PUT`/`PATCH`/`DELETE`, matched
   case-insensitively — `-X post` is the same request);
 - **`gh api` with an *implicit* POST** — see below.
@@ -657,9 +664,9 @@ command *string* cannot see through indirection):
   worse trade than the residual.
 - **Any non-`gh` route to an external tracker** — a raw `curl` against a tracker's REST API, a
   different CLI, or a non-GitHub tracker's own tool — is outside what a `gh`-shaped regex can ever see.
-- **gh's repo-*admin* surface** (`gh secret set`, `gh workflow run`, `gh ssh-key add`, …) — a different
-  risk class from a tracker write, and one no plausible lode ticket asks an agent to touch; tracked
-  separately in `lode-9l3d`.
+
+(gh's repo-*admin* surface — `gh secret set`, `gh workflow run`, `gh ssh-key add`, … — was residual
+here until `lode-9l3d` folded it into the same verb alternation above; it is covered now, not a gap.)
 
 None of these is a reason to skip the guard — and, crucially, none of them is a route an *obedient*
 agent takes. That is the distinction that matters when judging where the fence is high enough: the
