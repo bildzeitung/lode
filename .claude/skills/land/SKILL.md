@@ -942,13 +942,18 @@ sitting in it (lode-oqr). Dropping the branch-name filter makes the sweep's **co
 it used to be incidental: *any* worktree under `.claude/worktrees/` that is unlocked and has not
 diverged from `trunk` is reclaimable, whoever created it — and a tree freshly branched off `trunk` HEAD
 is trivially "merged" by zero divergence, so uncommitted work in one is **not** protected by the merged
-check. `locked` is the only thing holding this loop off, and only the producer raises it — a hand-made
-worktree under `.claude/worktrees/` must be committed or locked. This residual is **pre-existing, not
-new** (both unified sweeps already had it: the old name-keyed one matched `worktree-agent-*`, which is
-exactly what an interactive session gets, and the old detached one was already name-blind); dropping
-the name filter just makes it impossible to overlook. **lode-9hgu** tracks fixing it at the root —
-guard on the real invariant (is the tree dirty?) rather than the zero-divergence-vulnerable
-"merged" proxy. A branch-attached candidate here is typically the reviewer's or a rebase
+check. At the time this loop was written, `locked` was the only thing holding it off — and a hand-made
+worktree raises no lock (both lock sources are agent-side: see the CONTRACT paragraph above), so one
+under `.claude/worktrees/` had to be committed or locked by hand to survive. This residual is
+**pre-existing, not new** (both unified sweeps already had it: the old name-keyed one matched
+`worktree-agent-*`, which is exactly what an interactive session gets, and the old detached one was
+already name-blind); dropping the name filter just makes it impossible to overlook. **lode-9hgu** has
+since closed the *destructive* half of this (see below): it **added** a real guard on the actual
+invariant (is the tree dirty?) *alongside* the ancestry checks — which still run and still decide
+candidacy — rather than relying solely on the zero-divergence-vulnerable "merged" proxy. So today a
+**dirty** hand-made worktree survives even unlocked and merged-by-zero-divergence; a **clean** one at
+zero divergence is still reclaimable, which is the accepted residual the CONTRACT paragraph above
+records. A branch-attached candidate here is typically the reviewer's or a rebase
 pickup's *own* launch worktree, per the lode-k5e/lode-8k3 architecture (they `git fetch origin
 land/<id>` and check it out into a locally **uniquely-named** branch — `land/<id>--<their-own-worktree-dir>`
 since **lode-em6v**, plain `land/<id>` before it. Before lode-em6v this reused the bare `land/<id>` name,
