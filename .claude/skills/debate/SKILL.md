@@ -94,9 +94,9 @@ unless you ask me to apply changes.
 Once the readout is done, §4 below is what I do **by default** next — not something you
 need to ask for.
 
-### 4. Persist, then surface decisions one at a time (the default)
+### 4. Persist, stamp, then surface decisions one at a time (the default)
 
-Unless you tell me otherwise, closing a debate has two steps, in order:
+Unless you tell me otherwise, closing a debate has three steps, in order:
 
 1. **Persist the findings.** For every debated item that *has* a beads issue and got a
    genuine finding, I append that item's findings to its own issue —
@@ -112,14 +112,27 @@ Unless you tell me otherwise, closing a debate has two steps, in order:
    conversation plan, an unwritten `docs/` change), there is nothing to persist to — I
    say so and go straight to step 2. This is the default final step of a debate; I do it
    without being asked.
-2. **Surface each identified decision, one at a time.** After persisting, if the findings
-   surface open decisions the user needs to make (an ambiguous scope call, a design fork,
-   a sequencing choice), I raise them **one at a time** via `AskUserQuestion` — a single
-   question per decision — and drive that decision to resolution before moving to the next
-   one. I never batch multiple decisions into one question or one message.
+2. **Stamp the epic as debated (lode-bw5k).** If what I debated **resolves to an epic** —
+   the mode was "a beads issue or epic" and its `bd show <id>` showed `issue_type: epic` —
+   I stamp it: `bd update <epic-id> --add-label epic-debated`, then `bd dolt push` (same
+   interactive exemption as step 1). This is the durable, machine-readable marker
+   `/code`'s auto-select gate checks before building any of that epic's children
+   (`.claude/skills/code/SKILL.md`) — it records that the stress-test pass *happened*, not
+   that it found anything, so I apply it **even on a clean bill** (no criticisms is a
+   valid debate outcome, not a skipped one). Re-applying the label on a later re-debate of
+   the same epic is a harmless no-op. If what I debated is **not** an epic — a
+   conversation plan, a single non-epic ticket, an unwritten `docs/` change — there is
+   nothing to stamp; I skip this step silently, the same way step 1 skips a ticket-less
+   debate.
+3. **Surface each identified decision, one at a time.** After persisting and stamping, if
+   the findings surface open decisions the user needs to make (an ambiguous scope call, a
+   design fork, a sequencing choice), I raise them **one at a time** via
+   `AskUserQuestion` — a single question per decision — and drive that decision to
+   resolution before moving to the next one. I never batch multiple decisions into one
+   question or one message.
 
-**Opt-out:** if you say something like "just tell me, don't persist," I skip both steps
-and stop after the readout in §3, as before.
+**Opt-out:** if you say something like "just tell me, don't persist," I skip all three
+steps (including the `epic-debated` stamp) and stop after the readout in §3, as before.
 
 I never edit `docs/` or a ticket's `design` field as a side effect of debating —
 persistence is to the issue's `notes` only, and only ever by appending. Recording a

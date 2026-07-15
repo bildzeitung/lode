@@ -69,8 +69,14 @@ bug-fix approach it also weighs **root cause vs. symptom**, **side effects**, an
 standard pattern exists.
 
 Findings come back grouped by item, each a *genuine blocker* — no padding, and a clean bill is a
-valid outcome. The human decides what to do with them; nothing is persisted unless explicitly asked
-(`bd update <id> --notes=…` / `--design=…`).
+valid outcome. By default, closing a debate persists: findings are appended to each debated issue's
+notes (`bd update <id> --append-notes=…`), and — since lode-bw5k — if the debated target *resolves to
+an epic* (`bd show <id>` shows `issue_type: epic`), that epic is stamped `bd update <epic-id>
+--add-label epic-debated`, applied even on a clean bill (the marker records that the stress-test pass
+*happened*, not that it found anything). This is the durable, machine-readable marker
+[`/code`'s auto-select gate](#the-coding-loop--code--coding--code-reviewer) checks before building any
+of that epic's children. Either the note-persisting or the stamp can be skipped by telling `/debate`
+"just tell me, don't persist" — never a ticket's `design` field, which `/debate` never touches.
 
 ```mermaid
 flowchart TD
@@ -170,6 +176,41 @@ falling back to a filtered-out ticket. A frontier of nothing but `human` tickets
 reachable state (a decision ticket is its own blocker, and bd won't let a task block an epic); it
 means there is no buildable work right now, a signal for `/sweep`, not a build target. This filter
 never applies to explicitly-named IDs — those are an operator override, unfiltered.
+
+**Auto-select paths only — exclude children of an un-debated epic (lode-bw5k).** `/debate` is the
+intended stress-test gate a plan/epic should pass **before** its children get built, but nothing
+enforced that before this ticket — `lode-olmi`'s children were built and landed by `/code` without the
+epic ever having been debated, caught only by a human noticing after the fact. `/code` now runs a
+second, mechanical check on every candidate that survives the `human`/epic filter above, scoped
+identically (the same **no-argument**, **`--all-ready`**, **`--single`** paths; never applied to an
+explicitly-named ID):
+
+```bash
+scripts/epic-debate-gate.sh <candidate-id>
+```
+
+The **marker side of the contract** lives in `/debate` (`.claude/skills/debate/SKILL.md` §4): closing
+a debate whose target *resolves to an epic* (`bd show <id>` shows `issue_type: epic`) stamps
+`bd update <epic-id> --add-label epic-debated` — applied even on a clean bill, since the marker records
+that the stress-test pass *happened*, not that it found anything; skipped entirely for a non-epic
+target (a conversation plan, a single ticket, a `docs/` change) or under the "just tell me, don't
+persist" opt-out. The **check side** is `scripts/epic-debate-gate.sh`: given a candidate ticket id, it
+derives the parent epic from the candidate's `dependencies[]` — a `parent-child` entry whose target has
+`issue_type: epic` (`parent_id`/`epic_id` are null on real tickets; the deps array is the only reliable
+source) — and prints `BUILD <id>` when there is no parent epic or the parent carries `epic-debated`,
+else `SKIP <id> epic not debated (<epic-id>)`. It only ever calls `bd show` (twice at most per
+candidate); it never writes bd state. `/code` keeps every `BUILD` in the buildable set and reports every
+`SKIP` in its skip list alongside the `human`/epic skips (id + `epic not debated (<epic-id>)`).
+
+**No new escape-hatch flag.** The only unblock is to actually run `/debate <epic-id>` (cheap) or
+hand-apply the `epic-debated` label to acknowledge the epic was debated informally — both leave the
+same durable marker, so there is nothing else to build. Both this gate and the `human`/epic filter
+above are scoped to step 2's auto-select only: step 0's `needs-rebase` pickups and step 1's stranded
+`ready-for-code-review` re-entries pick up tickets already mid-flight, past this gate, and re-checking
+them here would strand in-flight work behind a retroactively-applied rule. Tests:
+`tests/test_epic_debate_gate.py` (a fake `bd` shim on PATH drives the script through all three shapes:
+no-epic ticket builds, debated-epic child builds, un-debated-epic child is skipped with the epic id
+named in the reason).
 
 Each builder then runs its orderly cycle. The worktree is **handed to it by the harness**
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins

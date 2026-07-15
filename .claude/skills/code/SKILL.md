@@ -317,6 +317,35 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > notwithstanding: the operator named it on purpose, so the ticket's kind is not this skill's call
    > to second-guess on that path.
 
+   > **Auto-select paths only — also exclude children of an un-debated epic (lode-bw5k).** `/debate`
+   > is the intended stress-test gate a plan/epic should pass **before** its children get built, but
+   > nothing enforced that — `lode-olmi`'s children were built and landed without the epic ever having
+   > been debated, caught only by a human noticing after the fact. So, for **every candidate that
+   > survives the `human`/epic filter above** (same three auto-select paths, same exclusion of
+   > explicitly-named IDs — an operator naming a ticket is never second-guessed here either), run:
+   >
+   > ```bash
+   > scripts/epic-debate-gate.sh <candidate-id>
+   > ```
+   >
+   > It prints `BUILD <id>` (no parent epic, or the parent epic already carries the `epic-debated`
+   > label `/debate` stamps when it debates an epic — `.claude/skills/debate/SKILL.md`) or `SKIP <id>
+   > epic not debated (<epic-id>)`. Keep every `BUILD` in the buildable set; **report every `SKIP`** —
+   > id + reason (`epic not debated (<epic-id>)`) — in step 5's skip list, right alongside the
+   > `human`/epic skips. The script only reads (`bd show`, twice at most per candidate — the ticket,
+   > then its epic if it has one); it never writes bd state, and it derives the parent epic from the
+   > candidate's `dependencies[]` (a `parent-child` entry whose target has `issue_type: epic`), not
+   > from `parent_id`/`epic_id` (verified null on real tickets — read the deps array).
+   >
+   > **No new escape-hatch flag.** The unblock is to actually debate the epic (`/debate <epic-id>`,
+   > cheap) or hand-apply the `epic-debated` label to acknowledge it was debated informally — both
+   > leave the same durable marker this gate reads, so there is nothing else to build.
+   >
+   > **Scope: this gate runs only inside step 2's auto-select filtering, exactly like the `human`/epic
+   > filter above.** It never applies to step 0's `needs-rebase` pickups or step 1's stranded
+   > `ready-for-code-review` re-entries — both pick up tickets already mid-flight, past this gate, and
+   > re-gating them here would strand in-flight work behind a retroactively-applied check.
+
 3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
    `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a subagent is
    pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own, so the harness must
