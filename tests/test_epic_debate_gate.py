@@ -57,8 +57,9 @@ def _show_payload(
 
 def _fake_bd(tmp_path: Path, fixtures: dict[str, list[dict]]) -> Path:
     """A PATH dir holding a fake `bd` that serves `fixtures[<id>]` for
-    `bd show <id> --json`, and a real `jq` (via a thin passthrough shim so the
-    gate script's own `jq` calls keep working unmodified)."""
+    `bd show <id> --json`. Only `bd` is shimmed; the real `jq` (used by both the
+    fake `bd` and the gate script itself) still resolves via the inherited
+    PATH, which `_run` appends after this dir."""
     fixtures_path = tmp_path / "fixtures.json"
     fixtures_path.write_text(json.dumps(fixtures))
 

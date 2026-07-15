@@ -45,9 +45,9 @@ if [ -z "$epic_id" ]; then
 fi
 
 epic_json=$(bd show "$epic_id" --json)
-debated=$(printf '%s' "$epic_json" | jq -r '(.[0].labels // []) | index("epic-debated") // empty')
+debated=$(printf '%s' "$epic_json" | jq -r '(.[0].labels // []) | any(. == "epic-debated")')
 
-if [ -n "$debated" ]; then
+if [ "$debated" = "true" ]; then
   echo "BUILD $id"
 else
   echo "SKIP $id epic not debated ($epic_id)"
