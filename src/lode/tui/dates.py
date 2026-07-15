@@ -54,7 +54,7 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     time), not elapsed hours, so an 11pm-yesterday note reads as "this week"
     rather than "today" even though it's under 24h old.
     """
-    dt = _parse(created).astimezone()
+    dt = parse_stamp(created).astimezone()
     reference = (now if now is not None else datetime.now(timezone.utc)).astimezone()
     delta_days = (reference.date() - dt.date()).days
     if delta_days == 0:
@@ -64,8 +64,3 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     if dt.year == reference.year:
         return f"{dt:%b} {dt.day}"
     return dt.strftime("%Y-%m-%d")
-
-
-def _parse(created: str) -> datetime:
-    """Parse the shared UTC stamp via :func:`lode.timestamps.parse_stamp`."""
-    return parse_stamp(created)
