@@ -857,9 +857,12 @@ class EditScreen(Screen[None]):
     ``TextArea`` is editable, so a bare ``i`` would type a literal letter
     instead of opening the modal, the identical trap ``Ctrl+H`` above exists
     to dodge. Two more letters that look tempting fail for their own
-    reasons: ``Ctrl+I`` is *not* a safe substitute for bare ``i`` -- Textual's
-    ``KEY_ALIASES`` maps ``ctrl+i`` to ``tab``, which this ``TextArea`` also
-    consumes (for indent), so that binding would be silently unreachable too
+    reasons: ``Ctrl+I`` is *not* a safe substitute for bare ``i`` -- terminals
+    encode Ctrl+I as the Tab control character, and Textual's ``KEY_ALIASES``
+    reflects that (``"tab": ["ctrl+i"]``), so a ``ctrl+i`` binding is
+    indistinguishable from ``tab`` -- a non-printable navigation key -- and
+    would be silently unreachable too (confirmed empirically: pressing it with
+    the body focused neither opens the inspector nor types anything)
     -- and ``Ctrl+P`` (a natural "peek" pick, matching this modal's own
     glance-and-dismiss contract) collides with Textual's own App-level
     command-palette binding, which is registered with ``priority=True`` and
