@@ -35,6 +35,7 @@ from lode.tui.screens.browse import (
     VERSION_BODY_ID,
     BrowseScreen,
     DeleteConfirmScreen,
+    EditScreen,
     EnrichmentModalScreen,
     NoteViewScreen,
     VersionHistoryScreen,
@@ -1319,3 +1320,143 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
         conn.close()
     # No tombstone was written -- the rejected delete left the chain untouched.
     assert rows == [("original body", "create"), ("moved on without you", "update")]
+
+
+# ---------------------------------------------------------------------------
+# Cursor preservation across a reload (lode-olmi.1) -- _reload_rows'
+# clear(columns=True) used to discard the DataTable's cursor, so leaving a
+# highlighted row to view/edit a note and Escaping back always snapped the
+# cursor to the top. The fix captures the highlighted note_id before the
+# rebuild and restores the cursor to that same row key afterward, falling
+# back to the top only when that note is gone.
+# ---------------------------------------------------------------------------
+
+
+def _highlighted_note_id(table: DataTable) -> str | None:
+    return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+
+def test_escape_from_note_view_keeps_the_same_row_highlighted(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first")
+        save(conn, "note-b", "second")
+        save(conn, "note-c", "third")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str | None, str | None]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            # Newest-first: note-c, note-b, note-a. Move down once to
+            # highlight the middle row (note-b), not the default top row --
+            # otherwise a bug that always leaves the cursor on the top row
+            # would pass unnoticed.
+            await pilot.press("down")
+            before = _highlighted_note_id(table)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, NoteViewScreen)
+            assert app.screen.note_id == "note-b"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            after = _highlighted_note_id(
+                app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            )
+            return before, after
+
+    before, after = asyncio.run(_drive())
+
+    assert before == "note-b"
+    assert after == "note-b"
+
+
+def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
+    tmp_path: Path,
+) -> None:
+    """The same reload path (``on_screen_resume``) runs after ``e`` + save,
+
+    not just after a plain view -- guards that the restore lives in
+    ``_reload_rows`` itself, not something special-cased to ``NoteViewScreen``.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first")
+        save(conn, "note-b", "second")
+        save(conn, "note-c", "third")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down")  # highlight note-b
+            assert _highlighted_note_id(table) == "note-b"
+            await pilot.press("e")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("escape")  # unchanged buffer -- pops immediately
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            return _highlighted_note_id(app.screen.query_one(f"#{TABLE_ID}", DataTable))
+
+    after = asyncio.run(_drive())
+
+    assert after == "note-b"
+
+
+def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
+    tmp_path: Path,
+) -> None:
+    """If the previously-highlighted note was deleted meanwhile, fall back
+
+    to the top row rather than raising or leaving the cursor stranded.
+    """
+    from lode.versions import delete as versions_delete
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first")
+        b_head = save(conn, "note-b", "second").version_id
+        save(conn, "note-c", "third")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str | None, list[str]]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down")  # highlight note-b
+            assert _highlighted_note_id(table) == "note-b"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, NoteViewScreen)
+            # note-b is deleted while its view is open, out from under the
+            # still-highlighted row.
+            conn = init_db(db_path)
+            try:
+                versions_delete(conn, "note-b", parent=b_head)
+            finally:
+                conn.close()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            summaries = [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+            return _highlighted_note_id(table), summaries
+
+    highlighted, summaries = asyncio.run(_drive())
+
+    assert summaries == ["third", "first"]  # note-b gone, newest-first order
+    assert highlighted == "note-c"  # fell back to the (new) top row
