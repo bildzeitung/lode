@@ -114,6 +114,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Static, TextArea
+from textual.widgets.data_table import RowDoesNotExist
 
 from lode.enrichment_view import (
     EnrichmentEdge,
@@ -553,8 +554,25 @@ class BrowseScreen(Screen[None]):
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
         :meth:`on_resize` and :meth:`on_screen_resume`.
+
+        **Cursor preservation (lode-olmi.1).** ``clear(columns=True)`` also
+        discards the ``DataTable``'s cursor position -- without this, leaving
+        a highlighted row to view/edit a note and popping back (which fires
+        :meth:`on_screen_resume`, and so this reload) always snapped the
+        cursor back to the top row. This captures the highlighted row's
+        ``note_id`` (the row key) *before* the rebuild and restores the
+        cursor to that same key afterward, falling back to the top row only
+        when the note is gone (deleted/tombstoned in the meantime, or the
+        table is now empty). The same logic covers :meth:`on_resize` too,
+        since it shares this one reload path -- a resize-triggered rebuild
+        never loses the selection either.
         """
         table = self.query_one(f"#{TABLE_ID}", DataTable)
+        selected_note_id: str | None = None
+        if table.row_count > 0:
+            selected_note_id = table.coordinate_to_cell_key(
+                table.cursor_coordinate
+            ).row_key.value
         rows = list_notes(self.app.db_path)
         table.clear(columns=True)
 
@@ -591,6 +609,18 @@ class BrowseScreen(Screen[None]):
                 key=row.note_id,
                 height=None,
             )
+
+        if table.row_count == 0:
+            return
+        restored_index = 0
+        if selected_note_id is not None:
+            try:
+                restored_index = table.get_row_index(selected_note_id)
+            except RowDoesNotExist:
+                # The previously-highlighted note is gone (deleted/tombstoned)
+                # -- fall back to the top row.
+                restored_index = 0
+        table.move_cursor(row=restored_index)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         note_id = event.row_key.value
