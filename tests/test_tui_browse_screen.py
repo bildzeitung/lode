@@ -385,13 +385,16 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
     assert row_count == 1
 
 
-def test_long_summary_wraps_instead_of_scrolling_the_table(tmp_path: Path) -> None:
-    """A long Summary wraps down over several lines; the table never scrolls sideways.
+def test_long_summary_is_capped_at_two_lines_not_wrapped_unbounded(
+    tmp_path: Path,
+) -> None:
+    """A long Summary never grows a row past two lines; the table never scrolls sideways.
 
-    Guards the lode-5qp fix: the Summary column is capped to the room left over
-    after Date/Version so a long summary grows the row's height (auto height)
-    rather than growing the table past the terminal width and forcing a
-    horizontal scroll.
+    Guards the lode-olmi.3 fix: earlier (lode-5qp), the Summary column was
+    capped to the room left over after Date/Version but rows were added with
+    unbounded auto height, so a long summary could still wrap over many lines
+    and make a busy list hard to scan. Every row is now fixed at two lines and
+    overflow is ellipsized rather than wrapped further.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -417,9 +420,36 @@ def test_long_summary_wraps_instead_of_scrolling_the_table(tmp_path: Path) -> No
 
     row_height, virtual_width, widget_width, summary_cell = asyncio.run(_drive())
 
-    assert row_height > 1  # the summary wrapped onto multiple lines
+    assert row_height == 2  # capped at two lines, not grown to fit the whole summary
     assert virtual_width <= widget_width  # ... so the table needs no h-scroll
-    assert summary_cell == long_summary  # the cell keeps the full text, untruncated
+    assert summary_cell.count("\n") == 1  # exactly two rendered lines
+    assert summary_cell != long_summary  # truncated, not kept in full
+    assert summary_cell.endswith("\N{HORIZONTAL ELLIPSIS}")  # overflow is ellipsized
+
+
+def test_short_summary_is_unaffected_by_the_two_line_cap(tmp_path: Path) -> None:
+    """A summary that already fits on one line is left alone, no ellipsis added."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    short_summary = "a short summary"
+    try:
+        save(conn, "note-a", short_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, str]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return table.rows[row_key].height, table.get_row_at(0)[3]
+
+    row_height, summary_cell = asyncio.run(_drive())
+
+    assert row_height == 2  # rows are always the fixed cap height
+    assert summary_cell == short_summary  # left untouched, no ellipsis
 
 
 # ---------------------------------------------------------------------------
