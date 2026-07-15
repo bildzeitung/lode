@@ -700,6 +700,7 @@ class EditScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
+        Binding("f4", "focus_related", "Related"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -745,6 +746,16 @@ class EditScreen(Screen[None]):
         if event.text_area.id != EDIT_BODY_ID:
             return
         self.query_one(RelatedNotesPanel).update_draft(event.text_area.text)
+
+    def action_focus_related(self) -> None:
+        """F4: move focus onto the related-notes panel (lode-olmi.9).
+
+        Its own Up/Down/Enter bindings only fire while it holds focus (see
+        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
+        ``TextArea`` consumes those keys itself while typing, so this is the
+        only way to reach them.
+        """
+        self.query_one(RelatedNotesPanel).focus()
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""
