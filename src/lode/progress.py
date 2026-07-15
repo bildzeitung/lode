@@ -77,11 +77,14 @@ def op_progress(
     try:
         yield
     except BaseException as exc:
-        stop.set()
-        thread.join(timeout=1.0)
-        log.info("%s: failed after %.1fs (%s)", name, time.monotonic() - start, exc)
+        # Format the terminal line here (while `exc` is bound) but emit it in
+        # `finally`, so the thread-teardown (stop + join) lives in one place
+        # for both the success and failure paths.
+        outcome = f"failed after {time.monotonic() - start:.1f}s ({exc})"
         raise
     else:
+        outcome = f"done ({time.monotonic() - start:.1f}s)"
+    finally:
         stop.set()
         thread.join(timeout=1.0)
-        log.info("%s: done (%.1fs)", name, time.monotonic() - start)
+        log.info("%s: %s", name, outcome)

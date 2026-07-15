@@ -197,6 +197,12 @@ def _call_haiku(
     failures.
     """
     prompt = _PROMPT_TMPL.format(body=body)
+    # Bounded client-side (lode-olmi.15): this immediate Haiku call is reachable
+    # from `lode work`'s drain loop (a residual `enrich` job claimed by the main
+    # claim/run loop, not the batch route -- see lode.worker.drain) as well as
+    # from the capture path, and with no timeout it can otherwise hang the drain
+    # indefinitely -- the same unbounded-hang the Batches API calls below are
+    # bounded against, via the same knob.
     response = client.messages.create(
         model=settings.enrichment_llm,
         max_tokens=1024,
@@ -210,6 +216,7 @@ def _call_haiku(
         ],
         tool_choice={"type": "tool", "name": _TOOL_NAME},
         messages=[{"role": "user", "content": prompt}],
+        timeout=settings.anthropic_call_timeout_s,
     )
     tool_block = next(b for b in response.content if b.type == "tool_use")
     return EnrichmentResult.model_validate(tool_block.input)

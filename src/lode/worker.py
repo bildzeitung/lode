@@ -962,11 +962,12 @@ def drain(
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
     # so the embeds land before any residual enrich job re-raises out of run_one.
-    # Progress instrumentation (lode-olmi.15): each named step below logs a
+    # Progress instrumentation (lode-olmi.15): the three potentially-slow steps
+    # below -- the two batch pre-steps and the main claim/run loop -- each log a
     # "starting"/heartbeat/"done" line via op_progress so a plain `lode work`
-    # always shows which step is currently running -- rather than the prior
-    # silence during the batch pre-steps, the reclaim/reset sweeps, and the
-    # main claim/run loop.
+    # always shows which one is currently running, rather than the prior silence.
+    # The reclaim/reset sweeps between them are left uninstrumented on purpose:
+    # they are fast local UPDATEs with no network or model call to stall on.
     heartbeat_interval_s = settings.progress_heartbeat_interval_s
     permanent: AuthError | None = None
     try:

@@ -251,8 +251,10 @@ class Settings(BaseModel):
         120.0,
         Kind.RUNTIME,
         "Per-call client-side timeout (seconds) passed to the Anthropic "
-        "Batches API calls in drain()'s batch pre-steps (client.beta.messages."
-        "batches.create/retrieve/results, enrich.py) -- bounds a hung network "
+        "enrichment calls reachable from 'lode work' (enrich.py): the Batches "
+        "API pre-steps (client.beta.messages.batches.create/retrieve/results) "
+        "and the immediate Haiku call (client.messages.create) a residual "
+        "enrich job can take in drain()'s main loop -- bounds a hung network "
         "call rather than letting it block 'lode work' forever (lode-olmi.15). "
         "Distinct from fetch_timeout_s, which governs web draw-down HTTP "
         "fetches, not Anthropic API calls.",

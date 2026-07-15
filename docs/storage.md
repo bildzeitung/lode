@@ -1077,12 +1077,15 @@ uniformly from `worker.py`/`reconcile.py`/`embedding.py` without threading
 kind of op it is:**
 
 - For a call that can be given a real client-side timeout — the Anthropic
-  Batches API calls (`client.beta.messages.batches.create`/`retrieve`/
-  `results`, `enrich.py`) — one is: `Settings.anthropic_call_timeout_s`
-  (default 120s), the same pattern `fetch_timeout_s` already established for
-  web draw-down HTTP fetches. A timed-out Batches call now raises rather than
-  hanging forever; the existing transient-failure retry/backoff accounting
-  handles it like any other failure.
+  enrichment calls (`enrich.py`): the Batches API calls
+  (`client.beta.messages.batches.create`/`retrieve`/`results`) and the
+  immediate Haiku call (`client.messages.create`) a residual `enrich` job can
+  take in `drain()`'s main claim/run loop — one is:
+  `Settings.anthropic_call_timeout_s` (default 120s), the same pattern
+  `fetch_timeout_s` already established for web draw-down HTTP fetches. A
+  timed-out call now raises rather than hanging forever; the existing
+  transient-failure retry/backoff accounting handles it like any other
+  failure.
 - For a call this codebase cannot safely abort mid-flight without cooperation
   from the callee — a local SQL scan (reconcile's steps), an in-process ONNX
   model construction (`embedding.py`) — there is no safe interrupt mechanism

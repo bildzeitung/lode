@@ -386,6 +386,24 @@ def test_enrich_version_returns_result(
     assert returned.tags == ["design"]
 
 
+def test_enrich_version_passes_anthropic_call_timeout_to_create(
+    conn: sqlite3.Connection,
+) -> None:
+    """The immediate Haiku call is bounded by Settings.anthropic_call_timeout_s
+    (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
+    residual enrich job claimed by the main claim/run loop), so with no
+    client-side timeout it could otherwise hang the drain forever.
+    """
+    _insert_note(conn)
+    result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
+    settings = Settings(anthropic_call_timeout_s=42.0)
+    client = _fake_client(result)
+    enrich_version(conn, "ver-1", settings, client=client)
+
+    create_kwargs = client.messages.create.call_args.kwargs
+    assert create_kwargs["timeout"] == 42.0
+
+
 def test_enrich_version_full_provenance(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
