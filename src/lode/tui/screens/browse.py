@@ -517,21 +517,20 @@ class ExternalPickerScreen(Screen[None]):
     def on_mount(self) -> None:
         table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
         table.add_columns("Source", "Snapshot", "Fetched", "State")
-        for index, external in enumerate(self._externals):
+        for external in self._externals:
             table.add_row(
                 external.source_type,
                 short_version_id(external.snapshot_id),
                 external.fetched_at,
                 external.state,
-                key=str(index),
+                key=external.snapshot_id,
             )
         table.focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        index = event.row_key.value
-        if index is not None:
-            external = self._externals[int(index)]
-            self.app.push_screen(SnapshotViewerScreen(external.snapshot_id))
+        snapshot_id = event.row_key.value
+        if snapshot_id is not None:
+            self.app.push_screen(SnapshotViewerScreen(snapshot_id))
 
     def action_dismiss_screen(self) -> None:
         self.app.pop_screen()

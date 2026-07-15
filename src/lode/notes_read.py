@@ -321,11 +321,10 @@ class SnapshotRow:
 
     body: str
     raw_payload: str | None
-    status: str
 
 
 def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
-    """Return one snapshot's stored body/raw_payload/status, or ``None`` if missing.
+    """Return one snapshot's stored body/raw_payload, or ``None`` if missing.
 
     Feeds :class:`~lode.tui.screens.browse.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
@@ -337,11 +336,11 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
     conn = init_db(db_path)
     try:
         row = conn.execute(
-            "SELECT body, raw_payload, status FROM snapshots WHERE snapshot_id = ?",
+            "SELECT body, raw_payload FROM snapshots WHERE snapshot_id = ?",
             (snapshot_id,),
         ).fetchone()
         if row is None:
             return None
-        return SnapshotRow(body=row[0], raw_payload=row[1], status=row[2])
+        return SnapshotRow(body=row[0], raw_payload=row[1])
     finally:
         conn.close()
