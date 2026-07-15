@@ -1,12 +1,12 @@
 """Tests for scripts/epic-debate-gate.sh (lode-bw5k).
 
 `/code` auto-select must refuse to build a child ticket whose parent epic has
-never been debated at least once — `/debate` is supposed to be the mandatory
+never been debated at least once — `/challenge` is supposed to be the mandatory
 stress-test gate before an epic's children get built, but nothing enforced it
 (exactly what happened with `lode-olmi`: its children were built and landed
-without the epic ever being debated). `/debate` now stamps a durable
+without the epic ever being debated). `/challenge` now stamps a durable
 `epic-debated` label on an epic when it debates it
-(.claude/skills/debate/SKILL.md); this script is the mechanical check
+(.claude/skills/challenge/SKILL.md); this script is the mechanical check
 `/code`'s auto-select step (.claude/skills/code/SKILL.md) runs, per candidate
 ticket, after the existing human/epic filter (lode-8pqv).
 

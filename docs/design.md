@@ -22,7 +22,7 @@ mechanics live in focused companion docs:
 | [configuration.md](configuration.md) | Every tunable knob and build constant, in one table |
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 | [keybindings.md](keybindings.md) | The TUI's central keymap: which keys are taken, App- vs Screen-level altitude, the editable-TextArea non-printable-key rule |
-| [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`debate`) and the coding loop (`/code` → `coding`) |
+| [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`challenge`) and the coding loop (`/code` → `coding`) |
 
 ---
 

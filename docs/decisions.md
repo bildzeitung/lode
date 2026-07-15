@@ -204,7 +204,7 @@ are catalogued in [configuration.md](configuration.md).
   `"rtk bd dolt push"`, missing any call site written without the `rtk` prefix. A prefix-agnostic
   re-audit found and wrapped two more unattended-loop call sites (`land/SKILL.md`'s exit-(a)
   re-entry step, `sweep/SKILL.md`'s publish step) and confirmed three deliberate exemptions —
-  `debate/SKILL.md` (human-invoked/interactive, a failed push is observed), `.beads/README.md` and
+  `challenge/SKILL.md` (human-invoked/interactive, a failed push is observed), `.beads/README.md` and
   `AGENTS.md` (generic beads-generated quick-reference prose, not automated call sites). See the
   "Concurrent `bd dolt push` under fan-out" section in [agents-workflow.md](agents-workflow.md) for
   the full inventory.
@@ -238,7 +238,7 @@ are catalogued in [configuration.md](configuration.md).
 - **Epic auto-close + confirming re-audit — rejected, not merely deferred (lode-nps).** `/epic-audit`
   never closes an epic itself and, after filing gap children, does not re-arm itself — closing an
   `epic-audited` + all-children-closed epic stays a manual act (`/epic-audit <id>` to re-verify, or a
-  direct `bd close`). A `/debate` pass considered auto-closing an epic once every filed gap child had
+  direct `bd close`). A `/challenge` pass considered auto-closing an epic once every filed gap child had
   landed and a confirming re-audit came back clean. **Rejected:** epic closure is a human
   **capability judgment** — "did the delivered set actually satisfy what this epic promised" — not a
   mechanical check a re-audit can safely stand in for. Every gap child already passes code-review +

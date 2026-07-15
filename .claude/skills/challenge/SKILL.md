@@ -1,11 +1,11 @@
 ---
-name: debate
-description: Stress-test a work plan, ticket tree, bug-fix approach, or proposed design change before it gets built. Surfaces ambiguities, hidden assumptions, sequencing gaps, and risky approaches, then pushes back with specific criticisms. Invoke when you want hard pushback on a plan rather than agreement. Examples — "debate this plan", "poke holes in this approach", "stress-test these tickets before I build them".
+name: challenge
+description: Stress-test a work plan, ticket tree, bug-fix approach, or proposed design change before it gets built. Surfaces ambiguities, hidden assumptions, sequencing gaps, and risky approaches, then pushes back with specific criticisms. Invoke when you want hard pushback on a plan rather than agreement. Examples — "challenge this plan", "poke holes in this approach", "stress-test these tickets before I build them".
 ---
 
-# debate
+# challenge
 
-I am a debate pass. My job is to **push back**, not to agree. You give me something
+I am a challenge pass. My job is to **push back**, not to agree. You give me something
 about to be built — a work plan, a beads ticket or epic tree, a bug-fix approach, or
 a proposed change to the `docs/` design — and I stress-test it for the things that
 will hurt at implementation time: ambiguities, hidden assumptions, sequencing gaps,
@@ -18,7 +18,7 @@ adapted from, I do not run in a loop or dispatch other agents. I run once.
 
 ## How to use me
 
-State what you want debated. I figure out which mode applies:
+State what you want challenged. I figure out which mode applies:
 
 - **A plan or approach in the conversation** (most common) — the thing we've been
   discussing, or text you paste in.
@@ -96,34 +96,34 @@ need to ask for.
 
 ### 4. Persist, stamp, then surface decisions one at a time (the default)
 
-Unless you tell me otherwise, closing a debate has three steps, in order:
+Unless you tell me otherwise, closing a challenge has three steps, in order:
 
-1. **Persist the findings.** For every debated item that *has* a beads issue and got a
+1. **Persist the findings.** For every challenged item that *has* a beads issue and got a
    genuine finding, I append that item's findings to its own issue —
    `bd update <id> --append-notes="CRITICISM: <finding>"`, one issue at a time, not a
    single dump across items — then `bd dolt push` so the writes reach the wire. This is a
    **deliberate exemption** from routing through `scripts/bd-dolt-push.sh` (the
-   retry-on-reject wrapper the unattended loops use, lode-83d): `/debate` is human-invoked
-   and interactive, so a failed push here is observed directly in the transcript rather
-   than silently stranding a hand-off — unlike the four+ unattended-loop call sites the
-   wrapper hardens. Don't "fix" this one by wrapping it (lode-bpl). Always
-   `--append-notes`, never `--notes`: `--notes` *replaces* the notes field and would
-   silently destroy whatever is already there. If what I debated has no ticket (a
-   conversation plan, an unwritten `docs/` change), there is nothing to persist to — I
-   say so and go straight to step 2. This is the default final step of a debate; I do it
-   without being asked.
-2. **Stamp the epic as debated (lode-bw5k).** If what I debated **resolves to an epic** —
-   the mode was "a beads issue or epic" and its `bd show <id>` showed `issue_type: epic` —
-   I stamp it: `bd update <epic-id> --add-label epic-debated`, then `bd dolt push` (same
-   interactive exemption as step 1). This is the durable, machine-readable marker
-   `/code`'s auto-select gate checks before building any of that epic's children
-   (`.claude/skills/code/SKILL.md`) — it records that the stress-test pass *happened*, not
-   that it found anything, so I apply it **even on a clean bill** (no criticisms is a
-   valid debate outcome, not a skipped one). Re-applying the label on a later re-debate of
-   the same epic is a harmless no-op. If what I debated is **not** an epic — a
-   conversation plan, a single non-epic ticket, an unwritten `docs/` change — there is
-   nothing to stamp; I skip this step silently, the same way step 1 skips a ticket-less
-   debate.
+   retry-on-reject wrapper the unattended loops use, lode-83d): `/challenge` is
+   human-invoked and interactive, so a failed push here is observed directly in the
+   transcript rather than silently stranding a hand-off — unlike the four+
+   unattended-loop call sites the wrapper hardens. Don't "fix" this one by wrapping it
+   (lode-bpl). Always `--append-notes`, never `--notes`: `--notes` *replaces* the notes
+   field and would silently destroy whatever is already there. If what I challenged has
+   no ticket (a conversation plan, an unwritten `docs/` change), there is nothing to
+   persist to — I say so and go straight to step 2. This is the default final step of a
+   challenge; I do it without being asked.
+2. **Stamp the epic as debated (lode-bw5k).** If what I challenged **resolves to an
+   epic** — the mode was "a beads issue or epic" and its `bd show <id>` showed
+   `issue_type: epic` — I stamp it: `bd update <epic-id> --add-label epic-debated`, then
+   `bd dolt push` (same interactive exemption as step 1). This is the durable,
+   machine-readable marker `/code`'s auto-select gate checks before building any of that
+   epic's children (`.claude/skills/code/SKILL.md`) — it records that the stress-test
+   pass *happened*, not that it found anything, so I apply it **even on a clean bill**
+   (no criticisms is a valid challenge outcome, not a skipped one). Re-applying the label
+   on a later challenge of the same epic is a harmless no-op. If what I challenged is
+   **not** an epic — a conversation plan, a single non-epic ticket, an unwritten `docs/`
+   change — there is nothing to stamp; I skip this step silently, the same way step 1
+   skips a ticket-less challenge.
 3. **Surface each identified decision, one at a time.** After persisting and stamping, if
    the findings surface open decisions the user needs to make (an ambiguous scope call, a
    design fork, a sequencing choice), I raise them **one at a time** via
@@ -134,7 +134,7 @@ Unless you tell me otherwise, closing a debate has three steps, in order:
 **Opt-out:** if you say something like "just tell me, don't persist," I skip all three
 steps (including the `epic-debated` stamp) and stop after the readout in §3, as before.
 
-I never edit `docs/` or a ticket's `design` field as a side effect of debating —
+I never edit `docs/` or a ticket's `design` field as a side effect of challenging —
 persistence is to the issue's `notes` only, and only ever by appending. Recording a
 corrected bug approach to `--design`, or writing a `docs/` change, stays a separate,
 explicit step you ask for.
