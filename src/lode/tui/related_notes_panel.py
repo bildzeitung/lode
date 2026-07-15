@@ -402,8 +402,8 @@ class RelatedNoteModalScreen(ModalScreen[None]):
     version_body` — not a current-live-head lookup — because ``char_range``
     is only guaranteed valid against the precise version it was computed
     from; the note's live head can have moved on since. The ``[start:end)``
-    slice is styled ``reverse`` in the
-    surrounding body (:meth:`_highlighted_body`) via a plain Rich
+    slice is styled ``reverse`` in the surrounding body
+    (:meth:`_highlighted_body`) via a plain Rich
     :class:`~rich.text.Text` object (not ``markup=True`` on the ``Static`` —
     verbatim note text commonly contains bracket sequences Textual would
     otherwise parse as console markup, the same ``markup=False`` reasoning

@@ -234,9 +234,8 @@ def enrichment_view(db_path: Path, note_id: str) -> EnrichmentView | None:
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
     convention as :func:`lode.notes_read.list_notes` -- a plain top-level
     read, not tied to a connection a caller might hold. Prefer
-    :func:`enrichment_view_conn` when you already
-    hold an open connection (e.g. ``cli.show_``, lode-ay5.3) -- it avoids
-    opening a second one.
+    :func:`enrichment_view_conn` when you already hold an open connection
+    (e.g. ``cli.show_``, lode-ay5.3) -- it avoids opening a second one.
     """
     conn = init_db(db_path)
     try:
