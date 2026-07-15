@@ -17,7 +17,6 @@ from lode.notes_read import (
     list_deleted_notes,
     list_notes,
     list_versions,
-    note_body,
     short_note_id,
     version_body,
 )
@@ -261,50 +260,6 @@ def test_list_deleted_notes_summary_falls_back_to_the_tombstones_carried_body(
     rows = list_deleted_notes(db_path)
 
     assert rows[0].summary == "the original first line"
-
-
-def _setup_live_head(conn) -> str | None:
-    head = save(conn, "note-1", "v1 body").version_id
-    save(conn, "note-1", "v2 body", parent=head)
-    return "v2 body"
-
-
-def _setup_deleted_note(conn) -> str | None:
-    head = save(conn, "note-1", "v1 body").version_id
-    delete(conn, "note-1", parent=head)
-    return None
-
-
-# lode-b4w.1's checklist flagged this pair as sharing a shape (parametrize
-# over note-state candidate); the setups differ (an update vs. a delete) so
-# each is wrapped as a setup_fn returning its expected note_body -- 2 tests
-# -> 1, no assertion dropped. test_version_body_returns_a_specific_non_head_version
-# below is explicitly NOT folded in here per the checklist's caution (it's a
-# related but distinct call, testing version_body's own happy path against a
-# known non-head version_id, not note_body's "reflects current note state").
-@pytest.mark.parametrize(
-    "setup_fn",
-    [
-        pytest.param(_setup_live_head, id="live_head"),
-        pytest.param(_setup_deleted_note, id="deleted"),
-    ],
-)
-def test_note_body_reflects_note_state(tmp_path: Path, setup_fn) -> None:
-    db_path = tmp_path / "lode.db"
-    conn = init_db(db_path)
-    try:
-        expected = setup_fn(conn)
-    finally:
-        conn.close()
-
-    assert note_body(db_path, "note-1") == expected
-
-
-def test_note_body_returns_none_for_an_absent_note(tmp_path: Path) -> None:
-    db_path = tmp_path / "lode.db"
-    init_db(db_path).close()
-
-    assert note_body(db_path, "nonexistent") is None
 
 
 def test_list_versions_orders_newest_first_with_seq_matching_chain_length(

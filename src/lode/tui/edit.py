@@ -68,8 +68,8 @@ def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     """Return ``(head_version_id, head_body)`` for ``note_id``'s live head.
 
     ``None`` if the note is absent or its head is a soft-delete tombstone
-    (``op = 'delete'``) — mirroring :func:`lode.notes_read.note_body`'s "live
-    heads only" guard, since a tombstoned note has nothing editable to load.
+    (``op = 'delete'``) — same "live heads only" guard :func:`lode.notes_read.
+    list_notes` applies, since a tombstoned note has nothing editable to load.
     :class:`~lode.tui.screens.browse.EditScreen` uses this both to seed the
     editable buffer and to remember the CAS ``parent`` its save must reparent
     onto.

@@ -399,10 +399,10 @@ class RelatedNoteModalScreen(ModalScreen[None]):
     **Highlighted context = the matched passage span, not the whole note**
     (the design question the ticket posed, decided in ``--design``): loads
     the note's *exact* ``target_version`` body via :func:`lode.notes_read.
-    version_body` — not :func:`lode.notes_read.note_body`'s current-live-head
-    lookup — because ``char_range`` is only guaranteed valid against the
-    precise version it was computed from; the note's live head can have moved
-    on since. The ``[start:end)`` slice is styled ``reverse`` in the
+    version_body` — not a current-live-head lookup — because ``char_range``
+    is only guaranteed valid against the precise version it was computed
+    from; the note's live head can have moved on since. The ``[start:end)``
+    slice is styled ``reverse`` in the
     surrounding body (:meth:`_highlighted_body`) via a plain Rich
     :class:`~rich.text.Text` object (not ``markup=True`` on the ``Static`` —
     verbatim note text commonly contains bracket sequences Textual would
