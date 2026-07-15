@@ -166,15 +166,17 @@ class CaptureScreen(Screen[None]):
     only; otherwise it pops a Save/Discard/Cancel confirm (lode-0wj.1) rather
     than discarding silently. The app-level Ctrl+Q binding
     (:mod:`lode.tui.app`) applies the same guard via :meth:`confirm_quit`
-    (lode-0wj.8). The related-notes panel is read-only and non-interactive —
-    it never takes focus or input, so it changes nothing about capture's
-    "get in, dump text, get out" contract.
+    (lode-0wj.8). The related-notes panel stays passive by default while the
+    body holds focus, but is itself interactive (lode-olmi.9) — F4 moves
+    focus onto it to step through results and open one's highlighted context;
+    see :mod:`lode.tui.related_notes_panel`'s module docstring.
     """
 
     BINDINGS = [
         Binding("ctrl+s", "save", "Save & quit"),
         Binding("ctrl+n", "save_and_new", "Save & new"),
         Binding("escape", "cancel", "Discard & quit"),
+        Binding("f4", "focus_related", "Related"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -273,6 +275,16 @@ class CaptureScreen(Screen[None]):
     def action_cancel(self) -> None:
         """Escape: exit immediately if the buffer is empty, else confirm first."""
         self.confirm_quit()
+
+    def action_focus_related(self) -> None:
+        """F4: move focus onto the related-notes panel (lode-olmi.9).
+
+        Its own Up/Down/Enter bindings only fire while it holds focus (see
+        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
+        ``TextArea`` consumes those keys itself while typing, so this is the
+        only way to reach them.
+        """
+        self.query_one(RelatedNotesPanel).focus()
 
     def confirm_quit(self) -> None:
         """Exit immediately if the buffer is empty, else confirm first.

@@ -313,6 +313,51 @@ own) and is at CONTENT parity with the TUI modal: it gained edge `reason`/`confi
 `-> to_id (reason, 0.82)[stale]`) and an `enrichment:` status line ({pending, failed, ready}), neither
 of which the pre-ay5.3 CLI printed.
 
+### Surfacing retrieved external content in the edit screen (decided, lode-olmi.8)
+
+**The ask (spec 06, "Surfacing more retrieved data"):** a user whose note draws down a web link has no
+way, from either the edit screen or the browse-row inspector, to tell that content was actually
+fetched, nor to look at what was fetched. `ExternalView` (above) already carries the metadata half of
+this — `source_type`, `snapshot_id`, `fetched_at`, `state` — but deliberately carries no content field
+(its own module docstring: `state` is scoped to what `lode-ay5.1`/`lode-w0h.2` land, "this module
+fabricates no field for data that does not exist yet"); `snapshots.body`/`raw_payload` hold the actual
+extracted text / raw HTML, and nothing on either TUI surface reads them today.
+
+**Options considered:**
+
+1. **Upgrade `EnrichmentModalScreen`'s Edges block into a selectable list**, with a "view" action on
+   the highlighted external edge opening a content viewer in place. Reuses the one existing inspector
+   surface for both metadata and content, but breaks that modal's documented "glance-and-dismiss,"
+   zero-interactivity contract (its own docstring) — the biggest structural change of the three, for a
+   screen the codebase otherwise treats as a pure, non-interactive render of `enrichment_view`.
+2. **A second, independent binding + a new, small content-viewer modal**, orthogonal to the existing
+   inspector. The inspector keeps showing metadata only, unchanged; the new binding resolves the note's
+   external edges (already exactly what `enrichment_view` assembles) and either notifies "no retrieved
+   content" (zero externals), pushes the viewer directly (exactly one), or — mirroring `lode-olmi.7`'s
+   CLI `dump-html` disambiguation decision on purpose, so the CLI and TUI addressing logic can't drift
+   onto two different rules for the same question — lists them first (reusing
+   `VersionHistoryScreen`'s existing DataTable-then-select pattern) and pushes the viewer once one is
+   chosen. Smallest diff of the three; touches no existing screen's rendering contract.
+3. **A permanent, always-visible "N external source(s) retrieved" line in `EditScreen`'s layout**,
+   computed once from `enrichment_view` in `on_mount`, plus the same viewer/addressing flow as (2) for
+   the actual look. Answers "was anything retrieved" with no keypress needed to notice — the most
+   visible of the three. But it's new permanent chrome competing for the edit screen's vertical space
+   (already shared with `RelatedNotesPanel`) on every note, most of which have zero externals — against
+   the epic's own "capped/lean" ergonomics theme (browse's summary cap, `lode-olmi.3`) — and it
+   duplicates state `EnrichmentModalScreen` already renders, just gated behind a different screen.
+
+**Decision: option 2.** `EditScreen` gains the same `i` → `EnrichmentModalScreen(self.note_id)` wiring
+`BrowseScreen.action_inspect_selected` already has (`lode-g5es`), so "was this retrieved" is answered
+by the existing, unmodified inspector, now reachable from the edit screen too and not only from browse
+— plus a new `v` binding and a new `SnapshotViewerScreen` (`ModalScreen`) keyed to
+`ExternalView.snapshot_id`, reading `snapshots.body`/`raw_payload` with a toggle key between the
+extracted body and the raw HTML, sharing the same NULL/tombstone handling `lode-olmi.7`'s CLI
+`dump-html` command establishes (a tombstone or a no-`raw_payload` snapshot reports cleanly rather than
+toggling into blank) rather than re-deriving it (`lode-0sjj`). Chosen over (1) because it leaves
+`EnrichmentModalScreen`'s existing glance-and-dismiss contract untouched, and over (3) because it adds
+no permanent chrome to a screen most notes never populate. Follow-up build tickets: `lode-g5es` (wire
+`i` into `EditScreen`) and `lode-0sjj` (the `v` addressing flow + new `SnapshotViewerScreen`).
+
 ### Provenance & user override
 
 - **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,

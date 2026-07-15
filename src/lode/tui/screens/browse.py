@@ -130,6 +130,8 @@ usual pop back to capture.
 
 from __future__ import annotations
 
+import textwrap
+
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -137,6 +139,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
+from textual.widgets.data_table import RowDoesNotExist
 
 from lode.enrichment_view import (
     EnrichmentEdge,
@@ -207,6 +210,31 @@ _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
 #: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
+#: Fixed row height (lode-olmi.3) -- a long summary used to grow the row (and
+#: so the whole list) as tall as it needed via ``height=None``; every row is
+#: now capped to this many lines, with overflow ellipsized instead of wrapped.
+_SUMMARY_ROW_HEIGHT = 2
+
+
+def _clip_summary_to_row_height(summary: str, width: int) -> str:
+    """Wrap *summary* to *width* and cap it at :data:`_SUMMARY_ROW_HEIGHT` lines.
+
+    A ``DataTable`` row given a fixed ``height`` doesn't ellipsize overflow on
+    its own -- it just clips whatever doesn't fit, mid-word, with no visual
+    cue that anything is missing. So the wrapping is done here instead: the
+    text is pre-wrapped to *width* and, if that produces more than
+    :data:`_SUMMARY_ROW_HEIGHT` lines, the last visible line is truncated and
+    given a trailing ellipsis so the cut is visible rather than silent.
+    """
+    if width <= 0:
+        return summary
+    lines = textwrap.wrap(summary, width=width) or [""]
+    if len(lines) <= _SUMMARY_ROW_HEIGHT:
+        return "\n".join(lines)
+    kept = lines[:_SUMMARY_ROW_HEIGHT]
+    last = kept[-1][: max(width - 1, 0)].rstrip()
+    kept[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
+    return "\n".join(kept)
 
 
 class NoteViewScreen(Screen[None]):
@@ -590,15 +618,38 @@ class BrowseScreen(Screen[None]):
         Summary used to push the table wider than the terminal and force an
         inconvenient horizontal scroll. Instead the Id/Date/Version columns
         keep their natural (content) widths and the Summary column is capped
-        to the room left over, with rows added ``height=None`` (auto height)
-        so the summary text wraps down over as many lines as it needs -- the
-        row grows vertically rather than the table growing horizontally.
+        to the room left over.
+
+        **Two-line cap (lode-olmi.3).** Rows used to be added with
+        ``height=None`` (auto height), so a long summary wrapped down over as
+        many lines as it needed and a busy list became hard to scan. Every row
+        is now a fixed :data:`_SUMMARY_ROW_HEIGHT` tall, and the summary text
+        is pre-wrapped and ellipsized to that budget by
+        :func:`_clip_summary_to_row_height` before it ever reaches the table
+        -- overflow is truncated, not wrapped further.
 
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
         :meth:`on_resize` and :meth:`on_screen_resume`.
+
+        **Cursor preservation (lode-olmi.1).** ``clear(columns=True)`` also
+        discards the ``DataTable``'s cursor position -- without this, leaving
+        a highlighted row to view/edit a note and popping back (which fires
+        :meth:`on_screen_resume`, and so this reload) always snapped the
+        cursor back to the top row. This captures the highlighted row's
+        ``note_id`` (the row key) *before* the rebuild and restores the
+        cursor to that same key afterward, falling back to the top row only
+        when the note is gone (deleted/tombstoned in the meantime, or the
+        table is now empty). The same logic covers :meth:`on_resize` too,
+        since it shares this one reload path -- a resize-triggered rebuild
+        never loses the selection either.
         """
         table = self.query_one(f"#{TABLE_ID}", DataTable)
+        selected_note_id: str | None = None
+        if table.row_count > 0:
+            selected_note_id = table.coordinate_to_cell_key(
+                table.cursor_coordinate
+            ).row_key.value
         rows = list_notes(self.app.db_path)
         table.clear(columns=True)
 
@@ -631,10 +682,22 @@ class BrowseScreen(Screen[None]):
                 id_cell,
                 date_cell,
                 version_cell,
-                row.summary,
+                _clip_summary_to_row_height(row.summary, summary_width),
                 key=row.note_id,
-                height=None,
+                height=_SUMMARY_ROW_HEIGHT,
             )
+
+        if table.row_count == 0:
+            return
+        restored_index = 0
+        if selected_note_id is not None:
+            try:
+                restored_index = table.get_row_index(selected_note_id)
+            except RowDoesNotExist:
+                # The previously-highlighted note is gone (deleted/tombstoned)
+                # -- fall back to the top row (restored_index is already 0).
+                pass
+        table.move_cursor(row=restored_index)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         note_id = event.row_key.value
@@ -817,6 +880,7 @@ class EditScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
+        Binding("f4", "focus_related", "Related"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -862,6 +926,16 @@ class EditScreen(Screen[None]):
         if event.text_area.id != EDIT_BODY_ID:
             return
         self.query_one(RelatedNotesPanel).update_draft(event.text_area.text)
+
+    def action_focus_related(self) -> None:
+        """F4: move focus onto the related-notes panel (lode-olmi.9).
+
+        Its own Up/Down/Enter bindings only fire while it holds focus (see
+        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
+        ``TextArea`` consumes those keys itself while typing, so this is the
+        only way to reach them.
+        """
+        self.query_one(RelatedNotesPanel).focus()
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

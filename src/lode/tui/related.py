@@ -61,11 +61,23 @@ _SNIPPET_CHARS = 80
 
 @dataclass(frozen=True, slots=True)
 class RelatedNote:
-    """One past note surfaced while writing — "you wrote about this 3 weeks ago"."""
+    """One past note surfaced while writing — "you wrote about this 3 weeks ago".
+
+    ``version_id`` and ``char_range`` (lode-olmi.9) pin the exact matched
+    passage — the specific ``target_version`` the retrieval pipeline matched
+    against, and its half-open char offsets within that version's own stored
+    body (:data:`lode.chunking.Passage.char_range`'s convention) — so a caller
+    can look up that precise passage later (e.g. to open a highlighted-context
+    modal) without re-running retrieval. Both default to ``""`` so the small
+    number of hand-constructed ``RelatedNote(...)`` test stand-ins that predate
+    this field stay valid; a ``""`` value simply means "nothing to highlight."
+    """
 
     note_id: str
     snippet: str
     age: str
+    version_id: str = ""
+    char_range: str = ""
 
 
 def find_related_notes(
@@ -102,7 +114,9 @@ def find_related_notes(
     at most ``settings.related_notes_limit``
     **distinct notes** (deduped, keeping each note's best-ranked passage as its
     snippet), each carrying a human "N weeks ago"-style age
-    (:func:`humanize_age`).
+    (:func:`humanize_age`) plus that best-ranked passage's own ``version_id``/
+    ``char_range`` (lode-olmi.9) — enough for a caller to later locate and
+    highlight the exact matched span, not just show the truncated snippet.
 
     ``exclude_note_id`` (lode-aoc) drops that one note from the results before
     the dedup/limit cap — the note being *edited* trivially matches its own
@@ -190,6 +204,8 @@ def _to_related_notes(
                 note_id=note_id,
                 snippet=_snippet(item.passage_text),
                 age=humanize_age(created, now=now),
+                version_id=item.target_version,
+                char_range=item.char_range,
             )
         )
         if len(related) >= limit:
