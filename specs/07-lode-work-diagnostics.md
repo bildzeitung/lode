@@ -30,7 +30,7 @@ the DB that reproduces the problem.
    plenty), then Ctrl-C. Capture *all* stdout/stderr:
 
    ```bash
-   lode work --wait --debug 2>&1 | tee /tmp/lode-work-wait.log
+   lode --debug work --wait 2>&1 | tee /tmp/lode-work-wait.log
    ```
 
    `--debug` matters: it turns on the reconcile step's per-step `reconcile[<step>]: N
@@ -56,7 +56,7 @@ the DB that reproduces the problem.
    Python stack so I can see the exact blocking call:
 
    ```bash
-   lode work --debug 2>&1 | tee /tmp/lode-work-oneshot.log &
+   lode --debug work 2>&1 | tee /tmp/lode-work-oneshot.log &
    #   … wait ~10s until it's clearly hung, note the PID printed …
    py-spy dump --pid <PID>      # if py-spy is installed (pip install py-spy)
    #   — OR, if no py-spy: Ctrl-\ (SIGQUIT) in the foreground run prints a traceback
