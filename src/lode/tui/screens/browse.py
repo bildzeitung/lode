@@ -107,6 +107,8 @@ empty table, is a no-op.
 
 from __future__ import annotations
 
+import textwrap
+
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -181,6 +183,31 @@ _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
 #: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
+#: Fixed row height (lode-olmi.3) -- a long summary used to grow the row (and
+#: so the whole list) as tall as it needed via ``height=None``; every row is
+#: now capped to this many lines, with overflow ellipsized instead of wrapped.
+_SUMMARY_ROW_HEIGHT = 2
+
+
+def _clip_summary_to_row_height(summary: str, width: int) -> str:
+    """Wrap *summary* to *width* and cap it at :data:`_SUMMARY_ROW_HEIGHT` lines.
+
+    A ``DataTable`` row given a fixed ``height`` doesn't ellipsize overflow on
+    its own -- it just clips whatever doesn't fit, mid-word, with no visual
+    cue that anything is missing. So the wrapping is done here instead: the
+    text is pre-wrapped to *width* and, if that produces more than
+    :data:`_SUMMARY_ROW_HEIGHT` lines, the last visible line is truncated and
+    given a trailing ellipsis so the cut is visible rather than silent.
+    """
+    if width <= 0:
+        return summary
+    lines = textwrap.wrap(summary, width=width) or [""]
+    if len(lines) <= _SUMMARY_ROW_HEIGHT:
+        return "\n".join(lines)
+    kept = lines[:_SUMMARY_ROW_HEIGHT]
+    last = kept[-1][: max(width - 1, 0)].rstrip()
+    kept[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
+    return "\n".join(kept)
 
 
 class NoteViewScreen(Screen[None]):
@@ -546,9 +573,15 @@ class BrowseScreen(Screen[None]):
         Summary used to push the table wider than the terminal and force an
         inconvenient horizontal scroll. Instead the Id/Date/Version columns
         keep their natural (content) widths and the Summary column is capped
-        to the room left over, with rows added ``height=None`` (auto height)
-        so the summary text wraps down over as many lines as it needs -- the
-        row grows vertically rather than the table growing horizontally.
+        to the room left over.
+
+        **Two-line cap (lode-olmi.3).** Rows used to be added with
+        ``height=None`` (auto height), so a long summary wrapped down over as
+        many lines as it needed and a busy list became hard to scan. Every row
+        is now a fixed :data:`_SUMMARY_ROW_HEIGHT` tall, and the summary text
+        is pre-wrapped and ellipsized to that budget by
+        :func:`_clip_summary_to_row_height` before it ever reaches the table
+        -- overflow is truncated, not wrapped further.
 
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
@@ -587,9 +620,9 @@ class BrowseScreen(Screen[None]):
                 id_cell,
                 date_cell,
                 version_cell,
-                row.summary,
+                _clip_summary_to_row_height(row.summary, summary_width),
                 key=row.note_id,
-                height=None,
+                height=_SUMMARY_ROW_HEIGHT,
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
