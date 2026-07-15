@@ -618,8 +618,8 @@ class BrowseScreen(Screen[None]):
                 restored_index = table.get_row_index(selected_note_id)
             except RowDoesNotExist:
                 # The previously-highlighted note is gone (deleted/tombstoned)
-                # -- fall back to the top row.
-                restored_index = 0
+                # -- fall back to the top row (restored_index is already 0).
+                pass
         table.move_cursor(row=restored_index)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
