@@ -197,7 +197,7 @@ def _clip_summary_to_row_height(summary: str, width: int) -> str:
     cue that anything is missing. So the wrapping is done here instead: the
     text is pre-wrapped to *width* and, if that produces more than
     :data:`_SUMMARY_ROW_HEIGHT` lines, the last visible line is truncated and
-    given a trailing ``...`` so the cut is visible rather than silent.
+    given a trailing ellipsis so the cut is visible rather than silent.
     """
     if width <= 0:
         return summary
