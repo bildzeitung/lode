@@ -2,9 +2,10 @@
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot, the same
 style ``tests/test_tui_browse_screen.py`` / ``tests/test_tui_capture_confirm.py``
-use: reaching the edit screen with browse's ``e`` binding, saving appends a
-version onto the existing note (never a new note), Escape returns to the
-list, the confirm-on-unsaved guard applies -- but with "changed from the
+use: reaching the edit screen via browse's row-select (lode-olmi.2 -- row-select
+opens the editor directly, retiring the earlier separate ``e`` binding), saving
+appends a version onto the existing note (never a new note), Escape returns to
+the list, the confirm-on-unsaved guard applies -- but with "changed from the
 loaded buffer" as the dirty check, not "non-empty" (a freshly loaded existing
 version is never empty).
 """
@@ -34,7 +35,7 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         conn.close()
 
 
-def test_e_on_a_highlighted_row_opens_it_editable(tmp_path: Path) -> None:
+def test_row_select_on_a_highlighted_row_opens_it_editable(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -46,7 +47,7 @@ def test_e_on_a_highlighted_row_opens_it_editable(tmp_path: Path) -> None:
     async def _drive() -> str:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             return app.screen.query_one(f"#{EDIT_BODY_ID}").text
@@ -68,7 +69,7 @@ def test_saving_an_edit_appends_a_version_not_a_new_note(tmp_path: Path) -> None
     async def _drive() -> None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "edited body"
@@ -103,7 +104,7 @@ def test_escape_on_unchanged_buffer_returns_to_the_list_without_confirm(
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             await pilot.press("escape")
@@ -131,7 +132,7 @@ def test_escape_on_a_dirty_buffer_shows_the_confirm_dialog(tmp_path: Path) -> No
     async def _drive() -> str:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "a real edit"
@@ -159,7 +160,7 @@ def test_confirm_discard_returns_to_the_list_without_saving(tmp_path: Path) -> N
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "discarded edit"
@@ -189,7 +190,7 @@ def test_confirm_save_saves_and_returns_to_the_list(tmp_path: Path) -> None:
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "saved via the confirm dialog"
@@ -221,7 +222,7 @@ def test_confirm_cancel_returns_to_editing_with_buffer_intact(tmp_path: Path) ->
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "do not lose this"
@@ -252,7 +253,7 @@ def test_saving_an_empty_edit_is_refused_without_leaving_the_screen(
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "   "
@@ -285,7 +286,7 @@ def test_browse_list_reflects_the_new_version_after_returning_from_edit(
 
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "edited body"
@@ -324,7 +325,7 @@ def test_cas_reject_on_save_shows_reconcile_then_returns_to_the_list(
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             # A concurrent process saves onto this note while it's being

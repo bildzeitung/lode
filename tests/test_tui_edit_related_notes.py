@@ -49,9 +49,10 @@ def test_editing_surfaces_a_related_past_note(
     """The acceptance criterion end to end: editing surfaces a related note,
     with the same debounce/knob behavior capture has (lode-aoc).
 
-    ``BrowseScreen``'s table lists notes newest-first and ``e`` opens whatever
-    row the cursor sits on (row 0 by default) -- so the *second* saved note
-    (``note-under-edit``) is the one browse's ``e`` opens, not the first.
+    ``BrowseScreen``'s table lists notes newest-first and row-select opens
+    whatever row the cursor sits on (row 0 by default, lode-olmi.2) -- so the
+    *second* saved note (``note-under-edit``) is the one that gets opened,
+    not the first.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -67,7 +68,7 @@ def test_editing_surfaces_a_related_past_note(
     async def _drive() -> list:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             assert app.screen.note_id == "note-under-edit"
@@ -102,7 +103,7 @@ def test_editing_a_note_never_surfaces_the_note_itself(
     async def _drive() -> list:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             # Loading the head into the buffer alone (no further typing) is
@@ -133,7 +134,7 @@ def test_edit_screen_panel_excludes_this_note_id_at_construction(
     async def _drive() -> str | None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             panel = app.screen.query_one(f"#{EDIT_RELATED_ID}", RelatedNotesPanel)

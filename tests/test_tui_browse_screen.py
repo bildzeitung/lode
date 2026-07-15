@@ -3,8 +3,8 @@
 Drives the real widgets end to end via Textual's ``run_test`` pilot, the same
 style ``tests/test_tui_config.py`` / ``tests/test_tui_ask_screen.py`` use:
 reaching the screen from capture via the app-level ``F3`` binding, the table's
-contents/ordering, selecting a row to open a read-only note view, and the
-"note -> list -> capture" Escape chain.
+contents/ordering, selecting a row to open the editor directly (lode-olmi.2),
+and the "edit -> list -> capture" Escape chain.
 """
 
 import asyncio
@@ -23,6 +23,7 @@ from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
     DELETE_CONFIRM_MESSAGE_ID,
+    EDIT_BODY_ID,
     HISTORY_TABLE_ID,
     INSPECTOR_EDGES_ID,
     INSPECTOR_EMBED_ID,
@@ -30,7 +31,6 @@ from lode.tui.screens.browse import (
     INSPECTOR_STATE_ID,
     INSPECTOR_SUMMARY_ID,
     INSPECTOR_TAGS_ID,
-    NOTE_BODY_ID,
     SEARCH_INPUT_ID,
     TABLE_ID,
     VERSION_BODY_ID,
@@ -38,7 +38,6 @@ from lode.tui.screens.browse import (
     DeleteConfirmScreen,
     EditScreen,
     EnrichmentModalScreen,
-    NoteViewScreen,
     VersionHistoryScreen,
     VersionViewScreen,
 )
@@ -134,11 +133,12 @@ def test_date_column_shows_the_adaptive_form_not_full_iso_8601(
     assert "T" not in date_cell  # never the raw ISO-8601 stamp
 
 
-def test_selecting_a_row_opens_a_read_only_note_view(tmp_path: Path) -> None:
+def test_selecting_a_row_opens_the_editor_directly(tmp_path: Path) -> None:
+    """Row-select opens the editor directly -- no read-only detour (lode-olmi.2)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        save(conn, "note-a", "the note body to view")
+        save(conn, "note-a", "the note body to edit")
     finally:
         conn.close()
     app = LodeApp(db_path=db_path)
@@ -148,21 +148,21 @@ def test_selecting_a_row_opens_a_read_only_note_view(tmp_path: Path) -> None:
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
-            return app.screen.query_one(f"#{NOTE_BODY_ID}", TextArea).text
+            assert isinstance(app.screen, EditScreen)
+            return app.screen.query_one(f"#{EDIT_BODY_ID}", TextArea).text
 
     body = asyncio.run(_drive())
 
-    assert body == "the note body to view"
+    assert body == "the note body to edit"
 
 
-def test_note_view_screen_shows_the_full_note_id(tmp_path: Path) -> None:
-    """The note-view header shows the FULL id (lode-1gr.2), not the short prefix."""
+def test_edit_screen_shows_the_full_note_id(tmp_path: Path) -> None:
+    """The editor header shows the FULL id (lode-1gr.2), not the short prefix."""
     long_note_id = "0123456789abcdef-longer-than-eight-chars"
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
-        save(conn, long_note_id, "the note body to view")
+        save(conn, long_note_id, "the note body to edit")
     finally:
         conn.close()
     app = LodeApp(db_path=db_path)
@@ -172,7 +172,7 @@ def test_note_view_screen_shows_the_full_note_id(tmp_path: Path) -> None:
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
+            assert isinstance(app.screen, EditScreen)
             return app.screen.sub_title
 
     sub_title = asyncio.run(_drive())
@@ -180,7 +180,7 @@ def test_note_view_screen_shows_the_full_note_id(tmp_path: Path) -> None:
     assert sub_title == long_note_id
 
 
-def test_escape_steps_back_note_then_list_then_capture(tmp_path: Path) -> None:
+def test_escape_steps_back_edit_then_list_then_capture(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -194,7 +194,7 @@ def test_escape_steps_back_note_then_list_then_capture(tmp_path: Path) -> None:
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
+            assert isinstance(app.screen, EditScreen)
             await pilot.press("escape")
             back_to_list = isinstance(app.screen, BrowseScreen)
             await pilot.press("escape")
@@ -233,9 +233,10 @@ def test_deleted_note_does_not_appear_in_the_browse_list(
     assert summaries == ["still here"]
 
 
-def test_h_from_note_view_opens_version_history_newest_first(
+def test_ctrl_h_from_editor_opens_version_history_newest_first(
     tmp_path: Path,
 ) -> None:
+    """Ctrl+H (not bare ``h`` -- the body TextArea is editable) opens history."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -250,8 +251,8 @@ def test_h_from_note_view_opens_version_history_newest_first(
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
-            await pilot.press("h")
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("ctrl+h")
             await pilot.pause()
             assert isinstance(app.screen, VersionHistoryScreen)
             table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
@@ -264,6 +265,39 @@ def test_h_from_note_view_opens_version_history_newest_first(
     assert rows[1][1] == "v1"
     assert rows[0][2] == "update"
     assert rows[1][2] == "create"
+
+
+def test_bare_h_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
+    """Bare ``h`` is consumed by the editable body TextArea, not a Screen binding.
+
+    This is exactly why version history is bound to Ctrl+H rather than bare
+    ``h`` (lode-olmi.2, amended acceptance criterion) -- guards against a
+    regression back to a bare-letter binding, which would silently corrupt
+    the note body instead of opening history.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello body")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("h")
+            await pilot.pause()
+            text = app.screen.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+            return text, isinstance(app.screen, VersionHistoryScreen)
+
+    text, opened_history = asyncio.run(_drive())
+
+    assert text == "hhello body"
+    assert not opened_history
 
 
 def test_version_history_date_column_shows_the_adaptive_form(
@@ -286,7 +320,7 @@ def test_version_history_date_column_shows_the_adaptive_form(
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            await pilot.press("h")
+            await pilot.press("ctrl+h")
             await pilot.pause()
             table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
             return str(table.get_row_at(0)[0])
@@ -314,7 +348,7 @@ def test_selecting_a_prior_version_shows_its_body_read_only(
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            await pilot.press("h")
+            await pilot.press("ctrl+h")
             await pilot.pause()
             # Cursor starts on the newest row (v2); move down to the prior (v1).
             await pilot.press("down")
@@ -328,7 +362,7 @@ def test_selecting_a_prior_version_shows_its_body_read_only(
     assert body == "v1 body"
 
 
-def test_escape_steps_back_version_view_then_history_then_note_view(
+def test_escape_steps_back_version_view_then_history_then_editor(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -345,7 +379,7 @@ def test_escape_steps_back_version_view_then_history_then_note_view(
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            await pilot.press("h")
+            await pilot.press("ctrl+h")
             await pilot.pause()
             await pilot.press("enter")
             await pilot.pause()
@@ -353,13 +387,13 @@ def test_escape_steps_back_version_view_then_history_then_note_view(
             await pilot.press("escape")
             back_to_history = isinstance(app.screen, VersionHistoryScreen)
             await pilot.press("escape")
-            back_to_note_view = isinstance(app.screen, NoteViewScreen)
-            return back_to_history, back_to_note_view
+            back_to_editor = isinstance(app.screen, EditScreen)
+            return back_to_history, back_to_editor
 
-    back_to_history, back_to_note_view = asyncio.run(_drive())
+    back_to_history, back_to_editor = asyncio.run(_drive())
 
     assert back_to_history
-    assert back_to_note_view
+    assert back_to_editor
 
 
 def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
@@ -377,7 +411,7 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
             await pilot.press("f3")
             await pilot.press("enter")
             await pilot.pause()
-            await pilot.press("h")
+            await pilot.press("ctrl+h")
             await pilot.pause()
             table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
             return table.row_count
@@ -1548,7 +1582,7 @@ def _highlighted_note_id(table: DataTable) -> str | None:
     return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
 
 
-def test_escape_from_note_view_keeps_the_same_row_highlighted(
+def test_escape_from_editor_keeps_the_same_row_highlighted(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -1573,9 +1607,9 @@ def test_escape_from_note_view_keeps_the_same_row_highlighted(
             before = _highlighted_note_id(table)
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
+            assert isinstance(app.screen, EditScreen)
             assert app.screen.note_id == "note-b"
-            await pilot.press("escape")
+            await pilot.press("escape")  # unchanged buffer -- pops immediately
             await pilot.pause()
             assert isinstance(app.screen, BrowseScreen)
             after = _highlighted_note_id(
@@ -1592,10 +1626,11 @@ def test_escape_from_note_view_keeps_the_same_row_highlighted(
 def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
     tmp_path: Path,
 ) -> None:
-    """The same reload path (``on_screen_resume``) runs after ``e`` + save,
+    """The same reload path (``on_screen_resume``) runs after an edit + save,
 
-    not just after a plain view -- guards that the restore lives in
-    ``_reload_rows`` itself, not something special-cased to ``NoteViewScreen``.
+    not just after opening the editor -- guards that the restore lives in
+    ``_reload_rows`` itself, not something special-cased to a single entry
+    path into :class:`EditScreen`.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -1613,7 +1648,7 @@ def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             await pilot.press("escape")  # unchanged buffer -- pops immediately
@@ -1653,8 +1688,8 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
             assert _highlighted_note_id(table) == "note-b"
             await pilot.press("enter")
             await pilot.pause()
-            assert isinstance(app.screen, NoteViewScreen)
-            # note-b is deleted while its view is open, out from under the
+            assert isinstance(app.screen, EditScreen)
+            # note-b is deleted while its editor is open, out from under the
             # still-highlighted row.
             conn = init_db(db_path)
             try:
