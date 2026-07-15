@@ -40,13 +40,20 @@ _WEEK_WINDOW_DAYS = 7
 def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     """Shorten an ISO-8601 UTC ``created`` timestamp into an adaptive human form.
 
+    ``created`` is stored and parsed as UTC, but displayed in the system
+    local timezone (lode-olmi.5): both the parsed timestamp and the
+    reference "now" are converted with ``.astimezone()`` (no argument --
+    system local) before bucketing or formatting, so a note captured near
+    midnight UTC lands in the calendar day/bucket a human actually
+    experienced it in, not the UTC one.
+
     ``now`` defaults to the real current UTC time; tests pass a fixed instant
-    so each bucket is deterministic. Buckets compare calendar dates (UTC), not
-    elapsed hours, so an 11pm-yesterday note reads as "this week" rather than
-    "today" even though it's under 24h old.
+    so each bucket is deterministic. Buckets compare calendar dates (in local
+    time), not elapsed hours, so an 11pm-yesterday note reads as "this week"
+    rather than "today" even though it's under 24h old.
     """
-    dt = _parse(created)
-    reference = now if now is not None else datetime.now(timezone.utc)
+    dt = _parse(created).astimezone()
+    reference = (now if now is not None else datetime.now(timezone.utc)).astimezone()
     delta_days = (reference.date() - dt.date()).days
     if delta_days == 0:
         return dt.strftime("%H:%M")

@@ -51,6 +51,7 @@ import time
 import tomllib
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -645,14 +646,19 @@ def recover(
 
 
 def _short_date(created: str) -> str:
-    """Render a ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` timestamp as ``YYYY-MM-DD HH:MM``.
+    """Render a stored UTC ``created`` timestamp as ``YYYY-MM-DD HH:MM`` local time.
 
-    Just drops the seconds/fractional precision and the ISO ``T``/``Z``
-    markers for a shorter, still-sortable read-out; the full adaptive
-    (relative) date format is Browse-only scope (lode-1gr.8), not this
-    command's.
+    ``created`` is parsed as the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` UTC stamp
+    (:mod:`lode.worker`/:mod:`lode.versions`), then converted to system local
+    time with ``.astimezone()`` (no argument, lode-olmi.5) before dropping
+    the seconds/fractional precision -- stored/parsed values stay UTC, only
+    the human-facing render changes. The full adaptive (relative) date format
+    is Browse-only scope (lode-1gr.8), not this command's.
     """
-    return created[:16].replace("T", " ")
+    dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+        tzinfo=timezone.utc
+    )
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 @app.command(name="notes")
