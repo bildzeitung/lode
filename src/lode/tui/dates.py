@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from lode.timestamps import parse_stamp
+
 #: How many days back from "now" still count as "this week" (weekday + time)
 #: rather than falling through to the "this year" (month + day) bucket -- a
 #: rolling 6-day window rather than a calendar-week boundary, so it needs no
@@ -65,7 +67,5 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
 
 
 def _parse(created: str) -> datetime:
-    """Parse the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` stamp (worker.py/versions.py)."""
-    return datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=timezone.utc
-    )
+    """Parse the shared UTC stamp via :func:`lode.timestamps.parse_stamp`."""
+    return parse_stamp(created)
