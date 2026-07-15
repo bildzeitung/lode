@@ -28,13 +28,15 @@ something to lose, via an optional ``confirm_quit()`` method, rather than
 hardcoding a check against ``CaptureScreen`` — ask/config/reconcile don't
 define it, so they keep quitting immediately.
 
-**Browse screen (lode-0wj.5).** ``F3`` reaches
-:class:`~lode.tui.screens.browse.BrowseScreen` the same "global, reachable
-from anywhere" way ``F2`` reaches config — a plain, non-priority ``App``
-binding, since (unlike Ctrl+Q) no screen needs to intercept it. It lists
-every live note (Id | Date | Version | Summary, newest-first); selecting one
-pushes a read-only view, and Escape steps back one screen at a time (note
-view -> list -> capture) via each screen's own ``pop_screen``.
+**Browse screen (lode-0wj.5, edit-first navigation lode-olmi.2).** ``F3``
+reaches :class:`~lode.tui.screens.browse.BrowseScreen` the same "global,
+reachable from anywhere" way ``F2`` reaches config — a plain, non-priority
+``App`` binding, since (unlike Ctrl+Q) no screen needs to intercept it. It
+lists every live note (Id | Date | Version | Summary, newest-first);
+selecting one pushes its editor directly
+(:class:`~lode.tui.screens.browse.EditScreen`), and Escape steps back one
+screen at a time (editor -> list -> capture) via each screen's own
+``pop_screen``.
 
 **App-level stylesheet (lode-1i8.4).** ``CSS_PATH`` loads
 :mod:`lode.tui`'s ``lode.tcss`` — an *external* stylesheet (not

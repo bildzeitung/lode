@@ -184,7 +184,7 @@ def test_ctrl_q_on_unchanged_edit_buffer_quits_immediately(tmp_path: Path) -> No
     async def _drive() -> None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             await pilot.press("ctrl+q")
@@ -209,7 +209,7 @@ def test_ctrl_q_on_dirty_edit_buffer_shows_the_confirm_dialog(tmp_path: Path) ->
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "a real edit"
@@ -240,7 +240,7 @@ def test_ctrl_q_confirm_save_saves_the_edit_and_quits_the_app(tmp_path: Path) ->
     async def _drive() -> None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "saved via ctrl+q"
@@ -270,7 +270,7 @@ def test_ctrl_q_confirm_discard_quits_without_saving(tmp_path: Path) -> None:
     async def _drive() -> None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "discarded via ctrl+q"
@@ -300,7 +300,7 @@ def test_ctrl_q_confirm_cancel_returns_to_editing_with_buffer_intact_edit_screen
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.text = "do not lose this"
@@ -338,7 +338,7 @@ def test_ctrl_q_confirm_save_with_cas_conflict_shows_reconcile_then_quits_on_res
     async def _drive() -> None:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             conn = init_db(db_path)

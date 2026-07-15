@@ -1,4 +1,4 @@
-"""The browse screen (lode-0wj.5) -- list live notes, pick one to view or edit.
+"""The browse screen (lode-0wj.5) -- list live notes, pick one to edit.
 
 ``docs/design.md``'s post-E11 feedback: a way to see what you've captured
 without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
@@ -6,53 +6,60 @@ CaptureScreen` via the app-level ``F3`` binding (:mod:`lode.tui.app`, the same
 "reachable from anywhere" convention ``F2``'s config screen already uses).
 This screen owns no read logic of its own -- it only renders the rows
 :func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
-Version | Summary, newest-first, live notes only) and reacts to a row select
-or an edit key press.
+Version | Summary, newest-first, live notes only) and reacts to a row select.
 
-Selecting a row pushes :class:`NoteViewScreen`, a read-only view of that
-note's live head body (:func:`lode.notes_read.note_body`) -- mirroring how
-:class:`~lode.tui.screens.reconcile.ReconcileScreen` shows a read-only
-``TextArea`` for its diff. ``NoteViewScreen`` needs a ``note_id`` to push, so
-(like ``ReconcileScreen`` and ``CaptureScreen``'s own ``DiscardConfirmScreen``)
-it is not itself an entry in :data:`~lode.tui.app.LodeApp.SCREENS` -- only
-this screen is, per the app shell's registration convention.
+Selecting a row -- Enter, or a mouse click -- pushes :class:`EditScreen`
+directly (lode-olmi.2): editing an existing note *is* the point of opening
+it, so there is no separate read-only detour first. ``EditScreen`` needs a
+``note_id`` to push, so (like ``ReconcileScreen`` and ``CaptureScreen``'s own
+``DiscardConfirmScreen``) it is not itself an entry in
+:data:`~lode.tui.app.LodeApp.SCREENS` -- only this screen is, per the app
+shell's registration convention.
 
-Escape pops back one level at a time -- note view to list, list to capture --
+Escape pops back one level at a time -- editor to list, list to capture --
 which falls out of Textual's own screen stack for free: both screens' Escape
-is a plain :meth:`~textual.app.App.pop_screen`, so "note -> list -> capture"
-is just "pop whatever is on top," never a hardcoded target.
+is a plain :meth:`~textual.app.App.pop_screen` (``EditScreen``'s own, dirty-
+buffer-aware version of it), so "edit -> list -> capture" is just "pop
+whatever is on top," never a hardcoded target.
 
-**Edit an existing note (lode-0wj.6).** ``e`` on a highlighted row -- "edit an
-existing note *from the browse screen*," per the ticket title -- pushes
-:class:`EditScreen` directly, without detouring through the read-only
-``NoteViewScreen`` first. Saving there appends a new version onto that note's
-chain via the CAS head path (:mod:`lode.tui.edit`), never a new note; the
-table is stale the moment that happens (its Version/Summary columns no
-longer match the just-written head), so :meth:`BrowseScreen.on_screen_resume`
--- Textual's hook for "this screen is visible again" -- reloads the table
-every time browse becomes the top screen again (a fresh ``F3``, or popping
-back from ``NoteViewScreen``/``EditScreen``), not only on first mount.
+**Retire the read-only note view (lode-olmi.2).** Before this, row-select
+pushed a separate read-only ``NoteViewScreen`` and a distinct ``e`` keypress
+was needed to reach the editor -- now removed along with the now-redundant
+``e`` binding, since row-select opens the editor directly. Saving there
+appends a new version onto that note's chain via the CAS head path
+(:mod:`lode.tui.edit`), never a new note; the table is stale the moment that
+happens (its Version/Summary columns no longer match the just-written head),
+so :meth:`BrowseScreen.on_screen_resume` -- Textual's hook for "this screen is
+visible again" -- reloads the table every time browse becomes the top screen
+again (a fresh ``F3``, or popping back from ``EditScreen``), not only on
+first mount.
 
-**View prior versions (lode-0wj.7).** ``h`` on :class:`NoteViewScreen` pushes
-:class:`VersionHistoryScreen` -- a Date | Version | Op table over the note's
-whole chain (:func:`lode.notes_read.list_versions`), newest (the head) first.
-Selecting a row pushes :class:`VersionViewScreen`, a read-only view of that
-exact version's body (:func:`lode.notes_read.version_body`) -- the same
-"read-only ``TextArea``" pattern ``NoteViewScreen`` itself already uses, just
-keyed to a specific ``version_id`` instead of always the live head. Escape
-pops one level at a time here too: version body -> history list -> note view,
-falling out of the same Textual screen-stack pop every other Escape in this
-module already relies on.
+**View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on
+:class:`EditScreen` pushes :class:`VersionHistoryScreen` -- a Date | Version |
+Op table over the note's whole chain (:func:`lode.notes_read.list_versions`),
+newest (the head) first. This used to be a bare ``h`` on the now-retired
+``NoteViewScreen``; it moved into the editor as ``Ctrl+H`` (not bare ``h``)
+because ``EditScreen``'s body is an editable ``TextArea``, which consumes
+every printable keypress -- including bare ``h`` -- before a Screen-level
+binding ever sees it (the same reason this screen's save binding is
+``Ctrl+S``, not a bare letter). Selecting a row in the history table pushes
+:class:`VersionViewScreen`, a read-only view of that exact version's body
+(:func:`lode.notes_read.version_body`) -- a read-only ``TextArea``, keyed to
+a specific ``version_id`` instead of always the live head. Escape pops one
+level at a time here too: version body -> history list -> editor, falling out
+of the same Textual screen-stack pop every other Escape in this module
+already relies on.
 
-**Expose the note id (lode-1gr.2).** Before this, nothing in the TUI showed a
-note's id, so a user could see a note in Browse but not ``purge`` it. The
-table's leading Id column shows :func:`lode.notes_read.short_note_id`'s 8-char
-prefix (the same shared abbreviation :func:`lode.cli` will use for ``lode
-show``, lode-1gr.5) -- enough to feed ``lode purge <prefix>``
-(lode-1gr.3) unambiguously in practice, without widening the table for a
-36-char id most rows never need in full. :class:`NoteViewScreen` shows the
-*full* id instead, in its header's ``sub_title`` -- selectable/copyable there,
-where there is no width budget to protect.
+**Expose the note id (lode-1gr.2, moved lode-olmi.2).** Before this, nothing
+in the TUI showed a note's id, so a user could see a note in Browse but not
+``purge`` it. The table's leading Id column shows
+:func:`lode.notes_read.short_note_id`'s 8-char prefix (the same shared
+abbreviation :func:`lode.cli` will use for ``lode show``, lode-1gr.5) --
+enough to feed ``lode purge <prefix>`` (lode-1gr.3) unambiguously in
+practice, without widening the table for a 36-char id most rows never need in
+full. :class:`EditScreen` shows the *full* id instead, in its header's
+``sub_title`` -- selectable/copyable there, where there is no width budget to
+protect (moved from the retired ``NoteViewScreen``).
 
 **Adaptive dates (lode-1gr.8).** Both this screen's Date column and
 :class:`VersionHistoryScreen`'s render :func:`lode.tui.dates.
@@ -151,7 +158,6 @@ from lode.ids import short_version_id
 from lode.notes_read import (
     list_notes,
     list_versions,
-    note_body,
     short_note_id,
     version_body,
 )
@@ -170,8 +176,6 @@ from lode.versions import HeadConflictError, SaveResult
 
 #: The notes table's widget id -- read back in tests.
 TABLE_ID = "browse-table"
-#: The read-only note body's widget id -- read back in tests.
-NOTE_BODY_ID = "note-view-body"
 #: The editable note body's widget id -- read back in tests.
 EDIT_BODY_ID = "note-edit-body"
 #: The delete-confirm dialog's message widget id -- read back in tests.
@@ -237,60 +241,19 @@ def _clip_summary_to_row_height(summary: str, width: int) -> str:
     return "\n".join(kept)
 
 
-class NoteViewScreen(Screen[None]):
-    """A read-only view of one note's live head body.
-
-    **Version history (lode-0wj.7).** ``h`` pushes :class:`VersionHistoryScreen`
-    for this same ``note_id`` -- "expose its version history" from a note
-    already opened in browse, per the ticket title. Escape here still pops
-    straight back to :class:`BrowseScreen`, unaffected: the history screen is
-    reached and left via its own push/pop, not a change to this screen's own
-    Escape contract.
-
-    **Full id (lode-1gr.2).** Browse's Id column is an 8-char prefix (a width
-    budget, not a full id); opening a note here shows its full 36-char
-    ``note_id`` in the header's ``sub_title`` so it can be selected/copied.
-    """
-
-    BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
-        Binding("h", "show_history", "History"),
-    ]
-
-    def __init__(self, note_id: str) -> None:
-        super().__init__()
-        self.note_id = note_id
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield TextArea("", read_only=True, id=NOTE_BODY_ID)
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self.sub_title = self.note_id
-        body = note_body(self.app.db_path, self.note_id)
-        self.query_one(f"#{NOTE_BODY_ID}", TextArea).text = body or ""
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
-
-    def action_show_history(self) -> None:
-        """``h``: push this note's version-history list (lode-0wj.7)."""
-        self.app.push_screen(VersionHistoryScreen(self.note_id))
-
-
 class VersionHistoryScreen(Screen[None]):
     """A note's version chain, newest (the head) first (lode-0wj.7).
 
-    Pushed from :class:`NoteViewScreen` via ``h``. Each row is one version
-    (Date | Version | Op, mirroring :class:`BrowseScreen`'s own column style);
-    selecting one pushes :class:`VersionViewScreen`, a read-only view of that
-    exact version's body -- deliberately every row, including the current head,
+    Pushed from :class:`EditScreen` via ``Ctrl+H`` (moved from the now-retired
+    read-only note view, lode-olmi.2). Each row is one version (Date | Version
+    | Op, mirroring :class:`BrowseScreen`'s own column style); selecting one
+    pushes :class:`VersionViewScreen`, a read-only view of that exact
+    version's body -- deliberately every row, including the current head,
     rather than filtering it out: picking the head row just shows the same
-    body :class:`NoteViewScreen` already displayed, which is harmless and
+    body :class:`EditScreen` already has loaded, which is harmless and
     avoids an off-by-one special case for no real benefit.
 
-    Escape pops back to :class:`NoteViewScreen`, the same "one level at a time"
+    Escape pops back to :class:`EditScreen`, the same "one level at a time"
     contract every other browse-family screen uses.
     """
 
@@ -552,7 +515,6 @@ class BrowseScreen(Screen[None]):
 
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
-        Binding("e", "edit_selected", "Edit"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("d", "delete_selected", "Delete"),
         Binding("slash", "search_forward", "Search"),
@@ -603,11 +565,11 @@ class BrowseScreen(Screen[None]):
         Textual fires this on the *initial* push too (after ``on_mount``),
         so this is the one place that populates the table -- ``on_mount``
         never needs its own copy. That single load path is what makes
-        lode-0wj.6's edit flow correct: a ``NoteViewScreen``/``EditScreen``
-        pushed on top and popped back leaves the previously-loaded rows
-        stale (an edit's Version/Summary columns no longer match the
-        just-written head), and this hook reloads them every time browse
-        becomes the top screen again, not only on first mount.
+        lode-0wj.6's edit flow correct: an ``EditScreen`` pushed on top and
+        popped back leaves the previously-loaded rows stale (an edit's
+        Version/Summary columns no longer match the just-written head), and
+        this hook reloads them every time browse becomes the top screen
+        again, not only on first mount.
         """
         self._reload_rows()
 
@@ -658,7 +620,7 @@ class BrowseScreen(Screen[None]):
         # adaptive form (lode-1gr.8), not the full ISO-8601 timestamp --
         # shorter, so it frees more of that natural width for Summary below;
         # Id is the shared 8-char note-id abbreviation (lode-1gr.2), not the
-        # full id -- NoteViewScreen shows that instead, where there's no width
+        # full id -- EditScreen shows that instead, where there's no width
         # budget to protect.
         id_cells = [short_note_id(row.note_id) for row in rows]
         id_width = max([len("Id"), *(len(cell) for cell in id_cells)])
@@ -700,16 +662,8 @@ class BrowseScreen(Screen[None]):
         table.move_cursor(row=restored_index)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Enter/select on a row opens that note's editor directly (lode-olmi.2)."""
         note_id = event.row_key.value
-        if note_id is not None:
-            self.app.push_screen(NoteViewScreen(note_id))
-
-    def action_edit_selected(self) -> None:
-        """``e``: open the highlighted row's note directly into an edit buffer."""
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
-        if table.row_count == 0:
-            return
-        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is not None:
             self.app.push_screen(EditScreen(note_id))
 
@@ -875,12 +829,31 @@ class EditScreen(Screen[None]):
     (which keeps the screen alive for a fresh note), every exit here either
     pops or tears down this screen, and Textual cancels a screen's workers on
     unmount -- the same guarantee the panel's own module docstring relies on.
+
+    **Row-select opens here directly; full id; version history (lode-olmi.2).**
+    Before this, row-select pushed a separate read-only note view first, and
+    this screen was only reached via a distinct ``e`` keypress -- both now
+    retired, since selecting a row *is* "I want to edit this note." Two things
+    that screen used to own move in along with it: the header's ``sub_title``
+    now shows the full 36-char ``note_id`` (:meth:`on_mount`, same as the
+    retired screen did -- selectable/copyable, unlike the Browse table's
+    8-char abbreviation, which has a width budget to protect), and ``Ctrl+H``
+    pushes :class:`VersionHistoryScreen` for this note (:meth:`action_show_history`).
+    ``Ctrl+H``, not bare ``h``: this screen's body ``TextArea`` is editable
+    (unlike the retired note view's), and Textual's ``TextArea`` consumes
+    every ``is_printable`` keypress -- including a bare ``h`` -- before a
+    Screen-level, non-priority ``Binding`` ever sees it (confirmed empirically
+    -- a bare ``h`` binding here would insert the literal letter into the note
+    body instead of opening history). ``Ctrl+S``/``Ctrl+N`` already use this
+    same non-printable-key escape hatch on this and capture's screen, for the
+    identical reason.
     """
 
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
         Binding("f4", "focus_related", "Related"),
+        Binding("ctrl+h", "show_history", "History"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -904,6 +877,10 @@ class EditScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Full 36-char id (lode-1gr.2/lode-olmi.2) -- selectable/copyable in
+        # the header, unlike Browse's 8-char abbreviated Id column, which has
+        # a width budget to protect.
+        self.sub_title = self.note_id
         head = load_head(self.app.db_path, self.note_id)
         if head is None:
             raise LookupError(f"no live note {self.note_id!r} to edit")
@@ -936,6 +913,15 @@ class EditScreen(Screen[None]):
         only way to reach them.
         """
         self.query_one(RelatedNotesPanel).focus()
+
+    def action_show_history(self) -> None:
+        """Ctrl+H: push this note's version-history list (lode-0wj.7/lode-olmi.2).
+
+        Not bare ``h`` -- the body ``TextArea`` is editable here and consumes
+        every printable keypress before a Screen-level binding can fire (see
+        this class's docstring).
+        """
+        self.app.push_screen(VersionHistoryScreen(self.note_id))
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

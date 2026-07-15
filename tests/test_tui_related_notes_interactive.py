@@ -120,7 +120,7 @@ def test_f4_focuses_the_related_panel_from_edit(tmp_path: Path) -> None:
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             await pilot.press("f3")
-            await pilot.press("e")
+            await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             panel = app.screen.query_one(f"#{EDIT_RELATED_ID}", RelatedNotesPanel)
