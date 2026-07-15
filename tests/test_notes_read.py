@@ -16,6 +16,8 @@ import pytest
 from lode.notes_read import (
     list_deleted_notes,
     list_notes,
+    list_notes_with_all_tags,
+    list_tags,
     list_versions,
     note_body,
     short_note_id,
@@ -23,6 +25,29 @@ from lode.notes_read import (
 )
 from lode.storage import init_db
 from lode.versions import delete, save
+
+
+def _write_tag(
+    db_path: Path,
+    note_id: str,
+    version_id: str,
+    tag: str,
+    *,
+    source: str = "ai",
+    status: str = "fresh",
+) -> None:
+    """Insert a ``kind='tag'`` annotation directly (lode-olmi.6's shape)."""
+    conn = init_db(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status) "
+            "VALUES (?, ?, 'tag', ?, ?, ?)",
+            (note_id, version_id, json.dumps(tag), source, status),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _write_summary(db_path: Path, note_id: str, version_id: str, text: str) -> None:
@@ -388,3 +413,160 @@ def test_version_body_returns_none_for_an_unknown_version_id(tmp_path: Path) -> 
         conn.close()
 
     assert version_body(db_path, "note-1", "nonexistent-version") is None
+
+
+# ---------------------------------------------------------------------------
+# list_tags / list_notes_with_all_tags (lode-olmi.6) -- the Tags screen's read
+# side: the distinct tag set, and the AND/intersection notes filter over it.
+# ---------------------------------------------------------------------------
+
+
+def test_list_tags_returns_distinct_sorted_values(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "about staging").version_id
+        head_b = save(conn, "note-b", "about prod").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head_a, "staging")
+    _write_tag(db_path, "note-b", head_b, "prod")
+    _write_tag(db_path, "note-b", head_b, "staging")  # duplicate value
+
+    assert list_tags(db_path) == ["prod", "staging"]
+
+
+def test_list_tags_excludes_a_curation_tombstone(tmp_path: Path) -> None:
+    """A user ``status='orphaned'`` row is a curation tombstone, never a real tag."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "removed-tag", source="user", status="orphaned")
+
+    assert list_tags(db_path) == []
+
+
+def test_list_tags_includes_a_stale_tag(tmp_path: Path) -> None:
+    """Tags are shown, just flagged stale elsewhere -- never hidden for staleness."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "stale-tag", status="stale")
+
+    assert list_tags(db_path) == ["stale-tag"]
+
+
+def test_list_tags_empty_when_no_notes_are_tagged(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "untagged")
+    finally:
+        conn.close()
+
+    assert list_tags(db_path) == []
+
+
+def test_list_notes_with_all_tags_returns_every_live_note_when_empty(
+    tmp_path: Path,
+) -> None:
+    """No selected tags -- the same rows :func:`list_notes` returns."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first")
+        save(conn, "note-b", "second")
+    finally:
+        conn.close()
+
+    assert list_notes_with_all_tags(db_path, []) == list_notes(db_path)
+
+
+def test_list_notes_with_all_tags_requires_every_selected_tag(tmp_path: Path) -> None:
+    """AND/intersection: a note must carry EVERY selected tag, not just one."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_both = save(conn, "note-both", "has both tags").version_id
+        head_one = save(conn, "note-one", "has only one tag").version_id
+        save(conn, "note-neither", "has no tags")
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-both", head_both, "staging")
+    _write_tag(db_path, "note-both", head_both, "urgent")
+    _write_tag(db_path, "note-one", head_one, "staging")
+
+    rows = list_notes_with_all_tags(db_path, ["staging", "urgent"])
+
+    assert [row.note_id for row in rows] == ["note-both"]
+
+
+def test_list_notes_with_all_tags_single_tag_is_a_plain_membership_filter(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "tagged").version_id
+        save(conn, "note-b", "untagged")
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head_a, "staging")
+
+    rows = list_notes_with_all_tags(db_path, ["staging"])
+
+    assert [row.note_id for row in rows] == ["note-a"]
+
+
+def test_list_notes_with_all_tags_excludes_a_deleted_note(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "gone-note", "will be deleted").version_id
+        _write_tag(db_path, "gone-note", head, "staging")
+    finally:
+        conn.close()
+    conn = init_db(db_path)
+    try:
+        delete(conn, "gone-note", parent=head)
+    finally:
+        conn.close()
+
+    assert list_notes_with_all_tags(db_path, ["staging"]) == []
+
+
+def test_list_notes_with_all_tags_treats_a_tombstoned_tag_as_absent(
+    tmp_path: Path,
+) -> None:
+    """A curation-tombstoned tag row does not count toward the AND filter."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "removed-tag", source="user", status="orphaned")
+
+    assert list_notes_with_all_tags(db_path, ["removed-tag"]) == []
+
+
+def test_list_notes_with_all_tags_orders_newest_first(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_note_with_created(
+        db_path, "note-1", "v1", "first", "2026-01-01T00:00:00.000Z"
+    )
+    _seed_note_with_created(
+        db_path, "note-2", "v2", "second", "2026-02-01T00:00:00.000Z"
+    )
+    _write_tag(db_path, "note-1", "v1", "staging")
+    _write_tag(db_path, "note-2", "v2", "staging")
+
+    rows = list_notes_with_all_tags(db_path, ["staging"])
+
+    assert [row.note_id for row in rows] == ["note-2", "note-1"]

@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -344,3 +345,98 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
         return SnapshotRow(body=row[0], raw_payload=row[1])
     finally:
         conn.close()
+
+
+def _visible_tag_where(prefix: str = "") -> str:
+    """A live, visible ``kind='tag'`` row's ``WHERE`` fragment (lode-olmi.6).
+
+    Mirrors :func:`lode.display.classify_annotation_display`'s tombstone
+    exclusion (a ``source='user' AND status='orphaned'`` row is a curation
+    tombstone, never a real tag) without importing that target-scoped helper
+    -- the same "reimplement the one filter this module needs" convention
+    :func:`list_notes` already uses for its own ``op != 'delete'`` guard. Tags
+    are never hidden for staleness alone (unlike :data:`lode.display.
+    ASSERTIVE_KINDS`) -- ``docs/storage.md``'s stale-display policy shows a
+    stale tag flagged, not hidden -- so this is the only check needed.
+    ``prefix`` (e.g. ``"a."``) lets the same fragment work unqualified (the
+    top-level ``annotations`` scan in :func:`_list_tags`) or against a table
+    alias (the correlated ``EXISTS`` subquery in
+    :func:`_list_notes_with_all_tags`).
+    """
+    return (
+        f"{prefix}kind = 'tag' AND "
+        f"NOT ({prefix}source = 'user' AND {prefix}status = 'orphaned')"
+    )
+
+
+def list_tags(db_path: Path) -> list[str]:
+    """Return every distinct visible tag value across all notes, sorted.
+
+    Tags live in ``annotations`` as ``kind='tag'`` rows (lode-olmi.6) -- there
+    is no dedicated tags table -- one row per ``(note, tag)`` pair, ``payload``
+    the JSON-encoded tag string. Powers the Tags screen's top panel
+    (:class:`~lode.tui.screens.tags.TagsScreen`), which multi-selects across
+    this exact set.
+    """
+    conn = init_db(db_path)
+    try:
+        return _list_tags(conn)
+    finally:
+        conn.close()
+
+
+def _list_tags(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        f"SELECT DISTINCT payload FROM annotations WHERE {_visible_tag_where()}"
+    ).fetchall()
+    return sorted(json.loads(payload) for (payload,) in rows)
+
+
+def list_notes_with_all_tags(db_path: Path, tags: Collection[str]) -> list[NoteRow]:
+    """Return every live note carrying **every** tag in ``tags`` (AND/intersection).
+
+    The Tags screen's (lode-olmi.6) bottom-panel filter: an empty ``tags``
+    means no filter at all, so this returns exactly what :func:`list_notes`
+    does (every live note, newest-first). Each selected tag narrows the set
+    further via its own ``EXISTS`` clause matched against the tag's *exact*
+    JSON-encoded payload -- the same equality :func:`lode.curation.
+    is_annotation_suppressed` uses for a single tag, just repeated once per
+    tag so a note only qualifies when *every* clause finds a live
+    (non-tombstone) row for it.
+    """
+    conn = init_db(db_path)
+    try:
+        return _list_notes_with_all_tags(conn, tags)
+    finally:
+        conn.close()
+
+
+def _list_notes_with_all_tags(
+    conn: sqlite3.Connection, tags: Collection[str]
+) -> list[NoteRow]:
+    tag_list = list(tags)
+    if not tag_list:
+        return _list_notes(conn)
+    exists_clause = (
+        "AND EXISTS (SELECT 1 FROM annotations a WHERE a.target = n.note_id "
+        f"AND a.payload = ? AND {_visible_tag_where('a.')}) "
+    )
+    rows = conn.execute(
+        "SELECT n.note_id, n.created, n.head_version_id, v.body, "
+        "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
+        "FROM notes n "
+        "JOIN versions v ON v.version_id = n.head_version_id "
+        "WHERE v.op != 'delete' "
+        + exists_clause * len(tag_list)
+        + "ORDER BY n.created DESC",
+        [json.dumps(tag) for tag in tag_list],
+    ).fetchall()
+    return [
+        NoteRow(
+            note_id=note_id,
+            created=created,
+            version=chain_length,
+            summary=_head_summary(conn, note_id, head_version_id, body),
+        )
+        for note_id, created, head_version_id, body, chain_length in rows
+    ]

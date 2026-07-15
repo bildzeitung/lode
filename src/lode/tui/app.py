@@ -38,6 +38,24 @@ selecting one pushes its editor directly
 screen at a time (editor -> list -> capture) via each screen's own
 ``pop_screen``.
 
+**Tags screen (lode-olmi.6).** ``F5`` reaches
+:class:`~lode.tui.screens.tags.TagsScreen` the same "global, reachable from
+anywhere" way as ``F2``/``F3``. Top panel: every distinct tag, multi-select;
+bottom panel: live notes carrying **every** selected tag (AND/intersection;
+no selection shows every note). Selecting a note there pushes
+:class:`~lode.tui.screens.browse.EditScreen` directly.
+
+**Rekeyed off F4 (lode-olmi.6 land-time decision).** This screen's binding was
+originally ``F4``, but sibling ``lode-olmi.9`` landed a Screen-level ``F4``
+("focus related-notes panel") on ``CaptureScreen``/``EditScreen`` first.
+Since ``CaptureScreen`` is the app's own default screen, Textual's
+Screen-shadows-App resolution order made the App-level ``F4`` for this screen
+unreachable from the screen a user sees on startup (see
+``docs/keybindings.md``'s "Two altitudes" section for the general rule).
+Rather than touch ``lode-olmi.9``'s already-shipped binding, this screen was
+rekeyed to ``F5`` -- a free App-level function key per that doc's keymap
+table -- leaving ``F4``'s Screen-level meaning untouched everywhere else.
+
 **App-level stylesheet (lode-1i8.4).** ``CSS_PATH`` loads
 :mod:`lode.tui`'s ``lode.tcss`` — an *external* stylesheet (not
 ``DEFAULT_CSS``), resolved relative to this module's file by Textual and
@@ -62,6 +80,7 @@ from lode.tui.screens.browse import BrowseScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.config import ConfigScreen
 from lode.tui.screens.reconcile import ReconcileScreen
+from lode.tui.screens.tags import TagsScreen
 
 
 class LodeApp(App[str | None]):
@@ -74,7 +93,9 @@ class LodeApp(App[str | None]):
     ``App.exit(result)`` / ``App.run()`` return-value contract. ``F2`` reaches
     the read-only config/diagnostics screen (lode-3r4) from anywhere; it pops
     back to the previous screen on Escape. ``F3`` reaches the browse screen
-    (lode-0wj.5) the same way. Ctrl+Q quits immediately unless the current
+    (lode-0wj.5) the same way, and ``F5`` reaches the tags screen
+    (lode-olmi.6; rekeyed off ``F4`` — see the module docstring above).
+    Ctrl+Q quits immediately unless the current
     screen has unsaved state to confirm first (lode-0wj.8) — see
     :meth:`action_quit`.
     """
@@ -91,12 +112,14 @@ class LodeApp(App[str | None]):
         "ask": AskScreen,
         "reconcile": ReconcileScreen,
         "browse": BrowseScreen,
+        "tags": TagsScreen,
     }
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("f2", "show_config", "Config"),
         Binding("f3", "show_browse", "Browse"),
+        Binding("f5", "show_tags", "Tags"),
     ]
 
     def __init__(
@@ -119,6 +142,10 @@ class LodeApp(App[str | None]):
     def action_show_browse(self) -> None:
         """Push the browse screen (lode-0wj.5) on top of the current one."""
         self.push_screen("browse")
+
+    def action_show_tags(self) -> None:
+        """Push the tags screen (lode-olmi.6) on top of the current one."""
+        self.push_screen("tags")
 
     def action_quit(self) -> None:
         """Ctrl+Q: quit immediately, unless the current screen has unsaved state.
