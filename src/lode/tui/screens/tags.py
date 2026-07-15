@@ -111,8 +111,17 @@ class TagsScreen(Screen[None]):
         tag_list = self.query_one(f"#{TAG_LIST_ID}", SelectionList)
         tags = list_tags(self.app.db_path)
         self._selected &= set(tags)  # drop selections for tags that vanished
-        tag_list.clear_options()
-        tag_list.add_options([(tag, tag, tag in self._selected) for tag in tags])
+        # Restoring a preselected option makes SelectionList post a
+        # SelectedChanged per selected tag (add_options -> _make_selection ->
+        # _select), each of which would drive on_selection_list_selected_changed
+        # -> _reload_notes again -- N redundant table rebuilds on every resume
+        # that has an active filter. on_screen_resume already calls
+        # _reload_notes() explicitly right after, so suppress the programmatic
+        # restore's messages (the same prevent() Textual itself uses to batch
+        # bulk selection changes) and let that one explicit call be the reload.
+        with tag_list.prevent(SelectionList.SelectedChanged):
+            tag_list.clear_options()
+            tag_list.add_options([(tag, tag, tag in self._selected) for tag in tags])
 
     def _reload_notes(self) -> None:
         """Rebuild the notes table against the current tag selection (AND/intersection)."""
