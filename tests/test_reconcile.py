@@ -813,3 +813,72 @@ def test_reconcile_embed_gap_idempotent_via_reconcile(conn: sqlite3.Connection) 
     reconcile(conn)
     statuses = _pending_embed_jobs(conn, "ver-1")
     assert statuses == ["pending"]  # still exactly one row
+
+
+# ---------------------------------------------------------------------------
+# Progress instrumentation (lode-olmi.15)
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_logs_progress_line_per_step(
+    conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Each step call is wrapped in op_progress -- a 'starting' line names it.
+
+    Before lode-olmi.15, reconcile() logged nothing while a step was running
+    (only a gap-count summary afterward, and only if it found a gap) -- a
+    plain 'lode work' had no sign a step was even in progress.
+    """
+
+    def _step_a(c: sqlite3.Connection, settings: Settings) -> int:
+        return 0
+
+    def _step_b(c: sqlite3.Connection, settings: Settings) -> int:
+        return 0
+
+    with caplog.at_level("INFO"):
+        reconcile(conn, steps=[("step_a", _step_a), ("step_b", _step_b)])
+
+    assert "reconcile.step_a: starting" in caplog.text
+    assert "reconcile.step_a: done" in caplog.text
+    assert "reconcile.step_b: starting" in caplog.text
+    assert "reconcile.step_b: done" in caplog.text
+
+
+def test_reconcile_progress_heartbeats_a_slow_step(
+    conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A step slower than progress_heartbeat_interval_s gets a heartbeat line.
+
+    Uses a tiny heartbeat interval + a short sleep in the step so this stays
+    fast without any fake-clock plumbing through the threading-based
+    op_progress heartbeat.
+    """
+    import time
+
+    def _slow_step(c: sqlite3.Connection, settings: Settings) -> int:
+        time.sleep(0.2)
+        return 0
+
+    settings = Settings(progress_heartbeat_interval_s=0.05)
+    with caplog.at_level("INFO"):
+        reconcile(conn, settings=settings, steps=[("slow", _slow_step)])
+
+    assert "reconcile.slow: starting" in caplog.text
+    assert "reconcile.slow: still running" in caplog.text
+    assert "reconcile.slow: done" in caplog.text
+
+
+def test_reconcile_progress_logs_failed_and_reraises(
+    conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A raising step logs a 'failed' progress line and the exception propagates."""
+
+    def _boom(c: sqlite3.Connection, settings: Settings) -> int:
+        raise RuntimeError("boom")
+
+    with caplog.at_level("INFO"), pytest.raises(RuntimeError, match="boom"):
+        reconcile(conn, steps=[("boom", _boom)])
+
+    assert "reconcile.boom: starting" in caplog.text
+    assert "reconcile.boom: failed" in caplog.text

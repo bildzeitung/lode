@@ -140,6 +140,7 @@ from pathlib import Path
 from lode import jobs
 from lode.config import Settings, lance_dir as _lance_dir
 from lode.ids import short_version_id
+from lode.progress import op_progress
 
 log = logging.getLogger(__name__)
 
@@ -928,6 +929,13 @@ def drain(
     ``embed`` jobs). Left ``None`` (the default), behavior is unchanged from
     before lode-1gr.4 — this is purely additive so existing callers (and the
     ``int`` return contract) are unaffected.
+
+    **Progress instrumentation (lode-olmi.15):** ``drain.batch_collect``,
+    ``drain.batch_submit``, and ``drain.run_jobs`` each log a start/heartbeat/
+    done line via :func:`lode.progress.op_progress` (cadence
+    ``settings.progress_heartbeat_interval_s``) — so a plain ``lode work`` that
+    stalls inside one of these always shows *which* step it is stuck in,
+    instead of producing no output until it finishes or hangs forever.
     """
     settings = settings or Settings()
     registry = _registry if _registry is not None else _REGISTRY
@@ -954,10 +962,25 @@ def drain(
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
     # so the embeds land before any residual enrich job re-raises out of run_one.
+    # Progress instrumentation (lode-olmi.15): the three potentially-slow steps
+    # below -- the two batch pre-steps and the main claim/run loop -- each log a
+    # "starting"/heartbeat/"done" line via op_progress so a plain `lode work`
+    # always shows which one is currently running, rather than the prior silence.
+    # The reclaim/reset sweeps between them are left uninstrumented on purpose:
+    # they are fast local UPDATEs with no network or model call to stall on.
+    heartbeat_interval_s = settings.progress_heartbeat_interval_s
     permanent: AuthError | None = None
     try:
-        _batch_collect_enrich(conn, settings, _client=_batch_client, outcomes=outcomes)
-        _batch_submit_enrich(conn, settings, _client=_batch_client)
+        with op_progress(
+            "drain.batch_collect", heartbeat_interval_s=heartbeat_interval_s
+        ):
+            _batch_collect_enrich(
+                conn, settings, _client=_batch_client, outcomes=outcomes
+            )
+        with op_progress(
+            "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
+        ):
+            _batch_submit_enrich(conn, settings, _client=_batch_client)
     except AuthError as exc:
         permanent = exc
 
@@ -971,13 +994,15 @@ def drain(
         log.debug("reset %d overdue failed job(s) to pending", reset)
 
     processed = 0
-    while True:
-        now = jobs.now_iso()
-        job_id = _claim_one(conn, types, now)
-        if job_id is None:
-            break
-        run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
-        processed += 1
+    with op_progress("drain.run_jobs", heartbeat_interval_s=heartbeat_interval_s):
+        while True:
+            now = jobs.now_iso()
+            job_id = _claim_one(conn, types, now)
+            if job_id is None:
+                break
+            log.info("drain.run_jobs: running job %s", job_id)
+            run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
+            processed += 1
 
     # The credential-free work is done; now surface the permanent failure the
     # batch pre-step stashed (if a residual enrich job in the main loop above

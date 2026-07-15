@@ -236,6 +236,30 @@ class Settings(BaseModel):
         "enrich backlog may need a plain re-run of 'lode work' instead.",
         gt=0,
     )
+    progress_heartbeat_interval_s: float = _knob(
+        15.0,
+        Kind.RUNTIME,
+        "How often 'lode work' logs a 'still running' heartbeat line "
+        "(lode.progress.op_progress) for a named long-running op -- a "
+        "reconcile() step, a drain() batch pre-step, or the main claim/run "
+        "loop -- that hasn't finished yet (lode-olmi.15). Makes a genuinely "
+        "stuck op visible instead of silent, even when it can't be safely "
+        "aborted outright.",
+        gt=0.0,
+    )
+    anthropic_call_timeout_s: float = _knob(
+        120.0,
+        Kind.RUNTIME,
+        "Per-call client-side timeout (seconds) passed to the Anthropic "
+        "enrichment calls reachable from 'lode work' (enrich.py): the Batches "
+        "API pre-steps (client.beta.messages.batches.create/retrieve/results) "
+        "and the immediate Haiku call (client.messages.create) a residual "
+        "enrich job can take in drain()'s main loop -- bounds a hung network "
+        "call rather than letting it block 'lode work' forever (lode-olmi.15). "
+        "Distinct from fetch_timeout_s, which governs web draw-down HTTP "
+        "fetches, not Anthropic API calls.",
+        gt=0.0,
+    )
 
     # --- Externals (with connectors) -----------------------------------------
     refresh_ttl_s: int = _knob(

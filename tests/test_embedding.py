@@ -307,6 +307,35 @@ def test_load_passes_durable_model_cache_dir(
     assert captured["cache_dir"] == str(tmp_path / "root" / "models")
 
 
+def test_load_logs_progress_around_the_model_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The first-use ONNX cold load is a named op_progress step (lode-olmi.15):
+    a stuck 'lode work' inside a first embed job should show 'embedding.
+    load_model' as the step in progress rather than staying silent.
+    """
+    import logging
+
+    import fastembed
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    embedder = FastEmbedEmbedder(_settings())
+    with caplog.at_level(logging.INFO):
+        embedder._load()
+
+    assert "embedding.load_model: starting" in caplog.text
+    assert "embedding.load_model: done" in caplog.text
+
+
 # --- EmbeddingCacheBackend: vectors reached THROUGH the Repository (lode-1f9) ---
 #
 # The embed leg wrapped as a CacheBackend, so a save on the Repository fills the

@@ -47,6 +47,8 @@ def test_documented_defaults_load() -> None:
     assert s.fetch_min_extract_chars == 200
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
+    assert s.progress_heartbeat_interval_s == 15.0
+    assert s.anthropic_call_timeout_s == 120.0
 
 
 # --- load_settings() reads config.toml (lode-40g) ----------------------------
@@ -251,6 +253,8 @@ def test_model_cache_dir_defaults_under_home_not_tempdir(
         {"fetch_max_redirects": -1},  # ge=0
         {"fetch_min_extract_chars": -1},  # ge=0
         {"retry_max_attempts": 0},  # ge=1
+        {"progress_heartbeat_interval_s": 0},  # gt=0.0
+        {"anthropic_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
     ],
 )

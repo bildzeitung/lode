@@ -53,6 +53,7 @@ from typing import Protocol
 
 from lode.chunking import Passage, chunk
 from lode.config import Settings, model_cache_dir
+from lode.progress import op_progress
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
 
@@ -109,6 +110,7 @@ class FastEmbedEmbedder:
         self._model_name = settings.embedding_model
         self._model: object | None = None
         self._load_lock = threading.Lock()
+        self._heartbeat_interval_s = settings.progress_heartbeat_interval_s
 
     def _load(self) -> object:
         # Double-checked locking: the fast (already-loaded) path never takes
@@ -119,12 +121,21 @@ class FastEmbedEmbedder:
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
-                    from fastembed import TextEmbedding
+                    # First-use ONNX cold load (lode-olmi.15): can be a
+                    # multi-second (or, on a slow/first-ever download,
+                    # much longer) blocking call with no output of its own --
+                    # op_progress logs it as a named step and heartbeats if
+                    # it's still running past the interval.
+                    with op_progress(
+                        "embedding.load_model",
+                        heartbeat_interval_s=self._heartbeat_interval_s,
+                    ):
+                        from fastembed import TextEmbedding
 
-                    self._model = TextEmbedding(
-                        model_name=self._model_name,
-                        cache_dir=str(model_cache_dir()),
-                    )
+                        self._model = TextEmbedding(
+                            model_name=self._model_name,
+                            cache_dir=str(model_cache_dir()),
+                        )
         return self._model
 
     def warm(self) -> None:

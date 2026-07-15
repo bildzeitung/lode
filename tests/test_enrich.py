@@ -386,6 +386,24 @@ def test_enrich_version_returns_result(
     assert returned.tags == ["design"]
 
 
+def test_enrich_version_passes_anthropic_call_timeout_to_create(
+    conn: sqlite3.Connection,
+) -> None:
+    """The immediate Haiku call is bounded by Settings.anthropic_call_timeout_s
+    (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
+    residual enrich job claimed by the main claim/run loop), so with no
+    client-side timeout it could otherwise hang the drain forever.
+    """
+    _insert_note(conn)
+    result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
+    settings = Settings(anthropic_call_timeout_s=42.0)
+    client = _fake_client(result)
+    enrich_version(conn, "ver-1", settings, client=client)
+
+    create_kwargs = client.messages.create.call_args.kwargs
+    assert create_kwargs["timeout"] == 42.0
+
+
 def test_enrich_version_full_provenance(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
@@ -1144,6 +1162,24 @@ def test_submit_enrich_batch_returns_batch_id(
     assert result_id == "batch-xyz"
 
 
+def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
+    conn: sqlite3.Connection,
+) -> None:
+    """create() is bounded by Settings.anthropic_call_timeout_s (lode-olmi.15) --
+    the network call that commits the spend must not be able to hang forever
+    with no client-side timeout at all.
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn)
+
+    settings = Settings(anthropic_call_timeout_s=42.0)
+    client = _fake_batch_client(batch_id="batch-xyz")
+    submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    assert create_kwargs["timeout"] == 42.0
+
+
 def test_submit_enrich_batch_stores_batch_handle(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
@@ -1373,6 +1409,29 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
     client = _fake_batch_client(processing_status="in_progress")
     ended = collect_enrich_batch(conn, "batch-in-flight", settings, client=client)
     assert ended is False
+
+
+def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_results(
+    conn: sqlite3.Connection,
+) -> None:
+    """retrieve()/results() are bounded by Settings.anthropic_call_timeout_s
+    (lode-olmi.15) -- with no client-side timeout either call could otherwise
+    hang forever with no signal back to 'lode work'.
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
+        )
+    settings = Settings(anthropic_call_timeout_s=42.0)
+    client = _fake_batch_client(results=[])
+    collect_enrich_batch(conn, "batch-done", settings, client=client)
+
+    retrieve_kwargs = client.beta.messages.batches.retrieve.call_args.kwargs
+    assert retrieve_kwargs["timeout"] == 42.0
+    results_kwargs = client.beta.messages.batches.results.call_args.kwargs
+    assert results_kwargs["timeout"] == 42.0
 
 
 def test_collect_enrich_batch_returns_true_and_writes_enrichment(

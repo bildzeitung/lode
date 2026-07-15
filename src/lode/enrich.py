@@ -197,6 +197,12 @@ def _call_haiku(
     failures.
     """
     prompt = _PROMPT_TMPL.format(body=body)
+    # Bounded client-side (lode-olmi.15): this immediate Haiku call is reachable
+    # from `lode work`'s drain loop (a residual `enrich` job claimed by the main
+    # claim/run loop, not the batch route -- see lode.worker.drain) as well as
+    # from the capture path, and with no timeout it can otherwise hang the drain
+    # indefinitely -- the same unbounded-hang the Batches API calls below are
+    # bounded against, via the same knob.
     response = client.messages.create(
         model=settings.enrichment_llm,
         max_tokens=1024,
@@ -210,6 +216,7 @@ def _call_haiku(
         ],
         tool_choice={"type": "tool", "name": _TOOL_NAME},
         messages=[{"role": "user", "content": prompt}],
+        timeout=settings.anthropic_call_timeout_s,
     )
     tool_block = next(b for b in response.content if b.type == "tool_use")
     return EnrichmentResult.model_validate(tool_block.input)
@@ -621,7 +628,11 @@ def submit_enrich_batch(
         return None
 
     # Submit the batch — this is the network call that commits the spend.
-    batch = client.beta.messages.batches.create(requests=requests)
+    # Bounded client-side (lode-olmi.15): with no timeout this can otherwise
+    # hang indefinitely with no signal to the caller.
+    batch = client.beta.messages.batches.create(
+        requests=requests, timeout=settings.anthropic_call_timeout_s
+    )
     batch_id = batch.id
 
     # Persist the handle + flip to running so the collect step (and a restart)
@@ -696,7 +707,11 @@ def collect_enrich_batch(
     if client is None:
         client = build_client()
 
-    batch = client.beta.messages.batches.retrieve(batch_id)
+    # Bounded client-side (lode-olmi.15): with no timeout either call below
+    # can otherwise hang indefinitely with no signal to the caller.
+    batch = client.beta.messages.batches.retrieve(
+        batch_id, timeout=settings.anthropic_call_timeout_s
+    )
     if batch.processing_status != "ended":
         log.debug(
             "collect_enrich_batch: batch=%s still %s",
@@ -724,7 +739,9 @@ def collect_enrich_batch(
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
 
-    for result in client.beta.messages.batches.results(batch_id):
+    for result in client.beta.messages.batches.results(
+        batch_id, timeout=settings.anthropic_call_timeout_s
+    ):
         version_id = result.custom_id
         job_id = job_map.get(version_id)
         if job_id is None:
