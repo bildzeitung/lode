@@ -95,6 +95,35 @@ switches from the truncated :func:`~lode.notes_read.short_note_id` prefix to
 the bare ``to_id`` when it resolves to an external, since that ``to_id`` is
 the full source URL, not a note id worth abbreviating.
 
+**Content viewer + 'v' addressing flow (lode-olmi.8's decision, lode-0sjj).**
+Neither this screen nor :class:`EditScreen` could show a note's actually-
+retrieved external content before this -- :class:`EnrichmentModalScreen`
+(above) carries only :class:`~lode.enrichment_view.ExternalView` metadata
+(source_type, snapshot id, fetched_at, state), never the snapshot's stored
+``body``/``raw_payload``. :class:`SnapshotViewerScreen` is the new modal that
+reads them, keyed to one ``snapshot_id``: it shows the extracted ``body`` by
+default in a read-only ``TextArea`` and ``t`` toggles to ``raw_payload``
+(nullable -- a clean notify-and-stay when it isn't captured, never a blank
+toggle). ``_resolve_externals`` + ``_view_note_external_content`` implement
+the shared zero/one/many addressing rule both screens' bindings call into --
+mirroring ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose,
+so the CLI and TUI can't drift onto two different rules for the same
+question: zero externals notifies ``'no retrieved content for this note'``;
+exactly one pushes the viewer directly; more than one pushes
+:class:`ExternalPickerScreen` first, a DataTable-then-select list (mirroring
+:class:`VersionHistoryScreen`'s own pattern above) showing each candidate's
+source_type/snapshot id/fetched_at/state -- the same fields
+:func:`_external_text` already renders -- before the chosen row pushes the
+viewer.
+
+This screen's binding is bare ``v`` (``action_view_content``): the focused
+widget here is the notes ``DataTable``, not an editable ``TextArea``, so a
+bare printable key reaches a Screen-level binding fine -- the same reason
+``i``/``d`` are already bare on this screen. :class:`EditScreen`'s own
+binding for the identical action is **not** the same key -- see that class's
+docstring and ``docs/keybindings.md`` for why an editable-body screen can't
+reuse a bare letter here, and which non-printable key it uses instead.
+
 **Delete from browse (lode-d32.1).** ``d`` on a highlighted row soft-deletes
 that note via :func:`~lode.tui.edit.delete_note` -- the CAS-guarded
 ``op='delete'`` tombstone (:func:`lode.versions.delete`, routed through
@@ -138,6 +167,7 @@ usual pop back to capture.
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 from rich.text import Text
 from textual import events
@@ -156,8 +186,10 @@ from lode.enrichment_view import (
 )
 from lode.ids import short_version_id
 from lode.notes_read import (
+    SnapshotRow,
     list_notes,
     list_versions,
+    read_snapshot,
     short_note_id,
     version_body,
 )
@@ -204,6 +236,13 @@ INSPECTOR_ENTITIES_ID = "inspector-entities"
 INSPECTOR_EDGES_ID = "inspector-edges"
 #: The inspector's embed-status line id -- read back in tests.
 INSPECTOR_EMBED_ID = "inspector-embed"
+#: The content-viewer modal's body ``TextArea`` widget id (lode-0sjj) -- read
+#: back in tests.
+SNAPSHOT_VIEWER_BODY_ID = "snapshot-viewer-body"
+#: The content-viewer modal's dialog container id -- read back in tests.
+SNAPSHOT_VIEWER_DIALOG_ID = "snapshot-viewer-dialog"
+#: The many-externals picker table's widget id -- read back in tests.
+EXTERNAL_PICKER_TABLE_ID = "external-picker-table"
 #: Placeholder text for an empty section -- never suppressed, just labeled.
 _NONE_TEXT = "(none)"
 
@@ -401,6 +440,182 @@ def _edges_text(edges: list[EnrichmentEdge]) -> Text:
     return block
 
 
+def _resolve_externals(db_path: Path, note_id: str) -> list[ExternalView]:
+    """*note_id*'s drawn-down external edges, in edge order (lode-0sjj).
+
+    The one place the "which externals does this note have" question is
+    answered for the content-viewer feature -- both
+    :meth:`BrowseScreen.action_view_content` and
+    :meth:`EditScreen.action_view_content` resolve through this (via
+    :func:`_view_note_external_content`) rather than each independently
+    filtering :func:`~lode.enrichment_view.enrichment_view`'s edges, which
+    would risk the two screens silently drifting onto different rules. A
+    missing note (should never happen -- both callers only ever have a real,
+    live ``note_id`` in hand) returns an empty list rather than raising; an
+    empty result and "note exists but has no external edges" are
+    indistinguishable to the caller, which is fine -- both mean "notify, don't
+    view anything."
+    """
+    view = enrichment_view(db_path, note_id)
+    if view is None:
+        return []
+    return [edge.external for edge in view.edges if edge.external is not None]
+
+
+def _view_note_external_content(screen: Screen[None], note_id: str) -> None:
+    """Resolve *note_id*'s externals and push the right viewer (lode-0sjj).
+
+    Shared by :meth:`BrowseScreen.action_view_content` (bare ``v``) and
+    :meth:`EditScreen.action_view_content` (a Ctrl-prefixed key) so the
+    zero/one/many addressing rule lives in exactly one place -- mirroring
+    ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose. Zero
+    externals notifies cleanly; exactly one pushes
+    :class:`SnapshotViewerScreen` directly; more than one pushes
+    :class:`ExternalPickerScreen` first, which pushes the viewer itself once
+    a row is chosen.
+    """
+    externals = _resolve_externals(screen.app.db_path, note_id)
+    if not externals:
+        screen.notify("no retrieved content for this note", severity="warning")
+    elif len(externals) == 1:
+        screen.app.push_screen(SnapshotViewerScreen(externals[0].snapshot_id))
+    else:
+        screen.app.push_screen(ExternalPickerScreen(externals))
+
+
+class ExternalPickerScreen(Screen[None]):
+    """List a note's external edges so the user can pick one to view (lode-0sjj).
+
+    Pushed by :func:`_view_note_external_content` only when a note has more
+    than one external edge -- the "many" branch of the zero/one/many
+    addressing rule shared with ``lode dump-html`` (lode-olmi.7). Each row is
+    one :class:`~lode.enrichment_view.ExternalView` (Source | Snapshot |
+    Fetched | State -- the same fields :func:`_external_text` already renders
+    beneath an edge line in :class:`EnrichmentModalScreen`); selecting one
+    pushes :class:`SnapshotViewerScreen` for that row's ``snapshot_id``.
+
+    Mirrors :class:`VersionHistoryScreen`'s DataTable-then-select shape
+    exactly (a plain, non-modal ``Screen``, not a ``ModalScreen`` -- there is
+    no "dimmed screen underneath" need here, just a list to pick from).
+    Escape pops back one level, the same contract every other screen in this
+    module uses.
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+    ]
+
+    def __init__(self, externals: list[ExternalView]) -> None:
+        super().__init__()
+        self._externals = externals
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id=EXTERNAL_PICKER_TABLE_ID, cursor_type="row")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
+        table.add_columns("Source", "Snapshot", "Fetched", "State")
+        for index, external in enumerate(self._externals):
+            table.add_row(
+                external.source_type,
+                short_version_id(external.snapshot_id),
+                external.fetched_at,
+                external.state,
+                key=str(index),
+            )
+        table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        index = event.row_key.value
+        if index is not None:
+            external = self._externals[int(index)]
+            self.app.push_screen(SnapshotViewerScreen(external.snapshot_id))
+
+    def action_dismiss_screen(self) -> None:
+        self.app.pop_screen()
+
+
+class SnapshotViewerScreen(ModalScreen[None]):
+    """A retrieved external's stored content -- body by default, raw on toggle (lode-0sjj).
+
+    Pushed keyed to one ``snapshot_id`` by :func:`_view_note_external_content`
+    -- directly, for a note with exactly one external edge, or after
+    :class:`ExternalPickerScreen` resolves which of several. Shows
+    ``snapshots.body`` (the extracted text -- ``NOT NULL``, ``schema.sql``;
+    even a tombstone snapshot carries a stable placeholder body,
+    :func:`lode.externals.tombstone_body`) in a read-only ``TextArea`` by
+    default. ``Binding('t', 'toggle_raw', ...)`` switches to
+    ``snapshots.raw_payload`` instead -- the same nullable raw-HTML column
+    ``lode dump-html`` (lode-olmi.7) prints to stdout -- and back again on a
+    second press. Unlike that CLI command, a missing ``raw_payload`` here
+    isn't an error: it notifies ``'no raw HTML captured for this source'``
+    and stays on the body, since the body is still perfectly viewable and the
+    toggle simply has nothing to switch to (never a blank toggle).
+
+    ``Esc`` dismisses -- the same one-level-at-a-time contract every other
+    modal in this module uses. Bare printable ``t`` is safe here (unlike
+    :class:`EditScreen`'s own binding for reaching this screen,
+    ``docs/keybindings.md``): this screen's body ``TextArea`` is
+    ``read_only=True``, so it never intercepts a printable keypress before a
+    Screen-level binding sees it (the same reason ``NoteViewScreen``'s
+    read-only body could bind bare ``h``, back when that screen existed).
+    """
+
+    BINDINGS = [
+        Binding("escape", "dismiss_screen", "Back"),
+        Binding("t", "toggle_raw", "Toggle raw HTML"),
+    ]
+
+    def __init__(self, snapshot_id: str) -> None:
+        super().__init__()
+        self.snapshot_id = snapshot_id
+        self._snapshot: SnapshotRow | None = None
+        self._showing_raw = False
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            TextArea("", read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
+            id=SNAPSHOT_VIEWER_DIALOG_ID,
+        )
+
+    def on_mount(self) -> None:
+        snapshot = read_snapshot(self.app.db_path, self.snapshot_id)
+        if snapshot is None:
+            # Only ever pushed for a snapshot_id an already-assembled
+            # ExternalView carried, so a missing row here would be a real
+            # bug, not a normal race worth a soft fallback -- the same stance
+            # EnrichmentModalScreen.on_mount takes for a missing note.
+            raise LookupError(f"no snapshot {self.snapshot_id!r} to view")
+        self._snapshot = snapshot
+        self._show_body()
+
+    def _show_body(self) -> None:
+        self._showing_raw = False
+        assert self._snapshot is not None
+        self.query_one(
+            f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
+        ).text = self._snapshot.body
+
+    def action_toggle_raw(self) -> None:
+        """``t``: switch to the raw HTML, or back to the body from there."""
+        assert self._snapshot is not None
+        if self._showing_raw:
+            self._show_body()
+            return
+        if not self._snapshot.raw_payload:
+            self.notify("no raw HTML captured for this source", severity="warning")
+            return
+        self._showing_raw = True
+        self.query_one(
+            f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
+        ).text = self._snapshot.raw_payload
+
+    def action_dismiss_screen(self) -> None:
+        self.app.pop_screen()
+
+
 class EnrichmentModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
 
@@ -516,6 +731,7 @@ class BrowseScreen(Screen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
+        Binding("v", "view_content", "View content"),
         Binding("d", "delete_selected", "Delete"),
         Binding("slash", "search_forward", "Search"),
         Binding("question_mark", "search_backward", "Search up"),
@@ -675,6 +891,15 @@ class BrowseScreen(Screen[None]):
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is not None:
             self.app.push_screen(EnrichmentModalScreen(note_id))
+
+    def action_view_content(self) -> None:
+        """``v``: view the highlighted row's retrieved external content, if any (lode-0sjj)."""
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        if table.row_count == 0:
+            return
+        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if note_id is not None:
+            _view_note_external_content(self, note_id)
 
     def action_delete_selected(self) -> None:
         """``d``: soft-delete the highlighted row's note, after confirming (lode-d32.1)."""
@@ -872,6 +1097,26 @@ class EditScreen(Screen[None]):
     practice, not a one-off: every action this screen binds beyond Escape
     uses a ``Ctrl+``-prefixed (or otherwise non-printable) key for exactly
     this reason -- see ``docs/keybindings.md``.
+
+    **Content viewer, Ctrl+R not bare ``v`` (lode-0sjj).**
+    :meth:`action_view_content` resolves this note's external edges the same
+    way :meth:`BrowseScreen.action_view_content` does (via the shared
+    :func:`_view_note_external_content`) and pushes
+    :class:`SnapshotViewerScreen` (zero/one) or :class:`ExternalPickerScreen`
+    (many). ``BrowseScreen``'s binding for the identical feature is bare
+    ``v`` -- safe there because its focused widget is a ``DataTable``, not an
+    editable ``TextArea``. Here the body is editable, so the literal ``v``
+    key lode-olmi.8's design named would just type a letter, exactly the
+    ``Ctrl+H``/``Ctrl+G`` trap above; a human resolved this 2026-07-15 as a
+    Ctrl-prefixed key, consistent with every other action on this screen.
+    ``Ctrl+R`` ("retrieved") was checked against all three traps
+    ``docs/keybindings.md`` catalogs before landing on it: it is not one of
+    ``TextArea``'s own builtin bindings (``ctrl+a/e/w/d/x/c/v/u/k/z/y``, see
+    that doc's table), Textual's ``KEY_ALIASES`` does not alias it to a
+    non-printable key (unlike ``ctrl+i`` -> ``tab``, ``ctrl+m`` -> ``enter``),
+    and it is not one of ``App``'s own ``priority=True`` reservations (unlike
+    ``ctrl+p``, the command palette) -- confirmed empirically, not just by
+    inspection, the same standard ``Ctrl+G``'s own candidates were held to.
     """
 
     BINDINGS = [
@@ -880,6 +1125,7 @@ class EditScreen(Screen[None]):
         Binding("f4", "focus_related", "Related"),
         Binding("ctrl+h", "show_history", "History"),
         Binding("ctrl+g", "inspect_selected", "Inspect"),
+        Binding("ctrl+r", "view_content", "View content"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -959,6 +1205,22 @@ class EditScreen(Screen[None]):
         for why ``Ctrl+G`` rather than bare ``i``, ``Ctrl+I``, or ``Ctrl+P``.
         """
         self.app.push_screen(EnrichmentModalScreen(self.note_id))
+
+    def action_view_content(self) -> None:
+        """Ctrl+R: view this note's retrieved external content, if any (lode-0sjj).
+
+        Not bare ``v`` -- this screen's body ``TextArea`` is editable and
+        consumes every printable keypress before a Screen-level binding ever
+        fires, the identical trap ``Ctrl+H``/``Ctrl+G`` above exist to dodge
+        (this class's docstring; ``docs/keybindings.md``). ``Ctrl+R``
+        ("retrieved") is free of the same three traps checked there: it isn't
+        a builtin ``TextArea`` binding (``ctrl+a/e/w/d/x/c/v/u/k/z/y`` are, see
+        that doc), Textual's ``KEY_ALIASES`` doesn't remap it to a
+        non-printable key the way ``ctrl+i``/``ctrl+m`` are, and ``App``
+        doesn't reserve it with ``priority=True`` the way ``ctrl+p`` is for
+        the command palette.
+        """
+        _view_note_external_content(self, self.note_id)
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

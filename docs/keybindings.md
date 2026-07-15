@@ -129,14 +129,19 @@ freed one), and re-grep this file before landing.
 | `BrowseScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
 | | | `e` | Edit | |
 | | | `i` | Inspect | |
+| | | `v` | View retrieved content | |
 | | | `d` | Delete | |
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
+| `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
+| `SnapshotViewerScreen` | `screens/browse.py` | `escape` | Back | read-only |
+| | | `t` | Toggle raw HTML | |
 | `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
 | | | `escape` | Back (cancel) | |
 | | | `f4` | Focus related-notes panel | |
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
+| | | `ctrl+r` | View retrieved content | |
 | `DiscardConfirmScreen` | `screens/capture.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |
@@ -155,9 +160,9 @@ freed one), and re-grep this file before landing.
 | `RelatedNoteModalScreen` | `related_notes_panel.py` | `escape` | Back | — |
 
 `ctrl+s`/`ctrl+n` on `EditScreen`/`CaptureScreen` already predate this doc and are the precedent
-`lode-olmi.2`'s `Ctrl+H` and `lode-g5es`'s `Ctrl+G` both follow: every existing binding on a screen
-with an editable body uses a non-printable key — a `ctrl+` combo like these, or a named/function key
-like `escape`/`f4` — never a bare letter.
+`lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, and `lode-0sjj`'s `Ctrl+R` all follow: every
+existing binding on a screen with an editable body uses a non-printable key — a `ctrl+` combo like
+these, or a named/function key like `escape`/`f4` — never a bare letter.
 
 ## Resolved collisions (history, for context)
 
@@ -181,3 +186,13 @@ collided at land time — this doc exists to stop the next one:
   Screen-level `f4` on the default screen (`CaptureScreen`), so it is being rekeyed to a different,
   free App-level key (see the table above) — the exact key is chosen at that ticket's build time,
   consulting this doc.
+- **`lode-0sjj`**: the content-viewer binding (lode-olmi.8's decision doc) was specified as a single
+  `v` key shared verbatim by both `BrowseScreen` and `EditScreen` — escalated for the identical
+  reason as `.2`'s `h` and `g5es`'s `i` (empirically confirmed: pressing `v` on `EditScreen` typed a
+  literal `v` into the note body instead of opening the viewer). `BrowseScreen`'s half kept bare `v`
+  (its focused widget is a `DataTable`, not an editable `TextArea`, so no collision there);
+  human-resolved `EditScreen`'s half as a Ctrl-prefixed key, per project practice, landing on
+  **`Ctrl+R`** ("retrieved") after checking it against the same three traps `Ctrl+G` was: it is not
+  one of `TextArea`'s own builtin bindings (`ctrl+a/e/w/d/x/c/v/u/k/z/y`, see the table in the hard
+  rule's "before binding" checklist above), `KEY_ALIASES` doesn't remap it to a non-printable key, and
+  `App` doesn't reserve it with `priority=True`.
