@@ -56,7 +56,8 @@ note body `TextArea` still has focus.
 
 Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewScreen`,
 `ReconcileScreen`'s diff view — are unaffected; `read_only` still lets bare-letter Screen bindings
-through normally (see `BrowseScreen`'s `e`/`i`/`d`/`h` today, none of which touch an editable body).
+through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-body screen — or
+`BrowseScreen`'s `e`/`i`/`d`, none of which touch an editable body).
 
 ## Current keymap
 
@@ -115,7 +116,8 @@ freed one), and re-grep this file before landing.
 
 `ctrl+s`/`ctrl+n` on `EditScreen`/`CaptureScreen` already predate this doc and are the precedent
 `lode-olmi.2`'s `Ctrl+H` follows: every existing binding on a screen with an editable body uses a
-`ctrl+` combo, never a bare letter.
+non-printable key — a `ctrl+` combo like these, or a named/function key like `escape`/`f4` — never a
+bare letter.
 
 ## Resolved collisions (history, for context)
 
