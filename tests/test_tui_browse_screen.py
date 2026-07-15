@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, Static, TextArea
+from textual.widgets import DataTable, Input, Static, TextArea
 
 from lode.ids import short_version_id
 from lode.notes_read import short_note_id
@@ -31,6 +31,7 @@ from lode.tui.screens.browse import (
     INSPECTOR_SUMMARY_ID,
     INSPECTOR_TAGS_ID,
     NOTE_BODY_ID,
+    SEARCH_INPUT_ID,
     TABLE_ID,
     VERSION_BODY_ID,
     BrowseScreen,
@@ -1289,3 +1290,214 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
         conn.close()
     # No tombstone was written -- the rejected delete left the chain untouched.
     assert rows == [("original body", "create"), ("moved on without you", "update")]
+
+
+# ---------------------------------------------------------------------------
+# Progressive incremental search (lode-olmi.4) -- '/' opens a hidden one-line
+# Input at the bottom of the screen; each keystroke re-scans the table from
+# the cursor's current row for the next Summary containing the query
+# (case-insensitive substring), wrapping if needed. '?' does the same upward.
+# Escape/Enter both close the box, keeping wherever the search landed.
+#
+# Four notes are saved in this order: alpha, beta, gamma, delta -- newest
+# first, the table therefore reads (top to bottom) delta(0), gamma(1),
+# beta(2), alpha(3).
+# ---------------------------------------------------------------------------
+
+
+def _seed_four_notes(db_path: Path) -> None:
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-alpha", "alpha widget")
+        save(conn, "note-beta", "beta widget")
+        save(conn, "note-gamma", "gamma widget")
+        save(conn, "note-delta", "delta report")
+    finally:
+        conn.close()
+
+
+def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            closed_before = not search_input.display
+            await pilot.press("slash")
+            await pilot.pause()
+            open_after = search_input.display
+            focused_after = app.focused is search_input
+            return closed_before, open_after, focused_after
+
+    closed_before, open_after, focused_after = asyncio.run(_drive())
+
+    assert closed_before
+    assert open_after
+    assert focused_after
+
+
+def test_incremental_search_forward_jumps_to_the_next_matching_summary(
+    tmp_path: Path,
+) -> None:
+    """'/' then typing scans DOWNWARD from the cursor's current row."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            assert table.cursor_row == 0  # starts on delta
+            await pilot.press("slash")
+            await pilot.press(*"beta")
+            await pilot.pause()
+            return table.cursor_row
+
+    cursor_row = asyncio.run(_drive())
+
+    assert cursor_row == 2  # beta widget, skipping gamma on the way down
+
+
+def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
+    tmp_path: Path,
+) -> None:
+    """'?' then typing scans UPWARD from the cursor's current row."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down", "down", "down")
+            assert table.cursor_row == 3  # now on alpha, the bottom row
+            await pilot.press("question_mark")
+            await pilot.press(*"beta")
+            await pilot.pause()
+            return table.cursor_row
+
+    cursor_row = asyncio.run(_drive())
+
+    assert cursor_row == 2  # beta widget, one row up
+
+
+def test_incremental_search_wraps_around_when_scanning_forward(
+    tmp_path: Path,
+) -> None:
+    """Downward search from the bottom row wraps back to the top to find a match."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("down", "down", "down")
+            assert table.cursor_row == 3  # alpha, the bottom row
+            await pilot.press("slash")
+            await pilot.press(*"delta")
+            await pilot.pause()
+            return table.cursor_row
+
+    cursor_row = asyncio.run(_drive())
+
+    assert cursor_row == 0  # delta report -- only reachable by wrapping past the end
+
+
+def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("slash")
+            await pilot.press(*"GAMMA")
+            await pilot.pause()
+            return table.cursor_row
+
+    cursor_row = asyncio.run(_drive())
+
+    assert cursor_row == 1  # gamma widget, matched despite the differing case
+
+
+def test_empty_query_is_a_no_op(tmp_path: Path) -> None:
+    """Backspacing the query back to empty leaves the cursor wherever it last
+    landed, rather than searching for (and "matching") the empty string."""
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("slash")
+            await pilot.press(*"beta")
+            await pilot.pause()
+            assert table.cursor_row == 2
+            await pilot.press("backspace", "backspace", "backspace", "backspace")
+            await pilot.pause()
+            return table.cursor_row
+
+    cursor_row = asyncio.run(_drive())
+
+    assert cursor_row == 2  # unchanged -- the empty query moved nothing
+
+
+def test_escape_closes_the_search_box_and_keeps_the_current_selection(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, bool, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("slash")
+            await pilot.press(*"beta")
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            still_browsing = isinstance(app.screen, BrowseScreen)
+            return still_browsing, search_input.display, table.cursor_row
+
+    still_browsing, box_visible, cursor_row = asyncio.run(_drive())
+
+    assert still_browsing  # Escape closed the box, not the whole screen
+    assert not box_visible
+    assert cursor_row == 2  # selection kept where the search left it
+
+
+def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    _seed_four_notes(db_path)
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, int]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            await pilot.press("slash")
+            await pilot.press(*"gamma")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            return search_input.display, table.cursor_row
+
+    box_visible, cursor_row = asyncio.run(_drive())
+
+    assert not box_visible
+    assert cursor_row == 1  # gamma widget, kept after Enter confirms

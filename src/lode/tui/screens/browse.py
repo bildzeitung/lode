@@ -103,6 +103,29 @@ routed through :class:`~lode.tui.screens.reconcile.ReconcileScreen` the way a
 save conflict is; it is simplest to notify and reload the table, which
 already reflects the current state either way. Declining the confirm, or an
 empty table, is a no-op.
+
+**Progressive incremental search (lode-olmi.4).** ``/`` opens a one-line
+:class:`~textual.widgets.Input` at the bottom of the screen (hidden the rest
+of the time via ``display = False``, so it claims no vertical space when
+closed); each keystroke re-scans the table **from the cursor's current row**
+for the next row whose Summary cell contains the typed query as a
+case-insensitive substring -- the match target settled with the user
+2026-07-14, deliberately the visible Summary text rather than the full note
+body, since that's the same text the row already shows. ``?`` opens the same
+box but scans upward instead of downward. Scanning from the *current* row
+(not a remembered start-of-search anchor) on every keystroke, rather than
+restarting from wherever the box was opened, is what makes "wrapping if
+needed" alone sufficient to still reach an earlier match after the query has
+grown past it: the wrap covers the whole table either way, so nothing further
+back is ever unreachable. Escape closes the box and leaves the cursor at
+whatever row the search last landed on (the same "keep the current
+selection" contract, not a revert-on-cancel); Enter does the same, just
+spelled as a confirm rather than a dismiss. An empty query is a no-op --
+:meth:`BrowseScreen._seek_match` returns immediately rather than searching for
+the empty string. Escape means two different things depending on whether the
+box is open (:meth:`BrowseScreen.action_dismiss_screen` checks
+``self._search_open`` first) -- close the search, or (box already closed) the
+usual pop back to capture.
 """
 
 from __future__ import annotations
@@ -113,7 +136,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Header, Static, TextArea
+from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 
 from lode.enrichment_view import (
     EnrichmentEdge,
@@ -150,6 +173,9 @@ NOTE_BODY_ID = "note-view-body"
 EDIT_BODY_ID = "note-edit-body"
 #: The delete-confirm dialog's message widget id -- read back in tests.
 DELETE_CONFIRM_MESSAGE_ID = "delete-confirm-message"
+#: The progressive-search one-line input's widget id (lode-olmi.4) -- read
+#: back in tests.
+SEARCH_INPUT_ID = "browse-search-input"
 #: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
 #: back in tests.
 EDIT_RELATED_ID = "edit-related-notes"
@@ -501,11 +527,25 @@ class BrowseScreen(Screen[None]):
         Binding("e", "edit_selected", "Edit"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("d", "delete_selected", "Delete"),
+        Binding("slash", "search_forward", "Search"),
+        Binding("question_mark", "search_backward", "Search up"),
     ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: Which way the last-opened search box scans (lode-olmi.4): +1 for
+        #: ``/`` (downward), -1 for ``?`` (upward). Set in :meth:`_open_search`,
+        #: read by :meth:`_seek_match` on every keystroke.
+        self._search_direction = 1
+        #: Whether the search box is currently open -- read by
+        #: :meth:`action_dismiss_screen` to decide what Escape means right now
+        #: (close the search box vs. pop back to capture).
+        self._search_open = False
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id=TABLE_ID, cursor_type="row")
+        yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -513,6 +553,10 @@ class BrowseScreen(Screen[None]):
         # width depends on the current terminal width, which _reload_rows reads
         # back off the laid-out table. on_mount only needs to take focus.
         self.query_one(f"#{TABLE_ID}", DataTable).focus()
+        # Closed by default (lode-olmi.4) -- display=False claims no vertical
+        # space, so the "one-line input box at the bottom" only appears once
+        # '/' or '?' is pressed.
+        self.query_one(f"#{SEARCH_INPUT_ID}", Input).display = False
 
     def on_resize(self, event: events.Resize) -> None:
         """Rebuild on resize so the wrapped Summary column re-fills the new width.
@@ -656,7 +700,80 @@ class BrowseScreen(Screen[None]):
             )
         self._reload_rows()
 
+    def action_search_forward(self) -> None:
+        """``/``: open the progressive search box, scanning downward (lode-olmi.4)."""
+        self._open_search(direction=1)
+
+    def action_search_backward(self) -> None:
+        """``?``: open the progressive search box, scanning upward (lode-olmi.4)."""
+        self._open_search(direction=-1)
+
+    def _open_search(self, *, direction: int) -> None:
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        if table.row_count == 0:
+            return
+        self._search_direction = direction
+        self._search_open = True
+        search_input = self.query_one(f"#{SEARCH_INPUT_ID}", Input)
+        search_input.value = ""
+        search_input.display = True
+        search_input.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Every keystroke re-scans from the cursor's current row (lode-olmi.4)."""
+        if event.input.id != SEARCH_INPUT_ID:
+            return
+        self._seek_match(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Enter: confirm and close the box, keeping wherever the search landed."""
+        if event.input.id != SEARCH_INPUT_ID:
+            return
+        self._close_search()
+
+    def _seek_match(self, query: str) -> None:
+        """Move the cursor to the closest row (in ``_search_direction``) whose
+        Summary contains ``query``, case-insensitive, wrapping if needed.
+
+        An empty query is a no-op (acceptance criteria) -- returns immediately
+        rather than "matching" every row. Scanning starts at ``offset=0`` (the
+        cursor's own current row), so a query that already matches where the
+        cursor sits leaves it in place instead of jumping to the *next*
+        occurrence.
+        """
+        if not query:
+            return
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        row_count = table.row_count
+        if row_count == 0:
+            return
+        needle = query.lower()
+        start = table.cursor_row
+        direction = self._search_direction
+        for offset in range(row_count):
+            candidate = (start + offset * direction) % row_count
+            summary = str(table.get_row_at(candidate)[3])
+            if needle in summary.lower():
+                table.move_cursor(row=candidate)
+                return
+
+    def _close_search(self) -> None:
+        search_input = self.query_one(f"#{SEARCH_INPUT_ID}", Input)
+        search_input.display = False
+        search_input.value = ""
+        self._search_open = False
+        self.query_one(f"#{TABLE_ID}", DataTable).focus()
+
     def action_dismiss_screen(self) -> None:
+        """Escape: close an open search box first, else pop back to capture.
+
+        The same key means two different things depending on whether the
+        search box is open (lode-olmi.4) -- closing it keeps the current
+        selection rather than popping the whole screen out from under it.
+        """
+        if self._search_open:
+            self._close_search()
+            return
         self.app.pop_screen()
 
 
