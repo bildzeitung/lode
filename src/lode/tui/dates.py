@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from lode.timestamps import parse_stamp
+
 #: How many days back from "now" still count as "this week" (weekday + time)
 #: rather than falling through to the "this year" (month + day) bucket -- a
 #: rolling 6-day window rather than a calendar-week boundary, so it needs no
@@ -52,7 +54,7 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     time), not elapsed hours, so an 11pm-yesterday note reads as "this week"
     rather than "today" even though it's under 24h old.
     """
-    dt = _parse(created).astimezone()
+    dt = parse_stamp(created).astimezone()
     reference = (now if now is not None else datetime.now(timezone.utc)).astimezone()
     delta_days = (reference.date() - dt.date()).days
     if delta_days == 0:
@@ -62,10 +64,3 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     if dt.year == reference.year:
         return f"{dt:%b} {dt.day}"
     return dt.strftime("%Y-%m-%d")
-
-
-def _parse(created: str) -> datetime:
-    """Parse the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` stamp (worker.py/versions.py)."""
-    return datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=timezone.utc
-    )

@@ -57,7 +57,6 @@ import time
 import tomllib
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -84,6 +83,7 @@ from lode.lexical import LexicalCacheBackend
 from lode.notes_read import list_deleted_notes, list_notes
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
+from lode.timestamps import parse_stamp
 
 if TYPE_CHECKING:
     # Type-only; the runtime imports live inside ``ask`` / ``_retrieve`` so the
@@ -654,17 +654,15 @@ def recover(
 def _short_date(created: str) -> str:
     """Render a stored UTC ``created`` timestamp as ``YYYY-MM-DD HH:MM`` local time.
 
-    ``created`` is parsed as the shared ``%Y-%m-%dT%H:%M:%S.%fZ`` UTC stamp
-    (:mod:`lode.worker`/:mod:`lode.versions`), then converted to system local
-    time with ``.astimezone()`` (no argument, lode-olmi.5) before dropping
-    the seconds/fractional precision -- stored/parsed values stay UTC, only
-    the human-facing render changes. The full adaptive (relative) date format
-    is Browse-only scope (lode-1gr.8), not this command's.
+    ``created`` is parsed via the shared :func:`lode.timestamps.parse_stamp`
+    (:mod:`lode.worker`/:mod:`lode.versions` write the UTC stamp it expects),
+    then converted to system local time with ``.astimezone()`` (no argument,
+    lode-olmi.5) before dropping the seconds/fractional precision --
+    stored/parsed values stay UTC, only the human-facing render changes. The
+    full adaptive (relative) date format is Browse-only scope (lode-1gr.8),
+    not this command's.
     """
-    dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=timezone.utc
-    )
-    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    return parse_stamp(created).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 @app.command(name="notes")
