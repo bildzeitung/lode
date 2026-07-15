@@ -354,19 +354,25 @@ class RelatedNotesPanel(Static):
                 text.append("\n")
         self.update(text)
 
-    def action_select_previous(self) -> None:
-        """Up (while focused): move the selection cursor back one (lode-olmi.9)."""
+    def _step_selection(self, delta: int) -> None:
+        """Move the selection cursor by ``delta``, wrapping at both ends.
+
+        No-op on an empty result set; the shared body of the Up/Down actions
+        so the guard, the wrap, and the re-render can't drift between them
+        (lode-olmi.9).
+        """
         if not self._related:
             return
-        self._selected_index = (self._selected_index - 1) % len(self._related)
+        self._selected_index = (self._selected_index + delta) % len(self._related)
         self._render_related(self._related)
+
+    def action_select_previous(self) -> None:
+        """Up (while focused): move the selection cursor back one (lode-olmi.9)."""
+        self._step_selection(-1)
 
     def action_select_next(self) -> None:
         """Down (while focused): move the selection cursor forward one (lode-olmi.9)."""
-        if not self._related:
-            return
-        self._selected_index = (self._selected_index + 1) % len(self._related)
-        self._render_related(self._related)
+        self._step_selection(1)
 
     def action_open_selected(self) -> None:
         """Enter (while focused): open the selected note's highlighted context.
