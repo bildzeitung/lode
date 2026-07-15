@@ -847,6 +847,28 @@ class EditScreen(Screen[None]):
     body instead of opening history). ``Ctrl+S``/``Ctrl+N`` already use this
     same non-printable-key escape hatch on this and capture's screen, for the
     identical reason.
+
+    **Enrichment inspector, Ctrl+G not bare ``i`` (lode-g5es).**
+    :meth:`action_inspect_selected` pushes the same
+    :class:`EnrichmentModalScreen` :meth:`BrowseScreen.action_inspect_selected`
+    does, keyed to ``self.note_id`` -- "was anything retrieved for this note,"
+    reachable while editing, not just from the browse row. It is bound to
+    ``Ctrl+G``, not ``BrowseScreen``'s bare ``i``: this screen's body
+    ``TextArea`` is editable, so a bare ``i`` would type a literal letter
+    instead of opening the modal, the identical trap ``Ctrl+H`` above exists
+    to dodge. Two more letters that look tempting fail for their own
+    reasons: ``Ctrl+I`` is *not* a safe substitute for bare ``i`` -- Textual's
+    ``KEY_ALIASES`` maps ``ctrl+i`` to ``tab``, which this ``TextArea`` also
+    consumes (for indent), so that binding would be silently unreachable too
+    -- and ``Ctrl+P`` (a natural "peek" pick, matching this modal's own
+    glance-and-dismiss contract) collides with Textual's own App-level
+    command-palette binding, which is registered with ``priority=True`` and
+    so wins over *any* Screen-level binding on the same key, confirmed
+    empirically (pressing it opened ``CommandPalette``, never the inspector).
+    ``Ctrl+G`` ("glance") is free of all three traps. This is project
+    practice, not a one-off: every action this screen binds beyond Escape
+    uses a ``Ctrl+``-prefixed (or otherwise non-printable) key for exactly
+    this reason -- see ``docs/keybindings.md``.
     """
 
     BINDINGS = [
@@ -854,6 +876,7 @@ class EditScreen(Screen[None]):
         Binding("escape", "cancel", "Back"),
         Binding("f4", "focus_related", "Related"),
         Binding("ctrl+h", "show_history", "History"),
+        Binding("ctrl+g", "inspect_selected", "Inspect"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -922,6 +945,17 @@ class EditScreen(Screen[None]):
         this class's docstring).
         """
         self.app.push_screen(VersionHistoryScreen(self.note_id))
+
+    def action_inspect_selected(self) -> None:
+        """Ctrl+G: open this note's enrichment inspector modal (lode-g5es).
+
+        Mirrors :meth:`BrowseScreen.action_inspect_selected` -- same modal,
+        same glance-and-dismiss contract, keyed to ``self.note_id`` directly
+        (this screen always has exactly one note loaded, unlike Browse's
+        table, which needs the highlighted row). See this class's docstring
+        for why ``Ctrl+G`` rather than bare ``i``, ``Ctrl+I``, or ``Ctrl+P``.
+        """
+        self.app.push_screen(EnrichmentModalScreen(self.note_id))
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""
