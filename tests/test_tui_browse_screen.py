@@ -621,6 +621,89 @@ def test_i_on_highlighted_row_opens_the_inspector_with_full_enrichment(
     assert fields["embed"] == "Embedded: no (0 passages)"
 
 
+def test_ctrl_g_from_editor_opens_the_inspector_with_full_enrichment(
+    tmp_path: Path,
+) -> None:
+    """Ctrl+G (not bare ``i`` -- the body TextArea is editable) opens the same
+    enrichment inspector modal Browse's ``i`` binding does (lode-g5es)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note about jwt auth").version_id
+        _insert_annotation(
+            conn,
+            target="note-a",
+            source_version=head,
+            kind="summary",
+            payload_value="a note about jwt auth",
+        )
+        _insert_annotation(
+            conn, target="note-a", source_version=head, kind="tag", payload_value="auth"
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> dict[str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert isinstance(app.screen, EnrichmentModalScreen)
+            screen = app.screen
+            return {
+                "state": str(
+                    screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content
+                ),
+                "summary": str(
+                    screen.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).content
+                ),
+                "tags": str(screen.query_one(f"#{INSPECTOR_TAGS_ID}", Static).content),
+            }
+
+    fields = asyncio.run(_drive())
+
+    assert fields["state"] == "Enrichment: ready"
+    assert fields["summary"] == "Summary: a note about jwt auth"
+    assert fields["tags"] == "Tags: auth"
+
+
+def test_bare_i_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
+    """Bare ``i`` is consumed by the editable body TextArea, not a Screen binding.
+
+    Guards against a regression back to a bare-letter binding for the
+    inspector (lode-g5es) -- exactly the trap ``Ctrl+H``'s own guard test
+    (``test_bare_h_from_editor_types_into_the_body_instead``, above) covers
+    for version history.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "insightful body")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("i")
+            await pilot.pause()
+            text = app.screen.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+            return text, isinstance(app.screen, EnrichmentModalScreen)
+
+    text, opened_inspector = asyncio.run(_drive())
+
+    assert text == "iinsightful body"
+    assert not opened_inspector
+
+
 def test_inspector_modal_field_coverage_matches_the_view_model(tmp_path: Path) -> None:
     """TUI-side parity guard (lode-ay5.4), mirroring the CLI one (lode-ay5.3,
 
