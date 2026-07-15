@@ -2692,6 +2692,81 @@ def test_work_without_wait_is_unchanged_one_shot(
     assert "drained 0 job(s)" in result.stdout
 
 
+def test_work_one_shot_reports_outstanding_jobs_not_just_drained_0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A one-shot pass over a thrashing head is no longer silent about it (lode-olmi.13).
+
+    A 'refresh' job has no registered handler, so it stays 'pending' across a
+    single one-shot pass -- the same shape as a reconcile re-enqueue that
+    drain() never reaches this pass. Plain 'lode work' (no --wait) must name
+    it explicitly instead of just printing 'drained 0 job(s)' and exiting
+    silent about what's left.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("refresh", "ver-stuck"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "drained 0 job(s)" in result.stdout
+    assert "1 job(s) still outstanding after this pass" in result.stdout
+    assert "refresh" in result.stdout
+    assert "pending" in result.stdout
+
+
+def test_work_wait_does_not_duplicate_the_one_shot_outstanding_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'--wait' keeps its own outstanding-jobs reporting -- no duplicate generic line.
+
+    --wait already decides whether to keep polling from _outstanding_jobs()
+    and names outstanding jobs itself on timeout; the new one-shot/--loop
+    "still outstanding after this pass" line (lode-olmi.13) is specific to
+    the non---wait path and must not also appear under --wait.
+    """
+    import lode.worker as worker_mod
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("refresh", "ver-stuck"),
+            )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
+
+    calls = {"n": 0}
+
+    def _fake_monotonic() -> float:
+        calls["n"] += 1
+        return 0.0 if calls["n"] == 1 else 1_000_000.0
+
+    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
+    assert result.exit_code == 1
+    assert "timed out" in result.stderr
+    assert "still outstanding after this pass" not in result.stdout
+    assert "still outstanding after this pass" not in result.stderr
+
+
 def test_work_refuses_when_lock_held(tmp_path: Path) -> None:
     """A second 'lode work' must refuse when the lockfile holds a live PID.
 

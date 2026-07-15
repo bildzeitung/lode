@@ -1407,8 +1407,16 @@ def work(
     passages`` for an embed job -- ahead of the existing ``drained N job(s)``
     summary. A one-shot ``work`` right after capture only *submits* the enrich
     batch (nothing to collect yet), so the enrich line appears on a later pass
-    (or under ``--wait``); a no-op pass still just prints ``drained 0
-    job(s)``.
+    (or under ``--wait``).
+
+    Without ``--wait``, if jobs are still ``pending``/``running`` once the
+    pass ends (e.g. ``reconcile()`` just re-enqueued a head this pass's
+    ``drain()`` didn't reach), that is reported too -- ``N job(s) still
+    outstanding after this pass: ...`` -- naming each one the same way
+    ``--wait``'s own timeout message does (lode-olmi.13). This is what makes a
+    single one-shot pass over a thrashing head visible instead of a bare
+    ``drained 0 job(s)`` that looks like nothing happened. A clean pass with
+    nothing left still just prints ``drained 0 job(s)``.
     """
     if wait and loop:
         typer.echo(
@@ -1473,6 +1481,27 @@ def work(
                                 raise typer.Exit(code=1)
                             time.sleep(interval)
                             continue
+
+                        # Logging parity with --wait (lode-olmi.13): --wait
+                        # already surfaces outstanding jobs via the timeout
+                        # message above (or by polling again next tick), so a
+                        # thrashing head is visible across its passes. A
+                        # one-shot pass has no "next tick" -- if reconcile()
+                        # just re-enqueued jobs that this pass's drain() never
+                        # got to (or can't -- e.g. no handler registered yet),
+                        # the one-shot exits right after a bare "drained 0
+                        # job(s)" with no sign anything is left, which is what
+                        # hid the reconcile re-enqueue loop (lode-olmi.11) and
+                        # the one-shot hang (lode-olmi.12) from a plain
+                        # 'lode work'. Report the same outstanding-jobs detail
+                        # --wait's own timeout path names, every pass, so a
+                        # one-shot (or --loop) run is never silent about it.
+                        outstanding = _outstanding_jobs(conn)
+                        if outstanding:
+                            typer.echo(
+                                f"{len(outstanding)} job(s) still outstanding "
+                                f"after this pass: {_format_outstanding(outstanding)}"
+                            )
 
                         if not loop:
                             break
