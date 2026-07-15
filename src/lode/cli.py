@@ -34,7 +34,13 @@ so the ~500MB first-run download happens as a deliberate one-time setup step
 rather than silently mid-capture, and turns its most likely failure mode --
 no network, or a cold cache under ``HF_HUB_OFFLINE=1`` -- into an actionable
 message instead of a raw traceback -- see ``docs/onboarding.md`` and
-``docs/configuration.md`` ("Models").
+``docs/configuration.md`` ("Models"); ``dump-html`` (spec 06 item 7c,
+lode-olmi.7) prints a note's drawn-down external's raw fetched markup
+(``snapshots.raw_payload``) to stdout -- the raw counterpart to ``show``'s
+extracted-text ``snapshots.body`` introspection (lode-8d2) -- resolving
+which external via the same :mod:`lode.enrichment_view` seam, and
+disambiguating by listing or by a 1-based-index/id selector when a note has
+more than one drawn-down external.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -1080,6 +1086,146 @@ def no_egress_(
         raise typer.Exit(code=1)
     state = "cleared" if clear else "marked"
     typer.echo(f"{state} no_egress: {external_id}")
+
+
+def _render_external_choice(index: int, external: ExternalView) -> str:
+    """Render one numbered listing line for ``dump-html``'s disambiguation prompt.
+
+    Same fields :func:`_render_external` shows beneath a ``show`` edge line
+    (source_type, short snapshot id, fetched_at, state), fronted by the
+    1-based ``index`` this command also accepts as a selector -- so what's
+    printed here is exactly what a subsequent selector argument can
+    reference back.
+    """
+    return (
+        f"  {index}) {external.external_id}  "
+        f"{external.source_type} · snapshot {short_version_id(external.snapshot_id)} "
+        f"· as of {external.fetched_at} [{external.state}]"
+    )
+
+
+def _select_external(
+    externals: list[ExternalView], selector: str
+) -> ExternalView | None:
+    """Resolve ``selector`` against ``externals`` -- a 1-based index or an exact id.
+
+    ``selector`` is either the 1-based position :func:`_render_external_choice`
+    printed, or the external's own id (its canonical URL) verbatim -- no
+    prefix matching, unlike note-id resolution, since ``external_id`` values
+    are typically full URLs a caller would paste rather than abbreviate.
+    Returns ``None`` on no match; the caller decides how to report that.
+    """
+    if selector.isdigit():
+        index = int(selector)
+        if 1 <= index <= len(externals):
+            return externals[index - 1]
+        return None
+    matches = [external for external in externals if external.external_id == selector]
+    return matches[0] if len(matches) == 1 else None
+
+
+@app.command(name="dump-html")
+def dump_html(
+    target: str = typer.Argument(
+        ..., help="Note id, or an unambiguous prefix of one, to dump an external for."
+    ),
+    selector: str | None = typer.Argument(
+        None,
+        help="Which external to dump when the note has more than one: its "
+        "1-based listing index, or its external id (URL) verbatim.",
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Print a note's drawn-down external's raw HTML (``snapshots.raw_payload``).
+
+    Spec 06 item 7c (lode-olmi.7). ``snapshots.raw_payload`` holds the
+    original fetched bytes/markup a web draw-down mirrored (``lode-w0h.2``);
+    ``snapshots.body`` -- what ``show``'s external-snapshot introspection
+    already surfaces (lode-8d2) -- is the *extracted* text instead. This
+    command is the CLI's route to the raw side.
+
+    ``target`` resolves exactly like ``show``/``purge``
+    (:meth:`lode.repository.Repository.resolve_note_prefix`): full id or an
+    unambiguous prefix. A note reaches an external via one of its enrichment
+    edges (:mod:`lode.enrichment_view`'s ``EnrichmentEdge.external``, the same
+    seam ``show`` renders) -- only edges that resolve to a real ``externals``
+    row count. Addressing a note with more than one such edge is this
+    ticket's open question, resolved as: with exactly one, no ``selector`` is
+    needed; with more than one and no ``selector``, the command lists them
+    (index, id, source_type, snapshot, state) rather than guessing; a
+    ``selector`` picks by that listing's 1-based index or by the external's
+    id (URL) verbatim.
+
+    A tombstoned snapshot, or an ``ok`` one that simply has no captured raw
+    HTML (``raw_payload`` is nullable, ``schema.sql``), reports cleanly to
+    stderr and exits non-zero rather than dumping an empty line.
+    """
+    conn = _open_db(db)
+    try:
+        repo = Repository(conn)
+        try:
+            note_id = repo.resolve_note_prefix(target)
+        except KeyError:
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1) from None
+        except AmbiguousNoteIdError as exc:
+            typer.echo(
+                f"ambiguous note id prefix {target!r}: matches "
+                + ", ".join(exc.candidates),
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+
+        view = enrichment_view_conn(conn, note_id)
+        if view is None:
+            typer.echo(f"no such note: {target}", err=True)
+            raise typer.Exit(code=1)
+
+        externals = [edge.external for edge in view.edges if edge.external is not None]
+        if not externals:
+            typer.echo(f"no external sources for note {note_id}", err=True)
+            raise typer.Exit(code=1)
+
+        if len(externals) == 1:
+            chosen = externals[0]
+        elif selector is None:
+            typer.echo(f"note {note_id} has {len(externals)} external sources:")
+            for index, external in enumerate(externals, start=1):
+                typer.echo(_render_external_choice(index, external))
+            return
+        else:
+            chosen = _select_external(externals, selector)
+            if chosen is None:
+                typer.echo(
+                    f"no external source matching {selector!r} for note "
+                    f"{note_id}; options:",
+                    err=True,
+                )
+                for index, external in enumerate(externals, start=1):
+                    typer.echo(_render_external_choice(index, external), err=True)
+                raise typer.Exit(code=1)
+
+        row = conn.execute(
+            "SELECT raw_payload FROM snapshots WHERE snapshot_id = ?",
+            (chosen.snapshot_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    raw_payload = row[0] if row else None
+    if not raw_payload:
+        reason = (
+            "fetch failed (tombstone)"
+            if chosen.status == "tombstone"
+            else "no HTML was captured for this snapshot"
+        )
+        typer.echo(
+            f"no stored HTML for {chosen.external_id} "
+            f"(snapshot {short_version_id(chosen.snapshot_id)}): {reason}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(raw_payload)
 
 
 @app.command()

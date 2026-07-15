@@ -16,10 +16,14 @@ summary/tags/entities/edges-with-reason-confidence via the shared
 status -- sharing ``purge``'s id/prefix resolution); ``ask`` (the cited Q&A
 loop,
 lode-y42.2: retrieve → synthesize → faithfulness gate → cite or abstain, with the
-Anthropic client mocked so the gate runs offline); and ``no-egress`` (lode-w0h.7:
+Anthropic client mocked so the gate runs offline); ``no-egress`` (lode-w0h.7:
 the no-egress-tier control surface for an external source -- sets/``--clear``s
 ``externals.no_egress`` via ``lode.externals.set_no_egress``, refusing an unknown
-external_id).
+external_id); and ``dump-html`` (spec 06 item 7c, lode-olmi.7: prints a note's
+drawn-down external's raw fetched HTML, ``snapshots.raw_payload`` -- resolving
+the note the same way ``show``/``purge`` do, disambiguating a multi-external
+note by listing or by a 1-based-index/id selector, and reporting a
+tombstone/no-HTML snapshot cleanly rather than dumping empty).
 """
 
 import json
@@ -66,6 +70,7 @@ ALL_SUBCOMMANDS = [
     "jobs",
     "egress",
     "no-egress",
+    "dump-html",
     "config",
     "work",
     "tui",
@@ -1545,6 +1550,343 @@ def test_show_edge_without_a_matching_external_row_has_no_snapshot_line(
     assert result.exit_code == 0
     assert "-> concept-not-external (because, 0.50)" in result.stdout
     assert "snapshot" not in result.stdout
+
+
+# --- lode dump-html <note> [<selector>] (spec 06 item 7c, lode-olmi.7) -----
+
+
+def _seed_external_edge(
+    conn: sqlite3.Connection,
+    note_id: str,
+    version_id: str,
+    *,
+    external_id: str,
+    snapshot_id: str,
+    raw_payload: str | None,
+    status: str = "ok",
+) -> None:
+    """Draw down one external and wire an edge to it from ``note_id``.
+
+    Mirrors ``_seed_external`` (the ``show`` external-snapshot fixture) but
+    also writes ``raw_payload`` -- ``dump-html``'s whole reason for being --
+    which that fixture never needed to set.
+    """
+    with conn:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, 'web')",
+            (external_id,),
+        )
+        conn.execute(
+            "INSERT INTO snapshots "
+            "(snapshot_id, external_id, body, raw_payload, status, fetched_at) "
+            "VALUES (?, ?, 'body', ?, ?, '2026-07-08T00:00:00.000000Z')",
+            (snapshot_id, external_id, raw_payload, status),
+        )
+        conn.execute(
+            "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
+            (snapshot_id, external_id),
+        )
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, ?, 'user', 'pasted URL', 1.0, ?, 'fresh')",
+            (note_id, external_id, version_id),
+        )
+
+
+def test_dump_html_single_external_prints_raw_payload(tmp_path: Path) -> None:
+    """The common case: one drawn-down external, no selector needed."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dump-1", "see https://example.com/article")
+        _seed_external_edge(
+            conn,
+            "note-dump-1",
+            result.version_id,
+            external_id="https://example.com/article",
+            snapshot_id="snap-dump-1",
+            raw_payload="<html><body>hello</body></html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-1", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "<html><body>hello</body></html>"
+
+
+def test_dump_html_accepts_an_unambiguous_note_prefix(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dump-prefix", "see https://example.com/x")
+        _seed_external_edge(
+            conn,
+            "note-dump-prefix",
+            result.version_id,
+            external_id="https://example.com/x",
+            snapshot_id="snap-dump-prefix",
+            raw_payload="<html>x</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-pref", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "<html>x</html>"
+
+
+def test_dump_html_no_external_sources_reports_and_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-dump-none", "just a plain note")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-none", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "no external sources" in result.stderr
+
+
+def test_dump_html_multi_external_no_selector_lists_them(tmp_path: Path) -> None:
+    """Ambiguous (>1 external, no selector): list rather than guess."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-dump-multi", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-multi",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-dump-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-multi",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-dump-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-multi", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "https://a.example" in result.stdout
+    assert "https://b.example" in result.stdout
+    assert "<html>a</html>" not in result.stdout
+    assert "<html>b</html>" not in result.stdout
+
+
+def test_dump_html_multi_external_selector_by_index(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-dump-idx", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-idx",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-dump-idx-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-idx",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-dump-idx-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app, ["dump-html", "note-dump-idx", "2", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "<html>b</html>"
+
+
+def test_dump_html_multi_external_selector_by_id(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-dump-sel", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-sel",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-dump-sel-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-sel",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-dump-sel-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "note-dump-sel", "https://a.example", "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "<html>a</html>"
+
+
+def test_dump_html_unmatched_selector_reports_and_exits_nonzero(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-dump-bad-sel", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-bad-sel",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-dump-bad-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-dump-bad-sel",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-dump-bad-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "note-dump-bad-sel", "no-such-thing", "--db", str(db_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "no external source matching" in result.stderr
+
+
+def test_dump_html_tombstone_reports_cleanly_instead_of_dumping_empty(
+    tmp_path: Path,
+) -> None:
+    """A tombstoned (link-rotted) snapshot has no raw HTML to dump -- report,
+    don't print an empty line (this ticket's acceptance criteria)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dump-dead", "see https://dead.example")
+        _seed_external_edge(
+            conn,
+            "note-dump-dead",
+            result.version_id,
+            external_id="https://dead.example",
+            snapshot_id="snap-dump-dead",
+            raw_payload=None,
+            status="tombstone",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-dead", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+    assert "no stored HTML" in result.stderr
+
+
+def test_dump_html_ok_snapshot_with_no_raw_payload_reports_cleanly(
+    tmp_path: Path,
+) -> None:
+    """An ``ok`` snapshot can still have a NULL raw_payload (e.g. a redirect-cap
+    tombstone predecessor never applies here, but the column is nullable
+    regardless of status) -- same clean report, not an empty dump."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dump-noraw", "see https://noraw.example")
+        _seed_external_edge(
+            conn,
+            "note-dump-noraw",
+            result.version_id,
+            external_id="https://noraw.example",
+            snapshot_id="snap-dump-noraw",
+            raw_payload=None,
+            status="ok",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-noraw", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert result.stdout == ""
+    assert "no stored HTML" in result.stderr
+
+
+def test_dump_html_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["dump-html", "no-such-note", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "no such note" in result.stderr
+
+
+def test_dump_html_ambiguous_note_prefix_reports_candidates(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-dump-ambig-1", "a")
+        save(conn, "note-dump-ambig-2", "b")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "note-dump-ambig", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "ambiguous note id prefix" in result.stderr
 
 
 # --- lode recover <prefix> (undo a soft-delete, lode-d32.3) ----------------
