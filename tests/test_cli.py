@@ -24,7 +24,11 @@ external_id).
 
 import json
 import logging
+import os
 import sqlite3
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -184,6 +188,29 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         return conn.execute(query, params).fetchall()
     finally:
         conn.close()
+
+
+@contextmanager
+def _local_tz(tz: str) -> Iterator[None]:
+    """Pin the process's local timezone (``time.tzset``, POSIX-only) for a block.
+
+    ``_short_date`` converts a stored UTC timestamp to system local time
+    before formatting (lode-olmi.5); pinning ``TZ`` here makes that
+    conversion deterministic regardless of the host machine's real
+    timezone, and restores whatever ``TZ`` was set to (or unsets it) on
+    exit so it can never leak into a later test.
+    """
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = tz
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
 
 
 def _noop_enrich(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -809,6 +836,11 @@ def test_notes_lists_the_full_id_date_and_summary(
     ``test_add_calls_enrich_immediately`` already use -- pins the note to its
     not-yet-enriched state, where ``notes_read.list_notes`` falls back to the
     note's first line.
+
+    ``_short_date`` now converts the stored UTC ``created`` to system local
+    time before formatting (lode-olmi.5); this test pins ``TZ=UTC`` so that
+    conversion is a no-op and the raw-UTC-slice assertion below stays valid
+    regardless of the host machine's real timezone.
     """
     import lode.enrich as enrich_mod
 
@@ -817,12 +849,13 @@ def test_notes_lists_the_full_id_date_and_summary(
 
     monkeypatch.setattr(enrich_mod, "enrich_version", _fake_enrich)
 
-    db_path = tmp_path / "lode.db"
-    note_id = runner.invoke(
-        app, ["add", "the first line of the note", "--db", str(db_path)]
-    ).stdout.strip()
+    with _local_tz("UTC"):
+        db_path = tmp_path / "lode.db"
+        note_id = runner.invoke(
+            app, ["add", "the first line of the note", "--db", str(db_path)]
+        ).stdout.strip()
 
-    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+        result = runner.invoke(app, ["notes", "--db", str(db_path)])
 
     assert result.exit_code == 0
     assert note_id in result.stdout  # full id, copy-pasteable into `purge`
@@ -831,6 +864,42 @@ def test_notes_lists_the_full_id_date_and_summary(
         0
     ][0]
     assert created[:16].replace("T", " ") in result.stdout
+
+
+def test_notes_date_column_renders_in_local_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``lode notes``' date column converts stored UTC to local time (lode-olmi.5).
+
+    Pins a fixed, non-UTC, no-DST offset (``Etc/GMT+5`` == UTC-5) so the
+    displayed date/time is deterministically shifted from the raw UTC
+    timestamp, and asserts the *converted* wall clock appears -- not the
+    raw UTC slice.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+
+    with _local_tz("Etc/GMT+5"):
+        note_id = runner.invoke(
+            app, ["add", "a note for the local-time test", "--db", str(db_path)]
+        ).stdout.strip()
+
+        result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    created = _rows(db_path, "SELECT created FROM notes WHERE note_id = ?", (note_id,))[
+        0
+    ][0]
+    utc_dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+        tzinfo=timezone.utc
+    )
+    expected_local = (utc_dt - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
+    assert expected_local in result.stdout
+    # The whole-hour UTC-5 offset always shifts the displayed hour, so the raw
+    # UTC slice can never coincide with the converted wall clock -- it must not
+    # appear verbatim in the output.
+    raw_utc_slice = created[:16].replace("T", " ")
+    assert raw_utc_slice not in result.stdout
 
 
 def test_notes_excludes_a_tombstoned_note(
