@@ -895,13 +895,11 @@ def test_notes_date_column_renders_in_local_time(
     )
     expected_local = (utc_dt - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
     assert expected_local in result.stdout
-    # The raw UTC slice must NOT appear verbatim unless the conversion
-    # happens to be a no-op at the minute granularity displayed (i.e. the
-    # capture landed exactly on an hour boundary) -- guard against that
-    # extremely rare flake by asserting the two differ when they should.
+    # The whole-hour UTC-5 offset always shifts the displayed hour, so the raw
+    # UTC slice can never coincide with the converted wall clock -- it must not
+    # appear verbatim in the output.
     raw_utc_slice = created[:16].replace("T", " ")
-    if raw_utc_slice != expected_local:
-        assert raw_utc_slice not in result.stdout
+    assert raw_utc_slice not in result.stdout
 
 
 def test_notes_excludes_a_tombstoned_note(
