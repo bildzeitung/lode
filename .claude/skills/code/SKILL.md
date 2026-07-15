@@ -317,7 +317,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > notwithstanding: the operator named it on purpose, so the ticket's kind is not this skill's call
    > to second-guess on that path.
 
-   > **Auto-select paths only — also exclude children of an un-debated epic (lode-bw5k).** `/debate`
+   > **Auto-select paths only — also exclude children of an un-debated epic (lode-bw5k).** `/challenge`
    > is the intended stress-test gate a plan/epic should pass **before** its children get built, but
    > nothing enforced that — `lode-olmi`'s children were built and landed without the epic ever having
    > been debated, caught only by a human noticing after the fact. So, for **every candidate that
@@ -329,7 +329,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > ```
    >
    > It prints `BUILD <id>` (no parent epic, or the parent epic already carries the `epic-debated`
-   > label `/debate` stamps when it debates an epic — `.claude/skills/debate/SKILL.md`) or `SKIP <id>
+   > label `/challenge` stamps when it debates an epic — `.claude/skills/challenge/SKILL.md`) or `SKIP <id>
    > epic not debated (<epic-id>)`. Keep every `BUILD` in the buildable set; **report every `SKIP`** —
    > id + reason (`epic not debated (<epic-id>)`) — in step 5's skip list, right alongside the
    > `human`/epic skips. The script only reads (`bd show`, twice at most per candidate — the ticket,
@@ -337,7 +337,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > candidate's `dependencies[]` (a `parent-child` entry whose target has `issue_type: epic`), not
    > from `parent_id`/`epic_id` (verified null on real tickets — read the deps array).
    >
-   > **No new escape-hatch flag.** The unblock is to actually debate the epic (`/debate <epic-id>`,
+   > **No new escape-hatch flag.** The unblock is to actually debate the epic (`/challenge <epic-id>`,
    > cheap) or hand-apply the `epic-debated` label to acknowledge it was debated informally — both
    > leave the same durable marker this gate reads, so there is nothing else to build.
    >

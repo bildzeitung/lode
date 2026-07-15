@@ -1,12 +1,12 @@
 ---
 name: land-review
-description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `debate`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (`/code-review` + `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
+description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (`/code-review` + `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
 ---
 
 # land-review
 
-I am the **land-side semantic review** — the build-side twin of [`debate`](../debate/SKILL.md).
-`debate` critiques a *plan* before it's built; I critique the *result* before it lands. I take one
+I am the **land-side semantic review** — the build-side twin of [`challenge`](../challenge/SKILL.md).
+`challenge` critiques a *plan* before it's built; I critique the *result* before it lands. I take one
 **built, ready-for-land branch** and its **ticket**, and I answer a single question: **should this
 land?** I return a structured verdict — **accept | bounce | escalate** — with findings precise
 enough for the lander to act on without re-reading the branch.
@@ -45,7 +45,7 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 
 - **The ticket:** `bd show <id> --json` — title, description, **acceptance criteria**, `design`,
   notes, parent/links. The acceptance criteria are the contract; the `design` (if a planner or
-  `debate` wrote one) is the agreed approach. I read these as the standard, not my own preference.
+  `challenge` wrote one) is the agreed approach. I read these as the standard, not my own preference.
 - **The branch:** `git fetch origin land/<id>` (and `land/<base>` too if the lander told me this is a
   stacked branch), then diff against the right base:
   - **Unstacked (the common case):**
@@ -94,21 +94,21 @@ Form no opinion until I've read **both sides** — the ticket as written and the
 
 ### 2. Judge on the axes that apply
 
-These mirror `debate`'s axes, turned from *plan* onto *result*:
+These mirror `challenge`'s axes, turned from *plan* onto *result*:
 
-**Acceptance — is the contract met?** (debate's *acceptance/verifiability*, after the fact)
+**Acceptance — is the contract met?** (challenge's *acceptance/verifiability*, after the fact)
 - Does the branch satisfy **every** acceptance criterion, observably — not "mostly", not "the happy
   path"? Could I write the acceptance test against this branch and watch it pass?
 - Is anything in the criteria silently unaddressed, stubbed, or deferred without saying so?
 
-**Scope — is it clean?** (debate's *ambiguity/sequencing*, after the fact)
+**Scope — is it clean?** (challenge's *ambiguity/sequencing*, after the fact)
 - Does the branch do **exactly** the ticket, no more? **Silent scope creep** — an unrelated refactor,
   a drive-by feature, a config change nobody asked for — is a finding even when it's "nice", because
   it lands unreviewed work under this ticket's name. Discovered work belongs in its own
   `discovered-from` issue, not smuggled in here.
 - Does it do **less** than the ticket and hide it? Under-scope is as much a finding as over-scope.
 
-**Design & invariants — does it honor the record?** (debate's *assumptions*, after the fact)
+**Design & invariants — does it honor the record?** (challenge's *assumptions*, after the fact)
 - Are the **lode invariants** kept? **Typer, never argparse**; venv at `./venv`; design decisions in
   `docs/` (never a bd note or memory — that forks the record); **simplest thing that works** (no
   abstraction or flexibility nobody asked for).
@@ -116,14 +116,14 @@ These mirror `debate`'s axes, turned from *plan* onto *result*:
   different architecture? A defensible-but-different approach is a *decision*, not automatically a
   failure — see the escalate rule.
 
-**Approach — is it the right shape?** (debate's *root-cause vs symptom / correctness & simplicity*)
+**Approach — is it the right shape?** (challenge's *root-cause vs symptom / correctness & simplicity*)
 - For a fix: does it address the **root cause**, or mask a symptom? For a feature: is this the
   simplest correct shape, or a more elaborate one than the problem warrants?
 - Are there obvious side effects or coupling the ticket didn't anticipate that make landing risky?
 
 ### 3. Return a verdict — accept | bounce | escalate
 
-Exactly one verdict. The seam between **bounce** and **escalate** is the same one `debate` and the
+Exactly one verdict. The seam between **bounce** and **escalate** is the same one `challenge` and the
 producer use: **a clear failure I'm confident about → bounce; a genuine decision I can't make →
 escalate.** When unsure which side I'm on, I escalate — landing the wrong thing is costlier than
 asking.

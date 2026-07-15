@@ -14,7 +14,7 @@ human when work parks on one of these — you only find it by manually running `
 silence into an active surface.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
-(a running digest) and nothing else. The full design record — why this exists, what was debated,
+(a running digest) and nothing else. The full design record — why this exists, what was challenged,
 and the decisions that shaped it — lives in the epic `lode-nps` and its children; `bd show lode-nps
 --json` is the source-of-record if you need the history.
 

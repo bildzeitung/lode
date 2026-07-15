@@ -2,9 +2,9 @@
 #
 # Decide whether a single bd ticket should be auto-selected by /code's ready-
 # frontier filter, per lode-bw5k: /code must refuse to auto-select a child
-# ticket whose parent epic has never been debated at least once. `/debate`
+# ticket whose parent epic has never been debated at least once. `/challenge`
 # stamps a durable `epic-debated` label on an epic when it debates it
-# (.claude/skills/debate/SKILL.md); this script is the mechanical check
+# (.claude/skills/challenge/SKILL.md); this script is the mechanical check
 # `/code`'s auto-select step (.claude/skills/code/SKILL.md, step 2) runs for
 # each candidate that already survived the existing human/epic filter
 # (lode-8pqv).

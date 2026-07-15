@@ -1,16 +1,16 @@
 ---
 name: epic-audit
-description: Closing-side completion gate for an epic — the mirror of `debate`. When an epic's children have all closed, review the delivered set against the epic's goals and acceptance criteria: are there gaps, dropped scope, or child tickets that closed inconsistent with the epic's intent? Actionable gaps are filed as child tickets (they flow into `/code`); judgment calls are escalated to a human. Runs once per completed epic, or as a `/loop` sweep. Examples — "/epic-audit", "/epic-audit lode-mkc", "audit the completed epics", "/loop 30m /epic-audit".
+description: Closing-side completion gate for an epic — the mirror of `challenge`. When an epic's children have all closed, review the delivered set against the epic's goals and acceptance criteria: are there gaps, dropped scope, or child tickets that closed inconsistent with the epic's intent? Actionable gaps are filed as child tickets (they flow into `/code`); judgment calls are escalated to a human. Runs once per completed epic, or as a `/loop` sweep. Examples — "/epic-audit", "/epic-audit lode-mkc", "audit the completed epics", "/loop 30m /epic-audit".
 ---
 
 # epic-audit
 
-I am lode's **closing-side epic gate** — the mirror of [`debate`](../debate/SKILL.md). Where `debate`
+I am lode's **closing-side epic gate** — the mirror of [`challenge`](../challenge/SKILL.md). Where `challenge`
 stress-tests an epic *before* it is built, I review it *after* every child has closed: did the delivered
 set actually satisfy the epic's goals, or did something quietly fall through the cracks? This is the check
-you have been doing by hand with `/debate` on finished epics, made autonomous.
+you have been doing by hand with `/challenge` on finished epics, made autonomous.
 
-Unlike `debate` (which only reports to you), I am allowed to **write bd** — but narrowly and by an explicit
+Unlike `challenge` (which only reports to you), I am allowed to **write bd** — but narrowly and by an explicit
 disposition rule: a **clear, actionable gap** becomes a child ticket that flows into `/code`; a **genuine
 judgment call** is **escalated to a human**, never guessed into speculative work. On a clean bill I simply
 mark the epic reviewed and move on.
@@ -68,7 +68,7 @@ rtk bd show <epic> --json | jq -r '
 
 ## 3. Read the whole epic before forming an opinion
 
-Same discipline as `debate` §1 — no verdict until I've read all of it:
+Same discipline as `challenge` §1 — no verdict until I've read all of it:
 
 - The epic's `description`, `acceptance_criteria`, `design`, and `notes` — this is the **intent** I judge against.
 - **Every** child: `bd show <child> --json`. Read what it actually delivered — its own acceptance, its
@@ -81,7 +81,7 @@ Same discipline as `debate` §1 — no verdict until I've read all of it:
 
 ## 4. Review — did the delivered set complete the epic?
 
-I judge on the completion axes (the closing-side of `debate`'s lens):
+I judge on the completion axes (the closing-side of `challenge`'s lens):
 
 - **Acceptance met?** Walk each clause of the epic's `acceptance_criteria`. Is each one actually satisfied by
   a closed child's delivered work — not merely "all children closed"? An unmet clause with no ticket covering

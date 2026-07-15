@@ -19,8 +19,8 @@ in [`CLAUDE.md`](../CLAUDE.md) and [`AGENTS.md`](../AGENTS.md) — **where they 
 
 Work moves through three passes, with the human as the hinge:
 
-1. **Design loop — `debate`.** Before anything is built, a plan, a beads ticket tree, a bug-fix
-   approach, or a proposed `docs/` change is handed to the `debate` skill, which *pushes back*:
+1. **Design loop — `challenge`.** Before anything is built, a plan, a beads ticket tree, a bug-fix
+   approach, or a proposed `docs/` change is handed to the `challenge` skill, which *pushes back*:
    it surfaces ambiguity, hidden assumptions, sequencing gaps, and risky approaches, and reports
    them to the human. It never edits `docs/` or beads as a side effect. The human revises until
    the plan is sound.
@@ -37,7 +37,7 @@ Work moves through three passes, with the human as the hinge:
    pushes. It is the **only** thing that writes `trunk` (see
    [the landing loop](#the-landing-loop--build-review-land)).
 
-The boundaries are deliberate: **debate decides *what* and *whether*; the coding loop decides *how*
+The boundaries are deliberate: **challenge decides *what* and *whether*; the coding loop decides *how*
 and *builds and reviews* it; the landing loop decides *whether it lands* and *does the merge*.**
 Keeping the merge decision out of the hands of the agent that wrote the code is the point. Design
 decisions settle into `docs/` and beads; only then does code get written (see
@@ -45,13 +45,13 @@ decisions settle into `docs/` and beads; only then does code get written (see
 
 ---
 
-## The design loop — `debate`
+## The design loop — `challenge`
 
-`debate` is a single, non-looping pass whose only job is to **argue with the plan**. You give it
+`challenge` is a single, non-looping pass whose only job is to **argue with the plan**. You give it
 something about to be built; it reads the *whole* thing before forming an opinion, challenges it on
 the axes that apply, and hands the criticisms back. It does **not** implement, close tickets,
 dispatch other agents, or silently rewrite issues — it runs once and stops. (Skill:
-[`.claude/skills/debate/SKILL.md`](../.claude/skills/debate/SKILL.md).)
+[`.claude/skills/challenge/SKILL.md`](../.claude/skills/challenge/SKILL.md).)
 
 What it reads depends on the mode:
 
@@ -69,18 +69,18 @@ bug-fix approach it also weighs **root cause vs. symptom**, **side effects**, an
 standard pattern exists.
 
 Findings come back grouped by item, each a *genuine blocker* — no padding, and a clean bill is a
-valid outcome. By default, closing a debate persists: findings are appended to each debated issue's
-notes (`bd update <id> --append-notes=…`), and — since lode-bw5k — if the debated target *resolves to
-an epic* (`bd show <id>` shows `issue_type: epic`), that epic is stamped `bd update <epic-id>
---add-label epic-debated`, applied even on a clean bill (the marker records that the stress-test pass
-*happened*, not that it found anything). This is the durable, machine-readable marker
+valid outcome. By default, closing a challenge persists: findings are appended to each challenged
+issue's notes (`bd update <id> --append-notes=…`), and — since lode-bw5k — if the challenged target
+*resolves to an epic* (`bd show <id>` shows `issue_type: epic`), that epic is stamped `bd update
+<epic-id> --add-label epic-debated`, applied even on a clean bill (the marker records that the
+stress-test pass *happened*, not that it found anything). This is the durable, machine-readable marker
 [`/code`'s auto-select gate](#the-coding-loop--code--coding--code-reviewer) checks before building any
-of that epic's children. Either the note-persisting or the stamp can be skipped by telling `/debate`
-"just tell me, don't persist" — never a ticket's `design` field, which `/debate` never touches.
+of that epic's children. Either the note-persisting or the stamp can be skipped by telling `/challenge`
+"just tell me, don't persist" — never a ticket's `design` field, which `/challenge` never touches.
 
 ```mermaid
 flowchart TD
-    START["Human: 'debate this'<br>(plan / ticket / bug-fix / doc change)"] --> MODE{"Which mode?"}
+    START["Human: 'challenge this'<br>(plan / ticket / bug-fix / doc change)"] --> MODE{"Which mode?"}
     MODE -->|"ambiguous"| ASK["Ask which thing<br>before analysing"]
     ASK --> READ
     MODE -->|"clear"| READ["Read the WHOLE thing first<br>(bd show + dep tree, or<br>re-read proposal; cross-check docs/)"]
@@ -97,7 +97,7 @@ flowchart TD
     A4 --> REP
 
     REP --> STOP["Stop — runs once, no loop,<br>no dispatch, no side-effect edits"]
-    STOP -.->|"human revises, may re-debate"| START
+    STOP -.->|"human revises, may re-challenge"| START
     REP -.->|"only if asked"| PERSIST["bd update --notes / --design"]
 
     classDef start fill:#fcf8e3,stroke:#8a6d3b,color:#1b1b1b;
@@ -177,7 +177,7 @@ reachable state (a decision ticket is its own blocker, and bd won't let a task b
 means there is no buildable work right now, a signal for `/sweep`, not a build target. This filter
 never applies to explicitly-named IDs — those are an operator override, unfiltered.
 
-**Auto-select paths only — exclude children of an un-debated epic (lode-bw5k).** `/debate` is the
+**Auto-select paths only — exclude children of an un-debated epic (lode-bw5k).** `/challenge` is the
 intended stress-test gate a plan/epic should pass **before** its children get built, but nothing
 enforced that before this ticket — `lode-olmi`'s children were built and landed by `/code` without the
 epic ever having been debated, caught only by a human noticing after the fact. `/code` now runs a
@@ -189,8 +189,8 @@ explicitly-named ID):
 scripts/epic-debate-gate.sh <candidate-id>
 ```
 
-The **marker side of the contract** lives in `/debate` (`.claude/skills/debate/SKILL.md` §4): closing
-a debate whose target *resolves to an epic* (`bd show <id>` shows `issue_type: epic`) stamps
+The **marker side of the contract** lives in `/challenge` (`.claude/skills/challenge/SKILL.md` §4):
+closing a challenge whose target *resolves to an epic* (`bd show <id>` shows `issue_type: epic`) stamps
 `bd update <epic-id> --add-label epic-debated` — applied even on a clean bill, since the marker records
 that the stress-test pass *happened*, not that it found anything; skipped entirely for a non-epic
 target (a conversation plan, a single ticket, a `docs/` change) or under the "just tell me, don't
@@ -202,7 +202,7 @@ else `SKIP <id> epic not debated (<epic-id>)`. It only ever calls `bd show` (twi
 candidate); it never writes bd state. `/code` keeps every `BUILD` in the buildable set and reports every
 `SKIP` in its skip list alongside the `human`/epic skips (id + `epic not debated (<epic-id>)`).
 
-**No new escape-hatch flag.** The only unblock is to actually run `/debate <epic-id>` (cheap) or
+**No new escape-hatch flag.** The only unblock is to actually run `/challenge <epic-id>` (cheap) or
 hand-apply the `epic-debated` label to acknowledge the epic was debated informally — both leave the
 same durable marker, so there is nothing else to build. Both this gate and the `human`/epic filter
 above are scoped to step 2's auto-select only: step 0's `needs-rebase` pickups and step 1's stranded
@@ -809,7 +809,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 ## How the loops connect
 
 The two loops share one substrate: **`docs/` and beads are the source of truth between them.**
-Debate reads that substrate and argues against the plan; the human folds the criticisms back into
+Challenge reads that substrate and argues against the plan; the human folds the criticisms back into
 the docs and the ticket tree; the coding loop then reads the settled docs and the claimed issue and
 writes code to them. Nothing skips the middle — a design decision that exists only in a chat
 transcript, a bd note, or memory has *forked the record*, and the next loop will trust the docs and
@@ -859,7 +859,7 @@ landing-side shared state — but only *within* one `/code` invocation: two *con
 invocations are unsupported, because their start-of-run sweeps race (lode-pzr; see [the coding
 loop's topology note](#the-coding-loop--code--coding--code-reviewer)).
 
-Two further safeguards a `/debate` pass considered for this unattended story — a `/land`
+Two further safeguards a `/challenge` pass considered for this unattended story — a `/land`
 bounce-lineage cap and a `/code` rebase-attempt cap — were deliberately **deferred**, and an
 epic-auto-close mechanism was deliberately **rejected**; see [decisions.md](decisions.md) for the
 rationale and each one's revisit trigger. `/sweep` itself is the detector for the deferred caps: it
@@ -906,8 +906,8 @@ code:**
   (see below).
 - **Semantic review — *the first task of `/land`*.** Does it meet the ticket's acceptance? Is scope
   clean (no silent creep)? Are the design and the lode invariants honored? Is the approach right?
-  This is the **build-side twin of `debate`**, and it's done by the lander, *not* the builder — the
-  independence is the point. `debate` critiques the *plan* before building; the semantic review
+  This is the **build-side twin of `challenge`**, and it's done by the lander, *not* the builder — the
+  independence is the point. `challenge` critiques the *plan* before building; the semantic review
   critiques the *result* before landing.
 
 Both run autonomously and surface to you on the **same rule**: only a **genuine decision** pulls you
@@ -999,7 +999,7 @@ turned up two more unwrapped call sites inside unattended loops, now also routed
 wrapper: `.claude/skills/land/SKILL.md`'s exit-(a) re-entry step (a bare call added by lode-08g,
 after lode-83d's audit ran) and `.claude/skills/sweep/SKILL.md`'s publish step (a skill that didn't
 exist yet when lode-83d ran its audit). Three more bare mentions survive as **deliberate
-exemptions**, not oversights: `.claude/skills/debate/SKILL.md` (`/debate` is human-invoked and
+exemptions**, not oversights: `.claude/skills/challenge/SKILL.md` (`/challenge` is human-invoked and
 interactive — a failed push is observed directly, unlike the unattended loops above — see the
 in-line note at its persist step), and `.beads/README.md` / `AGENTS.md` (generic, beads-generated
 quick-reference boilerplate demonstrating the base `bd` CLI to a human reader, not an automated call
@@ -1069,7 +1069,7 @@ being the *single* lander is what serializes landing (the single-lander lock in
 [Mechanics](#mechanics-decided) below keeps overlapping ticks from colliding). Guaranteeing only one
 is active across machines is an open mechanism (see [decisions.md](decisions.md)). A drain pass:
 
-1. **Semantic review — the first task.** For each ready-for-land branch, the `debate`-twin reviews it
+1. **Semantic review — the first task.** For each ready-for-land branch, the `challenge`-twin reviews it
    against the ticket (acceptance, scope, design, invariants, approach) and returns a verdict:
    **accept** → into the merge set; **bounce** (a clear failure it's confident about) → open a **new
    ticket carrying the findings, linked to the original** (the original is superseded), and drop the
@@ -1087,7 +1087,7 @@ before the merge; a drifted or missing branch is bounced like any other failure.
 ```mermaid
 flowchart TD
     Q[("ready-for-land queue<br>(beads + remote branches)")] --> LAND["/land<br>(single lander · /loop 5m /land)"]
-    LAND --> SEM["Semantic review — FIRST task<br>(debate-twin, per branch:<br>acceptance · scope · design · invariants)"]
+    LAND --> SEM["Semantic review — FIRST task<br>(challenge-twin, per branch:<br>acceptance · scope · design · invariants)"]
     SEM --> V{"verdict"}
     V -->|"accept"| ACC["into merge set"]
     V -->|"bounce (clear fail)"| NEW["New ticket with findings ·<br>linked to original (superseded) ·<br>drop branch"]

@@ -27,7 +27,7 @@ one that runs cheaper on Sonnet; the `code-reviewer` and I stay on Opus).
 ## The merge decision belongs to the agent that didn't write the code
 
 My **first task per branch is a semantic review I do not perform myself** — I dispatch the
-[`land-review`](../land-review/SKILL.md) skill (the build-side twin of `debate`). The independence is
+[`land-review`](../land-review/SKILL.md) skill (the build-side twin of `challenge`). The independence is
 the point: the producer already ran the *technical* review (`/code-review` + `simplify` = bugs &
 cleanup) on its own branch with gates green; I add the *semantic* gate — *should this land?* — from
 the outside. I do **not** re-run the technical review and I assume the branch is green until my

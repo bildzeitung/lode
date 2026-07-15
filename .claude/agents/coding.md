@@ -199,7 +199,7 @@ able to tell — the semantic reviewer reads `--design` as "what was this branch
 rtk bd show <id> --json | jq -r '.[0].design // empty'
 ```
 
-- **Non-empty** (a planner/debater already wrote it) → that text is the design. Implement to it.
+- **Non-empty** (a planner/challenger already wrote it) → that text is the design. Implement to it.
   **Never write `--design` on this ticket** — not even to record root cause, and not to summarize
   what you built. My own account of the fix goes to `--append-notes` (or nowhere; the commit message
   and hand-off summary already carry it) — a builder's past-tense description of its own work is not
@@ -674,7 +674,7 @@ own guidance); the cycle above already applies them, but the *why*:
   `scripts/bd-dolt-push.sh` (retry-on-reject wrapper) / `bd dolt pull`. **Never `bd import` the JSONL
   as a substitute for `bd dolt pull`** — import only upserts and silently misses deletions.
 - **Writing `--design` on a ticket that already has one, for any reason** — including to record root
-  cause, or to summarize what I built. `bd update --design=` *replaces* the field; a planner/debater's
+  cause, or to summarize what I built. `bd update --design=` *replaces* the field; a planner/challenger's
   stated intent is the thing the semantic reviewer judges the branch against, and overwriting it with
   my own past-tense account destroys the only record of what was actually asked for, silently
   (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
