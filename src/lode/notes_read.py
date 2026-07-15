@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -112,14 +112,27 @@ def list_notes(db_path: Path) -> list[NoteRow]:
         conn.close()
 
 
-def _list_notes(conn: sqlite3.Connection) -> list[NoteRow]:
+def _list_notes(
+    conn: sqlite3.Connection,
+    extra_where: str = "",
+    params: Sequence[object] = (),
+) -> list[NoteRow]:
+    """Build the browse note-list projection, optionally narrowed by ``extra_where``.
+
+    ``extra_where`` is spliced in after the live-note guard and before
+    ``ORDER BY`` (its ``?`` placeholders bound by ``params``), so a caller
+    that needs the *same* rows through a further filter -- currently only
+    :func:`_list_notes_with_all_tags`' per-tag ``EXISTS`` clauses -- reuses this
+    one query and row-mapping instead of copying both. Empty ``extra_where``
+    (the plain :func:`list_notes` call) leaves the query exactly as it was.
+    """
     rows = conn.execute(
         "SELECT n.note_id, n.created, n.head_version_id, v.body, "
         "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
         "FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
-        "WHERE v.op != 'delete' "
-        "ORDER BY n.created DESC"
+        "WHERE v.op != 'delete' " + extra_where + "ORDER BY n.created DESC",
+        params,
     ).fetchall()
     return [
         NoteRow(
@@ -415,28 +428,15 @@ def _list_notes_with_all_tags(
     conn: sqlite3.Connection, tags: Collection[str]
 ) -> list[NoteRow]:
     tag_list = list(tags)
-    if not tag_list:
-        return _list_notes(conn)
+    # One EXISTS clause per selected tag (empty selection -> "", i.e. the plain
+    # list_notes query): a note qualifies only when a live tag row matches every
+    # clause. Delegates the shared SELECT + NoteRow mapping to _list_notes.
     exists_clause = (
         "AND EXISTS (SELECT 1 FROM annotations a WHERE a.target = n.note_id "
         f"AND a.payload = ? AND {_visible_tag_where('a.')}) "
     )
-    rows = conn.execute(
-        "SELECT n.note_id, n.created, n.head_version_id, v.body, "
-        "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
-        "FROM notes n "
-        "JOIN versions v ON v.version_id = n.head_version_id "
-        "WHERE v.op != 'delete' "
-        + exists_clause * len(tag_list)
-        + "ORDER BY n.created DESC",
+    return _list_notes(
+        conn,
+        exists_clause * len(tag_list),
         [json.dumps(tag) for tag in tag_list],
-    ).fetchall()
-    return [
-        NoteRow(
-            note_id=note_id,
-            created=created,
-            version=chain_length,
-            summary=_head_summary(conn, note_id, head_version_id, body),
-        )
-        for note_id, created, head_version_id, body, chain_length in rows
-    ]
+    )
