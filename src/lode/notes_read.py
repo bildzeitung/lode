@@ -306,3 +306,41 @@ def version_body(db_path: Path, note_id: str, version_id: str) -> str | None:
         return row[0] if row is not None else None
     finally:
         conn.close()
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotRow:
+    """One external snapshot's stored content, as the content viewer shows it (lode-0sjj).
+
+    ``body`` is the extracted text (``schema.sql``'s ``snapshots.body TEXT NOT
+    NULL`` -- even a tombstoned snapshot carries a stable placeholder body,
+    :func:`lode.externals.tombstone_body`, so this is never ``None``).
+    ``raw_payload`` is the original fetched bytes/markup and *is* nullable --
+    a snapshot may simply have never captured raw HTML.
+    """
+
+    body: str
+    raw_payload: str | None
+
+
+def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
+    """Return one snapshot's stored body/raw_payload, or ``None`` if missing.
+
+    Feeds :class:`~lode.tui.screens.browse.SnapshotViewerScreen` (lode-0sjj):
+    a plain ``snapshot_id`` lookup, the read-side counterpart to
+    :func:`lode.cli.dump_html`'s (lode-olmi.7) inline ``raw_payload`` SELECT.
+    That query lives inlined in ``cli.py`` rather than a shared helper, so
+    there is nothing importable from there yet -- this mirrors its shape
+    closely enough that a later refactor could unify the two.
+    """
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT body, raw_payload FROM snapshots WHERE snapshot_id = ?",
+            (snapshot_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return SnapshotRow(body=row[0], raw_payload=row[1])
+    finally:
+        conn.close()

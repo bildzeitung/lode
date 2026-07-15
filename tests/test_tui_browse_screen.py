@@ -24,6 +24,7 @@ from lode.tui.dates import format_adaptive_date
 from lode.tui.screens.browse import (
     DELETE_CONFIRM_MESSAGE_ID,
     EDIT_BODY_ID,
+    EXTERNAL_PICKER_TABLE_ID,
     HISTORY_TABLE_ID,
     INSPECTOR_EDGES_ID,
     INSPECTOR_EMBED_ID,
@@ -32,12 +33,15 @@ from lode.tui.screens.browse import (
     INSPECTOR_SUMMARY_ID,
     INSPECTOR_TAGS_ID,
     SEARCH_INPUT_ID,
+    SNAPSHOT_VIEWER_BODY_ID,
     TABLE_ID,
     VERSION_BODY_ID,
     BrowseScreen,
     DeleteConfirmScreen,
     EditScreen,
     EnrichmentModalScreen,
+    ExternalPickerScreen,
+    SnapshotViewerScreen,
     VersionHistoryScreen,
     VersionViewScreen,
 )
@@ -998,6 +1002,8 @@ def _insert_external(
     status: str = "ok",
     no_egress: bool = False,
     fetched_at: str = "2026-07-08T00:00:00.000000Z",
+    body: str = "body",
+    raw_payload: str | None = None,
 ) -> None:
     with conn:
         conn.execute(
@@ -1007,9 +1013,9 @@ def _insert_external(
         )
         conn.execute(
             "INSERT INTO snapshots "
-            "(snapshot_id, external_id, body, status, fetched_at) "
-            "VALUES (?, ?, 'body', ?, ?)",
-            (snapshot_id, external_id, status, fetched_at),
+            "(snapshot_id, external_id, body, raw_payload, status, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (snapshot_id, external_id, body, raw_payload, status, fetched_at),
         )
         conn.execute(
             "UPDATE externals SET head_snapshot_id = ? WHERE external_id = ?",
@@ -1790,3 +1796,411 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
 
     assert summaries == ["third", "first"]  # note-b gone, newest-first order
     assert highlighted == "note-c"  # fell back to the (new) top row
+
+
+# ---------------------------------------------------------------------------
+# Content viewer + 'v' addressing flow (lode-olmi.8's decision, lode-0sjj) --
+# bare 'v' on a Browse row (DataTable focused, safe for a bare key) and
+# Ctrl+R from the editor (body TextArea focused, so a non-printable key is
+# required -- docs/keybindings.md) both resolve the same zero/one/many
+# addressing rule (_view_note_external_content) and land on the same
+# SnapshotViewerScreen / ExternalPickerScreen.
+# ---------------------------------------------------------------------------
+
+
+def test_v_with_no_externals_notifies_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "a note with nothing retrieved")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    messages: list[str] = []
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            monkeypatch.setattr(
+                app, "notify", lambda message, **kw: messages.append(message)
+            )
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    stayed_on_browse = asyncio.run(_drive())
+
+    assert stayed_on_browse
+    assert any("no retrieved content" in message for message in messages)
+
+
+def test_v_with_one_external_opens_the_viewer_directly(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-view-1",
+            body="the extracted article text",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, SnapshotViewerScreen)
+            return app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+
+    body_text = asyncio.run(_drive())
+
+    assert body_text == "the extracted article text"
+
+
+def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(
+            conn, "note-a", "see https://a.example.com/ and https://b.example.com/"
+        ).version_id
+        _insert_external(
+            conn,
+            external_id="https://a.example.com/",
+            snapshot_id="snap-view-a",
+            body="body a",
+            fetched_at="2026-07-08T00:00:00.000000Z",
+        )
+        _insert_external(
+            conn,
+            external_id="https://b.example.com/",
+            snapshot_id="snap-view-b",
+            body="body b",
+            fetched_at="2026-07-09T00:00:00.000000Z",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://a.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://b.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[list[tuple], str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, ExternalPickerScreen)
+            table = app.screen.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
+            rows = [tuple(table.get_row_at(i)) for i in range(table.row_count)]
+            await pilot.press("down")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, SnapshotViewerScreen)
+            body_text = app.screen.query_one(
+                f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
+            ).text
+            return rows, body_text
+
+    rows, body_text = asyncio.run(_drive())
+
+    assert len(rows) == 2
+    assert rows[0][0] == "web"
+    assert short_version_id("snap-view-a") in str(rows[0][1])
+    assert short_version_id("snap-view-b") in str(rows[1][1])
+    # Selected the second (b.example.com) row -- its body, not a's.
+    assert body_text == "body b"
+
+
+def test_escape_steps_back_picker_then_browse(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(
+            conn, "note-a", "see https://a.example.com/ and https://b.example.com/"
+        ).version_id
+        _insert_external(
+            conn, external_id="https://a.example.com/", snapshot_id="snap-esc-a"
+        )
+        _insert_external(
+            conn, external_id="https://b.example.com/", snapshot_id="snap-esc-b"
+        )
+        _insert_edge(
+            conn, from_id="note-a", to_id="https://a.example.com/", source_version=head
+        )
+        _insert_edge(
+            conn, from_id="note-a", to_id="https://b.example.com/", source_version=head
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, ExternalPickerScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    back_on_browse = asyncio.run(_drive())
+
+    assert back_on_browse
+
+
+def test_toggle_raw_switches_to_raw_html_and_back(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-toggle-1",
+            body="extracted text",
+            raw_payload="<html>raw markup</html>",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, str, str]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, SnapshotViewerScreen)
+            initial = app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+            await pilot.press("t")
+            await pilot.pause()
+            toggled = app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+            await pilot.press("t")
+            await pilot.pause()
+            back = app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+            return initial, toggled, back
+
+    initial, toggled, back = asyncio.run(_drive())
+
+    assert initial == "extracted text"
+    assert toggled == "<html>raw markup</html>"
+    assert back == "extracted text"
+
+
+def test_toggle_raw_with_no_raw_payload_notifies_and_stays_on_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No raw_payload captured -> 't' notifies and the body stays put --
+
+    never a blank toggle (acceptance criteria).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-toggle-2",
+            body="extracted text only",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    messages: list[str] = []
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            monkeypatch.setattr(
+                app, "notify", lambda message, **kw: messages.append(message)
+            )
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            await pilot.press("t")
+            await pilot.pause()
+            return app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+
+    body_text = asyncio.run(_drive())
+
+    assert body_text == "extracted text only"
+    assert any("no raw HTML" in message for message in messages)
+
+
+def test_escape_dismisses_the_snapshot_viewer_back_to_browse(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-esc-viewer",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, SnapshotViewerScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    back_on_browse = asyncio.run(_drive())
+
+    assert back_on_browse
+
+
+def test_v_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> None:
+    """No highlighted row (empty list) -> 'v' opens nothing and does not raise.
+
+    Mirrors the same empty-list contract 'i' (inspect) and 'e' (edit) hold --
+    see ``test_i_on_an_empty_browse_list_is_a_no_op_not_a_crash`` above.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> bool:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
+            await pilot.press("v")
+            await pilot.pause()
+            return isinstance(app.screen, BrowseScreen)
+
+    stayed_on_browse = asyncio.run(_drive())
+
+    assert stayed_on_browse
+
+
+def test_ctrl_r_from_editor_opens_the_content_viewer(tmp_path: Path) -> None:
+    """Ctrl+R (not bare ``v`` -- the body TextArea is editable) opens the same
+
+    content viewer Browse's bare ``v`` binding does (lode-0sjj).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://example.com/article").version_id
+        _insert_external(
+            conn,
+            external_id="https://example.com/article",
+            snapshot_id="snap-ctrl-r",
+            body="from the editor",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://example.com/article",
+            source_version=head,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("ctrl+r")
+            await pilot.pause()
+            assert isinstance(app.screen, SnapshotViewerScreen)
+            return app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea).text
+
+    body_text = asyncio.run(_drive())
+
+    assert body_text == "from the editor"
+
+
+def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
+    """Bare ``v`` is consumed by the editable body TextArea, not a Screen binding.
+
+    Guards against a regression back to a bare-letter binding for the content
+    viewer (lode-0sjj) -- exactly the trap ``Ctrl+H``'s
+    (``test_bare_h_from_editor_types_into_the_body_instead``) and ``Ctrl+G``'s
+    (``test_bare_i_from_editor_types_into_the_body_instead``) own guard tests
+    cover for their own actions.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "very informative body")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[str, bool]:
+        async with app.run_test() as pilot:
+            await pilot.press("f3")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("v")
+            await pilot.pause()
+            text = app.screen.query_one(f"#{EDIT_BODY_ID}", TextArea).text
+            return text, isinstance(app.screen, SnapshotViewerScreen)
+
+    text, opened_viewer = asyncio.run(_drive())
+
+    assert text == "vvery informative body"
+    assert not opened_viewer

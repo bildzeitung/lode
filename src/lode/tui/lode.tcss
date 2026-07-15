@@ -86,3 +86,20 @@ RelatedNoteModalScreen {
     background: $panel;
     padding: 1 2;
 }
+
+/* Content-viewer modal (lode-0sjj) -- same larger, scrollable popup
+ * treatment as #enrichment-inspector-dialog / #related-note-modal-dialog
+ * above, since a retrieved page's extracted body (or raw HTML) can run much
+ * longer than the terminal height; the TextArea inside scrolls its own
+ * content within this bounded box. */
+SnapshotViewerScreen {
+    align: center middle;
+}
+
+#snapshot-viewer-dialog {
+    width: 80%;
+    height: 80%;
+    border: thick $primary;
+    background: $panel;
+    padding: 1 2;
+}
