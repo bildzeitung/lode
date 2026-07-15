@@ -34,7 +34,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _show_payload(id_: str, *, epic: str | None, labels: list[str] | None) -> list[dict]:
+def _show_payload(
+    id_: str, *, epic: str | None, labels: list[str] | None
+) -> list[dict]:
     """A `bd show <id> --json` payload shaped like real bd output.
 
     Real `bd show` embeds the parent epic as a nested object inside
@@ -78,7 +80,9 @@ def _fake_bd(tmp_path: Path, fixtures: dict[str, list[dict]]) -> Path:
     return bin_dir
 
 
-def _run(id_: str, fixtures: dict[str, list[dict]], tmp_path: Path) -> subprocess.CompletedProcess:
+def _run(
+    id_: str, fixtures: dict[str, list[dict]], tmp_path: Path
+) -> subprocess.CompletedProcess:
     bin_dir = _fake_bd(tmp_path, fixtures)
     return subprocess.run(
         ["bash", str(SCRIPT), id_],
@@ -120,7 +124,9 @@ def test_child_of_undebated_epic_is_skipped(tmp_path: Path) -> None:
     assert result.stdout.strip() == "SKIP lode-olmi.4 epic not debated (lode-olmi)"
 
 
-def test_child_of_epic_with_other_labels_but_not_debated_is_skipped(tmp_path: Path) -> None:
+def test_child_of_epic_with_other_labels_but_not_debated_is_skipped(
+    tmp_path: Path,
+) -> None:
     """The gate checks specifically for `epic-debated`, not just any label."""
     fixtures = {
         "lode-x.1": _show_payload("lode-x.1", epic="lode-x", labels=None),
