@@ -24,6 +24,7 @@ level ``_REGISTRY`` (with the real embed handler) is not touched.  Batch pre-ste
 tests inject ``_batch_client`` (a MagicMock) so no real Anthropic calls are made.
 """
 
+import logging
 import sqlite3
 import sys
 import threading
@@ -1783,6 +1784,55 @@ def test_drain_processes_pending_embed_jobs(
         for r in conn.execute("SELECT status FROM jobs WHERE type = 'embed'").fetchall()
     ]
     assert all(s == "done" for s in statuses)
+
+
+def test_drain_logs_progress_lines_for_batch_pre_steps_and_run_loop(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """drain() logs a start/done progress line naming each of its named steps
+    (lode-olmi.15): the two batch pre-steps and the main claim/run loop --
+    before this, drain() logged nothing while any of these actually ran.
+
+    An embed-only queue exercises this with no enrich jobs pending, so
+    ``_batch_collect_enrich``/``_batch_submit_enrich`` return immediately
+    without needing a batch client or the Anthropic SDK.
+    """
+    _insert_job(conn, target_version="ver-1")
+
+    with caplog.at_level(logging.INFO):
+        drain(conn, db_path, settings, _registry=_noop_registry())
+
+    assert "drain.batch_collect: starting" in caplog.text
+    assert "drain.batch_collect: done" in caplog.text
+    assert "drain.batch_submit: starting" in caplog.text
+    assert "drain.batch_submit: done" in caplog.text
+    assert "drain.run_jobs: starting" in caplog.text
+    assert "drain.run_jobs: done" in caplog.text
+    assert "drain.run_jobs: running job" in caplog.text
+
+
+def test_drain_progress_heartbeats_a_slow_job(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A handler slower than progress_heartbeat_interval_s gets a heartbeat
+    line under drain.run_jobs -- the main-loop analogue of a slow reconcile
+    step or a slow batch pre-step (lode-olmi.15).
+    """
+    _insert_job(conn, target_version="ver-1")
+    slow_settings = Settings(progress_heartbeat_interval_s=0.05)
+    slow_registry: dict[str, HandlerFn] = {
+        "embed": lambda conn, tv, db, s: (time.sleep(0.2), None)[1]
+    }
+
+    with caplog.at_level(logging.INFO):
+        drain(conn, db_path, slow_settings, _registry=slow_registry)
+
+    assert "drain.run_jobs: still running" in caplog.text
 
 
 def test_drain_embed_only_does_not_import_the_sdk(

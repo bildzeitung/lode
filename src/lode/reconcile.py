@@ -91,6 +91,7 @@ from datetime import UTC, datetime, timedelta
 from lode import jobs
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
+from lode.progress import op_progress
 
 log = logging.getLogger(__name__)
 
@@ -154,13 +155,23 @@ def reconcile(
     list onto ``settings``. Production callers omit it and the module-level
     :data:`_STEPS` list is used.  Returns ``0`` when no steps are registered or
     all steps find no gaps.
+
+    **Progress instrumentation (lode-olmi.15):** each step call is wrapped in
+    :func:`lode.progress.op_progress` (``reconcile.<name>``), so a plain
+    ``lode work`` always logs which step is currently running (and, if a step
+    hangs, a periodic heartbeat) rather than staying silent until the whole
+    scan returns.
     """
     settings = settings or Settings()
     if steps is None:
         steps = _STEPS
     total = 0
     for name, step_fn in steps:
-        count = step_fn(conn, settings)
+        with op_progress(
+            f"reconcile.{name}",
+            heartbeat_interval_s=settings.progress_heartbeat_interval_s,
+        ):
+            count = step_fn(conn, settings)
         if count:
             log.info("reconcile[%s]: %d gap version(s) enqueued", name, count)
         total += count

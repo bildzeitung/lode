@@ -621,7 +621,11 @@ def submit_enrich_batch(
         return None
 
     # Submit the batch — this is the network call that commits the spend.
-    batch = client.beta.messages.batches.create(requests=requests)
+    # Bounded client-side (lode-olmi.15): with no timeout this can otherwise
+    # hang indefinitely with no signal to the caller.
+    batch = client.beta.messages.batches.create(
+        requests=requests, timeout=settings.anthropic_call_timeout_s
+    )
     batch_id = batch.id
 
     # Persist the handle + flip to running so the collect step (and a restart)
@@ -696,7 +700,11 @@ def collect_enrich_batch(
     if client is None:
         client = build_client()
 
-    batch = client.beta.messages.batches.retrieve(batch_id)
+    # Bounded client-side (lode-olmi.15): with no timeout either call below
+    # can otherwise hang indefinitely with no signal to the caller.
+    batch = client.beta.messages.batches.retrieve(
+        batch_id, timeout=settings.anthropic_call_timeout_s
+    )
     if batch.processing_status != "ended":
         log.debug(
             "collect_enrich_batch: batch=%s still %s",
@@ -724,7 +732,9 @@ def collect_enrich_batch(
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
 
-    for result in client.beta.messages.batches.results(batch_id):
+    for result in client.beta.messages.batches.results(
+        batch_id, timeout=settings.anthropic_call_timeout_s
+    ):
         version_id = result.custom_id
         job_id = job_map.get(version_id)
         if job_id is None:

@@ -1051,6 +1051,48 @@ flowchart LR
     class DEAD bad;
 ```
 
+### Progress visibility & stuck-op bounding (lode-olmi.15)
+
+`lode work` (one-shot, `--loop`, and `--wait` alike) makes several potentially
+slow, blocking calls per pass — reconcile's step registry, drain's two
+Batches API pre-steps, the main claim/run loop (an `embed` job can trigger a
+first-use fastembed/ONNX model load), and the Anthropic Batches API network
+calls themselves. Before this ticket, none of them printed or logged anything
+*while* they ran — every existing line fired only *after* a step returned —
+so a one-shot run blocked inside one of these produced no visible sign of
+what was happening until it either finished or hung forever.
+
+**Fix: `lode.progress.op_progress`**, a context manager wrapping each named
+step (`reconcile.<step>`, `drain.batch_collect`, `drain.batch_submit`,
+`drain.run_jobs`, `embedding.load_model`). It logs an immediate `"<name>:
+starting"` line, a periodic `"<name>: still running (<elapsed>s)"` heartbeat
+(cadence `Settings.progress_heartbeat_interval_s`, default 15s) if the step
+outlives the interval, and a final `"<name>: done"`/`"<name>: failed"` line.
+This uses the stdlib `logging` module (mirrored to stderr at `INFO` by
+default, `src/lode/logconfig.py`) rather than `typer.echo`, so it works
+uniformly from `worker.py`/`reconcile.py`/`embedding.py` without threading
+`typer` through those layers.
+
+**"Bound a genuinely stuck op" has two different answers depending on what
+kind of op it is:**
+
+- For a call that can be given a real client-side timeout — the Anthropic
+  Batches API calls (`client.beta.messages.batches.create`/`retrieve`/
+  `results`, `enrich.py`) — one is: `Settings.anthropic_call_timeout_s`
+  (default 120s), the same pattern `fetch_timeout_s` already established for
+  web draw-down HTTP fetches. A timed-out Batches call now raises rather than
+  hanging forever; the existing transient-failure retry/backoff accounting
+  handles it like any other failure.
+- For a call this codebase cannot safely abort mid-flight without cooperation
+  from the callee — a local SQL scan (reconcile's steps), an in-process ONNX
+  model construction (`embedding.py`) — there is no safe interrupt mechanism
+  to reach for. The heartbeat above is the bound here: "hangs silently
+  forever" becomes "known to still be running, and for how long" — visibility
+  standing in for a hard timeout where one isn't safely available.
+
+This is deliberately **CLI stdout/log instrumentation only** — no change to
+what `lode work` actually does, no new keybindings, no TUI surface.
+
 ---
 
 ## Data shape (sketch)
