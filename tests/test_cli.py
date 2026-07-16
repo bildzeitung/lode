@@ -2345,6 +2345,62 @@ def test_dump_html_single_target_file_multi_external_uses_selector_index(
     assert not (out_dir / "note-file-multi-0001.dmp").exists()
 
 
+def test_dump_html_single_target_file_duplicate_externals_use_listed_index(
+    tmp_path: Path,
+) -> None:
+    """A duplicate edge's NNNN is its own listing position, not the first equal one.
+
+    ``edges`` has no ``(from_id, to_id)`` unique constraint and ``lode.enrich``
+    inserts an ``ai`` edge without dedup against an existing one, so a note can
+    list the same external twice. :class:`ExternalView` is a frozen dataclass
+    (equal by value), so recovering the choice's position with
+    ``externals.index(chosen)`` would find the FIRST equal entry: selecting the
+    listing's entry 2 would write ``-0001.dmp``, colliding with entry 1's file
+    and disagreeing with the ``--all`` path, which numbers by position.
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-file-dup", "see https://dup.example")
+        _seed_external_edge(
+            conn,
+            "note-file-dup",
+            result.version_id,
+            external_id="https://dup.example",
+            snapshot_id="snap-file-dup",
+            raw_payload="<html>dup</html>",
+        )
+        # A second, AI-inferred edge to the SAME external -- what enrich writes.
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, ?, 'ai', 'inferred', 0.9, ?, 'fresh')",
+            ("note-file-dup", "https://dup.example", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-dup",
+            "2",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-file-dup-0002.dmp").read_text() == "<html>dup</html>"
+    assert not (out_dir / "note-file-dup-0001.dmp").exists()
+
+
 def test_dump_html_single_target_file_still_errors_on_nothing_to_dump(
     tmp_path: Path,
 ) -> None:
@@ -2382,6 +2438,25 @@ def test_dump_html_no_target_and_no_all_is_an_arity_error(tmp_path: Path) -> Non
     init_db(db_path).close()
 
     result = runner.invoke(app, ["dump-html", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "target is required unless --all is given" in result.stderr
+
+
+def test_dump_html_file_with_no_target_and_no_all_reuses_the_target_check(
+    tmp_path: Path,
+) -> None:
+    """--file with neither a target nor --all errors via the EXISTING target check.
+
+    lode-l38d.8's post-review user decision: this combination stays an error,
+    but deliberately NOT through a check of its own -- "the existing 'no target
+    and no --all' rejection already covers it. Do not add a second one." So the
+    message must be that check's, not a --file-specific one.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["dump-html", "--file", "--db", str(db_path)])
 
     assert result.exit_code != 0
     assert "target is required unless --all is given" in result.stderr

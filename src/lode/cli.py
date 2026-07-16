@@ -1122,7 +1122,7 @@ def _render_external_choice(index: int, external: ExternalView) -> str:
 
 def _select_external(
     externals: list[ExternalView], selector: str
-) -> ExternalView | None:
+) -> tuple[int, ExternalView] | None:
     """Resolve ``selector`` against ``externals`` -- a 1-based index or an exact id.
 
     ``selector`` is either the 1-based position :func:`_render_external_choice`
@@ -1130,13 +1130,28 @@ def _select_external(
     prefix matching, unlike note-id resolution, since ``external_id`` values
     are typically full URLs a caller would paste rather than abbreviate.
     Returns ``None`` on no match; the caller decides how to report that.
+
+    Returns the match's 1-based listing position ALONGSIDE it, because the
+    position is what ``--file`` names the output file with
+    (``<note-id>-NNNN.dmp``) and only this function knows it: recovering it
+    afterwards with ``externals.index(chosen)`` would find the first
+    *equal* entry instead of the selected one. :class:`ExternalView` is a
+    frozen dataclass, so two edges pointing at the same external compare
+    equal -- reachable, since ``edges`` has no ``(from_id, to_id)`` unique
+    constraint and ``enrich`` inserts an ``ai`` edge without dedup against an
+    existing one (``lode.enrich``) -- and selecting the later duplicate would
+    then write the earlier one's filename.
     """
     if selector.isdigit():
         index = int(selector)
         if 1 <= index <= len(externals):
-            return externals[index - 1]
+            return index, externals[index - 1]
         return None
-    matches = [external for external in externals if external.external_id == selector]
+    matches = [
+        (index, external)
+        for index, external in enumerate(externals, start=1)
+        if external.external_id == selector
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -1180,6 +1195,19 @@ def _raw_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _dump_path(out_dir: Path, note_id: str, index: int) -> Path:
+    """Where ``--file`` writes one dump: ``<out_dir>/<note-id>-NNNN.dmp``.
+
+    The single definition of the output naming both write paths promise to
+    share -- ``--all``'s per-external sweep and the single-target path's one
+    resolved dump -- so a change to the suffix width or the extension cannot
+    land on one and miss the other. ``index`` is the external's 1-based
+    position in the note's dumpable-external listing, 0-padded to four digits
+    UNCONDITIONALLY (lode-l38d.8), even when the note has only one external.
+    """
+    return out_dir / f"{note_id}-{index:04d}.dmp"
+
+
 def _dump_all_notes(
     conn: sqlite3.Connection,
     *,
@@ -1221,7 +1249,7 @@ def _dump_all_notes(
             if not raw_payload:
                 continue
             if write_files:
-                out_path = out_dir / f"{note.note_id}-{index:04d}.dmp"
+                out_path = _dump_path(out_dir, note.note_id, index)
                 out_path.write_text(raw_payload, encoding="utf-8")
             else:
                 if dumped:
@@ -1332,10 +1360,16 @@ def dump_html(
         typer.echo("--dir requires --file", err=True)
         raise typer.Exit(code=1)
 
+    # Resolved once, for both write paths: --dir defaults to None (NOT Path("."))
+    # so the check above can tell "given" from "absent"; the cwd fallback is this
+    # command's output-location rule and belongs in one place, like _dump_path's
+    # naming rule. Harmless without --file -- nothing is created until a mkdir.
+    out_dir = dir_ or Path(".")
+
     conn = _open_db(db)
     try:
         if all_notes:
-            _dump_all_notes(conn, write_files=file, out_dir=dir_ or Path("."))
+            _dump_all_notes(conn, write_files=file, out_dir=out_dir)
             return
 
         assert target is not None  # validated above: required unless --all
@@ -1364,15 +1398,15 @@ def dump_html(
             raise typer.Exit(code=1)
 
         if len(externals) == 1:
-            chosen = externals[0]
+            chosen_index, chosen = 1, externals[0]
         elif selector is None:
             typer.echo(f"note {note_id} has {len(externals)} external sources:")
             for index, external in enumerate(externals, start=1):
                 typer.echo(_render_external_choice(index, external))
             return
         else:
-            chosen = _select_external(externals, selector)
-            if chosen is None:
+            selected = _select_external(externals, selector)
+            if selected is None:
                 typer.echo(
                     f"no external source matching {selector!r} for note "
                     f"{note_id}; options:",
@@ -1381,8 +1415,8 @@ def dump_html(
                 for index, external in enumerate(externals, start=1):
                     typer.echo(_render_external_choice(index, external), err=True)
                 raise typer.Exit(code=1)
+            chosen_index, chosen = selected
 
-        chosen_index = externals.index(chosen) + 1
         raw_payload = _raw_payload(conn, chosen.snapshot_id)
     finally:
         conn.close()
@@ -1401,9 +1435,8 @@ def dump_html(
         raise typer.Exit(code=1)
 
     if file:
-        out_dir = dir_ or Path(".")
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{note_id}-{chosen_index:04d}.dmp"
+        out_path = _dump_path(out_dir, note_id, chosen_index)
         out_path.write_text(raw_payload, encoding="utf-8")
         typer.echo(f"wrote {out_path}")
         return

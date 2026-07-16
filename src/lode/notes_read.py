@@ -339,10 +339,14 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
 
     Feeds :class:`~lode.tui.screens.browse.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
-    :func:`lode.cli.dump_html`'s (lode-olmi.7) inline ``raw_payload`` SELECT.
-    That query lives inlined in ``cli.py`` rather than a shared helper, so
-    there is nothing importable from there yet -- this mirrors its shape
-    closely enough that a later refactor could unify the two.
+    :func:`lode.cli.dump_html`'s (lode-olmi.7) ``raw_payload`` SELECT. That
+    query now has a name of its own -- ``cli._raw_payload`` (lode-l38d.8,
+    which needed it on two paths) -- but it stays private to ``cli.py``: it
+    takes the open ``conn`` that command already holds and returns only
+    ``raw_payload``, where this returns a whole :class:`SnapshotRow` from a
+    ``db_path``. A later refactor could still unify the two, on the
+    :func:`list_notes` / :func:`list_notes_conn` pattern (a shared
+    ``read_snapshot_conn``); nothing needs it yet.
     """
     conn = init_db(db_path)
     try:
