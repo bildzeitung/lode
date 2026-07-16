@@ -425,16 +425,15 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
     assert row_count == 1
 
 
-def test_long_summary_is_capped_at_two_lines_not_wrapped_unbounded(
+def test_long_summary_is_capped_at_one_line_not_wrapped_unbounded(
     tmp_path: Path,
 ) -> None:
-    """A long Summary never grows a row past two lines; the table never scrolls sideways.
+    """A long Summary never grows a row past one line; the table never scrolls sideways.
 
-    Guards the lode-olmi.3 fix: earlier (lode-5qp), the Summary column was
-    capped to the room left over after Date/Version but rows were added with
-    unbounded auto height, so a long summary could still wrap over many lines
-    and make a busy list hard to scan. Every row is now fixed at two lines and
-    overflow is ellipsized rather than wrapped further.
+    Guards the lode-juz8.3 fix: earlier (lode-olmi.3), the Summary column was
+    capped to the room left over after Date/Version and rows were fixed at
+    two lines, but a busy list was still hard to scan. Every row is now fixed
+    at one line and overflow is ellipsized rather than wrapped further.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -460,14 +459,14 @@ def test_long_summary_is_capped_at_two_lines_not_wrapped_unbounded(
 
     row_height, virtual_width, widget_width, summary_cell = asyncio.run(_drive())
 
-    assert row_height == 2  # capped at two lines, not grown to fit the whole summary
+    assert row_height == 1  # capped at one line, not grown to fit the whole summary
     assert virtual_width <= widget_width  # ... so the table needs no h-scroll
-    assert summary_cell.count("\n") == 1  # exactly two rendered lines
+    assert summary_cell.count("\n") == 0  # exactly one rendered line
     assert summary_cell != long_summary  # truncated, not kept in full
     assert summary_cell.endswith("\N{HORIZONTAL ELLIPSIS}")  # overflow is ellipsized
 
 
-def test_short_summary_is_unaffected_by_the_two_line_cap(tmp_path: Path) -> None:
+def test_short_summary_is_unaffected_by_the_one_line_cap(tmp_path: Path) -> None:
     """A summary that already fits on one line is left alone, no ellipsis added."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -488,7 +487,7 @@ def test_short_summary_is_unaffected_by_the_two_line_cap(tmp_path: Path) -> None
 
     row_height, summary_cell = asyncio.run(_drive())
 
-    assert row_height == 2  # rows are always the fixed cap height
+    assert row_height == 1  # rows are always the fixed cap height
     assert summary_cell == short_summary  # left untouched, no ellipsis
 
 

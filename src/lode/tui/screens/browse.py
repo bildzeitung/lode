@@ -267,10 +267,13 @@ _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
 #: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
-#: Fixed row height (lode-olmi.3) -- a long summary used to grow the row (and
-#: so the whole list) as tall as it needed via ``height=None``; every row is
-#: now capped to this many lines, with overflow ellipsized instead of wrapped.
-_SUMMARY_ROW_HEIGHT = 2
+#: Fixed row height (lode-olmi.3, tightened from 2 to 1 by lode-juz8.3) -- a
+#: long summary used to grow the row (and so the whole list) as tall as it
+#: needed via ``height=None``; every row is now capped to this many lines,
+#: with overflow ellipsized instead of wrapped. Summaries are prompted
+#: lede-first (lode-juz8.5) so the single visible line still carries the
+#: note's point.
+_SUMMARY_ROW_HEIGHT = 1
 
 
 def _clip_summary_to_row_height(summary: str, width: int) -> str:
@@ -811,13 +814,15 @@ class BrowseScreen(Screen[None]):
         keep their natural (content) widths and the Summary column is capped
         to the room left over.
 
-        **Two-line cap (lode-olmi.3).** Rows used to be added with
-        ``height=None`` (auto height), so a long summary wrapped down over as
-        many lines as it needed and a busy list became hard to scan. Every row
-        is now a fixed :data:`_SUMMARY_ROW_HEIGHT` tall, and the summary text
-        is pre-wrapped and ellipsized to that budget by
-        :func:`_clip_summary_to_row_height` before it ever reaches the table
-        -- overflow is truncated, not wrapped further.
+        **Fixed-height cap (lode-olmi.3), tightened to one line (lode-juz8.3).**
+        Rows used to be added with ``height=None`` (auto height), so a long
+        summary wrapped down over as many lines as it needed and a busy list
+        became hard to scan. Every row is now a fixed :data:`_SUMMARY_ROW_HEIGHT`
+        tall -- one line -- and the summary text is pre-wrapped and ellipsized
+        to that budget by :func:`_clip_summary_to_row_height` before it ever
+        reaches the table -- overflow is truncated, not wrapped further.
+        Summaries are prompted lede-first (lode-juz8.5) so the truncated line
+        still carries the note's point.
 
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
