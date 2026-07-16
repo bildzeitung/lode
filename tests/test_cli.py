@@ -2221,8 +2221,15 @@ def test_dump_html_all_with_explicit_target_is_an_arity_error(tmp_path: Path) ->
     assert "--all" in result.stderr
 
 
-def test_dump_html_file_without_all_is_an_arity_error(tmp_path: Path) -> None:
+def test_dump_html_single_target_file_writes_without_all(tmp_path: Path) -> None:
+    """--file no longer requires --all: a single target writes its own file.
+
+    Post-technical-review user correction (lode-l38d.8): the original
+    "--file requires --all" arity check is wrong -- --file with an explicit
+    target should write that one dump to a file, not error.
+    """
     db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
     conn = init_db(db_path)
     try:
         result = save(conn, "note-file-noall", "see https://noall.example")
@@ -2239,11 +2246,135 @@ def test_dump_html_file_without_all_is_an_arity_error(tmp_path: Path) -> None:
         conn.close()
 
     result = runner.invoke(
-        app, ["dump-html", "note-file-noall", "--file", "--db", str(db_path)]
+        app,
+        [
+            "dump-html",
+            "note-file-noall",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    written = out_dir / "note-file-noall-0001.dmp"
+    assert written.read_text() == "<html>x</html>"
+    assert str(written) in result.stdout
+
+
+def test_dump_html_single_target_file_bare_defaults_to_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare --file (no --dir, no --all) writes into the current directory."""
+    db_path = tmp_path / "lode.db"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-file-cwd", "see https://filecwd.example")
+        _seed_external_edge(
+            conn,
+            "note-file-cwd",
+            result.version_id,
+            external_id="https://filecwd.example",
+            snapshot_id="snap-file-cwd",
+            raw_payload="<html>cwd</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.chdir(cwd)
+    result = runner.invoke(
+        app, ["dump-html", "note-file-cwd", "--file", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0
+    assert (cwd / "note-file-cwd-0001.dmp").read_text() == "<html>cwd</html>"
+
+
+def test_dump_html_single_target_file_multi_external_uses_selector_index(
+    tmp_path: Path,
+) -> None:
+    """The written file's NNNN matches the note's dumpable-external listing index."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-file-multi", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-file-multi",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-file-multi-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-file-multi",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-file-multi-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-multi",
+            "2",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-file-multi-0002.dmp").read_text() == "<html>b</html>"
+    assert not (out_dir / "note-file-multi-0001.dmp").exists()
+
+
+def test_dump_html_single_target_file_still_errors_on_nothing_to_dump(
+    tmp_path: Path,
+) -> None:
+    """--file doesn't bypass the single-target path's existing "nothing to
+    dump" errors -- a note with no external sources still fails cleanly."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-file-none", "just a plain note")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-none",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
     )
 
     assert result.exit_code != 0
-    assert "--file requires --all" in result.stderr
+    assert "no external sources" in result.stderr
+    assert not out_dir.exists()
 
 
 def test_dump_html_no_target_and_no_all_is_an_arity_error(tmp_path: Path) -> None:

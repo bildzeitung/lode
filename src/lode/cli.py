@@ -44,7 +44,9 @@ more than one drawn-down external; ``--all`` (lode-l38d.8) bulk-dumps every
 live note's dumpable external(s) instead, printing a delimited
 ``==> id url <==`` concatenation to stdout or, with ``--file`` (writing
 into ``--dir``, default the cwd), one 0-padded-suffixed ``<note-id>-NNNN.dmp``
-file per external.
+file per external; ``--file``/``--dir`` also apply to the single-target
+path (no ``--all`` required), writing that one resolved dump to a file
+with the same naming instead of stdout.
 
 The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
 integration test run via ``nox -s eval`` — it is **not** a shipped end-user
@@ -1256,8 +1258,9 @@ def dump_html(
     file: bool = typer.Option(
         False,
         "--file",
-        help="Write dumps to per-note files (named <note-id>-NNNN.dmp, see "
-        "--dir) instead of printing to stdout. Only valid with --all.",
+        help="Write dump(s) to per-note file(s) (named <note-id>-NNNN.dmp, "
+        "see --dir) instead of printing to stdout. Valid with or without "
+        "--all.",
     ),
     dir_: Path | None = typer.Option(
         None,
@@ -1301,9 +1304,21 @@ def dump_html(
     ``--all --file`` (writing into ``--dir``, default the cwd, created if
     absent) instead writes one ``<note-id>-NNNN.dmp`` file per external,
     0-padded and unconditionally suffixed even for a note's only external.
-    ``--file`` without ``--all`` is also an arity error (exit 1) -- this is
-    a bulk-dump option -- as is ``--dir`` without ``--file``, which would
-    otherwise be silently ignored while output still went to stdout.
+
+    ``--file`` is NOT restricted to ``--all`` (lode-l38d.8, post-review user
+    correction): given alongside a single ``target``, it writes that one
+    resolved external's dump to a file instead of stdout, using the same
+    ``<note-id>-NNNN.dmp`` naming and ``--dir`` handling as the ``--all``
+    path -- NNNN is the external's 1-based position in the note's dumpable-
+    external listing (the same listing/selector numbering above), so it is
+    always ``0001`` when the note has only one. The single-target path's own
+    "nothing to dump" errors (unknown note, no external sources, no captured
+    HTML, tombstone) fire exactly as before and take priority over writing a
+    file. The only arity error left involving these two flags is ``--dir``
+    without ``--file``, which would otherwise be silently ignored while
+    output still went to stdout; ``--file`` with neither a ``target`` nor
+    ``--all`` is still rejected, by the existing "target is required unless
+    --all is given" check above -- no separate check is needed.
     """
     if all_notes and (target is not None or selector is not None):
         typer.echo(
@@ -1312,9 +1327,6 @@ def dump_html(
         raise typer.Exit(code=1)
     if not all_notes and target is None:
         typer.echo("target is required unless --all is given", err=True)
-        raise typer.Exit(code=1)
-    if file and not all_notes:
-        typer.echo("--file requires --all", err=True)
         raise typer.Exit(code=1)
     if dir_ is not None and not file:
         typer.echo("--dir requires --file", err=True)
@@ -1370,6 +1382,7 @@ def dump_html(
                     typer.echo(_render_external_choice(index, external), err=True)
                 raise typer.Exit(code=1)
 
+        chosen_index = externals.index(chosen) + 1
         raw_payload = _raw_payload(conn, chosen.snapshot_id)
     finally:
         conn.close()
@@ -1386,6 +1399,15 @@ def dump_html(
             err=True,
         )
         raise typer.Exit(code=1)
+
+    if file:
+        out_dir = dir_ or Path(".")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{note_id}-{chosen_index:04d}.dmp"
+        out_path.write_text(raw_payload, encoding="utf-8")
+        typer.echo(f"wrote {out_path}")
+        return
+
     typer.echo(raw_payload)
 
 
