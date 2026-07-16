@@ -1,7 +1,7 @@
 """Config/diagnostics screen (lode-3r4) — the TUI half of ``lode config``.
 
-A read-only surface reachable from the capture screen via the app-level ``F2``
-binding (:meth:`~lode.tui.app.LodeApp.action_show_config`). It renders the exact
+A read-only surface reachable from the capture screen via the app-level
+``Ctrl+O`` binding (:meth:`~lode.tui.app.LodeApp.action_show_config`). It renders the exact
 same rows as the CLI's ``lode config``, because both call the ONE shared
 row-builder :func:`lode.config.config_lines` for the resolved on-disk paths
 (lode-u5gh) and the ONE shared row-builder :func:`lode.config.knob_rows` for

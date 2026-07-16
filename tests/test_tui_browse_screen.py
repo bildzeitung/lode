@@ -2,7 +2,7 @@
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot, the same
 style ``tests/test_tui_config.py`` / ``tests/test_tui_ask_screen.py`` use:
-reaching the screen from capture via the app-level ``F3`` binding, the table's
+reaching the screen from capture via the app-level ``Ctrl+B`` binding, the table's
 contents/ordering, selecting a row to open the editor directly (lode-olmi.2),
 and the "edit -> list -> capture" Escape chain.
 """
@@ -54,7 +54,7 @@ def test_app_registers_browse_screen(tmp_path: Path) -> None:
     assert app.SCREENS["browse"] is BrowseScreen
 
 
-def test_f3_reaches_the_browse_screen_with_notes_newest_first(
+def test_ctrl_b_reaches_the_browse_screen_with_notes_newest_first(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -68,7 +68,7 @@ def test_f3_reaches_the_browse_screen_with_notes_newest_first(
 
     async def _drive() -> list[tuple]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             assert isinstance(app.screen, BrowseScreen)
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return [tuple(table.get_row_at(i)) for i in range(table.row_count)]
@@ -94,7 +94,7 @@ def test_id_column_shows_the_shared_8_char_note_id_prefix(tmp_path: Path) -> Non
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return str(table.get_row_at(0)[0])
 
@@ -127,7 +127,7 @@ def test_date_column_shows_the_adaptive_form_not_full_iso_8601(
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return str(table.get_row_at(0)[1])
 
@@ -149,7 +149,7 @@ def test_selecting_a_row_opens_the_editor_directly(tmp_path: Path) -> None:
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -173,7 +173,7 @@ def test_edit_screen_shows_the_full_note_id(tmp_path: Path) -> None:
 
     async def _drive() -> str | None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -195,7 +195,7 @@ def test_escape_steps_back_edit_then_list_then_capture(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[bool, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -228,7 +228,7 @@ def test_deleted_note_does_not_appear_in_the_browse_list(
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
 
@@ -252,7 +252,7 @@ def test_ctrl_h_from_editor_opens_version_history_newest_first(
 
     async def _drive() -> list[tuple]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -289,7 +289,7 @@ def test_bare_h_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -321,7 +321,7 @@ def test_version_history_date_column_shows_the_adaptive_form(
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("ctrl+h")
@@ -349,7 +349,7 @@ def test_selecting_a_prior_version_shows_its_body_read_only(
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("ctrl+h")
@@ -380,7 +380,7 @@ def test_escape_steps_back_version_view_then_history_then_editor(
 
     async def _drive() -> tuple[bool, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("ctrl+h")
@@ -412,7 +412,7 @@ def test_version_history_includes_the_head_row(tmp_path: Path) -> None:
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             await pilot.press("ctrl+h")
@@ -447,7 +447,7 @@ def test_long_summary_is_capped_at_two_lines_not_wrapped_unbounded(
 
     async def _drive() -> tuple[int, int, int, str]:
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row_key = next(iter(table.rows))
@@ -480,7 +480,7 @@ def test_short_summary_is_unaffected_by_the_two_line_cap(tmp_path: Path) -> None
 
     async def _drive() -> tuple[int, str]:
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row_key = next(iter(table.rows))
@@ -588,7 +588,7 @@ def test_i_on_highlighted_row_opens_the_inspector_with_full_enrichment(
 
     async def _drive() -> dict[str, str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             assert isinstance(app.screen, EnrichmentModalScreen)
@@ -650,7 +650,7 @@ def test_ctrl_g_from_editor_opens_the_inspector_with_full_enrichment(
 
     async def _drive() -> dict[str, str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -693,7 +693,7 @@ def test_bare_i_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -801,7 +801,7 @@ def test_inspector_modal_field_coverage_matches_the_view_model(tmp_path: Path) -
 
     async def _drive() -> dict[str, str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             screen = app.screen
@@ -853,7 +853,7 @@ def test_inspector_modal_shows_pending_for_an_unenriched_note(
 
     async def _drive() -> tuple[str, str, str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             screen = app.screen
@@ -885,7 +885,7 @@ def test_inspector_modal_shows_failed_for_a_dead_lettered_job(
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             return str(app.screen.query_one(f"#{INSPECTOR_STATE_ID}", Static).content)
@@ -906,7 +906,7 @@ def test_escape_dismisses_the_inspector_modal_back_to_browse(tmp_path: Path) -> 
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             assert isinstance(app.screen, EnrichmentModalScreen)
@@ -945,7 +945,7 @@ def test_stale_tag_is_styled_dim_not_printed_as_a_cli_style_suffix(
 
     async def _drive() -> Text:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             content = app.screen.query_one(f"#{INSPECTOR_TAGS_ID}", Static).content
@@ -973,7 +973,7 @@ def test_i_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> Non
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
             await pilot.press("i")
@@ -1054,7 +1054,7 @@ def test_inspector_shows_external_snapshot_for_a_drawn_down_edge(
 
     async def _drive() -> Text:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
@@ -1121,7 +1121,7 @@ def test_inspector_distinguishes_stale_and_withheld_external_states(
 
     async def _drive() -> Text:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
@@ -1157,7 +1157,7 @@ def test_inspector_edge_without_a_matching_external_row_has_no_snapshot_line(
 
     async def _drive() -> Text:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("i")
             await pilot.pause()
             content = app.screen.query_one(f"#{INSPECTOR_EDGES_ID}", Static).content
@@ -1194,7 +1194,7 @@ def test_d_on_a_highlighted_row_pops_the_delete_confirm(tmp_path: Path) -> None:
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, DeleteConfirmScreen)
@@ -1223,7 +1223,7 @@ def test_confirming_delete_appends_a_tombstone_and_the_note_vanishes(
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             # Newest-first: "gone-note" (saved last) is the top row, and the
             # cursor starts there by default -- no cursor manipulation needed.
             await pilot.press("d")
@@ -1260,7 +1260,7 @@ def test_declining_delete_leaves_the_note_untouched(tmp_path: Path) -> None:
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, DeleteConfirmScreen)
@@ -1295,7 +1295,7 @@ def test_escape_on_the_delete_confirm_also_declines(tmp_path: Path) -> None:
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, DeleteConfirmScreen)
@@ -1328,7 +1328,7 @@ def test_d_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> Non
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
             await pilot.press("d")
@@ -1362,7 +1362,7 @@ def test_delete_confirmed_after_the_note_already_vanished_resyncs_not_crashes(
 
     async def _drive() -> tuple[bool, list[str]]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, DeleteConfirmScreen)
@@ -1419,7 +1419,7 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
 
     async def _drive() -> tuple[bool, list[str]]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("d")
             await pilot.pause()
             assert isinstance(app.screen, DeleteConfirmScreen)
@@ -1477,7 +1477,7 @@ def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[bool, bool, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
             closed_before = not search_input.display
             await pilot.press("slash")
@@ -1503,7 +1503,7 @@ def test_incremental_search_forward_jumps_to_the_next_matching_summary(
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             assert table.cursor_row == 0  # starts on delta
             await pilot.press("slash")
@@ -1526,7 +1526,7 @@ def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # now on alpha, the bottom row
@@ -1550,7 +1550,7 @@ def test_incremental_search_wraps_around_when_scanning_forward(
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # alpha, the bottom row
@@ -1571,7 +1571,7 @@ def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
             await pilot.press(*"GAMMA")
@@ -1592,7 +1592,7 @@ def test_empty_query_is_a_no_op(tmp_path: Path) -> None:
 
     async def _drive() -> int:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
             await pilot.press(*"beta")
@@ -1616,7 +1616,7 @@ def test_escape_closes_the_search_box_and_keeps_the_current_selection(
 
     async def _drive() -> tuple[bool, bool, int]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
             await pilot.press(*"beta")
@@ -1641,7 +1641,7 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[bool, int]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
             await pilot.press(*"gamma")
@@ -1685,7 +1685,7 @@ def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
 
     async def _drive() -> tuple[int, int, int, int]:
         async with app.run_test(size=screen_size) as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
@@ -1730,7 +1730,7 @@ def test_escape_from_editor_keeps_the_same_row_highlighted(
 
     async def _drive() -> tuple[str | None, str | None]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             # Newest-first: note-c, note-b, note-a. Move down once to
             # highlight the middle row (note-b), not the default top row --
@@ -1777,7 +1777,7 @@ def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
 
     async def _drive() -> str | None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
@@ -1815,7 +1815,7 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
 
     async def _drive() -> tuple[str | None, list[str]]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
@@ -1869,7 +1869,7 @@ def test_v_with_no_externals_notifies_cleanly(
             monkeypatch.setattr(
                 app, "notify", lambda message, **kw: messages.append(message)
             )
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             return isinstance(app.screen, BrowseScreen)
@@ -1906,7 +1906,7 @@ def test_v_with_one_external_opens_the_viewer_directly(tmp_path: Path) -> None:
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             assert isinstance(app.screen, SnapshotViewerScreen)
@@ -1962,7 +1962,7 @@ def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[list[tuple], str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             assert isinstance(app.screen, ExternalPickerScreen)
@@ -2012,7 +2012,7 @@ def test_escape_steps_back_picker_then_browse(tmp_path: Path) -> None:
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             assert isinstance(app.screen, ExternalPickerScreen)
@@ -2049,7 +2049,7 @@ def test_toggle_raw_switches_to_raw_html_and_back(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[str, str, str]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             assert isinstance(app.screen, SnapshotViewerScreen)
@@ -2102,7 +2102,7 @@ def test_toggle_raw_with_no_raw_payload_notifies_and_stays_on_body(
             monkeypatch.setattr(
                 app, "notify", lambda message, **kw: messages.append(message)
             )
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             await pilot.press("t")
@@ -2137,7 +2137,7 @@ def test_escape_dismisses_the_snapshot_viewer_back_to_browse(tmp_path: Path) -> 
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("v")
             await pilot.pause()
             assert isinstance(app.screen, SnapshotViewerScreen)
@@ -2163,7 +2163,7 @@ def test_v_on_an_empty_browse_list_is_a_no_op_not_a_crash(tmp_path: Path) -> Non
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             assert app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count == 0
             await pilot.press("v")
@@ -2202,7 +2202,7 @@ def test_ctrl_r_from_editor_opens_the_content_viewer(tmp_path: Path) -> None:
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -2235,7 +2235,7 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)

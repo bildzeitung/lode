@@ -8,8 +8,8 @@ screen (via an optional ``confirm_quit()`` method) whether it has unsaved
 state before exiting. This drives that override end to end through the real
 Textual pilot, covering the ticket's three cases: a dirty capture buffer
 confirms (reusing lode-0wj.1's Save/Discard/Cancel dialog), a clean capture
-buffer quits immediately, and a non-capture screen (config, reached via F2)
-quits immediately regardless of what the capture screen underneath is
+buffer quits immediately, and a non-capture screen (config, reached via
+Ctrl+O) quits immediately regardless of what the capture screen underneath is
 holding.
 
 **lode-b14** extends the same guard to :class:`~lode.tui.screens.browse.EditScreen`
@@ -148,7 +148,7 @@ def test_ctrl_q_on_non_capture_screen_quits_immediately_even_if_capture_is_dirty
 ) -> None:
     """Ctrl+Q asks the CURRENT screen, not the whole stack.
 
-    Reach the config screen (F2, pushed on top of capture) with a dirty
+    Reach the config screen (Ctrl+O, pushed on top of capture) with a dirty
     capture buffer underneath, then Ctrl+Q: config has no unsaved state of
     its own (no ``confirm_quit``), so it quits right away -- the dirty
     capture buffer one level down never gets a say.
@@ -160,7 +160,7 @@ def test_ctrl_q_on_non_capture_screen_quits_immediately_even_if_capture_is_dirty
         async with app.run_test() as pilot:
             text_area = app.screen.query_one(f"#{BODY_ID}")
             text_area.text = "dirty underneath, but not on this screen"
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             await pilot.pause()
             assert isinstance(app.screen, ConfigScreen)
             await pilot.press("ctrl+q")
@@ -183,7 +183,7 @@ def test_ctrl_q_on_unchanged_edit_buffer_quits_immediately(tmp_path: Path) -> No
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -208,7 +208,7 @@ def test_ctrl_q_on_dirty_edit_buffer_shows_the_confirm_dialog(tmp_path: Path) ->
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -239,7 +239,7 @@ def test_ctrl_q_confirm_save_saves_the_edit_and_quits_the_app(tmp_path: Path) ->
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -269,7 +269,7 @@ def test_ctrl_q_confirm_discard_quits_without_saving(tmp_path: Path) -> None:
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -299,7 +299,7 @@ def test_ctrl_q_confirm_cancel_returns_to_editing_with_buffer_intact_edit_screen
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -337,7 +337,7 @@ def test_ctrl_q_confirm_save_with_cas_conflict_shows_reconcile_then_quits_on_res
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)

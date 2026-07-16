@@ -19,15 +19,52 @@ other screen. This is exactly what bit `lode-olmi.6`: `CaptureScreen` is the app
 and once `lode-olmi.9` landed a Screen-level `f4` on `CaptureScreen`/`EditScreen` ("focus related"),
 an App-level `f4` for the Tags screen became unreachable from the screen a user is on by default,
 even though the two features never look at the same code. **When claiming a new App-level key,
-check every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s.**
+check every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s.** (This example is
+historical — as of `lode-juz8.1` the two live bindings involved read `ctrl+f`/`ctrl+t`, not
+`f4`/`f5` — but the shadow mechanics it illustrates are unchanged and apply identically to any
+`ctrl+` combo.)
+
+## No function keys (`lode-juz8.1`)
+
+**lode's TUI binds no function keys anywhere — every action key is a `ctrl+<letter>` combo (or a
+named key like `escape`/`tab`/`up`/`down`/`enter`).** Before this ticket, three App-level actions
+(`f2`/`f3`/`f5`) and one Screen-level action (`f4`, shared by `CaptureScreen`/`EditScreen`) used
+function keys — a real ergonomic cost worth closing (many laptops chord Fn+number to reach one at
+all). The policy going forward: **a new binding is never a bare function key**, full stop — not
+just on an editable-`TextArea` screen (the hard rule below covers that narrower case already),
+everywhere in the TUI. Reach for an unclaimed `ctrl+<letter>` and run it through the trap
+checklist below before landing it.
+
+**The letter space is nearly exhausted — check it, don't guess.** 26 letters, minus 11 already
+claimed by `TextArea`'s own builtin bindings (`ctrl+a/e/w/d/x/c/v/u/k/z/y` — cursor/line-start/end,
+cut/copy/paste, delete-word, undo/redo, …), minus the six letters already in live App/Screen use
+(`ctrl+g/h/n/q/r/s`), minus two `KEY_ALIASES` traps (`ctrl+i` → `tab`, `ctrl+m` → `enter`) and one
+`App`-level `priority=True` reservation (`ctrl+p`, the command palette) — leaves exactly **`b`,
+`f`, `j`, `l`, `o`, `t`** as formally-checked-safe candidates. Of those, `l` and `o` are
+conventional terminal-driver control characters (`ctrl+l` clear/redraw, `ctrl+o` — termios
+`VDISCARD` — flush) and `ctrl+j` is the raw LF byte some terminals treat as Enter-adjacent; but none
+of the three is *aliased away* to a different key the way the two `KEY_ALIASES` traps above are —
+each still reaches a binding under its own `ctrl+<letter>` name (verified against the installed
+sequence tables: the LF byte parses to `ctrl+j`, `\x0f` to `ctrl+o`, and `ctrl+l` is not remapped at
+all). `ctrl+j` *does* appear in `textual.keys.KEY_ALIASES` (which holds five entries, not just
+`escape`), but on the *canonical* side — `ctrl+j` → alias `newline` — so it adds a name rather than
+diverting the binding the way `ctrl+i` → `tab` / `ctrl+m` → `enter` do. What Textual's source
+*cannot* rule out is a given terminal emulator's own handling of a control byte, so treat them as a
+*last resort*, not a first pick. This ticket claimed the two
+cleanest mnemonic fits first — `ctrl+b` (Browse), `ctrl+t` (Tags) — plus `ctrl+f` (Focus, for the
+related-notes panel) before reaching for one risk-flagged letter, `ctrl+o` ("Options", for Config).
+`l` and `j` are left unclaimed for the next ticket that needs one, checked against this same
+checklist rather than assumed safe.
 
 ## The hard rule: editable-TextArea screens use non-printable keys
 
 A screen that composes an **editable** `TextArea` (`read_only` not set, or explicitly `False`) —
 today `EditScreen` (`src/lode/tui/screens/browse.py`) and `CaptureScreen`
 (`src/lode/tui/screens/capture.py`) — must bind new actions to a **non-printable** key: a
-`ctrl+<letter>` combo, a function key, or a named key like `escape`/`tab`. **Never a bare printable
-character** (a letter, digit, or punctuation key without a modifier).
+`ctrl+<letter>` combo or a named key like `escape`/`tab`. **Never a bare printable
+character** (a letter, digit, or punctuation key without a modifier), and — per the "No function
+keys" policy above — never a function key either; `ctrl+<letter>` is effectively the only option
+left.
 
 **Why:** Textual's `TextArea._on_key` intercepts every `is_printable` keypress and calls
 `event.stop()` + `prevent_default()` to insert it as a literal character, *before* the event can
@@ -42,8 +79,9 @@ The two structurally possible workarounds and why one is rejected:
   *every* press of that key globally while the screen is active — the user could never again type
   that literal character into the note body. **Rejected** for any binding meant to coexist with
   typing.
-- A non-printable key (`ctrl+<letter>`, a function key, `escape`) survives `TextArea`'s
-  `is_printable` filter untouched and reaches the Screen binding normally. **This is the rule.**
+- A non-printable key (`ctrl+<letter>`, `escape`) survives `TextArea`'s
+  `is_printable` filter untouched and reaches the Screen binding normally. **This is the rule** —
+  narrowed to exclude function keys by the "No function keys" policy above.
 
 **Project practice: Ctrl-prefixed keys are standard for `EditScreen` actions.** Every action this
 screen binds beyond `escape` (`ctrl+s`, `ctrl+h`, `ctrl+g`, …) uses a `ctrl+` combo, precisely
@@ -89,8 +127,8 @@ though those aren't "printable" characters. A Screen-level binding on one of tho
 unreachable while the `TextArea` itself is focused — it only fires once focus has moved to a
 *different* widget on the same screen. `lode-olmi.9`'s `RelatedNotesPanel` uses exactly this: it
 binds its own `up`/`down`/`enter` for stepping through related notes, but those only apply once the
-panel itself holds focus (moved there via the Screen-level `f4` → `focus_related`), not while the
-note body `TextArea` still has focus.
+panel itself holds focus (moved there via the Screen-level `ctrl+f` → `focus_related`), not while
+the note body `TextArea` still has focus.
 
 Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewScreen`,
 `ReconcileScreen`'s diff view — are unaffected; `read_only` still lets bare-letter Screen bindings
@@ -104,18 +142,16 @@ through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-bo
 | Key | Action | Notes |
 |---|---|---|
 | `ctrl+q` | Quit | `priority=True` — always wins, even over a Screen binding |
-| `f2` | Show Config | |
-| `f3` | Show Browse | |
-| `f5` | Show Tags | rekeyed off `f4` — see below |
+| `ctrl+o` | Show Config | "Options" — rekeyed off the function key `f2` by `lode-juz8.1` |
+| `ctrl+b` | Show Browse | "Browse" — rekeyed off the function key `f3` by `lode-juz8.1` |
+| `ctrl+t` | Show Tags | "Tags" — rekeyed off the function key `f5` by `lode-juz8.1` (itself a land-time rekey off `f4` — see the history below) |
 
-Free App-level function keys today: `f1`, `f6`–`f12`. **`f4` is not safely reusable at App-level**
-without first resolving the shadow described above — it is already Screen-level `"focus_related"`
-on `CaptureScreen` (the default screen) and `EditScreen`, so an App-level `f4` binding would be
-unreachable from the screen a user sees on startup. `lode-olmi.6`'s tags screen was rekeyed off
-`f4` for exactly this reason, landing on **`f5`** (the next free App-level function key, checked
-against every screen's own `BINDINGS` per the rule above — no `f5` collision anywhere in the repo).
-Pick a free key from the list above instead (or another explicitly freed one) for the next ticket,
-and re-grep this file before landing.
+No App-level function keys remain — see the "No function keys" policy above. The next ticket that
+needs a new App-level (or Screen-level) key should reach for `ctrl+l` or `ctrl+j` first (the two
+formally-safe letters this ticket left unclaimed — both carry a terminal-level caveat flagged in
+that section, so treat them as last resort, not first pick), confirm the full trap checklist, and
+**check every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s** (still the
+operative rule from "Two altitudes" above; only the alphabet changed).
 
 ### Screen-level
 
@@ -142,7 +178,7 @@ and re-grep this file before landing.
 | | | `t` | Toggle raw HTML | |
 | `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
 | | | `escape` | Back (cancel) | |
-| | | `f4` | Focus related-notes panel | |
+| | | `ctrl+f` | Focus related-notes panel | |
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
 | | | `ctrl+r` | View retrieved content | |
@@ -153,7 +189,7 @@ and re-grep this file before landing.
 | `CaptureScreen` (default screen) | `screens/capture.py` | `ctrl+s` | Save & quit | **editable** |
 | | | `ctrl+n` | Save & new | |
 | | | `escape` | Discard & quit | |
-| | | `f4` | Focus related-notes panel | |
+| | | `ctrl+f` | Focus related-notes panel | |
 | `AskScreen` | `screens/ask.py` | `escape` | Quit screen | — |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
@@ -166,7 +202,8 @@ and re-grep this file before landing.
 `ctrl+s`/`ctrl+n` on `EditScreen`/`CaptureScreen` already predate this doc and are the precedent
 `lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, and `lode-0sjj`'s `Ctrl+R` all follow: every
 existing binding on a screen with an editable body uses a non-printable key — a `ctrl+` combo like
-these, or a named/function key like `escape`/`f4` — never a bare letter.
+these, or the named key `escape` — never a bare letter, and (per the "No function keys" policy
+above) never a function key either.
 
 ## Resolved collisions (history, for context)
 
@@ -200,3 +237,16 @@ collided at land time — this doc exists to stop the next one:
   one of `TextArea`'s own builtin bindings (`ctrl+a/e/w/d/x/c/v/u/k/z/y`, see the table in the hard
   rule's "before binding" checklist above), `KEY_ALIASES` doesn't remap it to a non-printable key, and
   `App` doesn't reserve it with `priority=True`.
+- **`lode-juz8.1`**: adopted the "no function keys" policy above and remapped every remaining
+  function key in the TUI — App-level `f2`/`f3`/`f5` (Config/Browse/Tags) and Screen-level `f4`
+  (`focus_related` on `CaptureScreen`/`EditScreen`) — to `ctrl+` combos in one pass, since the
+  by-then-nearly-exhausted safe-letter space (six formally-clean candidates — `b`, `f`, `j`, `l`,
+  `o`, `t` — for four required distinct bindings) meant picking them independently, ticket by
+  ticket, risked exactly the kind of collision this doc's "Resolved collisions" history already
+  catalogs three times over. Landed as **`Ctrl+O`** (Config, "Options"), **`Ctrl+B`** (Browse,
+  direct mnemonic), **`Ctrl+T`** (Tags, direct mnemonic), and **`Ctrl+F`** (focus-related, "Focus")
+  — each confirmed against the same three formal traps as every Ctrl-binding above (`TextArea`
+  builtins, `KEY_ALIASES`, `App` `priority=True` reservations), by inspecting the installed
+  `textual.widgets.TextArea.BINDINGS`, `textual.keys.KEY_ALIASES`, and `textual.app.App.BINDINGS`
+  directly rather than by assumption. `l` and `j` were left unclaimed (see the policy section above
+  for why) for the next ticket that needs a fifth.

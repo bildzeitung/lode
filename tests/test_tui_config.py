@@ -1,7 +1,7 @@
 """Tests for the TUI config/diagnostics screen (lode-3r4, widened lode-juz8.6).
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot: reaching
-the screen from the capture screen via the app-level ``F2`` binding, and
+the screen from the capture screen via the app-level ``Ctrl+O`` binding, and
 confirming the resolved paths + runtime/tune knob table shown are the exact
 values ``lode.config``'s resolvers report (and the CLI's ``lode config``
 already surfaces) — never re-derived here (docs/configuration.md). Since
@@ -53,7 +53,7 @@ def test_app_registers_config_screen() -> None:
     assert LodeApp.SCREENS["config"] is ConfigScreen
 
 
-def test_f2_reaches_the_config_screen_with_resolved_paths(
+def test_ctrl_o_reaches_the_config_screen_with_resolved_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Acceptance: resolved $LODE_HOME, DB, db lock, vector store, model cache,
@@ -71,7 +71,7 @@ def test_f2_reaches_the_config_screen_with_resolved_paths(
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             assert isinstance(app.screen, ConfigScreen)
             text = str(app.screen.query_one(f"#{ROWS_ID}", Static).content)
             assert str(home) in text
@@ -98,7 +98,7 @@ def test_config_file_present_is_reflected(
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             text = str(app.screen.query_one(f"#{ROWS_ID}", Static).content)
             assert "(present)" in text
 
@@ -113,7 +113,7 @@ def test_escape_returns_to_the_previous_screen(
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             assert isinstance(app.screen, ConfigScreen)
             await pilot.press("escape")
             assert not isinstance(app.screen, ConfigScreen)
@@ -124,8 +124,8 @@ def test_escape_returns_to_the_previous_screen(
 def test_cli_and_tui_render_identical_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # THE ANTI-DRIFT TEST (lode-u5gh): the CLI's `lode config` and the TUI's F2
-    # screen must render the exact same PATH row set for the same
+    # THE ANTI-DRIFT TEST (lode-u5gh): the CLI's `lode config` and the TUI's
+    # Ctrl+O screen must render the exact same PATH row set for the same
     # $LODE_HOME/db_path -- not "the same fields, independently maintained"
     # (that was the pre-u5gh state, and it already drifted once, lode-ak6). A
     # row added to only one surface's list can no longer happen because there
@@ -154,7 +154,7 @@ def test_cli_and_tui_render_identical_rows(
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             text = str(app.screen.query_one(f"#{ROWS_ID}", Static).content)
             return text.splitlines()
 
@@ -189,7 +189,7 @@ def test_cli_and_tui_render_identical_knob_rows(
 
     async def _drive() -> list[tuple[object, ...]]:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             table = app.screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
             return [tuple(table.get_row_at(i)) for i in range(table.row_count)]
 
@@ -197,7 +197,7 @@ def test_cli_and_tui_render_identical_knob_rows(
     assert tui_rows == expected
 
 
-def test_f2_knob_table_shows_runtime_and_tune_knobs_only(
+def test_ctrl_o_knob_table_shows_runtime_and_tune_knobs_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Acceptance: every runtime+tune Settings knob appears with its current
@@ -208,7 +208,7 @@ def test_f2_knob_table_shows_runtime_and_tune_knobs_only(
 
     async def _drive() -> DataTable:
         async with app.run_test() as pilot:
-            await pilot.press("f2")
+            await pilot.press("ctrl+o")
             return app.screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
 
     table = asyncio.run(_drive())

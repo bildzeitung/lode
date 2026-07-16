@@ -65,9 +65,9 @@ DeleteConfirmScreen {
     padding: 1 2;
 }
 
-/* Related-notes panel (lode-olmi.9) -- a visible border once F4 moves focus
- * onto it, so "you can now step through results" has an on-screen cue rather
- * than relying purely on the in-text "▸" selection marker. */
+/* Related-notes panel (lode-olmi.9) -- a visible border once Ctrl+F moves
+ * focus onto it, so "you can now step through results" has an on-screen cue
+ * rather than relying purely on the in-text "▸" selection marker. */
 RelatedNotesPanel:focus {
     border: round $accent;
 }

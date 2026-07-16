@@ -46,7 +46,7 @@ def test_row_select_on_a_highlighted_row_opens_it_editable(tmp_path: Path) -> No
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -68,7 +68,7 @@ def test_saving_an_edit_appends_a_version_not_a_new_note(tmp_path: Path) -> None
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -103,7 +103,7 @@ def test_escape_on_unchanged_buffer_returns_to_the_list_without_confirm(
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -131,7 +131,7 @@ def test_escape_on_a_dirty_buffer_shows_the_confirm_dialog(tmp_path: Path) -> No
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -159,7 +159,7 @@ def test_confirm_discard_returns_to_the_list_without_saving(tmp_path: Path) -> N
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -189,7 +189,7 @@ def test_confirm_save_saves_and_returns_to_the_list(tmp_path: Path) -> None:
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -221,7 +221,7 @@ def test_confirm_cancel_returns_to_editing_with_buffer_intact(tmp_path: Path) ->
 
     async def _drive() -> tuple[str, bool]:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -252,7 +252,7 @@ def test_saving_an_empty_edit_is_refused_without_leaving_the_screen(
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -285,7 +285,7 @@ def test_browse_list_reflects_the_new_version_after_returning_from_edit(
         from textual.widgets import DataTable
 
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
@@ -324,7 +324,7 @@ def test_cas_reject_on_save_shows_reconcile_then_returns_to_the_list(
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)

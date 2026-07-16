@@ -8,8 +8,8 @@ the related-notes bits of ``tests/test_tui_app.py``/
 ``tests/test_tui_capture_save_and_new.py`` -- untouched here). This file adds:
 stepping through :attr:`RelatedNotesPanel._related` with Up/Down once the
 panel holds focus, opening :class:`~lode.tui.related_notes_panel.
-RelatedNoteModalScreen` for the selected note with Enter, F4 moving focus onto
-the panel from each composing screen, and the modal's highlighted-context
+RelatedNoteModalScreen` for the selected note with Enter, Ctrl+F moving focus
+onto the panel from each composing screen, and the modal's highlighted-context
 rendering itself (:meth:`RelatedNoteModalScreen._highlighted_body`).
 """
 
@@ -98,33 +98,33 @@ def test_enter_on_empty_related_is_a_noop(tmp_path: Path) -> None:
     assert unchanged  # no screen pushed
 
 
-def test_f4_focuses_the_related_panel_from_capture(tmp_path: Path) -> None:
+def test_ctrl_f_focuses_the_related_panel_from_capture(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
             panel = app.screen.query_one(f"#{RELATED_ID}", RelatedNotesPanel)
-            await pilot.press("f4")
+            await pilot.press("ctrl+f")
             await pilot.pause()
             return app.focused is panel
 
     assert asyncio.run(_drive())
 
 
-def test_f4_focuses_the_related_panel_from_edit(tmp_path: Path) -> None:
+def test_ctrl_f_focuses_the_related_panel_from_edit(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_note(db_path, "note-a", "a note to edit")
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             panel = app.screen.query_one(f"#{EDIT_RELATED_ID}", RelatedNotesPanel)
-            await pilot.press("f4")
+            await pilot.press("ctrl+f")
             await pilot.pause()
             return app.focused is panel
 
