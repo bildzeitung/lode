@@ -586,10 +586,8 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
     ticket's design: "TUI renders it in a table widget ... CLI prints
     aligned rows. Both call the one shared builder."
     """
-    kinds = knob_kinds()
     rows: list[tuple[str, str, str]] = []
-    for name in Settings.model_fields:
-        kind = kinds.get(name)
+    for name, kind in knob_kinds().items():
         if kind not in (Kind.RUNTIME.value, Kind.TUNE.value):
             continue
         value = getattr(settings, name)

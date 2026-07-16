@@ -1241,13 +1241,13 @@ def _format_knob_table(rows: list[tuple[str, str, str]]) -> list[str]:
     (:mod:`lode.tui.screens.config`); only the row data is shared, not this
     text formatting.
     """
-    header = ("Knob", "Value", "Kind")
-    name_width = max(len(row[0]) for row in (header, *rows))
-    value_width = max(len(row[1]) for row in (header, *rows))
-    lines = [f"{header[0]:<{name_width}}  {header[1]:<{value_width}}  {header[2]}"]
-    for name, value, kind in rows:
-        lines.append(f"{name:<{name_width}}  {value:<{value_width}}  {kind}")
-    return lines
+    all_rows = [("Knob", "Value", "Kind"), *rows]
+    name_width = max(len(name) for name, _, _ in all_rows)
+    value_width = max(len(value) for _, value, _ in all_rows)
+    return [
+        f"{name:<{name_width}}  {value:<{value_width}}  {kind}"
+        for name, value, kind in all_rows
+    ]
 
 
 @app.command()
