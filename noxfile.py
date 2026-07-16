@@ -99,6 +99,7 @@ went quiet here is a defect that went *unobserved*, not one that went away.
 """
 
 import os
+import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
@@ -109,7 +110,7 @@ nox.options.default_venv_backend = "none"
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests"]
+nox.options.sessions = ["fix", "tests", "shellcheck"]
 
 
 def _xdist_workers() -> str:
@@ -153,6 +154,29 @@ def tests(session: nox.Session) -> None:
     no test skipped, just distributed across workers.
     """
     session.run("pytest", "-n", _xdist_workers())
+
+
+@nox.session
+def shellcheck(session: nox.Session) -> None:
+    """Lint every tracked shell script (shellcheck, --severity=warning).
+
+    A default gate for the repo's shell — ``.claude/statusline.sh`` and
+    ``scripts/*.sh``. The binary ships bundled via the ``shellcheck-py`` dev
+    dep (see ``pyproject.toml``), so this needs no system package. Gated at
+    ``warning``: errors and warnings (real bugs — unquoted word-splitting, bad
+    test operators) fail the gate; ``info``/``style`` notes do not, keeping the
+    signal level in line with what ruff enforces for Python. Scoped to tracked
+    files via ``git ls-files`` so scratch/vendored scripts never enter the gate.
+    """
+    files = subprocess.run(
+        ["git", "ls-files", "*.sh"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    if not files:
+        session.skip("no tracked shell scripts to check")
+    session.run("shellcheck", "--severity=warning", *files)
 
 
 @nox.session
