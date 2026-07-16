@@ -26,14 +26,25 @@ happens at IMPORT time, not per-invocation. Two consequences:
 
 The only way to actually exercise ``NO_COLOR`` detection is a FRESH
 SUBPROCESS that imports ``lode.cli`` with the target env already set, so the
-shared ``console`` re-detects from scratch. This module is that pattern,
-manually proven non-vacuous while building lode-xgaa: with
-``_console_no_color``'s subprocess ``-c`` script temporarily patched so the
-printed value ignores the actual ``no_color`` attribute (i.e. the harness
-itself broken), ``test_console_no_color_true_when_env_set`` failed as
-expected; reverted, it passes again. Any colour ticket
-(lode-l38d.4/.5/.6/.10) that asserts the ``NO_COLOR`` negative path should
-copy this pattern rather than reinvent — or silently no-op — one of its own.
+shared ``console`` re-detects from scratch. This module is that pattern, and
+it is proven non-vacuous by sabotaging the SUBJECT — ``src/lode/cli.py``'s
+shared ``console`` — in both directions (re-verified against rich 15.0.0
+during lode-xgaa's technical review):
+
+* ``console = Console(no_color=False)`` (the Console stops honouring
+  ``NO_COLOR``) makes ``test_console_no_color_true_when_env_set`` FAIL, while
+  the control below still passes.
+* ``console = Console(no_color=True)`` (colour wrongly forced off always)
+  makes ``test_console_no_color_false_when_env_absent`` FAIL, while the
+  positive test still passes.
+
+Sabotaging the subject is the demonstration that counts. Breaking the
+harness's own ``-c`` script fails the test too, but only circularly — it
+shows nothing about whether these tests reach ``cli.py``'s console at all.
+Any colour ticket (lode-l38d.4/.5/.6/.10) that asserts the ``NO_COLOR``
+negative path should copy this pattern rather than reinvent — or silently
+no-op — one of its own, and should re-run the two subject-sabotage checks
+above rather than trust that a green test exercised anything.
 See also ``src/lode/cli.py``'s ``console`` docstring and docs/stack.md's
 ``rich`` row, which record the same mechanism.
 """
@@ -67,7 +78,15 @@ def _console_no_color(*, no_color_env: str | None) -> bool:
         check=True,
         timeout=30,
     )
-    return result.stdout.strip() == "True"
+    printed = result.stdout.strip()
+    if printed not in ("True", "False"):
+        # Never coerce unexpected output to False: that would let the
+        # env-absent control below pass for the wrong reason, which is the
+        # exact silent-pass failure mode this module exists to rule out.
+        raise AssertionError(
+            f"subprocess did not report a bare bool for console.no_color: {printed!r}"
+        )
+    return printed == "True"
 
 
 def test_console_no_color_true_when_env_set() -> None:
