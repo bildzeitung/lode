@@ -17,7 +17,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, Footer, Header, Static
 from typer.testing import CliRunner
 
 from lode.cli import app as cli_app
@@ -241,3 +241,64 @@ def test_config_knob_table_works_with_no_config_toml(
     for name, value, kind in knob_rows(Settings()):
         assert name in result.stdout
         assert kind in result.stdout
+
+
+def test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guards lode-l38d.2: the knob table scrolls internally; the Screen doesn't.
+
+    config_lines() (7 lines) + knob_rows(Settings()) (36 rows, +1 header row)
+    is ~44 rows of content -- more than fits in a normal-but-short 80x24
+    terminal. Before the fix (no height rule for #config-rows/#config-knobs
+    in lode.tcss), the DataTable's auto-computed height ignored the Footer's
+    docked position and extended several rows past it -- confirmed by hand
+    against the pre-fix stylesheet, where the assertion below (the table's
+    region ending at or before the Footer's row) fails (the literal "scrolls
+    past the bottom" the ticket title describes). After the fix
+    (#config-rows: height auto; #config-knobs: height 1fr -- the same
+    pattern as #browse-table/#tags-notes-table), the table's region is
+    bounded to end exactly at the Footer's row, and the Screen itself never
+    needs to scroll.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
+    app = LodeApp(db_path=tmp_path / "home" / "lode.db")
+
+    async def _drive() -> tuple[object, ...]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+o")
+            await pilot.pause()
+            screen = app.screen
+            table = screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
+            header = screen.query_one(Header)
+            footer = screen.query_one(Footer)
+            return (
+                screen.size,
+                screen.max_scroll_y,
+                header.region,
+                footer.region,
+                table.region,
+                table.virtual_size,
+            )
+
+    screen_size, screen_max_scroll_y, header_region, footer_region, table_region, table_virtual_size = asyncio.run(
+        _drive()
+    )
+
+    # The knob table has more content than fits its allotted space -- it
+    # genuinely needs to scroll internally, so this test would be vacuous
+    # without it.
+    assert table_virtual_size.height > table_region.height
+
+    # The screen itself never scrolls...
+    assert screen_max_scroll_y == 0
+    # ...and Header/Footer -- both docked -- stay on-screen.
+    assert header_region.y == 0
+    assert footer_region.y + footer_region.height == screen_size.height
+
+    # The table's own region is fully contained above the Footer and within
+    # the screen -- it does not extend past the visible window (the actual
+    # regression: pre-fix, the table's auto-computed region ran past the
+    # Footer's row entirely).
+    assert table_region.y + table_region.height <= footer_region.y
+    assert table_region.y + table_region.height <= screen_size.height

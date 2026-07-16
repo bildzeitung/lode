@@ -129,3 +129,22 @@ SnapshotViewerScreen {
 #browse-table {
     height: 1fr;
 }
+
+/* Config screen (lode-l38d.2) -- same class of bug lode-juz8.2 fixed for
+ * #browse-table above: without a height constraint, the knob DataTable
+ * auto-sizes toward its full row count (config_lines() + knob_rows() is
+ * ~45 rows of content -- src/lode/tui/screens/config.py:47-58), and the
+ * containing Vertical follows suit, overflowing the viewport. Screen's
+ * default overflow-y: auto then makes the *whole screen* scroll instead of
+ * the table scrolling its own rows, pushing the always-docked Footer out of
+ * view along the way. #config-rows is pinned to its natural (auto) size --
+ * it's the fixed-line paths readout, never taller than its own content --
+ * so #config-knobs (1fr, same pattern as #tags-notes-table/#browse-table)
+ * takes exactly the remaining space and scrolls its rows internally. */
+#config-rows {
+    height: auto;
+}
+
+#config-knobs {
+    height: 1fr;
+}
