@@ -1958,6 +1958,590 @@ def test_dump_html_ambiguous_note_prefix_reports_candidates(tmp_path: Path) -> N
     assert "ambiguous note id prefix" in result.stderr
 
 
+# --- lode dump-html --all / --file (bulk dumping, lode-l38d.8) -------------
+
+
+def test_dump_html_all_no_file_prints_delimited_concatenation(tmp_path: Path) -> None:
+    """--all without --file: stdout, ==> id url <== headers, blank line between."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        r1 = save(conn, "note-all-1", "see https://one.example")
+        _seed_external_edge(
+            conn,
+            "note-all-1",
+            r1.version_id,
+            external_id="https://one.example",
+            snapshot_id="snap-all-1",
+            raw_payload="<html>one</html>",
+        )
+        r2 = save(conn, "note-all-2", "see https://two.example")
+        _seed_external_edge(
+            conn,
+            "note-all-2",
+            r2.version_id,
+            external_id="https://two.example",
+            snapshot_id="snap-all-2",
+            raw_payload="<html>two</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "--all", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "==> note-all-2  https://two.example <==" in result.stdout
+    assert "==> note-all-1  https://one.example <==" in result.stdout
+    assert "<html>one</html>" in result.stdout
+    assert "<html>two</html>" in result.stdout
+
+
+def test_dump_html_all_skips_notes_with_no_external(tmp_path: Path) -> None:
+    """Under --all, a note with nothing to dump is silently skipped -- no error."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-all-bare", "just a plain note, no externals")
+        r = save(conn, "note-all-has", "see https://has.example")
+        _seed_external_edge(
+            conn,
+            "note-all-has",
+            r.version_id,
+            external_id="https://has.example",
+            snapshot_id="snap-all-has",
+            raw_payload="<html>has</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "--all", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "<html>has</html>" in result.stdout
+    assert "note-all-bare" not in result.stdout
+
+
+def test_dump_html_all_skips_tombstoned_and_no_raw_payload_externals(
+    tmp_path: Path,
+) -> None:
+    """Under --all, an external with nothing captured is skipped, not an error."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        r = save(conn, "note-all-dead", "see https://dead.example")
+        _seed_external_edge(
+            conn,
+            "note-all-dead",
+            r.version_id,
+            external_id="https://dead.example",
+            snapshot_id="snap-all-dead",
+            raw_payload=None,
+            status="tombstone",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["dump-html", "--all", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "no external HTML captured for any note" in result.stdout
+
+
+def test_dump_html_all_file_writes_one_file_per_external_zero_padded(
+    tmp_path: Path,
+) -> None:
+    """--all --file DIR: one 0-padded-suffix file per dumpable external."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-all-multi", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-all-multi",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-all-multi-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-all-multi",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-all-multi-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-all-multi-0001.dmp").read_text() == "<html>a</html>"
+    assert (out_dir / "note-all-multi-0002.dmp").read_text() == "<html>b</html>"
+    assert "wrote 2 file(s)" in result.stdout
+
+
+def test_dump_html_all_file_suffixes_single_external_unconditionally(
+    tmp_path: Path,
+) -> None:
+    """The 0-padded suffix is unconditional, even for a note's only external."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-single", "see https://only.example")
+        _seed_external_edge(
+            conn,
+            "note-all-single",
+            result.version_id,
+            external_id="https://only.example",
+            snapshot_id="snap-all-single",
+            raw_payload="<html>only</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-all-single-0001.dmp").read_text() == "<html>only</html>"
+
+
+def test_dump_html_all_file_creates_directory_if_absent(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "does" / "not" / "exist" / "yet"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-mkdir", "see https://mkdir.example")
+        _seed_external_edge(
+            conn,
+            "note-all-mkdir",
+            result.version_id,
+            external_id="https://mkdir.example",
+            snapshot_id="snap-all-mkdir",
+            raw_payload="<html>mkdir</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert not out_dir.exists()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-all-mkdir-0001.dmp").exists()
+
+
+def test_dump_html_all_file_bare_defaults_to_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare --file (no --dir) writes into the current working directory."""
+    db_path = tmp_path / "lode.db"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-cwd", "see https://cwd.example")
+        _seed_external_edge(
+            conn,
+            "note-all-cwd",
+            result.version_id,
+            external_id="https://cwd.example",
+            snapshot_id="snap-all-cwd",
+            raw_payload="<html>cwd</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.chdir(cwd)
+    result = runner.invoke(app, ["dump-html", "--all", "--file", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert (cwd / "note-all-cwd-0001.dmp").read_text() == "<html>cwd</html>"
+
+
+def test_dump_html_all_file_overwrites_existing_file(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "note-all-over-0001.dmp").write_text("stale")
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-over", "see https://over.example")
+        _seed_external_edge(
+            conn,
+            "note-all-over",
+            result.version_id,
+            external_id="https://over.example",
+            snapshot_id="snap-all-over",
+            raw_payload="<html>fresh</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-all-over-0001.dmp").read_text() == "<html>fresh</html>"
+
+
+def test_dump_html_all_with_explicit_target_is_an_arity_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(
+        app, ["dump-html", "--all", "some-note", "--db", str(db_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "--all" in result.stderr
+
+
+def test_dump_html_single_target_file_writes_without_all(tmp_path: Path) -> None:
+    """--file no longer requires --all: a single target writes its own file.
+
+    Post-technical-review user correction (lode-l38d.8): the original
+    "--file requires --all" arity check is wrong -- --file with an explicit
+    target should write that one dump to a file, not error.
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-file-noall", "see https://noall.example")
+        _seed_external_edge(
+            conn,
+            "note-file-noall",
+            result.version_id,
+            external_id="https://noall.example",
+            snapshot_id="snap-file-noall",
+            raw_payload="<html>x</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-noall",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    written = out_dir / "note-file-noall-0001.dmp"
+    assert written.read_text() == "<html>x</html>"
+    assert str(written) in result.stdout
+
+
+def test_dump_html_single_target_file_bare_defaults_to_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare --file (no --dir, no --all) writes into the current directory."""
+    db_path = tmp_path / "lode.db"
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-file-cwd", "see https://filecwd.example")
+        _seed_external_edge(
+            conn,
+            "note-file-cwd",
+            result.version_id,
+            external_id="https://filecwd.example",
+            snapshot_id="snap-file-cwd",
+            raw_payload="<html>cwd</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.chdir(cwd)
+    result = runner.invoke(
+        app, ["dump-html", "note-file-cwd", "--file", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0
+    assert (cwd / "note-file-cwd-0001.dmp").read_text() == "<html>cwd</html>"
+
+
+def test_dump_html_single_target_file_multi_external_uses_selector_index(
+    tmp_path: Path,
+) -> None:
+    """The written file's NNNN matches the note's dumpable-external listing index."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(
+            conn, "note-file-multi", "see https://a.example and https://b.example"
+        )
+        _seed_external_edge(
+            conn,
+            "note-file-multi",
+            result.version_id,
+            external_id="https://a.example",
+            snapshot_id="snap-file-multi-a",
+            raw_payload="<html>a</html>",
+        )
+        _seed_external_edge(
+            conn,
+            "note-file-multi",
+            result.version_id,
+            external_id="https://b.example",
+            snapshot_id="snap-file-multi-b",
+            raw_payload="<html>b</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-multi",
+            "2",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-file-multi-0002.dmp").read_text() == "<html>b</html>"
+    assert not (out_dir / "note-file-multi-0001.dmp").exists()
+
+
+def test_dump_html_single_target_file_duplicate_externals_use_listed_index(
+    tmp_path: Path,
+) -> None:
+    """A duplicate edge's NNNN is its own listing position, not the first equal one.
+
+    ``edges`` has no ``(from_id, to_id)`` unique constraint and ``lode.enrich``
+    inserts an ``ai`` edge without dedup against an existing one, so a note can
+    list the same external twice. :class:`ExternalView` is a frozen dataclass
+    (equal by value), so recovering the choice's position with
+    ``externals.index(chosen)`` would find the FIRST equal entry: selecting the
+    listing's entry 2 would write ``-0001.dmp``, colliding with entry 1's file
+    and disagreeing with the ``--all`` path, which numbers by position.
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-file-dup", "see https://dup.example")
+        _seed_external_edge(
+            conn,
+            "note-file-dup",
+            result.version_id,
+            external_id="https://dup.example",
+            snapshot_id="snap-file-dup",
+            raw_payload="<html>dup</html>",
+        )
+        # A second, AI-inferred edge to the SAME external -- what enrich writes.
+        conn.execute(
+            "INSERT INTO edges (from_id, to_id, source, reason, confidence, "
+            "source_version, status) "
+            "VALUES (?, ?, 'ai', 'inferred', 0.9, ?, 'fresh')",
+            ("note-file-dup", "https://dup.example", result.version_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-dup",
+            "2",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "note-file-dup-0002.dmp").read_text() == "<html>dup</html>"
+    assert not (out_dir / "note-file-dup-0001.dmp").exists()
+
+
+def test_dump_html_single_target_file_still_errors_on_nothing_to_dump(
+    tmp_path: Path,
+) -> None:
+    """--file doesn't bypass the single-target path's existing "nothing to
+    dump" errors -- a note with no external sources still fails cleanly."""
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-file-none", "just a plain note")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        [
+            "dump-html",
+            "note-file-none",
+            "--file",
+            "--dir",
+            str(out_dir),
+            "--db",
+            str(db_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "no external sources" in result.stderr
+    assert not out_dir.exists()
+
+
+def test_dump_html_no_target_and_no_all_is_an_arity_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["dump-html", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "target is required unless --all is given" in result.stderr
+
+
+def test_dump_html_file_with_no_target_and_no_all_reuses_the_target_check(
+    tmp_path: Path,
+) -> None:
+    """--file with neither a target nor --all errors via the EXISTING target check.
+
+    lode-l38d.8's post-review user decision: this combination stays an error,
+    but deliberately NOT through a check of its own -- "the existing 'no target
+    and no --all' rejection already covers it. Do not add a second one." So the
+    message must be that check's, not a --file-specific one.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["dump-html", "--file", "--db", str(db_path)])
+
+    assert result.exit_code != 0
+    assert "target is required unless --all is given" in result.stderr
+
+
+def test_dump_html_dir_without_file_is_an_arity_error(tmp_path: Path) -> None:
+    """--dir without --file must fail, not be silently ignored while stdout wins.
+
+    --dir only means anything in file-output mode; accepting it bare would
+    silently discard the user's stated intent (write files into DIR) and dump
+    HTML to stdout instead -- the same "given vs absent is indistinguishable"
+    trap that sank the ticket's original single tri-state --file, which is why
+    --dir defaults to None rather than Path(".").
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dir-nofile", "see https://nofile.example")
+        _seed_external_edge(
+            conn,
+            "note-dir-nofile",
+            result.version_id,
+            external_id="https://nofile.example",
+            snapshot_id="snap-dir-nofile",
+            raw_payload="<html>x</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app, ["dump-html", "--all", "--dir", str(out_dir), "--db", str(db_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "--dir requires --file" in result.stderr
+    assert not out_dir.exists()
+
+
+def test_dump_html_all_file_writes_non_ascii_payload_as_utf8(tmp_path: Path) -> None:
+    """Fetched HTML is routinely non-ASCII: pin the on-disk bytes to UTF-8.
+
+    ``Path.write_text`` with no explicit encoding uses the locale's preferred
+    encoding, so under a C/POSIX locale (cron, systemd, minimal containers)
+    the unfixed write raised UnicodeEncodeError mid-sweep, after partially
+    writing the batch -- hence the explicit ``encoding="utf-8"``.
+
+    This asserts the CONTRACT (UTF-8 on disk), not that failure mode: it does
+    not reproduce it, and passes either way under a UTF-8 locale. Forcing it
+    in-process is not possible -- CPython resolves the default encoding in C
+    at open() time, so monkeypatching ``locale.getpreferredencoding`` does not
+    reach it -- and a ``LC_ALL=C`` subprocess would stop reproducing it under
+    PEP 686's UTF-8-by-default anyway. It still guards the real contract: a
+    non-UTF-8 explicit encoding here would fail it.
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    payload = "<html>café — ünïcode … 日本語</html>"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-utf8", "see https://utf8.example")
+        _seed_external_edge(
+            conn,
+            "note-all-utf8",
+            result.version_id,
+            external_id="https://utf8.example",
+            snapshot_id="snap-all-utf8",
+            raw_payload=payload,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    written = out_dir / "note-all-utf8-0001.dmp"
+    assert written.read_bytes() == payload.encode("utf-8")
+    assert written.read_text(encoding="utf-8") == payload
+
+
 # --- lode recover <prefix> (undo a soft-delete, lode-d32.3) ----------------
 
 

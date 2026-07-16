@@ -103,13 +103,31 @@ def list_notes(db_path: Path) -> list[NoteRow]:
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
     convention as :func:`lode.tui.capture.save_capture` / :func:`lode.tui.ask.
     run_ask` -- this is a plain top-level read, not tied to any open
-    connection a caller might hold.
+    connection a caller might hold. A caller that already holds one wants
+    :func:`list_notes_conn` instead.
     """
     conn = init_db(db_path)
     try:
         return _list_notes(conn)
     finally:
         conn.close()
+
+
+def list_notes_conn(conn: sqlite3.Connection) -> list[NoteRow]:
+    """Same as :func:`list_notes`, but reuses a connection you already hold.
+
+    Mirrors the :func:`~lode.enrichment_view.enrichment_view` /
+    :func:`~lode.enrichment_view.enrichment_view_conn` split, promoted for the
+    same reason and on the same terms (lode-ay5.1's technical review: keep it
+    private until a real caller exists, since "a public API with no caller and
+    no test is speculative"). ``cli._dump_all_notes`` (``dump-html --all``,
+    lode-l38d.8) is that caller: it already holds an open ``conn`` and sweeps
+    every note's externals through it, so routing its note listing through
+    :func:`list_notes` would open a redundant second connection to the same
+    file -- re-running the whole schema/migration pass -- just to issue one
+    SELECT. This is that caller.
+    """
+    return _list_notes(conn)
 
 
 def _list_notes(
@@ -321,10 +339,14 @@ def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
 
     Feeds :class:`~lode.tui.screens.browse.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
-    :func:`lode.cli.dump_html`'s (lode-olmi.7) inline ``raw_payload`` SELECT.
-    That query lives inlined in ``cli.py`` rather than a shared helper, so
-    there is nothing importable from there yet -- this mirrors its shape
-    closely enough that a later refactor could unify the two.
+    :func:`lode.cli.dump_html`'s (lode-olmi.7) ``raw_payload`` SELECT. That
+    query now has a name of its own -- ``cli._raw_payload`` (lode-l38d.8,
+    which needed it on two paths) -- but it stays private to ``cli.py``: it
+    takes the open ``conn`` that command already holds and returns only
+    ``raw_payload``, where this returns a whole :class:`SnapshotRow` from a
+    ``db_path``. A later refactor could still unify the two, on the
+    :func:`list_notes` / :func:`list_notes_conn` pattern (a shared
+    ``read_snapshot_conn``); nothing needs it yet.
     """
     conn = init_db(db_path)
     try:
