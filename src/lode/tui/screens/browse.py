@@ -777,11 +777,11 @@ class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
     # Descriptions kept short (lode-l38d.3): the stock Footer renders all 7 of
-    # these plus the 4 App-level bindings (LodeApp.BINDINGS) in one line, and
-    # the full-length descriptions overflowed 80 columns (Textual then drops/
-    # compresses the tail). Every binding stays visible -- see docs/decisions
-    # history on lode-l38d.3 for why hiding entries was ruled out -- only the
-    # description text was shortened.
+    # these plus the 4 App-level bindings (LodeApp.BINDINGS) on one line, and at
+    # full length that clipped at 80 columns (128 columns' worth of content).
+    # Every binding stays visible and only the description text was shortened --
+    # hiding entries via show=False was ruled out on lode-l38d.3, because the
+    # footer is the only surface these keys are discoverable on.
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Insp"),
@@ -814,14 +814,14 @@ class BrowseScreen(Screen[None]):
         yield Header()
         yield DataTable(id=TABLE_ID, cursor_type="row")
         yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
-        # compact=True: Textual's built-in tighter FooterKey padding (2 cols
-        # of overhead per entry instead of 3) -- still the stock Footer, no
-        # custom widget. show_command_palette=False: Textual auto-adds a 12th,
-        # docked "^p palette" entry for its own command palette regardless of
-        # BINDINGS; that entry is not one of the 11 the ticket enumerates and
-        # dropping just its footer icon (ctrl+p / the command palette itself
-        # keeps working) buys back the width needed to keep all 11 real
-        # bindings visible without cryptic single-letter labels (lode-l38d.3).
+        # Still the stock Footer, just asked for less padding (lode-l38d.3).
+        # compact=True trims Textual's built-in FooterKey padding from 3 columns
+        # of overhead per entry to 1 -- across 11 entries that alone is 22
+        # columns, which is most of what makes the bar fit. Textual also
+        # auto-adds a 12th "^p palette" entry regardless of BINDINGS;
+        # show_command_palette=False hides only that icon (ctrl+p still opens
+        # the palette) and buys the last few columns, which is what lets all 11
+        # real bindings stay visible without cryptic single-letter labels.
         yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:

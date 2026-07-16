@@ -117,12 +117,20 @@ class LodeApp(App[str | None]):
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
-        # Descriptions kept short (lode-l38d.3): these four App-level bindings
-        # are always present in every screen's footer alongside that screen's
-        # own bindings, so their width counts against every screen's fit, not
-        # just Browse's -- shortest label that still reads unambiguously.
+        # "Cfg" is abbreviated to buy width for BrowseScreen (lode-l38d.3), and
+        # is deliberately the ONLY one: these bindings show in every screen's
+        # footer, so shortening them is a cost paid everywhere to fix one
+        # screen. BrowseScreen's footer is an 11-column grid with 1-column
+        # gutters, so what it really consumes is sum(FooterKey widths) + 10, and
+        # it fits only while that lands at <= 79 of the 80 available -- which
+        # leaves room for exactly one of these two to keep its full word.
+        # Measured at 80x24: "Cfg"+"Browse" = 79 (fits), "Config"+"Brow" = 80
+        # and "Config"+"Browse" = 82 (both clip). "Browse" keeps its word
+        # because "Brow" reads as a different English word, whereas "Cfg" is a
+        # conventional abbreviation. Do not lengthen either without re-running
+        # test_browse_footer_fits_80_columns_with_every_binding_visible.
         Binding("ctrl+o", "show_config", "Cfg"),
-        Binding("ctrl+b", "show_browse", "Brow"),
+        Binding("ctrl+b", "show_browse", "Browse"),
         Binding("ctrl+t", "show_tags", "Tags"),
     ]
 

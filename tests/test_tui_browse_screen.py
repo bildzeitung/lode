@@ -2488,6 +2488,6 @@ def test_browse_footer_fits_80_columns_with_every_binding_visible(
         "Up",
         "Quit",
         "Cfg",
-        "Brow",
+        "Browse",
         "Tags",
     ]
