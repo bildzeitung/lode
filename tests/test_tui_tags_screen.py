@@ -1,4 +1,4 @@
-"""Screen-level tests for the Tags screen (lode-olmi.6).
+"""Screen-level tests for the Tags screen (lode-olmi.6, multi-column grid lode-l38d.9).
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot, the same
 style ``tests/test_tui_browse_screen.py`` uses: reaching the screen from
@@ -6,16 +6,27 @@ capture via the app-level ``Ctrl+T`` binding (originally the function key
 ``F5``, itself a land-time rekey off the function key ``F4``, which sibling
 ``lode-olmi.9`` claimed at Screen level first as ``Ctrl+F`` -- see
 ``docs/keybindings.md`` -- then remapped off function keys entirely by
-lode-juz8.1's no-function-key policy), the tag multi-select's contents,
-the AND/intersection notes filter, selecting a note to open its editor, and
-the "tags -> capture" Escape chain.
+lode-juz8.1's no-function-key policy), the tag grid's contents, the
+AND/intersection notes filter, selecting a note to open its editor, the
+"tags -> capture" Escape chain, and (lode-l38d.9) the multi-column reflow on
+resize and selection surviving a reflow that moves selected tags to
+different grid coordinates -- the ticket's own called-out main regression
+risk.
+
+Most tests pin a narrow terminal width (``size=(20, 24)``) so the tag grid
+lays out as a single column, one tag per row -- the same shape the old
+``SelectionList`` had, keeping keyboard-navigation assertions simple and
+deterministic regardless of border/padding pixel details. The reflow tests
+below pin a *wide* terminal instead specifically to exercise multiple
+columns.
 """
 
 import asyncio
 import json
 from pathlib import Path
 
-from textual.widgets import DataTable, SelectionList
+from textual.coordinate import Coordinate
+from textual.widgets import DataTable
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
@@ -23,6 +34,14 @@ from lode.tui.screens.browse import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.capture import CaptureScreen
 from lode.tui.screens.tags import NOTES_TABLE_ID, TAG_LIST_ID, TagsScreen
 from lode.versions import save
+
+#: A narrow terminal forces the tag grid to a single column regardless of
+#: border/padding overhead -- ``_tag_grid_layout``'s ``max(1, ...)`` floor
+#: guarantees at least one column even when nothing else fits.
+_NARROW = (18, 24)
+#: A wide terminal, used only by the reflow tests below to force multiple
+#: columns for short tag names.
+_WIDE = (60, 24)
 
 
 def _write_tag(db_path: Path, note_id: str, version_id: str, tag: str) -> None:
@@ -57,15 +76,19 @@ def test_ctrl_t_reaches_the_tags_screen_with_every_tag_listed(tmp_path: Path) ->
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> list[str]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             assert isinstance(app.screen, TagsScreen)
-            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", SelectionList)
-            return [str(tag_list.get_option_at_index(i).prompt) for i in range(2)]
+            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
+            # Single column at this width -- one tag per row, sorted.
+            return [
+                str(tag_list.get_cell_at(Coordinate(i, 0)))
+                for i in range(tag_list.row_count)
+            ]
 
-    tags = asyncio.run(_drive())
+    cells = asyncio.run(_drive())
 
-    assert tags == ["prod", "staging"]
+    assert cells == ["[ ] prod", "[ ] staging"]
 
 
 def test_no_tag_selected_shows_every_live_note(tmp_path: Path) -> None:
@@ -79,7 +102,7 @@ def test_no_tag_selected_shows_every_live_note(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> list[str]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
             return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
@@ -104,13 +127,14 @@ def test_selecting_a_tag_narrows_notes_by_and_semantics(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> list[str]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            # Tag options are sorted: "prod" (index 0) then "staging" (index
-            # 1). Nothing is highlighted until the first "down" -- pressing
-            # it once moves the cursor to index 0, not "next from current".
-            await pilot.press("down")
+            # Single column, sorted: row 0 "prod", row 1 "staging". The
+            # cursor starts on row 0 (DataTable's cursor_coordinate defaults
+            # to (0, 0)), so no initial "down" is needed before the first
+            # toggle -- unlike the old SelectionList, which highlighted
+            # nothing until the first cursor move.
             await pilot.press("space")  # select "prod"
             await pilot.press("down")
             await pilot.press("space")  # select "staging" too
@@ -139,11 +163,10 @@ def test_deselecting_a_tag_widens_the_filter_again(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> tuple[list[str], list[str]]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            # Tag options sorted: "prod" (index 0), "staging" (index 1).
-            await pilot.press("down")
+            # Single column, sorted: row 0 "prod", row 1 "staging".
             await pilot.press("space")  # select "prod"
             await pilot.press("down")
             await pilot.press("space")  # select "staging" too
@@ -175,12 +198,10 @@ def test_clearing_all_selected_tags_shows_every_note_again(tmp_path: Path) -> No
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> tuple[list[str], list[str]]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            # Nothing is highlighted until the first "down" moves the cursor
-            # to index 0 -- the only tag option here ("staging").
-            await pilot.press("down")
+            # Single tag ("staging") at row 0, cursor already there.
             await pilot.press("space")  # select "staging"
             await pilot.pause()
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
@@ -196,6 +217,33 @@ def test_clearing_all_selected_tags_shows_every_note_again(tmp_path: Path) -> No
     assert sorted(widened) == ["tagged note", "untagged note"]
 
 
+def test_enter_also_toggles_the_tag_under_the_cursor(tmp_path: Path) -> None:
+    """DataTable's own native "enter" -> CellSelected binding toggles too,
+    not just the hand-rolled "space" (lode-l38d.9's module docstring)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "tagged note").version_id
+        save(conn, "note-b", "untagged note")
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head_a, "staging")
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> list[str]:
+        async with app.run_test(size=_NARROW) as pilot:
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            await pilot.press("enter")  # select "staging" via enter, not space
+            await pilot.pause()
+            table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+            return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
+
+    summaries = asyncio.run(_drive())
+
+    assert summaries == ["tagged note"]
+
+
 def test_selecting_a_note_opens_the_editor(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -206,10 +254,10 @@ def test_selecting_a_note_opens_the_editor(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> str:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            # Focus the notes table (tag list has initial focus) and select.
+            # Focus the notes table (tag grid has initial focus) and select.
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
             table.focus()
             await pilot.press("enter")
@@ -239,10 +287,9 @@ def test_tag_selection_survives_a_round_trip_to_the_editor(tmp_path: Path) -> No
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> list[str]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            await pilot.press("down")
             await pilot.press("space")  # select "prod"
             await pilot.press("down")
             await pilot.press("space")  # select "staging"
@@ -268,7 +315,7 @@ def test_escape_from_tags_screen_returns_to_capture(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> bool:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             assert isinstance(app.screen, TagsScreen)
             await pilot.press("escape")
@@ -286,14 +333,130 @@ def test_empty_tag_list_and_notes_table_is_not_a_crash(tmp_path: Path) -> None:
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> tuple[int, int]:
-        async with app.run_test() as pilot:
+        async with app.run_test(size=_NARROW) as pilot:
             await pilot.press("ctrl+t")
             await pilot.pause()
-            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", SelectionList)
+            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
-            return tag_list.option_count, table.row_count
+            return tag_list.row_count, table.row_count
 
-    tag_count, row_count = asyncio.run(_drive())
+    tag_row_count, note_row_count = asyncio.run(_drive())
 
-    assert tag_count == 0
-    assert row_count == 0
+    assert tag_row_count == 0
+    assert note_row_count == 0
+
+
+def test_tags_reflow_into_multiple_columns_on_a_wide_terminal(tmp_path: Path) -> None:
+    """Acceptance: tags render in as many columns as the terminal width
+    allows -- three short tags all fit on one grid row once the terminal is
+    wide enough, instead of the old SelectionList's forced single column."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "a note").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "aaa")
+    _write_tag(db_path, "note-a", head, "bbb")
+    _write_tag(db_path, "note-a", head, "ccc")
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int]:
+        async with app.run_test(size=_WIDE) as pilot:
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
+            return table.row_count, len(table.columns)
+
+    row_count, column_count = asyncio.run(_drive())
+
+    # All three short tags fit on a single grid row once >1 column is
+    # available -- the concrete, terminal-width-dependent proof of reflow.
+    assert row_count == 1
+    assert column_count >= 3
+
+
+def test_tag_grid_reflows_and_selection_survives_a_resize(tmp_path: Path) -> None:
+    """The ticket's main regression risk: selecting tags that land on
+    DIFFERENT rows/columns of the grid, then resizing so they land on the
+    SAME row (fewer columns -> more; more rows -> fewer) must not reset the
+    selection or the AND-narrowed notes table (lode-l38d.9)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_both = save(conn, "note-both", "has aaa and ccc").version_id
+        head_one = save(conn, "note-one", "has only aaa").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-both", head_both, "aaa")
+    _write_tag(db_path, "note-both", head_both, "ccc")
+    _write_tag(db_path, "note-one", head_one, "aaa")
+    _write_tag(db_path, "note-one", head_one, "bbb")
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int, list[str], int, int, list[str], list[str]]:
+        async with app.run_test(size=_NARROW) as pilot:
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
+            narrow_rows = tag_list.row_count
+            narrow_columns = len(tag_list.columns)
+            # Single column, sorted: row 0 "aaa", row 1 "bbb", row 2 "ccc" --
+            # select "aaa" (row 0) and "ccc" (row 2): two DIFFERENT rows.
+            await pilot.press("space")  # select "aaa"
+            await pilot.press("down")
+            await pilot.press("down")
+            await pilot.press("space")  # select "ccc"
+            await pilot.pause()
+            notes_table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+            before_resize = [
+                str(notes_table.get_row_at(i)[3]) for i in range(notes_table.row_count)
+            ]
+
+            await pilot.resize_terminal(*_WIDE)
+            await pilot.pause()
+            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
+            wide_rows = tag_list.row_count
+            wide_columns = len(tag_list.columns)
+            notes_table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+            after_resize = [
+                str(notes_table.get_row_at(i)[3]) for i in range(notes_table.row_count)
+            ]
+            checkboxes = [
+                str(tag_list.get_cell_at(Coordinate(0, c))) for c in range(wide_columns)
+            ]
+            return (
+                narrow_rows,
+                narrow_columns,
+                before_resize,
+                wide_rows,
+                wide_columns,
+                after_resize,
+                checkboxes,
+            )
+
+    (
+        narrow_rows,
+        narrow_columns,
+        before_resize,
+        wide_rows,
+        wide_columns,
+        after_resize,
+        checkboxes,
+    ) = asyncio.run(_drive())
+
+    # Narrow: one tag per row. Wide: reflows to one row, several columns --
+    # "aaa" and "ccc" moved from rows 0/2 (column 0) to row 0, columns 0/2.
+    assert narrow_rows == 3
+    assert narrow_columns == 1
+    assert wide_rows == 1
+    assert wide_columns >= 3
+
+    # AND semantics unaffected by the resize -- the only note tagged with
+    # BOTH "aaa" and "ccc", before and after the reflow.
+    assert before_resize == ["has aaa and ccc"]
+    assert after_resize == ["has aaa and ccc"]
+
+    # And the grid itself visibly reflects the still-selected checkboxes at
+    # their new coordinates, not a reset-to-unselected redraw.
+    assert checkboxes[:3] == ["[x] aaa", "[ ] bbb", "[x] ccc"]
