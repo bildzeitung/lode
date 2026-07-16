@@ -163,6 +163,25 @@ box is open (:meth:`BrowseScreen.action_dismiss_screen` checks
 ``self._search_open`` first) -- close the search, or (box already closed) the
 usual pop back to capture.
 
+**Expand the highlighted row's summary (lode-juz8.4).** ``x`` on a row toggles
+it between the 1-line-capped summary the whole list otherwise shows
+(lode-juz8.3) and its full, untruncated text -- highlighted row only, so the
+rest of the list stays scannable while one row is read in full.
+:meth:`BrowseScreen._reload_rows` renders that one row with
+:func:`_wrap_summary_full` (no line cap, ``height=`` its actual wrapped line
+count) instead of :func:`_clip_summary_to_row_height`; every other row is
+unaffected. Tracked as :attr:`BrowseScreen._expanded_note_id`, a plain
+``note_id | None`` rather than a set, since only one row can be expanded at a
+time. Unlike the cursor (preserved across a reload, lode-olmi.1), expansion
+does **not** survive a ``_reload_rows`` triggered by :meth:`on_screen_resume`
+or :meth:`on_resize` -- both reset :attr:`_expanded_note_id` to ``None``
+before reloading, so tabbing away to edit and back, or resizing the
+terminal, collapses an expanded row (confirmed acceptable by the user
+2026-07-16, over a `challenge` finding that raised the inconsistency with
+the cursor's own preservation). The toggle action itself calls
+``_reload_rows`` too, but *after* setting/clearing ``_expanded_note_id`` --
+that reload is what renders the just-toggled state, not a reset.
+
 **Search box stays on-screen with a long list (lode-juz8.2).** Before this,
 the table's ``DataTable`` had no height constraint, so with more notes than
 fit the terminal it auto-sized past the viewport; ``Screen``'s default
@@ -274,6 +293,19 @@ _MIN_SUMMARY_WIDTH = 10
 #: lede-first (lode-juz8.5) so the single visible line still carries the
 #: note's point.
 _SUMMARY_ROW_HEIGHT = 1
+
+
+def _wrap_summary_full(summary: str, width: int) -> tuple[str, int]:
+    """Wrap *summary* to *width* with no line cap -- the full untruncated text.
+
+    Companion to :func:`_clip_summary_to_row_height`, used for the one
+    highlighted row a user has expanded (lode-juz8.4) instead of the
+    1-line-capped rendering every other row gets. Returns the wrapped text
+    and its line count together since the caller needs both in the same
+    ``add_row`` call: the cell content and the row's ``height=``.
+    """
+    lines = textwrap.wrap(summary, width=width) or [""]
+    return "\n".join(lines), len(lines)
 
 
 def _clip_summary_to_row_height(summary: str, width: int) -> str:
@@ -749,6 +781,7 @@ class BrowseScreen(Screen[None]):
         Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View content"),
         Binding("d", "delete_selected", "Delete"),
+        Binding("x", "toggle_summary", "Expand summary"),
         Binding("slash", "search_forward", "Search"),
         Binding("question_mark", "search_backward", "Search up"),
     ]
@@ -763,6 +796,13 @@ class BrowseScreen(Screen[None]):
         #: :meth:`action_dismiss_screen` to decide what Escape means right now
         #: (close the search box vs. pop back to capture).
         self._search_open = False
+        #: The ``note_id`` of the one row currently showing its full,
+        #: untruncated summary (lode-juz8.4), or ``None`` when every row is
+        #: 1-line-capped. Set/cleared by :meth:`action_toggle_summary`; reset
+        #: to ``None`` by :meth:`on_screen_resume`/:meth:`on_resize` before
+        #: their own reload, so expansion does not survive tabbing away or a
+        #: resize (see the module docstring's lode-juz8.4 section).
+        self._expanded_note_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -787,8 +827,12 @@ class BrowseScreen(Screen[None]):
         the Date/Version columns (see :meth:`_reload_rows`); when the terminal
         grows or shrinks that budget changes, so rows must be re-laid-out to
         wrap at the new width. Reuses the same single load path as
-        :meth:`on_screen_resume`.
+        :meth:`on_screen_resume`. Resets :attr:`_expanded_note_id` first
+        (lode-juz8.4): a resize-triggered reload collapses an expanded row,
+        the same "does not survive this reload" contract
+        :meth:`on_screen_resume` applies below.
         """
+        self._expanded_note_id = None
         self._reload_rows()
 
     def on_screen_resume(self) -> None:
@@ -802,7 +846,13 @@ class BrowseScreen(Screen[None]):
         Version/Summary columns no longer match the just-written head), and
         this hook reloads them every time browse becomes the top screen
         again, not only on first mount.
+
+        Also resets :attr:`_expanded_note_id` to ``None`` (lode-juz8.4)
+        before reloading -- tabbing away to edit a note and popping back
+        collapses any row the user had expanded, confirmed acceptable over
+        preserving it the way the cursor is (see the module docstring).
         """
+        self._expanded_note_id = None
         self._reload_rows()
 
     def _reload_rows(self) -> None:
@@ -823,6 +873,13 @@ class BrowseScreen(Screen[None]):
         reaches the table -- overflow is truncated, not wrapped further.
         Summaries are prompted lede-first (lode-juz8.5) so the truncated line
         still carries the note's point.
+
+        **One row can opt out (lode-juz8.4).** When :attr:`_expanded_note_id`
+        names a row still present in *rows*, that one row is rendered with
+        :func:`_wrap_summary_full` instead -- the full, untruncated summary,
+        at its own actual wrapped ``height=`` rather than the fixed
+        :data:`_SUMMARY_ROW_HEIGHT` -- while every other row keeps the
+        1-line-capped rendering above.
 
         Rebuilt in full (``clear(columns=True)``) each time because the cap is a
         function of the current terminal width, recomputed on every
@@ -874,13 +931,20 @@ class BrowseScreen(Screen[None]):
         for row, id_cell, date_cell, version_cell in zip(
             rows, id_cells, date_cells, version_cells
         ):
+            if row.note_id == self._expanded_note_id:
+                summary_cell, row_height = _wrap_summary_full(
+                    row.summary, summary_width
+                )
+            else:
+                summary_cell = _clip_summary_to_row_height(row.summary, summary_width)
+                row_height = _SUMMARY_ROW_HEIGHT
             table.add_row(
                 id_cell,
                 date_cell,
                 version_cell,
-                _clip_summary_to_row_height(row.summary, summary_width),
+                summary_cell,
                 key=row.note_id,
-                height=_SUMMARY_ROW_HEIGHT,
+                height=row_height,
             )
 
         if table.row_count == 0:
@@ -918,6 +982,28 @@ class BrowseScreen(Screen[None]):
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         if note_id is not None:
             _view_note_external_content(self, note_id)
+
+    def action_toggle_summary(self) -> None:
+        """``x``: toggle the highlighted row between its 1-line and full summary (lode-juz8.4).
+
+        Highlighted row only -- expanding one row never affects any other.
+        Toggling off (pressing ``x`` again on the already-expanded row, or
+        moving to a different row and pressing ``x`` there) collapses it back
+        to the 1-line cap. Delegates the actual rendering to
+        :meth:`_reload_rows`, which reads :attr:`_expanded_note_id` on every
+        rebuild -- setting it here and reloading is the whole toggle.
+        """
+        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        if table.row_count == 0:
+            return
+        note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if note_id is None:
+            return
+        if self._expanded_note_id == note_id:
+            self._expanded_note_id = None
+        else:
+            self._expanded_note_id = note_id
+        self._reload_rows()
 
     def action_delete_selected(self) -> None:
         """``d``: soft-delete the highlighted row's note, after confirming (lode-d32.1)."""

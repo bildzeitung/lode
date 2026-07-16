@@ -170,6 +170,7 @@ operative rule from "Two altitudes" above; only the alphabet changed).
 | | | `i` | Inspect | |
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
+| | | `x` | Expand/collapse summary | |
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
 | `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
