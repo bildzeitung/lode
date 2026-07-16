@@ -2,9 +2,11 @@
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot, the same
 style ``tests/test_tui_browse_screen.py`` uses: reaching the screen from
-capture via the app-level ``F5`` binding (rekeyed at land time from ``F4``,
-which sibling ``lode-olmi.9`` claimed at Screen level first -- see
-``docs/keybindings.md``), the tag multi-select's contents,
+capture via the app-level ``Ctrl+T`` binding (originally the function key
+``F5``, itself a land-time rekey off the function key ``F4``, which sibling
+``lode-olmi.9`` claimed at Screen level first as ``Ctrl+F`` -- see
+``docs/keybindings.md`` -- then remapped off function keys entirely by
+lode-juz8.1's no-function-key policy), the tag multi-select's contents,
 the AND/intersection notes filter, selecting a note to open its editor, and
 the "tags -> capture" Escape chain.
 """
@@ -42,7 +44,7 @@ def test_app_registers_tags_screen(tmp_path: Path) -> None:
     assert app.SCREENS["tags"] is TagsScreen
 
 
-def test_f5_reaches_the_tags_screen_with_every_tag_listed(tmp_path: Path) -> None:
+def test_ctrl_t_reaches_the_tags_screen_with_every_tag_listed(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -56,7 +58,7 @@ def test_f5_reaches_the_tags_screen_with_every_tag_listed(tmp_path: Path) -> Non
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             assert isinstance(app.screen, TagsScreen)
             tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", SelectionList)
             return [str(tag_list.get_option_at_index(i).prompt) for i in range(2)]
@@ -78,7 +80,7 @@ def test_no_tag_selected_shows_every_live_note(tmp_path: Path) -> None:
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
             return [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
 
@@ -103,7 +105,7 @@ def test_selecting_a_tag_narrows_notes_by_and_semantics(tmp_path: Path) -> None:
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             # Tag options are sorted: "prod" (index 0) then "staging" (index
             # 1). Nothing is highlighted until the first "down" -- pressing
@@ -138,7 +140,7 @@ def test_deselecting_a_tag_widens_the_filter_again(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[list[str], list[str]]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             # Tag options sorted: "prod" (index 0), "staging" (index 1).
             await pilot.press("down")
@@ -174,7 +176,7 @@ def test_clearing_all_selected_tags_shows_every_note_again(tmp_path: Path) -> No
 
     async def _drive() -> tuple[list[str], list[str]]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             # Nothing is highlighted until the first "down" moves the cursor
             # to index 0 -- the only tag option here ("staging").
@@ -205,7 +207,7 @@ def test_selecting_a_note_opens_the_editor(tmp_path: Path) -> None:
 
     async def _drive() -> str:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             # Focus the notes table (tag list has initial focus) and select.
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
@@ -238,7 +240,7 @@ def test_tag_selection_survives_a_round_trip_to_the_editor(tmp_path: Path) -> No
 
     async def _drive() -> list[str]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             await pilot.press("down")
             await pilot.press("space")  # select "prod"
@@ -267,7 +269,7 @@ def test_escape_from_tags_screen_returns_to_capture(tmp_path: Path) -> None:
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             assert isinstance(app.screen, TagsScreen)
             await pilot.press("escape")
             return isinstance(app.screen, CaptureScreen)
@@ -285,7 +287,7 @@ def test_empty_tag_list_and_notes_table_is_not_a_crash(tmp_path: Path) -> None:
 
     async def _drive() -> tuple[int, int]:
         async with app.run_test() as pilot:
-            await pilot.press("f5")
+            await pilot.press("ctrl+t")
             await pilot.pause()
             tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", SelectionList)
             table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)

@@ -9,13 +9,16 @@ intersection, decided with the user 2026-07-14; no selection shows every
 live note, same rows :class:`~lode.tui.screens.browse.BrowseScreen` itself
 lists).
 
-Reached app-level via ``F5`` (:mod:`lode.tui.app`), the same "reachable from
-anywhere" convention ``F2``/``F3`` already use for config/browse. Originally
-specified as ``F4``, rekeyed to ``F5`` at land time: sibling ``lode-olmi.9``
-landed a Screen-level ``F4`` ("focus related-notes panel") on
+Reached app-level via ``Ctrl+T`` (:mod:`lode.tui.app`), the same "reachable
+from anywhere" convention ``Ctrl+O``/``Ctrl+B`` already use for
+config/browse. Originally specified as the function key ``F5`` (itself a
+land-time rekey off a colliding ``F4``: sibling ``lode-olmi.9`` landed a
+Screen-level ``F4`` ("focus related-notes panel") on
 ``CaptureScreen``/``EditScreen`` first, and since ``CaptureScreen`` is the
 app's own default screen, Textual's Screen-shadows-App resolution made an
-App-level ``F4`` here unreachable on startup (``docs/keybindings.md``).
+App-level ``F4`` here unreachable on startup), then remapped off function
+keys entirely to ``Ctrl+T`` by lode-juz8.1's no-function-key policy
+(``docs/keybindings.md``).
 
 **Read side (lode-olmi.6).** :func:`lode.notes_read.list_tags` and
 :func:`lode.notes_read.list_notes_with_all_tags` are this screen's only two
@@ -32,8 +35,8 @@ this screen via Textual's ordinary screen-stack pop, same as everywhere else
 in the TUI.
 
 **Tag selection survives a round-trip to the editor.** Both panels reload on
-:meth:`~textual.screen.Screen.on_screen_resume` (fires on the initial ``F5``
-push and every time this screen becomes the top screen again, mirroring
+:meth:`~textual.screen.Screen.on_screen_resume` (fires on the initial
+``Ctrl+T`` push and every time this screen becomes the top screen again, mirroring
 :meth:`~lode.tui.screens.browse.BrowseScreen.on_screen_resume`'s own
 "stale after an edit" rationale) -- picking a note, editing it, and
 returning must not silently drop the filter you had just built, so the

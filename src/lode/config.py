@@ -527,7 +527,7 @@ def config_lines(db_path: Path) -> list[str]:
     """Render the resolved on-disk locations as aligned ``label  path`` lines.
 
     The ONE shared row-builder behind both ``lode config`` (:mod:`lode.cli`) and
-    the TUI's F2 diagnostics screen (:mod:`lode.tui.screens.config`) — lode-u5gh
+    the TUI's Ctrl+O diagnostics screen (:mod:`lode.tui.screens.config`) — lode-u5gh
     collapsed what used to be two independently-maintained copies (lode-3r4,
     lode-ak6) after they had already drifted once (lode-ak6 added the model-cache
     row to the CLI by hand; the TUI's mirrored screen did not get it, because

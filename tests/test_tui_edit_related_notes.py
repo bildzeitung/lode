@@ -67,7 +67,7 @@ def test_editing_surfaces_a_related_past_note(
 
     async def _drive() -> list:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -102,7 +102,7 @@ def test_editing_a_note_never_surfaces_the_note_itself(
 
     async def _drive() -> list:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)
@@ -133,7 +133,7 @@ def test_edit_screen_panel_excludes_this_note_id_at_construction(
 
     async def _drive() -> str | None:
         async with app.run_test() as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditScreen)

@@ -2,9 +2,9 @@
 
 ``docs/design.md``'s post-E11 feedback: a way to see what you've captured
 without leaving the terminal. Reached from :class:`~lode.tui.screens.capture.
-CaptureScreen` via the app-level ``F3`` binding (:mod:`lode.tui.app`, the same
-"reachable from anywhere" convention ``F2``'s config screen already uses).
-This screen owns no read logic of its own -- it only renders the rows
+CaptureScreen` via the app-level ``Ctrl+B`` binding (:mod:`lode.tui.app`, the
+same "reachable from anywhere" convention ``Ctrl+O``'s config screen already
+uses). This screen owns no read logic of its own -- it only renders the rows
 :func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
 Version | Summary, newest-first, live notes only) and reacts to a row select.
 
@@ -31,7 +31,7 @@ appends a new version onto that note's chain via the CAS head path
 happens (its Version/Summary columns no longer match the just-written head),
 so :meth:`BrowseScreen.on_screen_resume` -- Textual's hook for "this screen is
 visible again" -- reloads the table every time browse becomes the top screen
-again (a fresh ``F3``, or popping back from ``EditScreen``), not only on
+again (a fresh ``Ctrl+B``, or popping back from ``EditScreen``), not only on
 first mount.
 
 **View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on
@@ -1121,7 +1121,7 @@ class EditScreen(Screen[None]):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
-        Binding("f4", "focus_related", "Related"),
+        Binding("ctrl+f", "focus_related", "Related"),
         Binding("ctrl+h", "show_history", "History"),
         Binding("ctrl+g", "inspect_selected", "Inspect"),
         Binding("ctrl+r", "view_content", "View content"),
@@ -1176,7 +1176,7 @@ class EditScreen(Screen[None]):
         self.query_one(RelatedNotesPanel).update_draft(event.text_area.text)
 
     def action_focus_related(self) -> None:
-        """F4: move focus onto the related-notes panel (lode-olmi.9).
+        """Ctrl+F: move focus onto the related-notes panel (lode-olmi.9).
 
         Its own Up/Down/Enter bindings only fire while it holds focus (see
         :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
