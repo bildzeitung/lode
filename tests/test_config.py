@@ -19,6 +19,7 @@ from lode.config import (
     config_path,
     default_db_path,
     knob_kinds,
+    knob_rows,
     lance_dir,
     load_settings,
     lode_home,
@@ -239,6 +240,48 @@ def test_model_cache_dir_defaults_under_home_not_tempdir(
     cache_dir = model_cache_dir()
     assert cache_dir == Path.home() / ".lode" / "models"
     assert not str(cache_dir).startswith(tempfile.gettempdir())
+
+
+# --- knob_rows() — the shared CLI+TUI knob-table builder (lode-juz8.6) ------
+
+
+def test_knob_rows_includes_only_runtime_and_tune_kinds() -> None:
+    rows = knob_rows(Settings())
+    names = {name for name, _, _ in rows}
+    kinds = knob_kinds()
+    expected_names = {
+        name
+        for name, kind in kinds.items()
+        if kind in (Kind.RUNTIME.value, Kind.TUNE.value)
+    }
+    assert names == expected_names
+    assert all(kind != Kind.BUILD.value for _, _, kind in rows)
+    # A build-kind knob by name is excluded outright.
+    assert "embedding_model" not in names
+    assert "content_hash" not in names
+
+
+def test_knob_rows_reads_current_resolved_value_not_bare_default() -> None:
+    # The row shows load_settings()'s CURRENT value, not Settings()'s default --
+    # the table exists to answer "what is it set to", including a config.toml
+    # override.
+    overridden = Settings(retrieval_top_k=42)
+    rows = dict((name, value) for name, value, _ in knob_rows(overridden))
+    assert rows["retrieval_top_k"] == "42"
+
+
+def test_knob_rows_renders_list_valued_knobs_comma_joined() -> None:
+    rows = dict((name, value) for name, value, _ in knob_rows(Settings()))
+    assert rows["url_tracking_param_blocklist"] == "utm_*, fbclid, gclid"
+
+
+def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
+    # Acceptance: works with no config.toml present (shows defaults).
+    rows = knob_rows(Settings())
+    assert rows  # non-empty
+    values = dict((name, value) for name, value, _ in rows)
+    assert values["retrieval_top_k"] == "20"
+    assert values["rerank_enabled"] == "True"
 
 
 @pytest.mark.parametrize(
