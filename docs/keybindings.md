@@ -42,11 +42,15 @@ cut/copy/paste, delete-word, undo/redo, …), minus the six letters already in l
 `App`-level `priority=True` reservation (`ctrl+p`, the command palette) — leaves exactly **`b`,
 `f`, `j`, `l`, `o`, `t`** as formally-checked-safe candidates. Of those, `l` and `o` are
 conventional terminal-driver control characters (`ctrl+l` clear/redraw, `ctrl+o` — termios
-`VDISCARD` — flush) and `ctrl+j` is the raw LF byte some terminals treat as Enter-adjacent; none of
-the three alias to anything in Textual's own tables (confirmed against the installed
-`textual.keys.KEY_ALIASES` — only `escape` is aliased at all), but a given terminal emulator's own
-handling of a control byte isn't something Textual's source can rule out the way the three formal
-traps below can be, so treat them as a *last resort*, not a first pick. This ticket claimed the two
+`VDISCARD` — flush) and `ctrl+j` is the raw LF byte some terminals treat as Enter-adjacent; but none
+of the three is *aliased away* to a different key the way the two `KEY_ALIASES` traps above are —
+each still reaches a binding under its own `ctrl+<letter>` name (verified against the installed
+sequence tables: the LF byte parses to `ctrl+j`, `\x0f` to `ctrl+o`, and `ctrl+l` is not remapped at
+all). `ctrl+j` *does* appear in `textual.keys.KEY_ALIASES` (which holds five entries, not just
+`escape`), but on the *canonical* side — `ctrl+j` → alias `newline` — so it adds a name rather than
+diverting the binding the way `ctrl+i` → `tab` / `ctrl+m` → `enter` do. What Textual's source
+*cannot* rule out is a given terminal emulator's own handling of a control byte, so treat them as a
+*last resort*, not a first pick. This ticket claimed the two
 cleanest mnemonic fits first — `ctrl+b` (Browse), `ctrl+t` (Tags) — plus `ctrl+f` (Focus, for the
 related-notes panel) before reaching for one risk-flagged letter, `ctrl+o` ("Options", for Config).
 `l` and `j` are left unclaimed for the next ticket that needs one, checked against this same
@@ -236,7 +240,7 @@ collided at land time — this doc exists to stop the next one:
 - **`lode-juz8.1`**: adopted the "no function keys" policy above and remapped every remaining
   function key in the TUI — App-level `f2`/`f3`/`f5` (Config/Browse/Tags) and Screen-level `f4`
   (`focus_related` on `CaptureScreen`/`EditScreen`) — to `ctrl+` combos in one pass, since the
-  by-then-nearly-exhausted safe-letter space (five formally-clean candidates — `b`, `f`, `j`, `l`,
+  by-then-nearly-exhausted safe-letter space (six formally-clean candidates — `b`, `f`, `j`, `l`,
   `o`, `t` — for four required distinct bindings) meant picking them independently, ticket by
   ticket, risked exactly the kind of collision this doc's "Resolved collisions" history already
   catalogs three times over. Landed as **`Ctrl+O`** (Config, "Options"), **`Ctrl+B`** (Browse,
