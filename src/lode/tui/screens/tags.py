@@ -298,7 +298,9 @@ class TagsScreen(Screen[None]):
         of adding a redundant one."""
         if event.data_table.id != TAG_LIST_ID:
             return
-        self._toggle_tag_at(event.data_table, event.coordinate.row, event.coordinate.column)
+        self._toggle_tag_at(
+            event.data_table, event.coordinate.row, event.coordinate.column
+        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Selecting a note opens its editor directly (this ticket's own acceptance
