@@ -64,8 +64,9 @@ fi
 
 # SemVer monotonicity: $1 > $2, both bare X.Y.Z (no leading 'v').
 version_gt() {
-  local IFS=.
-  local -a a=($1) b=($2)
+  local -a a b
+  IFS=. read -ra a <<< "$1"
+  IFS=. read -ra b <<< "$2"
   for i in 0 1 2; do
     if [ "${a[i]}" -gt "${b[i]}" ]; then return 0; fi
     if [ "${a[i]}" -lt "${b[i]}" ]; then return 1; fi
