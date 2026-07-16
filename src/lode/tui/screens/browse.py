@@ -849,8 +849,9 @@ class BrowseScreen(Screen[None]):
 
         Also resets :attr:`_expanded_note_id` to ``None`` (lode-juz8.4)
         before reloading -- tabbing away to edit a note and popping back
-        collapses any row the user had expanded, confirmed acceptable over
-        preserving it the way the cursor is (see the module docstring).
+        collapses any row the user had expanded (the "does not survive this
+        reload" contract; rationale in the module docstring's lode-juz8.4
+        section).
         """
         self._expanded_note_id = None
         self._reload_rows()
@@ -986,12 +987,13 @@ class BrowseScreen(Screen[None]):
     def action_toggle_summary(self) -> None:
         """``x``: toggle the highlighted row between its 1-line and full summary (lode-juz8.4).
 
-        Highlighted row only -- expanding one row never affects any other.
-        Toggling off (pressing ``x`` again on the already-expanded row, or
-        moving to a different row and pressing ``x`` there) collapses it back
-        to the 1-line cap. Delegates the actual rendering to
-        :meth:`_reload_rows`, which reads :attr:`_expanded_note_id` on every
-        rebuild -- setting it here and reloading is the whole toggle.
+        Highlighted row only -- at most one row is ever expanded. Pressing
+        ``x`` again on the already-expanded row collapses it back to the
+        1-line cap (no row expanded); pressing ``x`` on a *different* row
+        moves the expansion there -- the previously-expanded row collapses
+        and the newly-highlighted one expands. Delegates the actual rendering
+        to :meth:`_reload_rows`, which reads :attr:`_expanded_note_id` on
+        every rebuild -- setting it here and reloading is the whole toggle.
         """
         table = self.query_one(f"#{TABLE_ID}", DataTable)
         if table.row_count == 0:
