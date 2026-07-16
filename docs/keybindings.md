@@ -173,7 +173,8 @@ operative rule from "Two altitudes" above; only the alphabet changed).
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
 | `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
-| `TagsScreen` | `screens/tags.py` | `escape` | Back | — (SelectionList/DataTable) |
+| `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
+| | | `space` | Toggle tag | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same |
 | `SnapshotViewerScreen` | `screens/browse.py` | `escape` | Back | read-only |
 | | | `t` | Toggle raw HTML | |
 | `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
