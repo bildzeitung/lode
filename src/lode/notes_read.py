@@ -200,27 +200,6 @@ def _first_line(body: str) -> str:
     return ""
 
 
-def note_body(db_path: Path, note_id: str) -> str | None:
-    """Return ``note_id``'s live head body, or ``None`` if absent/deleted.
-
-    The browse list's row-select opens a read-only view of the full body
-    (:class:`~lode.tui.screens.browse.NoteViewScreen`), which needs more than
-    :class:`NoteRow`'s summary -- this is that lookup, gated to a live head the
-    same way :func:`list_notes` is.
-    """
-    conn = init_db(db_path)
-    try:
-        row = conn.execute(
-            "SELECT v.body FROM notes n "
-            "JOIN versions v ON v.version_id = n.head_version_id "
-            "WHERE n.note_id = ? AND v.op != 'delete'",
-            (note_id,),
-        ).fetchone()
-        return row[0] if row is not None else None
-    finally:
-        conn.close()
-
-
 @dataclass(frozen=True, slots=True)
 class VersionRow:
     """One version in a note's chain, as the history screen's table shows it.
@@ -293,8 +272,8 @@ def version_body(db_path: Path, note_id: str, version_id: str) -> str | None:
 
     The history list's row-select opens a read-only view of a *prior* version
     (:class:`~lode.tui.screens.browse.VersionViewScreen`, lode-0wj.7) -- unlike
-    :func:`note_body` this is keyed to an exact ``version_id``, live or not,
-    since viewing history is precisely about seeing a version that is no
+    a live-head-only lookup, this is keyed to an exact ``version_id``, live or
+    not, since viewing history is precisely about seeing a version that is no
     longer the head.
     """
     conn = init_db(db_path)
