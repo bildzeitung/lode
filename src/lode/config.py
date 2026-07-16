@@ -558,3 +558,42 @@ def config_lines(db_path: Path) -> list[str]:
     ]
     width = max(len(label) for label, _ in rows)
     return [f"{label:<{width}}  {value}" for label, value in rows]
+
+
+def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
+    """Return ``(name, current value, kind)`` for every runtime/tune knob.
+
+    The ONE shared builder behind both ``lode config`` (:mod:`lode.cli`) and
+    the TUI's ``ConfigScreen`` knob table (:mod:`lode.tui.screens.config`) --
+    lode-juz8.6's widening of the config surface past the on-disk paths
+    :func:`config_lines` already covers, following the same "one row list,
+    not two, feeds both surfaces" architecture lode-u5gh established for
+    paths. Iterates ``Settings.model_fields`` in declaration order, filtered
+    to :attr:`Kind.RUNTIME` / :attr:`Kind.TUNE` via :func:`knob_kinds` --
+    :attr:`Kind.BUILD` knobs (the local-model ids, ``content_hash``, ...) are
+    excluded, since changing one implies a rebuild/migration rather than a
+    live retune (docs/configuration.md).
+
+    Reads the CURRENT resolved value off the given ``settings`` (already
+    layered defaults <- config.toml <- overrides by :func:`load_settings`),
+    so this works with no ``config.toml`` present -- ``settings`` then just
+    holds every field's default (``Settings()``). A list-valued knob
+    (``url_tracking_param_blocklist``, the redaction pattern sets) renders
+    comma-joined on one line, so the table stays one row per knob.
+
+    Only the row DATA is shared -- each surface renders it in its own idiom
+    (the CLI as aligned text, the TUI as a ``DataTable`` widget), per the
+    ticket's design: "TUI renders it in a table widget ... CLI prints
+    aligned rows. Both call the one shared builder."
+    """
+    kinds = knob_kinds()
+    rows: list[tuple[str, str, str]] = []
+    for name in Settings.model_fields:
+        kind = kinds.get(name)
+        if kind not in (Kind.RUNTIME.value, Kind.TUNE.value):
+            continue
+        value = getattr(settings, name)
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value)
+        rows.append((name, str(value), kind))
+    return rows
