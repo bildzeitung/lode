@@ -31,6 +31,7 @@ dev = [
     "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
     "nox",           # task runner (`nox -t fix` before merging)
     "ruff",          # lint / format
+    "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
 ]
 

@@ -116,3 +116,16 @@ SnapshotViewerScreen {
 #tags-notes-table {
     height: 1fr;
 }
+
+/* Browse screen (lode-juz8.2) -- without a height constraint, the notes
+ * DataTable auto-sizes to its full row count, and Screen's default
+ * overflow-y: auto then scrolls the *whole screen* once that exceeds the
+ * viewport -- pushing the progressive-search Input (lode-olmi.4, non-docked,
+ * laid out just below the table) below the visible area once it's opened.
+ * Capping the table to the remaining space (1fr, same pattern as
+ * #tags-notes-table above) makes it scroll its own rows internally instead
+ * (DataTable is a ScrollView), so the Input -- and the always-docked Footer
+ * beneath it -- stay on-screen regardless of list length. */
+#browse-table {
+    height: 1fr;
+}

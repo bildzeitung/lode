@@ -2813,6 +2813,59 @@ def test_config_db_override_shifts_displayed_db_and_vector_store(
     assert str(home / "config.toml") in out
 
 
+# --- lode config knob table (lode-juz8.6) ------------------------------------
+
+
+def test_config_shows_every_runtime_and_tune_knob_with_current_value(
+    tmp_path: Path,
+) -> None:
+    # Acceptance: every runtime+tune Settings knob appears with its CURRENT
+    # resolved value and kind, even with no config.toml present (shows
+    # defaults) -- the knob table sits below the existing paths block.
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    for name, value, kind in config.knob_rows(config.Settings()):
+        assert name in result.stdout
+        assert value in result.stdout
+        assert kind in result.stdout
+
+
+def test_config_excludes_build_kind_knobs(tmp_path: Path) -> None:
+    # SCOPE decision (lode-juz8.6): build-kind knobs (imply a rebuild/
+    # migration, e.g. embedding_model/embedding_vector_dim/content_hash) are
+    # hidden from the knob table.
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    knob_names = {name for name, _, _ in config.knob_rows(config.Settings())}
+    assert "embedding_model" not in knob_names
+    assert "content_hash" not in knob_names
+    for _, _, kind in config.knob_rows(config.Settings()):
+        assert kind != config.Kind.BUILD.value
+    assert "embedding_model" not in result.stdout
+    assert "nomic-ai/nomic-embed-text-v1.5" not in result.stdout
+
+
+def test_config_knob_table_reflects_config_toml_override(tmp_path: Path) -> None:
+    # A config.toml override for a runtime knob shows up as the CURRENT
+    # value, not the field default -- confirms the table reads a resolved
+    # Settings instance (load_settings), not bare field defaults.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("retrieval_top_k = 42\n", encoding="utf-8")
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    assert "retrieval_top_k" in result.stdout
+    lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("retrieval_top_k")
+    ]
+    assert len(lines) == 1
+    assert "42" in lines[0]
+
+
 # --- lode work (async worker drain, lode-i05.3) ----------------------------
 
 

@@ -162,6 +162,20 @@ the empty string. Escape means two different things depending on whether the
 box is open (:meth:`BrowseScreen.action_dismiss_screen` checks
 ``self._search_open`` first) -- close the search, or (box already closed) the
 usual pop back to capture.
+
+**Search box stays on-screen with a long list (lode-juz8.2).** Before this,
+the table's ``DataTable`` had no height constraint, so with more notes than
+fit the terminal it auto-sized past the viewport; ``Screen``'s default
+``overflow-y: auto`` then scrolled the *whole screen* to accommodate it,
+pushing this non-docked search ``Input`` (laid out just below the table, in
+normal document flow) below the visible area once opened -- while the
+always-docked ``Header``/``Footer`` stayed put, so nothing *looked* broken
+until '/' was pressed. ``lode.tcss``'s ``#browse-table { height: 1fr; }``
+fixes it the same way :class:`~lode.tui.screens.tags.TagsScreen` already
+solved the identical problem for its own notes table: capped to the
+remaining space, the table (a ``ScrollView`` subclass) scrolls its own rows
+internally instead of growing the layout, so the search box -- and the
+footer beneath it -- always land in-viewport.
 """
 
 from __future__ import annotations

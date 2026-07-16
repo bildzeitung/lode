@@ -70,6 +70,7 @@ from lode.config import (
     config_lines,
     config_path,
     default_db_path,
+    knob_rows,
     lance_dir,
     load_settings,
     log_dir,
@@ -1232,23 +1233,50 @@ def dump_html(
     typer.echo(raw_payload)
 
 
+def _format_knob_table(rows: list[tuple[str, str, str]]) -> list[str]:
+    """Render :func:`~lode.config.knob_rows`' output as aligned text, with header.
+
+    The CLI's own renderer around the shared ``knob_rows`` builder (lode-juz8.6)
+    -- the TUI renders the same rows into a ``DataTable`` widget instead
+    (:mod:`lode.tui.screens.config`); only the row data is shared, not this
+    text formatting.
+    """
+    all_rows = [("Knob", "Value", "Kind"), *rows]
+    name_width = max(len(name) for name, _, _ in all_rows)
+    value_width = max(len(value) for _, value, _ in all_rows)
+    return [
+        f"{name:<{name_width}}  {value:<{value_width}}  {kind}"
+        for name, value, kind in all_rows
+    ]
+
+
 @app.command()
 def config(
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Show the resolved on-disk locations lode uses (``docs/configuration.md``).
+    """Show the resolved on-disk locations and every runtime/tune knob.
 
     A read-out of the single-root layout under ``$LODE_HOME`` (default ``~/.lode``)
     so you can find, back up, or inspect lode's state: the root, the SQLite DB and
     its sibling lock, the LanceDB vector store, the model-weights cache, the log
     directory, and the optional ``config.toml`` (shown present/absent) — the same
-    set ``docs/configuration.md`` "Paths & locations" documents. The rows come
+    set ``docs/configuration.md`` "Paths & locations" documents. The path rows come
     from the shared row-builder (:func:`lode.config.config_lines`) that the TUI's
     Ctrl+O diagnostics screen renders from too, so the two cannot drift (lode-u5gh);
     ``--db`` shifts the displayed DB (and its lock + co-located vector store) to
     an explicit override.
+
+    Below the paths, a knob table lists every ``runtime``/``tune`` Settings knob
+    (``Kind.BUILD`` knobs excluded — changing one implies a rebuild/migration,
+    docs/configuration.md) with its CURRENT resolved value (defaults <-
+    config.toml <- overrides), even with no ``config.toml`` present. Fed by the
+    same shared builder (:func:`lode.config.knob_rows`) the TUI's ConfigScreen
+    renders into a table widget (lode-juz8.6) — one row list, not two.
     """
     for line in config_lines(db or default_db_path()):
+        typer.echo(line)
+    typer.echo("")
+    for line in _format_knob_table(knob_rows(_resolve_settings())):
         typer.echo(line)
 
 

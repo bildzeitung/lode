@@ -1657,6 +1657,50 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
     assert cursor_row == 1  # gamma widget, kept after Enter confirms
 
 
+def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
+    tmp_path: Path,
+) -> None:
+    """lode-juz8.2: a notes list taller than the terminal used to push the
+    (non-docked) search Input below the visible area once opened -- the
+    DataTable had no height constraint, so it auto-sized past the viewport
+    and Screen's default overflow-y: auto scrolled the whole screen to
+    accommodate it, taking the Input (and only the Input -- Header/Footer
+    are always docked) out of view with it.
+
+    Regression guard, not a behavior test: drives Pilot at a small, FIXED
+    screen size with a list deliberately taller than that, opens the search
+    box, and asserts the Input's laid-out screen region is fully within the
+    viewport bounds -- not merely that search still works, which would pass
+    even with the box off-screen.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        for i in range(40):  # far more rows than a 10-row-tall screen can show
+            save(conn, f"note-{i:02d}", f"note number {i}")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+    screen_size = (80, 10)
+
+    async def _drive() -> tuple[int, int, int, int]:
+        async with app.run_test(size=screen_size) as pilot:
+            await pilot.press("f3")
+            await pilot.pause()
+            await pilot.press("slash")
+            await pilot.pause()
+            search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
+            region = search_input.region
+            return region.y, region.bottom, region.right, region.x
+
+    top, bottom, right, left = asyncio.run(_drive())
+
+    width, height = screen_size
+    assert 0 <= top < height  # the box's top edge is on-screen
+    assert bottom <= height  # ... and its bottom edge doesn't run off it either
+    assert 0 <= left < right <= width  # sanity: a real, non-empty region
+
+
 # ---------------------------------------------------------------------------
 # Cursor preservation across a reload (lode-olmi.1) -- _reload_rows'
 # clear(columns=True) used to discard the DataTable's cursor, so leaving a
