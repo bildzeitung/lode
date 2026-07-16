@@ -106,13 +106,16 @@ through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-bo
 | `ctrl+q` | Quit | `priority=True` — always wins, even over a Screen binding |
 | `f2` | Show Config | |
 | `f3` | Show Browse | |
+| `f5` | Show Tags | rekeyed off `f4` — see below |
 
-Free App-level function keys today: `f1`, `f5`–`f12`. **`f4` is not safely reusable at App-level**
+Free App-level function keys today: `f1`, `f6`–`f12`. **`f4` is not safely reusable at App-level**
 without first resolving the shadow described above — it is already Screen-level `"focus_related"`
 on `CaptureScreen` (the default screen) and `EditScreen`, so an App-level `f4` binding would be
 unreachable from the screen a user sees on startup. `lode-olmi.6`'s tags screen was rekeyed off
-`f4` for exactly this reason; pick a free key from the list above instead (or another explicitly
-freed one), and re-grep this file before landing.
+`f4` for exactly this reason, landing on **`f5`** (the next free App-level function key, checked
+against every screen's own `BINDINGS` per the rule above — no `f5` collision anywhere in the repo).
+Pick a free key from the list above instead (or another explicitly freed one) for the next ticket,
+and re-grep this file before landing.
 
 ### Screen-level
 
@@ -134,6 +137,7 @@ freed one), and re-grep this file before landing.
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
 | `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
+| `TagsScreen` | `screens/tags.py` | `escape` | Back | — (SelectionList/DataTable) |
 | `SnapshotViewerScreen` | `screens/browse.py` | `escape` | Back | read-only |
 | | | `t` | Toggle raw HTML | |
 | `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
@@ -183,9 +187,9 @@ collided at land time — this doc exists to stop the next one:
   aliases it to `tab`, a non-printable navigation key, so the binding is unreachable) and `Ctrl+P` (Textual's `App`
   reserves it, `priority=True`, for the command palette, so it always wins over any Screen binding).
 - **`lode-olmi.6`**: the Tags screen's App-level binding was originally `f4`; shadowed by `.9`'s
-  Screen-level `f4` on the default screen (`CaptureScreen`), so it is being rekeyed to a different,
-  free App-level key (see the table above) — the exact key is chosen at that ticket's build time,
-  consulting this doc.
+  Screen-level `f4` on the default screen (`CaptureScreen`), so it landed rekeyed to **`f5`** (see
+  the table above) — the next free App-level function key, confirmed with a repo-wide grep for
+  `f5` against both `App.BINDINGS` and every screen's own `BINDINGS` before landing.
 - **`lode-0sjj`**: the content-viewer binding (lode-olmi.8's decision doc) was specified as a single
   `v` key shared verbatim by both `BrowseScreen` and `EditScreen` — escalated for the identical
   reason as `.2`'s `h` and `g5es`'s `i` (empirically confirmed: pressing `v` on `EditScreen` typed a

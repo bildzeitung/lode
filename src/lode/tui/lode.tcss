@@ -103,3 +103,16 @@ SnapshotViewerScreen {
     background: $panel;
     padding: 1 2;
 }
+
+/* Tags screen (lode-olmi.6) -- top panel (tag multi-select) is capped to 30%
+ * of the available height so the bottom panel (the filtered notes list)
+ * keeps most of the vertical space; each panel scrolls its own overflow
+ * independently. */
+#tags-tag-list {
+    height: 30%;
+    border: solid $primary;
+}
+
+#tags-notes-table {
+    height: 1fr;
+}
