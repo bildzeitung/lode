@@ -80,12 +80,17 @@ from lode.config import (
     log_dir,
     model_cache_dir,
 )
-from lode.enrichment_view import EnrichmentItem, ExternalView, enrichment_view_conn
+from lode.enrichment_view import (
+    EnrichmentItem,
+    EnrichmentView,
+    ExternalView,
+    enrichment_view_conn,
+)
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
-from lode.notes_read import list_deleted_notes, list_notes
+from lode.notes_read import list_deleted_notes, list_notes, list_notes_conn
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
@@ -1133,22 +1138,35 @@ def _select_external(
     return matches[0] if len(matches) == 1 else None
 
 
+def _externals_from_view(view: EnrichmentView) -> list[ExternalView]:
+    """Filter an enrichment view's edges to the ones that are real externals.
+
+    The single definition of "which of a note's edges ``dump-html`` can
+    address": exactly the edges that resolve to a real ``externals`` row.
+    Shared by ``dump_html``'s single-target path (which already holds the
+    view, having needed it to tell "unknown note" from "no externals") and by
+    :func:`_note_externals` on the ``--all`` path, so the two cannot drift
+    onto different rules about what counts as dumpable.
+    """
+    return [edge.external for edge in view.edges if edge.external is not None]
+
+
 def _note_externals(conn: sqlite3.Connection, note_id: str) -> list[ExternalView]:
     """Return a note's dumpable externals -- the addressable set for ``dump-html``.
 
-    Shared by ``dump_html``'s single-target and ``--all`` paths: exactly
-    :func:`~lode.enrichment_view.enrichment_view_conn`'s edges, filtered to
-    the ones that resolve to a real ``externals`` row (only edges with
-    ``edge.external is not None`` count -- the same filter the single-target
-    path has always applied). Returns ``[]`` for an unknown note id, same as
-    a note with no such edges -- callers that need to distinguish "unknown
-    note" from "no externals" (the single-target path does) check
-    :func:`~lode.enrichment_view.enrichment_view_conn` directly instead.
+    ``dump_html``'s ``--all`` path only: looks the note's view up and applies
+    :func:`_externals_from_view` (the shared dumpable-edge rule). Returns
+    ``[]`` for an unknown note id, same as a note with no such edges, which
+    is why the single-target path does NOT call this: it must distinguish
+    "unknown note" from "no externals" (two different errors), so it checks
+    :func:`~lode.enrichment_view.enrichment_view_conn` itself and passes the
+    view it already holds to :func:`_externals_from_view` directly rather
+    than re-querying it here.
     """
     view = enrichment_view_conn(conn, note_id)
     if view is None:
         return []
-    return [edge.external for edge in view.edges if edge.external is not None]
+    return _externals_from_view(view)
 
 
 def _raw_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | None:
@@ -1162,14 +1180,13 @@ def _raw_payload(conn: sqlite3.Connection, snapshot_id: str) -> str | None:
 
 def _dump_all_notes(
     conn: sqlite3.Connection,
-    db_path: Path,
     *,
     write_files: bool,
     out_dir: Path,
 ) -> None:
     """Implement ``dump-html --all``: every live note's dumpable external(s).
 
-    Iterates :func:`~lode.notes_read.list_notes` (newest-first, the same
+    Iterates :func:`~lode.notes_read.list_notes_conn` (newest-first, the same
     listing plain ``lode notes`` shows) and, per note, ALL of
     :func:`_note_externals`' externals -- not just one, unlike the
     single-target path's selector-driven single choice (lode-l38d.8: "a note
@@ -1195,27 +1212,25 @@ def _dump_all_notes(
     if write_files:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    written = 0
-    printed_any = False
-    for note in list_notes(db_path):
+    dumped = 0
+    for note in list_notes_conn(conn):
         for index, external in enumerate(_note_externals(conn, note.note_id), start=1):
             raw_payload = _raw_payload(conn, external.snapshot_id)
             if not raw_payload:
                 continue
             if write_files:
                 out_path = out_dir / f"{note.note_id}-{index:04d}.dmp"
-                out_path.write_text(raw_payload)
-                written += 1
+                out_path.write_text(raw_payload, encoding="utf-8")
             else:
-                if printed_any:
+                if dumped:
                     typer.echo("")
                 typer.echo(f"==> {note.note_id}  {external.external_id} <==")
                 typer.echo(raw_payload)
-                printed_any = True
+            dumped += 1
 
     if write_files:
-        typer.echo(f"wrote {written} file(s) to {out_dir}")
-    elif not printed_any:
+        typer.echo(f"wrote {dumped} file(s) to {out_dir}")
+    elif not dumped:
         typer.echo("no external HTML captured for any note")
 
 
@@ -1244,11 +1259,11 @@ def dump_html(
         help="Write dumps to per-note files (named <note-id>-NNNN.dmp, see "
         "--dir) instead of printing to stdout. Only valid with --all.",
     ),
-    dir_: Path = typer.Option(
-        Path("."),
+    dir_: Path | None = typer.Option(
+        None,
         "--dir",
         help="Directory to write files into with --file (created if "
-        "absent). Default: the current directory.",
+        "absent). Default: the current directory. Only valid with --file.",
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
@@ -1287,7 +1302,8 @@ def dump_html(
     absent) instead writes one ``<note-id>-NNNN.dmp`` file per external,
     0-padded and unconditionally suffixed even for a note's only external.
     ``--file`` without ``--all`` is also an arity error (exit 1) -- this is
-    a bulk-dump option.
+    a bulk-dump option -- as is ``--dir`` without ``--file``, which would
+    otherwise be silently ignored while output still went to stdout.
     """
     if all_notes and (target is not None or selector is not None):
         typer.echo(
@@ -1300,12 +1316,14 @@ def dump_html(
     if file and not all_notes:
         typer.echo("--file requires --all", err=True)
         raise typer.Exit(code=1)
+    if dir_ is not None and not file:
+        typer.echo("--dir requires --file", err=True)
+        raise typer.Exit(code=1)
 
     conn = _open_db(db)
     try:
         if all_notes:
-            db_path = db or default_db_path()
-            _dump_all_notes(conn, db_path, write_files=file, out_dir=dir_)
+            _dump_all_notes(conn, write_files=file, out_dir=dir_ or Path("."))
             return
 
         assert target is not None  # validated above: required unless --all
@@ -1328,7 +1346,7 @@ def dump_html(
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1)
 
-        externals = [edge.external for edge in view.edges if edge.external is not None]
+        externals = _externals_from_view(view)
         if not externals:
             typer.echo(f"no external sources for note {note_id}", err=True)
             raise typer.Exit(code=1)
@@ -1352,14 +1370,10 @@ def dump_html(
                     typer.echo(_render_external_choice(index, external), err=True)
                 raise typer.Exit(code=1)
 
-        row = conn.execute(
-            "SELECT raw_payload FROM snapshots WHERE snapshot_id = ?",
-            (chosen.snapshot_id,),
-        ).fetchone()
+        raw_payload = _raw_payload(conn, chosen.snapshot_id)
     finally:
         conn.close()
 
-    raw_payload = row[0] if row else None
     if not raw_payload:
         reason = (
             "fetch failed (tombstone)"

@@ -2256,6 +2256,86 @@ def test_dump_html_no_target_and_no_all_is_an_arity_error(tmp_path: Path) -> Non
     assert "target is required unless --all is given" in result.stderr
 
 
+def test_dump_html_dir_without_file_is_an_arity_error(tmp_path: Path) -> None:
+    """--dir without --file must fail, not be silently ignored while stdout wins.
+
+    --dir only means anything in file-output mode; accepting it bare would
+    silently discard the user's stated intent (write files into DIR) and dump
+    HTML to stdout instead -- the same "given vs absent is indistinguishable"
+    trap that sank the ticket's original single tri-state --file, which is why
+    --dir defaults to None rather than Path(".").
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-dir-nofile", "see https://nofile.example")
+        _seed_external_edge(
+            conn,
+            "note-dir-nofile",
+            result.version_id,
+            external_id="https://nofile.example",
+            snapshot_id="snap-dir-nofile",
+            raw_payload="<html>x</html>",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app, ["dump-html", "--all", "--dir", str(out_dir), "--db", str(db_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "--dir requires --file" in result.stderr
+    assert not out_dir.exists()
+
+
+def test_dump_html_all_file_writes_non_ascii_payload_as_utf8(tmp_path: Path) -> None:
+    """Fetched HTML is routinely non-ASCII: pin the on-disk bytes to UTF-8.
+
+    ``Path.write_text`` with no explicit encoding uses the locale's preferred
+    encoding, so under a C/POSIX locale (cron, systemd, minimal containers)
+    the unfixed write raised UnicodeEncodeError mid-sweep, after partially
+    writing the batch -- hence the explicit ``encoding="utf-8"``.
+
+    This asserts the CONTRACT (UTF-8 on disk), not that failure mode: it does
+    not reproduce it, and passes either way under a UTF-8 locale. Forcing it
+    in-process is not possible -- CPython resolves the default encoding in C
+    at open() time, so monkeypatching ``locale.getpreferredencoding`` does not
+    reach it -- and a ``LC_ALL=C`` subprocess would stop reproducing it under
+    PEP 686's UTF-8-by-default anyway. It still guards the real contract: a
+    non-UTF-8 explicit encoding here would fail it.
+    """
+    db_path = tmp_path / "lode.db"
+    out_dir = tmp_path / "out"
+    payload = "<html>café — ünïcode … 日本語</html>"
+    conn = init_db(db_path)
+    try:
+        result = save(conn, "note-all-utf8", "see https://utf8.example")
+        _seed_external_edge(
+            conn,
+            "note-all-utf8",
+            result.version_id,
+            external_id="https://utf8.example",
+            snapshot_id="snap-all-utf8",
+            raw_payload=payload,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(
+        app,
+        ["dump-html", "--all", "--file", "--dir", str(out_dir), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0
+    written = out_dir / "note-all-utf8-0001.dmp"
+    assert written.read_bytes() == payload.encode("utf-8")
+    assert written.read_text(encoding="utf-8") == payload
+
+
 # --- lode recover <prefix> (undo a soft-delete, lode-d32.3) ----------------
 
 

@@ -103,13 +103,31 @@ def list_notes(db_path: Path) -> list[NoteRow]:
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
     convention as :func:`lode.tui.capture.save_capture` / :func:`lode.tui.ask.
     run_ask` -- this is a plain top-level read, not tied to any open
-    connection a caller might hold.
+    connection a caller might hold. A caller that already holds one wants
+    :func:`list_notes_conn` instead.
     """
     conn = init_db(db_path)
     try:
         return _list_notes(conn)
     finally:
         conn.close()
+
+
+def list_notes_conn(conn: sqlite3.Connection) -> list[NoteRow]:
+    """Same as :func:`list_notes`, but reuses a connection you already hold.
+
+    Mirrors the :func:`~lode.enrichment_view.enrichment_view` /
+    :func:`~lode.enrichment_view.enrichment_view_conn` split, promoted for the
+    same reason and on the same terms (lode-ay5.1's technical review: keep it
+    private until a real caller exists, since "a public API with no caller and
+    no test is speculative"). ``cli._dump_all_notes`` (``dump-html --all``,
+    lode-l38d.8) is that caller: it already holds an open ``conn`` and sweeps
+    every note's externals through it, so routing its note listing through
+    :func:`list_notes` would open a redundant second connection to the same
+    file -- re-running the whole schema/migration pass -- just to issue one
+    SELECT. This is that caller.
+    """
+    return _list_notes(conn)
 
 
 def _list_notes(
