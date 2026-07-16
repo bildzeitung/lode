@@ -492,6 +492,198 @@ def test_short_summary_is_unaffected_by_the_one_line_cap(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Expand the highlighted row's summary (lode-juz8.4) -- 'x' toggles between
+# the 1-line-capped rendering (lode-juz8.3) and the full, untruncated
+# summary, highlighted row only.
+# ---------------------------------------------------------------------------
+
+
+def test_x_expands_the_highlighted_row_to_its_full_summary(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary = ("wrap me " * 40).strip()  # ~320 chars: wraps to several lines
+    try:
+        save(conn, "note-a", long_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, str]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            # Collapsed first: the row is ellipsized at one line, same as the
+            # lode-juz8.3 cap test above.
+            assert table.rows[row_key].height == 1
+            await pilot.press("x")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return table.rows[row_key].height, table.get_row_at(0)[3]
+
+    row_height, summary_cell = asyncio.run(_drive())
+
+    assert row_height > 1  # expanded past the one-line cap
+    assert "\N{HORIZONTAL ELLIPSIS}" not in summary_cell  # nothing truncated
+    assert summary_cell.replace("\n", " ") == long_summary  # full text, rewrapped
+
+
+def test_x_twice_collapses_back_to_the_one_line_cap(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary = ("wrap me " * 40).strip()
+    try:
+        save(conn, "note-a", long_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, str]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.press("x")  # toggle back off
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return table.rows[row_key].height, table.get_row_at(0)[3]
+
+    row_height, summary_cell = asyncio.run(_drive())
+
+    assert row_height == 1
+    assert summary_cell.endswith("\N{HORIZONTAL ELLIPSIS}")
+
+
+def test_x_only_affects_the_highlighted_row(tmp_path: Path) -> None:
+    """Expanding one row leaves every other row's 1-line cap untouched."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary_a = ("wrap me " * 40).strip()
+    long_summary_b = ("also wrap me " * 40).strip()
+    try:
+        save(conn, "note-a", long_summary_a)
+        save(conn, "note-b", long_summary_b)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int, str, str]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            # Newest-first: note-b (row 0) is highlighted by default.
+            await pilot.press("x")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_keys = list(table.rows)
+            return (
+                table.rows[row_keys[0]].height,
+                table.rows[row_keys[1]].height,
+                table.get_row_at(0)[3],
+                table.get_row_at(1)[3],
+            )
+
+    expanded_height, other_height, expanded_cell, other_cell = asyncio.run(_drive())
+
+    assert expanded_height > 1
+    assert other_height == 1
+    assert "\N{HORIZONTAL ELLIPSIS}" not in expanded_cell
+    assert other_cell.endswith("\N{HORIZONTAL ELLIPSIS}")
+
+
+def test_expansion_collapses_after_returning_from_the_editor(tmp_path: Path) -> None:
+    """Popping back from EditScreen re-fires on_screen_resume, which resets
+    the expansion -- confirmed acceptable over preserving it (lode-juz8.4)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary = ("wrap me " * 40).strip()
+    try:
+        save(conn, "note-a", long_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            expanded_height = table.rows[row_key].height
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            await pilot.press("escape")  # unchanged buffer -- pops immediately
+            await pilot.pause()
+            assert isinstance(app.screen, BrowseScreen)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return expanded_height, table.rows[row_key].height
+
+    expanded_height, height_after_return = asyncio.run(_drive())
+
+    assert expanded_height > 1
+    assert height_after_return == 1
+
+
+def test_expansion_collapses_on_resize(tmp_path: Path) -> None:
+    """A terminal resize re-fires on_resize, which also resets the
+    expansion (lode-juz8.4) -- the same "does not survive this reload"
+    contract as returning from the editor."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    long_summary = ("wrap me " * 40).strip()
+    try:
+        save(conn, "note-a", long_summary)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[int, int]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            await pilot.press("x")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            expanded_height = table.rows[row_key].height
+            await pilot.resize_terminal(100, 30)
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            row_key = next(iter(table.rows))
+            return expanded_height, table.rows[row_key].height
+
+    expanded_height, height_after_resize = asyncio.run(_drive())
+
+    assert expanded_height > 1
+    assert height_after_resize == 1
+
+
+def test_x_on_empty_table_is_a_no_op(tmp_path: Path) -> None:
+    """Guards ``action_toggle_summary``'s ``row_count == 0`` check, the same
+    pattern every other row action on this screen already follows."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> int:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("x")  # must not raise
+            return app.screen.query_one(f"#{TABLE_ID}", DataTable).row_count
+
+    row_count = asyncio.run(_drive())
+
+    assert row_count == 0
+
+
+# ---------------------------------------------------------------------------
 # Enrichment inspector modal (lode-ay5.2) -- 'i' on a highlighted row opens a
 # modal rendering lode.enrichment_view.enrichment_view (lode-ay5.1) verbatim.
 # Seeding jobs/annotations/edges mirrors tests/test_enrichment_view.py's own
