@@ -63,6 +63,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from pydantic import ValidationError
+from rich.console import Console
 
 from lode import __version__, versions
 from lode.config import (
@@ -102,6 +103,29 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+#: The one shared rich Console for the whole CLI (lode-l38d.1) — every
+#: colour/width-aware command renders through this, never a per-command
+#: ``Console()``, so colour is decided once per process rather than
+#: hand-rolled per command. Deliberately **no test seam** (no
+#: ``force_terminal``, no accessor to monkeypatch) — see docs/stack.md.
+#:
+#: BEWARE, if you are writing the sibling colour tickets' tests: ``Console()``
+#: freezes BOTH its TTY check and its ``NO_COLOR`` read at CONSTRUCTION, which
+#: at module scope means **import** time. That is correct for real use (piping
+#: ``lode notes | cat`` replaces stdout before this module is imported), but it
+#: has two non-obvious consequences under test:
+#:
+#: * Colour is off under ``CliRunner`` because *pytest's default capture* had
+#:   already replaced stdout by import time — NOT because CliRunner's output is
+#:   not a TTY. Swapping stdout afterwards cannot change the frozen decision.
+#:   Under ``pytest -s`` from a real terminal the decision freezes the other
+#:   way and ANSI leaks into captured output, failing such assertions.
+#: * ``monkeypatch.setenv("NO_COLOR", "1")`` after import is a **no-op** — it
+#:   is read too late, so the assertion passes without exercising anything.
+#:   Assert the ``NO_COLOR`` path in a **subprocess** with ``NO_COLOR=1`` in
+#:   its env, which re-imports and so re-detects (verified in lode-l38d.1).
+console = Console()
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
