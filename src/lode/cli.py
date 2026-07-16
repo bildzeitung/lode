@@ -1290,7 +1290,9 @@ def dump_html(
     a bulk-dump option.
     """
     if all_notes and (target is not None or selector is not None):
-        typer.echo("--all cannot be combined with an explicit target/selector", err=True)
+        typer.echo(
+            "--all cannot be combined with an explicit target/selector", err=True
+        )
         raise typer.Exit(code=1)
     if not all_notes and target is None:
         typer.echo("target is required unless --all is given", err=True)
