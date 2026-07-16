@@ -63,6 +63,7 @@ from typing import TYPE_CHECKING
 
 import typer
 from pydantic import ValidationError
+from rich.console import Console
 
 from lode import __version__, versions
 from lode.config import (
@@ -102,6 +103,19 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+#: The one shared rich Console for the whole CLI (lode-l38d.1) — every
+#: colour/width-aware command renders through this, not a per-command
+#: Console(), so there is exactly one NO_COLOR / TTY-detection decision for
+#: the whole process. Constructed at import time (module scope): Console()
+#: decides colour at construction from TTY/NO_COLOR detection, which is
+#: exactly the behavior every sibling ticket wants for free (auto-disables
+#: under a pipe or NO_COLOR, no hand-rolled detection). No test seam
+#: (no force_terminal, no accessor) — a deliberate call (/challenge
+#: 2026-07-16, taken with the user): colour tickets assert only the negative
+#: path (CliRunner's captured output is never a TTY, so colour is off under
+#: test); the positive case is verified by eye, not by the suite.
+console = Console()
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
