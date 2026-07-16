@@ -1685,7 +1685,7 @@ def test_search_box_stays_on_screen_when_the_notes_list_overflows_the_viewport(
 
     async def _drive() -> tuple[int, int, int, int]:
         async with app.run_test(size=screen_size) as pilot:
-            await pilot.press("f3")
+            await pilot.press("ctrl+b")
             await pilot.pause()
             await pilot.press("slash")
             await pilot.pause()
