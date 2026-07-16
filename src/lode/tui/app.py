@@ -117,8 +117,12 @@ class LodeApp(App[str | None]):
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
-        Binding("ctrl+o", "show_config", "Config"),
-        Binding("ctrl+b", "show_browse", "Browse"),
+        # Descriptions kept short (lode-l38d.3): these four App-level bindings
+        # are always present in every screen's footer alongside that screen's
+        # own bindings, so their width counts against every screen's fit, not
+        # just Browse's -- shortest label that still reads unambiguously.
+        Binding("ctrl+o", "show_config", "Cfg"),
+        Binding("ctrl+b", "show_browse", "Brow"),
         Binding("ctrl+t", "show_tags", "Tags"),
     ]
 
