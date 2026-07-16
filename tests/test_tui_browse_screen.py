@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, Input, Static, TextArea
+from textual.widgets import DataTable, Footer, Input, Static, TextArea
+from textual.widgets._footer import FooterKey
 
 from lode.ids import short_version_id
 from lode.notes_read import short_note_id
@@ -2439,3 +2440,54 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
     assert text == "vvery informative body"
     assert not opened_viewer
+
+
+# ---------------------------------------------------------------------------
+# Compact footer bar (lode-l38d.3) -- BrowseScreen.BINDINGS renders 7 entries
+# plus 4 App-level ones (LodeApp.BINDINGS) in one footer line; with the
+# original, full-length descriptions that overflowed 80 columns and Textual
+# clipped the tail. The fix stays inside the stock Footer (compact=True +
+# shorter descriptions), no custom widget -- every binding stays visible,
+# nothing is hidden.
+# ---------------------------------------------------------------------------
+
+
+def test_browse_footer_fits_80_columns_with_every_binding_visible(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, list[str]]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            footer = app.screen.query_one(Footer)
+            descriptions = [
+                c.description for c in footer.children if isinstance(c, FooterKey)
+            ]
+            return footer.show_horizontal_scrollbar, descriptions
+
+    has_hscroll, descriptions = asyncio.run(_drive())
+
+    assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
+    # All 7 screen-level + 4 App-level bindings stay visible (none hidden via
+    # show=False) -- only their description text was shortened.
+    assert descriptions == [
+        "Back",
+        "Insp",
+        "View",
+        "Del",
+        "Exp",
+        "Find",
+        "Up",
+        "Quit",
+        "Cfg",
+        "Browse",
+        "Tags",
+    ]

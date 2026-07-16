@@ -776,14 +776,20 @@ class DeleteConfirmScreen(ModalScreen[bool]):
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
+    # Descriptions kept short (lode-l38d.3): the stock Footer renders all 7 of
+    # these plus the 4 App-level bindings (LodeApp.BINDINGS) on one line, and at
+    # full length that clipped at 80 columns (128 columns' worth of content).
+    # Every binding stays visible and only the description text was shortened --
+    # hiding entries via show=False was ruled out on lode-l38d.3, because the
+    # footer is the only surface these keys are discoverable on.
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
-        Binding("i", "inspect_selected", "Inspect"),
-        Binding("v", "view_content", "View content"),
-        Binding("d", "delete_selected", "Delete"),
-        Binding("x", "toggle_summary", "Expand summary"),
-        Binding("slash", "search_forward", "Search"),
-        Binding("question_mark", "search_backward", "Search up"),
+        Binding("i", "inspect_selected", "Insp"),
+        Binding("v", "view_content", "View"),
+        Binding("d", "delete_selected", "Del"),
+        Binding("x", "toggle_summary", "Exp"),
+        Binding("slash", "search_forward", "Find"),
+        Binding("question_mark", "search_backward", "Up"),
     ]
 
     def __init__(self) -> None:
@@ -808,7 +814,15 @@ class BrowseScreen(Screen[None]):
         yield Header()
         yield DataTable(id=TABLE_ID, cursor_type="row")
         yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
-        yield Footer()
+        # Still the stock Footer, just asked for less padding (lode-l38d.3).
+        # compact=True trims Textual's built-in FooterKey padding from 3 columns
+        # of overhead per entry to 1 -- across 11 entries that alone is 22
+        # columns, which is most of what makes the bar fit. Textual also
+        # auto-adds a 12th "^p palette" entry regardless of BINDINGS;
+        # show_command_palette=False hides only that icon (ctrl+p still opens
+        # the palette) and buys the last few columns, which is what lets all 11
+        # real bindings stay visible without cryptic single-letter labels.
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         # Columns are (re)built in _reload_rows, not here: the Summary column's
