@@ -281,9 +281,14 @@ def test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen(
                 table.virtual_size,
             )
 
-    screen_size, screen_max_scroll_y, header_region, footer_region, table_region, table_virtual_size = asyncio.run(
-        _drive()
-    )
+    (
+        screen_size,
+        screen_max_scroll_y,
+        header_region,
+        footer_region,
+        table_region,
+        table_virtual_size,
+    ) = asyncio.run(_drive())
 
     # The knob table has more content than fits its allotted space -- it
     # genuinely needs to scroll internally, so this test would be vacuous
