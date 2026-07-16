@@ -133,7 +133,7 @@ the note body `TextArea` still has focus.
 Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewScreen`,
 `ReconcileScreen`'s diff view — are unaffected; `read_only` still lets bare-letter Screen bindings
 through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-body screen — or
-`BrowseScreen`'s `e`/`i`/`d`, none of which touch an editable body).
+`BrowseScreen`'s `i`/`d`, none of which touch an editable body).
 
 ## Current keymap
 
@@ -166,7 +166,6 @@ operative rule from "Two altitudes" above; only the alphabet changed).
 | | | `n` | No, cancel | |
 | | | `escape` | Cancel (`show=False`) | |
 | `BrowseScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
-| | | `e` | Edit | |
 | | | `i` | Inspect | |
 | | | `v` | View retrieved content | |
 | | | `d` | Delete | |
