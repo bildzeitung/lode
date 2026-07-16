@@ -131,20 +131,20 @@ SnapshotViewerScreen {
 }
 
 /* Config screen (lode-l38d.2) -- same class of bug lode-juz8.2 fixed for
- * #browse-table above: without a height constraint, the knob DataTable
- * auto-sizes toward its full row count (config_lines() + knob_rows() is
- * ~45 rows of content -- src/lode/tui/screens/config.py:47-58), and the
- * containing Vertical follows suit, overflowing the viewport. Screen's
- * default overflow-y: auto then makes the *whole screen* scroll instead of
- * the table scrolling its own rows, pushing the always-docked Footer out of
- * view along the way. #config-rows is pinned to its natural (auto) size --
- * it's the fixed-line paths readout, never taller than its own content --
- * so #config-knobs (1fr, same pattern as #tags-notes-table/#browse-table)
- * takes exactly the remaining space and scrolls its rows internally. */
-#config-rows {
-    height: auto;
-}
-
+ * #browse-table above, and the same one-rule fix. Without a height
+ * constraint the knob DataTable auto-sizes toward its full row count
+ * (config_lines() + knob_rows(), src/lode/tui/screens/config.py:47-58), so
+ * its rendered region runs off the bottom of the viewport, past the docked
+ * Footer. Note the screen does NOT scroll to compensate, despite the ticket
+ * title: the containing Vertical is not a scroll container, so the
+ * overflowing rows are unreachable rather than merely scrolled-away, and
+ * Screen.max_scroll_y stays 0 while the Footer itself stays docked and
+ * visible. Capping the table to the remaining space (1fr, same pattern as
+ * #tags-notes-table/#browse-table) makes it scroll its own rows internally
+ * instead (DataTable is a ScrollView), so every knob stays reachable at any
+ * terminal height. #config-rows needs no rule of its own -- Static already
+ * defaults to height: auto, and adding one changes nothing (verified across
+ * terminal sizes). */
 #config-knobs {
     height: 1fr;
 }

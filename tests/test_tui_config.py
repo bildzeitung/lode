@@ -248,18 +248,22 @@ def test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen(
 ) -> None:
     """Guards lode-l38d.2: the knob table scrolls internally; the Screen doesn't.
 
-    config_lines() (7 lines) + knob_rows(Settings()) (36 rows, +1 header row)
-    is ~44 rows of content -- more than fits in a normal-but-short 80x24
-    terminal. Before the fix (no height rule for #config-rows/#config-knobs
-    in lode.tcss), the DataTable's auto-computed height ignored the Footer's
-    docked position and extended several rows past it -- confirmed by hand
-    against the pre-fix stylesheet, where the assertion below (the table's
-    region ending at or before the Footer's row) fails (the literal "scrolls
-    past the bottom" the ticket title describes). After the fix
-    (#config-rows: height auto; #config-knobs: height 1fr -- the same
-    pattern as #browse-table/#tags-notes-table), the table's region is
-    bounded to end exactly at the Footer's row, and the Screen itself never
-    needs to scroll.
+    config_lines() + knob_rows(Settings()) is more content than fits a
+    normal-but-short 80x24 terminal. Before the fix (no height rule for
+    #config-knobs in lode.tcss), the DataTable's auto-computed height ignored
+    the Footer's docked position and its region ran several rows past it --
+    the literal "scrolls past the bottom" of the ticket title, leaving the
+    last knobs unreachable. After the fix (#config-knobs: height 1fr -- the
+    same one-rule pattern as #browse-table/#tags-notes-table), the table is
+    bounded at the Footer's row and scrolls its rows internally.
+
+    The table-region assertion is the discriminating one -- verified to fail
+    against the pre-fix stylesheet. The Screen never scrolls (max_scroll_y
+    == 0) in EITHER state, because the containing Vertical is not a scroll
+    container: the overflow is unreachable, not scrolled-away. So the
+    max_scroll_y/Header/Footer assertions pass pre-fix too; they are kept
+    because they encode the ticket's stated acceptance criteria as
+    regression guards, not because they catch this particular bug.
     """
     monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
     app = LodeApp(db_path=tmp_path / "home" / "lode.db")
@@ -301,9 +305,9 @@ def test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen(
     assert header_region.y == 0
     assert footer_region.y + footer_region.height == screen_size.height
 
-    # The table's own region is fully contained above the Footer and within
-    # the screen -- it does not extend past the visible window (the actual
-    # regression: pre-fix, the table's auto-computed region ran past the
-    # Footer's row entirely).
+    # THE assertion that catches the regression: the table's own region ends
+    # at or above the Footer's row, so it never extends past the visible
+    # window (pre-fix, its auto-computed region ran 7 rows past the Footer).
+    # Bounding it against the Footer implies bounding it against the screen,
+    # since the Footer is asserted flush with the bottom just above.
     assert table_region.y + table_region.height <= footer_region.y
-    assert table_region.y + table_region.height <= screen_size.height
