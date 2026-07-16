@@ -98,8 +98,10 @@ log = logging.getLogger(__name__)
 
 #: Prompt version -- baked into every enrichment provenance row so a model or
 #: prompt change can trigger corpus-wide re-enrichment via the reconcile scan.
-#: Bumped to v2 for the ``summary`` field (lode-0wj.9).
-ENRICH_PROMPT_VER = "npx1-v2"
+#: Bumped to v2 for the ``summary`` field (lode-0wj.9); bumped to v3 to
+#: front-load the lede in ``summary`` so a 1-line-truncated browse view still
+#: carries the note's point (lode-juz8.5).
+ENRICH_PROMPT_VER = "npx1-v3"
 
 #: Tool name used to force Haiku into structured output via tool-use calling.
 _TOOL_NAME = "extract_enrichment"
@@ -118,7 +120,9 @@ _PROMPT_TMPL = (
     "inferred this link), and a confidence score (0.0-1.0). "
     "These are suggestions only -- not asserted facts.\n"
     "- summary: One concise plain-English sentence summarizing the note's main point. "
-    "Empty string if the note has no meaningful content.\n\n"
+    "Put the single most important fact or conclusion FIRST, so a truncated first "
+    "clause still conveys the main point. Empty string if the note has no meaningful "
+    "content.\n\n"
     "Note body:\n---\n{body}\n---"
 )
 
@@ -174,7 +178,9 @@ class EnrichmentResult(BaseModel):
         default="",
         description=(
             "One concise plain-English sentence summarizing the note's main "
-            "point. Empty string if the note has no meaningful content."
+            "point, with the single most important fact/conclusion first so a "
+            "truncated first clause still conveys the main point. Empty string "
+            "if the note has no meaningful content."
         ),
     )
 
