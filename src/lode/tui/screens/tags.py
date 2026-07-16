@@ -69,19 +69,18 @@ Selected state lives in :attr:`_selected`, same set as before, so it already
 surviving a full tag-list reload (the round-trip-to-editor case above) covers
 surviving a resize/re-column the same way; the two are the same code path.
 
-**No discrete paging (superseded a first-pass decision -- see this ticket's
-bd notes).** The ticket's own title and an earlier decision called for
-discrete "page 1/4"-style paging. Once tags reflow into columns the list is
-short enough that ``DataTable``'s *native*, unsuppressed ``PgUp``/``PgDn``
-scrolling already satisfies "add the ability to page through them" -- so
-that binding is left exactly as ``DataTable`` ships it, and no page counter
-is built. Building discrete pages on top of a widget that already pages by
-scrolling would have meant suppressing and reimplementing a binding the
-widget gives for free, on top of the hand-rolled multi-select above -- paying
-twice for the same thing.
+**No discrete paging -- deliberate, not missing.** This ticket's title and an
+earlier decision called for discrete "page 1/4"-style paging; both were
+superseded once tags reflow into columns, since ``DataTable``'s *native*
+``PgUp``/``PgDn`` scrolling then satisfies "page through them" on its own.
+That binding is therefore left exactly as ``DataTable`` ships it -- never
+suppressed or rebound -- and no page counter exists. Full rationale in
+lode-l38d.9's bd notes.
 """
 
 from __future__ import annotations
+
+import math
 
 from textual import events
 from textual.app import ComposeResult
@@ -191,23 +190,23 @@ class TagsScreen(Screen[None]):
         """
         self._reload_tags()
 
-    def _cursor_tag(self, table: DataTable) -> str | None:
-        """The tag under ``table``'s cursor right now, or ``None``.
+    def _tag_at(self, row: int, col: int) -> str | None:
+        """The tag at grid cell ``(row, col)``, or ``None`` if there isn't one.
 
-        Read *before* :meth:`_reload_tags` clears and rebuilds the grid --
-        mirrors :meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows`'s
-        own "capture the key before ``clear()`` discards it" cursor
-        preservation (lode-olmi.1), so a resize/reload doesn't visually snap
-        the cursor back to the top-left cell when the highlighted tag is
-        still present afterward.
+        The single place the grid's row-major layout is expressed: it fills
+        the cells (:meth:`_reload_tags`), resolves a toggle
+        (:meth:`_toggle_tag_at`), and recovers the cursor's tag across a
+        rebuild. Those three must agree on the same index math and the same
+        bounds check, so they share one implementation instead of each
+        carrying a copy that could drift.
+
+        ``None`` covers a blank filler cell past the last tag on a short
+        final row (the grid pads the last row rather than leaving a ragged
+        column count), and an empty grid, where the index is out of range of
+        an empty :attr:`_tags` either way.
         """
-        if table.row_count == 0 or not self._tags:
-            return None
-        row, col = table.cursor_coordinate
         idx = row * self._tag_columns + col
-        if 0 <= idx < len(self._tags):
-            return self._tags[idx]
-        return None
+        return self._tags[idx] if 0 <= idx < len(self._tags) else None
 
     def _tag_cell_text(self, tag: str) -> str:
         prefix = "[x] " if tag in self._selected else "[ ] "
@@ -221,9 +220,16 @@ class TagsScreen(Screen[None]):
         resize. :attr:`_selected` is pruned against tags that no longer
         exist but otherwise left alone, so a tag selected on what is now a
         different page/row/column of the grid still counts.
+
+        The cursor's tag is captured *before* the rebuild below clears it --
+        mirrors :meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows`'s
+        own "capture the key before ``clear()`` discards it" cursor
+        preservation (lode-olmi.1), so a resize/reload doesn't visually snap
+        the cursor back to the top-left cell when the highlighted tag is
+        still present afterward.
         """
         table = self.query_one(f"#{TAG_LIST_ID}", DataTable)
-        previous_tag = self._cursor_tag(table)
+        previous_tag = self._tag_at(*table.cursor_coordinate)
 
         tags = list_tags(self.app.db_path)
         self._selected &= set(tags)  # drop selections for tags that vanished
@@ -234,12 +240,18 @@ class TagsScreen(Screen[None]):
         table.clear(columns=True)
         for col in range(columns):
             table.add_column("", width=column_width, key=f"col-{col}")
-        row_count = -(-len(tags) // columns) if tags else 0  # ceil division
-        for row in range(row_count):
-            cells: list[str] = []
-            for col in range(columns):
-                idx = row * columns + col
-                cells.append(self._tag_cell_text(tags[idx]) if idx < len(tags) else "")
+        # Filled through the same _tag_at mapping that reads a coordinate back,
+        # against the _tags/_tag_columns just assigned above -- one row-major
+        # layout rather than two that have to agree. A short final row's
+        # trailing cells have no tag and render blank, keeping the column count
+        # rectangular.
+        for row in range(math.ceil(len(tags) / columns)):
+            cells = [
+                ""
+                if (tag := self._tag_at(row, col)) is None
+                else self._tag_cell_text(tag)
+                for col in range(columns)
+            ]
             table.add_row(*cells, key=f"row-{row}")
 
         if previous_tag is not None and previous_tag in tags:
@@ -263,14 +275,11 @@ class TagsScreen(Screen[None]):
     def _toggle_tag_at(self, table: DataTable, row: int, col: int) -> None:
         """Flip the selected state of the tag at grid cell ``(row, col)``.
 
-        A no-op on an empty filler cell past the last tag on a short final
-        row (``idx`` out of range) -- the grid pads the last row with blank
-        cells rather than leaving a ragged column count.
+        A no-op on a cell that carries no tag (see :meth:`_tag_at`).
         """
-        idx = row * self._tag_columns + col
-        if not (0 <= idx < len(self._tags)):
+        tag = self._tag_at(row, col)
+        if tag is None:
             return
-        tag = self._tags[idx]
         if tag in self._selected:
             self._selected.discard(tag)
         else:

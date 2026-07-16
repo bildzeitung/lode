@@ -174,7 +174,7 @@ operative rule from "Two altitudes" above; only the alphabet changed).
 | | | `question_mark` | Search backward | |
 | `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
-| | | `space` | Toggle tag | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same |
+| | | `space` | Toggle tag (`show=False`) | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same. Hidden to match the `SelectionList` it replaced, whose own `space` binding was `show=False` too |
 | `SnapshotViewerScreen` | `screens/browse.py` | `escape` | Back | read-only |
 | | | `t` | Toggle raw HTML | |
 | `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
