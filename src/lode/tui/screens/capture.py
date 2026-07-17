@@ -172,10 +172,18 @@ class CaptureScreen(Screen[None]):
     see :mod:`lode.tui.related_notes_panel`'s module docstring.
     """
 
+    # Descriptions kept short (lode-3rvw, same lever as BrowseScreen's own
+    # lode-l38d.3 fix): the stock Footer renders these 4 plus the 4 App-level
+    # bindings (LodeApp.BINDINGS) on one line, and at full length ("Save &
+    # quit", "Save & new", "Discard & quit") that clipped at 80 columns (right
+    # edge 103/80 on trunk). Every binding stays visible and only the
+    # description text was shortened -- hiding entries via show=False was
+    # ruled out on lode-l38d.3, because the footer is the only surface these
+    # keys are discoverable on.
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save & quit"),
-        Binding("ctrl+n", "save_and_new", "Save & new"),
-        Binding("escape", "cancel", "Discard & quit"),
+        Binding("ctrl+s", "save", "Save"),
+        Binding("ctrl+n", "save_and_new", "New"),
+        Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),
     ]
 
@@ -187,7 +195,15 @@ class CaptureScreen(Screen[None]):
             # exclude -- see lode.tui.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
         )
-        yield Footer()
+        # Still the stock Footer, just asked for less padding (lode-3rvw,
+        # mirroring BrowseScreen's lode-l38d.3 fix). compact=True trims
+        # Textual's built-in FooterKey padding from 3 columns of overhead per
+        # entry to 1; show_command_palette=False hides only the auto-added
+        # "^p palette" icon (ctrl+p still opens the palette). Measured at
+        # 80x24: right edge lands at 70/80 with every binding visible --
+        # comfortable headroom, unlike Browse's tighter 79/80 fit, because
+        # Capture has only 4 screen-level bindings vs. Browse's 7.
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         self.query_one(f"#{BODY_ID}", TextArea).focus()
