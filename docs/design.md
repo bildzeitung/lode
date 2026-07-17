@@ -3,9 +3,11 @@
 > An AI-first, TUI-first personal knowledge base for "things I learn during my day at work" —
 > meeting notes, technical instructions, decisions. Fast to capture, intelligent to retrieve.
 
-Status: **design captured, not yet built.** These documents record the reasoning and the
-decisions from the founding discussion so the build can proceed incrementally without
-re-litigating settled questions.
+Status: **built end-to-end.** The core loop from §7 step 1 — notes, version chains, cited Q&A,
+and the eval harness — ships, plus a web connector and a Textual TUI. These documents remain the
+source of truth for the reasoning and the decisions from the founding discussion, and record what
+still lies ahead (additional connectors, one at a time — see §7 step 2 and
+[`docs/decisions.md`](decisions.md)).
 
 ## Map of the docs
 

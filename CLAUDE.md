@@ -18,7 +18,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 
 ## What this is
 
-**lode** — an AI-first, TUI-first personal knowledge base for "things you learn during your day at work." Fast to capture, intelligent to retrieve: the bet is grounded, *cited* Q&A over your own notes. Status: **design captured, not yet built.**
+**lode** — an AI-first, TUI-first personal knowledge base for "things you learn during your day at work." Fast to capture, intelligent to retrieve: the bet is grounded, *cited* Q&A over your own notes. Status: **built end-to-end.** The core loop ships — notes, version chains, cited Q&A, a minimal eval harness, and a web connector — behind a Textual TUI, plus a full CLI. Additional connectors (e.g. Atlassian) are in progress; see [`docs/decisions.md`](docs/decisions.md) for what's still open.
 
 The source of truth is the design under [`docs/`](docs/). Read [`docs/design.md`](docs/design.md) first — it's the index/overview with a map of the companion docs:
 
