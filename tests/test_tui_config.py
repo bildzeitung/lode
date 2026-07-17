@@ -6,14 +6,21 @@ confirming the resolved paths + runtime/tune knob table shown are the exact
 values ``lode.config``'s resolvers report (and the CLI's ``lode config``
 already surfaces) — never re-derived here (docs/configuration.md). Since
 lode-u5gh collapsed the CLI's and this screen's path-row lists onto the ONE
-shared builder (:func:`lode.config.config_lines`), and lode-juz8.6 did the
-same for the knob table (:func:`lode.config.knob_rows`), the two now render
-identically — ``test_cli_and_tui_render_identical_rows`` and
-``test_cli_and_tui_render_identical_knob_rows`` are the anti-drift tests that
+shared computation (:func:`lode.config.config_lines` for this screen,
+:func:`lode.config.config_rows` for the CLI's rich Table — lode-l38d.4), and
+lode-juz8.6 did the same for the knob table (:func:`lode.config.knob_rows`),
+the two surfaces render the same DATA — ``test_cli_and_tui_render_same_path_data``
+and ``test_cli_and_tui_render_same_knob_data`` are the anti-drift tests that
 keep it that way: they fail if either surface ever re-grows its own row list.
+(Pre-lode-l38d.4 these compared literal rendered TEXT, not just data — the CLI
+side moved to a terminal-width-aware wrapping rich Table, which the TUI's
+plain ``Static``/``DataTable`` widgets do not do, so byte-identical output
+between the two surfaces is no longer the invariant; the shared row data
+still is.)
 """
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -25,6 +32,7 @@ from lode.config import (
     Kind,
     Settings,
     config_path,
+    config_rows,
     default_db_path,
     knob_rows,
     lance_dir,
@@ -36,17 +44,6 @@ from lode.tui.app import LodeApp
 from lode.tui.screens.config import KNOB_TABLE_ID, ROWS_ID, ConfigScreen
 
 runner = CliRunner()
-
-
-def _cli_knob_lines(stdout: str) -> list[str]:
-    """Split ``lode config`` stdout at the blank line into just the knob rows.
-
-    ``config_lines`` (paths) come first, then a blank separator, then the
-    knob table's header + data rows (:func:`lode.cli._format_knob_table`) --
-    mirrors the exact split the ``config`` command itself renders.
-    """
-    lines = stdout.splitlines()
-    return lines[lines.index("") + 1 :]
 
 
 def test_app_registers_config_screen() -> None:
@@ -121,69 +118,111 @@ def test_escape_returns_to_the_previous_screen(
     asyncio.run(_drive())
 
 
-def test_cli_and_tui_render_identical_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_cli_and_tui_render_same_path_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    set_console_width: Callable[[int], None],
 ) -> None:
-    # THE ANTI-DRIFT TEST (lode-u5gh): the CLI's `lode config` and the TUI's
-    # Ctrl+O screen must render the exact same PATH row set for the same
-    # $LODE_HOME/db_path -- not "the same fields, independently maintained"
-    # (that was the pre-u5gh state, and it already drifted once, lode-ak6). A
-    # row added to only one surface's list can no longer happen because there
-    # is only one list (lode.config.config_lines) -- this test would catch a
-    # regression back to two independently-built row sets even if neither
-    # list itself changed. (lode-juz8.6 widened `lode config`'s stdout with a
-    # knob table below a blank line -- that section is compared separately,
-    # see test_cli_and_tui_render_identical_knob_rows, so this test still
-    # isolates just the paths block.)
+    # THE ANTI-DRIFT TEST (lode-u5gh, reshaped by lode-l38d.4): the CLI's
+    # `lode config` and the TUI's Ctrl+O screen must still show the exact same
+    # PATH DATA for the same $LODE_HOME/db_path -- not "the same fields,
+    # independently maintained" (that was the pre-u5gh state, and it already
+    # drifted once, lode-ak6). Both are fed by the ONE row computation
+    # (lode.config.config_rows -- rendered directly into the CLI's rich Table,
+    # and via config_lines' text shape for the TUI's Static) -- this
+    # test would catch a regression back to two independently-built row sets
+    # even if neither builder itself changed.
     #
-    # Both sides are fed the SAME input on purpose: one $LODE_HOME (monkeypatch,
-    # which the CliRunner subprocess-less invoke inherits) and, for the TUI, the
-    # very db_path the no---db CLI resolves to. Any difference in the output is
-    # then a difference in the RENDERING -- i.e. real drift -- and never an
-    # artifact of the two sides having been handed different paths.
+    # lode-l38d.4 moved the CLI to a terminal-width-aware rich Table (to fix
+    # the whitespace-overflow bug), so the two surfaces' exact rendered TEXT
+    # is no longer byte-identical -- the CLI's Table can wrap a long value,
+    # the TUI's Static text never does. What must still hold, and what this
+    # test asserts, is that every row's DATA reaches both surfaces. Forcing
+    # the CLI's shared console wide (see the set_console_width fixture) keeps its own
+    # table from wrapping so this stays a plain substring check
+    # (dedicated wrap-without-data-loss coverage lives in tests/test_cli.py's
+    # test_config_wraps_long_knob_values_without_losing_characters).
+    set_console_width(1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
     db_path = default_db_path()
 
     cli_result = runner.invoke(cli_app, ["config"])
     assert cli_result.exit_code == 0
-    cli_lines = cli_result.stdout.splitlines()
-    cli_path_lines = cli_lines[: cli_lines.index("")]
+    cli_out = cli_result.stdout
 
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> list[str]:
+    async def _drive() -> str:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+o")
-            text = str(app.screen.query_one(f"#{ROWS_ID}", Static).content)
-            return text.splitlines()
+            return str(app.screen.query_one(f"#{ROWS_ID}", Static).content)
 
-    tui_lines = asyncio.run(_drive())
-    assert tui_lines == cli_path_lines
+    tui_text = asyncio.run(_drive())
+
+    expected = config_rows(db_path)
+    for label, value, note in expected:
+        assert label in cli_out
+        assert label in tui_text
+        assert value in cli_out
+        assert value in tui_text
+        if note:
+            assert f"({note})" in cli_out
+            assert f"({note})" in tui_text
+
+    # ROW COUNTS, not just presence: a per-row substring check above can only
+    # catch a row that went MISSING from a surface -- it is structurally blind
+    # to an EXTRA row that only one surface renders, which is the other half of
+    # the drift this test exists to catch (lode-ak6 was an asymmetry in BOTH
+    # directions). The pre-lode-l38d.4 `tui_lines == cli_path_lines` caught
+    # both for free; exact text parity is gone (the CLI wraps, the TUI does
+    # not), so the count is pinned explicitly instead. Both surfaces render one
+    # line per row here: the CLI's path Table is box-less and forced wide
+    # enough not to wrap, and console.print() emits the truly-blank line that
+    # terminates the block before the knob table.
+    cli_lines = cli_out.splitlines()
+    cli_path_lines = cli_lines[: cli_lines.index("")]
+    assert len(cli_path_lines) == len(expected)
+    assert len(tui_text.splitlines()) == len(expected)
 
 
-def test_cli_and_tui_render_identical_knob_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_cli_and_tui_render_same_knob_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    set_console_width: Callable[[int], None],
 ) -> None:
-    # THE KNOB-TABLE ANTI-DRIFT TEST (lode-juz8.6): the CLI's knob table and
-    # the TUI's DataTable must show the same (name, value, kind) rows, since
-    # both are fed by the ONE shared builder (lode.config.knob_rows) rather
-    # than each surface re-deriving its own knob list.
+    # THE KNOB-TABLE ANTI-DRIFT TEST (lode-juz8.6, reshaped by lode-l38d.4):
+    # the CLI's knob table and the TUI's DataTable must still show the same
+    # (name, value, kind) DATA, since both are fed by the ONE shared builder
+    # (lode.config.knob_rows). lode-l38d.4 moved the CLI to a rich Table
+    # (header + separator rule, wrapping long values instead of inflating
+    # every row to the single widest value), so literal-line parity with the
+    # CLI's own stdout is no longer meaningful -- this compares DATA instead,
+    # exactly like the path-table test above.
+    set_console_width(1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
 
     cli_result = runner.invoke(cli_app, ["config"])
     assert cli_result.exit_code == 0
-    knob_lines = _cli_knob_lines(cli_result.stdout)
-    assert knob_lines[0].split() == ["Knob", "Value", "Kind"]  # header row
-    cli_data_lines = knob_lines[1:]
+    assert "Knob" in cli_result.stdout
+    assert "Value" in cli_result.stdout
+    assert "Kind" in cli_result.stdout
 
     expected = knob_rows(Settings())
-    assert len(cli_data_lines) == len(expected)
-    for (name, value, kind), line in zip(expected, cli_data_lines, strict=True):
-        assert line.startswith(name)
-        assert line.rstrip().endswith(kind)
-        assert value in line
+    for name, value, _kind in expected:
+        assert name in cli_result.stdout
+        assert value in cli_result.stdout
+
+    # ROW COUNT, not just presence -- see the path-table test above for why
+    # (a substring check cannot see an EXTRA row the CLI grew on its own).
+    # The knob block is everything past the blank line separating it from the
+    # paths block; box.SIMPLE_HEAD contributes exactly two non-data lines (the
+    # header and its separator rule) ahead of the one-line-per-knob rows, which
+    # do not wrap at the width forced above.
+    cli_lines = cli_result.stdout.splitlines()
+    knob_block = cli_lines[cli_lines.index("") + 1 :]
+    assert len(knob_block) == len(expected) + 2
 
     app = LodeApp(db_path=default_db_path())
 

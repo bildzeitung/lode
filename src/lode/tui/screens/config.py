@@ -37,8 +37,9 @@ class ConfigScreen(Screen[None]):
     (also resolved once by ``LodeApp``) feeds the shared
     :func:`~lode.config.knob_rows` into a ``DataTable`` — the "TUI uses a table"
     half of lode-juz8.6's widened contract; the CLI renders the identical row
-    data as aligned text instead (:func:`lode.cli._format_knob_table`). Escape
-    pops back to whichever screen was active before.
+    data as a terminal-width-aware rich ``Table`` instead
+    (:func:`lode.cli._config_knob_table`, lode-l38d.4). Escape pops back to
+    whichever screen was active before.
     """
 
     BINDINGS = [
