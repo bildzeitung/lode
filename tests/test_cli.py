@@ -26,6 +26,7 @@ note by listing or by a 1-based-index/id selector, and reporting a
 tombstone/no-HTML snapshot cleanly rather than dumping empty).
 """
 
+import io
 import json
 import logging
 import os
@@ -41,6 +42,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from rich.console import Console
+from rich.table import Table
 from typer.testing import CliRunner
 
 from lode import __version__, cli, config
@@ -4111,6 +4114,90 @@ def test_config_output_has_no_ansi_under_no_color(tmp_path: Path) -> None:
         check=True,
     )
     assert "\x1b[" not in result.stdout
+
+
+# --- CLI rich Table markup-injection guard, shared seam (lode-9tmd) --------
+#
+# THE INVARIANT: rich parses a bare `str` cell as MARKUP, so a literal
+# "[...]" substring (a redaction regex character class, an absolute path,
+# anything) is silently DROPPED. lode-l38d.4 fixed this per call site by
+# wrapping every cell in `Text(...)`; lode-9tmd moves the guard into
+# `cli.SafeTable.add_row` itself so a future table cannot reintroduce the bug
+# by forgetting to wrap. Three tests below: (1) the guard itself, proven
+# non-vacuous by a same-input control against plain `rich.table.Table`; (2) a
+# structural test that fails for ANY table in cli.py built via bare `Table(`
+# instead of `SafeTable(`; (3) the full CLI-level round trip named in the
+# ticket's acceptance criteria.
+
+
+def test_safe_table_round_trips_a_bracketed_cell_where_plain_table_drops_it() -> None:
+    # Non-vacuity proof, inline rather than merely asserted: the SAME input
+    # rendered through plain rich.table.Table on the same Console settings
+    # DOES lose the bracketed content -- this is the exact defect lode-9tmd
+    # closes, not a hypothetical. If SafeTable's add_row override were ever
+    # deleted (or a cell type check were mistakenly narrowed), this test
+    # would start failing on the SafeTable assertion below.
+    cell = "gh[pousr]_[0-9a-zA-Z]{36}"
+
+    control = Table()
+    control.add_column("Value")
+    control.add_row(cell)
+    control_buf = io.StringIO()
+    Console(file=control_buf, width=80, no_color=True).print(control)
+    assert cell not in control_buf.getvalue()  # the bug, reproduced
+
+    guarded = cli.SafeTable()
+    guarded.add_column("Value")
+    guarded.add_row(cell)
+    guarded_buf = io.StringIO()
+    Console(file=guarded_buf, width=80, no_color=True).print(guarded)
+    assert cell in guarded_buf.getvalue()  # the fix: byte-for-byte round trip
+
+
+def test_every_cli_table_construction_routes_through_safe_table() -> None:
+    # Structural guard (the ticket's own acceptance criterion: "a test fails
+    # for ANY table that passes a bare str, so a future third table cannot
+    # silently reintroduce the character drop"). Enforced here by making it
+    # IMPOSSIBLE to construct a plain rich.table.Table anywhere in cli.py
+    # outside SafeTable's own class body -- a bare-str cell is only ever
+    # dangerous on an unguarded Table, so barring the construction bars the
+    # whole defect class regardless of how a future call site writes its
+    # add_row calls.
+    source = Path(cli.__file__).read_text(encoding="utf-8")
+    # Drop SafeTable's own class body (it legitimately subclasses Table and
+    # calls super().add_row) before scanning the rest of the module.
+    class_start = source.index("class SafeTable(Table):")
+    next_def = re.search(r"\ndef _tabular_table", source[class_start:])
+    assert next_def, "SafeTable class body boundary not found -- test is stale"
+    class_end = class_start + next_def.start()
+    rest = source[:class_start] + source[class_end:]
+    # \bTable\( (not \bSafeTable\() -- word-boundary regex so a legitimate
+    # `SafeTable(...)` construction (which itself contains the substring
+    # "Table(") never false-positives: there is no \b between "Safe" and
+    # "Table" inside one identifier, so this matches only a standalone
+    # `Table(` construction.
+    bare_construction = re.search(r"\bTable\(", rest)
+    assert bare_construction is None, (
+        "found a direct rich.table.Table(...) construction in lode.cli "
+        "outside SafeTable -- every CLI table must construct a SafeTable "
+        "instead (lode-9tmd), or a bare-str cell can silently drop "
+        "bracketed content again"
+    )
+
+
+def test_config_knob_table_round_trips_the_github_pat_pattern_at_cli_level(
+    tmp_path: Path, set_console_width: Callable[[int], None]
+) -> None:
+    # Acceptance criterion, verbatim: "A value containing a literal [...]
+    # (e.g. gh[pousr]_[0-9a-zA-Z]{36}) round-trips to stdout byte-for-byte."
+    # This is the real knob value (config._SECRET_SEED_PATTERNS via
+    # Settings.redact_before_egress_patterns default), exercised through the
+    # actual `lode config` command end-to-end -- not a synthetic table.
+    set_console_width(1000)
+    home = tmp_path / "home"
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    assert "gh[pousr]_[0-9A-Za-z]{36}" in result.stdout
 
 
 # --- lode work (async worker drain, lode-i05.3) ----------------------------
