@@ -16,9 +16,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.widgets import DataTable, Header, Static
 
 from lode.config import config_lines, knob_rows
+from lode.tui.lode_footer import LodeFooter
 
 #: The resolved-paths readout widget id — read back in tests.
 ROWS_ID = "config-rows"
@@ -51,7 +52,7 @@ class ConfigScreen(Screen[None]):
             Static("\n".join(config_lines(self.app.db_path)), id=ROWS_ID),
             DataTable(id=KNOB_TABLE_ID, cursor_type="row"),
         )
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         table = self.query_one(f"#{KNOB_TABLE_ID}", DataTable)

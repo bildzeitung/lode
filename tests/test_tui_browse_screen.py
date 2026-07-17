@@ -2601,16 +2601,32 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Compact footer bar (lode-l38d.3) -- BrowseScreen.BINDINGS renders 7 entries
-# plus 4 App-level ones (LodeApp.BINDINGS) in one footer line; with the
-# original, full-length descriptions that overflowed 80 columns and Textual
-# clipped the tail. The fix stays inside the stock Footer (compact=True +
-# shorter descriptions), no custom widget -- every binding stays visible,
-# nothing is hidden.
+# Compact footer bar (lode-l38d.3, widget lode-uczx) -- BrowseScreen.BINDINGS
+# renders 7 entries plus 4 App-level ones (LodeApp.BINDINGS) in one footer
+# line; with the original, full-length descriptions that overflowed the
+# 80-column bound this screen was originally sized to and Textual clipped
+# the tail. The fix stays inside the stock Footer (compact=True +
+# show_command_palette=False), now baked into the shared
+# :class:`~lode.tui.lode_footer.LodeFooter` every screen composes instead of
+# repeating the two flags per call site.
+#
+# lode-uczx: lode's minimum supported terminal width is 100 columns, not 80
+# (docs/tui.md) -- this test's bound moved accordingly, and the extra room
+# lets the labels this shortened ("Insp"/"Del"/"Exp") go back to full words.
+#
+# The consumed-width assert (lode-3aen's backport) is the same lever
+# tests/test_tui_app.py's Capture footer test documents: show_horizontal_
+# scrollbar alone is necessary but not sufficient (Textual can squeeze
+# 1-column gutters to 0 to absorb a small overflow and still report
+# hscroll=False), so this test checks the real consumed width too. Confirmed
+# non-vacuous: pushing this screen with the pre-fix bare ``Footer()`` (no
+# compact, no show_command_palette=False) and these same restored labels
+# measures consumed=123/hscroll=True at 100 columns -- both this assert and
+# the hscroll one would have caught it.
 # ---------------------------------------------------------------------------
 
 
-def test_browse_footer_fits_80_columns_with_every_binding_visible(
+def test_browse_footer_fits_100_columns_with_every_binding_visible(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -2621,29 +2637,91 @@ def test_browse_footer_fits_80_columns_with_every_binding_visible(
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, list[str]]:
-        async with app.run_test(size=(80, 24)) as pilot:
+    async def _drive() -> tuple[bool, list[str], int]:
+        async with app.run_test(size=(100, 24)) as pilot:
             await pilot.press("ctrl+b")
             await pilot.pause()
             footer = app.screen.query_one(Footer)
-            descriptions = [
-                c.description for c in footer.children if isinstance(c, FooterKey)
-            ]
-            return footer.show_horizontal_scrollbar, descriptions
+            keys = [c for c in footer.children if isinstance(c, FooterKey)]
+            descriptions = [c.description for c in keys]
+            # Natural width, immune to the gutter-squeeze trap described above.
+            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
+            return footer.show_horizontal_scrollbar, descriptions, consumed
 
-    has_hscroll, descriptions = asyncio.run(_drive())
+    has_hscroll, descriptions, consumed = asyncio.run(_drive())
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
+    # ...and it fits WITHOUT Textual collapsing the gutters to get there.
+    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
     # All 7 screen-level + 4 App-level bindings stay visible (none hidden via
-    # show=False) -- only their description text was shortened.
+    # show=False) -- restored to full words at the new 100-column bound.
     assert descriptions == [
         "Back",
-        "Insp",
+        "Inspect",
         "View",
-        "Del",
-        "Exp",
+        "Delete",
+        "Expand",
         "Find",
         "Up",
+        "Quit",
+        "Cfg",
+        "Browse",
+        "Tags",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# EditScreen footer (lode-uczx, folding in lode-3aen) -- the only one of the
+# ten footer-bearing screens that actually clipped at the new 100-column
+# bound: full labels rendered 131 columns' worth of content (measured
+# against the pre-fix bare ``Footer()``, below), which two prior footer
+# tickets (lode-l38d.3, lode-3rvw) walked past without a guard test on this
+# screen. "View content" -> "View" plus the shared LodeFooter's compact
+# style is what brings it in under 100.
+#
+# Confirmed non-vacuous: pushing this screen with the pre-fix bare
+# ``Footer()`` and the original "View content" label measures
+# consumed=131/hscroll=True at 100 columns -- both asserts below would have
+# caught it.
+# ---------------------------------------------------------------------------
+
+
+def test_edit_footer_fits_100_columns_with_every_binding_visible(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "hello world")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[bool, list[str], int]:
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditScreen)
+            footer = app.screen.query_one(Footer)
+            keys = [c for c in footer.children if isinstance(c, FooterKey)]
+            descriptions = [c.description for c in keys]
+            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
+            return footer.show_horizontal_scrollbar, descriptions, consumed
+
+    has_hscroll, descriptions, consumed = asyncio.run(_drive())
+
+    assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
+    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
+    # All 6 screen-level + 4 App-level bindings stay visible (none hidden via
+    # show=False); only "View content" -> "View" was shortened.
+    assert descriptions == [
+        "Save",
+        "Back",
+        "Related",
+        "History",
+        "Inspect",
+        "View",
         "Quit",
         "Cfg",
         "Browse",

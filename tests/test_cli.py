@@ -29,6 +29,7 @@ tombstone/no-HTML snapshot cleanly rather than dumping empty).
 import json
 import logging
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -932,6 +933,107 @@ def test_notes_excludes_a_tombstoned_note(
     assert result.stdout.strip() == "no notes"
 
 
+def _capture_console_print(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, dict[str, object]]]:
+    """Capture every ROW passed to the shared ``console.print``, with kwargs.
+
+    Rows only: the bare ``console.print()`` that separates notes carries no
+    argument and is skipped, so a caller can add a second note without the
+    capture blowing up on a missing ``args[0]``.
+    """
+    printed: list[tuple[str, dict[str, object]]] = []
+
+    def _capture(*args: object, **kwargs: object) -> None:
+        if args:
+            printed.append((str(args[0]), kwargs))
+
+    monkeypatch.setattr(cli.console, "print", _capture)
+    return printed
+
+
+def test_notes_separates_rows_with_a_blank_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l38d.5: a blank line separates each note from the next -- but
+    there is no trailing blank line after the last row."""
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    runner.invoke(app, ["add", "first note", "--db", str(db_path)])
+    runner.invoke(app, ["add", "second note", "--db", str(db_path)])
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines.count("") == 1  # exactly one separator, between the 2 rows
+    assert lines[-1] != ""  # no trailing blank line after the last note
+
+
+def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l38d.5: the id/date render via the shared theme's ``note_id``/
+    ``date`` style NAMES (lode-l38d.11) -- never a hand-rolled colour literal
+    -- and the summary is markup-escaped so a literal ``[`` in note text can
+    never be mistaken for rich markup.
+
+    NOTE ON WHAT THIS CAN AND CANNOT ASSERT (lode-xgaa -- do not "simplify"
+    this back): the shared ``console`` froze its colour decision at IMPORT
+    time, so no ANSI is emitted under the suite and no assertion here can
+    prove colour is actually APPLIED. That is the residual risk the
+    lode-l38d.1 /challenge decision accepted knowingly (positive path verified
+    BY EYE, no test seam). It is emphatically NOT because "CliRunner's output
+    is never a TTY" -- that mechanism is FALSE; colour is off only because
+    pytest's default capture replaced stdout before ``lode.cli`` was imported,
+    and ``pytest -s`` from a real terminal freezes it the other way. See
+    tests/test_cli_console.py, which refutes that claim at length, and
+    ``cli.py``'s ``console`` docstring.
+
+    So this test asserts the two things it genuinely can: that ``notes_``
+    hands rich the ``[note_id]``/``[date]`` style names (captured in-process),
+    and that the summary's markup escaping SURVIVES RENDERING to real stdout.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "a note with a [bracket] in it", "--db", str(db_path)]
+    ).stdout.strip()
+
+    # Assert on the RENDERED output first: the escaped "[bracket]" must reach
+    # the user as the literal text they typed. Capturing the pre-render string
+    # alone would only prove escape() was called, not that rich renders it
+    # back correctly -- the round-trip is the behaviour that matters.
+    rendered = runner.invoke(app, ["notes", "--db", str(db_path)])
+    assert rendered.exit_code == 0
+    assert "a note with a [bracket] in it" in rendered.stdout
+    assert "\\[bracket]" not in rendered.stdout  # the escape must not leak
+
+    printed = _capture_console_print(monkeypatch)
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert len(printed) == 1
+    line, kwargs = printed[0]
+    assert f"[note_id]{note_id}[/note_id]" in line
+    assert "[date]" in line and "[/date]" in line
+    # The literal "[bracket]" in the note text must be ESCAPED (rich.markup's
+    # backslash convention), not left as unescaped markup that could corrupt
+    # the row or the styles around it.
+    assert "\\[bracket]" in line
+    assert "[bracket]" not in line.replace("\\[bracket]", "")
+    # Pin both rendering flags. They are asserted here rather than left to
+    # eye-verification precisely because the suite can never catch them by
+    # eye: colour is frozen off at import (see this test's docstring), so a
+    # regression in either would sail through green. The rationale for each
+    # flag lives at the call site in cli.py's notes_ loop -- deliberately not
+    # restated here, since both pin rich-version-specific behaviour and two
+    # copies would drift apart.
+    assert kwargs["highlight"] is False
+    assert kwargs["soft_wrap"] is True
+
+
 # --- lode notes --deleted (list tombstoned notes, lode-d32.2) ---------------
 
 
@@ -961,6 +1063,41 @@ def test_notes_deleted_flag_lists_only_tombstoned_notes(
     assert gone_id in result.stdout  # full id -- the only route to `show`/`recover`
     assert live_id not in result.stdout
     assert "gone soon" in result.stdout
+
+
+def test_notes_deleted_flag_also_colours_id_and_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--deleted`` renders through the SAME styled path as the live listing
+    (lode-l38d.5) -- no separate hand-rolled formatting for tombstoned rows.
+    The two currently look identical; whether a tombstoned note deserves its
+    own visual distinction is raised, not resolved, in this ticket's hand-off.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    gone_id = runner.invoke(
+        app, ["add", "gone soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (gone_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, gone_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    printed = _capture_console_print(monkeypatch)
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert len(printed) == 1
+    line, kwargs = printed[0]
+    assert f"[note_id]{gone_id}[/note_id]" in line
+    assert "[date]" in line and "[/date]" in line
+    assert kwargs["highlight"] is False  # same rendering flags as the live path
+    assert kwargs["soft_wrap"] is True
 
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
@@ -1014,9 +1151,20 @@ def test_purge_ambiguous_prefix_reports_candidates_and_purges_nothing(
 
     result = runner.invoke(app, ["purge", "note-aaa", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-aaa111" in result.stderr
-    assert "note-aaa222" in result.stderr
+    assert "ambiguous note id prefix 'note-aaa': 2 matches" in result.stderr
+    # Self-sufficient (lode-l38d.10): a full row -- id, date, summary -- per
+    # candidate, not just its bare id, so no second command is needed to tell
+    # them apart.
+    assert re.search(
+        r"note-aaa111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-aaa222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
     # Neither candidate was touched.
     assert _rows(
@@ -1413,9 +1561,17 @@ def test_show_ambiguous_prefix_reports_candidates(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["show", "note-bbb", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-bbb111" in result.stderr
-    assert "note-bbb222" in result.stderr
+    assert "ambiguous note id prefix 'note-bbb': 2 matches" in result.stderr
+    assert re.search(
+        r"note-bbb111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-bbb222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_show_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
@@ -1957,7 +2113,20 @@ def test_dump_html_ambiguous_note_prefix_reports_candidates(tmp_path: Path) -> N
     result = runner.invoke(app, ["dump-html", "note-dump-ambig", "--db", str(db_path)])
 
     assert result.exit_code != 0
-    assert "ambiguous note id prefix" in result.stderr
+    assert "ambiguous note id prefix 'note-dump-ambig': 2 matches" in result.stderr
+    # A full candidate row -- id, date, summary -- not just a bare id
+    # (lode-l38d.10): each candidate's body ("a"/"b") IS its summary here
+    # (no annotation, so it falls back to the first line).
+    assert re.search(
+        r"note-dump-ambig-1 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-dump-ambig-2 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 # --- lode dump-html --all / --file (bulk dumping, lode-l38d.8) -------------
@@ -2665,9 +2834,21 @@ def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
 
     result = runner.invoke(app, ["recover", "note-ddd", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-ddd111" in result.stderr
-    assert "note-ddd222" in result.stderr
+    assert "ambiguous note id prefix 'note-ddd': 2 matches" in result.stderr
+    # The live candidate renders unmarked; the tombstoned one gets the
+    # ` [deleted]` marker (lode-l38d.10's WRINKLE) -- for `recover` that's the
+    # candidate the user actually wants, so it must not render blank or look
+    # identical to the live match.
+    assert re.search(
+        r"note-ddd111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +still live$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-ddd222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone soon \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> None:
@@ -2683,9 +2864,17 @@ def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> No
 
     result = runner.invoke(app, ["recover", "note-eee", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-eee111" in result.stderr
-    assert "note-eee222" in result.stderr
+    assert "ambiguous note id prefix 'note-eee': 2 matches" in result.stderr
+    assert re.search(
+        r"note-eee111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone a \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-eee222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone b \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_recover_full_id_of_a_live_note_errors_not_deleted(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from lode.notes_read import (
+    candidate_rows_conn,
     list_deleted_notes,
     list_notes,
     list_notes_with_all_tags,
@@ -285,6 +286,95 @@ def test_list_deleted_notes_summary_falls_back_to_the_tombstones_carried_body(
     rows = list_deleted_notes(db_path)
 
     assert rows[0].summary == "the original first line"
+
+
+# ---------------------------------------------------------------------------
+# candidate_rows_conn (lode-l38d.10) -- the ambiguous-prefix CLI error's
+# lookup: date/summary/deleted-state for a specific candidate set, spanning
+# both live and tombstoned notes at once (unlike list_notes/list_deleted_notes,
+# each scoped to a single state).
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_rows_conn_resolves_live_candidates_in_the_given_order(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-aaa222", "second body")
+        save(conn, "note-aaa111", "first body")
+
+        rows = candidate_rows_conn(conn, ["note-aaa222", "note-aaa111"])
+    finally:
+        conn.close()
+
+    # Same order as the input list, NOT re-sorted by created/note_id.
+    assert [row.note_id for row in rows] == ["note-aaa222", "note-aaa111"]
+    assert [row.summary for row in rows] == ["second body", "first body"]
+    assert [row.deleted for row in rows] == [False, False]
+
+
+def test_candidate_rows_conn_flags_a_tombstoned_candidate_and_uses_its_body(
+    tmp_path: Path,
+) -> None:
+    """A candidate set mixing live and tombstoned notes resolves both.
+
+    The WRINKLE lode-l38d.10 calls out: ``recover`` resolves with
+    ``include_deleted=True``, so its candidate set can span both states. The
+    tombstoned candidate must render *correctly* -- not blank -- and must
+    carry a marker distinguishing it from a live match, since for ``recover``
+    it is the one the user actually wants.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-ddd111", "still live")
+        gone_head = save(conn, "note-ddd222", "gone soon").version_id
+        delete(conn, "note-ddd222", parent=gone_head)
+
+        rows = candidate_rows_conn(conn, ["note-ddd111", "note-ddd222"])
+    finally:
+        conn.close()
+
+    assert rows[0].note_id == "note-ddd111"
+    assert rows[0].summary == "still live"
+    assert rows[0].deleted is False
+
+    assert rows[1].note_id == "note-ddd222"
+    assert rows[1].summary == "gone soon"  # the tombstone's carried-forward body
+    assert rows[1].deleted is True
+
+
+def test_candidate_rows_conn_uses_the_head_summary_annotation_when_present(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-1", "some long note body").version_id
+    finally:
+        conn.close()
+    _write_summary(db_path, "note-1", head, "AI one-line summary")
+
+    conn = init_db(db_path)
+    try:
+        rows = candidate_rows_conn(conn, ["note-1"])
+    finally:
+        conn.close()
+
+    assert rows[0].summary == "AI one-line summary"
+
+
+def test_candidate_rows_conn_empty_input_returns_empty_list(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        rows = candidate_rows_conn(conn, [])
+    finally:
+        conn.close()
+
+    assert rows == []
 
 
 def test_list_versions_orders_newest_first_with_seq_matching_chain_length(
