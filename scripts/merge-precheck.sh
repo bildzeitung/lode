@@ -68,9 +68,6 @@
 set -uo pipefail   # deliberately NOT -e: this script's entire job is to
                    # inspect a command's exit code, which -e would short-circuit
 
-base="${1:?usage: merge-precheck.sh <base-ref> <branch-ref>}"
-branch="${2:?usage: merge-precheck.sh <base-ref> <branch-ref>}"
-
 gate_could_not_run() {
   echo "GATE COULD NOT RUN: $1" >&2
   shift
@@ -80,23 +77,46 @@ gate_could_not_run() {
   exit 2
 }
 
-for ref_name_val in "base-ref:$base" "branch-ref:$branch"; do
-  ref_name="${ref_name_val%%:*}"
-  ref_val="${ref_name_val#*:}"
-  if ! git rev-parse --verify --quiet "${ref_val}^{commit}" >/dev/null; then
-    gate_could_not_run \
-      "unreadable/unknown ref (${ref_name}): '$ref_val' does not resolve to a" \
-      "commit. Usual causes: the branch was deleted or force-pushed away, or a" \
-      "typo in the ref name. Diagnose with: git rev-parse --verify $ref_val"
-  fi
-done
+# Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`. In a script
+# run as `bash merge-precheck.sh`, an unset `${1:?}` exits 1, which is exactly
+# the CONFLICT code: a caller bug (wrong arg count) would then be misread as a
+# branch conflict, the same class of collision this script's whole exit-code
+# split exists to prevent. Only 0 (clean) and 1 (conflict) are branch verdicts;
+# everything else -- including a usage error -- is exit 2.
+if [ "$#" -ne 2 ]; then
+  gate_could_not_run \
+    "usage: merge-precheck.sh <base-ref> <branch-ref>" \
+    "Got $# argument(s), expected exactly 2. This is a caller bug, not a" \
+    "branch conflict, so it exits 2 (never 1) to stay out of the conflict path."
+fi
+base="$1"
+branch="$2"
 
-errfile="$(mktemp)"
+verify_ref() {   # $1 = human label, $2 = ref
+  git rev-parse --verify --quiet "$2^{commit}" >/dev/null && return
+  gate_could_not_run \
+    "unreadable/unknown ref ($1): '$2' does not resolve to a" \
+    "commit. Usual causes: the branch was deleted or force-pushed away, or a" \
+    "typo in the ref name. Diagnose with: git rev-parse --verify $2"
+}
+verify_ref base-ref   "$base"
+verify_ref branch-ref "$branch"
+
+# Guard mktemp: if it fails (TMPDIR points at a nonexistent/full/read-only
+# filesystem) it returns an empty string, and the `2>"$errfile"` redirect below
+# becomes `2>""` -- an ambiguous-redirect failure that makes the command
+# substitution exit 1 with empty stdout, i.e. a PHANTOM conflict on a pure
+# machine fault. Route it to exit 2 instead, the same way every other machine
+# fault here is handled. (mktemp prints its own error to stderr; suppress it so
+# the single authoritative diagnostic is the one below.)
+errfile="$(mktemp 2>/dev/null)" || gate_could_not_run \
+  "could not create a temporary file (mktemp failed)" \
+  "Usual causes: TMPDIR points at a nonexistent, full, or read-only" \
+  "filesystem. Diagnose with: mktemp"
 trap 'rm -f "$errfile"' EXIT
 
 out="$(git merge-tree --write-tree --name-only "$base" "$branch" 2>"$errfile")"
 rc=$?
-err="$(cat "$errfile")"
 
 case "$rc" in
   0)
@@ -111,6 +131,10 @@ case "$rc" in
     exit 1
     ;;
   *)
+    # `$err` is only ever needed here, on the machine-fault path -- read it
+    # with the bash builtin (no `cat` fork), and only now rather than on every
+    # (overwhelmingly clean/conflict) invocation.
+    err="$(<"$errfile")"
     lines=(
       "git merge-tree exited $rc while checking whether $branch merges onto"
       "$base (0=clean, 1=conflict expected; this is neither). Usual causes:"

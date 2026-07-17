@@ -34,6 +34,7 @@ the corresponding test red, verified by hand while writing this suite.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -216,14 +217,57 @@ def test_unrelated_histories_is_a_machine_fault(tmp_path: Path) -> None:
     assert "GATE COULD NOT RUN" in result.stderr
 
 
-def test_usage_without_args_errors_immediately() -> None:
-    """No repo needed -- bash's `${1:?...}` parameter expansion fires before
-    anything touches git."""
+def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
+    """A wrong arg count must exit 2, NEVER 1. In a script run as
+    `bash merge-precheck.sh`, the old `${1:?...}` form exited 1 -- exactly the
+    CONFLICT code -- so a caller bug would be misread as a branch conflict.
+    Reverting the explicit arity check back to `${1:?...}` makes this exit 1
+    and fails the assertion (defect: usage error colliding with exit 1)."""
     result = subprocess.run(
         ["bash", str(SCRIPT)],
         capture_output=True,
         text=True,
         timeout=30,
     )
-    assert result.returncode != 0
+    assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
+    assert result.stdout == ""
+
+
+def test_usage_with_one_arg_is_also_exit_2() -> None:
+    """The arity check fires on ANY count other than 2, not just zero args."""
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "only-one-arg"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "usage" in result.stderr
+
+
+def test_mktemp_failure_is_a_machine_fault_not_a_conflict(tmp_path: Path) -> None:
+    """A machine fault in `mktemp` (TMPDIR pointing at a nonexistent dir) must
+    exit 2, never 1 -- otherwise the failed `2>"$errfile"` redirect makes the
+    merge-tree command substitution exit 1 with empty stdout, i.e. a PHANTOM
+    conflict that kicks a perfectly-landable branch back needs-rebase. Refs are
+    valid and the merge is clean, so ONLY the mktemp failure can produce a
+    non-zero exit here. Removing the `|| gate_could_not_run` guard on mktemp
+    reintroduces the exit-1 phantom conflict and fails this test."""
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "branchA")
+    _commit_file(repo, "f.txt", "line1\nCHANGED-A\nline3\n", "A changes f")
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "trunk", "branchA"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "TMPDIR": str(tmp_path / "does-not-exist")},
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    assert "not a branch conflict" in result.stderr
