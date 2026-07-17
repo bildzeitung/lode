@@ -1287,7 +1287,9 @@ are catalogued in [configuration.md](configuration.md).
   has since become legitimately caught-up via real `bd dolt pull`s.
 
   **Both of the guard's inputs are gitignored, and that is load-bearing, not hygiene** (added in
-  review; `.beads/.gitignore`). The guard reads two files to decide whether to BLOCK a push, and each
+  review; the **root** `.gitignore` — NOT `.beads/.gitignore`, which `bd init` regenerates, so a rule
+  placed there would be silently rewritten away; same hazard CLAUDE.md documents for the BEADS
+  INTEGRATION markers). The guard reads two files to decide whether to BLOCK a push, and each
   is per-machine state that is actively harmful if it travels: `.bd-dolt-push-guard-highwater` is a
   baseline for one DB path on one machine — committed, it would land on other clones asserting a count
   they never pushed, and a *wrong* baseline in a blocking guard is worse than the *no* baseline the
