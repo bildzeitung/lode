@@ -176,13 +176,26 @@ if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
 fi
 
 # --- Model + tokens ---------------------------------------------------------
+# Model: only the class matters (Opus/Sonnet/…), so keep the first word and drop
+# the version + "(1M context)" tail that display_name carries.
 model_part=""
-[ -n "$model" ] && model_part="$model"
+[ -n "$model" ] && model_part="${model%% *}"
 
+# Tokens: one meter instead of separate used/left numbers. A 10-cell bar fills
+# with context used (left is just the unfilled remainder), used % printed after.
 tokens_part=""
-tokens_remaining_part=""
-[ -n "$used" ] && tokens_part="$(printf '%.0f' "$used")% used"
-[ -n "$remaining" ] && tokens_remaining_part="$(printf '%.0f' "$remaining")% left"
+if [ -n "$used" ]; then
+    u=$(printf '%.0f' "$used")
+    [ "$u" -lt 0 ] && u=0; [ "$u" -gt 100 ] && u=100
+    width=10
+    filled=$(( u * width / 100 ))
+    bar=""; i=0
+    while [ "$i" -lt "$width" ]; do
+        if [ "$i" -lt "$filled" ]; then bar="${bar}█"; else bar="${bar}░"; fi
+        i=$((i + 1))
+    done
+    tokens_part="[${bar}] ${u}%"
+fi
 
 # --- Assemble (fleet first), skipping empties -------------------------------
 parts=()
@@ -191,7 +204,6 @@ parts=()
 [ -n "$git_part" ] && parts+=("$git_part")
 [ -n "$model_part" ] && parts+=("$model_part")
 [ -n "$tokens_part" ] && parts+=("$tokens_part")
-[ -n "$tokens_remaining_part" ] && parts+=("$tokens_remaining_part")
 
 # Join with an explicit " | " (IFS+"${arr[*]}" would join on a single space,
 # blurring the pipeline group into the agents group).
