@@ -127,10 +127,8 @@ def _tag_grid_layout(tags: list[str], available_width: int) -> tuple[int, int]:
 class TagsScreen(Screen[None]):
     """Top panel: every tag, multi-column grid. Bottom: notes carrying ALL of them."""
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("space", "toggle_tag", "Toggle", show=False),

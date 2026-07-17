@@ -43,10 +43,8 @@ class ConfigScreen(Screen[None]):
     whichever screen was active before.
     """
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
     ]

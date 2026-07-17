@@ -355,10 +355,8 @@ class VersionHistoryScreen(Screen[None]):
     contract every other browse-family screen uses.
     """
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
@@ -398,6 +396,8 @@ class VersionViewScreen(Screen[None]):
     this module.
     """
 
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
@@ -558,10 +558,8 @@ class ExternalPickerScreen(Screen[None]):
     module uses.
     """
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
@@ -620,10 +618,8 @@ class SnapshotViewerScreen(ModalScreen[None]):
     read-only body could bind bare ``h``, back when that screen existed).
     """
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("t", "toggle_raw", "Toggle raw HTML"),
@@ -702,10 +698,8 @@ class EnrichmentModalScreen(ModalScreen[None]):
     and centering for :data:`INSPECTOR_DIALOG_ID`.
     """
 
-    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
-    # unqualified form resolves against this Screen's own action namespace,
-    # which has no such method, and silently fails (lode-pijc, verified
-    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
     ]

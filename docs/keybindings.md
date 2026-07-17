@@ -135,6 +135,21 @@ Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewS
 through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-body screen — or
 `BrowseScreen`'s `i`/`d`, none of which touch an editable body).
 
+**A trap on the action side, not the key side — pop the screen with `app.pop_screen`, never bare
+`pop_screen`.** A Screen-level `Binding("escape", "app.pop_screen", "Back")` must name the pop action
+**app-namespaced**. Textual resolves an unqualified action string against the *current* namespace,
+which for a Screen binding is the Screen itself; no `Screen` subclass defines `pop_screen` (it lives
+on `App`), so the bare `"pop_screen"` form silently does nothing while looking correct. Verified
+against Textual 8.2.8. This is why every "Escape → Back" binding in the TUI —
+`ConfigScreen`, `TagsScreen`, `AskScreen`, the browse-family view/picker/modal screens
+(`VersionHistoryScreen`/`VersionViewScreen`/`ExternalPickerScreen`/`SnapshotViewerScreen`/`EnrichmentModalScreen`),
+and `RelatedNoteModalScreen` — uses `"app.pop_screen"`. The sole exception is
+`BrowseScreen.action_dismiss_screen`, which keeps a hand-rolled action (it closes an open search box
+first, then pops); its binding names the bare `"dismiss_screen"`, which correctly resolves to that
+Screen's own method. Discovered on `lode-11io`, then collapsed from ~13 hand-rolled one-line
+`action_show_*`/`action_dismiss_screen` wrappers onto Textual's builtin action strings across the
+tree by `lode-pijc`.
+
 ## Current keymap
 
 ### App-level (`LodeApp`, `src/lode/tui/app.py`)

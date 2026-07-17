@@ -35,12 +35,10 @@ class AskScreen(Screen[None]):
 
     Pushed on top of another screen via the App-level ``ctrl+l`` binding
     (Textual's builtin ``push_screen('ask')`` action string,
-    :mod:`lode.tui.app`'s ``LodeApp.BINDINGS`` -- lode-11io, lode-pijc) --
-    Escape pops back to whatever screen was showing, via Textual's builtin
-    APP-NAMESPACED ``app.pop_screen`` action string (lode-pijc): the
-    unqualified ``pop_screen`` resolves against this Screen's own action
-    namespace, which has no such method, and silently fails (verified
-    against Textual 8.2.8).
+    :mod:`lode.tui.app`'s ``LodeApp.BINDINGS`` -- lode-11io, lode-pijc).
+    Escape pops back to whatever screen was showing, via the builtin
+    APP-NAMESPACED ``app.pop_screen`` action string (bare ``pop_screen``
+    silently fails on a Screen -- see ``docs/keybindings.md``).
     """
 
     BINDINGS = [
