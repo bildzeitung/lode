@@ -1746,51 +1746,6 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
-async def _settle(pilot: Pilot) -> None:
-    """Drain Textual's message queues TWICE, deterministically (lode-9y68).
-
-    ``pilot.pause()`` is two different mechanisms bolted together
-    (``textual/pilot.py``)::
-
-        await self._wait_for_screen()   # message-count drain -- no clock
-        await wait_for_idle(0)          # CPU-vs-wall-clock heuristic
-
-    Only the first is deterministic. ``_wait_for_screen`` snapshots
-    ``self.app.screen``, that screen's child list, AND each child's pending
-    message count ONCE, up front, then waits for exactly that set to drain
-    (its own comment: "all messages queued at the start of the method have
-    been processed"). Work enqueued *after* the snapshot is outside it --
-    notably work landing on a screen that only *becomes* ``app.screen`` once
-    an already-queued transition is processed, since the snapshot resolved
-    ``app.screen`` to the outgoing screen and posted its sentinels there.
-
-    The second is the one CPU contention defeats: ``wait_for_idle``
-    (``textual/_wait.py``) compares this process's ``process_time()`` against
-    wall-clock ``monotonic()`` and breaks when CPU time is not keeping up --
-    so a process merely *starved of timeslices* (this machine legitimately
-    runs several concurrent ``nox -s tests`` invocations) reads as "idle"
-    while its work is still pending.
-
-    So the second ``pause()`` re-snapshots from the now-later state and drains
-    that second wave *by message count* -- rather than leaving it to
-    ``wait_for_idle``'s unconditional ~20ms sleep to have happened to cover it.
-    That converts a timing-dependent catch into an ordering-dependent one.
-
-    HONEST SCOPE [Likely, not Certain] -- a single ``pause()`` was NOT observed
-    to miss a cascade in isolation: probed across both a same-widget delayed
-    post and a screen-pop, one drain caught the follow-up 30/30 even with
-    ``wait_for_idle`` factored out. The reason is that those races resolve on
-    asyncio's *ready-queue ordering*, which OS starvation does not perturb --
-    starvation slows the whole loop uniformly instead of reordering callbacks.
-    This helper is therefore hardening against *relying on* ``wait_for_idle``'s
-    sleep, and is cheap (~20ms) insurance -- not a fix for a demonstrated
-    single-``pause()`` failure. The demonstrated load-sensitive gap is the one
-    :func:`_press_and_settle` closes.
-    """
-    await pilot.pause()
-    await pilot.pause()
-
-
 async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
     """Press each key one at a time, settling after EACH one (lode-9y68).
 
@@ -1828,7 +1783,7 @@ async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
     """
     for key in keys:
         await pilot.press(key)
-        await _settle(pilot)
+        await pilot.pause()
 
 
 def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
@@ -1978,7 +1933,7 @@ def test_escape_closes_the_search_box_and_keeps_the_current_selection(
             await pilot.press("slash")
             await _press_and_settle(pilot, *"beta")
             await pilot.press("escape")
-            await _settle(pilot)
+            await pilot.pause()
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
             still_browsing = isinstance(app.screen, BrowseScreen)
             return still_browsing, search_input.display, table.cursor_row
@@ -2002,7 +1957,7 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
             await pilot.press("slash")
             await _press_and_settle(pilot, *"gamma")
             await pilot.press("enter")
-            await _settle(pilot)
+            await pilot.pause()
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
             return search_input.display, table.cursor_row
 
@@ -2094,11 +2049,11 @@ def test_escape_from_editor_keeps_the_same_row_highlighted(
             await pilot.press("down")
             before = _highlighted_note_id(table)
             await pilot.press("enter")
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             assert app.screen.note_id == "note-b"
             await pilot.press("escape")  # unchanged buffer -- pops immediately
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, BrowseScreen)
             after = _highlighted_note_id(
                 app.screen.query_one(f"#{TABLE_ID}", DataTable)
@@ -2137,10 +2092,10 @@ def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
             await pilot.press("enter")
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             await pilot.press("escape")  # unchanged buffer -- pops immediately
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, BrowseScreen)
             return _highlighted_note_id(app.screen.query_one(f"#{TABLE_ID}", DataTable))
 
@@ -2175,7 +2130,7 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
             await pilot.press("enter")
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, EditScreen)
             # note-b is deleted while its editor is open, out from under the
             # still-highlighted row.
@@ -2185,7 +2140,7 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
             finally:
                 conn.close()
             await pilot.press("escape")
-            await _settle(pilot)
+            await pilot.pause()
             assert isinstance(app.screen, BrowseScreen)
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             summaries = [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
