@@ -781,10 +781,12 @@ def notes_(
     or the note's first line when not yet enriched). Tombstoned notes are
     excluded, same live-heads-only rule ``purge`` and the TUI browse screen
     already use. The id and date render via the shared theme's ``note_id``/
-    ``date`` styles (lode-l38d.11, lode-l38d.5) -- cyan / dim, auto-disabled
-    when piped or under ``NO_COLOR`` by the shared ``console`` (lode-l38d.1)
-    -- and a blank line separates each note from the next (not a trailing
-    one after the last row). The full id is never shortened here (lode-1gr.1):
+    ``date`` style NAMES (lode-l38d.11, lode-l38d.5) -- never a colour literal,
+    so ``CLI_STYLES`` stays the one source of truth for the palette -- and are
+    auto-disabled when piped or under ``NO_COLOR`` by the shared ``console``
+    (lode-l38d.1). A blank line separates each note from the next (not a
+    trailing one after the last row). The full id is never shortened here
+    (lode-1gr.1):
     ``lode notes`` is the copy-pasteable, greppable listing Browse/``show``/
     Tags deliberately don't try to be.
 
@@ -817,10 +819,29 @@ def notes_(
         # silently break a long summary across lines; the prior
         # ``typer.echo`` never did that ("no truncation, no width clamp" is
         # this ticket's own description of the behaviour being preserved).
+        # ``highlight=False`` -- rich's Console applies ReprHighlighter to
+        # plain strings BY DEFAULT, which is actively wrong for this row.
+        # Verified against rich 15.0.0, it breaks it two ways:
+        #   * The DATE is shredded: ``_short_date``'s "2026-07-16 14:32"
+        #     highlights as bold-cyan numbers + dim dashes + a bold-GREEN
+        #     "14:32", so it is neither uniformly ``date``-styled nor distinct
+        #     from ``note_id``'s cyan -- defeating this ticket's own
+        #     acceptance criterion ("colour the id and date distinctly").
+        #   * The user's own SUMMARY gets recoloured wherever it happens to
+        #     contain a number/IP/URL/True/None, which the ``typer.echo`` this
+        #     replaced never did.
+        # NOTE the asymmetry, which is why this is easy to miss: the note_id
+        # is NOT damaged -- it is a str(uuid.uuid4()) (repository.py:35) and
+        # rich's ReprHighlighter has a ``uuid`` pattern that matches it whole,
+        # so it renders as one clean cyan span. Only the date gives the bug
+        # away, and only in a real terminal (colour is frozen off under the
+        # suite, so no test can see this -- hence the flag is pinned instead).
+        # The theme styles are the ONLY colour this row should carry.
         console.print(
             f"[note_id]{row.note_id}[/note_id]  "
             f"[date]{_short_date(row.created)}[/date]  {escape(row.summary)}",
             soft_wrap=True,
+            highlight=False,
         )
 
 

@@ -930,6 +930,25 @@ def test_notes_excludes_a_tombstoned_note(
     assert result.stdout.strip() == "no notes"
 
 
+def _capture_console_print(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, dict[str, object]]]:
+    """Capture every ROW passed to the shared ``console.print``, with kwargs.
+
+    Rows only: the bare ``console.print()`` that separates notes carries no
+    argument and is skipped, so a caller can add a second note without the
+    capture blowing up on a missing ``args[0]``.
+    """
+    printed: list[tuple[str, dict[str, object]]] = []
+
+    def _capture(*args: object, **kwargs: object) -> None:
+        if args:
+            printed.append((str(args[0]), kwargs))
+
+    monkeypatch.setattr(cli.console, "print", _capture)
+    return printed
+
+
 def test_notes_separates_rows_with_a_blank_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -956,13 +975,21 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
     -- and the summary is markup-escaped so a literal ``[`` in note text can
     never be mistaken for rich markup.
 
-    ``CliRunner``'s captured stdout is never a TTY (see
-    tests/test_cli_console.py), so the shared ``console`` never actually
-    emits ANSI codes here -- that auto-disable mechanism is already covered
-    generically there. What is specific to *this* ticket, and what this test
-    proves instead, is that ``notes_`` feeds rich the ``[note_id]``/``[date]``
-    markup tags (rather than e.g. raw ANSI or no styling at all) by
-    capturing the exact string passed to ``console.print`` in-process.
+    NOTE ON WHAT THIS CAN AND CANNOT ASSERT (lode-xgaa -- do not "simplify"
+    this back): the shared ``console`` froze its colour decision at IMPORT
+    time, so no ANSI is emitted under the suite and no assertion here can
+    prove colour is actually APPLIED. That is the residual risk the
+    lode-l38d.1 /challenge decision accepted knowingly (positive path verified
+    BY EYE, no test seam). It is emphatically NOT because "CliRunner's output
+    is never a TTY" -- that mechanism is FALSE; colour is off only because
+    pytest's default capture replaced stdout before ``lode.cli`` was imported,
+    and ``pytest -s`` from a real terminal freezes it the other way. See
+    tests/test_cli_console.py, which refutes that claim at length, and
+    ``cli.py``'s ``console`` docstring.
+
+    So this test asserts the two things it genuinely can: that ``notes_``
+    hands rich the ``[note_id]``/``[date]`` style names (captured in-process),
+    and that the summary's markup escaping SURVIVES RENDERING to real stdout.
     """
     _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
@@ -970,14 +997,22 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
         app, ["add", "a note with a [bracket] in it", "--db", str(db_path)]
     ).stdout.strip()
 
-    printed: list[str] = []
-    monkeypatch.setattr(cli.console, "print", lambda *a, **k: printed.append(a[0]))
+    # Assert on the RENDERED output first: the escaped "[bracket]" must reach
+    # the user as the literal text they typed. Capturing the pre-render string
+    # alone would only prove escape() was called, not that rich renders it
+    # back correctly -- the round-trip is the behaviour that matters.
+    rendered = runner.invoke(app, ["notes", "--db", str(db_path)])
+    assert rendered.exit_code == 0
+    assert "a note with a [bracket] in it" in rendered.stdout
+    assert "\\[bracket]" not in rendered.stdout  # the escape must not leak
+
+    printed = _capture_console_print(monkeypatch)
 
     result = runner.invoke(app, ["notes", "--db", str(db_path)])
 
     assert result.exit_code == 0
     assert len(printed) == 1
-    line = printed[0]
+    line, kwargs = printed[0]
     assert f"[note_id]{note_id}[/note_id]" in line
     assert "[date]" in line and "[/date]" in line
     # The literal "[bracket]" in the note text must be ESCAPED (rich.markup's
@@ -985,6 +1020,15 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
     # the row or the styles around it.
     assert "\\[bracket]" in line
     assert "[bracket]" not in line.replace("\\[bracket]", "")
+    # Pin both rendering flags. They are asserted here rather than left to
+    # eye-verification precisely because the suite can never catch them by
+    # eye: colour is frozen off at import (see this test's docstring), so a
+    # regression in either would sail through green. The rationale for each
+    # flag lives at the call site in cli.py's notes_ loop -- deliberately not
+    # restated here, since both pin rich-version-specific behaviour and two
+    # copies would drift apart.
+    assert kwargs["highlight"] is False
+    assert kwargs["soft_wrap"] is True
 
 
 # --- lode notes --deleted (list tombstoned notes, lode-d32.2) ---------------
@@ -1040,16 +1084,17 @@ def test_notes_deleted_flag_also_colours_id_and_date(
     finally:
         conn.close()
 
-    printed: list[str] = []
-    monkeypatch.setattr(cli.console, "print", lambda *a, **k: printed.append(a[0]))
+    printed = _capture_console_print(monkeypatch)
 
     result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
 
     assert result.exit_code == 0
     assert len(printed) == 1
-    line = printed[0]
+    line, kwargs = printed[0]
     assert f"[note_id]{gone_id}[/note_id]" in line
     assert "[date]" in line and "[/date]" in line
+    assert kwargs["highlight"] is False  # same rendering flags as the live path
+    assert kwargs["soft_wrap"] is True
 
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
