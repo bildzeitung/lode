@@ -607,6 +607,50 @@ def test_run_refresh_dead_letter_writes_tombstone_snapshot(
     assert head_snapshot_id is not None, "head must point at the tombstone, not NULL"
 
 
+def test_refresh_dead_letter_hook_is_generic_over_source_type(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-gpzn.13: a non-web target's dead-letter tombstone must carry its
+    own source_type, not the hook's former hardcoded 'web' default.
+
+    A JIRA/Confluence connector (gpzn.2, not yet built) persists the
+    externals row -- source_type included -- synchronously at note-save
+    detection time, before any 'refresh' job for that target is even
+    enqueued (docs/decisions.md's Atlassian refinement A: the API base is
+    PERSISTED on the external row at detection). This test reproduces that
+    precondition directly (bypassing the not-yet-built connector) and
+    asserts the shared _refresh_dead_letter_hook does not clobber it with
+    'web' when the same job type ('refresh') dead-letters for a non-web
+    target.
+    """
+    external_id = "JIRA-1234"
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+        (external_id, "jira"),
+    )
+    conn.commit()
+
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+    ok = run_one(
+        conn, job_id, db_path, settings, _always_raising_refresh_registry("timeout")
+    )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"
+
+    (source_type,) = conn.execute(
+        "SELECT source_type FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert source_type == "jira", "dead-letter tombstone must not overwrite source_type"
+
+    (status,) = conn.execute(
+        "SELECT status FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert status == "tombstone"
+
+
 def test_run_refresh_transient_failure_writes_no_tombstone(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:

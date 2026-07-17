@@ -316,6 +316,17 @@ needed. **JS-rendered pages are a permanent tombstone by this rule, deliberately
 rendering them (headless browser / JS execution) is an explicit deferred follow-on (`lode-oni`),
 not first-connector scope.
 
+**The HTTP-status half of this table is a shared, connector-neutral classifier (`lode-gpzn.13`).**
+`lode.fetch_outcome.classify_http_status` is the single place the OK / TOMBSTONE / TRANSIENT
+status-code mapping lives — the web path (`lode.webfetch`) and the Atlassian connectors (JIRA
+`lode-gpzn.3`, Confluence `lode-gpzn.4`) all call it rather than each copying the 401/403/404 →
+tombstone, 408/429/5xx → transient rule. The extractor-driven "2xx but empty/short content" signal
+above stays connector-specific (trafilatura, in `lode.webfetch`) since it has no HTTP-status
+analogue. `lode.worker._refresh_dead_letter_hook` (the "on `dead`, the caller writes a tombstone"
+step just below) is generic over `source_type` too: it reuses an already-existing `externals` row's
+`source_type` rather than assuming `web`, falling back to `web` only when no row exists yet (today,
+only reachable for a web target whose first-ever fetch never succeeds).
+
 **A `dead` job's tombstone write must not beat an already-succeeded fetch (closed, `lode-uda1` +
 `lode-elc8`).** The TRANSIENT row's "on `dead`, the caller writes a tombstone" is unconditional *only*
 with respect to content that predates the dead-lettering job's own claim. `lode.worker._reclaim_stale_running`'s

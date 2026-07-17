@@ -17,6 +17,14 @@ that invokes this unit and owns queueing/retries around it.
 
 ## Fetch-outcome taxonomy (decision, bd lode-w0h.1, debate round 3, 2026-07-08)
 
+**The HTTP-status half of this taxonomy — which statuses are OK/TOMBSTONE/
+TRANSIENT — now lives in :mod:`lode.fetch_outcome` (lode-gpzn.13), a
+connector-neutral module the Atlassian connectors (JIRA/Confluence) also
+call, so the mapping is defined once rather than copied per connector. Only
+the extractor-driven "2xx but empty/short content" tombstone signal (b,
+below) stays here — it is trafilatura-specific, not part of the HTTP
+classifier.**
+
 - **(a) 2xx + extractable text** → :data:`FetchStatus.OK` — job done.
 - **(b) PERMANENT failure** (retrying will not help) → :data:`FetchStatus.TOMBSTONE`:
     - 401/403 and any other 4xx response, **except** the two codes HTTP itself
@@ -114,6 +122,7 @@ import httpx
 import trafilatura
 
 from lode.config import Settings
+from lode.fetch_outcome import HttpOutcome, classify_http_status
 
 #: Sent on every fetch so a server sees an identifiable, non-empty UA rather
 #: than a bare httpx default (some sites 403 a missing/generic UA outright).
@@ -130,14 +139,6 @@ from lode.config import Settings
 #: operator can actually act on. Restore ``(+<url>)`` only if lode ever gains a
 #: project-owned URL. (lode-yzv)
 _USER_AGENT = "lode-webfetch/1"
-
-#: The 4xx codes HTTP itself flags as "try again later" — everything else in
-#: the 4xx range is a permanent tombstone. 408 Request Timeout (RFC 9110
-#: §15.5.9: "the client MAY repeat the request") and 429 Too Many Requests.
-_TRANSIENT_4XX = frozenset({408, 429})
-
-#: At and above this, every status is a 5xx server error — always retryable.
-_TRANSIENT_STATUS_FLOOR = 500
 
 
 class FetchStatus(str, Enum):
@@ -256,10 +257,7 @@ class HttpxFetcher:
             # or it escapes this method entirely, unclassified.
             raise TransientFetchError(f"http client error: {exc}") from exc
 
-        if (
-            response.status_code in _TRANSIENT_4XX
-            or response.status_code >= _TRANSIENT_STATUS_FLOOR
-        ):
+        if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
             raise TransientFetchError(f"http {response.status_code}")
 
         return RawResponse(
@@ -313,7 +311,12 @@ def fetch_and_extract(
     except TooManyRedirectsError:
         return _tombstone(final_url=url, reason="too_many_redirects")
 
-    if response.status_code >= 400:
+    # fetcher.fetch() already raised TransientFetchError for any TRANSIENT
+    # status (see HttpxFetcher.fetch above), so a status_code reaching here
+    # classifies as either OK (< 400) or TOMBSTONE (>= 400) — never
+    # TRANSIENT. Re-running the shared classifier keeps this branch in sync
+    # with lode.fetch_outcome rather than re-deriving ">= 400" locally.
+    if classify_http_status(response.status_code) is HttpOutcome.TOMBSTONE:
         return _tombstone(
             final_url=response.final_url,
             reason=f"http_{response.status_code}",
