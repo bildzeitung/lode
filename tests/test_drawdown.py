@@ -6,6 +6,10 @@ to one external node with two edges; only one hop is followed (the fetched
 page's own links are never scanned); plus the canonicalization rule set and the
 redirect-wrinkle re-pointing the ticket's decision pins down explicitly.
 
+Also covers lode-gpzn.2: JIRA/Confluence Cloud link detection + source_type
+routing + semantic external_id + persisted api_base (``TestAtlassianDetection``),
+and the ``refresh_external`` source_type dispatcher (``TestRefreshExternalDispatch``).
+
 All fetch-touching tests use a stub :class:`~lode.webfetch.Fetcher` (the seam
 lode-w0h.1 built) so the gate never makes a real network request -- except one
 negative-controlled "real wiring" test that monkeypatches ``httpx.Client``
@@ -24,6 +28,9 @@ import pytest
 
 from lode.config import load_settings
 from lode.drawdown import (
+    SOURCE_TYPE_CONFLUENCE,
+    SOURCE_TYPE_JIRA,
+    SOURCE_TYPE_WEB,
     canonicalize_url,
     detect_and_enqueue_drawdown,
     extract_urls,
@@ -58,6 +65,13 @@ def _jobs_for(conn, target: str) -> list[tuple]:
         "SELECT type, status FROM jobs WHERE target_version = ? ORDER BY type",
         (target,),
     ).fetchall()
+
+
+def _external_row(conn, external_id: str) -> tuple | None:
+    return conn.execute(
+        "SELECT source_type, api_base FROM externals WHERE external_id = ?",
+        (external_id,),
+    ).fetchone()
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +343,204 @@ class TestDetectAndEnqueueDrawdown:
 
 
 # ---------------------------------------------------------------------------
+# Atlassian link detection + source_type routing + semantic external_id
+# (lode-gpzn.2)
+# ---------------------------------------------------------------------------
+
+
+def _jira_settings(**overrides):
+    return load_settings(
+        jira_enabled=True, jira_token="tok", jira_email="a@example.com", **overrides
+    )
+
+
+def _confluence_settings(**overrides):
+    return load_settings(
+        confluence_enabled=True,
+        confluence_token="tok",
+        confluence_email="a@example.com",
+        **overrides,
+    )
+
+
+class TestAtlassianDetection:
+    def test_jira_browse_url_routes_when_active(self, conn) -> None:
+        url = "https://acme.atlassian.net/browse/ABC-123"
+        settings = _jira_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+
+        assert external_ids == ["ABC-123"]
+        rows = _edges_from(conn, "note-1")
+        assert len(rows) == 1
+        to_id, source, confidence, quoted_text, status, source_version = rows[0]
+        assert to_id == "ABC-123"
+        assert source == "user"
+        assert confidence == 1.0
+        assert quoted_text == url  # literal pasted URL, for provenance
+        assert status == "fresh"
+        assert _jobs_for(conn, "ABC-123") == [("refresh", "pending")]
+        assert _external_row(conn, "ABC-123") == (
+            SOURCE_TYPE_JIRA,
+            "https://acme.atlassian.net",
+        )
+
+    def test_jira_flag_off_falls_through_to_web(self, conn) -> None:
+        url = "https://acme.atlassian.net/browse/ABC-123"
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=load_settings()
+            )
+        # Flag-off (default) -- untouched web path: canonicalized URL, not
+        # the semantic key, and no externals row pre-created.
+        assert external_ids == [canonicalize_url(url)]
+        assert _external_row(conn, "ABC-123") is None
+        assert _jobs_for(conn, canonicalize_url(url)) == [("refresh", "pending")]
+
+    def test_jira_enabled_but_no_credentials_falls_through_to_web(self, conn) -> None:
+        url = "https://acme.atlassian.net/browse/ABC-123"
+        settings = load_settings(jira_enabled=True)  # no token/email resolvable
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+        assert external_ids == [canonicalize_url(url)]
+        assert _external_row(conn, "ABC-123") is None
+
+    def test_jira_url_without_issue_key_falls_through_to_web(self, conn) -> None:
+        url = "https://acme.atlassian.net/jira/software/projects/ABC/boards/1"
+        settings = _jira_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+        # Matched host, but no /browse/{KEY} shape -- no semantic id to route
+        # on, so this falls through to the web path exactly like flag-off.
+        assert external_ids == [canonicalize_url(url)]
+
+    def test_jira_configured_base_url_persisted_verbatim(self, conn) -> None:
+        url = "https://jira.internal.example.com/browse/XYZ-9"
+        settings = _jira_settings(jira_base_url="https://jira.internal.example.com")
+        with conn:
+            detect_and_enqueue_drawdown(conn, "note-1", "ver-1", url, settings=settings)
+        assert _external_row(conn, "XYZ-9") == (
+            SOURCE_TYPE_JIRA,
+            "https://jira.internal.example.com",
+        )
+
+    def test_jira_configured_base_url_host_mismatch_falls_through(self, conn) -> None:
+        # A configured base_url means ONLY that host routes -- the
+        # *.atlassian.net inference is not also tried once a base is set.
+        url = "https://other.atlassian.net/browse/ABC-123"
+        settings = _jira_settings(jira_base_url="https://jira.internal.example.com")
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+        assert external_ids == [canonicalize_url(url)]
+
+    def test_confluence_id_bearing_url_routes_when_active(self, conn) -> None:
+        url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789/Design+Doc"
+        settings = _confluence_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+
+        assert external_ids == ["123456789"]
+        rows = _edges_from(conn, "note-1")
+        assert rows[0][0] == "123456789"
+        assert rows[0][3] == url
+        assert _external_row(conn, "123456789") == (
+            SOURCE_TYPE_CONFLUENCE,
+            "https://acme.atlassian.net",
+        )
+
+    def test_confluence_tiny_link_falls_through_to_web(self, conn) -> None:
+        """Owner decision F: id-less tiny-links stay synchronous/network-free web."""
+        url = "https://acme.atlassian.net/wiki/x/AbCdE"
+        settings = _confluence_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+        assert external_ids == [canonicalize_url(url)]
+        rows = _edges_from(conn, "note-1")
+        assert rows[0][0] == canonicalize_url(url)
+
+    def test_confluence_legacy_display_url_falls_through_to_web(self, conn) -> None:
+        """Owner decision F: legacy /display/SPACE/Title carries no page-id."""
+        url = "https://acme.atlassian.net/display/ENG/Design+Doc"
+        settings = _confluence_settings()
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=settings
+            )
+        assert external_ids == [canonicalize_url(url)]
+
+    def test_confluence_flag_off_falls_through_to_web(self, conn) -> None:
+        url = "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456789/Design+Doc"
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", url, settings=load_settings()
+            )
+        assert external_ids == [canonicalize_url(url)]
+        assert _external_row(conn, "123456789") is None
+
+    def test_two_url_forms_of_same_issue_dedup_to_one_external(self, conn) -> None:
+        """Acceptance: two id-bearing URL forms of the same issue dedup to one node."""
+        settings = _jira_settings()
+        with conn:
+            detect_and_enqueue_drawdown(
+                conn,
+                "note-1",
+                "ver-1",
+                "https://acme.atlassian.net/browse/ABC-123",
+                settings=settings,
+            )
+        with conn:
+            detect_and_enqueue_drawdown(
+                conn,
+                "note-2",
+                "ver-2",
+                "https://acme.atlassian.net/browse/ABC-123/",
+                settings=settings,
+            )
+
+        (n,) = conn.execute(
+            "SELECT COUNT(*) FROM externals WHERE external_id = 'ABC-123'"
+        ).fetchone()
+        assert n == 1
+        (edge_count,) = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE to_id = 'ABC-123' AND source = 'user'"
+        ).fetchone()
+        assert edge_count == 2
+
+    def test_jira_and_confluence_urls_in_one_note_both_route(self, conn) -> None:
+        body = (
+            "see https://acme.atlassian.net/browse/ABC-123 and "
+            "https://acme.atlassian.net/wiki/spaces/ENG/pages/999/Doc"
+        )
+        settings = load_settings(
+            jira_enabled=True,
+            jira_token="tok",
+            jira_email="a@example.com",
+            confluence_enabled=True,
+            confluence_token="tok",
+            confluence_email="a@example.com",
+        )
+        with conn:
+            external_ids = detect_and_enqueue_drawdown(
+                conn, "note-1", "ver-1", body, settings=settings
+            )
+        assert external_ids == ["ABC-123", "999"]
+        assert _external_row(conn, "ABC-123")[0] == SOURCE_TYPE_JIRA
+        assert _external_row(conn, "999")[0] == SOURCE_TYPE_CONFLUENCE
+
+
+# ---------------------------------------------------------------------------
 # refresh_external
 # ---------------------------------------------------------------------------
 
@@ -494,6 +706,79 @@ class TestRefreshExternalRealWiring:
             "SELECT status FROM snapshots WHERE external_id = ?", (_URL,)
         ).fetchone()
         assert status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# refresh_external source_type dispatcher (lode-gpzn.2)
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshExternalDispatch:
+    def test_no_externals_row_dispatches_to_web(self, conn) -> None:
+        """No row yet (a first-ever web refresh) falls back to SOURCE_TYPE_WEB.
+
+        Mirrors worker._refresh_dead_letter_hook's identical fallback --
+        detect_and_enqueue_drawdown never pre-creates a web external's row.
+        """
+        html = (
+            "<html><body><article><p>"
+            + ("Dispatcher web fallback content. " * 20)
+            + "</p></article></body></html>"
+        )
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=_URL, status_code=200, text=html)
+        )
+        outcome = refresh_external(conn, _URL, load_settings(), fetcher=fetcher)
+        assert outcome is not None
+        assert "ok" in outcome
+        assert fetcher.calls == [_URL]
+
+    def test_explicit_web_source_type_row_dispatches_to_web(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+            (_URL, SOURCE_TYPE_WEB),
+        )
+        conn.commit()
+        html = (
+            "<html><body><article><p>"
+            + ("Explicit web row content. " * 20)
+            + "</p></article></body></html>"
+        )
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=_URL, status_code=200, text=html)
+        )
+        outcome = refresh_external(conn, _URL, load_settings(), fetcher=fetcher)
+        assert outcome is not None
+        assert "ok" in outcome
+
+    def test_jira_source_type_raises_no_fetch_unit_yet(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("ABC-123", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
+        )
+        conn.commit()
+        with pytest.raises(RuntimeError, match="ABC-123"):
+            refresh_external(conn, "ABC-123", load_settings())
+
+    def test_confluence_source_type_raises_no_fetch_unit_yet(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("999", SOURCE_TYPE_CONFLUENCE, "https://acme.atlassian.net"),
+        )
+        conn.commit()
+        with pytest.raises(RuntimeError, match="999"):
+            refresh_external(conn, "999", load_settings())
+
+    def test_unknown_source_type_raises(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+            ("weird-1", "carrier-pigeon"),
+        )
+        conn.commit()
+        with pytest.raises(RuntimeError, match="carrier-pigeon"):
+            refresh_external(conn, "weird-1", load_settings())
 
 
 # ---------------------------------------------------------------------------
