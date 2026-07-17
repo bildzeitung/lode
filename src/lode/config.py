@@ -25,12 +25,25 @@ each pattern is validated to compile at load.
 import os
 import re
 import tomllib
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lode.lock import lock_path
+
+# --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
+# Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
+# credentials (account email + API token) -- checked before the config.toml
+# fallback fields declared on Settings below. Named here, at module scope
+# (rather than as string literals), so Settings' field descriptions and
+# resolve_jira_credentials/resolve_confluence_credentials share one spelling.
+JIRA_TOKEN_ENV = "LODE_JIRA_TOKEN"
+JIRA_EMAIL_ENV = "LODE_JIRA_EMAIL"
+CONFLUENCE_TOKEN_ENV = "LODE_CONFLUENCE_TOKEN"
+CONFLUENCE_EMAIL_ENV = "LODE_CONFLUENCE_EMAIL"
 
 
 class Kind(str, Enum):
@@ -41,11 +54,20 @@ class Kind(str, Enum):
     BUILD = "build"
 
 
-def _knob(default: object, kind: Kind, doc: str, **constraints: object) -> object:
-    """A typed field carrying its kind tag (read back via :func:`knob_kinds`)."""
-    return Field(
-        default, description=doc, json_schema_extra={"kind": kind.value}, **constraints
-    )
+def _knob(
+    default: object, kind: Kind, doc: str, secret: bool = False, **constraints: object
+) -> object:
+    """A typed field carrying its kind tag (read back via :func:`knob_kinds`).
+
+    ``secret=True`` marks a field whose value must never be echoed back to the
+    user (a credential, e.g. an Atlassian API token, lode-gpzn.1) --
+    :func:`knob_rows` excludes any field tagged this way from the ``lode
+    config`` / TUI knob table, regardless of its ``kind``.
+    """
+    extra: dict[str, object] = {"kind": kind.value}
+    if secret:
+        extra["secret"] = True
+    return Field(default, description=doc, json_schema_extra=extra, **constraints)
 
 
 # High-precision secret seed set (docs/configuration.md "Privacy & egress",
@@ -312,6 +334,73 @@ class Settings(BaseModel):
         "utm_medium, utm_campaign, ... Everything else matches exactly.",
     )
 
+    # --- Externals: Atlassian connectors (JIRA + Confluence Cloud, lode-gpzn) -
+    # Locked decisions (lode-gpzn epic): Cloud-only, Basic auth (account email +
+    # API token), feature-flagged per product default OFF, token resolved
+    # env-var PRIMARY with an optional config.toml fallback (no secret required
+    # to live in config.toml). See resolve_jira_credentials /
+    # resolve_confluence_credentials / jira_active / confluence_active below.
+    jira_enabled: bool = _knob(
+        False,
+        Kind.RUNTIME,
+        "Feature flag: JIRA Cloud API connector. Off by default -- a JIRA "
+        "link falls through to the generic web connector until flagged on "
+        "AND credentials resolve (lode-gpzn.1).",
+    )
+    confluence_enabled: bool = _knob(
+        False,
+        Kind.RUNTIME,
+        "Feature flag: Confluence Cloud API connector. Off by default -- a "
+        "Confluence link falls through to the generic web connector until "
+        "flagged on AND credentials resolve (lode-gpzn.1).",
+    )
+    jira_base_url: str = _knob(
+        "",
+        Kind.RUNTIME,
+        "JIRA Cloud API base URL override, e.g. 'https://acme.atlassian.net'. "
+        "Empty (default) means infer from the pasted link at detection time. "
+        "Validated as a well-formed http(s) URL when non-empty.",
+    )
+    confluence_base_url: str = _knob(
+        "",
+        Kind.RUNTIME,
+        "Confluence Cloud API base URL override. Empty (default) means infer "
+        "from the pasted link at detection time. Validated as a well-formed "
+        "http(s) URL when non-empty.",
+    )
+    jira_email: str = _knob(
+        "",
+        Kind.RUNTIME,
+        f"JIRA Cloud Basic-auth account email, config.toml FALLBACK only -- "
+        f"the {JIRA_EMAIL_ENV} env var is checked first (lode-gpzn.1). Empty "
+        "means unresolved from this source.",
+    )
+    confluence_email: str = _knob(
+        "",
+        Kind.RUNTIME,
+        f"Confluence Cloud Basic-auth account email, config.toml FALLBACK "
+        f"only -- the {CONFLUENCE_EMAIL_ENV} env var is checked first "
+        "(lode-gpzn.1). Empty means unresolved from this source.",
+    )
+    jira_token: str = _knob(
+        "",
+        Kind.RUNTIME,
+        f"JIRA Cloud API token, config.toml FALLBACK only -- the "
+        f"{JIRA_TOKEN_ENV} env var is checked first (lode-gpzn.1). No secret "
+        "is required to live here. NEVER logged or echoed -- excluded from "
+        "the lode config / TUI knob table (secret=True).",
+        secret=True,
+    )
+    confluence_token: str = _knob(
+        "",
+        Kind.RUNTIME,
+        f"Confluence Cloud API token, config.toml FALLBACK only -- the "
+        f"{CONFLUENCE_TOKEN_ENV} env var is checked first (lode-gpzn.1). No "
+        "secret is required to live here. NEVER logged or echoed -- excluded "
+        "from the lode config / TUI knob table (secret=True).",
+        secret=True,
+    )
+
     # --- Privacy & egress -----------------------------------------------------
     no_egress_default: bool = _knob(
         False,
@@ -389,6 +478,25 @@ class Settings(BaseModel):
                 raise ValueError(f"invalid redaction regex {pattern!r}: {exc}") from exc
         return patterns
 
+    @field_validator("jira_base_url", "confluence_base_url")
+    @classmethod
+    def _base_url_valid_or_empty(cls, value: str) -> str:
+        """Fail loudly at load if a non-empty base-URL override is malformed.
+
+        Empty is the documented "infer at detection time" default (lode-gpzn.1)
+        and always passes; anything else must be a well-formed http(s) URL, so
+        a typo'd override surfaces at ``Settings()`` construction rather than
+        as an opaque request failure from the fetch unit later.
+        """
+        if value == "":
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                f"invalid base URL {value!r}: must be a well-formed http(s) URL"
+            )
+        return value
+
 
 def knob_kinds() -> dict[str, str]:
     """Map each knob name to its kind tag (runtime/tune/build)."""
@@ -444,6 +552,94 @@ def load_settings(**overrides: object) -> Settings:
         if v is not None or k not in Settings.model_fields
     }
     return Settings(**{**file_values, **supplied})
+
+
+# --- Atlassian connector credentials (JIRA + Confluence Cloud, lode-gpzn.1) --
+# Resolution order per product: the documented env var (JIRA_TOKEN_ENV /
+# JIRA_EMAIL_ENV / CONFLUENCE_TOKEN_ENV / CONFLUENCE_EMAIL_ENV above) first,
+# then the matching Settings/config.toml field as fallback. A missing token OR
+# email resolves to None -- a clean "connector inactive" state (locked
+# decision 5, lode-gpzn epic), never an exception; the connector falls through
+# to the generic web fetcher. Deliberately NOT modeled on lode.auth.build_client
+# (the Anthropic SDK credential chain): that chain never reads config.toml at
+# all, whereas this ticket's locked design explicitly wants a config.toml
+# fallback, so it needed its own resolver rather than reusing that one.
+
+
+@dataclass(frozen=True)
+class AtlassianCredentials:
+    """Resolved Basic-auth credentials for one Atlassian Cloud product.
+
+    ``__repr__`` is overridden so the token never appears in a traceback, a
+    ``repr()``, or an incautious ``logger.debug(creds)`` -- the acceptance
+    criterion (lode-gpzn.1) is "never logged or echoed anywhere", not just
+    "never logged deliberately".
+    """
+
+    email: str
+    token: str
+
+    def __repr__(self) -> str:
+        return f"AtlassianCredentials(email={self.email!r}, token='***redacted***')"
+
+
+def _resolve_atlassian_credentials(
+    token_env: str, email_env: str, config_token: str, config_email: str
+) -> AtlassianCredentials | None:
+    """Env-var-primary, config.toml-fallback resolution shared by both products."""
+    token = os.environ.get(token_env) or config_token or None
+    email = os.environ.get(email_env) or config_email or None
+    if token is None or email is None:
+        return None
+    return AtlassianCredentials(email=email, token=token)
+
+
+def resolve_jira_credentials(settings: Settings) -> AtlassianCredentials | None:
+    """Resolve JIRA Cloud Basic-auth credentials, or ``None`` if unresolved.
+
+    ``None`` is the clean "connector inactive" state -- not an error -- for
+    either a missing token or a missing account email, from either source.
+    """
+    return _resolve_atlassian_credentials(
+        JIRA_TOKEN_ENV, JIRA_EMAIL_ENV, settings.jira_token, settings.jira_email
+    )
+
+
+def resolve_confluence_credentials(settings: Settings) -> AtlassianCredentials | None:
+    """Resolve Confluence Cloud Basic-auth credentials, or ``None`` if unresolved.
+
+    ``None`` is the clean "connector inactive" state -- not an error -- for
+    either a missing token or a missing account email, from either source.
+    """
+    return _resolve_atlassian_credentials(
+        CONFLUENCE_TOKEN_ENV,
+        CONFLUENCE_EMAIL_ENV,
+        settings.confluence_token,
+        settings.confluence_email,
+    )
+
+
+def jira_active(settings: Settings) -> bool:
+    """True iff JIRA is flagged on AND credentials resolve (locked decision 5).
+
+    The single check gpzn.2's link-detection routing and gpzn.3's fetch unit
+    are expected to make before treating a JIRA link as API-connector
+    territory rather than falling through to the generic web fetcher.
+    """
+    return settings.jira_enabled and resolve_jira_credentials(settings) is not None
+
+
+def confluence_active(settings: Settings) -> bool:
+    """True iff Confluence is flagged on AND credentials resolve (locked decision 5).
+
+    The single check gpzn.2's link-detection routing and gpzn.4's fetch unit
+    are expected to make before treating a Confluence link as API-connector
+    territory rather than falling through to the generic web fetcher.
+    """
+    return (
+        settings.confluence_enabled
+        and resolve_confluence_credentials(settings) is not None
+    )
 
 
 # --- On-disk layout (docs/configuration.md "Paths & locations") --------------
@@ -681,10 +877,19 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
     (the CLI as aligned text, the TUI as a ``DataTable`` widget), per the
     ticket's design: "TUI renders it in a table widget ... CLI prints
     aligned rows. Both call the one shared builder."
+
+    A field declared ``secret=True`` (``jira_token`` / ``confluence_token``,
+    lode-gpzn.1) is excluded outright, regardless of kind -- the token value
+    must never be echoed anywhere, including this table.
     """
     rows: list[tuple[str, str, str]] = []
     for name, kind in knob_kinds().items():
         if kind not in (Kind.RUNTIME.value, Kind.TUNE.value):
+            continue
+        field = Settings.model_fields[name]
+        if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get(
+            "secret", False
+        ):
             continue
         value = getattr(settings, name)
         if isinstance(value, list):

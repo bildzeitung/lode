@@ -14,12 +14,19 @@ import pytest
 from pydantic import ValidationError
 
 from lode.config import (
+    CONFLUENCE_EMAIL_ENV,
+    CONFLUENCE_TOKEN_ENV,
+    JIRA_EMAIL_ENV,
+    JIRA_TOKEN_ENV,
+    AtlassianCredentials,
     Kind,
     Settings,
+    confluence_active,
     config_lines,
     config_path,
     config_rows,
     default_db_path,
+    jira_active,
     knob_kinds,
     knob_rows,
     lance_dir,
@@ -27,6 +34,8 @@ from lode.config import (
     lode_home,
     log_dir,
     model_cache_dir,
+    resolve_confluence_credentials,
+    resolve_jira_credentials,
 )
 
 VALID_KINDS = {k.value for k in Kind}
@@ -294,10 +303,20 @@ def test_knob_rows_includes_only_runtime_and_tune_kinds() -> None:
     rows = knob_rows(Settings())
     names = {name for name, _, _ in rows}
     kinds = knob_kinds()
+    # A field declared secret=True (jira_token / confluence_token, lode-gpzn.1)
+    # is excluded even though it carries a RUNTIME kind -- see the dedicated
+    # test_jira_token_and_confluence_token_excluded_from_knob_rows below for
+    # that behavior specifically.
+    secret_names = {
+        name
+        for name, field in Settings.model_fields.items()
+        if isinstance(field.json_schema_extra, dict)
+        and field.json_schema_extra.get("secret", False)
+    }
     expected_names = {
         name
         for name, kind in kinds.items()
-        if kind in (Kind.RUNTIME.value, Kind.TUNE.value)
+        if kind in (Kind.RUNTIME.value, Kind.TUNE.value) and name not in secret_names
     }
     assert names == expected_names
     assert all(kind != Kind.BUILD.value for _, _, kind in rows)
@@ -344,8 +363,191 @@ def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
         {"progress_heartbeat_interval_s": 0},  # gt=0.0
         {"anthropic_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
+        {"jira_base_url": "not-a-url"},  # malformed base URL (lode-gpzn.1)
+        {"confluence_base_url": "ftp://wrong-scheme.example"},  # non-http(s)
     ],
 )
 def test_invalid_values_fail_at_load(overrides: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         load_settings(**overrides)
+
+
+# --- Atlassian connector config: flags, base URLs, credential resolution -----
+# (lode-gpzn.1: per-product feature flags + env-primary token/secret resolution)
+
+
+def test_atlassian_flags_default_off() -> None:
+    s = Settings()
+    assert s.jira_enabled is False
+    assert s.confluence_enabled is False
+
+
+def test_atlassian_base_urls_default_empty_meaning_infer() -> None:
+    s = Settings()
+    assert s.jira_base_url == ""
+    assert s.confluence_base_url == ""
+
+
+def test_atlassian_base_url_accepts_well_formed_http_url() -> None:
+    s = Settings(
+        jira_base_url="https://acme.atlassian.net",
+        confluence_base_url="http://internal.example.com/wiki",
+    )
+    assert s.jira_base_url == "https://acme.atlassian.net"
+    assert s.confluence_base_url == "http://internal.example.com/wiki"
+
+
+def test_atlassian_credential_fields_default_empty() -> None:
+    s = Settings()
+    assert s.jira_email == ""
+    assert s.jira_token == ""
+    assert s.confluence_email == ""
+    assert s.confluence_token == ""
+
+
+def test_atlassian_credential_fields_round_trip_via_config_toml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv(JIRA_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(JIRA_EMAIL_ENV, raising=False)
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        'jira_enabled = true\njira_email = "me@acme.com"\njira_token = "tok-123"\n',
+        encoding="utf-8",
+    )
+    s = load_settings()
+    assert s.jira_enabled is True
+    assert s.jira_email == "me@acme.com"
+    assert s.jira_token == "tok-123"
+
+
+# --- credential resolution: env-first, config.toml fallback ------------------
+
+
+def test_resolve_jira_credentials_env_var_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(JIRA_TOKEN_ENV, "env-token")
+    monkeypatch.setenv(JIRA_EMAIL_ENV, "env@acme.com")
+    s = Settings(jira_email="config@acme.com", jira_token="config-token")
+    creds = resolve_jira_credentials(s)
+    assert creds == AtlassianCredentials(email="env@acme.com", token="env-token")
+
+
+def test_resolve_jira_credentials_falls_back_to_config_toml_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(JIRA_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(JIRA_EMAIL_ENV, raising=False)
+    s = Settings(jira_email="config@acme.com", jira_token="config-token")
+    creds = resolve_jira_credentials(s)
+    assert creds == AtlassianCredentials(email="config@acme.com", token="config-token")
+
+
+def test_resolve_confluence_credentials_env_var_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CONFLUENCE_TOKEN_ENV, "env-token")
+    monkeypatch.setenv(CONFLUENCE_EMAIL_ENV, "env@acme.com")
+    s = Settings(confluence_email="config@acme.com", confluence_token="config-token")
+    creds = resolve_confluence_credentials(s)
+    assert creds == AtlassianCredentials(email="env@acme.com", token="env-token")
+
+
+def test_resolve_confluence_credentials_falls_back_to_config_toml_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONFLUENCE_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(CONFLUENCE_EMAIL_ENV, raising=False)
+    s = Settings(confluence_email="config@acme.com", confluence_token="config-token")
+    creds = resolve_confluence_credentials(s)
+    assert creds == AtlassianCredentials(email="config@acme.com", token="config-token")
+
+
+@pytest.mark.parametrize(
+    "field_overrides",
+    [
+        {},  # neither email nor token resolves from any source
+        {"jira_email": "only-email@acme.com"},  # token still missing
+        {"jira_token": "only-token"},  # email still missing
+    ],
+)
+def test_resolve_jira_credentials_missing_piece_returns_none_not_error(
+    monkeypatch: pytest.MonkeyPatch, field_overrides: dict[str, str]
+) -> None:
+    # Acceptance: a missing token yields a clean "connector inactive" state,
+    # not an exception -- even when only one of email/token resolves.
+    monkeypatch.delenv(JIRA_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(JIRA_EMAIL_ENV, raising=False)
+    s = Settings(**field_overrides)
+    assert resolve_jira_credentials(s) is None
+
+
+def test_resolve_confluence_credentials_missing_returns_none_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONFLUENCE_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(CONFLUENCE_EMAIL_ENV, raising=False)
+    s = Settings()
+    assert resolve_confluence_credentials(s) is None
+
+
+# --- jira_active / confluence_active: flag AND credentials both required ----
+
+
+def test_jira_active_requires_both_flag_and_resolved_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(JIRA_TOKEN_ENV, "env-token")
+    monkeypatch.setenv(JIRA_EMAIL_ENV, "env@acme.com")
+    # Credentials resolve, but the flag is off (the default) -- inactive.
+    assert jira_active(Settings(jira_enabled=False)) is False
+    # Flag on and credentials resolve -- active.
+    assert jira_active(Settings(jira_enabled=True)) is True
+
+
+def test_jira_active_false_when_flagged_on_but_no_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(JIRA_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(JIRA_EMAIL_ENV, raising=False)
+    assert jira_active(Settings(jira_enabled=True)) is False
+
+
+def test_confluence_active_requires_both_flag_and_resolved_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CONFLUENCE_TOKEN_ENV, "env-token")
+    monkeypatch.setenv(CONFLUENCE_EMAIL_ENV, "env@acme.com")
+    assert confluence_active(Settings(confluence_enabled=False)) is False
+    assert confluence_active(Settings(confluence_enabled=True)) is True
+
+
+def test_confluence_active_false_when_flagged_on_but_no_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONFLUENCE_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(CONFLUENCE_EMAIL_ENV, raising=False)
+    assert confluence_active(Settings(confluence_enabled=True)) is False
+
+
+# --- token value is never logged or echoed anywhere --------------------------
+
+
+def test_jira_token_and_confluence_token_excluded_from_knob_rows() -> None:
+    s = Settings(jira_token="super-secret", confluence_token="also-secret")
+    names = {name for name, _, _ in knob_rows(s)}
+    assert "jira_token" not in names
+    assert "confluence_token" not in names
+    # The non-secret sibling fields are still surfaced.
+    assert "jira_enabled" in names
+    assert "jira_email" in names
+    assert "jira_base_url" in names
+
+
+def test_atlassian_credentials_repr_redacts_token() -> None:
+    creds = AtlassianCredentials(email="me@acme.com", token="super-secret-token")
+    rendered = repr(creds)
+    assert "super-secret-token" not in rendered
+    assert "me@acme.com" in rendered
+    assert "redacted" in rendered

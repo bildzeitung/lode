@@ -148,6 +148,27 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 | Fetch min-extract-chars floor | tune | 200 | Readability-extracted text shorter than this is treated as a JS-scaffold/paywall/empty page and tombstoned, even when the extractor returned non-`None` text — the length-floor half of the fetch-outcome signal ([externals.md](externals.md#draw-down-rules)). |
 | URL tracking-param blocklist | runtime | `utm_*`, `fbclid`, `gclid` | Query params stripped during URL canonicalization (`lode-w0h.3`) before the `external_id` dedup key is computed. A trailing `*` matches a prefix (case-insensitive); everything else matches exactly. This same canonical form is the `lode-w0h.6` refresh policy's join key for "the same source" across refetches — and, since `lode-0as`, also strips userinfo (`user[:pass]@`) so credentials in a pasted URL never enter it. ([externals.md](externals.md#url-canonicalization-decided-lode-w0h3-userinfo-stripped-lode-0as)) |
 
+### Atlassian connectors (JIRA + Confluence Cloud, `lode-gpzn`)
+
+Cloud-only, Basic auth (account email + API token); JIRA REST v3 and Confluence Cloud REST. Data Center / Server is out of scope (deferred). Each product is feature-flagged independently and **defaults off** — a JIRA/Confluence link falls through to the generic web connector until its flag is on **and** credentials resolve (`src/lode/config.py::jira_active` / `confluence_active`).
+
+| Knob | Kind | Default | Notes |
+|---|---|---|---|
+| `jira_enabled` | runtime | `false` | Feature flag for the JIRA Cloud API connector. |
+| `confluence_enabled` | runtime | `false` | Feature flag for the Confluence Cloud API connector. |
+| `jira_base_url` | runtime | `""` (empty) | API base override, e.g. `https://acme.atlassian.net`. Empty means infer from the pasted link at detection time. A non-empty value must be a well-formed `http(s)` URL — a malformed one fails validation at `Settings()` construction. |
+| `confluence_base_url` | runtime | `""` (empty) | Same shape as `jira_base_url`, for Confluence. |
+| `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **Never logged, echoed, or shown by `lode config`** — excluded from the knob table by construction (`secret=True`), not just omitted by convention. |
+| `LODE_JIRA_EMAIL` env var / `jira_email` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud Basic-auth account email — same env-first, config.toml-fallback resolution as the token. |
+| `LODE_CONFLUENCE_TOKEN` env var / `confluence_token` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud API token — same resolution and secrecy guarantee as `jira_token`. |
+| `LODE_CONFLUENCE_EMAIL` env var / `confluence_email` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud Basic-auth account email — same resolution as `jira_email`. |
+
+A missing token or email — from either source — resolves to a clean **"connector inactive"** state (`resolve_jira_credentials`/`resolve_confluence_credentials` return `None`), never an exception; the link falls through to the generic web fetcher. This is a deliberately different shape from the Anthropic credential chain (`src/lode/auth.py`, [decisions.md](decisions.md)): that chain never reads `config.toml` at all and raises `AuthError` on "nothing resolved" (there is no "connector inactive" fallback path for the LLM calls lode's own core loop depends on), whereas an Atlassian connector is opt-in per product and must degrade quietly when unconfigured.
+
+### Atlassian secrets are excluded from `lode config` / the TUI knob table
+
+`jira_token` and `confluence_token` never appear in `knob_rows()`'s output (`src/lode/config.py::_knob`'s `secret=True` flag), so neither `lode config` nor the TUI's Ctrl+O diagnostics screen ever renders one — this is enforced structurally, not by each renderer remembering to skip two field names. `jira_email` / `confluence_email` / the base-URL overrides are ordinary knobs and do appear in the table.
+
 ## Privacy & egress
 
 | Knob | Kind | Default | Notes |
