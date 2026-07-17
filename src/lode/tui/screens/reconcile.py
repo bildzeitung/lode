@@ -36,8 +36,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Static, TextArea
+from textual.widgets import Header, Static, TextArea
 
+from lode.tui.lode_footer import LodeFooter
 from lode.tui.reconcile import Conflict, discard, reapply
 from lode.versions import SaveResult
 
@@ -98,7 +99,7 @@ class ReconcileScreen(Screen[None]):
             ),
             TextArea(_diff_text(self.conflict), read_only=True, id=DIFF_ID),
         )
-        yield Footer()
+        yield LodeFooter()
 
     def action_reapply(self) -> None:
         """Re-parent the buffer onto the new head and save it, or exit on success."""

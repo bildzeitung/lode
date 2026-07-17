@@ -88,10 +88,11 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.coordinate import Coordinate
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header
+from textual.widgets import DataTable, Header
 
 from lode.notes_read import list_notes_with_all_tags, list_tags, short_note_id
 from lode.tui.dates import format_adaptive_date
+from lode.tui.lode_footer import LodeFooter
 from lode.tui.screens.browse import EditScreen
 
 #: The top panel's tag grid widget id -- read back in tests.
@@ -155,7 +156,7 @@ class TagsScreen(Screen[None]):
             DataTable(id=TAG_LIST_ID, cursor_type="cell", show_header=False),
             DataTable(id=NOTES_TABLE_ID, cursor_type="row"),
         )
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         # Both panels are (re)populated in on_screen_resume, not here (see its
