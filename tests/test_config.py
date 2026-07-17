@@ -16,7 +16,9 @@ from pydantic import ValidationError
 from lode.config import (
     Kind,
     Settings,
+    config_lines,
     config_path,
+    config_rows,
     default_db_path,
     knob_kinds,
     knob_rows,
@@ -240,6 +242,49 @@ def test_model_cache_dir_defaults_under_home_not_tempdir(
     cache_dir = model_cache_dir()
     assert cache_dir == Path.home() / ".lode" / "models"
     assert not str(cache_dir).startswith(tempfile.gettempdir())
+
+
+# --- config_rows() — the CLI's raw path-row builder (lode-l38d.4) -----------
+
+
+def test_config_rows_and_config_lines_share_the_same_label_and_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # config_rows (the raw (label, value, note) triples the CLI's rich Table
+    # renders) and config_lines (the pre-padded text the TUI's Static widget
+    # renders) are two shapes of the ONE computation
+    # (_resolved_config_rows) -- this pins that they never drift apart.
+    root = tmp_path / "root"
+    monkeypatch.setenv("LODE_HOME", str(root))
+    db = default_db_path()
+
+    rows = config_rows(db)
+    lines = config_lines(db)
+    assert len(rows) == len(lines)
+    for (label, value, note), line in zip(rows, lines, strict=True):
+        assert line.startswith(label)
+        assert value in line
+        if note:
+            assert f"({note})" in line
+
+
+def test_config_rows_note_is_bare_no_parens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The parenthetical is a CLI-rendering decision (Table cell formatting),
+    # not part of the raw data -- config_rows' own "note" field is bare, so
+    # config_lines (and the CLI's rich Table) each choose whether/how to wrap
+    # it in parens rather than getting it pre-baked.
+    root = tmp_path / "root"
+    monkeypatch.setenv("LODE_HOME", str(root))
+    rows = config_rows(default_db_path())
+    notes = dict((label, note) for label, _, note in rows)
+    assert notes["LODE_HOME"] == "$LODE_HOME"
+    assert notes["config"] == "absent"
+    # Every other row carries no annotation.
+    for label, note in notes.items():
+        if label not in ("LODE_HOME", "config"):
+            assert note == ""
 
 
 # --- knob_rows() — the shared CLI+TUI knob-table builder (lode-juz8.6) ------

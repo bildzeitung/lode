@@ -523,6 +523,41 @@ def config_path() -> Path:
     return lode_home() / "config.toml"
 
 
+def _resolved_config_rows(db_path: Path) -> list[tuple[str, str, str]]:
+    """Return ``(label, value, note)`` triples behind both ``config_lines`` and
+    ``config_rows`` — the one computation, exposed in two shapes for two
+    renderers (lode-l38d.4). ``note`` is the parenthetical annotation
+    (``$LODE_HOME``/``default``, ``present``/``absent``) for the two rows that
+    carry one, and ``""`` for the rest.
+    """
+    lock_file = lock_path(db_path)
+    cfg = config_path()
+    home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
+    config_state = "present" if cfg.exists() else "absent"
+    return [
+        ("LODE_HOME", str(lode_home()), home_source),
+        ("database", str(db_path), ""),
+        ("db lock", str(lock_file), ""),
+        ("vector store", str(lance_dir(db_path)), ""),
+        ("model cache", str(model_cache_dir()), ""),
+        ("logs", str(log_dir()), ""),
+        ("config", str(cfg), config_state),
+    ]
+
+
+def config_rows(db_path: Path) -> list[tuple[str, str, str]]:
+    """Return ``(label, value, note)`` triples for the CLI's rich-Table path
+    rendering (lode-l38d.4) — the raw counterpart to :func:`config_lines`'
+    pre-padded text, so the CLI can render the parenthetical annotation
+    (``($LODE_HOME)``, ``(present)``/``(absent)``) as a real ``Note`` column
+    instead of string-baking it into ``value``. Same underlying computation as
+    :func:`config_lines` (:func:`_resolved_config_rows`); this and
+    ``config_lines`` are two shapes of the one row list, not two independently
+    maintained ones.
+    """
+    return _resolved_config_rows(db_path)
+
+
 def config_lines(db_path: Path) -> list[str]:
     """Render the resolved on-disk locations as aligned ``label  path`` lines.
 
@@ -542,22 +577,19 @@ def config_lines(db_path: Path) -> list[str]:
     and ``config.toml`` come from ``$LODE_HOME``. Whether ``$LODE_HOME`` is set
     in the environment (vs the ``~/.lode`` default) and whether the optional
     ``config.toml`` is present are surfaced inline.
+
+    lode-l38d.4: the TUI's Ctrl+O screen keeps rendering this pre-padded text
+    unchanged (via ``Static``); the CLI's ``lode config`` moved to a
+    terminal-width-aware rich ``Table`` fed by :func:`config_rows` instead, so
+    the two surfaces' exact output text is no longer identical byte-for-byte
+    (their underlying DATA still comes from the one computation here).
     """
-    lock_file = lock_path(db_path)
-    cfg = config_path()
-    home_source = "$LODE_HOME" if os.environ.get(LODE_HOME_ENV) else "default"
-    config_state = "present" if cfg.exists() else "absent"
-    rows = [
-        ("LODE_HOME", f"{lode_home()}  ({home_source})"),
-        ("database", str(db_path)),
-        ("db lock", str(lock_file)),
-        ("vector store", str(lance_dir(db_path))),
-        ("model cache", str(model_cache_dir())),
-        ("logs", str(log_dir())),
-        ("config", f"{cfg}  ({config_state})"),
+    rows = _resolved_config_rows(db_path)
+    formatted = [
+        (label, f"{value}  ({note})" if note else value) for label, value, note in rows
     ]
-    width = max(len(label) for label, _ in rows)
-    return [f"{label:<{width}}  {value}" for label, value in rows]
+    width = max(len(label) for label, _ in formatted)
+    return [f"{label:<{width}}  {value}" for label, value in formatted]
 
 
 def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:

@@ -30,6 +30,8 @@ import json
 import logging
 import os
 import sqlite3
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -3335,13 +3337,29 @@ def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
 # --- lode config (resolved paths read-out, lode-ftc) ------------------------
 
 
+#: A COLUMNS wide enough that none of ``lode config``'s rows -- including the
+#: longest knob value, the ~255-char redaction pattern lists -- ever wrap
+#: (lode-l38d.4). Tests below assert data PRESENCE via plain substring checks,
+#: which a wrapped rich Table cell would break across lines; passed via
+#: ``runner.invoke(..., env=...)``, which Click's ``CliRunner`` applies to the
+#: real ``os.environ`` for the duration of the call -- and rich's ``Console``
+#: reads terminal width LIVE off ``os.environ["COLUMNS"]`` on every render
+#: (unlike colour/TTY detection, which freezes at import time; verified
+#: against the installed rich 15.0.0 -- see lode-l38d.4's design notes). The
+#: dedicated wrapping tests below (module ``test_cli_config_width``) instead
+#: pin a narrow width to assert the wrap-without-data-loss behavior directly.
+_WIDE_COLUMNS = "1000"
+
+
 def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> None:
     # Acceptance: $LODE_HOME root, DB, vector store, model cache dir, log dir,
     # and config file path are all displayed, resolved under the single root
     # (docs/configuration.md §Paths & locations) -- the full set of paths that
     # table documents (lode-agh: model cache was missing here).
     home = tmp_path / "home"
-    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    result = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert result.exit_code == 0
     out = result.stdout
     assert str(home) in out  # the resolved root
@@ -3357,23 +3375,33 @@ def test_config_reports_config_file_present_or_absent(tmp_path: Path) -> None:
     # The optional config.toml is shown absent by default, present once it exists.
     home = tmp_path / "home"
     home.mkdir()
-    absent = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    absent = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert absent.exit_code == 0
-    assert "config.toml  (absent)" in absent.stdout
+    assert "config.toml" in absent.stdout
+    assert "(absent)" in absent.stdout
 
     (home / "config.toml").write_text("", encoding="utf-8")
-    present = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
-    assert "config.toml  (present)" in present.stdout
+    present = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
+    assert "config.toml" in present.stdout
+    assert "(present)" in present.stdout
 
 
 def test_config_flags_env_override_vs_default(tmp_path: Path) -> None:
     # The effective source of the root is surfaced: env override when set, else
     # the ~/.lode default (docs design: "show the effective env-var override").
     home = tmp_path / "home"
-    overridden = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    overridden = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert "($LODE_HOME)" in overridden.stdout
 
-    default = runner.invoke(app, ["config"], env={"LODE_HOME": ""})
+    default = runner.invoke(
+        app, ["config"], env={"LODE_HOME": "", "COLUMNS": _WIDE_COLUMNS}
+    )
     assert "(default)" in default.stdout
 
 
@@ -3385,7 +3413,9 @@ def test_config_db_override_shifts_displayed_db_and_vector_store(
     home = tmp_path / "home"
     custom_db = tmp_path / "elsewhere" / "custom.db"
     result = runner.invoke(
-        app, ["config", "--db", str(custom_db)], env={"LODE_HOME": str(home)}
+        app,
+        ["config", "--db", str(custom_db)],
+        env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS},
     )
     assert result.exit_code == 0
     out = result.stdout
@@ -3407,7 +3437,9 @@ def test_config_shows_every_runtime_and_tune_knob_with_current_value(
     # resolved value and kind, even with no config.toml present (shows
     # defaults) -- the knob table sits below the existing paths block.
     home = tmp_path / "home"
-    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    result = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert result.exit_code == 0
     for name, value, kind in config.knob_rows(config.Settings()):
         assert name in result.stdout
@@ -3420,7 +3452,9 @@ def test_config_excludes_build_kind_knobs(tmp_path: Path) -> None:
     # migration, e.g. embedding_model/embedding_vector_dim/content_hash) are
     # hidden from the knob table.
     home = tmp_path / "home"
-    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    result = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert result.exit_code == 0
     knob_names = {name for name, _, _ in config.knob_rows(config.Settings())}
     assert "embedding_model" not in knob_names
@@ -3438,7 +3472,9 @@ def test_config_knob_table_reflects_config_toml_override(tmp_path: Path) -> None
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.toml").write_text("retrieval_top_k = 42\n", encoding="utf-8")
-    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    result = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
+    )
     assert result.exit_code == 0
     assert "retrieval_top_k" in result.stdout
     lines = [
@@ -3448,6 +3484,59 @@ def test_config_knob_table_reflects_config_toml_override(tmp_path: Path) -> None
     ]
     assert len(lines) == 1
     assert "42" in lines[0]
+
+
+# --- lode config terminal-width awareness (lode-l38d.4) ----------------------
+
+
+def test_config_wraps_long_knob_values_without_losing_characters(
+    tmp_path: Path,
+) -> None:
+    # THE BUG THIS TICKET FIXES: at a normal 80-column terminal, a long
+    # list-valued knob (the ~255-char redaction pattern lists) used to inflate
+    # every row's padding to its own width; now it wraps within its own
+    # column instead. Assert no data is lost in the wrap.
+    home = tmp_path / "home"
+    result = runner.invoke(
+        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": "80"}
+    )
+    assert result.exit_code == 0
+    longest_name, longest_value, _ = max(
+        config.knob_rows(config.Settings()), key=lambda row: len(row[1])
+    )
+    assert len(longest_value) > 80  # the row genuinely needs to wrap at 80 cols
+    assert longest_name in result.stdout
+    # No ellipsis -- the ONLY way rich would ever drop characters here. rich's
+    # Column DEFAULT is overflow="ellipsis", which truncates a too-wide cell
+    # instead of wrapping it; this ticket sets overflow="fold" explicitly to
+    # rule that out (verified in lode-l38d.4's design notes). A regression
+    # back to the default would replace part of this value with "…".
+    assert "…" not in result.stdout
+    # The value's own distinctive tail token survives intact -- short enough
+    # to fit the Value column at COLUMNS=80 without itself needing a further
+    # fold-break, so it is a reliable "nothing before this was truncated"
+    # witness (an ellipsis-truncated render would never reach it at all).
+    last_token = longest_value.rsplit(", ", 1)[-1]
+    assert last_token in result.stdout
+
+
+def test_config_output_has_no_ansi_under_no_color(tmp_path: Path) -> None:
+    # Acceptance: output degrades cleanly when piped/NO_COLOR is set -- no
+    # ANSI escapes. The shared console (lode-l38d.1) freezes its NO_COLOR read
+    # at CONSTRUCTION (import time), so this must run in a SUBPROCESS carrying
+    # NO_COLOR=1 in its env to force re-detection -- a monkeypatch.setenv
+    # after import is a silent no-op (verified non-vacuous pattern:
+    # tests/test_cli_console.py, referenced from lode-l38d.1's notes).
+    home = tmp_path / "home"
+    env = {**os.environ, "LODE_HOME": str(home), "NO_COLOR": "1", "COLUMNS": "80"}
+    result = subprocess.run(
+        [sys.executable, "-m", "lode.cli", "config"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "\x1b[" not in result.stdout
 
 
 # --- lode work (async worker drain, lode-i05.3) ----------------------------
