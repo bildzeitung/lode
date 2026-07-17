@@ -537,6 +537,12 @@ rtk git status                 # MUST show trunk up to date with origin
 
 for id in $LANDED; do
   rtk bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
+  rtk bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
+    # symmetric with the needs-rebase/escalate/bounce exits, which have always done this (lode-myh6: the
+    # success path was the one exit that forgot, leaving 262/287 landed tickets carrying a stale label).
+    # This also closes the reopen hazard: the queue read (Section 1) is `bd list --label ready-for-land
+    # --status in_progress`, so a closed ticket with the label stripped can never silently re-enter the
+    # queue if it's later reopened -- there is nothing left for `bd reopen` to re-admit.
 done
 
 # Closing the last child of an epic completes it — flag it for the closing-side review.
