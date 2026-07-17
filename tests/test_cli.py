@@ -4080,11 +4080,17 @@ def test_config_wraps_long_knob_values_without_losing_characters(
     )
     assert len(longest_value) > 80  # the row genuinely needs to wrap at 80 cols
     assert longest_name in result.stdout
-    # No ellipsis -- the ONLY way rich would ever drop characters here. rich's
-    # Column DEFAULT is overflow="ellipsis", which truncates a too-wide cell
-    # instead of wrapping it; this ticket sets overflow="fold" explicitly to
-    # rule that out (verified in lode-l38d.4's design notes). A regression
-    # back to the default would replace part of this value with "…".
+    # No ellipsis, and no character loss. NOTE (lode-1apg): this does NOT
+    # guard overflow="fold" specifically, despite appearances. Knob values
+    # are ", "-joined (see knob_rows), so rich's default word-wrap already
+    # breaks this cell at the ", " boundaries -- overflow="ellipsis" only
+    # ever truncates a piece that is STILL too wide after wrapping (i.e. an
+    # unbreakable single token), which a ", "-joined list never is. Proven by
+    # sabotage: removing overflow="fold" from the knob table's Value column
+    # leaves this test passing. The genuinely fold-dependent case is a long
+    # UNBREAKABLE value (e.g. a path with no spaces) -- see
+    # test_config_path_table_folds_long_unbreakable_path_without_truncating
+    # below, which IS proven non-vacuous by that same sabotage.
     assert "…" not in result.stdout
     # The value's own distinctive tail token survives intact -- short enough
     # to fit the Value column at COLUMNS=80 without itself needing a further
@@ -4094,13 +4100,57 @@ def test_config_wraps_long_knob_values_without_losing_characters(
     assert last_token in result.stdout
 
 
-def test_config_output_has_no_ansi_under_no_color(tmp_path: Path) -> None:
-    # Acceptance: output degrades cleanly when piped/NO_COLOR is set -- no
-    # ANSI escapes. The shared console (lode-l38d.1) freezes its NO_COLOR read
-    # at CONSTRUCTION (import time), so this must run in a SUBPROCESS carrying
-    # NO_COLOR=1 in its env to force re-detection -- a monkeypatch.setenv
-    # after import is a silent no-op (verified non-vacuous pattern:
-    # tests/test_cli_console.py, referenced from lode-l38d.1's notes).
+def test_config_path_table_folds_long_unbreakable_path_without_truncating(
+    tmp_path: Path, set_console_width: Callable[[int], None]
+) -> None:
+    # lode-1apg finding 2: overflow="fold" on the PATH table (_config_path_
+    # table) is genuinely load-bearing but was untested -- every existing
+    # path-table test forces width=1000 with a short tmp_path home, so none
+    # can ever hit a column overflow. Unlike the knob table's ", "-joined
+    # values (see the previous test), a filesystem path has no space to wrap
+    # at -- it is a single unbreakable token. At a normal 80-column
+    # terminal, rich's DEFAULT overflow="ellipsis" truncates an unbreakable
+    # token wider than its column and drops characters; overflow="fold"
+    # hard-breaks it instead, losing nothing.
+    set_console_width(80)
+    # A single long, space-free path component -- guaranteed wider than any
+    # plausible Value column at 80 total columns, and unbreakable by rich's
+    # word-based wrapping (no spaces to wrap at).
+    home = tmp_path / ("x" * 200)
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
+    assert result.exit_code == 0
+    out = result.stdout
+    assert "…" not in out
+    # rich's "fold" hard-breaks mid-word by inserting a line break, not by
+    # dropping characters -- so the full path survives as a CONTIGUOUS
+    # substring once whitespace (the very line breaks fold introduces, plus
+    # ordinary column padding) is stripped back out. An ellipsis-truncating
+    # renderer could never satisfy this: it drops characters rather than
+    # merely relocating them across lines.
+    squashed = "".join(out.split())
+    assert str(home / "lode.db") in squashed
+
+
+def test_config_output_has_no_ansi_when_piped(tmp_path: Path) -> None:
+    # Acceptance: output degrades cleanly when piped -- no ANSI escapes.
+    #
+    # NAME/SCOPE CORRECTED (lode-1apg): this used to be named
+    # ...no_ansi_under_no_color and claimed to exercise NO_COLOR, but it does
+    # not. subprocess.run's captured stdout is a PIPE, so rich's console
+    # already sees is_terminal=False and suppresses ANSI for THAT reason,
+    # regardless of NO_COLOR -- verified by the control: with NO_COLOR
+    # removed from env entirely, no_color resolves False but is_terminal is
+    # still False, and this same assertion still holds. So this test
+    # genuinely covers "no ANSI when piped" (part of .4's acceptance), not
+    # NO_COLOR detection. NO_COLOR is still set below (harmless, matches how
+    # a real piped invocation is typically run) but is not what makes the
+    # assertion pass.
+    #
+    # The NO_COLOR *mechanism* itself is already covered non-vacuously,
+    # including an env-absent control, by tests/test_cli_console.py
+    # (lode-xgaa) -- that is the canonical pattern for any future test that
+    # actually needs to exercise NO_COLOR detection: a fresh subprocess with
+    # the env set before import, not a monkeypatch after.
     home = tmp_path / "home"
     env = {**os.environ, "LODE_HOME": str(home), "NO_COLOR": "1", "COLUMNS": "80"}
     result = subprocess.run(
