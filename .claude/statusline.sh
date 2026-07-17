@@ -14,8 +14,13 @@ input=$(cat)
 
 cwd=$(echo "$input" | jq -r '.cwd // .workspace.current_dir // empty')
 model=$(echo "$input" | jq -r '.model.display_name // empty')
+# Used TOKENS (current context: input + cache create + cache read) and the
+# window size, so we compute "percent of tokens used" ourselves rather than
+# leaning on .used_percentage (which reads as context occupancy and has drifted
+# from current usage across versions). Keep used_percentage only as a fallback.
+used_tokens=$(echo "$input" | jq -r '.context_window.total_input_tokens // empty')
+window=$(echo "$input" | jq -r '.context_window.context_window_size // empty')
 used=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
 
 # --- Live agent worktrees (B) -----------------------------------------------
 # One worktree per spawned agent under .claude/worktrees/agent-*. Branch encodes
@@ -182,10 +187,16 @@ model_part=""
 [ -n "$model" ] && model_part="${model%% *}"
 
 # Tokens: one meter instead of separate used/left numbers. A 10-cell bar fills
-# with context used (left is just the unfilled remainder), used % printed after.
+# with the share of tokens used (used_tokens / window), the % printed after.
+# Prefer the raw counts; fall back to the pre-baked used_percentage if absent.
 tokens_part=""
-if [ -n "$used" ]; then
+u=""
+if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
+    u=$(( used_tokens * 100 / window ))
+elif [ -n "$used" ]; then
     u=$(printf '%.0f' "$used")
+fi
+if [ -n "$u" ]; then
     [ "$u" -lt 0 ] && u=0; [ "$u" -gt 100 ] && u=100
     width=10
     filled=$(( u * width / 100 ))
