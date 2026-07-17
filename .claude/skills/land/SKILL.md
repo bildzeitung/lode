@@ -1139,11 +1139,13 @@ PARENT=$(rtk bd show <id> --json | jq -r '.[0].parent // empty')
 # Re-point each dependent onto NEW so the graph stays honest: they remain blocked until the rebuild
 # lands. Same principle as the epic re-parent above — keep the dependency graph accurate across a
 # supersede, not just the parentage.
-# --include-dependents is REQUIRED here (lode-v4rk): bd show's `.dependents` array is only
-# populated with that opt-in flag ("may be slow on hub beads" per `bd show --help`) -- without
-# it, dependent_count can be non-zero while `.dependents` is absent entirely, and this loop
-# silently iterates zero times.
-for DEP in $(rtk bd show <id> --json --include-dependents | jq -r '.[0].dependents[]? | select(.dependency_type=="blocks") | .id'); do
+# Extracted to scripts/blocks-dependents.sh (lode-verb), unlike the inline jq this replaced: that
+# snippet was correct but ungated, and unlike the epic-completion checks lode-v4rk extracted (which
+# fail silently SAFE on a schema/flag regression), a dropped re-point here fails silently UNSAFE --
+# the dependent unblocks immediately against a rebuild that was never built. The script carries its
+# own fixture-backed regression tests (tests/test_blocks_dependents.py) so a future regression (e.g.
+# the required --include-dependents flag getting dropped) fails a gate instead of failing silently.
+for DEP in $(rtk scripts/blocks-dependents.sh <id>); do
   rtk bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
 done
 
