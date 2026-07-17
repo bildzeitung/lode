@@ -1780,6 +1780,15 @@ async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
     are order-preserving and carry no read-back dependency between keys, and
     ``press()``'s trailing drain covers the final read. The trigger is the
     stateful read-back above, not multi-key presses in general.
+
+    The trailing ``pilot.pause()`` below is NOT part of that mechanism -- it is
+    just this file's ordinary post-keystroke dialect, kept so these sites read
+    like their ~90 siblings. ``press(key)`` alone is already sufficient. Do not
+    read it as load-bearing, and do not add more drains to settle a future
+    flake: a fixed count of drains neither waits longer under worse load nor
+    reports anything when it is insufficient. ``wait_for_idle``'s clock
+    comparison is the only load-sensitive element in this path (lode-lcju owns
+    the house-pattern ruling).
     """
     for key in keys:
         await pilot.press(key)
