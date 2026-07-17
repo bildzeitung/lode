@@ -311,12 +311,17 @@ def fetch_and_extract(
     except TooManyRedirectsError:
         return _tombstone(final_url=url, reason="too_many_redirects")
 
-    # fetcher.fetch() already raised TransientFetchError for any TRANSIENT
-    # status (see HttpxFetcher.fetch above), so a status_code reaching here
-    # classifies as either OK (< 400) or TOMBSTONE (>= 400) — never
-    # TRANSIENT. Re-running the shared classifier keeps this branch in sync
-    # with lode.fetch_outcome rather than re-deriving ">= 400" locally.
-    if classify_http_status(response.status_code) is HttpOutcome.TOMBSTONE:
+    # Any non-OK status here is a permanent tombstone from this function's
+    # perspective — behavior-preserving with the pre-lode-gpzn.13 ``>= 400``
+    # check (``not OK`` is exactly ``>= 400``), and via the shared classifier
+    # rather than re-deriving the threshold locally. A conforming Fetcher
+    # (see the Fetcher protocol contract) raises TransientFetchError for
+    # 408/429/5xx before returning, so a TRANSIENT status never reaches here
+    # in practice; testing for ``not OK`` rather than ``is TOMBSTONE`` keeps
+    # the original defensive behavior for a non-conforming custom fetcher
+    # (tombstone the error response) instead of silently extracting it as if
+    # it were content.
+    if classify_http_status(response.status_code) is not HttpOutcome.OK:
         return _tombstone(
             final_url=response.final_url,
             reason=f"http_{response.status_code}",
