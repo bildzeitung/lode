@@ -206,6 +206,19 @@ CLI_THEME = Theme(CLI_STYLES)
 #: style names and what each sibling ticket uses them for.
 console = Console(theme=CLI_THEME)
 
+#: A STDERR twin of ``console`` above (lode-l810) -- same theme, same
+#: colour/width auto-detection rules, but writing to stderr rather than
+#: stdout. Exists because :func:`_report_ambiguous_prefix` has a
+#: stderr + exit-1 contract that every one of its four call sites
+#: (``purge``/``recover``/``show``/``dump-html``) already depends on
+#: (lode-l38d.10); reusing the stdout ``console`` there would silently move
+#: that output onto stdout while colouring it. ``Console.file`` re-resolves
+#: ``sys.stderr`` on every ``print()`` call (it is a property, not frozen at
+#: construction) rather than the TTY/``NO_COLOR`` detection above it, so this
+#: still captures correctly under ``CliRunner``'s per-invocation stderr
+#: redirection, the same way ``typer.echo(err=True)`` already does.
+err_console = Console(theme=CLI_THEME, stderr=True)
+
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
 #: DEBUG-gated diagnostic (e.g. ``lode.tui.latency_probe``'s event-loop-lag probe,
@@ -780,6 +793,12 @@ def _report_ambiguous_prefix(
 
     Still stderr, still exit code 1 -- the contract every call site already
     had; only the rendering gained the extra columns.
+
+    Rows render through ``err_console`` -- a stderr twin of the shared
+    ``console`` (lode-l810) -- with the same theme style NAMES, escaping,
+    and ``highlight=False``/``soft_wrap=True`` flags ``notes_`` uses, so the
+    two listings' shared columns (id, date) now look identical rather than
+    one being coloured and the other bare ``typer.echo``.
     """
     typer.echo(
         f"ambiguous note id prefix {target!r}: {len(exc.candidates)} matches",
@@ -787,9 +806,29 @@ def _report_ambiguous_prefix(
     )
     for row in candidate_rows_conn(conn, exc.candidates):
         marker = " [deleted]" if row.deleted else ""
-        typer.echo(
-            f"  {row.note_id}  {_short_date(row.created)}  {row.summary}{marker}",
-            err=True,
+        # Same rendering path as notes_ (lode-l38d.5, lode-l810): the shared
+        # theme's note_id/date style NAMES (never a colour literal --
+        # CLI_STYLES stays the one source of truth), the summary escape()d
+        # since it is unescaped user/AI text, highlight=False (rich's
+        # ReprHighlighter would otherwise shred the date -- see notes_'s
+        # note above), soft_wrap=True (no width-clamped wrapping, matching
+        # the bare typer.echo this replaced). Routed through err_console
+        # (the stderr twin of the shared stdout `console`) rather than
+        # `console` itself, so this function's stderr + exit-1 contract --
+        # the behaviour all four call sites already depend on -- is
+        # unchanged. The " [deleted]" tombstone marker stays a literal,
+        # uncoloured suffix (lode-l38d.10) -- escape()d along with the
+        # summary, since its own literal "[deleted]" would otherwise be
+        # parsed as a (nonexistent) style tag by rich's markup engine and
+        # silently swallow the rest of the line (verified against rich
+        # 15.0.0: an unescaped "[deleted]" mid-string drops everything from
+        # that point on, with no error raised).
+        err_console.print(
+            f"  [note_id]{row.note_id}[/note_id]  "
+            f"[date]{_short_date(row.created)}[/date]  "
+            f"{escape(row.summary + marker)}",
+            soft_wrap=True,
+            highlight=False,
         )
     raise typer.Exit(code=1) from None
 
