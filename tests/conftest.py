@@ -89,12 +89,15 @@ about a real model load — use ``@pytest.mark.network``, which is greppable and
 says what it means.
 """
 
+import asyncio
 import ipaddress
 import socket
 import sys
+import time
 from collections.abc import Callable
 
 import pytest
+from textual.pilot import Pilot
 
 from lode.config import model_cache_dir
 
@@ -382,3 +385,102 @@ def _cache_cross_encoder_model_load():
     patcher.setattr(FastEmbedCrossEncoder, "_load", _cached_load)
     yield
     patcher.undo()
+
+
+# --- TUI test settle helpers (lode-lcju) -----------------------------------
+#
+# The ONE home for both of lode's settle-under-load patterns for driving a
+# Textual pilot -- see docs/tui.md's "Settling TUI tests under load" section
+# for the ruling (which helper applies when) and the verified mechanism
+# (wait_for_idle's CPU-vs-wall-clock heuristic is the only load-sensitive
+# element in the path; asyncio's ready-queue ordering is not perturbed by OS
+# starvation). Moved here verbatim from tests/test_tui_reconcile_screen.py
+# (_wait_until, lode-64jn) and tests/test_tui_browse_screen.py
+# (_press_and_settle, lode-9y68), which had independently invented the same
+# fix twice with no cross-reference. Do not add a third dialect in a new test
+# file -- import one of these two instead.
+
+#: How often :func:`_wait_until` re-checks its predicate.
+_POLL_INTERVAL = 0.01
+
+
+async def _wait_until(
+    predicate: Callable[[], bool], description: str, *, timeout: float = 5.0
+) -> None:
+    """Poll ``predicate`` until true, bounded by a real ``timeout`` (lode-64jn).
+
+    Use for a PRECONDITION (e.g. "the new screen has finished composing"),
+    never for the test's own expected assertion value -- see docs/tui.md's
+    "Settling TUI tests under load" section (lode-lcju) for the full rule and
+    why: baking the assertion's expected value into the predicate is the
+    retry-on-assertion antipattern, which masks a real bug as a slow-to-settle
+    one instead of failing where it happens.
+
+    ``description`` names the condition, so a timeout says *which* wait hung.
+
+    Yields the event loop via ``asyncio.sleep`` between checks -- a genuine
+    cooperative yield -- rather than Textual's ``pilot.pause()`` no-arg form,
+    which ultimately waits on a CPU-idle *heuristic*
+    (``textual._wait.wait_for_idle``): it compares this process's own CPU time
+    against wall-clock time and calls it "idle" once CPU time stops advancing.
+    Under real machine contention (several agents gating at once, e.g.
+    ``/code`` fan-out) that heuristic can misfire -- a process starved of
+    scheduler time by unrelated load barely advances its own CPU time
+    *regardless* of whether the screen transition it is supposed to be waiting
+    for has finished, and the heuristic reads that starvation as idleness.
+    Polling the real condition instead waits exactly as long as it takes, and
+    fails loudly (an explicit ``AssertionError``, never a silent false-idle
+    pass) if the condition genuinely never becomes true.
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"timed out after {timeout}s waiting until {description}"
+            )
+        await asyncio.sleep(_POLL_INTERVAL)
+
+
+async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
+    """Press each key one at a time, settling after EACH one (lode-9y68).
+
+    Use for a STATEFUL, read-back keystroke cascade -- a later key's behavior
+    depends on state an earlier key's cascade produced (e.g. incremental
+    search, where a scan reads the cursor's current row as its start) -- where
+    a precondition predicate would have to restate the test's own expected
+    value and so ``_wait_until`` is the wrong tool. See docs/tui.md's
+    "Settling TUI tests under load" section (lode-lcju) for the full rule.
+
+    ``pilot.press(*keys)`` (``pilot.py``) is::
+
+        await self._app._press_keys(keys)   # ALL keys, paced by heuristic only
+        await self._wait_for_screen()       # ONE real drain, at the very end
+
+    ``App._press_keys`` (``app.py``) paces BETWEEN keystrokes with nothing but
+    ``wait_for_idle()`` -- and that is a wall-clock-vs-``process_time()``
+    comparison, so a process merely *starved of timeslices* (this machine
+    legitimately runs several concurrent ``nox -s tests`` invocations) reads as
+    "idle" while a cascade is still in flight. The real drain comes only once,
+    after the last key. So the next key can be dispatched mid-cascade.
+
+    The fix is just to press ONE key per call: ``pilot.press(key)`` ends with
+    its own ``_wait_for_screen()``, so a real message-count drain -- not the
+    CPU heuristic -- separates every keystroke from the next.
+
+    NARROW BY DESIGN: a plain multi-key ``pilot.press("down", "down", "down")``
+    is fine and deliberately left alone where used -- cursor moves are
+    order-preserving and carry no read-back dependency between keys, and
+    ``press()``'s trailing drain covers the final read. The trigger is the
+    stateful read-back above, not multi-key presses in general.
+
+    The trailing ``pilot.pause()`` below is NOT part of that mechanism -- it is
+    just this suite's ordinary post-keystroke dialect, kept so call sites read
+    like their ~90 siblings. ``press(key)`` alone is already sufficient. Do not
+    read it as load-bearing, and do not add more drains to settle a future
+    flake: a fixed count of drains neither waits longer under worse load nor
+    reports anything when it is insufficient. ``wait_for_idle``'s clock
+    comparison is the only load-sensitive element in this path.
+    """
+    for key in keys:
+        await pilot.press(key)
+        await pilot.pause()

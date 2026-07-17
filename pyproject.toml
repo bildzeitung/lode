@@ -24,6 +24,10 @@ dependencies = [
                    # Satisfied transitively via lancedb today; declared anyway
                    # because we import it directly, so a lancedb release that
                    # drops it cannot silently break our import.
+    "huggingface_hub", # cache-only probe for `lode status` (lode-l38d.6) --
+                       # already a transitive fastembed dep; listed direct
+                       # (unpinned, like the rest) since cli.py now imports it
+                       # without importing fastembed
     "lancedb",     # on-disk vector store (ANN + metadata filtering)
     "networkx",    # in-memory knowledge-graph traversal
     "xxhash",      # 128-bit content-address hash (docs/storage.md)

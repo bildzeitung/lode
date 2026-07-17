@@ -1194,8 +1194,10 @@ Concretely, the whole cycle stays inside the one dispatched `coding` producer, s
 - refresh `land_head`/`land_summary` and swap `needs-rebase` straight to `ready-for-land` itself.
 
 **Expect the merge to conflict — that is the normal case, not the exception.** `/land` only applies
-`needs-rebase` when its precheck (`git merge-tree origin/trunk origin/land/<id>`) reports a conflict,
-so by construction a branch arriving at step 0 *does* conflict with current `trunk`; the clean-merge
+`needs-rebase` when its precheck (`scripts/merge-precheck.sh origin/trunk origin/land/<id>`, lode-mh9g)
+reports a conflict (exit 1) — a machine fault (exit 2) is handled separately, surfaced to a human
+rather than kicked back — so by construction a branch arriving at step 0 *does* conflict with
+current `trunk`; the clean-merge
 path is the rare one (it means `trunk` moved again in a way that dissolved the conflict). Resolving
 the conflict does not change any of the above: resolution rewrites the merge commit's *tree*, never
 its ancestry, so the branch's already-pushed tip remains an ancestor and the push stays a

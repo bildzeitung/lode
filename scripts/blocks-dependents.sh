@@ -44,11 +44,12 @@
 # flag gone -- i.e. it would delete the gate this script exists to be, and
 # hand the UNSAFE site back the silent no-op it was extracted to prevent.
 #
-# Note the caller's `for DEP in $(...)` discards that exit status, so a bd
-# runtime failure still degrades to "re-point nothing" at the call site. That
-# is unchanged from the inline snippet this replaced and out of scope here
-# (this script gates the DERIVATION regressing, which is what lode-verb is
-# about); it is recorded so the residual is known rather than assumed absent.
+# The caller (`/land`'s Bounce section, .claude/skills/land/SKILL.md) captures this script's
+# output via `if ! DEPS=$(...); then <escalate>; fi` rather than a bare `for DEP in $(...)`, so a bd
+# RUNTIME failure here (bd missing, Dolt DB locked, an id it can't resolve) is read as a failed
+# derivation and escalates instead of silently re-pointing nothing (lode-xm1h; this script itself
+# only gates the DERIVATION regressing, which is what lode-verb was about -- the caller reading the
+# exit status is what closes the runtime-failure gap on top of that).
 #
 # Read-only: this script only ever calls `bd show`, never a bd write. The
 # caller (/land Bounce) is the one that runs `bd dep add`.

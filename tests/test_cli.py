@@ -48,7 +48,7 @@ from lode.answer import Claim, Support
 from lode.auth import AuthError
 from lode.cli import app
 from lode.cited_answer import CitedAnswer
-from lode.config import load_settings
+from lode.config import Settings, load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
 from lode.externals import ingest_snapshot
@@ -593,27 +593,373 @@ def _seed_jobs(db_path: Path) -> None:
         conn.close()
 
 
-def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
+@pytest.fixture
+def warm_model_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin `lode status`'s cold-cache probe to "warm", deterministically.
+
+    The probe answers from the REAL machine-level weights cache: the autouse
+    `_isolate_lode_home` fixture symlinks $LODE_HOME/models at
+    `model_cache_dir()` and only `mkdir(exist_ok=True)`s it, so on a machine
+    that has never run `lode models pull` -- a fresh clone, i.e. exactly the
+    CLAUDE.md "New machine setup" path, and any CI runner -- that directory is
+    EMPTY and every resolved model probes cold. A test that asserts the
+    all-clear footer while depending on that ambient state is green only where
+    the weights happen to be present; it fails on the machines least able to
+    explain why (verified: the three tests using this fixture all failed under
+    a $LODE_HOME with no weights before it existed).
+
+    Stubbing the probe here is not a coverage loss: the probe's real cold path
+    is exercised end-to-end by `test_status_hints_cold_model_cache` (a genuinely
+    empty $LODE_HOME), and its resolution logic unit-tested in
+    `test_model_cache_probe_*` -- both hermetic. This fixture isolates the
+    FOOTER's logic, which is what these three tests are actually about.
+    """
+    monkeypatch.setattr("lode.cli._cold_model_cache", lambda _settings: False)
+
+
+def test_status_empty_db_reports_all_zero(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    assert "jobs: 0 pending, 0 running, 0 done, 0 failed, 0 dead" in result.stdout
+    # Job counts render as a rich Table (lode-l38d.6/.11) -- assert cell
+    # content rather than the old single-line string, which no longer exists.
+    for label, count in (
+        ("Pending", "0"),
+        ("Running", "0"),
+        ("Done", "0"),
+        ("Failed", "0"),
+        ("Dead", "0"),
+    ):
+        row = next(ln for ln in result.stdout.splitlines() if label in ln)
+        assert count in row
     assert "egress: 0 sends (none)" in result.stdout
     assert "dead-letters (dead jobs): 0" in result.stdout
+    # All-clear footer: an explicit affirmative line, never silence
+    # (lode-l38d.6's decision 3 -- an absent hint must not read as an
+    # absent check). Warm cache pinned by the fixture, not by whatever the
+    # machine happens to have cached -- see `warm_model_cache`.
+    assert "No action needed." in result.stdout
 
 
-def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
+def test_status_summarizes_jobs_egress_and_dead_letters(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
     db_path = tmp_path / "lode.db"
     _seed_jobs(db_path)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    # Seed has: 1 pending, 1 running, 1 done, 0 failed, 1 dead.
-    assert "jobs: 1 pending, 1 running, 1 done, 0 failed, 1 dead" in result.stdout
+    # Seed has: 1 pending, 1 running, 1 done, 0 failed, 1 dead -- each count
+    # is its own table cell (Status | Count columns).
+    for label, count in (
+        ("Pending", "1"),
+        ("Running", "1"),
+        ("Done", "1"),
+        ("Failed", "0"),
+        ("Dead", "1"),
+    ):
+        row = next(ln for ln in result.stdout.splitlines() if label in ln)
+        assert count in row
     # Egress summary totals across purposes and breaks them out.
     assert "egress: 3 sends (enrich: 1, qa: 2)" in result.stdout
     # The single dead job surfaces as a dead-letter with its last error.
     assert "dead-letters (dead jobs): 1" in result.stdout
     assert "(enrich) target=ver-bbbbbbbb…: RateLimitError" in result.stdout
+    # Action hint: 1 pending job -> a hint to drain the queue (lode-l38d.6).
+    assert "run 'lode work'" in result.stdout
+    # No dead-letter hint: dead jobs are already listed above with their
+    # errors and 'lode work' will not retry them (retries exhausted) -- they
+    # get colour instead of a hint (lode-l38d.6's explicit exclusion).
+    hint_lines = [ln for ln in result.stdout.splitlines() if "Action needed" in ln]
+    assert hint_lines  # the pending-job hint above did fire
+    assert not any("dead" in ln.lower() for ln in hint_lines)
+
+
+def test_status_no_hint_when_only_dead_letters_present(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Dead-letters alone (no pending/failed, warm cache) must not trip the
+    # 'lode work' hint -- 'lode work' cannot retry an exhausted dead-letter,
+    # so a hint here would suggest a command that cannot help (lode-l38d.6).
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
+    # A fresh $LODE_HOME with no models/ dir at all -- every resolved model
+    # is missing its cache subdir, so the probe must call this cold and hint
+    # 'lode models pull' (lode-l38d.6's /challenge-decided cold definition:
+    # ANY resolved model missing its cache counts, not a single dir-exists
+    # stat). Overriding LODE_HOME here (rather than relying on the autouse
+    # fixture's real-cache symlink) is the only way to exercise the cold path
+    # deterministically.
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    home = tmp_path / "cold-home"
+    result = runner.invoke(
+        app, ["status", "--db", str(db_path)], env={"LODE_HOME": str(home)}
+    )
+    assert result.exit_code == 0
+    assert "run 'lode models pull'" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    """The dead count must render `danger`, not rich's repr.number cyan (lode-re0s).
+
+    rich's Console runs ReprHighlighter over plain strings BY DEFAULT, repainting
+    bare values from its own repr.* palette -- which is NOT in CLI_STYLES. On this
+    ticket that lands on the one character that matters: with the highlighter on,
+    "dead-letters (dead jobs): 3" renders the 3 in bold CYAN while the rest of the
+    line is danger red, so the digit distinguishing 3 from 0 is the only digit not
+    coloured -- defeating lode-l38d.6's headline requirement ("dead > 0 should
+    render red, which is what stops '3' from looking like '0'"). Fixed at the call
+    site with highlight=False; hoisting it onto the shared Console is deliberately
+    left to lode-re0s, which owns that decision once the sibling branches land.
+
+    The module-level `console` freezes its colour decision at IMPORT (lode-xgaa),
+    which is off under the suite -- so this swaps in a force_terminal Console to
+    make colour observable at all. Without that, any assertion here is vacuous.
+    Proved non-vacuous by sabotage: dropping `highlight=False` from the
+    dead-letters print turns this red assertion cyan and the test fails.
+    """
+    import io
+
+    from rich.console import Console
+
+    from lode.cli import CLI_THEME
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+            )
+    finally:
+        conn.close()
+
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
+    )
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
+    # bold red (danger) present, bold cyan (repr.number) absent.
+    assert "\x1b[1;31m" in dead_line
+    assert "\x1b[1;36m" not in dead_line
+
+
+def _write_fake_cache_hit(home: Path, hf_source: str, model_file: str) -> None:
+    """Build the minimal on-disk layout `try_to_load_from_cache` recognizes.
+
+    Mirrors real HuggingFace cache structure closely enough to satisfy
+    `try_to_load_from_cache`'s own resolution (verified against the installed
+    `huggingface_hub`'s source): with no `refs/` dir present it looks for a
+    snapshot folder literally named `"main"` (its default revision), so
+    `snapshots/main/<model_file>` as a real file is sufficient -- no `blobs/`
+    symlink or `refs/main` commit-hash file needed for a cache HIT.
+    """
+    snapshot = (
+        home
+        / "models"
+        / f"models--{hf_source.replace('/', '--')}"
+        / "snapshots"
+        / "main"
+    )
+    file_path = snapshot / model_file
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("{}")
+
+
+def test_model_cache_probe_warm_and_cold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The probe is keyed by the entry's `sources.hf` repo id, NOT by the
+    # friendly model id in settings -- the two differ for some models, so a
+    # probe keyed on the model id would report a warm cache cold forever.
+    from lode.config import model_cache_identity
+    from lode.cli import _model_cache_probe
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("LODE_HOME", str(home))
+    model_id = Settings().embedding_model
+    hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
+
+    # Nothing on disk yet -> confirmed cold.
+    assert _model_cache_probe(model_id) is False
+
+    # A models--X dir with NO completed snapshot is still cold: HuggingFace's
+    # downloader creates `blobs/` with an `.incomplete` file BEFORE a download
+    # finishes, so "the directory exists" cannot mean "warm" -- this is the
+    # coupled partial-download bug lode-l38d.6's review found and this pin's
+    # switch to `try_to_load_from_cache` fixes.
+    repo_dir = home / "models" / f"models--{hf_source.replace('/', '--')}"
+    (repo_dir / "blobs").mkdir(parents=True)
+    (repo_dir / "blobs" / "deadbeef.incomplete").write_text("partial")
+    assert _model_cache_probe(model_id) is False
+
+    # Completed snapshot -> warm.
+    _write_fake_cache_hit(home, hf_source, model_file)
+    assert _model_cache_probe(model_id) is True
+
+
+def test_model_cache_probe_matches_model_id_case_insensitively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fastembed resolves model ids case-insensitively, so the probe must too --
+    # otherwise a config.toml with a case-variant id loads fine everywhere else
+    # in lode while the probe reports "cannot judge" and the cold hint can never
+    # fire for it.
+    from lode.config import model_cache_identity
+    from lode.cli import _model_cache_probe
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("LODE_HOME", str(home))
+    model_id = Settings().embedding_model
+    hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
+    _write_fake_cache_hit(home, hf_source, model_file)
+
+    assert _model_cache_probe(model_id.upper()) is True
+    assert _model_cache_probe(model_id.lower()) is True
+
+
+def test_model_cache_probe_unknown_model_cannot_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An id in no fastembed registry is un-judgeable, which is None ("could not
+    # judge"), NOT False ("confirmed cold") -- the distinction is what stops a
+    # user who pinned a custom model from being nagged to `lode models pull`
+    # forever by a probe that can never turn warm.
+    from lode.cli import _cold_model_cache, _model_cache_probe
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
+    # One call now covers what took two: the probe searches BOTH registries
+    # (they are disjoint), so a None here means neither list matched.
+    assert _model_cache_probe("not-a-real/model-id") is None
+
+    # ...and None must not read as cold at the caller: an all-unknown settings
+    # set produces no hint, per the probe's non-fatal contract.
+    settings = Settings(
+        embedding_model="not-a-real/model-id",
+        rerank_model="not-a-real/model-id",
+        entailment_model="not-a-real/model-id",
+    )
+    assert _cold_model_cache(settings) is False
+
+
+def test_cold_model_cache_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # lode-l38d.6 requires the probe to be non-fatal: `lode status` was a pure
+    # DB read before it, and a footer hint must never be able to take the
+    # command down. Force the probe's internals to raise and assert the caller
+    # still just answers "not cold".
+    from lode import cli
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("cache dir exploded")
+
+    monkeypatch.setattr(cli, "model_cache_dir", _boom)
+    assert cli._cold_model_cache(Settings()) is False
+
+
+def test_status_survives_a_malformed_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The test above asserts non-fatality of everything BELOW settings
+    # resolution -- it hands _cold_model_cache a ready-made Settings(), so it is
+    # structurally blind to a failure resolving them. That blind spot is exactly
+    # where the footer's own settings lookup went fatal: _resolve_settings()
+    # echoes + raises typer.Exit(1) on a bad config.toml (lode-40g), so an
+    # UNGUARDED call made `lode status` exit 1 over a config typo, after the
+    # table had printed -- no footer at all, which is decision 3's failure mode
+    # (an absent hint read as an absent check) and breaches lode-l38d.6's
+    # explicit "never a failed `lode status`". Assert at the COMMAND boundary,
+    # the only altitude that sees it.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = CliRunner().invoke(app, ["status", "--db", str(db_path)])
+
+    # Queue health needs no config -- a broken one must not take the command
+    # down (trunk exited 0 here; so must we).
+    assert result.exit_code == 0, result.output
+    # ...and the footer must still be REACHED. A cold-cache hint is suppressed
+    # (settings unresolvable -> "no hint", same as the probe's own None), so
+    # with an empty queue this is the all-clear.
+    assert "No action needed." in result.output
+
+
+def test_status_survives_an_unreadable_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The malformed case above is the one _resolve_settings converts to
+    # typer.Exit itself. This is the OTHER half, and the reason the guard above
+    # catches Exception rather than typer.Exit: load_settings() propagates an
+    # OSError (e.g. PermissionError on an unreadable $LODE_HOME/config.toml)
+    # straight THROUGH _resolve_settings, which only converts TOMLDecodeError
+    # and ValidationError. A narrow `except typer.Exit` would leave this case
+    # killing `lode status` exactly as before. Driven by monkeypatch rather than
+    # chmod 000, which is a no-op when the suite runs as root.
+    from lode import cli
+
+    def _boom() -> Settings:
+        raise PermissionError("config.toml is not readable")
+
+    monkeypatch.setattr(cli, "_resolve_settings", _boom)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = CliRunner().invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No action needed." in result.output
+
+
+def test_status_all_clear_when_no_pending_failed_and_cache_warm(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Warm cache (pinned by the fixture) + no pending/failed jobs -> the
+    # explicit all-clear line, not silence.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts) "
+                "VALUES ('embed', 'ver-dddddddddddddddd', 'done', 1)"
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "No action needed." in result.stdout
+    assert "Action needed" not in result.stdout
 
 
 def test_jobs_empty_db_says_no_jobs(tmp_path: Path) -> None:
@@ -935,8 +1281,12 @@ def test_notes_excludes_a_tombstoned_note(
 
 def _capture_console_print(
     monkeypatch: pytest.MonkeyPatch,
+    console: object | None = None,
 ) -> list[tuple[str, dict[str, object]]]:
-    """Capture every ROW passed to the shared ``console.print``, with kwargs.
+    """Capture every ROW passed to a shared Console's ``print``, with kwargs.
+
+    Defaults to the stdout ``cli.console``; pass ``cli.err_console`` to
+    capture the stderr twin instead (lode-l810).
 
     Rows only: the bare ``console.print()`` that separates notes carries no
     argument and is skipped, so a caller can add a second note without the
@@ -948,7 +1298,7 @@ def _capture_console_print(
         if args:
             printed.append((str(args[0]), kwargs))
 
-    monkeypatch.setattr(cli.console, "print", _capture)
+    monkeypatch.setattr(cli.console if console is None else console, "print", _capture)
     return printed
 
 
@@ -1023,14 +1373,13 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
     # the row or the styles around it.
     assert "\\[bracket]" in line
     assert "[bracket]" not in line.replace("\\[bracket]", "")
-    # Pin both rendering flags. They are asserted here rather than left to
-    # eye-verification precisely because the suite can never catch them by
-    # eye: colour is frozen off at import (see this test's docstring), so a
-    # regression in either would sail through green. The rationale for each
-    # flag lives at the call site in cli.py's notes_ loop -- deliberately not
-    # restated here, since both pin rich-version-specific behaviour and two
-    # copies would drift apart.
-    assert kwargs["highlight"] is False
+    # Pin the per-call rendering flag. Asserted here rather than left to
+    # eye-verification precisely because the suite can never catch a
+    # regression by eye: colour is frozen off at import (see this test's
+    # docstring). ``highlight`` is NOT asserted here (lode-re0s) -- it is no
+    # longer a per-call kwarg at all, having been hoisted onto the shared
+    # ``console`` itself; see tests/test_cli_console.py's
+    # test_console_highlight_is_disabled for that pin instead.
     assert kwargs["soft_wrap"] is True
 
 
@@ -1096,8 +1445,10 @@ def test_notes_deleted_flag_also_colours_id_and_date(
     line, kwargs = printed[0]
     assert f"[note_id]{gone_id}[/note_id]" in line
     assert "[date]" in line and "[/date]" in line
-    assert kwargs["highlight"] is False  # same rendering flags as the live path
-    assert kwargs["soft_wrap"] is True
+    # ``highlight`` is no longer a per-call kwarg (lode-re0s hoisted it onto
+    # the shared ``console`` itself) -- see test_cli_console.py's
+    # test_console_highlight_is_disabled for that pin instead.
+    assert kwargs["soft_wrap"] is True  # same rendering flag as the live path
 
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
@@ -2849,6 +3200,54 @@ def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
         result.stderr,
         re.MULTILINE,
     )
+
+
+def test_ambiguous_prefix_rows_render_like_notes_through_err_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l810: candidate rows render on notes_'s exact rendering path.
+
+    The whole point of this ticket is that the two listings' shared columns
+    cannot diverge again, so the things that made them diverge are pinned
+    here rather than left to eye-verification: the suite freezes colour off
+    at import (lode-xgaa), so a regression in the style names or either
+    rendering flag would sail through green -- which is exactly how the
+    ReprHighlighter date-shredding defect reached trunk in lode-l38d.5.
+
+    Rationale for each flag lives at the cli.py call site, deliberately not
+    restated here (see notes_'s equivalent pin).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-fff111", "a summary with a [bracket] in it")
+        r2 = save(conn, "note-fff222", "gone")
+        delete(conn, "note-fff222", parent=r2.version_id)
+    finally:
+        conn.close()
+
+    printed = _capture_console_print(monkeypatch, cli.err_console)
+
+    result = runner.invoke(app, ["recover", "note-fff", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert len(printed) == 2
+    for line, kwargs in printed:
+        # Semantic style NAMES, never a colour literal -- CLI_STYLES stays
+        # the one source of truth (lode-l38d.11).
+        assert "[note_id]" in line and "[/note_id]" in line
+        assert "[date]" in line and "[/date]" in line
+        assert kwargs["highlight"] is False
+        assert kwargs["soft_wrap"] is True
+
+    live_row, deleted_row = printed[0][0], printed[1][0]
+    # Markup in the user's summary must be escaped, not left to corrupt the
+    # row or the styles around it.
+    assert "\\[bracket]" in live_row
+    assert "[bracket]" not in live_row.replace("\\[bracket]", "")
+    # The tombstone marker must reach rich ESCAPED -- unescaped, rich parses
+    # "[deleted]" as a style tag and consumes it, and the marker vanishes.
+    assert "\\[deleted]" in deleted_row
 
 
 def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> None:
