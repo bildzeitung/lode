@@ -84,6 +84,7 @@ from lode.config import (
     load_settings,
     log_dir,
     model_cache_dir,
+    model_cache_identity,
 )
 from lode.enrichment_view import (
     EnrichmentItem,
@@ -1015,37 +1016,65 @@ def _format_redactions(redactions: str | None) -> str:
     return ", ".join(f"{_short(t)}×{n}" for t, n in by_target.items())
 
 
+def _cache_hit(hf_source: str, model_file: str) -> bool:
+    """Is ``model_file`` inside ``hf_source`` actually cached and complete?
+
+    Thin wrapper over ``huggingface_hub.try_to_load_from_cache`` -- the
+    supported, network-free cache query -- against :func:`lode.config.
+    model_cache_dir`. Deliberately NOT a ``Path.iterdir()``/dir-exists check:
+    HuggingFace's downloader creates ``models--X/blobs/`` with an
+    ``.incomplete`` file *before* a download finishes, so a dir-exists probe
+    reads an INTERRUPTED ``lode models pull`` as warm (verified empirically --
+    lode-l38d.6 review). ``try_to_load_from_cache`` resolves the actual
+    ``refs/snapshots`` chain HuggingFace's own loaders use, so a partial
+    download correctly returns ``None`` here, not a false warm.
+
+    Importing ``huggingface_hub`` alone (never ``fastembed``) costs ~10ms
+    warm and pulls in none of fastembed's onnxruntime/numpy dependency graph
+    (measured: 53 modules loaded vs. fastembed's ~866) -- this is the whole
+    point of pinning cache identity in :data:`lode.config._MODEL_CACHE_IDENTITY`
+    instead of resolving it via ``fastembed.list_supported_models()``.
+    """
+    from huggingface_hub import try_to_load_from_cache
+
+    hit = try_to_load_from_cache(
+        repo_id=hf_source, filename=model_file, cache_dir=str(model_cache_dir())
+    )
+    return isinstance(hit, str)
+
+
 def _model_cache_probe(model_name: str, registry: str) -> bool | None:
     """Cheap filesystem check: is ``model_name``'s fastembed weights cache warm?
 
+    Looks up ``model_name`` in :func:`lode.config.model_cache_identity` first
+    -- lode's two pinned models (lode-txh.6) resolve this way with NO
+    ``import fastembed`` at all (see :func:`_cache_hit`'s docstring for why
+    that import is worth avoiding: ~866 modules via onnxruntime/numpy, vs.
+    ``huggingface_hub`` alone at ~53).
+
     ``registry`` picks which fastembed class's ``list_supported_models()`` to
-    resolve ``model_name`` against -- ``"embedding"`` for
+    fall back to for a model id OUTSIDE the pinned set (e.g. a user's custom
+    ``config.toml`` override) -- ``"embedding"`` for
     ``fastembed.TextEmbedding``, ``"cross_encoder"`` for
     ``fastembed.rerank.cross_encoder.TextCrossEncoder`` -- since the embedder
     and the reranker/NLI cross-encoder ship separate supported-model lists and
     a given id can appear in only one. ``list_supported_models()`` is a static
-    in-memory list (no network, no model load), so importing the class and
-    calling it stays a cheap, local lookup.
-
-    The on-disk cache directory fastembed's own downloader uses is NOT keyed
-    by ``model_name`` directly -- it is keyed by that entry's
-    ``sources.hf`` (the actual HuggingFace repo id, which can differ from the
-    friendly model id lode's settings carry; e.g. ``BAAI/bge-small-en-v1.5``
-    resolves to ``qdrant/bge-small-en-v1.5-onnx-q``), as
-    ``models--{hf_source.replace("/", "--")}`` under
-    :func:`lode.config.model_cache_dir` -- verified against the installed
-    ``fastembed``'s ``download_files_from_huggingface``. This probe mirrors
-    that naming, then does one ``Path.iterdir()`` -- no network, no fastembed
-    model load, no ``huggingface_hub`` metadata verification (that is the
-    loader's job at actual load time, not this probe's).
+    in-memory list (no network, no model load); the ``import fastembed`` cost
+    to reach it is expected here -- an unpinned model is already outside
+    lode's fast path.
 
     Returns ``True`` if warm, ``False`` if confirmed cold, or ``None`` if the
     probe could not judge at all (unknown model id, a GCS-only source with no
-    ``models--`` naming to check, or any error). Never raises -- lode-l38d.6
+    HuggingFace repo id to check, or any error). Never raises -- lode-l38d.6
     requires this probe to be non-fatal; callers treat ``None`` the same as
     "not cold" (no hint).
     """
     try:
+        identity = model_cache_identity(model_name)
+        if identity is not None:
+            hf_source, model_file = identity
+            return _cache_hit(hf_source, model_file)
+
         if registry == "embedding":
             from fastembed import TextEmbedding as _Registry
         else:
@@ -1071,10 +1100,10 @@ def _model_cache_probe(model_name: str, registry: str) -> bool | None:
         if entry is None:
             return None
         hf_source = entry["sources"].get("hf")
-        if not hf_source:
+        model_file = entry.get("model_file")
+        if not hf_source or not model_file:
             return None
-        snapshot_dir = model_cache_dir() / f"models--{hf_source.replace('/', '--')}"
-        return snapshot_dir.is_dir() and any(snapshot_dir.iterdir())
+        return _cache_hit(hf_source, model_file)
     except Exception:
         return None
 
@@ -1083,9 +1112,12 @@ def _cold_model_cache(settings: Settings) -> bool:
     """True if ANY of the three resolved models' fastembed cache is cold.
 
     "Cold" is defined per lode-l38d.6's /challenge decision as ANY resolved
-    model missing its cache subdir -- not a single stat on the cache root --
-    so a partial warm (embedder pulled, reranker/NLI not) still surfaces the
-    hint rather than reading as fully warm.
+    model missing its cached weight file (:func:`_cache_hit`, via
+    ``huggingface_hub.try_to_load_from_cache`` -- not a dir-exists-or-empty
+    stat, which an INTERRUPTED download can satisfy, see :func:`_cache_hit`'s
+    docstring) -- not a single stat on the cache root -- so a partial warm
+    (embedder pulled, reranker/NLI not) still surfaces the hint rather than
+    reading as fully warm.
 
     Dedupes ``(registry, model_id)`` pairs before probing: ``rerank_model``
     and ``entailment_model`` default to the same pinned id (lode-txh.6) and

@@ -767,39 +767,57 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     assert "\x1b[1;36m" not in dead_line
 
 
+def _write_fake_cache_hit(home: Path, hf_source: str, model_file: str) -> None:
+    """Build the minimal on-disk layout `try_to_load_from_cache` recognizes.
+
+    Mirrors real HuggingFace cache structure closely enough to satisfy
+    `try_to_load_from_cache`'s own resolution (verified against the installed
+    `huggingface_hub`'s source): with no `refs/` dir present it looks for a
+    snapshot folder literally named `"main"` (its default revision), so
+    `snapshots/main/<model_file>` as a real file is sufficient -- no `blobs/`
+    symlink or `refs/main` commit-hash file needed for a cache HIT.
+    """
+    snapshot = (
+        home
+        / "models"
+        / f"models--{hf_source.replace('/', '--')}"
+        / "snapshots"
+        / "main"
+    )
+    file_path = snapshot / model_file
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("{}")
+
+
 def test_model_cache_probe_warm_and_cold(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The probe is keyed by the entry's `sources.hf` repo id, NOT by the
     # friendly model id in settings -- the two differ for some models, so a
-    # probe keyed on the model id would report a warm cache cold forever. Build
-    # the warm directory the way fastembed's own downloader names it
-    # (models--<hf repo id with / -> -->, verified against
-    # fastembed.common.model_management.download_files_from_huggingface) and
-    # check the probe agrees.
-    from fastembed import TextEmbedding
-
+    # probe keyed on the model id would report a warm cache cold forever.
+    from lode.config import model_cache_identity
     from lode.cli import _model_cache_probe
 
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
     model_id = Settings().embedding_model
-    entry = next(
-        m for m in TextEmbedding.list_supported_models() if m["model"] == model_id
-    )
-    hf_source = entry["sources"]["hf"]
+    hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
 
     # Nothing on disk yet -> confirmed cold.
     assert _model_cache_probe(model_id, "embedding") is False
 
-    # An EMPTY dir is still cold: fastembed creates the cache root before it
-    # has fetched anything, so "the directory exists" cannot mean "warm".
-    snapshot = home / "models" / f"models--{hf_source.replace('/', '--')}"
-    snapshot.mkdir(parents=True)
+    # A models--X dir with NO completed snapshot is still cold: HuggingFace's
+    # downloader creates `blobs/` with an `.incomplete` file BEFORE a download
+    # finishes, so "the directory exists" cannot mean "warm" -- this is the
+    # coupled partial-download bug lode-l38d.6's review found and this pin's
+    # switch to `try_to_load_from_cache` fixes.
+    repo_dir = home / "models" / f"models--{hf_source.replace('/', '--')}"
+    (repo_dir / "blobs").mkdir(parents=True)
+    (repo_dir / "blobs" / "deadbeef.incomplete").write_text("partial")
     assert _model_cache_probe(model_id, "embedding") is False
 
-    # Populated -> warm.
-    (snapshot / "config.json").write_text("{}")
+    # Completed snapshot -> warm.
+    _write_fake_cache_hit(home, hf_source, model_file)
     assert _model_cache_probe(model_id, "embedding") is True
 
 
@@ -810,19 +828,14 @@ def test_model_cache_probe_matches_model_id_case_insensitively(
     # otherwise a config.toml with a case-variant id loads fine everywhere else
     # in lode while the probe reports "cannot judge" and the cold hint can never
     # fire for it.
-    from fastembed import TextEmbedding
-
+    from lode.config import model_cache_identity
     from lode.cli import _model_cache_probe
 
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
     model_id = Settings().embedding_model
-    entry = next(
-        m for m in TextEmbedding.list_supported_models() if m["model"] == model_id
-    )
-    snapshot = home / "models" / f"models--{entry['sources']['hf'].replace('/', '--')}"
-    snapshot.mkdir(parents=True)
-    (snapshot / "config.json").write_text("{}")
+    hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
+    _write_fake_cache_hit(home, hf_source, model_file)
 
     assert _model_cache_probe(model_id.upper(), "embedding") is True
     assert _model_cache_probe(model_id.lower(), "embedding") is True

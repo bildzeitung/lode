@@ -512,6 +512,54 @@ def model_cache_dir() -> Path:
     return lode_home() / "models"
 
 
+#: On-disk cache identity for lode's pinned local models (``embedding_model``
+#: and the shared ``rerank_model``/``entailment_model`` id, lode-txh.6) --
+#: ``fastembed``'s own ``list_supported_models()`` entry for each, reduced to
+#: just what a filesystem cache probe needs: the HuggingFace repo id its
+#: downloader actually caches weights under (``sources.hf``, which can differ
+#: from the friendly model id lode's settings carry -- e.g.
+#: ``BAAI/bge-small-en-v1.5`` caches under ``qdrant/bge-small-en-v1.5-onnx-q``)
+#: and the specific weight file within it (``model_file``).
+#:
+#: Pinned here so ``lode status``'s cold-cache probe (lode-l38d.6) can answer
+#: "is this repo already on disk" with a pure
+#: ``huggingface_hub.try_to_load_from_cache`` filesystem lookup and NEVER
+#: ``import fastembed`` -- that import drags in onnxruntime + numpy (~866
+#: modules; measured ~0.4-2s), which took a pure-sqlite-read command to 2-4x
+#: slower on the WARM path just to print "No action needed." (the
+#: lode-l38d.6 review escalation this pin resolves, decided 2026-07-16).
+#:
+#: Keyed by the model id LOWERCASED, matching fastembed's own
+#: case-insensitive resolution (``ModelManagement._get_model_description``
+#: compares ``model_name.lower()``) -- a ``config.toml`` override spelled in a
+#: different case still probes correctly.
+#:
+#: DRIFT GUARD: a fastembed upgrade could in principle change a pinned id's
+#: ``sources.hf``/``model_file``. ``tests/test_model_cache_identity.py``
+#: asserts this dict still matches the installed fastembed's
+#: ``list_supported_models()`` -- that test may import fastembed; this module
+#: and ``cli.py``'s cold-cache probe must not.
+_MODEL_CACHE_IDENTITY: dict[str, tuple[str, str]] = {
+    "nomic-ai/nomic-embed-text-v1.5": (
+        "nomic-ai/nomic-embed-text-v1.5",
+        "onnx/model.onnx",
+    ),
+    "baai/bge-reranker-base": ("BAAI/bge-reranker-base", "onnx/model.onnx"),
+}
+
+
+def model_cache_identity(model_name: str) -> tuple[str, str] | None:
+    """Pinned ``(hf_source_repo_id, model_file)`` for ``model_name``, or ``None``.
+
+    Case-insensitive lookup against :data:`_MODEL_CACHE_IDENTITY`, matching
+    ``fastembed``'s own resolution. Returns ``None`` for any model id outside
+    lode's two pinned models (e.g. a user's custom ``config.toml`` override) --
+    callers fall back to importing ``fastembed`` to resolve those, same as
+    before this id set was pinned.
+    """
+    return _MODEL_CACHE_IDENTITY.get(model_name.lower())
+
+
 def config_path() -> Path:
     """The optional user config file under the root: ``$LODE_HOME/config.toml``.
 
