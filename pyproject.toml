@@ -19,6 +19,9 @@ dependencies = [
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
     "pydantic",    # structured outputs for the derived layer
     "fastembed",   # embeddings + reranker + NLI via bundled ONNX runtime
+    "pyarrow",     # direct import in vectorstore.py (lode-zcoz) -- already a
+                   # transitive lancedb dep, pinned direct since vectorstore.py
+                   # imports it without going through lancedb
     "lancedb",     # on-disk vector store (ANN + metadata filtering)
     "networkx",    # in-memory knowledge-graph traversal
     "xxhash",      # 128-bit content-address hash (docs/storage.md)
