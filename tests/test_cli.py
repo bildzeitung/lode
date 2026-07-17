@@ -1018,12 +1018,12 @@ def test_purge_ambiguous_prefix_reports_candidates_and_purges_nothing(
     # candidate, not just its bare id, so no second command is needed to tell
     # them apart.
     assert re.search(
-        r"note-aaa111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body a$",
+        r"note-aaa111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body a$",
         result.stderr,
         re.MULTILINE,
     )
     assert re.search(
-        r"note-aaa222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body b$",
+        r"note-aaa222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body b$",
         result.stderr,
         re.MULTILINE,
     )
@@ -1425,12 +1425,12 @@ def test_show_ambiguous_prefix_reports_candidates(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "ambiguous note id prefix 'note-bbb': 2 matches" in result.stderr
     assert re.search(
-        r"note-bbb111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body a$",
+        r"note-bbb111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body a$",
         result.stderr,
         re.MULTILINE,
     )
     assert re.search(
-        r"note-bbb222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body b$",
+        r"note-bbb222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +body b$",
         result.stderr,
         re.MULTILINE,
     )
@@ -1980,12 +1980,12 @@ def test_dump_html_ambiguous_note_prefix_reports_candidates(tmp_path: Path) -> N
     # (lode-l38d.10): each candidate's body ("a"/"b") IS its summary here
     # (no annotation, so it falls back to the first line).
     assert re.search(
-        r"note-dump-ambig-1\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+a$",
+        r"note-dump-ambig-1 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +a$",
         result.stderr,
         re.MULTILINE,
     )
     assert re.search(
-        r"note-dump-ambig-2\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+b$",
+        r"note-dump-ambig-2 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +b$",
         result.stderr,
         re.MULTILINE,
     )
@@ -2702,12 +2702,12 @@ def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
     # candidate the user actually wants, so it must not render blank or look
     # identical to the live match.
     assert re.search(
-        r"note-ddd111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+still live$",
+        r"note-ddd111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +still live$",
         result.stderr,
         re.MULTILINE,
     )
     assert re.search(
-        r"note-ddd222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone soon \[deleted\]$",
+        r"note-ddd222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone soon \[deleted\]$",
         result.stderr,
         re.MULTILINE,
     )
@@ -2728,12 +2728,12 @@ def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> No
     assert result.exit_code == 1
     assert "ambiguous note id prefix 'note-eee': 2 matches" in result.stderr
     assert re.search(
-        r"note-eee111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone a \[deleted\]$",
+        r"note-eee111 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone a \[deleted\]$",
         result.stderr,
         re.MULTILINE,
     )
     assert re.search(
-        r"note-eee222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone b \[deleted\]$",
+        r"note-eee222 +\d{4}-\d{2}-\d{2} \d{2}:\d{2} +gone b \[deleted\]$",
         result.stderr,
         re.MULTILINE,
     )

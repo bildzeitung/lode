@@ -318,11 +318,13 @@ def test_candidate_rows_conn_resolves_live_candidates_in_the_given_order(
 def test_candidate_rows_conn_flags_a_tombstoned_candidate_and_uses_its_body(
     tmp_path: Path,
 ) -> None:
-    """The WRINKLE lode-l38d.10 calls out: recover's candidate set can mix
+    """A candidate set mixing live and tombstoned notes resolves both.
 
-    live and tombstoned notes -- the tombstoned one must render (correctly),
-    not blank, and must carry a deleted marker distinguishing it from a live
-    match.
+    The WRINKLE lode-l38d.10 calls out: ``recover`` resolves with
+    ``include_deleted=True``, so its candidate set can span both states. The
+    tombstoned candidate must render *correctly* -- not blank -- and must
+    carry a marker distinguishing it from a live match, since for ``recover``
+    it is the one the user actually wants.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
