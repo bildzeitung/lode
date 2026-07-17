@@ -17,12 +17,21 @@
 # ticket's own repro steps, all resolved to the ONE shared, authoritative DB.
 # So this is deliberately a BACKSTOP against a mechanism that is real (it
 # happened once, with a concrete transcript) but not understood, not a fix for
-# a reproduced defect. It is scoped to `bd-dolt-push.sh` alone -- the single
-# chokepoint that actually publishes cross-machine -- not to every bd write,
-# which would be a much larger surface with much more false-positive exposure
-# for comparatively little extra safety (the write itself, if it lands on a
-# stray DB, is invisible and harmless to every OTHER machine until someone
-# publishes it).
+# a reproduced defect. It is scoped to `bd-dolt-push.sh` -- the chokepoint that
+# actually publishes cross-machine -- not to every bd write, which would be a
+# much larger surface with much more false-positive exposure for comparatively
+# little extra safety (a write landing on a stray DB cannot reach any OTHER
+# machine until something publishes it).
+#
+# Two limits of that scope, both accepted and recorded in docs/decisions.md
+# (lode-fzau) -- do not "discover" either one as a bug:
+#   - `bd-dolt-push.sh` is the main publisher, not the only one: /challenge
+#     calls `bd dolt push` directly as a DELIBERATE exemption from the wrapper
+#     (lode-bpl -- it is human-invoked and interactive, so a failed push is seen
+#     in the transcript). Those publishes are unguarded, by choice.
+#   - This guard covers publishing a stale DB, NOT the incident's other harm: a
+#     label swap that silently succeeds against a stray DB strands a ticket
+#     invisibly to /land, with no push involved at all. Tracked as lode-zz7x.
 #
 # Refuses (non-zero exit, message on stderr) when EITHER:
 #
@@ -61,21 +70,51 @@
 # bulk prune immediately followed by a push.
 #
 # Usage: scripts/bd-dolt-push-guard.sh
-# Env overrides: BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT (default 90),
-#                BD_DOLT_PUSH_GUARD_FORCE (any non-empty value bypasses)
+# Env overrides: BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT (default 90; must be a
+#                  non-negative integer -- a malformed value REFUSES the push
+#                  rather than silently skipping the check, see below)
+#                BD_DOLT_PUSH_GUARD_FORCE (bypasses both checks; the falsy
+#                  spellings 0/false/no/off are NOT a bypass, so writing
+#                  "don't force" cannot silently mean the opposite)
 #
-# Read-only with respect to bd state: the only file this script itself writes
-# is nothing -- the high-water-mark cache is written by bd-dolt-push.sh after
-# a real successful push, not by this guard.
+# This script writes nothing at all -- it only reads. The high-water-mark cache
+# it consults is written by bd-dolt-push.sh after a real successful push.
 
 set -euo pipefail
 
 MIN_RATIO_PCT="${BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT:-90}"
 
-if [ -n "${BD_DOLT_PUSH_GUARD_FORCE:-}" ]; then
-  echo "bd-dolt-push-guard: BD_DOLT_PUSH_GUARD_FORCE set -- skipping suspicious-DB checks" >&2
-  exit 0
-fi
+# The falsy spellings are deliberately NOT a bypass: with a plain non-empty
+# test, BD_DOLT_PUSH_GUARD_FORCE=0 / =false / =no -- the obvious ways to write
+# "don't force" -- would SILENTLY disable both checks, which is the same
+# "a broken config must never be indistinguishable from a clean DB" trap the
+# ratio validation below exists to close. Anything else non-empty forces.
+case "${BD_DOLT_PUSH_GUARD_FORCE:-}" in
+  '' | 0 | false | FALSE | no | NO | off | OFF) ;;
+  *)
+    echo "bd-dolt-push-guard: BD_DOLT_PUSH_GUARD_FORCE=${BD_DOLT_PUSH_GUARD_FORCE} -- skipping suspicious-DB checks" >&2
+    exit 0
+    ;;
+esac
+
+# Validate the ratio BEFORE it reaches the arithmetic below, and fail CLOSED.
+# Without this, a malformed value silently DISABLES check 2 and lets the push
+# through: `$(( last * MIN_RATIO_PCT ))` sits inside an `if` condition, where
+# `set -e` is suspended, so e.g. MIN_RATIO_PCT='90%' raises a bash syntax error
+# on stderr, evaluates the condition false, and falls through to `exit 0` -- a
+# guard reporting "all clear" while doing no checking at all, from a one-character
+# typo. (Malformed input was also INCONSISTENT: '90%' exited 0/allowed, while
+# 'abc' tripped `set -u` and exited 1/blocked.) Mirrors the same fail-closed
+# rule bd-dolt-push.sh already applies to a non-numeric BD_DOLT_PUSH_MAX_ATTEMPTS
+# ("Never succeed without having pushed") -- a broken guard config must never be
+# indistinguishable from a clean DB. Deliberately placed AFTER the FORCE bypass,
+# so the escape hatch keeps working even with a typo'd ratio in the environment.
+case "$MIN_RATIO_PCT" in
+  '' | *[!0-9]*)
+    echo "bd-dolt-push-guard: REFUSING to push -- BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT='${MIN_RATIO_PCT}' is not a non-negative integer (expected e.g. 90, with no '%'). The remedy is to FIX THE VALUE: it is this guard's own config, and refusing beats silently skipping the check. Do not reach for BD_DOLT_PUSH_GUARD_FORCE to get around a typo." >&2
+    exit 1
+    ;;
+esac
 
 where_json=$(bd where --json 2>/dev/null) || {
   echo "bd-dolt-push-guard: 'bd where --json' failed -- cannot assess the resolved DB, not blocking (bd dolt push will surface the underlying failure)" >&2
@@ -100,8 +139,13 @@ auto-hydrated from a passive jsonl snapshot, not built up via ordinary
 dolt-native writes/pulls. Publishing it over refs/dolt/data risks reverting
 real state cross-machine (lode-fzau).
 
-If this DB really is what you intend to publish (e.g. deliberate disaster
-recovery), re-run with BD_DOLT_PUSH_GUARD_FORCE=1.
+IF YOU ARE AN AGENT: do NOT set BD_DOLT_PUSH_GUARD_FORCE. STOP and escalate to
+a human, quoting this message. This guard fires on a mechanism nobody has been
+able to reproduce, so a refusal here is information, not an obstacle to route
+around -- and forcing it publishes over shared, cross-machine state.
+
+IF YOU ARE A HUMAN and this DB really is what you intend to publish (e.g.
+deliberate disaster recovery), re-run with BD_DOLT_PUSH_GUARD_FORCE=1.
 EOF
   exit 1
 fi
@@ -114,15 +158,19 @@ count_json=$(bd count --json 2>/dev/null) || {
 current=$(printf '%s' "$count_json" | jq -r '.count // empty' 2>/dev/null || true)
 
 cache_file="$db_dir/.bd-dolt-push-guard-highwater"
-if [ -n "$current" ] && [ -f "$cache_file" ]; then
-  last=$(cat "$cache_file" 2>/dev/null || true)
-  case "$current" in '' | *[!0-9]*) current="";; esac
-  case "$last" in '' | *[!0-9]*) last="";; esac
-  if [ -n "$current" ] && [ -n "$last" ] && [ "$last" -gt 0 ]; then
-    # Refuse when current * 100 < last * MIN_RATIO_PCT (integer arithmetic;
-    # avoids a bc/awk dependency for a simple percentage comparison).
-    if [ "$((current * 100))" -lt "$((last * MIN_RATIO_PCT))" ]; then
-      cat >&2 <<EOF
+# Every "cannot assess" input collapses to "" and simply does not fire, which is
+# the fail-open half of this guard's contract: a missing / unreadable / garbage
+# cache, or an uninterpretable count, is UNKNOWN, not SUSPICIOUS. (A missing
+# cache is the normal first-push-on-this-machine state, and the fresh-clone
+# case the guard must never block.) A zero baseline is likewise not a baseline.
+last=$(cat "$cache_file" 2>/dev/null || true)
+case "$current" in '' | *[!0-9]*) current="";; esac
+case "$last" in '' | *[!0-9]*) last="";; esac
+if [ -n "$current" ] && [ -n "$last" ] && [ "$last" -gt 0 ]; then
+  # Refuse when current * 100 < last * MIN_RATIO_PCT (integer arithmetic;
+  # avoids a bc/awk dependency for a simple percentage comparison).
+  if [ "$((current * 100))" -lt "$((last * MIN_RATIO_PCT))" ]; then
+    cat >&2 <<EOF
 bd-dolt-push-guard: REFUSING to push.
 
 The bd DB resolved at:
@@ -132,11 +180,15 @@ at its last successfully-recorded push (below the
 BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT=${MIN_RATIO_PCT}% floor). Publishing it over
 refs/dolt/data risks reverting real state cross-machine (lode-fzau).
 
-If this drop is deliberate (e.g. an intentional bulk prune you just ran),
-re-run with BD_DOLT_PUSH_GUARD_FORCE=1.
+IF YOU ARE AN AGENT: do NOT set BD_DOLT_PUSH_GUARD_FORCE. STOP and escalate to
+a human, quoting this message. A count that dropped this far is information,
+not an obstacle to route around -- and forcing it publishes over shared,
+cross-machine state.
+
+IF YOU ARE A HUMAN and this drop is deliberate (e.g. an intentional bulk prune
+you just ran), re-run with BD_DOLT_PUSH_GUARD_FORCE=1.
 EOF
-      exit 1
-    fi
+    exit 1
   fi
 fi
 

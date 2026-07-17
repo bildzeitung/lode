@@ -60,6 +60,10 @@ FAKE_BD_SOURCE = textwrap.dedent("""\
     #!/usr/bin/env bash
     # Fake `bd` for testing bd-dolt-push-guard.sh / bd-dolt-push.sh. Behavior
     # is driven entirely by env vars so tests need no fixture files.
+    # `set -u` (as in the sibling shims) so a future test that forgets to set an
+    # env var fails loudly here rather than handing back a silently-empty
+    # payload that looks like a legitimate "cannot assess" fail-open.
+    set -euo pipefail
     case "$1" in
       where)
         exit_code="${BD_FAKE_WHERE_EXIT:-0}"
@@ -222,8 +226,19 @@ def test_marker_present_but_force_env_allows(tmp_path: Path) -> None:
 
 
 def test_count_wildly_below_cache_refuses(tmp_path: Path) -> None:
-    """The real incident's shape: current count is far below what this same
-    DB path had at its last successfully-recorded push."""
+    """A count far below what this SAME DB path had at its last recorded push.
+
+    Note what this check is and is not: it is NOT the check that would have
+    caught the documented incident. Check 2 is keyed on the *resolved DB path*,
+    and the incident's stray DB lived at a path of its own (the worktree's own
+    `.beads/`) that had never been pushed from -- so it would have had no cache
+    file, hence no baseline, and check 2 would have failed open. Check 1 (the
+    marker) is what catches the incident, and the marker was in fact present in
+    the incident's transcript. Check 2 covers the *different* scenario of one
+    established DB path shrinking between pushes. The 245/404 numbers below are
+    borrowed from the incident only because they are a realistic magnitude of
+    drop -- do not read them as "check 2 covers the incident".
+    """
     db_dir = _db_dir(tmp_path)
     (db_dir / ".bd-dolt-push-guard-highwater").write_text("404")
     result = _run_guard(
@@ -302,6 +317,32 @@ def test_custom_ratio_threshold_env_var(tmp_path: Path) -> None:
     assert "REFUSING" in result.stderr
 
 
+@pytest.mark.parametrize("falsy", ["0", "false", "no", "off"])
+def test_falsy_force_does_not_bypass(tmp_path: Path, falsy: str) -> None:
+    """BD_DOLT_PUSH_GUARD_FORCE=0 must NOT force.
+
+    A plain non-empty test would treat '0'/'false'/'no' -- the obvious ways to
+    spell "don't force" -- as a bypass, silently disabling both checks on a DB
+    the guard should refuse. Same trap as the malformed-ratio case: an operator
+    writing the falsy spelling gets the opposite of what they asked for, with no
+    signal that any checking was skipped.
+    """
+    db_dir = _db_dir(tmp_path)
+    (db_dir / ".auto-import-issues.jsonl").write_text('{"size": 1}')
+    result = _run_guard(
+        tmp_path,
+        env_overrides={
+            "BD_FAKE_WHERE_JSON": _where_json(db_dir),
+            "BD_FAKE_COUNT_JSON": _count_json(245),
+            "BD_DOLT_PUSH_GUARD_FORCE": falsy,
+        },
+    )
+    assert result.returncode != 0, (
+        f"BD_DOLT_PUSH_GUARD_FORCE={falsy!r} was treated as 'force' and "
+        f"silently bypassed the guard; stderr={result.stderr!r}"
+    )
+
+
 def test_count_check_force_env_allows(tmp_path: Path) -> None:
     """BD_DOLT_PUSH_GUARD_FORCE also bypasses the count check."""
     db_dir = _db_dir(tmp_path)
@@ -311,6 +352,66 @@ def test_count_check_force_env_allows(tmp_path: Path) -> None:
         env_overrides={
             "BD_FAKE_WHERE_JSON": _where_json(db_dir),
             "BD_FAKE_COUNT_JSON": _count_json(1),
+            "BD_DOLT_PUSH_GUARD_FORCE": "1",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+
+# --- Guard: a malformed ratio must never silently disable the check ---------
+
+
+@pytest.mark.parametrize("bad_ratio", ["90%", "abc", "", "9.5", " 90", "-1"])
+def test_malformed_ratio_refuses_rather_than_silently_allowing(
+    tmp_path: Path, bad_ratio: str
+) -> None:
+    """A malformed BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT must FAIL CLOSED.
+
+    Regression test for a real defect (caught in technical review): the ratio
+    feeds `$(( last * MIN_RATIO_PCT ))` inside an `if` condition, where `set -e`
+    is suspended. Before the fix, MIN_RATIO_PCT='90%' -- an entirely plausible
+    typo -- raised a bash syntax error, evaluated the condition false, and fell
+    through to `exit 0`: the guard reported all-clear on a DB it never checked,
+    while `bd dolt push` proceeded. 'abc' meanwhile tripped `set -u` and exited
+    1, so malformed input was also inconsistent.
+
+    Each value here is fed a DB that the guard MUST refuse on the merits
+    (245 against a 404 high-water mark), so a passing exit code can only mean
+    the check was silently skipped -- this test cannot be satisfied by the guard
+    simply erroring out for unrelated reasons.
+    """
+    db_dir = _db_dir(tmp_path)
+    (db_dir / ".bd-dolt-push-guard-highwater").write_text("404")
+    result = _run_guard(
+        tmp_path,
+        env_overrides={
+            "BD_FAKE_WHERE_JSON": _where_json(db_dir),
+            "BD_FAKE_COUNT_JSON": _count_json(245),
+            "BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT": bad_ratio,
+        },
+    )
+    assert result.returncode != 0, (
+        f"a malformed ratio ({bad_ratio!r}) let the push through -- the guard "
+        f"silently did no checking at all; stderr={result.stderr!r}"
+    )
+
+
+def test_force_still_works_despite_malformed_ratio(tmp_path: Path) -> None:
+    """The escape hatch must not be taken out by a typo'd ratio.
+
+    BD_DOLT_PUSH_GUARD_FORCE is the documented way out of a guard that is
+    wrongly refusing, so validation is deliberately ordered AFTER the FORCE
+    bypass -- otherwise a bad ratio in the environment would brick the very
+    override meant to rescue it.
+    """
+    db_dir = _db_dir(tmp_path)
+    (db_dir / ".bd-dolt-push-guard-highwater").write_text("404")
+    result = _run_guard(
+        tmp_path,
+        env_overrides={
+            "BD_FAKE_WHERE_JSON": _where_json(db_dir),
+            "BD_FAKE_COUNT_JSON": _count_json(245),
+            "BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT": "90%",
             "BD_DOLT_PUSH_GUARD_FORCE": "1",
         },
     )
@@ -387,6 +488,53 @@ def test_push_wrapper_records_highwater_on_success(tmp_path: Path) -> None:
     cache_file = db_dir / ".bd-dolt-push-guard-highwater"
     assert cache_file.exists()
     assert cache_file.read_text().strip() == "407"
+
+
+def test_highwater_roundtrip_writer_and_reader_agree(tmp_path: Path) -> None:
+    """The cache bd-dolt-push.sh WRITES must be the cache the guard READS.
+
+    The two halves live in different files and each pins the resolution
+    independently -- `bd where`/`bd count` derivation and the literal
+    `.bd-dolt-push-guard-highwater` filename appear in both. Nothing else
+    couples them, and every other test in this file drives the two halves
+    separately, so a divergence (a renamed cache file, a changed jq path) would
+    leave the writer writing somewhere the reader never looks. Check 2 would
+    then fail OPEN invisibly -- silently doing nothing while every test still
+    passed. This is the same "extract it so a gate catches the derivation
+    regressing" rule lode-v4rk/lode-verb established, applied to the pair.
+
+    So: push once (writer records the baseline), then run the guard against a
+    now-collapsed count and assert it refuses ON THAT BASELINE -- which it can
+    only do if it found what the writer wrote.
+    """
+    db_dir = _db_dir(tmp_path)
+
+    # 1. A real successful push records the high-water mark.
+    result, _ = _run_push(
+        tmp_path,
+        env_overrides={
+            "BD_FAKE_WHERE_JSON": _where_json(db_dir),
+            "BD_FAKE_COUNT_JSON": _count_json(404),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+    # 2. The guard, run afterwards against a collapsed count, must pick that
+    #    baseline up and refuse -- naming the 404 the writer recorded.
+    result = _run_guard(
+        tmp_path,
+        env_overrides={
+            "BD_FAKE_WHERE_JSON": _where_json(db_dir),
+            "BD_FAKE_COUNT_JSON": _count_json(245),
+        },
+    )
+    assert result.returncode != 0, (
+        "the guard did not act on the baseline bd-dolt-push.sh just wrote -- "
+        f"writer and reader have diverged; stderr={result.stderr!r}"
+    )
+    assert "404" in result.stderr, (
+        "the guard refused, but not against the writer's recorded baseline"
+    )
 
 
 def test_push_wrapper_force_env_bypasses_guard(tmp_path: Path) -> None:
