@@ -828,9 +828,14 @@ def notes_(
     than overloading this command's live-only contract that browse/purge/
     retrieval/reconcile all depend on. A deleted note vanishes from both
     Browse and plain ``lode notes``, so this full-id listing is the only route
-    back to an id a later ``lode show``/``lode recover`` can act on. Rendering
-    is identical to the live listing -- no extra tombstone marker yet
-    (raised, not resolved, in lode-l38d.5's hand-off).
+    back to an id a later ``lode show``/``lode recover`` can act on.
+
+    Each ``--deleted`` row also carries a trailing ``" [deleted]"`` marker
+    (the human decision at lode-bau6, built here per lode-l38d.12) -- the same
+    convention ``show`` (a tombstoned head) and ``_report_ambiguous_prefix``
+    (lode-l38d.10) already use for the same concept, so this does not invent a
+    third. The live listing is untouched -- the marker is the empty string
+    there, so ``lode notes`` renders byte-identical to before this ticket.
     """
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -841,12 +846,26 @@ def notes_(
         # which is false whenever live notes exist (lode-d32.2).
         typer.echo("no deleted notes" if deleted else "no notes")
         return
+    # lode-bau6/lode-l38d.12: every row in ``--deleted`` mode is a tombstone
+    # by construction of the flag, so this is computed once, not per-row --
+    # empty in live mode, which is what keeps that path byte-identical to
+    # before this ticket.
+    marker = " [deleted]" if deleted else ""
     for i, row in enumerate(rows):
         if i:
             console.print()
         # ``row.summary`` is unescaped user/AI text and may itself contain
         # "[...]" (markdown links, code, etc.) -- escape it so it can never
         # be mistaken for markup and corrupt the row or the styles around it.
+        # The marker is escaped TOGETHER WITH the summary, not appended after
+        # -- escaping only the summary and then concatenating the raw
+        # ``" [deleted]"`` literal would hand rich's markup parser a bare
+        # "[deleted]" tag. "deleted" is not a real style name, and
+        # ``Console.print`` does not raise on an unknown tag -- it resolves
+        # to a null style and eats it, so the marker would render as nothing
+        # at all (verified against rich 15.0.0; the exact failure mode
+        # lode-l810 found in a sibling call site). Escaping the concatenation
+        # instead turns the whole marker into a literal, visible string.
         # ``soft_wrap=True`` -- rich's Console otherwise word-wraps to its
         # detected width (80 columns when not a terminal), which would
         # silently break a long summary across lines; the prior
@@ -872,7 +891,8 @@ def notes_(
         # The theme styles are the ONLY colour this row should carry.
         console.print(
             f"[note_id]{row.note_id}[/note_id]  "
-            f"[date]{_short_date(row.created)}[/date]  {escape(row.summary)}",
+            f"[date]{_short_date(row.created)}[/date]  "
+            f"{escape(row.summary + marker)}",
             soft_wrap=True,
             highlight=False,
         )
