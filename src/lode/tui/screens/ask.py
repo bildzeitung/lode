@@ -34,13 +34,17 @@ class AskScreen(Screen[None]):
     """One question input, one results pane. Enter asks; Escape pops back.
 
     Pushed on top of another screen via the App-level ``ctrl+l`` binding
-    (:meth:`~lode.tui.app.LodeApp.action_show_ask`, lode-11io) -- Escape pops
-    back to whatever screen was showing, matching every sibling screen
-    (config/tags/browse/edit all name this action ``dismiss_screen``).
+    (Textual's builtin ``push_screen('ask')`` action string,
+    :mod:`lode.tui.app`'s ``LodeApp.BINDINGS`` -- lode-11io, lode-pijc) --
+    Escape pops back to whatever screen was showing, via Textual's builtin
+    APP-NAMESPACED ``app.pop_screen`` action string (lode-pijc): the
+    unqualified ``pop_screen`` resolves against this Screen's own action
+    namespace, which has no such method, and silently fails (verified
+    against Textual 8.2.8).
     """
 
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -81,7 +85,3 @@ class AskScreen(Screen[None]):
             self.app.call_from_thread(self.notify, str(err), severity="error")
             return
         self.app.call_from_thread(results.update, render_ask_result(result))
-
-    def action_dismiss_screen(self) -> None:
-        """Escape pops back to the screen this was pushed on top of (lode-11io)."""
-        self.app.pop_screen()

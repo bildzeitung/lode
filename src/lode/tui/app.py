@@ -135,9 +135,13 @@ class LodeApp(App[str | None]):
         # they aren't the constraint. Do not restore "Config" without
         # re-measuring EditScreen's footer against the Ask binding's real
         # cost.
-        Binding("ctrl+o", "show_config", "Cfg"),
-        Binding("ctrl+b", "show_browse", "Browse"),
-        Binding("ctrl+t", "show_tags", "Tags"),
+        # These four use Textual's own builtin push_screen(name) action
+        # string (App.action_push_screen) rather than a one-line hand-rolled
+        # action_show_* wrapper (lode-pijc) -- each wrapper did nothing but
+        # self.push_screen(name), pure duplication of the builtin.
+        Binding("ctrl+o", "push_screen('config')", "Cfg"),
+        Binding("ctrl+b", "push_screen('browse')", "Browse"),
+        Binding("ctrl+t", "push_screen('tags')", "Tags"),
         # ctrl+l, not the mnemonic ctrl+a: TextArea/Input claim ctrl+a as a
         # builtin, so it would sit silently dead on every text-entry screen
         # (Capture/Ask/Edit). ctrl+l and ctrl+j were the last two
@@ -147,7 +151,7 @@ class LodeApp(App[str | None]):
         # choice. Full rationale and measurements: docs/keybindings.md. The
         # ctrl+a rule is enforced by tests/test_tui_ask_screen.py, not by this
         # comment -- a later ticket that re-binds it fails there.
-        Binding("ctrl+l", "show_ask", "Ask"),
+        Binding("ctrl+l", "push_screen('ask')", "Ask"),
     ]
 
     def __init__(
@@ -162,22 +166,6 @@ class LodeApp(App[str | None]):
 
     def on_mount(self) -> None:
         self.push_screen("capture")
-
-    def action_show_config(self) -> None:
-        """Push the config/diagnostics screen (lode-3r4) on top of the current one."""
-        self.push_screen("config")
-
-    def action_show_browse(self) -> None:
-        """Push the browse screen (lode-0wj.5) on top of the current one."""
-        self.push_screen("browse")
-
-    def action_show_tags(self) -> None:
-        """Push the tags screen (lode-olmi.6) on top of the current one."""
-        self.push_screen("tags")
-
-    def action_show_ask(self) -> None:
-        """Push the ask screen (lode-mkc.2) on top of the current one (lode-11io)."""
-        self.push_screen("ask")
 
     def action_quit(self) -> None:
         """Ctrl+Q: quit immediately, unless the current screen has unsaved state.

@@ -410,8 +410,12 @@ class RelatedNoteModalScreen(ModalScreen[None]):
     the panel itself already relies on, lode-mkc.3).
     """
 
+    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
+    # unqualified form resolves against this Screen's own action namespace,
+    # which has no such method, and silently fails (lode-pijc, verified
+    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, note: RelatedNote) -> None:
@@ -429,9 +433,6 @@ class RelatedNoteModalScreen(ModalScreen[None]):
         self.query_one(f"#{RELATED_MODAL_BODY_ID}", Static).update(
             self._highlighted_body(body or "")
         )
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
 
     def _highlighted_body(self, body: str) -> Text:
         """Style ``self._note``'s matched ``char_range`` slice of ``body``.

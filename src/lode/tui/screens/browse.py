@@ -355,8 +355,12 @@ class VersionHistoryScreen(Screen[None]):
     contract every other browse-family screen uses.
     """
 
+    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
+    # unqualified form resolves against this Screen's own action namespace,
+    # which has no such method, and silently fails (lode-pijc, verified
+    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -385,9 +389,6 @@ class VersionHistoryScreen(Screen[None]):
         if version_id is not None:
             self.app.push_screen(VersionViewScreen(self.note_id, version_id))
 
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
-
 
 class VersionViewScreen(Screen[None]):
     """A read-only view of one specific (possibly non-head) version's body.
@@ -398,7 +399,7 @@ class VersionViewScreen(Screen[None]):
     """
 
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, note_id: str, version_id: str) -> None:
@@ -414,9 +415,6 @@ class VersionViewScreen(Screen[None]):
     def on_mount(self) -> None:
         body = version_body(self.app.db_path, self.note_id, self.version_id)
         self.query_one(f"#{VERSION_BODY_ID}", TextArea).text = body or ""
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
 
 
 def _item_text(item: EnrichmentItem) -> Text:
@@ -560,8 +558,12 @@ class ExternalPickerScreen(Screen[None]):
     module uses.
     """
 
+    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
+    # unqualified form resolves against this Screen's own action namespace,
+    # which has no such method, and silently fails (lode-pijc, verified
+    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, externals: list[ExternalView]) -> None:
@@ -591,9 +593,6 @@ class ExternalPickerScreen(Screen[None]):
         if snapshot_id is not None:
             self.app.push_screen(SnapshotViewerScreen(snapshot_id))
 
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
-
 
 class SnapshotViewerScreen(ModalScreen[None]):
     """A retrieved external's stored content -- body by default, raw on toggle (lode-0sjj).
@@ -621,8 +620,12 @@ class SnapshotViewerScreen(ModalScreen[None]):
     read-only body could bind bare ``h``, back when that screen existed).
     """
 
+    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
+    # unqualified form resolves against this Screen's own action namespace,
+    # which has no such method, and silently fails (lode-pijc, verified
+    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
         Binding("t", "toggle_raw", "Toggle raw HTML"),
     ]
 
@@ -670,9 +673,6 @@ class SnapshotViewerScreen(ModalScreen[None]):
             f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
         ).text = self._snapshot.raw_payload
 
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
-
 
 class EnrichmentModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
@@ -702,8 +702,12 @@ class EnrichmentModalScreen(ModalScreen[None]):
     and centering for :data:`INSPECTOR_DIALOG_ID`.
     """
 
+    # "app.pop_screen" -- APP-NAMESPACED, not the bare "pop_screen": the
+    # unqualified form resolves against this Screen's own action namespace,
+    # which has no such method, and silently fails (lode-pijc, verified
+    # against Textual 8.2.8; see lode-11io's original discovery of this trap).
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -749,9 +753,6 @@ class EnrichmentModalScreen(ModalScreen[None]):
             f"Embedded: {'yes' if view.embedded else 'no'} "
             f"({view.passage_count} passages)"
         )
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
 
 
 class DeleteConfirmScreen(ModalScreen[bool]):
