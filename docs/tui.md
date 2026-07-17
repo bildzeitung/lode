@@ -1,9 +1,9 @@
 # lode — TUI layout conventions
 
-One page for layout rules that keep a screen's content from running past the docked Footer.
-Expected to grow as more screens land (`lode-l38d`'s UX-polish round and beyond) — kept short on
-purpose so later conventions have room. See [keybindings.md](keybindings.md) for the companion
-keymap doc.
+One page for layout rules that keep a screen's content inside the space it has — vertically (not
+running past the docked Footer) and horizontally (fitting the minimum terminal width). Expected to
+grow as more screens land (`lode-l38d`'s UX-polish round and beyond) — kept short on purpose so
+later conventions have room. See [keybindings.md](keybindings.md) for the companion keymap doc.
 
 ## Every middle panel needs an explicit height (`lode-efn2`)
 
@@ -85,6 +85,13 @@ bug and fixed it locally; the other eight stayed bare. That is drift-by-default:
 forgets the flags regresses silently, which is exactly how `CaptureScreen` — the app's own
 default/landing screen — clipped past `BrowseScreen`'s fix undetected (`lode-3rvw`). `LodeFooter`
 is the one seam for any future footer-wide style change; a screen never repeats the flags itself.
+
+Both of those flags are load-bearing at the 100-column bound, and neither is the `show=False`
+binding-hiding that `lode-l38d.3` ruled out and this epic has held to since: `compact=True` only
+trims Textual's per-entry padding, and `show_command_palette=False` drops only the footer's
+auto-added "^p palette" icon — `ctrl+p` still opens the palette (verified), and the palette was
+never one of lode's declared `BINDINGS`. Measured costs of dropping either, plus the tests that
+enforce it, are in [`lode.tui.lode_footer`](../src/lode/tui/lode_footer.py)'s docstring.
 
 Rejected alternatives, so the question isn't reopened:
 
