@@ -339,3 +339,45 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
         "Browse",
         "Tags",
     ]
+
+
+# ---------------------------------------------------------------------------
+# The LodeFooter invariant (lode-uczx) -- every screen composes LodeFooter, no
+# screen constructs the stock Footer itself.
+#
+# Why this test exists rather than a one-time grep: the bug lode-uczx was filed
+# for is drift-by-DEFAULT -- a screen that forgets the two flags regresses
+# silently -- and a grep at review time closes that for today's ten screens
+# only, not for the eleventh. The three footer-width tests don't cover it
+# either: they drive Browse/Capture/Edit, and the other seven screens consume
+# 41-78 columns even bare, so reverting any of those seven to a stock Footer()
+# passes the entire suite unnoticed (verified: the full suite is green with all
+# seven reverted). That is precisely how CaptureScreen -- the app's own landing
+# screen -- clipped past BrowseScreen's fix undetected (lode-3rvw), and this
+# footer bug has now been independently rediscovered three times
+# (lode-l38d.3 -> lode-3rvw -> lode-3aen) rather than caught by a gate.
+#
+# Checked at import level, not by grepping source text: a screen cannot build a
+# stock Footer without importing it, and the runtime check can't be fooled by
+# whitespace or a `f = Footer(); yield f` split that a text match would miss.
+# ---------------------------------------------------------------------------
+
+
+def test_no_screen_module_imports_the_stock_footer() -> None:
+    import importlib
+    import pkgutil
+
+    import lode.tui.screens
+
+    offenders = []
+    for info in pkgutil.iter_modules(lode.tui.screens.__path__):
+        module = importlib.import_module(f"lode.tui.screens.{info.name}")
+        # LodeFooter is a Footer subclass, so identity -- not issubclass -- is
+        # what distinguishes "imported the stock widget" from "imported ours".
+        if getattr(module, "Footer", None) is Footer:
+            offenders.append(info.name)
+
+    assert offenders == [], (
+        "these screen modules import Textual's stock Footer; compose "
+        f"LodeFooter instead (lode-uczx): {offenders}"
+    )
