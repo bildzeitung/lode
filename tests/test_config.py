@@ -551,3 +551,18 @@ def test_atlassian_credentials_repr_redacts_token() -> None:
     assert "super-secret-token" not in rendered
     assert "me@acme.com" in rendered
     assert "redacted" in rendered
+
+
+def test_settings_repr_and_str_never_echo_secret_tokens() -> None:
+    # Acceptance: the token value is NEVER logged or echoed anywhere -- so an
+    # incautious repr()/str()/print()/logger.debug() of the Settings object
+    # itself must not surface it (secret=True => repr=False on the field).
+    s = Settings(jira_token="jira-super-secret", confluence_token="conf-super-secret")
+    for rendered in (repr(s), str(s)):
+        assert "jira-super-secret" not in rendered
+        assert "conf-super-secret" not in rendered
+    # Non-secret siblings remain visible, and the values stay accessible/
+    # serializable -- only the human-facing repr is suppressed.
+    assert "jira_email" in repr(Settings(jira_email="me@acme.com"))
+    assert s.jira_token == "jira-super-secret"
+    assert s.model_dump()["confluence_token"] == "conf-super-secret"

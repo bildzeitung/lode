@@ -62,12 +62,22 @@ def _knob(
     ``secret=True`` marks a field whose value must never be echoed back to the
     user (a credential, e.g. an Atlassian API token, lode-gpzn.1) --
     :func:`knob_rows` excludes any field tagged this way from the ``lode
-    config`` / TUI knob table, regardless of its ``kind``.
+    config`` / TUI knob table, regardless of its ``kind``, AND the field is
+    given ``repr=False`` so the raw value never leaks through the Pydantic
+    model's own ``repr()`` / ``str()`` either (an incautious
+    ``logger.debug(settings)`` or ``print(settings)`` would otherwise echo it
+    -- the acceptance is "never logged or echoed *anywhere*", lode-gpzn.1).
     """
     extra: dict[str, object] = {"kind": kind.value}
     if secret:
         extra["secret"] = True
-    return Field(default, description=doc, json_schema_extra=extra, **constraints)
+    return Field(
+        default,
+        description=doc,
+        json_schema_extra=extra,
+        repr=not secret,
+        **constraints,
+    )
 
 
 # High-precision secret seed set (docs/configuration.md "Privacy & egress",
