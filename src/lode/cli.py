@@ -1568,9 +1568,7 @@ def _config_path_table(rows: list[tuple[str, str, str]]) -> Table:
         # (f"{value}  ({note})") -- moving it to its own column fixes the
         # actual bug (that text used to distort the Value column's computed
         # width), not the visual convention of wrapping it in parens.
-        table.add_row(
-            Text(label), Text(value), Text(f"({note})" if note else "")
-        )
+        table.add_row(Text(label), Text(value), Text(f"({note})" if note else ""))
     return table
 
 

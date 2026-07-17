@@ -3337,29 +3337,54 @@ def test_format_cited_answer_surfaces_withheld_even_on_abstention() -> None:
 # --- lode config (resolved paths read-out, lode-ftc) ------------------------
 
 
-#: A COLUMNS wide enough that none of ``lode config``'s rows -- including the
-#: longest knob value, the ~255-char redaction pattern lists -- ever wrap
-#: (lode-l38d.4). Tests below assert data PRESENCE via plain substring checks,
-#: which a wrapped rich Table cell would break across lines; passed via
-#: ``runner.invoke(..., env=...)``, which Click's ``CliRunner`` applies to the
-#: real ``os.environ`` for the duration of the call -- and rich's ``Console``
-#: reads terminal width LIVE off ``os.environ["COLUMNS"]`` on every render
-#: (unlike colour/TTY detection, which freezes at import time; verified
-#: against the installed rich 15.0.0 -- see lode-l38d.4's design notes). The
-#: dedicated wrapping tests below (module ``test_cli_config_width``) instead
-#: pin a narrow width to assert the wrap-without-data-loss behavior directly.
-_WIDE_COLUMNS = "1000"
+def _set_console_width(monkeypatch: pytest.MonkeyPatch, width: int) -> None:
+    """Force ``lode.cli``'s shared ``console`` to a specific width for one test.
+
+    rich's ``Console()`` reads ``COLUMNS`` from the environment ONCE, at
+    CONSTRUCTION -- but only CONDITIONALLY: ``Console.__init__`` sets
+    ``self._width`` from ``os.environ["COLUMNS"]`` whenever the ``width``
+    constructor arg is ``None`` (our case) AND ``COLUMNS`` happens to be
+    present in the environment at that moment (verified against the
+    installed rich 15.0.0). Once baked, ``Console.size`` short-circuits on
+    ``self._width is not None`` and never re-reads the environment again --
+    for the REST OF THE PROCESS'S LIFETIME.
+
+    For a real one-shot ``lode config`` invocation this is harmless (import
+    time and render time are the same moment). It is NOT harmless in this
+    test suite: pytest-xdist imports ``lode.cli`` ONCE per worker process and
+    reuses the same ``console`` singleton across every test that worker
+    runs -- so whichever COLUMNS value happened to be in THAT worker's
+    environment at its first import of ``lode.cli`` (observed here: '80',
+    inherited from outside pytest's own control) freezes the console's width
+    for every subsequent test in that worker, and a later
+    ``runner.invoke(..., env={"COLUMNS": ...})`` override has NO effect --
+    confirmed empirically: it changes ``os.environ`` for the call, but
+    ``console.size``'s early-return never re-reads it.
+
+    This directly reaches past that freeze by monkeypatching the private
+    ``_width``/``_height`` attributes (auto-reverted after the test). That is
+    deliberately NOT the same pattern as the NO_COLOR subprocess technique in
+    tests/test_cli_console.py: that module exists to verify rich's *env
+    detection mechanism itself*; these config tests only care about the
+    Table/overflow="fold" *rendering* behavior at a given width, which does
+    not require re-proving env detection (already covered where it matters).
+    """
+    from lode.cli import console
+
+    monkeypatch.setattr(console, "_width", width)
+    monkeypatch.setattr(console, "_height", 24)
 
 
-def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> None:
+def test_config_surfaces_every_resolved_path_under_lode_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Acceptance: $LODE_HOME root, DB, vector store, model cache dir, log dir,
     # and config file path are all displayed, resolved under the single root
     # (docs/configuration.md §Paths & locations) -- the full set of paths that
     # table documents (lode-agh: model cache was missing here).
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
-    result = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     out = result.stdout
     assert str(home) in out  # the resolved root
@@ -3371,51 +3396,50 @@ def test_config_surfaces_every_resolved_path_under_lode_home(tmp_path: Path) -> 
     assert str(home / "config.toml") in out
 
 
-def test_config_reports_config_file_present_or_absent(tmp_path: Path) -> None:
+def test_config_reports_config_file_present_or_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The optional config.toml is shown absent by default, present once it exists.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
     home.mkdir()
-    absent = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    absent = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert absent.exit_code == 0
     assert "config.toml" in absent.stdout
     assert "(absent)" in absent.stdout
 
     (home / "config.toml").write_text("", encoding="utf-8")
-    present = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    present = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert "config.toml" in present.stdout
     assert "(present)" in present.stdout
 
 
-def test_config_flags_env_override_vs_default(tmp_path: Path) -> None:
+def test_config_flags_env_override_vs_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The effective source of the root is surfaced: env override when set, else
     # the ~/.lode default (docs design: "show the effective env-var override").
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
-    overridden = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    overridden = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert "($LODE_HOME)" in overridden.stdout
 
-    default = runner.invoke(
-        app, ["config"], env={"LODE_HOME": "", "COLUMNS": _WIDE_COLUMNS}
-    )
+    default = runner.invoke(app, ["config"], env={"LODE_HOME": ""})
     assert "(default)" in default.stdout
 
 
 def test_config_db_override_shifts_displayed_db_and_vector_store(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A per-invocation --db override moves the displayed DB, its lock, and the
     # co-located vector store; the root/logs/config still come from $LODE_HOME.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
     custom_db = tmp_path / "elsewhere" / "custom.db"
     result = runner.invoke(
         app,
         ["config", "--db", str(custom_db)],
-        env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS},
+        env={"LODE_HOME": str(home)},
     )
     assert result.exit_code == 0
     out = result.stdout
@@ -3431,15 +3455,14 @@ def test_config_db_override_shifts_displayed_db_and_vector_store(
 
 
 def test_config_shows_every_runtime_and_tune_knob_with_current_value(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Acceptance: every runtime+tune Settings knob appears with its CURRENT
     # resolved value and kind, even with no config.toml present (shows
     # defaults) -- the knob table sits below the existing paths block.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
-    result = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     for name, value, kind in config.knob_rows(config.Settings()):
         assert name in result.stdout
@@ -3447,14 +3470,15 @@ def test_config_shows_every_runtime_and_tune_knob_with_current_value(
         assert kind in result.stdout
 
 
-def test_config_excludes_build_kind_knobs(tmp_path: Path) -> None:
+def test_config_excludes_build_kind_knobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # SCOPE decision (lode-juz8.6): build-kind knobs (imply a rebuild/
     # migration, e.g. embedding_model/embedding_vector_dim/content_hash) are
     # hidden from the knob table.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
-    result = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     knob_names = {name for name, _, _ in config.knob_rows(config.Settings())}
     assert "embedding_model" not in knob_names
@@ -3465,16 +3489,17 @@ def test_config_excludes_build_kind_knobs(tmp_path: Path) -> None:
     assert "nomic-ai/nomic-embed-text-v1.5" not in result.stdout
 
 
-def test_config_knob_table_reflects_config_toml_override(tmp_path: Path) -> None:
+def test_config_knob_table_reflects_config_toml_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A config.toml override for a runtime knob shows up as the CURRENT
     # value, not the field default -- confirms the table reads a resolved
     # Settings instance (load_settings), not bare field defaults.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.toml").write_text("retrieval_top_k = 42\n", encoding="utf-8")
-    result = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": _WIDE_COLUMNS}
-    )
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     assert "retrieval_top_k" in result.stdout
     lines = [
@@ -3490,16 +3515,15 @@ def test_config_knob_table_reflects_config_toml_override(tmp_path: Path) -> None
 
 
 def test_config_wraps_long_knob_values_without_losing_characters(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # THE BUG THIS TICKET FIXES: at a normal 80-column terminal, a long
     # list-valued knob (the ~255-char redaction pattern lists) used to inflate
     # every row's padding to its own width; now it wraps within its own
     # column instead. Assert no data is lost in the wrap.
+    _set_console_width(monkeypatch, 80)
     home = tmp_path / "home"
-    result = runner.invoke(
-        app, ["config"], env={"LODE_HOME": str(home), "COLUMNS": "80"}
-    )
+    result = runner.invoke(app, ["config"], env={"LODE_HOME": str(home)})
     assert result.exit_code == 0
     longest_name, longest_value, _ = max(
         config.knob_rows(config.Settings()), key=lambda row: len(row[1])

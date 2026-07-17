@@ -27,6 +27,7 @@ from textual.widgets import DataTable, Footer, Header, Static
 from typer.testing import CliRunner
 
 from lode.cli import app as cli_app
+from lode.cli import console as cli_console
 from lode.config import (
     Kind,
     Settings,
@@ -43,6 +44,19 @@ from lode.tui.app import LodeApp
 from lode.tui.screens.config import KNOB_TABLE_ID, ROWS_ID, ConfigScreen
 
 runner = CliRunner()
+
+
+def _set_console_width(monkeypatch: pytest.MonkeyPatch, width: int) -> None:
+    """Force the CLI's shared console to a specific width for one test.
+
+    See the identical helper (and its full rationale -- rich's ``Console()``
+    conditionally bakes ``self._width`` at CONSTRUCTION whenever ``COLUMNS``
+    happens to be present in the environment then, which under pytest-xdist
+    means a later per-test ``COLUMNS`` override can silently have no effect)
+    in tests/test_cli.py.
+    """
+    monkeypatch.setattr(cli_console, "_width", width)
+    monkeypatch.setattr(cli_console, "_height", 24)
 
 
 def test_app_registers_config_screen() -> None:
@@ -134,13 +148,14 @@ def test_cli_and_tui_render_same_path_data(
     # the whitespace-overflow bug), so the two surfaces' exact rendered TEXT
     # is no longer byte-identical -- the CLI's Table can wrap a long value,
     # the TUI's Static text never does. What must still hold, and what this
-    # test asserts, is that every row's DATA reaches both surfaces. A wide
-    # COLUMNS keeps the CLI's own table from wrapping so this stays a plain
-    # substring check (dedicated wrap-without-data-loss coverage lives in
-    # tests/test_cli.py's test_config_wraps_long_knob_values_without_losing_characters).
+    # test asserts, is that every row's DATA reaches both surfaces. Forcing
+    # the CLI's shared console wide (see _set_console_width) keeps its own
+    # table from wrapping so this stays a plain substring check
+    # (dedicated wrap-without-data-loss coverage lives in tests/test_cli.py's
+    # test_config_wraps_long_knob_values_without_losing_characters).
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
-    monkeypatch.setenv("COLUMNS", "1000")
     db_path = default_db_path()
 
     cli_result = runner.invoke(cli_app, ["config"])
@@ -177,9 +192,9 @@ def test_cli_and_tui_render_same_knob_data(
     # every row to the single widest value), so literal-line parity with the
     # CLI's own stdout is no longer meaningful -- this compares DATA instead,
     # exactly like the path-table test above.
+    _set_console_width(monkeypatch, 1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
-    monkeypatch.setenv("COLUMNS", "1000")
 
     cli_result = runner.invoke(cli_app, ["config"])
     assert cli_result.exit_code == 0
