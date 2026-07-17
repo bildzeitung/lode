@@ -14,7 +14,16 @@
 # A child links to its epic via a `parent-child` dependency whose target has
 # `issue_type: epic` (verified against real bd output: `bd show <child-id>
 # --json` embeds the epic as a nested object inside `.dependencies[]`, not via
-# the top-level `parent_id`/`epic_id` fields, which are null). `bd ready
+# the top-level `parent_id`/`epic_id` fields, which are null). This script wants
+# that embedded object specifically -- it needs the EPIC's own `issue_type` and
+# labels, not just its id, and the deps entry carries them in the same call.
+#
+# NB (lode-v4rk): `parent_id`/`epic_id` being null does NOT mean "no top-level
+# parent field" -- `bd show <child-id> --json` also exposes a `.parent` scalar,
+# which IS populated and agrees with this walk on every ticket sampled. It is
+# the simpler read when only the parent's ID is needed, and is what the sibling
+# scripts/epic-completion-check.sh uses. Both are correct; they differ in what
+# they return, not in reliability. `bd ready
 # --json` doesn't carry `dependencies` at all, so this script re-fetches the
 # candidate via `bd show` to get them.
 #

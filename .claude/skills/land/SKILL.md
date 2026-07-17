@@ -547,21 +547,21 @@ done
 
 # Closing the last child of an epic completes it — flag it for the closing-side review.
 # I only NOTICE completion here (I am the one that closed it); the review itself is the
-# separate `/epic-audit` skill. For each just-closed ticket, walk to its parent epic and,
-# if that epic is now fully child-complete and not already flagged/audited, label it.
+# separate `/epic-audit` skill. For each just-closed ticket, `scripts/epic-completion-check.sh`
+# walks to its parent epic and decides whether that epic is now fully child-complete and not
+# already flagged/audited (lode-v4rk: the derivation THIS inline snippet used to run —
+# `bd show <epic-id> --json | jq '.dependents[]'` — was dead code, since `bd show` only
+# populates `.dependents` when called with the opt-in `--include-dependents` flag; without it
+# `$kids` was always `[]`, and the `(($kids|length)>0)` false-positive guard silently ate every
+# pass. The script is extracted, not inlined, so it carries its own fixture-backed regression
+# tests — tests/test_epic_completion_check.py, including a test that reproduces the OLD bug and
+# proves it — since no gate here would ever catch a markdown-embedded jq snippet regressing).
+# The script is read-only; this loop is the one place that actually writes the label.
 for id in $LANDED; do
-  PARENT=$(rtk bd show "$id" --json | jq -r '.[0].dependencies[]? | select(.dependency_type=="parent-child") | .id' | head -1)
-  [ -z "$PARENT" ] && continue
-  READY=$(rtk bd show "$PARENT" --json | jq -r '
-    .[0] as $e |
-    (($e.dependents // []) | map(select(.dependency_type=="parent-child"))) as $kids |
-    ($e.labels // []) as $lbl |
-    if ($e.issue_type=="epic") and ($e.status!="closed")
-       and (($kids|length)>0) and (all($kids[]; .status=="closed"))
-       and (($lbl | index("epic-audited")) | not)
-       and (($lbl | index("epic-ready-to-audit")) | not)
-    then "READY" else "" end')
-  [ "$READY" = "READY" ] && rtk bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
+  RESULT=$(rtk scripts/epic-completion-check.sh "$id")
+  [ -z "$RESULT" ] && continue
+  PARENT=$(printf '%s' "$RESULT" | awk '{print $2}')
+  rtk bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
 done
 
 rtk scripts/bd-dolt-push.sh               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
@@ -1127,7 +1127,10 @@ REBUILD BRIEF (from land-review):
 # reading falsely "complete" while the real work sits in an unlinked ticket. Re-parenting keeps the
 # epic's completion accounting honest: the superseded child closes, but NEW is an open child, so the
 # epic stays incomplete until the rebuild lands (and /epic-audit sees the real work).
-PARENT=$(rtk bd show <id> --json | jq -r '.[0].dependencies[]? | select(.dependency_type=="parent-child") | .id' | head -1)
+# `.parent` (verified against real bd 1.1.0 output, lode-v4rk's audit) is the direct top-level
+# field bd show already populates for a parent-child child -- simpler and no schema/flag pitfall
+# to get wrong, unlike `.dependencies[]?`/`.dependents[]?` walks elsewhere in this file.
+PARENT=$(rtk bd show <id> --json | jq -r '.[0].parent // empty')
 [ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
 
 # Re-point non-parent dependents. If OTHER tickets depend on <id> via a `blocks` edge (e.g. a
@@ -1136,7 +1139,11 @@ PARENT=$(rtk bd show <id> --json | jq -r '.[0].dependencies[]? | select(.depende
 # Re-point each dependent onto NEW so the graph stays honest: they remain blocked until the rebuild
 # lands. Same principle as the epic re-parent above — keep the dependency graph accurate across a
 # supersede, not just the parentage.
-for DEP in $(rtk bd show <id> --json | jq -r '.[0].dependents[]? | select(.dependency_type=="blocks") | .id'); do
+# --include-dependents is REQUIRED here (lode-v4rk): bd show's `.dependents` array is only
+# populated with that opt-in flag ("may be slow on hub beads" per `bd show --help`) -- without
+# it, dependent_count can be non-zero while `.dependents` is absent entirely, and this loop
+# silently iterates zero times.
+for DEP in $(rtk bd show <id> --json --include-dependents | jq -r '.[0].dependents[]? | select(.dependency_type=="blocks") | .id'); do
   rtk bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
 done
 

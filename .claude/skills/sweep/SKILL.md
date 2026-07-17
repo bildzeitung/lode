@@ -68,19 +68,27 @@ than aborting — a failed query is not an empty queue. See
 
 An epic qualifies when it is `epic-audited` + still `open` + **every** `parent-child` child is
 `closed` — `/epic-audit` deliberately never closes an epic itself, so nothing else flags these.
-Same child-completion check `/epic-audit` uses:
+Same shared child-completion check `/epic-audit` and `/land` use, `scripts/epic-children-closed.sh`
+(NOT `bd show`'s `.dependents` array — see the script's own header; that array is populated only
+with the opt-in `--include-dependents` flag, and its absence made this exact check dead code in all
+three skills until lode-v4rk):
 
 ```bash
 CLOSABLE=""
-for e in $(rtk bd list --type=epic --label epic-audited --status open --json | jq -r '.[].id'); do
-  ROW=$(rtk bd show "$e" --json | jq -r '
-    .[0] as $e |
-    (($e.dependents // []) | map(select(.dependency_type=="parent-child"))) as $kids |
-    if (($kids|length)>0) and (all($kids[]; .status=="closed"))
-    then "\($e.id)\tepic-ready-to-close\t\($e.title)" else empty end')
-  [ -n "$ROW" ] && CLOSABLE="${CLOSABLE}${ROW}
+# Pull id AND title in the ONE list read -- `bd list --json` rows already carry
+# `title`, so re-fetching it per epic with a second `bd show` would be a wasted
+# round-trip against derivable state.
+while IFS=$'\t' read -r e TITLE; do
+  [ "$(rtk scripts/epic-children-closed.sh "$e")" = "true" ] || continue
+  ROW=$(printf '%s\tepic-ready-to-close\t%s' "$e" "$TITLE")
+  # The newline MUST sit outside the command substitution above: `$(...)` strips
+  # trailing newlines, so building the row as `printf '...\n'` would silently drop
+  # the separator and jam every epic onto ONE line (only visible with >=2 closable
+  # epics, which is why it reads fine in a one-epic spot check).
+  CLOSABLE="${CLOSABLE}${ROW}
 "
-done
+done < <(rtk bd list --type=epic --label epic-audited --status open --json \
+  | jq -r '.[] | [.id, .title] | @tsv')
 ```
 
 ## 3. Build the current queue (dedup on stable IDs)
