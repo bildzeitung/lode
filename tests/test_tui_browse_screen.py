@@ -1747,23 +1747,45 @@ def _seed_four_notes(db_path: Path) -> None:
 
 
 async def _settle(pilot: Pilot) -> None:
-    """Wait for Textual's message queue to fully drain -- TWICE (lode-9y68).
+    """Drain Textual's message queues TWICE, deterministically (lode-9y68).
 
-    ``pilot.pause()`` drains via ``Pilot._wait_for_screen``, which snapshots
-    each widget's pending-message count ONCE, up front, and waits only for
-    *those* specific messages to be processed. A message that gets enqueued
-    as a DELAYED side effect of processing an earlier one -- e.g. a
-    screen-pop's ``ScreenResume`` landing on the resumed screen only once the
-    popped screen finishes tearing down, or a ``DataTable`` cursor-move's
-    reactive fan-out posting a follow-up highlight event -- can arrive
-    *after* that snapshot already reported the target widget "idle" with
-    zero pending messages, so a single ``pause()`` does not reliably wait
-    for it. Calling ``pause()`` again re-snapshots from the (now later)
-    state and drains that second wave too. Confirmed empirically as the
-    live mechanism (not merely theoretical): reproduced under artificial
-    plus real concurrent-agent CPU load, a bare single ``pause()`` after a
-    keystroke/screen-transition sequence occasionally read a stale
-    ``cursor_row``/highlighted-row a first read would have missed.
+    ``pilot.pause()`` is two different mechanisms bolted together
+    (``textual/pilot.py``)::
+
+        await self._wait_for_screen()   # message-count drain -- no clock
+        await wait_for_idle(0)          # CPU-vs-wall-clock heuristic
+
+    Only the first is deterministic. ``_wait_for_screen`` snapshots
+    ``self.app.screen``, that screen's child list, AND each child's pending
+    message count ONCE, up front, then waits for exactly that set to drain
+    (its own comment: "all messages queued at the start of the method have
+    been processed"). Work enqueued *after* the snapshot is outside it --
+    notably work landing on a screen that only *becomes* ``app.screen`` once
+    an already-queued transition is processed, since the snapshot resolved
+    ``app.screen`` to the outgoing screen and posted its sentinels there.
+
+    The second is the one CPU contention defeats: ``wait_for_idle``
+    (``textual/_wait.py``) compares this process's ``process_time()`` against
+    wall-clock ``monotonic()`` and breaks when CPU time is not keeping up --
+    so a process merely *starved of timeslices* (this machine legitimately
+    runs several concurrent ``nox -s tests`` invocations) reads as "idle"
+    while its work is still pending.
+
+    So the second ``pause()`` re-snapshots from the now-later state and drains
+    that second wave *by message count* -- rather than leaving it to
+    ``wait_for_idle``'s unconditional ~20ms sleep to have happened to cover it.
+    That converts a timing-dependent catch into an ordering-dependent one.
+
+    HONEST SCOPE [Likely, not Certain] -- a single ``pause()`` was NOT observed
+    to miss a cascade in isolation: probed across both a same-widget delayed
+    post and a screen-pop, one drain caught the follow-up 30/30 even with
+    ``wait_for_idle`` factored out. The reason is that those races resolve on
+    asyncio's *ready-queue ordering*, which OS starvation does not perturb --
+    starvation slows the whole loop uniformly instead of reordering callbacks.
+    This helper is therefore hardening against *relying on* ``wait_for_idle``'s
+    sleep, and is cheap (~20ms) insurance -- not a fix for a demonstrated
+    single-``pause()`` failure. The demonstrated load-sensitive gap is the one
+    :func:`_press_and_settle` closes.
     """
     await pilot.pause()
     await pilot.pause()
@@ -1772,22 +1794,37 @@ async def _settle(pilot: Pilot) -> None:
 async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
     """Press each key one at a time, settling after EACH one (lode-9y68).
 
-    ``pilot.press(*keys)`` sends a whole sequence through Textual's own
-    ``App._press_keys``, which paces itself BETWEEN keystrokes using only
-    ``wait_for_idle()`` (``textual/_wait.py``) -- a heuristic that compares
-    this *process's own* CPU time against wall-clock time to guess whether
-    it has gone idle. Under CPU contention (this machine legitimately runs
-    several concurrent ``nox -s tests`` invocations at once), the OS
-    scheduler can starve this process of timeslices; ``wait_for_idle()``
-    then sees low CPU time relative to elapsed wall time and concludes
-    "idle" before a keystroke's full reactive cascade (Input value update ->
-    ``Input.Changed`` message -> ``on_input_changed`` -> ``_seek_match`` ->
-    ``DataTable.move_cursor``) has actually run -- so the next keystroke can
-    be dispatched while the previous one is still in flight. Pressing one
-    key at a time and settling with :func:`_settle` (which drains Textual's
-    message queues via ``_wait_for_screen``, not just the CPU-idle
-    heuristic) after EACH keystroke closes that gap: the next key is only
-    sent once the previous one's full cascade has been verified drained.
+    This is the one gap here with a mechanism that is both verified in
+    Textual's source AND load-sensitive.
+
+    ``pilot.press(*keys)`` (``pilot.py``) is::
+
+        await self._app._press_keys(keys)   # ALL keys, paced by heuristic only
+        await self._wait_for_screen()       # ONE real drain, at the very end
+
+    ``App._press_keys`` (``app.py``) paces BETWEEN keystrokes with nothing but
+    ``wait_for_idle()`` -- and that is a wall-clock-vs-``process_time()``
+    comparison, so a process merely *starved of timeslices* (this machine
+    legitimately runs several concurrent ``nox -s tests`` invocations) reads as
+    "idle" while a cascade is still in flight. The real drain comes only once,
+    after the last key. So the next key can be dispatched mid-cascade.
+
+    That matters here because this file's search is a STATEFUL cascade:
+    ``BrowseScreen._seek_match`` reads ``table.cursor_row`` as its *scan start*
+    (``src/lode/tui/screens/browse.py``), so each keystroke's search depends on
+    the previous keystroke's cursor having landed (``Input.Changed`` ->
+    ``on_input_changed`` -> ``_seek_match`` -> ``DataTable.move_cursor``). A key
+    dispatched before that lands corrupts the next scan's start row.
+
+    The fix is just to press ONE key per call: ``pilot.press(key)`` ends with
+    its own ``_wait_for_screen()``, so a real message-count drain -- not the
+    CPU heuristic -- separates every keystroke from the next.
+
+    NARROW BY DESIGN: a plain multi-key ``pilot.press("down", "down", "down")``
+    elsewhere in this file is fine and deliberately left alone -- cursor moves
+    are order-preserving and carry no read-back dependency between keys, and
+    ``press()``'s trailing drain covers the final read. The trigger is the
+    stateful read-back above, not multi-key presses in general.
     """
     for key in keys:
         await pilot.press(key)
