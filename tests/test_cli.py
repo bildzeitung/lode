@@ -594,9 +594,26 @@ def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    assert "jobs: 0 pending, 0 running, 0 done, 0 failed, 0 dead" in result.stdout
+    # Job counts render as a rich Table (lode-l38d.6/.11) -- assert cell
+    # content rather than the old single-line string, which no longer exists.
+    for label, count in (
+        ("Pending", "0"),
+        ("Running", "0"),
+        ("Done", "0"),
+        ("Failed", "0"),
+        ("Dead", "0"),
+    ):
+        row = next(ln for ln in result.stdout.splitlines() if label in ln)
+        assert count in row
     assert "egress: 0 sends (none)" in result.stdout
     assert "dead-letters (dead jobs): 0" in result.stdout
+    # All-clear footer: an explicit affirmative line, never silence
+    # (lode-l38d.6's decision 3 -- an absent hint must not read as an
+    # absent check). This assumes a warm model cache, which the autouse
+    # `_isolate_lode_home` fixture guarantees by linking the real, durable
+    # weights cache in (see tests/conftest.py) -- if that cache were cold on
+    # the machine running this test, the cold-cache hint would fire instead.
+    assert "No action needed." in result.stdout
 
 
 def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
@@ -604,13 +621,90 @@ def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
     _seed_jobs(db_path)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
-    # Seed has: 1 pending, 1 running, 1 done, 0 failed, 1 dead.
-    assert "jobs: 1 pending, 1 running, 1 done, 0 failed, 1 dead" in result.stdout
+    # Seed has: 1 pending, 1 running, 1 done, 0 failed, 1 dead -- each count
+    # is its own table cell (Status | Count columns).
+    for label, count in (
+        ("Pending", "1"),
+        ("Running", "1"),
+        ("Done", "1"),
+        ("Failed", "0"),
+        ("Dead", "1"),
+    ):
+        row = next(ln for ln in result.stdout.splitlines() if label in ln)
+        assert count in row
     # Egress summary totals across purposes and breaks them out.
     assert "egress: 3 sends (enrich: 1, qa: 2)" in result.stdout
     # The single dead job surfaces as a dead-letter with its last error.
     assert "dead-letters (dead jobs): 1" in result.stdout
     assert "(enrich) target=ver-bbbbbbbb…: RateLimitError" in result.stdout
+    # Action hint: 1 pending job -> a hint to drain the queue (lode-l38d.6).
+    assert "run 'lode work'" in result.stdout
+    # No dead-letter hint: dead jobs are already listed above with their
+    # errors and 'lode work' will not retry them (retries exhausted) -- they
+    # get colour instead of a hint (lode-l38d.6's explicit exclusion).
+    hint_lines = [ln for ln in result.stdout.splitlines() if "Action needed" in ln]
+    assert hint_lines  # the pending-job hint above did fire
+    assert not any("dead" in ln.lower() for ln in hint_lines)
+
+
+def test_status_no_hint_when_only_dead_letters_present(tmp_path: Path) -> None:
+    # Dead-letters alone (no pending/failed, warm cache) must not trip the
+    # 'lode work' hint -- 'lode work' cannot retry an exhausted dead-letter,
+    # so a hint here would suggest a command that cannot help (lode-l38d.6).
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
+    # A fresh $LODE_HOME with no models/ dir at all -- every resolved model
+    # is missing its cache subdir, so the probe must call this cold and hint
+    # 'lode models pull' (lode-l38d.6's /challenge-decided cold definition:
+    # ANY resolved model missing its cache counts, not a single dir-exists
+    # stat). Overriding LODE_HOME here (rather than relying on the autouse
+    # fixture's real-cache symlink) is the only way to exercise the cold path
+    # deterministically.
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    home = tmp_path / "cold-home"
+    result = runner.invoke(
+        app, ["status", "--db", str(db_path)], env={"LODE_HOME": str(home)}
+    )
+    assert result.exit_code == 0
+    assert "run 'lode models pull'" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_all_clear_when_no_pending_failed_and_cache_warm(
+    tmp_path: Path,
+) -> None:
+    # Warm cache (the autouse fixture's real-cache symlink) + no pending/
+    # failed jobs -> the explicit all-clear line, not silence.
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts) "
+                "VALUES ('embed', 'ver-dddddddddddddddd', 'done', 1)"
+            )
+    finally:
+        conn.close()
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "No action needed." in result.stdout
+    assert "Action needed" not in result.stdout
 
 
 def test_jobs_empty_db_says_no_jobs(tmp_path: Path) -> None:

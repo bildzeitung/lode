@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.table import Table
 from rich.theme import Theme
 
 from lode import __version__, versions
@@ -1014,19 +1015,110 @@ def _format_redactions(redactions: str | None) -> str:
     return ", ".join(f"{_short(t)}×{n}" for t, n in by_target.items())
 
 
+def _model_cache_probe(model_name: str, registry: str) -> bool | None:
+    """Cheap filesystem check: is ``model_name``'s fastembed weights cache warm?
+
+    ``registry`` picks which fastembed class's ``list_supported_models()`` to
+    resolve ``model_name`` against -- ``"embedding"`` for
+    ``fastembed.TextEmbedding``, ``"cross_encoder"`` for
+    ``fastembed.rerank.cross_encoder.TextCrossEncoder`` -- since the embedder
+    and the reranker/NLI cross-encoder ship separate supported-model lists and
+    a given id can appear in only one. ``list_supported_models()`` is a static
+    in-memory list (no network, no model load), so importing the class and
+    calling it stays a cheap, local lookup.
+
+    The on-disk cache directory fastembed's own downloader uses is NOT keyed
+    by ``model_name`` directly -- it is keyed by that entry's
+    ``sources.hf`` (the actual HuggingFace repo id, which can differ from the
+    friendly model id lode's settings carry; e.g. ``BAAI/bge-small-en-v1.5``
+    resolves to ``qdrant/bge-small-en-v1.5-onnx-q``), as
+    ``models--{hf_source.replace("/", "--")}`` under
+    :func:`lode.config.model_cache_dir` -- verified against the installed
+    ``fastembed``'s ``download_files_from_huggingface``. This probe mirrors
+    that naming, then does one ``Path.iterdir()`` -- no network, no fastembed
+    model load, no ``huggingface_hub`` metadata verification (that is the
+    loader's job at actual load time, not this probe's).
+
+    Returns ``True`` if warm, ``False`` if confirmed cold, or ``None`` if the
+    probe could not judge at all (unknown model id, a GCS-only source with no
+    ``models--`` naming to check, or any error). Never raises -- lode-l38d.6
+    requires this probe to be non-fatal; callers treat ``None`` the same as
+    "not cold" (no hint).
+    """
+    try:
+        if registry == "embedding":
+            from fastembed import TextEmbedding as _Registry
+        else:
+            from fastembed.rerank.cross_encoder import (
+                TextCrossEncoder as _Registry,
+            )
+        entry = next(
+            (m for m in _Registry.list_supported_models() if m["model"] == model_name),
+            None,
+        )
+        if entry is None:
+            return None
+        hf_source = entry["sources"].get("hf")
+        if not hf_source:
+            return None
+        snapshot_dir = model_cache_dir() / f"models--{hf_source.replace('/', '--')}"
+        return snapshot_dir.is_dir() and any(snapshot_dir.iterdir())
+    except Exception:
+        return None
+
+
+def _cold_model_cache(settings: Settings) -> bool:
+    """True if ANY of the three resolved models' fastembed cache is cold.
+
+    "Cold" is defined per lode-l38d.6's /challenge decision as ANY resolved
+    model missing its cache subdir -- not a single stat on the cache root --
+    so a partial warm (embedder pulled, reranker/NLI not) still surfaces the
+    hint rather than reading as fully warm.
+
+    Dedupes ``(registry, model_id)`` pairs before probing: ``rerank_model``
+    and ``entailment_model`` default to the same pinned id (lode-txh.6) and
+    always share the ``"cross_encoder"`` registry, so the common case is two
+    filesystem probes, not three. A probe that could not judge (``None`` --
+    unknown id, GCS-only source, or any error) is treated as "not cold", per
+    this function's non-fatal contract -- it can only ever make ``lode
+    status`` print an extra hint line, never fail the command.
+    """
+    probes = {
+        ("embedding", settings.embedding_model),
+        ("cross_encoder", settings.rerank_model),
+        ("cross_encoder", settings.entailment_model),
+    }
+    return any(
+        _model_cache_probe(model_id, registry) is False for registry, model_id in probes
+    )
+
+
 @app.command()
 def status(
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Show work-queue health: job counts, dead-letters, and an egress summary.
+    """Show work-queue health: job counts, dead-letters, an egress summary, and
+    what (if anything) needs your attention.
 
     Reads the ``jobs`` and ``egress_log`` tables (``docs/storage.md`` §8): the
-    pending/running/done/failed/dead job counts, the dead-letter (``dead``) jobs
-    with their last error, and how much content has left the box, by purpose.
+    pending/running/done/failed/dead job counts (rendered as a table -- the
+    ``dead`` row in ``danger`` red when > 0, lode-l38d.6/.11), the dead-letter
+    (``dead``) jobs with their last error (also ``danger``-styled when > 0),
+    and how much content has left the box, by purpose.
 
     Status lifecycle: ``pending -> running -> done`` (success);
     ``running -> failed`` (transient error, retried); ``failed -> dead``
     (terminal dead-letter at max-attempts gate).
+
+    Beneath all of that, an action-hint footer (lode-l38d.6) tells you what to
+    do next: a hint to run ``lode work`` if any job is pending or failed
+    (still-retryable), a hint to run ``lode models pull`` if the local
+    fastembed weights cache is cold for any resolved model (see
+    :func:`_cold_model_cache`), or an explicit "No action needed." when
+    neither applies -- so an absent hint is never mistaken for an absent
+    check. Dead-letters deliberately get no hint here: they are already
+    listed above with their errors, and ``lode work`` will not retry them
+    (retries are exhausted) -- colour is what distinguishes them instead.
     """
     conn = _open_db(db)
     try:
@@ -1043,25 +1135,46 @@ def status(
     finally:
         conn.close()
 
-    typer.echo(
-        "jobs: "
-        f"{job_counts.get('pending', 0)} pending, "
-        f"{job_counts.get('running', 0)} running, "
-        f"{job_counts.get('done', 0)} done, "
-        f"{job_counts.get('failed', 0)} failed, "
-        f"{job_counts.get('dead', 0)} dead"
-    )
+    dead_count = job_counts.get("dead", 0)
+
+    table = Table(header_style="table.header")
+    table.add_column("Status")
+    table.add_column("Count", justify="right")
+    table.add_row("Pending", str(job_counts.get("pending", 0)))
+    table.add_row("Running", str(job_counts.get("running", 0)))
+    table.add_row("Done", str(job_counts.get("done", 0)))
+    table.add_row("Failed", str(job_counts.get("failed", 0)))
+    table.add_row("Dead", str(dead_count), style="danger" if dead_count > 0 else None)
+    console.print(table)
 
     total_egress = sum(n for _, n in egress_counts)
     by_purpose = ", ".join(f"{purpose}: {n}" for purpose, n in egress_counts) or "none"
-    typer.echo(f"egress: {total_egress} sends ({by_purpose})")
+    console.print(f"egress: {total_egress} sends ({by_purpose})")
 
-    typer.echo(f"dead-letters (dead jobs): {len(dead_letters)}")
+    dead_line = f"dead-letters (dead jobs): {len(dead_letters)}"
+    console.print(f"[danger]{dead_line}[/danger]" if dead_count > 0 else dead_line)
     for job_id, job_type, target_version, last_error in dead_letters:
-        typer.echo(
+        line = (
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
             f"{last_error or 'no error recorded'}"
         )
+        console.print(f"[danger]{line}[/danger]" if dead_count > 0 else line)
+
+    pending_or_failed = job_counts.get("pending", 0) + job_counts.get("failed", 0)
+    cache_cold = _cold_model_cache(_resolve_settings())
+    console.print()
+    if pending_or_failed > 0:
+        console.print(
+            f"[warn]Action needed:[/warn] {pending_or_failed} job(s) pending or "
+            "failed -- run 'lode work' to drain the queue."
+        )
+    if cache_cold:
+        console.print(
+            "[warn]Action needed:[/warn] the local model cache is cold -- run "
+            "'lode models pull' to warm it."
+        )
+    if pending_or_failed == 0 and not cache_cold:
+        console.print("[ok]No action needed.[/ok]")
 
 
 @app.command(name="jobs")
