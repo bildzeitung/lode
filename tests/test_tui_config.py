@@ -249,13 +249,18 @@ def test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen(
     """Guards lode-l38d.2: the knob table scrolls internally; the Screen doesn't.
 
     config_lines() + knob_rows(Settings()) is more content than fits a
-    normal-but-short 80x24 terminal. Before the fix (no height rule for
-    #config-knobs in lode.tcss), the DataTable's auto-computed height ignored
-    the Footer's docked position and its region ran several rows past it --
-    the literal "scrolls past the bottom" of the ticket title, leaving the
-    last knobs unreachable. After the fix (#config-knobs: height 1fr -- the
-    same one-rule pattern as #browse-table/#tags-notes-table), the table is
-    bounded at the Footer's row and scrolls its rows internally.
+    normal-but-short 80x24 terminal. Before the fix (no height rule reaching
+    #config-knobs in lode.tcss), the table fell back to DataTable's own
+    DEFAULT_CSS -- ``height: auto; max-height: 100%`` -- and that 100%
+    resolves against the parent's height, not the space left after the
+    parent's other children. So the table claimed the full height of the
+    Vertical it shares with a 7-row Static, and its region ran several rows
+    past the docked Footer -- the literal "scrolls past the bottom" of the
+    ticket title, leaving the last knobs unreachable. After the fix (the
+    blanket ``DataTable { height: 1fr; }`` rule -- lode-efn2 collapsed the
+    former per-id #config-knobs/#browse-table/#tags-notes-table rules into
+    it), the table is bounded at the Footer's row and scrolls its rows
+    internally, because 1fr resolves against the space that remains.
 
     The table-region assertion is the discriminating one -- verified to fail
     against the pre-fix stylesheet. The Screen never scrolls (max_scroll_y

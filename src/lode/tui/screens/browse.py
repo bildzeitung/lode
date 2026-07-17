@@ -183,18 +183,27 @@ the cursor's own preservation). The toggle action itself calls
 that reload is what renders the just-toggled state, not a reset.
 
 **Search box stays on-screen with a long list (lode-juz8.2).** Before this,
-the table's ``DataTable`` had no height constraint, so with more notes than
-fit the terminal it auto-sized past the viewport; ``Screen``'s default
-``overflow-y: auto`` then scrolled the *whole screen* to accommodate it,
-pushing this non-docked search ``Input`` (laid out just below the table, in
-normal document flow) below the visible area once opened -- while the
-always-docked ``Header``/``Footer`` stayed put, so nothing *looked* broken
-until '/' was pressed. ``lode.tcss``'s ``#browse-table { height: 1fr; }``
-fixes it the same way :class:`~lode.tui.screens.tags.TagsScreen` already
-solved the identical problem for its own notes table: capped to the
-remaining space, the table (a ``ScrollView`` subclass) scrolls its own rows
-internally instead of growing the layout, so the search box -- and the
-footer beneath it -- always land in-viewport.
+the table had no height constraint from ``lode.tcss``, leaving it on
+``DataTable``'s own ``DEFAULT_CSS`` of ``height: auto; max-height: 100%``.
+That ``100%`` resolves against the *parent's* height -- not the space left
+over after the parent's other children -- so with more notes than fit the
+terminal the table claimed the Screen's entire content area, pushing this
+non-docked search ``Input`` (laid out just below the table, in normal
+document flow) below the visible area once opened. The always-docked
+``Header``/``Footer`` stayed put, so nothing *looked* broken until '/' was
+pressed. Note the ``Screen`` does **not** scroll to compensate
+(``Screen.max_scroll_y`` stays ``0``); an earlier version of this docstring
+mis-described the mechanism that way, and the correction is recorded with
+the rule itself in ``lode.tcss`` and in ``docs/tui.md``.
+
+``lode.tcss``'s blanket ``DataTable { height: 1fr; }`` rule (lode-efn2 --
+formerly a per-id ``#browse-table`` rule) fixes it the same way
+:class:`~lode.tui.screens.tags.TagsScreen` already solved the identical
+problem for its own notes table: ``1fr`` resolves against the space
+*remaining* after siblings, which ``max-height: 100%`` does not, so the
+table (a ``ScrollView`` subclass) scrolls its own rows internally instead of
+growing the layout, and the search box -- and the footer beneath it --
+always land in-viewport.
 """
 
 from __future__ import annotations

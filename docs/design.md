@@ -22,6 +22,7 @@ mechanics live in focused companion docs:
 | [configuration.md](configuration.md) | Every tunable knob and build constant, in one table |
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 | [keybindings.md](keybindings.md) | The TUI's central keymap: which keys are taken, App- vs Screen-level altitude, the editable-TextArea non-printable-key rule |
+| [tui.md](tui.md) | TUI layout conventions -- what every screen's middle panel needs so it never renders past the docked Footer |
 | [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`challenge`) and the coding loop (`/code` → `coding`) |
 
 ---
