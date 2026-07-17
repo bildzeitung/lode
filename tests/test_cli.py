@@ -930,6 +930,63 @@ def test_notes_excludes_a_tombstoned_note(
     assert result.stdout.strip() == "no notes"
 
 
+def test_notes_separates_rows_with_a_blank_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l38d.5: a blank line separates each note from the next -- but
+    there is no trailing blank line after the last row."""
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    runner.invoke(app, ["add", "first note", "--db", str(db_path)])
+    runner.invoke(app, ["add", "second note", "--db", str(db_path)])
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines.count("") == 1  # exactly one separator, between the 2 rows
+    assert lines[-1] != ""  # no trailing blank line after the last note
+
+
+def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l38d.5: the id/date render via the shared theme's ``note_id``/
+    ``date`` style NAMES (lode-l38d.11) -- never a hand-rolled colour literal
+    -- and the summary is markup-escaped so a literal ``[`` in note text can
+    never be mistaken for rich markup.
+
+    ``CliRunner``'s captured stdout is never a TTY (see
+    tests/test_cli_console.py), so the shared ``console`` never actually
+    emits ANSI codes here -- that auto-disable mechanism is already covered
+    generically there. What is specific to *this* ticket, and what this test
+    proves instead, is that ``notes_`` feeds rich the ``[note_id]``/``[date]``
+    markup tags (rather than e.g. raw ANSI or no styling at all) by
+    capturing the exact string passed to ``console.print`` in-process.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    note_id = runner.invoke(
+        app, ["add", "a note with a [bracket] in it", "--db", str(db_path)]
+    ).stdout.strip()
+
+    printed: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda *a, **k: printed.append(a[0]))
+
+    result = runner.invoke(app, ["notes", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert len(printed) == 1
+    line = printed[0]
+    assert f"[note_id]{note_id}[/note_id]" in line
+    assert "[date]" in line and "[/date]" in line
+    # The literal "[bracket]" in the note text must be ESCAPED (rich.markup's
+    # backslash convention), not left as unescaped markup that could corrupt
+    # the row or the styles around it.
+    assert "\\[bracket]" in line
+    assert "[bracket]" not in line.replace("\\[bracket]", "")
+
+
 # --- lode notes --deleted (list tombstoned notes, lode-d32.2) ---------------
 
 
@@ -959,6 +1016,40 @@ def test_notes_deleted_flag_lists_only_tombstoned_notes(
     assert gone_id in result.stdout  # full id -- the only route to `show`/`recover`
     assert live_id not in result.stdout
     assert "gone soon" in result.stdout
+
+
+def test_notes_deleted_flag_also_colours_id_and_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--deleted`` renders through the SAME styled path as the live listing
+    (lode-l38d.5) -- no separate hand-rolled formatting for tombstoned rows.
+    The two currently look identical; whether a tombstoned note deserves its
+    own visual distinction is raised, not resolved, in this ticket's hand-off.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    gone_id = runner.invoke(
+        app, ["add", "gone soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (gone_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, gone_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    printed: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda *a, **k: printed.append(a[0]))
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert len(printed) == 1
+    line = printed[0]
+    assert f"[note_id]{gone_id}[/note_id]" in line
+    assert "[date]" in line and "[/date]" in line
 
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
