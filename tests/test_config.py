@@ -252,8 +252,8 @@ def test_config_rows_and_config_lines_share_the_same_label_and_value(
 ) -> None:
     # config_rows (the raw (label, value, note) triples the CLI's rich Table
     # renders) and config_lines (the pre-padded text the TUI's Static widget
-    # renders) are two shapes of the ONE computation
-    # (_resolved_config_rows) -- this pins that they never drift apart.
+    # renders) are two shapes of the ONE computation (config_rows, which
+    # config_lines formats) -- this pins that they never drift apart.
     root = tmp_path / "root"
     monkeypatch.setenv("LODE_HOME", str(root))
     db = default_db_path()
@@ -278,7 +278,7 @@ def test_config_rows_note_is_bare_no_parens(
     root = tmp_path / "root"
     monkeypatch.setenv("LODE_HOME", str(root))
     rows = config_rows(default_db_path())
-    notes = dict((label, note) for label, _, note in rows)
+    notes = {label: note for label, _, note in rows}
     assert notes["LODE_HOME"] == "$LODE_HOME"
     assert notes["config"] == "absent"
     # Every other row carries no annotation.

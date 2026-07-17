@@ -523,12 +523,20 @@ def config_path() -> Path:
     return lode_home() / "config.toml"
 
 
-def _resolved_config_rows(db_path: Path) -> list[tuple[str, str, str]]:
-    """Return ``(label, value, note)`` triples behind both ``config_lines`` and
-    ``config_rows`` — the one computation, exposed in two shapes for two
-    renderers (lode-l38d.4). ``note`` is the parenthetical annotation
-    (``$LODE_HOME``/``default``, ``present``/``absent``) for the two rows that
-    carry one, and ``""`` for the rest.
+def config_rows(db_path: Path) -> list[tuple[str, str, str]]:
+    """Return ``(label, value, note)`` triples for the resolved on-disk locations.
+
+    THE one row computation behind both surfaces (lode-l38d.4): the CLI's
+    ``lode config`` renders these triples straight into a rich ``Table``, and
+    :func:`config_lines` formats the same triples into the pre-padded text the
+    TUI's Ctrl+O screen shows. Two shapes of one list, not two independently
+    maintained ones.
+
+    ``note`` is the parenthetical annotation (``$LODE_HOME``/``default``,
+    ``present``/``absent``) for the two rows that carry one, and ``""`` for the
+    rest — bare, without parens, so each renderer decides how to present it
+    (the CLI gives it a real ``Note`` column; ``config_lines`` bakes it into the
+    text as ``(...)``).
     """
     lock_file = lock_path(db_path)
     cfg = config_path()
@@ -545,23 +553,11 @@ def _resolved_config_rows(db_path: Path) -> list[tuple[str, str, str]]:
     ]
 
 
-def config_rows(db_path: Path) -> list[tuple[str, str, str]]:
-    """Return ``(label, value, note)`` triples for the CLI's rich-Table path
-    rendering (lode-l38d.4) — the raw counterpart to :func:`config_lines`'
-    pre-padded text, so the CLI can render the parenthetical annotation
-    (``($LODE_HOME)``, ``(present)``/``(absent)``) as a real ``Note`` column
-    instead of string-baking it into ``value``. Same underlying computation as
-    :func:`config_lines` (:func:`_resolved_config_rows`); this and
-    ``config_lines`` are two shapes of the one row list, not two independently
-    maintained ones.
-    """
-    return _resolved_config_rows(db_path)
-
-
 def config_lines(db_path: Path) -> list[str]:
     """Render the resolved on-disk locations as aligned ``label  path`` lines.
 
-    The ONE shared row-builder behind both ``lode config`` (:mod:`lode.cli`) and
+    The text shape of :func:`config_rows` — the ONE shared row computation behind
+    both ``lode config`` (:mod:`lode.cli`) and
     the TUI's Ctrl+O diagnostics screen (:mod:`lode.tui.screens.config`) — lode-u5gh
     collapsed what used to be two independently-maintained copies (lode-3r4,
     lode-ak6) after they had already drifted once (lode-ak6 added the model-cache
@@ -580,11 +576,11 @@ def config_lines(db_path: Path) -> list[str]:
 
     lode-l38d.4: the TUI's Ctrl+O screen keeps rendering this pre-padded text
     unchanged (via ``Static``); the CLI's ``lode config`` moved to a
-    terminal-width-aware rich ``Table`` fed by :func:`config_rows` instead, so
+    terminal-width-aware rich ``Table`` fed by :func:`config_rows` directly, so
     the two surfaces' exact output text is no longer identical byte-for-byte
-    (their underlying DATA still comes from the one computation here).
+    (their underlying DATA still comes from the one computation, ``config_rows``).
     """
-    rows = _resolved_config_rows(db_path)
+    rows = config_rows(db_path)
     formatted = [
         (label, f"{value}  ({note})" if note else value) for label, value, note in rows
     ]

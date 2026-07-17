@@ -1615,8 +1615,8 @@ def config(
     directory, and the optional ``config.toml`` (shown present/absent) — the same
     set ``docs/configuration.md`` "Paths & locations" documents. The path rows come
     from the shared row-builder (:func:`lode.config.config_rows`) that also backs
-    the TUI's Ctrl+O diagnostics screen (:func:`lode.config.config_lines`, a
-    differently-shaped view of the same computation), so the two cannot drift
+    the TUI's Ctrl+O diagnostics screen (via :func:`lode.config.config_lines`, the
+    text shape of those same rows), so the two cannot drift
     (lode-u5gh); ``--db`` shifts the displayed DB (and its lock + co-located
     vector store) to an explicit override.
 

@@ -20,6 +20,7 @@ still is.)
 """
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,6 @@ from textual.widgets import DataTable, Footer, Header, Static
 from typer.testing import CliRunner
 
 from lode.cli import app as cli_app
-from lode.cli import console as cli_console
 from lode.config import (
     Kind,
     Settings,
@@ -44,19 +44,6 @@ from lode.tui.app import LodeApp
 from lode.tui.screens.config import KNOB_TABLE_ID, ROWS_ID, ConfigScreen
 
 runner = CliRunner()
-
-
-def _set_console_width(monkeypatch: pytest.MonkeyPatch, width: int) -> None:
-    """Force the CLI's shared console to a specific width for one test.
-
-    See the identical helper (and its full rationale -- rich's ``Console()``
-    conditionally bakes ``self._width`` at CONSTRUCTION whenever ``COLUMNS``
-    happens to be present in the environment then, which under pytest-xdist
-    means a later per-test ``COLUMNS`` override can silently have no effect)
-    in tests/test_cli.py.
-    """
-    monkeypatch.setattr(cli_console, "_width", width)
-    monkeypatch.setattr(cli_console, "_height", 24)
 
 
 def test_app_registers_config_screen() -> None:
@@ -132,15 +119,17 @@ def test_escape_returns_to_the_previous_screen(
 
 
 def test_cli_and_tui_render_same_path_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    set_console_width: Callable[[int], None],
 ) -> None:
     # THE ANTI-DRIFT TEST (lode-u5gh, reshaped by lode-l38d.4): the CLI's
     # `lode config` and the TUI's Ctrl+O screen must still show the exact same
     # PATH DATA for the same $LODE_HOME/db_path -- not "the same fields,
     # independently maintained" (that was the pre-u5gh state, and it already
     # drifted once, lode-ak6). Both are fed by the ONE row computation
-    # (lode.config._resolved_config_rows, exposed as config_rows for the
-    # CLI's rich Table and config_lines for the TUI's Static text) -- this
+    # (lode.config.config_rows -- rendered directly into the CLI's rich Table,
+    # and via config_lines' text shape for the TUI's Static) -- this
     # test would catch a regression back to two independently-built row sets
     # even if neither builder itself changed.
     #
@@ -149,11 +138,11 @@ def test_cli_and_tui_render_same_path_data(
     # is no longer byte-identical -- the CLI's Table can wrap a long value,
     # the TUI's Static text never does. What must still hold, and what this
     # test asserts, is that every row's DATA reaches both surfaces. Forcing
-    # the CLI's shared console wide (see _set_console_width) keeps its own
+    # the CLI's shared console wide (see the set_console_width fixture) keeps its own
     # table from wrapping so this stays a plain substring check
     # (dedicated wrap-without-data-loss coverage lives in tests/test_cli.py's
     # test_config_wraps_long_knob_values_without_losing_characters).
-    _set_console_width(monkeypatch, 1000)
+    set_console_width(1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
     db_path = default_db_path()
@@ -171,7 +160,8 @@ def test_cli_and_tui_render_same_path_data(
 
     tui_text = asyncio.run(_drive())
 
-    for label, value, note in config_rows(db_path):
+    expected = config_rows(db_path)
+    for label, value, note in expected:
         assert label in cli_out
         assert label in tui_text
         assert value in cli_out
@@ -180,9 +170,26 @@ def test_cli_and_tui_render_same_path_data(
             assert f"({note})" in cli_out
             assert f"({note})" in tui_text
 
+    # ROW COUNTS, not just presence: a per-row substring check above can only
+    # catch a row that went MISSING from a surface -- it is structurally blind
+    # to an EXTRA row that only one surface renders, which is the other half of
+    # the drift this test exists to catch (lode-ak6 was an asymmetry in BOTH
+    # directions). The pre-lode-l38d.4 `tui_lines == cli_path_lines` caught
+    # both for free; exact text parity is gone (the CLI wraps, the TUI does
+    # not), so the count is pinned explicitly instead. Both surfaces render one
+    # line per row here: the CLI's path Table is box-less and forced wide
+    # enough not to wrap, and console.print() emits the truly-blank line that
+    # terminates the block before the knob table.
+    cli_lines = cli_out.splitlines()
+    cli_path_lines = cli_lines[: cli_lines.index("")]
+    assert len(cli_path_lines) == len(expected)
+    assert len(tui_text.splitlines()) == len(expected)
+
 
 def test_cli_and_tui_render_same_knob_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    set_console_width: Callable[[int], None],
 ) -> None:
     # THE KNOB-TABLE ANTI-DRIFT TEST (lode-juz8.6, reshaped by lode-l38d.4):
     # the CLI's knob table and the TUI's DataTable must still show the same
@@ -192,7 +199,7 @@ def test_cli_and_tui_render_same_knob_data(
     # every row to the single widest value), so literal-line parity with the
     # CLI's own stdout is no longer meaningful -- this compares DATA instead,
     # exactly like the path-table test above.
-    _set_console_width(monkeypatch, 1000)
+    set_console_width(1000)
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
 
@@ -206,6 +213,16 @@ def test_cli_and_tui_render_same_knob_data(
     for name, value, _kind in expected:
         assert name in cli_result.stdout
         assert value in cli_result.stdout
+
+    # ROW COUNT, not just presence -- see the path-table test above for why
+    # (a substring check cannot see an EXTRA row the CLI grew on its own).
+    # The knob block is everything past the blank line separating it from the
+    # paths block; box.SIMPLE_HEAD contributes exactly two non-data lines (the
+    # header and its separator rule) ahead of the one-line-per-knob rows, which
+    # do not wrap at the width forced above.
+    cli_lines = cli_result.stdout.splitlines()
+    knob_block = cli_lines[cli_lines.index("") + 1 :]
+    assert len(knob_block) == len(expected) + 2
 
     app = LodeApp(db_path=default_db_path())
 
