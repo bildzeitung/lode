@@ -272,7 +272,9 @@ def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
 def test_collapse_step_uses_no_bash_only_syntax() -> None:
     """Static guard for the AC's own wording: no `${var//pat/repl}`, no `$'...'` ANYWHERE."""
     hook = _hook_command()
-    assert "${" not in hook, f"bash-only pattern-substitution syntax found in hook: {hook!r}"
+    assert "${" not in hook, (
+        f"bash-only pattern-substitution syntax found in hook: {hook!r}"
+    )
     assert "$'" not in hook, f"bash-only ANSI-C-quoting syntax found in hook: {hook!r}"
 
 
@@ -293,7 +295,7 @@ def _sabotage_with_m6px_bash_only_collapse(hook: str) -> str:
         "0x5c",
         "0x6e",
     ], "byte-exact reconstruction of the m6px collapse drifted"
-    old_collapse = 'CMD="${CMD//$\'' + three_backslashes_then_n + "'/ }\""
+    old_collapse = "CMD=\"${CMD//$'" + three_backslashes_then_n + "'/ }\""
 
     anchor_start = "empty'); "
     anchor_end = "; if printf '%s' \"$CMD\" | grep -qE"
@@ -350,9 +352,15 @@ def test_m6px_bash_only_collapse_would_have_worked_under_bash() -> None:
         }
     )
     proc = subprocess.run(
-        [bash, "-c", sabotaged], input=payload, capture_output=True, text=True, timeout=30
+        [bash, "-c", sabotaged],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    assert proc.returncode == 0, f"expected the sabotaged hook to run cleanly under bash: {proc.stderr}"
+    assert proc.returncode == 0, (
+        f"expected the sabotaged hook to run cleanly under bash: {proc.stderr}"
+    )
     assert proc.stdout.strip(), "expected a deny decision under bash"
 
 
@@ -368,7 +376,11 @@ def test_shipped_hook_runs_cleanly_under_dash_end_to_end() -> None:
         }
     )
     proc = subprocess.run(
-        [SH, "-c", _hook_command()], input=payload, capture_output=True, text=True, timeout=30
+        [SH, "-c", _hook_command()],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert proc.returncode == 0, f"guard errored under dash: {proc.stderr}"
     assert "Bad substitution" not in proc.stderr
