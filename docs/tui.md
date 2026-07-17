@@ -137,8 +137,14 @@ element anywhere in the pilot press/pause path:
   earlier key's reactive cascade is still in flight; only the very last key gets a real drain.
 - `pilot.pause()` is `_wait_for_screen()` (a message-count drain) **plus** `wait_for_idle(0)` (the
   heuristic).
-- `_wait_for_screen()` snapshots `app.screen`, its child list, and each child's pending-message
-  count **once, up front** — not a live, re-checked observation.
+- `_wait_for_screen()` is a **barrier, not a clock heuristic** — so OS starvation cannot defeat it,
+  only make it wait longer. It snapshots `app.screen` and its child list **once, up front**, posts
+  one `call_later` sentinel to each child, and awaits a counter reaching zero (30s timeout). It
+  reads no pending-message *count*: a sentinel arrives behind everything already queued on that
+  child, so draining it proves those messages were processed. What that does *not* cover is a
+  message enqueued **after** its child's sentinel already ran (a delayed side effect of processing
+  an earlier one), or a child that did not exist when the list was snapshotted. Note this is why
+  *repeating* a drain is not a general fix: a second barrier has the same shape as the first.
 - **asyncio's ready-queue ordering is *not* perturbed by OS starvation** — starvation slows the
   whole event loop uniformly; it does not reorder callbacks relative to each other. This is the
   fact that separates a real settle fix from a placebo: a drain added to fix a *reordering* race
