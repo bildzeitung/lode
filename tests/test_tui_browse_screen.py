@@ -2658,6 +2658,9 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # (docs/tui.md) -- this test's bound moved accordingly, and the extra room
 # lets the labels this shortened ("Insp"/"Del"/"Exp") go back to full words.
 #
+# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
+# footer, including this one.
+#
 # The consumed-width assert (lode-3aen's backport) is the same lever
 # tests/test_tui_app.py's Capture footer test documents: show_horizontal_
 # scrollbar alone is necessary but not sufficient (Textual can squeeze
@@ -2697,7 +2700,7 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 4 App-level bindings stay visible (none hidden via
+    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- restored to full words at the new 100-column bound.
     assert descriptions == [
         "Back",
@@ -2711,6 +2714,7 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
         "Cfg",
         "Browse",
         "Tags",
+        "Ask",
     ]
 
 
@@ -2727,6 +2731,12 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
 # ``Footer()`` and the original "View content" label measures
 # consumed=131/hscroll=True at 100 columns -- both asserts below would have
 # caught it.
+#
+# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
+# footer too, taking this screen -- the tightest of the ten -- from 90/100 to
+# 97/100 (measured; this is exactly the 3 columns of slack app.py's own "Cfg"
+# rationale comment reserved room for, by keeping "Cfg" abbreviated rather
+# than restoring "Config").
 # ---------------------------------------------------------------------------
 
 
@@ -2757,7 +2767,7 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 6 screen-level + 4 App-level bindings stay visible (none hidden via
+    # All 6 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False); only "View content" -> "View" was shortened.
     assert descriptions == [
         "Save",
@@ -2770,4 +2780,5 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
         "Cfg",
         "Browse",
         "Tags",
+        "Ask",
     ]
