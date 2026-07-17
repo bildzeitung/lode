@@ -1256,14 +1256,41 @@ def _refresh_dead_letter_hook(
     Deferred import mirrors :func:`_refresh_handler`: keeps the
     httpx/trafilatura-adjacent ``lode.drawdown``/``lode.externals`` import
     cost off code paths where no ``refresh`` job has ever dead-lettered.
+
+    **Generic over ``source_type`` (lode-gpzn.13).** This hook is shared by
+    every connector that reuses the ``refresh`` job type (today: web; the
+    Atlassian connectors, gpzn.3/gpzn.4, are next) — it must never assume
+    ``target_external_id`` is a web source. If ``target_external_id`` already
+    has an ``externals`` row (the Atlassian connectors' detection step
+    persists one *synchronously*, source_type included, before their first
+    ``refresh`` job is even enqueued — ``docs/decisions.md``'s Atlassian
+    refinement A), its **existing** ``source_type`` is reused so the
+    tombstone record never overwrites a JIRA/Confluence source with ``web``.
+    Only when no row exists yet — today, only possible for a web target
+    whose very first fetch dies before any snapshot is ever written, since
+    :func:`lode.drawdown.detect_and_enqueue_drawdown` does not pre-create the
+    row the way the Atlassian detection step will — does this fall back to
+    :data:`lode.drawdown.SOURCE_TYPE_WEB`. ``ingest_snapshot``'s own upsert
+    (``INSERT ... ON CONFLICT (external_id) DO NOTHING``) already leaves an
+    existing row's ``source_type`` untouched regardless of what is passed,
+    so this lookup does not change behavior for an existing row — it exists
+    so the value passed in is never a misleading hardcoded ``web``, and so a
+    first-write for a non-web target (should one ever reach this hook with
+    no pre-created row) is labeled correctly instead of silently as ``web``.
     """
     from lode.drawdown import SOURCE_TYPE_WEB
     from lode.externals import ingest_snapshot, tombstone_body
 
+    existing = conn.execute(
+        "SELECT source_type FROM externals WHERE external_id = ?",
+        (target_external_id,),
+    ).fetchone()
+    source_type = existing[0] if existing is not None else SOURCE_TYPE_WEB
+
     result = ingest_snapshot(
         conn,
         target_external_id,
-        SOURCE_TYPE_WEB,
+        source_type,
         tombstone_body(f"dead: {last_error}"),
         status="tombstone",
         settings=settings,

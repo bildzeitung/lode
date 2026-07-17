@@ -607,6 +607,83 @@ def test_run_refresh_dead_letter_writes_tombstone_snapshot(
     assert head_snapshot_id is not None, "head must point at the tombstone, not NULL"
 
 
+def test_refresh_dead_letter_hook_is_generic_over_source_type(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lode-gpzn.13: a non-web target's dead-letter tombstone must carry its
+    own source_type, not the hook's former hardcoded 'web' default.
+
+    A JIRA/Confluence connector (gpzn.2, not yet built) persists the
+    externals row -- source_type included -- synchronously at note-save
+    detection time, before any 'refresh' job for that target is even
+    enqueued (docs/decisions.md's Atlassian refinement A: the API base is
+    PERSISTED on the external row at detection). This test reproduces that
+    precondition directly (bypassing the not-yet-built connector) and
+    asserts the shared _refresh_dead_letter_hook resolves the FAILING
+    target's own source_type ('jira') and passes THAT into ingest_snapshot
+    -- not the former hardcoded SOURCE_TYPE_WEB.
+
+    Why we spy on the ingest_snapshot argument rather than only reading the
+    externals row back: ingest_snapshot's externals upsert is
+    ``INSERT ... ON CONFLICT (external_id) DO NOTHING``, so a pre-existing
+    row's source_type is left untouched *regardless of the value passed in*.
+    A row-readback assertion (``source_type == 'jira'``) therefore passes
+    identically against the pre-fix hook that hardcoded 'web' -- it is
+    vacuous. Capturing the value the hook actually computes and hands to
+    ingest_snapshot is the only non-vacuous observable: it fails the moment
+    the hook reverts to passing 'web'.
+    """
+    external_id = "JIRA-1234"
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+        (external_id, "jira"),
+    )
+    conn.commit()
+
+    import lode.externals as externals_mod
+
+    real_ingest_snapshot = externals_mod.ingest_snapshot
+    captured: dict[str, str] = {}
+
+    def _spy_ingest_snapshot(conn, external_id, source_type, body, **kwargs):
+        captured["source_type"] = source_type
+        return real_ingest_snapshot(conn, external_id, source_type, body, **kwargs)
+
+    # The hook imports ingest_snapshot lazily (function-local `from
+    # lode.externals import ingest_snapshot`), so the name is rebound from
+    # the module at call time -- patching the module attribute is seen.
+    monkeypatch.setattr(externals_mod, "ingest_snapshot", _spy_ingest_snapshot)
+
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+    ok = run_one(
+        conn, job_id, db_path, settings, _always_raising_refresh_registry("timeout")
+    )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"
+
+    # Load-bearing: the hook resolved and passed the target's own source_type.
+    assert captured.get("source_type") == "jira", (
+        "hook must pass the failing target's own source_type into "
+        "ingest_snapshot, not the hardcoded 'web' default"
+    )
+
+    (source_type,) = conn.execute(
+        "SELECT source_type FROM externals WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert source_type == "jira", "dead-letter tombstone must not overwrite source_type"
+
+    (status,) = conn.execute(
+        "SELECT status FROM snapshots WHERE external_id = ?", (external_id,)
+    ).fetchone()
+    assert status == "tombstone"
+
+
 def test_run_refresh_transient_failure_writes_no_tombstone(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
