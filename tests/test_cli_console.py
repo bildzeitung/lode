@@ -106,3 +106,30 @@ def test_console_no_color_false_when_env_absent() -> None:
     lode-xgaa exists to prevent.
     """
     assert _console_no_color(no_color_env=None) is False
+
+
+def test_console_highlight_is_disabled() -> None:
+    """``highlight=False`` (lode-re0s) is process-wide policy hoisted onto the
+    shared ``console`` at construction, not left as a per-call-site kwarg —
+    see ``src/lode/cli.py``'s ``console`` docstring for the ReprHighlighter
+    defect this closes (a plain string like a rendered date gets shredded
+    into mismatched styled spans by rich's default highlighter, verified
+    against rich 15.0.0).
+
+    Unlike ``no_color`` above, ``highlight`` is not environment-detected —
+    it is a plain constructor kwarg — so this needs no subprocess; asserting
+    it in-process exercises the real, already-imported shared console.
+
+    rich exposes no public accessor for this flag, only the private
+    ``Console._highlight`` — same reasoning as ``tests/test_cli_theme.py``
+    pinning ``CLI_STYLES`` against the raw declaration rather than the
+    merged-with-defaults ``Theme``.
+
+    NON-VACUOUSNESS, demonstrated by sabotaging the subject: reverting
+    ``cli.py``'s ``console = Console(theme=CLI_THEME, highlight=False)`` back
+    to ``Console(theme=CLI_THEME)`` (its pre-lode-re0s form) makes this test
+    FAIL (verified manually against the installed rich 15.0.0).
+    """
+    import lode.cli
+
+    assert lode.cli.console._highlight is False  # noqa: SLF001 -- no public accessor

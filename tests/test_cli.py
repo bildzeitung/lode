@@ -1023,14 +1023,13 @@ def test_notes_colours_id_and_date_through_the_shared_theme_and_escapes_summary(
     # the row or the styles around it.
     assert "\\[bracket]" in line
     assert "[bracket]" not in line.replace("\\[bracket]", "")
-    # Pin both rendering flags. They are asserted here rather than left to
-    # eye-verification precisely because the suite can never catch them by
-    # eye: colour is frozen off at import (see this test's docstring), so a
-    # regression in either would sail through green. The rationale for each
-    # flag lives at the call site in cli.py's notes_ loop -- deliberately not
-    # restated here, since both pin rich-version-specific behaviour and two
-    # copies would drift apart.
-    assert kwargs["highlight"] is False
+    # Pin the per-call rendering flag. Asserted here rather than left to
+    # eye-verification precisely because the suite can never catch a
+    # regression by eye: colour is frozen off at import (see this test's
+    # docstring). ``highlight`` is NOT asserted here (lode-re0s) -- it is no
+    # longer a per-call kwarg at all, having been hoisted onto the shared
+    # ``console`` itself; see tests/test_cli_console.py's
+    # test_console_highlight_is_disabled for that pin instead.
     assert kwargs["soft_wrap"] is True
 
 
@@ -1096,8 +1095,10 @@ def test_notes_deleted_flag_also_colours_id_and_date(
     line, kwargs = printed[0]
     assert f"[note_id]{gone_id}[/note_id]" in line
     assert "[date]" in line and "[/date]" in line
-    assert kwargs["highlight"] is False  # same rendering flags as the live path
-    assert kwargs["soft_wrap"] is True
+    # ``highlight`` is no longer a per-call kwarg (lode-re0s hoisted it onto
+    # the shared ``console`` itself) -- see test_cli_console.py's
+    # test_console_highlight_is_disabled for that pin instead.
+    assert kwargs["soft_wrap"] is True  # same rendering flag as the live path
 
 
 def test_notes_deleted_flag_says_no_deleted_notes_when_none_are_tombstoned(
