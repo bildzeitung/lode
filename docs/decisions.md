@@ -1175,3 +1175,125 @@ are catalogued in [configuration.md](configuration.md).
   (`tests/test_gh_write_guard.py`) are untouched and still pass. If a future `gh` release, or a new
   observed evasion pattern, changes this risk calculus, reopen this entry rather than silently
   widening the wrapper list.
+- **`bd-dolt-push.sh` suspicious-DB guard: a backstop, not a fix for a mechanism nobody could
+  reproduce (lode-fzau).** A code-reviewer/coding launch worktree was observed, live, with a STRAY
+  worktree-local bd DB — bootstrap-hydrated from that branch's committed, passively-lagging
+  `.beads/issues.jsonl` (245 issues) instead of resolving to the ONE shared main-checkout DB (404
+  issues, authoritative). Because the reviewed ticket happened to postdate the stale jsonl snapshot,
+  the write against it failed *loudly* ("no issue found matching …") — the only reason the incident
+  was caught. Had the ticket predated the snapshot (the common case), the write would have succeeded
+  *silently* against the stray DB, and the reviewer's own next step, `bd-dolt-push.sh`, would have
+  published that stale 245-issue DB over `refs/dolt/data`, reverting ~159 issues of real cross-machine
+  state.
+
+  A diagnostic dispatched specifically to pin down the mechanism **could not reproduce it**: 10 probes
+  (9 live worktrees + 1 deliberate re-run of the ticket's own repro, `GIT_TRACE=1`-confirmed hook
+  firing included) all resolved to the ONE shared DB, with `import.auto: false` correctly read from
+  the main checkout's `config.yaml` every time — `bd`'s own binary strings confirm `--git-common-dir`-
+  based worktree DB-sharing is a deliberate, documented feature (1.1.0 changelog: "Enhanced Git
+  Worktree Support — Shared .beads database across worktrees"). **Human decision (recorded in
+  lode-fzau's notes): build the backstop (option (c) from the ticket), not a fix for the DB-resolution
+  mechanism (option (a)) or a doc mandate to always run bd writes from the main checkout (option
+  (b))** — both of those target a failure mode that today looks already structurally prevented by bd
+  itself; a fix for an unreproduced mechanism risks being no fix at all, while the backstop would have
+  caught the real incident regardless of which mechanism eventually turns out to explain it.
+
+  **What was built:** `scripts/bd-dolt-push-guard.sh`, called once at the top of
+  `scripts/bd-dolt-push.sh` — the highest-value chokepoint, since it is the step that actually
+  publishes cross-machine. Guarding *every* bd write was considered and rejected: a much larger
+  surface for comparatively little extra safety, since a write that lands on a stray DB cannot reach
+  another machine until something publishes it.
+
+  **Two limits of that scope, both accepted, both on the record rather than papered over:**
+
+  1. **`bd-dolt-push.sh` is the main publisher, not the only one.** `/challenge` calls `bd dolt push`
+     directly, as a *deliberate* exemption from the wrapper (lode-bpl explicitly says not to "fix" it
+     by wrapping it: it is human-invoked and interactive, so a failed push is observed in the
+     transcript rather than silently stranding a hand-off). So the guard does not cover `/challenge`'s
+     publishes. Accepted: that path is interactive and observed by a human, which is the same property
+     that earned it the wrapper exemption in the first place. Revisit if `/challenge` ever becomes
+     unattended.
+  2. **The push guard does not cover the incident's *second* harm.** Publishing a stale DB is the
+     larger blast radius, but the ticket describes a local one too: a label swap that silently
+     succeeds against a stray DB strands the ticket at `ready-for-code-review` forever, invisible to
+     `/land` — silent work loss that needs no push at all, and which this guard structurally cannot
+     see. So "harmless until someone publishes" is true of *other machines*, not of the local
+     workflow. Accepted deliberately: catching it would mean guarding every bd write (the rejected
+     option above), and the /code producer loops already re-read ticket state after writing, so a
+     stranded ticket surfaces as a stalled queue rather than as corrupted shared state. Filed as
+     **lode-zz7x** to track rather than expand this branch's scope; an explicit "accepted, won't fix"
+     is a valid outcome there.
+
+  It refuses (loud stderr, non-zero
+  exit, `bd dolt push` never invoked) when EITHER: (1) the resolved `.beads` directory (`bd where
+  --json`) carries bd's own `.auto-import-issues.jsonl` marker — direct evidence of exactly the
+  hydration-from-jsonl the incident showed; or (2) the current issue count (`bd count --json`) is below
+  `BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT` (default 90%) of a local, per-DB-path high-water-mark cache file
+  that `bd-dolt-push.sh` itself writes immediately after every successful push. That cache is a
+  **network-free proxy** for "wildly below the remote's count": our own last confirmed-pushed count is
+  a hard floor, since the real remote's count can only have grown or matched it since — this avoids
+  needing to contact the remote on top of what the push itself already requires, satisfying the
+  ticket's explicit constraint against gating *every* bd write behind network reachability (the
+  constraint is about ordinary bd writes, not about `bd-dolt-push.sh` itself, which already needs the
+  network to do its job).
+
+  **Deliberately does not false-positive on a fresh clone / `bd init`** (the other named failure mode):
+  `bd init` never calls this script, restores state via `bd dolt pull` (never a jsonl import, so no
+  marker is ever created by it), and a freshly-initialized DB has no high-water-mark cache file yet —
+  the count check treats "no cache" as "no baseline", not "suspicious", and does not fire. Both checks
+  also fail OPEN (do not block) if `bd where`/`bd count` themselves cannot be read, since the real `bd
+  dolt push` will surface that failure on its own. `BD_DOLT_PUSH_GUARD_FORCE=1` bypasses both checks
+  loudly, for the rare deliberate case (disaster recovery, an intentional bulk prune immediately
+  followed by a push). Full mechanism and both env overrides (`BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT`,
+  `BD_DOLT_PUSH_GUARD_FORCE`) are in `scripts/bd-dolt-push-guard.sh`'s own header comment — this is
+  dev-tooling/workflow config, not application config, so (matching `BD_DOLT_PUSH_MAX_ATTEMPTS` /
+  `BD_DOLT_PUSH_BASE_DELAY` just above) it is not duplicated into
+  [configuration.md](configuration.md), which is scoped to what `lode` itself reads at runtime.
+
+  **Why the ratio floor is 90% and not 100%, given the count only ever grows.** `bd count` counts
+  *every* issue, open and closed alike (verified: 412 total = 393 closed + 19 open), so a `bd close`
+  spree — by far the most common bulk operation here — never lowers it. Under ordinary use the count
+  is monotonically non-decreasing, which would argue for a 100% floor (refuse *any* decrease). The
+  10% slack is deliberate: the only things that legitimately shrink the count are rare, deliberate
+  deletions/prunes, and a 100% floor would turn every one of those into a `BD_DOLT_PUSH_GUARD_FORCE=1`
+  ceremony — pushing a backstop that should fire ~never toward fail-*annoying*, which is the failure
+  mode this guard most needs to avoid (it is defending against something that has happened exactly
+  once). The real incident sat at 245/404 ≈ 61%, far under either floor, so the slack costs nothing
+  against the case that actually motivated the guard. **Revisit if:** a real stale-DB drop ever lands
+  between 90% and 100% (i.e. the slack is what let it through), or if deliberate prunes turn out to be
+  common enough that the interactive `FORCE` ceremony is not the right shape.
+
+  **Two things a future reader should not misread:**
+  - **Check 2 is not what would have caught the incident.** It is keyed on the *resolved DB path*, and
+    a stray worktree-local DB is by definition a path that has never been pushed from — so it carries
+    no high-water cache, has no baseline, and check 2 fails open on it. **Check 1 (the marker) is the
+    check that catches the documented incident** (the marker was present in the incident's own
+    transcript). Check 2 covers the different scenario of one *established* DB path shrinking between
+    pushes. Do not drop check 1 as redundant on the theory that check 2 covers the incident.
+  - **A malformed `BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT` fails CLOSED, on purpose.** The ratio feeds
+    `$(( ))` inside an `if` condition, where `set -e` is suspended, so before this was validated a
+    value like `90%` raised a bash syntax error, evaluated false, and let the push through — a guard
+    reporting all-clear while doing no checking, from a one-character typo. It is now validated up
+    front and refuses, mirroring the rule `bd-dolt-push.sh` already applies to a non-numeric
+    `BD_DOLT_PUSH_MAX_ATTEMPTS` ("never succeed without having pushed"): a broken guard *config* must
+    never be indistinguishable from a clean DB. Validation sits *after* the `FORCE` bypass, so the
+    escape hatch still works with a typo'd ratio in the environment.
+
+  **Known residual, accepted:** the `.auto-import-issues.jsonl` marker, once created, is treated as
+  permanently disqualifying for that DB path unless `BD_DOLT_PUSH_GUARD_FORCE=1` is used — there is no
+  mechanism to "clear" it short of the override. Given the backstop's rarity of firing at all and the
+  override's availability, this was judged acceptable rather than adding logic to distinguish a stale
+  marker from a fresh one. **Revisit if:** the marker check false-positives in practice on a DB that
+  has since become legitimately caught-up via real `bd dolt pull`s.
+
+  **Both of the guard's inputs are gitignored, and that is load-bearing, not hygiene** (added in
+  review; `.beads/.gitignore`). The guard reads two files to decide whether to BLOCK a push, and each
+  is per-machine state that is actively harmful if it travels: `.bd-dolt-push-guard-highwater` is a
+  baseline for one DB path on one machine — committed, it would land on other clones asserting a count
+  they never pushed, and a *wrong* baseline in a blocking guard is worse than the *no* baseline the
+  guard already handles safely. `.auto-import-issues.jsonl` is worse still: the guard treats it as
+  permanently disqualifying, so a committed copy would block **every push on every clone, forever**,
+  escapable only via `FORCE`. That file is bd's, not ours, and was *inert* before this guard existed —
+  the guard is precisely what makes committing it costly, which is why ignoring it belongs to this
+  change and not to bd. Neither was ignored by default (`git check-ignore` matched neither), and
+  `.beads/` is exactly the directory CLAUDE.md warns a `git add -A` sweeps into.
