@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING, NoReturn
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.markup import escape
 from rich.theme import Theme
 
 from lode import __version__, versions
@@ -809,14 +810,24 @@ def notes_(
     short date, and its summary (the head's ``kind='summary'`` AI annotation,
     or the note's first line when not yet enriched). Tombstoned notes are
     excluded, same live-heads-only rule ``purge`` and the TUI browse screen
-    already use.
+    already use. The id and date render via the shared theme's ``note_id``/
+    ``date`` style NAMES (lode-l38d.11, lode-l38d.5) -- never a colour literal,
+    so ``CLI_STYLES`` stays the one source of truth for the palette -- and are
+    auto-disabled when piped or under ``NO_COLOR`` by the shared ``console``
+    (lode-l38d.1). A blank line separates each note from the next (not a
+    trailing one after the last row). The full id is never shortened here
+    (lode-1gr.1):
+    ``lode notes`` is the copy-pasteable, greppable listing Browse/``show``/
+    Tags deliberately don't try to be.
 
     ``--deleted`` (lode-d32.2) flips that: it lists *only* tombstoned notes
     (via the sibling reader :func:`lode.notes_read.list_deleted_notes`) rather
     than overloading this command's live-only contract that browse/purge/
     retrieval/reconcile all depend on. A deleted note vanishes from both
     Browse and plain ``lode notes``, so this full-id listing is the only route
-    back to an id a later ``lode show``/``lode recover`` can act on.
+    back to an id a later ``lode show``/``lode recover`` can act on. Rendering
+    is identical to the live listing -- no extra tombstone marker yet
+    (raised, not resolved, in lode-l38d.5's hand-off).
     """
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -827,8 +838,41 @@ def notes_(
         # which is false whenever live notes exist (lode-d32.2).
         typer.echo("no deleted notes" if deleted else "no notes")
         return
-    for row in rows:
-        typer.echo(f"{row.note_id}  {_short_date(row.created)}  {row.summary}")
+    for i, row in enumerate(rows):
+        if i:
+            console.print()
+        # ``row.summary`` is unescaped user/AI text and may itself contain
+        # "[...]" (markdown links, code, etc.) -- escape it so it can never
+        # be mistaken for markup and corrupt the row or the styles around it.
+        # ``soft_wrap=True`` -- rich's Console otherwise word-wraps to its
+        # detected width (80 columns when not a terminal), which would
+        # silently break a long summary across lines; the prior
+        # ``typer.echo`` never did that ("no truncation, no width clamp" is
+        # this ticket's own description of the behaviour being preserved).
+        # ``highlight=False`` -- rich's Console applies ReprHighlighter to
+        # plain strings BY DEFAULT, which is actively wrong for this row.
+        # Verified against rich 15.0.0, it breaks it two ways:
+        #   * The DATE is shredded: ``_short_date``'s "2026-07-16 14:32"
+        #     highlights as bold-cyan numbers + dim dashes + a bold-GREEN
+        #     "14:32", so it is neither uniformly ``date``-styled nor distinct
+        #     from ``note_id``'s cyan -- defeating this ticket's own
+        #     acceptance criterion ("colour the id and date distinctly").
+        #   * The user's own SUMMARY gets recoloured wherever it happens to
+        #     contain a number/IP/URL/True/None, which the ``typer.echo`` this
+        #     replaced never did.
+        # NOTE the asymmetry, which is why this is easy to miss: the note_id
+        # is NOT damaged -- it is a str(uuid.uuid4()) (repository.py:35) and
+        # rich's ReprHighlighter has a ``uuid`` pattern that matches it whole,
+        # so it renders as one clean cyan span. Only the date gives the bug
+        # away, and only in a real terminal (colour is frozen off under the
+        # suite, so no test can see this -- hence the flag is pinned instead).
+        # The theme styles are the ONLY colour this row should carry.
+        console.print(
+            f"[note_id]{row.note_id}[/note_id]  "
+            f"[date]{_short_date(row.created)}[/date]  {escape(row.summary)}",
+            soft_wrap=True,
+            highlight=False,
+        )
 
 
 def _render_item(item: EnrichmentItem) -> str:
