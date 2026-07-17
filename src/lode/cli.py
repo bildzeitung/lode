@@ -65,7 +65,7 @@ import uuid
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import typer
 from pydantic import ValidationError
@@ -94,7 +94,12 @@ from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
-from lode.notes_read import list_deleted_notes, list_notes, list_notes_conn
+from lode.notes_read import (
+    candidate_rows_conn,
+    list_deleted_notes,
+    list_notes,
+    list_notes_conn,
+)
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
@@ -649,12 +654,7 @@ def purge(
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1) from None
         except AmbiguousNoteIdError as exc:
-            typer.echo(
-                f"ambiguous note id prefix {target!r}: matches "
-                + ", ".join(exc.candidates),
-                err=True,
-            )
-            raise typer.Exit(code=1) from None
+            _report_ambiguous_prefix(conn, target, exc)
     finally:
         conn.close()
     typer.echo(
@@ -714,12 +714,7 @@ def recover(
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1) from None
         except AmbiguousNoteIdError as exc:
-            typer.echo(
-                f"ambiguous note id prefix {target!r}: matches "
-                + ", ".join(exc.candidates),
-                err=True,
-            )
-            raise typer.Exit(code=1) from None
+            _report_ambiguous_prefix(conn, target, exc)
 
         row = conn.execute(
             "SELECT v.op, v.parent_version_id FROM notes n "
@@ -761,6 +756,41 @@ def _short_date(created: str) -> str:
     not this command's.
     """
     return parse_stamp(created).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _report_ambiguous_prefix(
+    conn: sqlite3.Connection, target: str, exc: AmbiguousNoteIdError
+) -> NoReturn:
+    """Render an ambiguous note-id prefix's candidates, then exit 1 (lode-l38d.10).
+
+    The one shared body for the four call sites that resolve a note-id prefix
+    (``purge``/``recover``/``show``/``dump-html``) and can raise
+    :class:`AmbiguousNoteIdError`: each candidate gets a full listing row --
+    id, date, summary, same columns as ``lode notes`` (:func:`notes_`) -- so
+    the error is self-sufficient, no second command needed to tell the
+    candidates apart.
+
+    ``recover``'s ``include_deleted=True`` resolution can raise this across a
+    live AND a tombstoned candidate together (repository.py) -- the tombstoned
+    one is flagged `` [deleted]`` (the same trailing-marker convention
+    ``show`` uses for a tombstoned head) rather than left to look identical to
+    a live match, since for ``recover`` specifically the tombstoned candidate
+    is the one the user actually wants.
+
+    Still stderr, still exit code 1 -- the contract every call site already
+    had; only the rendering gained the extra columns.
+    """
+    typer.echo(
+        f"ambiguous note id prefix {target!r}: {len(exc.candidates)} matches",
+        err=True,
+    )
+    for row in candidate_rows_conn(conn, exc.candidates):
+        marker = " [deleted]" if row.deleted else ""
+        typer.echo(
+            f"  {row.note_id}  {_short_date(row.created)}  {row.summary}{marker}",
+            err=True,
+        )
+    raise typer.Exit(code=1) from None
 
 
 @app.command(name="notes")
@@ -899,12 +929,7 @@ def show_(
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1) from None
         except AmbiguousNoteIdError as exc:
-            typer.echo(
-                f"ambiguous note id prefix {target!r}: matches "
-                + ", ".join(exc.candidates),
-                err=True,
-            )
-            raise typer.Exit(code=1) from None
+            _report_ambiguous_prefix(conn, target, exc)
 
         row = conn.execute(
             "SELECT v.created, v.body, v.op FROM notes n "
@@ -1466,12 +1491,7 @@ def dump_html(
             typer.echo(f"no such note: {target}", err=True)
             raise typer.Exit(code=1) from None
         except AmbiguousNoteIdError as exc:
-            typer.echo(
-                f"ambiguous note id prefix {target!r}: matches "
-                + ", ".join(exc.candidates),
-                err=True,
-            )
-            raise typer.Exit(code=1) from None
+            _report_ambiguous_prefix(conn, target, exc)
 
         view = enrichment_view_conn(conn, note_id)
         if view is None:

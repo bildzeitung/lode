@@ -29,6 +29,7 @@ tombstone/no-HTML snapshot cleanly rather than dumping empty).
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -1012,9 +1013,20 @@ def test_purge_ambiguous_prefix_reports_candidates_and_purges_nothing(
 
     result = runner.invoke(app, ["purge", "note-aaa", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-aaa111" in result.stderr
-    assert "note-aaa222" in result.stderr
+    assert "ambiguous note id prefix 'note-aaa': 2 matches" in result.stderr
+    # Self-sufficient (lode-l38d.10): a full row -- id, date, summary -- per
+    # candidate, not just its bare id, so no second command is needed to tell
+    # them apart.
+    assert re.search(
+        r"note-aaa111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-aaa222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
     # Neither candidate was touched.
     assert _rows(
@@ -1411,9 +1423,17 @@ def test_show_ambiguous_prefix_reports_candidates(tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["show", "note-bbb", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-bbb111" in result.stderr
-    assert "note-bbb222" in result.stderr
+    assert "ambiguous note id prefix 'note-bbb': 2 matches" in result.stderr
+    assert re.search(
+        r"note-bbb111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-bbb222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+body b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_show_unknown_note_reports_and_exits_nonzero(tmp_path: Path) -> None:
@@ -1955,7 +1975,20 @@ def test_dump_html_ambiguous_note_prefix_reports_candidates(tmp_path: Path) -> N
     result = runner.invoke(app, ["dump-html", "note-dump-ambig", "--db", str(db_path)])
 
     assert result.exit_code != 0
-    assert "ambiguous note id prefix" in result.stderr
+    assert "ambiguous note id prefix 'note-dump-ambig': 2 matches" in result.stderr
+    # A full candidate row -- id, date, summary -- not just a bare id
+    # (lode-l38d.10): each candidate's body ("a"/"b") IS its summary here
+    # (no annotation, so it falls back to the first line).
+    assert re.search(
+        r"note-dump-ambig-1\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+a$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-dump-ambig-2\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+b$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 # --- lode dump-html --all / --file (bulk dumping, lode-l38d.8) -------------
@@ -2663,9 +2696,21 @@ def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
 
     result = runner.invoke(app, ["recover", "note-ddd", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-ddd111" in result.stderr
-    assert "note-ddd222" in result.stderr
+    assert "ambiguous note id prefix 'note-ddd': 2 matches" in result.stderr
+    # The live candidate renders unmarked; the tombstoned one gets the
+    # ` [deleted]` marker (lode-l38d.10's WRINKLE) -- for `recover` that's the
+    # candidate the user actually wants, so it must not render blank or look
+    # identical to the live match.
+    assert re.search(
+        r"note-ddd111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+still live$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-ddd222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone soon \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> None:
@@ -2681,9 +2726,17 @@ def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> No
 
     result = runner.invoke(app, ["recover", "note-eee", "--db", str(db_path)])
     assert result.exit_code == 1
-    assert "ambiguous" in result.stderr
-    assert "note-eee111" in result.stderr
-    assert "note-eee222" in result.stderr
+    assert "ambiguous note id prefix 'note-eee': 2 matches" in result.stderr
+    assert re.search(
+        r"note-eee111\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone a \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"note-eee222\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}\s+gone b \[deleted\]$",
+        result.stderr,
+        re.MULTILINE,
+    )
 
 
 def test_recover_full_id_of_a_live_note_errors_not_deleted(tmp_path: Path) -> None:
