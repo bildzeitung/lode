@@ -19,6 +19,11 @@ dependencies = [
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
     "pydantic",    # structured outputs for the derived layer
     "fastembed",   # embeddings + reranker + NLI via bundled ONNX runtime
+    "pyarrow",     # direct import in vectorstore.py (lode-zcoz) — lancedb's
+                   # schema API, so `_schema()` builds a pa.schema() itself.
+                   # Satisfied transitively via lancedb today; declared anyway
+                   # because we import it directly, so a lancedb release that
+                   # drops it cannot silently break our import.
     "huggingface_hub", # cache-only probe for `lode status` (lode-l38d.6) --
                        # already a transitive fastembed dep; listed direct
                        # (unpinned, like the rest) since cli.py now imports it
