@@ -1146,7 +1146,13 @@ supersede. Bounce does not proceed blind -- superseding without a reliable depen
 re-pointing nothing while blocks-dependents silently unblock against an unbuilt rebuild. No rebuild
 ticket was created; land/<id> is kept. Retry the bounce once the underlying bd failure clears."
   rtk scripts/bd-dolt-push.sh
-  # STOP -- do not create $NEW, do not re-parent, do not supersede, do not delete the branch.
+  # STOP here -- and stop with a STATEMENT, not a comment. A bare `# STOP` is INERT: control
+  # would fall through the `fi` straight into `NEW=$(bd create ...)` / `bd supersede` (which
+  # CLOSES <id>) / `git push --delete` below, superseding the ticket anyway -- the exact
+  # "proceed blind to the supersede" outcome this guard exists to prevent (lode-xm1h). The
+  # `exit 1` is what actually enforces the stop; do not drop it back to a comment. (Nothing has
+  # been created or changed beyond the land-escalated label above, so this exit is a clean stop.)
+  exit 1
 fi
 
 # UNGATED, unlike the derivation above: this `if !`/escalate structure lives in this markdown file,
@@ -1172,8 +1178,10 @@ REBUILD BRIEF (from land-review):
 # epic stays incomplete until the rebuild lands (and /epic-audit sees the real work).
 # `.parent` (verified against real bd 1.1.0 output, lode-v4rk's audit) is the direct top-level
 # field bd show already populates for a parent-child child -- simpler and no schema/flag pitfall to
-# get wrong, unlike the `.dependents[]?` walk below (no `.dependencies[]?`/`.dependents[]?` walk
-# survives elsewhere in this file -- lode-v4rk's audit extracted every other one; confirmed by grep).
+# get wrong, unlike the blocks-dependent derivation below, which needs the opt-in
+# --include-dependents walk and so lives in scripts/blocks-dependents.sh (no
+# `.dependencies[]?`/`.dependents[]?` walk survives inline in this file -- lode-v4rk's audit
+# extracted every other one; confirmed by grep).
 PARENT=$(rtk bd show <id> --json | jq -r '.[0].parent // empty')
 [ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
 
