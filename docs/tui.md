@@ -66,3 +66,42 @@ Guard tests for this shape assert on layout geometry, not selector text — see
 `tests/test_tui_config.py::test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen` and
 its `tests/test_tui_browse_screen.py` siblings for the pattern: drive the screen with `run_test`,
 assert `screen.max_scroll_y == 0` and the panel's own region ends at or above the Footer's row.
+
+## The footer: a 100-column minimum, one shared widget, no bracketed keys (`lode-uczx`)
+
+lode's minimum supported terminal width is **100 columns**. This had never been written down
+anywhere before `lode-uczx` — three prior footer tickets (`lode-l38d.3`, `lode-3rvw`, `lode-3aen`)
+each independently measured and coded against an **80**-column assumption instead, re-derived from
+a test literal because nothing in `docs/` said otherwise. Design facts belong in `docs/`
+(`CLAUDE.md`), so it is recorded here: **when sizing a screen's footer (or any other width-
+sensitive layout), 100 columns is the bound to design against, not 80.**
+
+**One shared footer widget, not ten call sites each managing their own flags.** Every
+footer-bearing screen composes `lode.tui.lode_footer.LodeFooter` — a ~4-line `Footer` subclass
+that bakes in `compact=True, show_command_palette=False` — instead of calling Textual's stock
+`Footer()` directly. Before `lode-uczx`, only two of the ten screens (`BrowseScreen`,
+`CaptureScreen`) passed those two flags explicitly, because each had independently hit an overflow
+bug and fixed it locally; the other eight stayed bare. That is drift-by-default: a new screen that
+forgets the flags regresses silently, which is exactly how `CaptureScreen` — the app's own
+default/landing screen — clipped past `BrowseScreen`'s fix undetected (`lode-3rvw`). `LodeFooter`
+is the one seam for any future footer-wide style change; a screen never repeats the flags itself.
+
+Rejected alternatives, so the question isn't reopened:
+
+- **Central CSS in `lode.tcss`** targeting Textual's internal compact/command-palette classes
+  (`.-compact`, `.-command-palette`): at the 100-column bound this genuinely fits too, but the
+  leading dash marks those classes as Textual-*internal*, not public API — a Textual upgrade could
+  silently revert the look. `LodeFooter` uses only `Footer`'s public `__init__` parameters instead.
+- **Repeating the two flags at each call site:** works, but is the drift-by-default `LodeFooter`
+  exists to close.
+
+**The bracketed-key style (`[d]elete`, `[i]nspect`, `E[x]pand`) is ruled out, permanently.** It
+needs the binding's key letter to literally appear inside its own description, which only
+single-letter bindings have — counted across the app's real binding set: `BrowseScreen` has 4 of 7
+(`i`/`v`/`d`/`x`; not `escape`/`slash`/`question_mark`), `ReconcileScreen` has 2 of 2 (`r`/`d`), and
+every other screen (`CaptureScreen`, `EditScreen`, `ConfigScreen`, `AskScreen`, `TagsScreen`,
+`VersionHistoryScreen`, `VersionViewScreen`, `ExternalPickerScreen`) has **zero** — all `ctrl+`
+combos or `escape`, per the no-function-key / no-bare-printable-key-on-an-editable-widget policy
+`docs/keybindings.md` documents. Styling only the ~6 bindings out of ~40 that qualify would leave
+two visual idioms in one footer bar — *more* drift than a plain, uniform description list, which is
+the exact bug the shared `LodeFooter` widget exists to eliminate. Do not reopen this a fourth time.

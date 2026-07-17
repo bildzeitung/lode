@@ -273,13 +273,19 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 
 
 # ---------------------------------------------------------------------------
-# Compact footer bar (lode-3rvw) -- CaptureScreen.BINDINGS renders 4 entries
-# plus 4 App-level ones (LodeApp.BINDINGS) in one footer line; with the
-# original, full-length descriptions that really consumed 100 columns and
-# Textual clipped the tail. The fix stays inside the stock Footer (compact=True
-# + show_command_palette=False + shorter descriptions), the same levers
-# lode-l38d.3 used for BrowseScreen -- no custom widget, every binding stays
-# visible, nothing is hidden.
+# Compact footer bar (lode-3rvw, widget lode-uczx) -- CaptureScreen.BINDINGS
+# renders 4 entries plus 4 App-level ones (LodeApp.BINDINGS) in one footer
+# line; with the original, full-length descriptions that really consumed 100
+# columns and Textual clipped the tail against the 80-column bound this
+# screen was originally sized to. The fix stays inside the stock Footer
+# (compact=True + show_command_palette=False + shorter descriptions), now
+# baked into the shared :class:`~lode.tui.lode_footer.LodeFooter` every
+# screen composes instead of repeating the two flags per call site.
+#
+# lode-uczx: lode's minimum supported terminal width is 100 columns, not 80
+# (docs/tui.md) -- this test's bound moved accordingly. Consumed width is
+# intrinsic to the labels (identical at 80 and 100; only the budget moved),
+# so it is unchanged by the bound: still 77.
 #
 # TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
 # sufficient, so this test does not rely on it alone. Textual separates the
@@ -297,7 +303,7 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # ---------------------------------------------------------------------------
 
 
-def test_capture_footer_fits_80_columns_with_every_binding_visible(
+def test_capture_footer_fits_100_columns_with_every_binding_visible(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "lode.db"
@@ -305,7 +311,7 @@ def test_capture_footer_fits_80_columns_with_every_binding_visible(
     app = LodeApp(db_path=db_path)
 
     async def _drive() -> tuple[bool, list[str], int]:
-        async with app.run_test(size=(80, 24)) as pilot:
+        async with app.run_test(size=(100, 24)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
             footer = app.screen.query_one(Footer)
@@ -319,7 +325,7 @@ def test_capture_footer_fits_80_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
-    assert consumed <= 80, f"footer really consumes {consumed}/80 columns"
+    assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
     # All 4 screen-level + 4 App-level bindings stay visible (none hidden via
     # show=False) -- only their description text was shortened, and ctrl+n
     # keeps its full "Save & new" so it cannot read as a discard-and-restart.

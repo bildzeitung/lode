@@ -117,18 +117,20 @@ class LodeApp(App[str | None]):
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
-        # "Cfg" is abbreviated to buy width for BrowseScreen (lode-l38d.3), and
-        # is deliberately the ONLY one: these bindings show in every screen's
-        # footer, so shortening them is a cost paid everywhere to fix one
-        # screen. BrowseScreen's footer is an 11-column grid with 1-column
-        # gutters, so what it really consumes is sum(FooterKey widths) + 10, and
-        # it fits only while that lands at <= 79 of the 80 available -- which
-        # leaves room for exactly one of these two to keep its full word.
-        # Measured at 80x24: "Cfg"+"Browse" = 79 (fits), "Config"+"Brow" = 80
-        # and "Config"+"Browse" = 82 (both clip). "Browse" keeps its word
-        # because "Brow" reads as a different English word, whereas "Cfg" is a
-        # conventional abbreviation. Do not lengthen either without re-running
-        # test_browse_footer_fits_80_columns_with_every_binding_visible.
+        # "Cfg" stays abbreviated (lode-uczx, amending lode-l38d.3's original
+        # rationale). lode's minimum supported terminal width is 100 columns
+        # (docs/tui.md), not 80 -- so "buy width for one screen" is no longer
+        # the reason: at 100 columns every one of the ten footer-bearing
+        # screens fits fine with "Config" spelled out. The real constraint is
+        # width reserved for lode-11io's not-yet-landed App-level Ask binding
+        # (ctrl+l), measured to cost +7 columns wherever it lands, since an
+        # App-level binding renders in every screen's footer. EditScreen is
+        # the tightest of the ten (see lode.tui.screens.browse.EditScreen):
+        # with "Cfg" it lands at 90/100 today and 97/100 once Ask lands; with
+        # "Config" it lands at 93/100 today but 100/100 -- zero slack -- once
+        # Ask lands. "Browse"/"Tags" already stay full words; they aren't the
+        # constraint. Do not restore "Config" without re-measuring
+        # EditScreen's footer against the Ask binding's real cost.
         Binding("ctrl+o", "show_config", "Cfg"),
         Binding("ctrl+b", "show_browse", "Browse"),
         Binding("ctrl+t", "show_tags", "Tags"),

@@ -93,10 +93,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Footer, Header, Static, TextArea
+from textual.widgets import Header, Static, TextArea
 
 from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
 from lode.tui.latency_probe import probe_event_loop_lag
+from lode.tui.lode_footer import LodeFooter
 from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.reconcile import ReconcileScreen
 
@@ -172,19 +173,21 @@ class CaptureScreen(Screen[None]):
     see :mod:`lode.tui.related_notes_panel`'s module docstring.
     """
 
-    # Descriptions kept short (lode-3rvw) -- same lever and same rationale as
-    # BrowseScreen's lode-l38d.3 fix, which spells both out (see
-    # lode.tui.screens.browse): show=False stays ruled out, only the
-    # description text is shortened. At full length these 4 plus the 4
-    # App-level bindings (LodeApp.BINDINGS) really consumed 100 columns.
+    # Descriptions kept short (lode-3rvw), unchanged by the LodeFooter
+    # extraction (lode-uczx): show=False stays ruled out, only description
+    # text is ever shortened -- see :mod:`lode.tui.lode_footer` for why a
+    # shared footer widget exists instead of per-screen compact/palette
+    # flags.
     #
     # ctrl+n deliberately keeps its full "Save & new" (lode-3rvw review): the
     # shortened "New" sits next to "Save" and reads as "start a new note"
     # WITHOUT saving -- the opposite of what it does, which is the same
-    # discoverability cost show=False was ruled out for. Only ONE of the two
-    # long labels fits: "Save & new" alone lands at 77/80, but restoring
-    # "Discard & quit" alongside it clips again at 84/80. Escape keeps the
-    # short form because "Discard" still names its destructive half honestly.
+    # discoverability cost show=False was ruled out for. Only ONE of "Save &
+    # new" and "Discard & quit" can be spelled out in full without the other
+    # -- Escape keeps the short "Discard" because it still names its
+    # destructive half honestly, and this screen's labels are otherwise
+    # unchanged by lode-uczx's 100-column bound (docs/tui.md): they already
+    # fit comfortably within it.
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("ctrl+n", "save_and_new", "Save & new"),
@@ -200,18 +203,7 @@ class CaptureScreen(Screen[None]):
             # exclude -- see lode.tui.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
         )
-        # Still the stock Footer, just asked for less padding (lode-3rvw) --
-        # the same two levers as BrowseScreen's lode-l38d.3 fix, which
-        # documents their mechanics (see lode.tui.screens.browse). Measured at
-        # 80x24: 77/80 with every binding visible.
-        #
-        # BOTH levers are load-bearing -- do not "simplify" either away: with
-        # these labels, dropping compact=True needs 93 columns and dropping
-        # show_command_palette=False needs 89. Measure with sum(FooterKey
-        # widths) + (N-1) gutters, never the right edge or
-        # show_horizontal_scrollbar alone -- both under-report a small overflow
-        # (tests/test_tui_app.py documents that trap).
-        yield Footer(compact=True, show_command_palette=False)
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         self.query_one(f"#{BODY_ID}", TextArea).focus()
