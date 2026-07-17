@@ -524,10 +524,30 @@ def model_cache_dir() -> Path:
 #: Pinned here so ``lode status``'s cold-cache probe (lode-l38d.6) can answer
 #: "is this repo already on disk" with a pure
 #: ``huggingface_hub.try_to_load_from_cache`` filesystem lookup and NEVER
-#: ``import fastembed`` -- that import drags in onnxruntime + numpy (~866
-#: modules; measured ~0.4-2s), which took a pure-sqlite-read command to 2-4x
-#: slower on the WARM path just to print "No action needed." (the
-#: lode-l38d.6 review escalation this pin resolves, decided 2026-07-16).
+#: ``import fastembed`` -- that import drags in onnxruntime + numpy (~830
+#: modules, ~740ms warm), which measurably slowed a pure-sqlite-read command
+#: just to print "No action needed." (the lode-l38d.6 review escalation this
+#: pin resolves, decided 2026-07-16).
+#:
+#: Measured on the WARM path -- the steady state -- as ``lode status`` min-of-11,
+#: two interleaved passes on one machine (the only fair shape: figures taken on
+#: different machines/loads are not comparable, which is what made the
+#: escalation and the implementing run disagree 2.4x about this very cost):
+#:
+#: ===========================  =========  =========
+#: ``lode status``              pass 1     pass 2
+#: ===========================  =========  =========
+#: trunk, no probe               864ms      919ms
+#: probe via ``import fastembed``  1320ms   1244ms
+#: probe via this pin            1019ms     1039ms
+#: ===========================  =========  =========
+#:
+#: So the probe's real cost was ~+330-460ms (~1.4x, NOT the "2-4x" the
+#: escalation reported and this comment once repeated -- that figure came from a
+#: 3.03s outlier no later run reproduced), and the pin removes ~65-70% of it.
+#: The residual ~+120-155ms is ``huggingface_hub``'s own import and is the
+#: accepted price of the hint: the pin does NOT make ``lode status`` as fast as
+#: trunk, and cannot -- it strictly adds work to a pure DB read.
 #:
 #: Keyed by the model id LOWERCASED, matching fastembed's own
 #: case-insensitive resolution (``ModelManagement._get_model_description``

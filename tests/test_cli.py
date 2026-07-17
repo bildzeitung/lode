@@ -804,7 +804,7 @@ def test_model_cache_probe_warm_and_cold(
     hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
 
     # Nothing on disk yet -> confirmed cold.
-    assert _model_cache_probe(model_id, "embedding") is False
+    assert _model_cache_probe(model_id) is False
 
     # A models--X dir with NO completed snapshot is still cold: HuggingFace's
     # downloader creates `blobs/` with an `.incomplete` file BEFORE a download
@@ -814,11 +814,11 @@ def test_model_cache_probe_warm_and_cold(
     repo_dir = home / "models" / f"models--{hf_source.replace('/', '--')}"
     (repo_dir / "blobs").mkdir(parents=True)
     (repo_dir / "blobs" / "deadbeef.incomplete").write_text("partial")
-    assert _model_cache_probe(model_id, "embedding") is False
+    assert _model_cache_probe(model_id) is False
 
     # Completed snapshot -> warm.
     _write_fake_cache_hit(home, hf_source, model_file)
-    assert _model_cache_probe(model_id, "embedding") is True
+    assert _model_cache_probe(model_id) is True
 
 
 def test_model_cache_probe_matches_model_id_case_insensitively(
@@ -837,8 +837,8 @@ def test_model_cache_probe_matches_model_id_case_insensitively(
     hf_source, model_file = model_cache_identity(model_id)  # type: ignore[misc]
     _write_fake_cache_hit(home, hf_source, model_file)
 
-    assert _model_cache_probe(model_id.upper(), "embedding") is True
-    assert _model_cache_probe(model_id.lower(), "embedding") is True
+    assert _model_cache_probe(model_id.upper()) is True
+    assert _model_cache_probe(model_id.lower()) is True
 
 
 def test_model_cache_probe_unknown_model_cannot_judge(
@@ -851,8 +851,9 @@ def test_model_cache_probe_unknown_model_cannot_judge(
     from lode.cli import _cold_model_cache, _model_cache_probe
 
     monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
-    assert _model_cache_probe("not-a-real/model-id", "embedding") is None
-    assert _model_cache_probe("not-a-real/model-id", "cross_encoder") is None
+    # One call now covers what took two: the probe searches BOTH registries
+    # (they are disjoint), so a None here means neither list matched.
+    assert _model_cache_probe("not-a-real/model-id") is None
 
     # ...and None must not read as cold at the caller: an all-unknown settings
     # set produces no hint, per the probe's non-fatal contract.
@@ -876,6 +877,65 @@ def test_cold_model_cache_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(cli, "model_cache_dir", _boom)
     assert cli._cold_model_cache(Settings()) is False
+
+
+def test_status_survives_a_malformed_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The test above asserts non-fatality of everything BELOW settings
+    # resolution -- it hands _cold_model_cache a ready-made Settings(), so it is
+    # structurally blind to a failure resolving them. That blind spot is exactly
+    # where the footer's own settings lookup went fatal: _resolve_settings()
+    # echoes + raises typer.Exit(1) on a bad config.toml (lode-40g), so an
+    # UNGUARDED call made `lode status` exit 1 over a config typo, after the
+    # table had printed -- no footer at all, which is decision 3's failure mode
+    # (an absent hint read as an absent check) and breaches lode-l38d.6's
+    # explicit "never a failed `lode status`". Assert at the COMMAND boundary,
+    # the only altitude that sees it.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.toml").write_text("embedding_model = [not valid toml\n")
+    monkeypatch.setenv("LODE_HOME", str(home))
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = CliRunner().invoke(app, ["status", "--db", str(db_path)])
+
+    # Queue health needs no config -- a broken one must not take the command
+    # down (trunk exited 0 here; so must we).
+    assert result.exit_code == 0, result.output
+    # ...and the footer must still be REACHED. A cold-cache hint is suppressed
+    # (settings unresolvable -> "no hint", same as the probe's own None), so
+    # with an empty queue this is the all-clear.
+    assert "No action needed." in result.output
+
+
+def test_status_survives_an_unreadable_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The malformed case above is the one _resolve_settings converts to
+    # typer.Exit itself. This is the OTHER half, and the reason the guard above
+    # catches Exception rather than typer.Exit: load_settings() propagates an
+    # OSError (e.g. PermissionError on an unreadable $LODE_HOME/config.toml)
+    # straight THROUGH _resolve_settings, which only converts TOMLDecodeError
+    # and ValidationError. A narrow `except typer.Exit` would leave this case
+    # killing `lode status` exactly as before. Driven by monkeypatch rather than
+    # chmod 000, which is a no-op when the suite runs as root.
+    from lode import cli
+
+    def _boom() -> Settings:
+        raise PermissionError("config.toml is not readable")
+
+    monkeypatch.setattr(cli, "_resolve_settings", _boom)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = CliRunner().invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No action needed." in result.output
 
 
 def test_status_all_clear_when_no_pending_failed_and_cache_warm(

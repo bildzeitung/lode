@@ -1029,11 +1029,18 @@ def _cache_hit(hf_source: str, model_file: str) -> bool:
     ``refs/snapshots`` chain HuggingFace's own loaders use, so a partial
     download correctly returns ``None`` here, not a false warm.
 
-    Importing ``huggingface_hub`` alone (never ``fastembed``) costs ~10ms
-    warm and pulls in none of fastembed's onnxruntime/numpy dependency graph
-    (measured: 53 modules loaded vs. fastembed's ~866) -- this is the whole
-    point of pinning cache identity in :data:`lode.config._MODEL_CACHE_IDENTITY`
-    instead of resolving it via ``fastembed.list_supported_models()``.
+    Reaching ``try_to_load_from_cache`` costs ~110ms warm and adds ~123 modules
+    on top of what ``lode.cli`` has already imported, pulling in NONE of
+    fastembed's onnxruntime/numpy graph -- the point of pinning cache identity
+    in :data:`lode.config._MODEL_CACHE_IDENTITY` rather than resolving it via
+    ``fastembed.list_supported_models()``. That constant's comment carries the
+    benchmark and is the one authority for these figures; don't re-quote them.
+
+    Measure this in PRODUCTION shape (call :func:`_cold_model_cache` after
+    importing ``lode.cli``, diff ``sys.modules``) -- never as a bare ``import
+    huggingface_hub``, which binds only huggingface_hub's LAZY module shell (19
+    modules, ~11ms) and understates the real cost ~10x. Actually touching
+    ``try_to_load_from_cache`` triggers the submodule import behind that shell.
     """
     from huggingface_hub import try_to_load_from_cache
 
@@ -1043,25 +1050,28 @@ def _cache_hit(hf_source: str, model_file: str) -> bool:
     return isinstance(hit, str)
 
 
-def _model_cache_probe(model_name: str, registry: str) -> bool | None:
+def _model_cache_probe(model_name: str) -> bool | None:
     """Cheap filesystem check: is ``model_name``'s fastembed weights cache warm?
 
     Looks up ``model_name`` in :func:`lode.config.model_cache_identity` first
     -- lode's two pinned models (lode-txh.6) resolve this way with NO
     ``import fastembed`` at all (see :func:`_cache_hit`'s docstring for why
-    that import is worth avoiding: ~866 modules via onnxruntime/numpy, vs.
-    ``huggingface_hub`` alone at ~53).
+    that import is worth avoiding).
 
-    ``registry`` picks which fastembed class's ``list_supported_models()`` to
-    fall back to for a model id OUTSIDE the pinned set (e.g. a user's custom
-    ``config.toml`` override) -- ``"embedding"`` for
-    ``fastembed.TextEmbedding``, ``"cross_encoder"`` for
-    ``fastembed.rerank.cross_encoder.TextCrossEncoder`` -- since the embedder
-    and the reranker/NLI cross-encoder ship separate supported-model lists and
-    a given id can appear in only one. ``list_supported_models()`` is a static
-    in-memory list (no network, no model load); the ``import fastembed`` cost
-    to reach it is expected here -- an unpinned model is already outside
-    lode's fast path.
+    A model id OUTSIDE the pinned set (a user's custom ``config.toml``
+    override) falls back to fastembed's own registries. The embedder and the
+    reranker/NLI cross-encoder ship SEPARATE supported-model lists, so both are
+    searched and the first hit wins -- safe because the two lists are disjoint
+    (verified: 30 embedding ids, 6 cross-encoder ids, no overlap), so "which
+    list" carries no information the id itself doesn't. Searching both rather
+    than being TOLD which to search is also the safer shape: a caller naming
+    the wrong registry would probe the right id against the wrong list, get
+    ``None``, and print a false all-clear -- decision 3's failure mode reached
+    by a typo, exactly like the casing bug below. ``list_supported_models()``
+    is a static in-memory list (no network, no model load), and reaching either
+    costs the same single ``import fastembed`` (importing the cross-encoder
+    submodule executes ``fastembed/__init__`` anyway) -- expected here, since
+    an unpinned model is already off lode's fast path.
 
     Returns ``True`` if warm, ``False`` if confirmed cold, or ``None`` if the
     probe could not judge at all (unknown model id, a GCS-only source with no
@@ -1075,12 +1085,9 @@ def _model_cache_probe(model_name: str, registry: str) -> bool | None:
             hf_source, model_file = identity
             return _cache_hit(hf_source, model_file)
 
-        if registry == "embedding":
-            from fastembed import TextEmbedding as _Registry
-        else:
-            from fastembed.rerank.cross_encoder import (
-                TextCrossEncoder as _Registry,
-            )
+        from fastembed import TextEmbedding
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
         # Case-INSENSITIVELY, matching fastembed's own resolution
         # (ModelManagement._get_model_description compares
         # model_name.lower()). An exact-match probe silently disagrees with the
@@ -1092,7 +1099,8 @@ def _model_cache_probe(model_name: str, registry: str) -> bool | None:
         entry = next(
             (
                 m
-                for m in _Registry.list_supported_models()
+                for registry in (TextEmbedding, TextCrossEncoder)
+                for m in registry.list_supported_models()
                 if m["model"].lower() == model_name.lower()
             ),
             None,
@@ -1119,22 +1127,19 @@ def _cold_model_cache(settings: Settings) -> bool:
     (embedder pulled, reranker/NLI not) still surfaces the hint rather than
     reading as fully warm.
 
-    Dedupes ``(registry, model_id)`` pairs before probing: ``rerank_model``
-    and ``entailment_model`` default to the same pinned id (lode-txh.6) and
-    always share the ``"cross_encoder"`` registry, so the common case is two
-    filesystem probes, not three. A probe that could not judge (``None`` --
-    unknown id, GCS-only source, or any error) is treated as "not cold", per
-    this function's non-fatal contract -- it can only ever make ``lode
-    status`` print an extra hint line, never fail the command.
+    Dedupes the resolved ids before probing: ``rerank_model`` and
+    ``entailment_model`` default to the same pinned id (lode-txh.6), so the
+    common case is two filesystem probes, not three. A probe that could not
+    judge (``None`` -- unknown id, GCS-only source, or any error) is treated as
+    "not cold", per this function's non-fatal contract -- it can only ever make
+    ``lode status`` print an extra hint line, never fail the command.
     """
     probes = {
-        ("embedding", settings.embedding_model),
-        ("cross_encoder", settings.rerank_model),
-        ("cross_encoder", settings.entailment_model),
+        settings.embedding_model,
+        settings.rerank_model,
+        settings.entailment_model,
     }
-    return any(
-        _model_cache_probe(model_id, registry) is False for registry, model_id in probes
-    )
+    return any(_model_cache_probe(model_id) is False for model_id in probes)
 
 
 @app.command()
@@ -1179,7 +1184,13 @@ def status(
     finally:
         conn.close()
 
-    dead_count = job_counts.get("dead", 0)
+    # dead_letters is the authority for "how many dead jobs", not
+    # job_counts["dead"]: the two are the same number by construction (both read
+    # the `jobs` table over one connection, one grouped by status, the other
+    # filtered to status='dead'), so carrying both invited the table and the
+    # prose line below to disagree with nothing but a comment promising they
+    # can't. One value instead makes that structural.
+    dead_style = "danger" if dead_letters else None
 
     # No header_style= here: rich's Table already defaults it to "table.header",
     # the name CLI_STYLES declares (see the palette comment above), so passing it
@@ -1191,7 +1202,7 @@ def status(
     table.add_row("Running", str(job_counts.get("running", 0)))
     table.add_row("Done", str(job_counts.get("done", 0)))
     table.add_row("Failed", str(job_counts.get("failed", 0)))
-    table.add_row("Dead", str(dead_count), style="danger" if dead_count > 0 else None)
+    table.add_row("Dead", str(len(dead_letters)), style=dead_style)
     console.print(table)
 
     total_egress = sum(n for _, n in egress_counts)
@@ -1226,11 +1237,6 @@ def status(
         f"egress: {total_egress} sends ({by_purpose})", markup=False, highlight=False
     )
 
-    # dead_count and len(dead_letters) are the same number by construction --
-    # both read the `jobs` table over one connection, one grouped by status, the
-    # other filtered to status='dead' -- so inside the loop below "is there a
-    # dead job?" is answered by the loop running at all.
-    dead_style = "danger" if dead_count > 0 else None
     console.print(
         f"dead-letters (dead jobs): {len(dead_letters)}",
         style=dead_style,
@@ -1247,7 +1253,37 @@ def status(
         )
 
     pending_or_failed = job_counts.get("pending", 0) + job_counts.get("failed", 0)
-    cache_cold = _cold_model_cache(_resolve_settings())
+    # _resolve_settings() is the "I need valid settings to do my job, abort
+    # otherwise" contract every OTHER command wants: on a malformed
+    # $LODE_HOME/config.toml it echoes a message and raises typer.Exit(1)
+    # (lode-40g). `lode status` reports QUEUE health, which needs no config at
+    # all -- so calling it UNGUARDED made a single config.toml typo exit 1 after
+    # the table had already printed, killing the footer outright. That is both a
+    # regression against trunk (where status never read the config and exited 0)
+    # and a direct breach of lode-l38d.6's "a probe error means no hint, never a
+    # failed `lode status`" -- and it lands on decision 3's exact failure mode,
+    # an absent hint read as an absent check. The guard inside
+    # _model_cache_probe could never catch this: it sits BELOW settings
+    # resolution. The stderr message _resolve_settings already emitted still
+    # reaches the user, so a broken config stays visible -- it just no longer
+    # takes the command down.
+    #
+    # The try covers ONLY the resolution, and _cold_model_cache stays OUTSIDE
+    # it, deliberately: that function documents "Never raises" and
+    # test_cold_model_cache_is_never_fatal pins it, so folding it in here would
+    # swallow a future bug in its internal guard into a silently-wrong "No
+    # action needed." and leave the contract unenforceable.
+    #
+    # `except Exception` rather than `except typer.Exit`, equally deliberately:
+    # typer.Exit is only the raise _resolve_settings RAISES ITSELF: an
+    # unreadable config.toml propagates PermissionError straight through it
+    # (verified), so catching the narrow type would leave that case fatal --
+    # the same bug in a smaller box.
+    try:
+        settings = _resolve_settings()
+    except Exception:
+        settings = None
+    cache_cold = False if settings is None else _cold_model_cache(settings)
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
