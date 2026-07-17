@@ -54,9 +54,12 @@ After that, indexing and retrieval are fully offline.
 
 ## Status
 
-**Design captured, not yet built.** See [`docs/design.md`](docs/design.md) for the overview and a
-map of the design docs, with the reasoning behind every decision. Build is incremental: notes +
-cited Q&A first, external connectors added one at a time afterward.
+**Built end-to-end.** The core loop ships: notes, version chains, cited Q&A, a minimal eval
+harness, and a web connector, behind a Textual TUI and a full CLI (`lode add`, `lode ask`, `lode
+notes`, `lode work`, `lode models pull`, …). See [`docs/design.md`](docs/design.md) for the
+overview and a map of the design docs, with the reasoning behind every decision. Additional
+connectors (e.g. Atlassian) are being added one at a time — see
+[`docs/decisions.md`](docs/decisions.md) for what's still open.
 
 ## Working on the docs
 
