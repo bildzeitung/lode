@@ -70,6 +70,7 @@ from lode.webfetch import (
     TooManyRedirectsError,
     TransientFetchError,
     _extract,
+    _tombstone,
 )
 
 log = logging.getLogger(__name__)
@@ -148,11 +149,13 @@ def _fetch_comments(fetcher: Fetcher, api_base: str, external_id: str) -> list[d
     still propagates uncaught, same as any other request this module makes.
     """
     comments: list[dict] = []
-    start_at = 0
     while True:
+        # len(comments) IS the next page's startAt — it grows monotonically by
+        # construction (every non-empty page is extended in), so there is no
+        # separate offset to track and no way to stall short of `total`.
         url = (
             f"{api_base}/rest/api/3/issue/{external_id}/comment"
-            f"?startAt={start_at}&expand=renderedBody"
+            f"?startAt={len(comments)}&expand=renderedBody"
         )
         response = fetcher.fetch(url)
         if classify_http_status(response.status_code) is not HttpOutcome.OK:
@@ -167,12 +170,9 @@ def _fetch_comments(fetcher: Fetcher, api_base: str, external_id: str) -> list[d
         payload = json.loads(response.text)
         page = payload.get("comments") or []
         comments.extend(page)
-        if not page:
-            break
-        total = payload.get("total", len(comments))
-        max_results = payload.get("maxResults") or len(page)
-        start_at = payload.get("startAt", start_at) + max_results
-        if start_at >= total:
+        # An empty page guards against a server that under-reports `total`;
+        # otherwise stop once we have collected every comment it claims.
+        if not page or len(comments) >= payload.get("total", len(comments)):
             break
     return comments
 
@@ -198,23 +198,6 @@ def _render_issue_html(issue: dict, comments: list[dict]) -> str:
     return "<html><body>" + "\n".join(parts) + "</body></html>"
 
 
-def _tombstone(
-    *,
-    final_url: str,
-    reason: str,
-    http_status: int | None = None,
-    raw_html: str | None = None,
-) -> FetchResult:
-    return FetchResult(
-        status=FetchStatus.TOMBSTONE,
-        final_url=final_url,
-        clean_text=None,
-        raw_html=raw_html,
-        http_status=http_status,
-        tombstone_reason=reason,
-    )
-
-
 def fetch_jira_issue(
     external_id: str,
     api_base: str,
@@ -234,7 +217,14 @@ def fetch_jira_issue(
     fetcher = fetcher or _default_fetcher(settings, external_id)
 
     issue_url = f"{api_base}/rest/api/3/issue/{external_id}?expand=renderedFields"
-    response = fetcher.fetch(issue_url)
+    try:
+        response = fetcher.fetch(issue_url)
+    except TooManyRedirectsError:
+        # A conforming Fetcher raises this as a named, permanent outcome (see
+        # JiraHttpFetcher.fetch); tombstone it in one attempt exactly as
+        # lode.webfetch.fetch_and_extract does, rather than letting it ride the
+        # worker's transient-retry/backoff cycle before it dead-letters.
+        return _tombstone(final_url=issue_url, reason="too_many_redirects")
 
     if classify_http_status(response.status_code) is not HttpOutcome.OK:
         return _tombstone(

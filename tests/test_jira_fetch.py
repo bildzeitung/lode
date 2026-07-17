@@ -25,7 +25,12 @@ import pytest
 
 from lode.config import AtlassianCredentials, load_settings
 from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
-from lode.webfetch import FetchStatus, RawResponse, TransientFetchError
+from lode.webfetch import (
+    FetchStatus,
+    RawResponse,
+    TooManyRedirectsError,
+    TransientFetchError,
+)
 
 _API_BASE = "https://acme.atlassian.net"
 _KEY = "ABC-123"
@@ -193,6 +198,22 @@ def test_transient_failure_on_comment_page_propagates_uncaught():
 
     with pytest.raises(TransientFetchError):
         fetch_jira_issue(_KEY, _API_BASE, fetcher=fetcher, settings=load_settings())
+
+
+def test_too_many_redirects_on_issue_yields_tombstone():
+    """A redirect-exhaustion is a permanent condition -- tombstoned in one
+    attempt (reason=too_many_redirects), mirroring
+    lode.webfetch.fetch_and_extract, not left to ride the transient-retry
+    cycle."""
+    fetcher = _QueueFetcher([TooManyRedirectsError("too many redirects")])
+
+    result = fetch_jira_issue(
+        _KEY, _API_BASE, fetcher=fetcher, settings=load_settings()
+    )
+
+    assert result.status is FetchStatus.TOMBSTONE
+    assert result.tombstone_reason == "too_many_redirects"
+    assert result.clean_text is None
 
 
 def test_empty_extract_yields_tombstone():
