@@ -67,7 +67,6 @@ Confluence-specific branch needed there.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from urllib.parse import quote
 
 import httpx
@@ -81,6 +80,7 @@ from lode.webfetch import (
     RawResponse,
     TransientFetchError,
     _extract,
+    _tombstone,
 )
 
 #: Sent on every Confluence REST call. A bare product token, no ``(+<url>)``
@@ -89,20 +89,6 @@ from lode.webfetch import (
 #: actually making the call is the end user's own machine, not a centrally
 #: operated crawler.
 _USER_AGENT = "lode-confluence/1"
-
-
-@dataclass(frozen=True)
-class ConfluencePageRef:
-    """The two persisted fields :func:`fetch_confluence_page` needs.
-
-    Purely a documentation/typing convenience — callers may just pass the
-    two strings positionally; this exists so a future caller (the
-    dispatcher wiring follow-up) has a named shape to read the ``externals``
-    row into, matching ``(external_id, api_base)`` 1:1.
-    """
-
-    external_id: str
-    api_base: str
 
 
 class HttpxConfluenceFetcher:
@@ -130,11 +116,10 @@ class HttpxConfluenceFetcher:
         self._settings = settings or Settings()
 
     def fetch(self, url: str) -> RawResponse:
-        settings = self._settings
         try:
             with httpx.Client(
                 auth=(self._credentials.email, self._credentials.token),
-                timeout=settings.fetch_timeout_s,
+                timeout=self._settings.fetch_timeout_s,
                 headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
             ) as client:
                 response = client.get(url)
@@ -158,23 +143,6 @@ class HttpxConfluenceFetcher:
             status_code=response.status_code,
             text=response.text,
         )
-
-
-def _tombstone(
-    *,
-    final_url: str,
-    reason: str,
-    http_status: int | None = None,
-    raw_payload: str | None = None,
-) -> FetchResult:
-    return FetchResult(
-        status=FetchStatus.TOMBSTONE,
-        final_url=final_url,
-        clean_text=None,
-        raw_html=raw_payload,
-        http_status=http_status,
-        tombstone_reason=reason,
-    )
 
 
 def _build_url(external_id: str, api_base: str) -> str:
@@ -262,7 +230,7 @@ def fetch_confluence_page(
             final_url=response.final_url,
             reason=f"http_{response.status_code}",
             http_status=response.status_code,
-            raw_payload=response.text,
+            raw_html=response.text,
         )
 
     try:
@@ -275,7 +243,7 @@ def fetch_confluence_page(
             final_url=response.final_url,
             reason="malformed_response",
             http_status=response.status_code,
-            raw_payload=response.text,
+            raw_html=response.text,
         )
 
     clean_text = _extract(html)
@@ -284,7 +252,7 @@ def fetch_confluence_page(
             final_url=response.final_url,
             reason="empty_extract",
             http_status=response.status_code,
-            raw_payload=response.text,
+            raw_html=response.text,
         )
 
     return FetchResult(
@@ -298,7 +266,6 @@ def fetch_confluence_page(
 
 
 __all__ = [
-    "ConfluencePageRef",
     "HttpxConfluenceFetcher",
     "fetch_confluence_page",
 ]
