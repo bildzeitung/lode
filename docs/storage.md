@@ -1108,7 +1108,10 @@ versions     version_id(=H(framed: note_id,parent,body)), note_id,
              parent_version_id, body, op(create|update|delete),
              purged_at?, created                                       # immutable, owned
 externals    external_id, source_type, head_snapshot_id, no_egress,    # logical identity
-             created
+             api_base?, created                                       # api_base: Atlassian
+                                                                        # connectors only
+                                                                        # (lode-gpzn.2), NULL
+                                                                        # for web
 snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
              raw_payload, fetched_at, status(ok|tombstone)             # immutable, mirrored
                                                                         # (fetched_at excepted: bumped

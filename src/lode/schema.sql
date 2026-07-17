@@ -54,11 +54,20 @@ CREATE INDEX IF NOT EXISTS idx_versions_parent ON versions (parent_version_id);
 -- externals — logical identity for an external source (created but UNUSED until
 -- the connectors step, docs/storage.md). head_snapshot_id mirrors the note head
 -- pointer; same DEFERRABLE rationale as notes.head_version_id.
+-- api_base (lode-gpzn.2): the inferred-or-configured Atlassian Cloud API base
+-- (e.g. "https://acme.atlassian.net"), persisted synchronously at link-
+-- detection time for a JIRA/Confluence external whose external_id is a
+-- SEMANTIC key (issue key / page id), not a fetchable URL -- so the async
+-- refresh handler can rebuild {api_base}+{external_id} without a network
+-- round-trip. NULL for every web external (external_id IS its own fetchable
+-- URL there, docs/externals.md "External identity") -- a general seam for any
+-- future non-URL-keyed connector, not Atlassian-specific machinery.
 CREATE TABLE IF NOT EXISTS externals (
     external_id      TEXT PRIMARY KEY,
     source_type      TEXT NOT NULL,
     head_snapshot_id TEXT,
     no_egress        INTEGER NOT NULL DEFAULT 0 CHECK (no_egress IN (0, 1)),
+    api_base         TEXT,
     created          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY (head_snapshot_id) REFERENCES snapshots (snapshot_id)
         DEFERRABLE INITIALLY DEFERRED

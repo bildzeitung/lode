@@ -55,6 +55,9 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # default"). Backfilled below so pre-existing rows are not left NULL
         # (NULL fails the ``next_attempt_at <= now`` claim predicate → invisible).
         "ALTER TABLE jobs ADD COLUMN next_attempt_at TEXT",
+        # lode-gpzn.2: persisted Atlassian API base (see schema.sql's comment on
+        # the column) — nullable, NULL for every pre-existing (web) row.
+        "ALTER TABLE externals ADD COLUMN api_base TEXT",
     ]
     for ddl in _migrations:
         try:
