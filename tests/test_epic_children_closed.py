@@ -13,11 +13,22 @@ without the flag. So every one of the three call sites always saw an empty
 short -- dead code in three places, all failing silently safe.
 
 `test_old_dependents_derivation_never_fires_even_when_fully_closed` runs the
-OLD shared snippet's logic directly against a fixture where every child is
-closed and asserts it produces nothing, proving the bug was real everywhere
-it was copied. The rest of the suite exercises the replacement script via a
-fake `bd` on PATH, the same pattern tests/test_epic_debate_gate.py and
-tests/test_epic_completion_check.py use for the sibling scripts.
+OLD shared snippet's logic directly and asserts it produces nothing. Note what
+its fixture can and cannot express: the children are closed *in the modeled
+DB*, but that is deliberately NOT observable in the payload, because the whole
+bug is that `bd show` omits the `dependents` key entirely (only
+`dependent_count: 2` survives). The old snippet therefore cannot distinguish
+"no children" from "children it wasn't given" -- which is exactly why it failed
+silently. That test is a pinned DEMONSTRATION of the old bug, not a regression
+guard: it embeds the dead snippet inline and so passes no matter what this
+repo's scripts do (verified: it still passes with the scripts deleted outright).
+
+The actual guards are the three tests that exercise the replacement script via
+a fake `bd` on PATH -- they are what fails if the derivation regresses (verified
+by reverting the script to the `.dependents[]` form: all three fail). That is
+the test satisfying the ticket's bar, "a test that FAILS against today's
+empty-$kids derivation". Same fake-`bd` pattern as
+tests/test_epic_debate_gate.py and tests/test_epic_completion_check.py.
 """
 
 from __future__ import annotations
@@ -111,14 +122,19 @@ def test_zero_children_is_false(tmp_path: Path) -> None:
 
 
 def test_old_dependents_derivation_never_fires_even_when_fully_closed() -> None:
-    """Regression proof for the bug this script replaces everywhere it was
+    """Pinned demonstration of the bug this script replaces everywhere it was
     copied (`/land`, `/epic-audit`, `/sweep`): the OLD inline jq snippet read
     `$epic.dependents`, which `bd show --json` never populates without the
-    opt-in `--include-dependents` flag. Run against a `bd show`-shaped
-    fixture with NO `dependents` key (matching real bd 1.1.0 output) but a
-    non-zero `dependent_count`, the old derivation must produce an empty
-    `$kids` and therefore never report the epic as having its children
-    closed -- proving this was a real, silent bug in all three copies.
+    opt-in `--include-dependents` flag. Against a `bd show`-shaped fixture with
+    NO `dependents` key (matching real bd 1.1.0 output) but a non-zero
+    `dependent_count`, the old derivation yields an empty `$kids` and so never
+    reports the epic's children as closed -- a real, silent bug in all three
+    copies.
+
+    NOT a regression guard: the snippet under test is embedded here, not read
+    from the repo, so this passes regardless of what the scripts do. It exists
+    to keep the dead derivation's behavior on the record now that no copy of it
+    survives in the tree. The guards are the fake-`bd` tests above.
     """
     epic = {
         "id": "lode-epic",

@@ -41,10 +41,10 @@ set -euo pipefail
 
 epic_id="${1:?usage: epic-children-closed.sh <epic-id>}"
 
-kids_json=$(bd list --parent "$epic_id" --all --json)
-
-jq -n --argjson kids "$kids_json" -r '
-  if (($kids | length) > 0) and (all($kids[]; .status == "closed"))
-  then "true"
-  else "false" end
-'
+# --all is REQUIRED: a bare `bd list` is open-only and would silently drop every
+# CLOSED child -- i.e. exactly the children that make an epic complete -- turning
+# this into a check that never fires.
+bd list --parent "$epic_id" --all --json |
+  jq -r 'if (length > 0) and (all(.[]; .status == "closed"))
+         then "true"
+         else "false" end'

@@ -12,13 +12,24 @@ from the JSON without the flag. So the old `$kids` derivation was always
 no epic was EVER flagged -- silently, since a missed flag reads identically
 to "not complete yet" (dead code that happened to fail safe).
 
-`test_old_dependents_derivation_never_fires_even_when_fully_closed` below
-runs the OLD snippet's logic directly, against a fixture where every child is
-closed, and asserts it produces nothing -- proving the bug was real, not a
-strawman, and that this test suite would have caught it. The rest of the
-suite exercises `scripts/epic-completion-check.sh`, the fixed replacement,
-via a fake `bd` executable on PATH exactly like tests/test_epic_debate_gate.py
-does for the sibling epic-debate-gate.sh -- no real bd database is touched.
+`test_old_dependents_derivation_never_fires_even_when_fully_closed` below runs
+the OLD snippet's logic directly and asserts it produces nothing. Its fixture
+models an epic whose children are all closed *in the DB*, but that closedness
+is deliberately NOT observable in the payload: the bug is precisely that
+`bd show` omits the `dependents` key entirely, leaving only
+`dependent_count: 2`. The snippet cannot tell "no children" from "children it
+wasn't handed" -- which is why it failed silently. That test is a pinned
+DEMONSTRATION, not a guard: it embeds the dead snippet inline and passes no
+matter what this repo's scripts do (verified: it still passes with the scripts
+deleted).
+
+`test_last_child_closes_epic_is_flagged_ready` is the test meeting the ticket's
+bar, "a test that FAILS against today's empty-$kids derivation" -- it drives
+the real script, so reverting the derivation to the `.dependents[]` form fails
+it. The rest of the suite likewise exercises
+`scripts/epic-completion-check.sh` via a fake `bd` executable on PATH, exactly
+like tests/test_epic_debate_gate.py does for the sibling epic-debate-gate.sh --
+no real bd database is touched.
 """
 
 from __future__ import annotations
@@ -268,15 +279,21 @@ def test_non_epic_parent_is_not_flagged(tmp_path: Path) -> None:
 
 
 def test_old_dependents_derivation_never_fires_even_when_fully_closed() -> None:
-    """Regression proof for the bug itself (not the replacement script): the
-    OLD inline jq snippet from .claude/skills/land/SKILL.md read
+    """Pinned demonstration of the bug itself (not of the replacement script):
+    the OLD inline jq snippet from .claude/skills/land/SKILL.md read
     `$epic.dependents`, which `bd show --json` never populates without the
-    opt-in `--include-dependents` flag. Run against a `bd show`-shaped
-    fixture with NO `dependents` key (matching real bd 1.1.0 output) but
-    every child otherwise closed, the old derivation must produce nothing --
-    proving this was a real, silent bug, not a strawman, and that the ticket's
-    acceptance bar ("a test that FAILS against today's empty-$kids
-    derivation") is met.
+    opt-in `--include-dependents` flag. Against a `bd show`-shaped fixture with
+    NO `dependents` key (matching real bd 1.1.0 output) -- modeling an epic
+    whose children are all closed, though the payload cannot say so, which IS
+    the bug -- the old derivation produces nothing.
+
+    NOT the test that meets the ticket's acceptance bar, and NOT a regression
+    guard: the snippet under test is embedded here rather than read from the
+    repo, so this passes regardless of repo state. The bar ("a test that FAILS
+    against today's empty-$kids derivation") is met by
+    `test_last_child_closes_epic_is_flagged_ready`, which drives the real
+    script. This test keeps the dead derivation's behavior on the record now
+    that no copy of it survives in the tree.
     """
     epic = {
         "id": "lode-epic",

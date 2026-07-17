@@ -60,16 +60,19 @@ For each candidate, confirm the child-completion gate from live state (the label
 NOT read `bd show`'s `.dependents` array (populated only with the opt-in `--include-dependents`
 flag; without it `dependent_count` can be non-zero while `.dependents` is entirely absent, which is
 exactly what made this same check dead code in all three skills until lode-v4rk — see the script's
-own header for the full mechanism writeup and tests/test_epic_children_closed.py for the regression
-proof). It derives children via `bd list --parent <epic-id> --all --json` instead:
+own header for the full mechanism writeup, and tests/test_epic_children_closed.py for the
+regression tests). It derives children via `bd list --parent <epic-id> --all --json` instead.
+
+Both candidate queries above already filter `--type=epic --status open`, so bd has *already*
+guaranteed those two fields — the child-completion answer is the whole verdict here, and there is
+nothing left for a second `bd show` to re-check:
 
 ```bash
-E=$(rtk bd show <epic> --json)
-CHILDREN_CLOSED=$(rtk scripts/epic-children-closed.sh <epic>)
-printf '%s' "$E" | jq -r --arg cc "$CHILDREN_CLOSED" '
-  .[0] as $e |
-  if ($e.issue_type=="epic") and ($e.status!="closed") and ($cc=="true")
-  then "AUDITABLE" else "SKIP" end'
+if [ "$(rtk scripts/epic-children-closed.sh <epic>)" = "true" ]; then
+  echo "AUDITABLE"
+else
+  echo "SKIP"
+fi
 ```
 
 ## 3. Read the whole epic before forming an opinion

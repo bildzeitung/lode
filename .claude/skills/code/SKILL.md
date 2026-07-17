@@ -334,8 +334,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > id + reason (`epic not debated (<epic-id>)`) — in step 5's skip list, right alongside the
    > `human`/epic skips. The script only reads (`bd show`, twice at most per candidate — the ticket,
    > then its epic if it has one); it never writes bd state, and it derives the parent epic from the
-   > candidate's `dependencies[]` (a `parent-child` entry whose target has `issue_type: epic`), not
-   > from `parent_id`/`epic_id` (verified null on real tickets — read the deps array).
+   > candidate's `dependencies[]` (a `parent-child` entry whose target has `issue_type: epic`) —
+   > because it needs the epic's own `issue_type`/labels, which that entry embeds. The top-level
+   > `.parent` scalar is also populated and equally reliable (lode-v4rk), and is what
+   > `scripts/epic-completion-check.sh` uses; only `parent_id`/`epic_id` are null. See
+   > [docs/agents-workflow.md](../../../docs/agents-workflow.md) — "Two derivations".
    >
    > **No new escape-hatch flag.** The unblock is to actually debate the epic (`/challenge <epic-id>`,
    > cheap) or hand-apply the `epic-debated` label to acknowledge it was debated informally — both

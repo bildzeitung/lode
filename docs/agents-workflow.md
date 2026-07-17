@@ -196,10 +196,19 @@ that the stress-test pass *happened*, not that it found anything; skipped entire
 target (a conversation plan, a single ticket, a `docs/` change) or under the "just tell me, don't
 persist" opt-out. The **check side** is `scripts/epic-debate-gate.sh`: given a candidate ticket id, it
 derives the parent epic from the candidate's `dependencies[]` — a `parent-child` entry whose target has
-`issue_type: epic` (`parent_id`/`epic_id` are null on real tickets; the deps array is the only reliable
-source) — and prints `BUILD <id>` when there is no parent epic or the parent carries `epic-debated`,
+`issue_type: epic` — and prints `BUILD <id>` when there is no parent epic or the parent carries `epic-debated`,
 else `SKIP <id> epic not debated (<epic-id>)`. It only ever calls `bd show` (twice at most per
-candidate); it never writes bd state. `/code` keeps every `BUILD` in the buildable set and reports every
+candidate); it never writes bd state.
+
+**Two derivations of "who is my parent epic" are both valid** (measured against bd 1.1.0, lode-v4rk).
+`bd show <child> --json` exposes a top-level **`.parent`** (`"lode-l38d"`) *and* embeds the epic inside
+`.dependencies[]` as a `parent-child` entry — the two agree on every ticket sampled. What is null is
+`parent_id`/`epic_id`, which are *different fields* from `.parent`; an earlier reading of that fact as
+"no top-level parent field works" is what made the deps walk look like the only option. Prefer `.parent`
+(one scalar, no schema/flag pitfall) — `scripts/epic-completion-check.sh` uses it. `epic-debate-gate.sh`
+still walks `.dependencies[]` because it needs the *epic's* `issue_type` too, which the deps entry
+embeds; that is a real reason, not an oversight. Neither form touches `.dependents`, which is the one
+that genuinely needs an opt-in flag (see below). `/code` keeps every `BUILD` in the buildable set and reports every
 `SKIP` in its skip list alongside the `human`/epic skips (id + `epic not debated (<epic-id>)`).
 
 **No new escape-hatch flag.** The only unblock is to actually run `/challenge <epic-id>` (cheap) or

@@ -37,19 +37,25 @@ if [ -z "$parent_id" ]; then
 fi
 
 epic_json=$(bd show "$parent_id" --json)
-children_closed=$("$SCRIPT_DIR/epic-children-closed.sh" "$parent_id")
 
-ready=$(jq -n --argjson epic "$epic_json" --arg children_closed "$children_closed" -r '
-  ($epic[0]) as $e
+# Cheap guards FIRST, child query second. Everything here is answerable from
+# `epic_json` alone, so rejecting now skips the `bd list --parent` subprocess
+# entirely. That ordering pays off exactly when it matters: when several
+# siblings of one epic land in the same /land pass, the first one labels the
+# epic epic-ready-to-audit, and every later sibling is rejected by the label
+# guard below without paying for the child query.
+printf '%s' "$epic_json" | jq -e '
+  .[0] as $e
   | ($e.labels // []) as $lbl
-  | if ($e.issue_type == "epic") and ($e.status != "closed")
-       and ($children_closed == "true")
-       and (($lbl | index("epic-audited")) | not)
-       and (($lbl | index("epic-ready-to-audit")) | not)
-    then "READY"
-    else "" end
-')
+  | ($e.issue_type == "epic")
+    and ($e.status != "closed")
+    and (($lbl | index("epic-audited")) | not)
+    and (($lbl | index("epic-ready-to-audit")) | not)
+' >/dev/null || exit 0
 
-if [ "$ready" = "READY" ]; then
-  echo "READY $parent_id"
-fi
+# The false-positive guard lives inside epic-children-closed.sh: zero children
+# reads `false`, never `true` (`all(.[]; ...)` is vacuously TRUE on an empty
+# array). Do not re-derive this check here -- call the shared script.
+[ "$("$SCRIPT_DIR/epic-children-closed.sh" "$parent_id")" = "true" ] || exit 0
+
+echo "READY $parent_id"
