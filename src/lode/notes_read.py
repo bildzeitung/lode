@@ -26,6 +26,12 @@ retrieval-pipeline module the browse screen has no other reason to depend on.
 :func:`list_deleted_notes` (lode-d32.2) is the flip side -- ``lode notes
 --deleted``'s reader, listing *only* tombstoned notes so their full ids stay
 reachable after they vanish from Browse and ``lode notes``.
+:func:`candidate_rows_conn` (lode-l38d.10) is a third variant, for a candidate
+*set* rather than a whole-table listing: it resolves a specific list of note
+ids spanning BOTH states at once, which the ambiguous-prefix CLI error needs
+since ``lode recover``'s ``include_deleted=True`` resolution can raise
+:class:`~lode.repository.AmbiguousNoteIdError` across a live and a tombstoned
+candidate together.
 
 **Chain length.** Per-note version chains are strictly linear and CAS-guarded
 (``docs/storage.md`` "event-sourced, linear per-note chains") -- a note never
@@ -230,6 +236,82 @@ def _first_line(body: str) -> str:
         if stripped:
             return stripped
     return ""
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRow:
+    """One ambiguous-prefix candidate, as the CLI's error rendering shows it (lode-l38d.10).
+
+    Distinct from :class:`NoteRow` -- that one is always scoped to a single
+    state (live-only for :func:`list_notes`, tombstoned-only for
+    :func:`list_deleted_notes`); a candidate set can mix both (``lode
+    recover``'s ``include_deleted=True`` resolution, whose ambiguity is
+    judged across live AND deleted notes at once -- repository.py), so each
+    row here carries its own :attr:`deleted` flag rather than relying on
+    which function returned it.
+    """
+
+    note_id: str
+    created: str
+    summary: str
+    deleted: bool
+
+
+def candidate_rows_conn(
+    conn: sqlite3.Connection, note_ids: Sequence[str]
+) -> list[CandidateRow]:
+    """Resolve date/summary/deleted-state for each of ``note_ids``, in that order.
+
+    The lookup the ambiguous-prefix error needs (lode-l38d.10): every one of
+    :class:`~lode.repository.AmbiguousNoteIdError`'s candidates, regardless of
+    whether it is live or tombstoned. Unlike :func:`list_notes`/
+    :func:`list_deleted_notes`, each scoped to one state via its own ``op``
+    guard, a caller here may hold a candidate set spanning both -- ``recover``
+    resolves with ``include_deleted=True``, so a prefix matching one live and
+    one deleted note is ambiguous by design (repository.py) and both
+    candidates must render, not just the live one.
+
+    A tombstoned candidate's summary skips straight to :func:`_first_line` on
+    the same grounds :func:`_list_deleted_notes` already documents: a
+    tombstone's ``version_id`` is never the ``source_version`` a summary
+    annotation was written against (the annotation targets the pre-delete
+    head; the tombstone re-hashes with that head as its parent), so
+    :func:`_head_summary` would always miss and fall through to
+    :func:`_first_line` anyway -- skip the lookup and go straight there.
+
+    Takes an already-open ``conn`` (the ``Repository``'s own, same one that
+    just raised the ``AmbiguousNoteIdError`` this feeds) rather than a
+    ``db_path`` -- every current caller already holds one, so there is no
+    non-conn caller to serve (the same "no speculative public API" reasoning
+    :func:`list_notes_conn` was promoted under).
+    """
+    if not note_ids:
+        return []
+    placeholders = ",".join("?" for _ in note_ids)
+    found = {
+        note_id: (created, head_version_id, body, op)
+        for note_id, created, head_version_id, body, op in conn.execute(
+            "SELECT n.note_id, n.created, n.head_version_id, v.body, v.op "
+            "FROM notes n JOIN versions v ON v.version_id = n.head_version_id "
+            f"WHERE n.note_id IN ({placeholders})",
+            tuple(note_ids),
+        )
+    }
+    rows = []
+    for note_id in note_ids:
+        created, head_version_id, body, op = found[note_id]
+        deleted = op == "delete"
+        summary = (
+            _first_line(body)
+            if deleted
+            else _head_summary(conn, note_id, head_version_id, body)
+        )
+        rows.append(
+            CandidateRow(
+                note_id=note_id, created=created, summary=summary, deleted=deleted
+            )
+        )
+    return rows
 
 
 @dataclass(frozen=True, slots=True)

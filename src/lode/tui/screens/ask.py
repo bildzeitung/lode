@@ -16,9 +16,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Header, Input, Static
 
 from lode.tui.ask import render_ask_result, run_ask
+from lode.tui.lode_footer import LodeFooter
 
 #: The question input's widget id -- read back in tests.
 QUESTION_ID = "ask-question"
@@ -42,7 +43,7 @@ class AskScreen(Screen[None]):
             Input(id=QUESTION_ID, placeholder=_PLACEHOLDER),
             VerticalScroll(Static(_PLACEHOLDER, id=RESULTS_ID), id="ask-results-pane"),
         )
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         self.query_one(f"#{QUESTION_ID}", Input).focus()

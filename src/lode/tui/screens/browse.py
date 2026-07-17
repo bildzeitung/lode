@@ -217,7 +217,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
+from textual.widgets import DataTable, Header, Input, Static, TextArea
 from textual.widgets.data_table import RowDoesNotExist
 
 from lode.enrichment_view import (
@@ -243,6 +243,7 @@ from lode.tui.edit import (
     load_head,
     save_edit,
 )
+from lode.tui.lode_footer import LodeFooter
 from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -365,7 +366,7 @@ class VersionHistoryScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id=HISTORY_TABLE_ID, cursor_type="row")
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         table = self.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
@@ -408,7 +409,7 @@ class VersionViewScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield TextArea("", read_only=True, id=VERSION_BODY_ID)
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         body = version_body(self.app.db_path, self.note_id, self.version_id)
@@ -570,7 +571,7 @@ class ExternalPickerScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id=EXTERNAL_PICKER_TABLE_ID, cursor_type="row")
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
@@ -785,18 +786,20 @@ class DeleteConfirmScreen(ModalScreen[bool]):
 class BrowseScreen(Screen[None]):
     """Id | Date | Version | Summary, newest-first, over every live note."""
 
-    # Descriptions kept short (lode-l38d.3): the stock Footer renders all 7 of
-    # these plus the 4 App-level bindings (LodeApp.BINDINGS) on one line, and at
-    # full length that clipped at 80 columns (128 columns' worth of content).
-    # Every binding stays visible and only the description text was shortened --
-    # hiding entries via show=False was ruled out on lode-l38d.3, because the
-    # footer is the only surface these keys are discoverable on.
+    # All 7 of these plus the 4 App-level bindings (LodeApp.BINDINGS) render
+    # in one footer line via the shared LodeFooter (lode-uczx) -- every
+    # binding stays visible, none hidden via show=False (ruled out on
+    # lode-l38d.3: the footer is the only surface these keys are
+    # discoverable on). Labels restored to full words (lode-uczx): the
+    # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
+    # minimum supported terminal width is 100 columns (docs/tui.md) -- and
+    # the full words fit comfortably within it.
     BINDINGS = [
         Binding("escape", "dismiss_screen", "Back"),
-        Binding("i", "inspect_selected", "Insp"),
+        Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View"),
-        Binding("d", "delete_selected", "Del"),
-        Binding("x", "toggle_summary", "Exp"),
+        Binding("d", "delete_selected", "Delete"),
+        Binding("x", "toggle_summary", "Expand"),
         Binding("slash", "search_forward", "Find"),
         Binding("question_mark", "search_backward", "Up"),
     ]
@@ -823,15 +826,7 @@ class BrowseScreen(Screen[None]):
         yield Header()
         yield DataTable(id=TABLE_ID, cursor_type="row")
         yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
-        # Still the stock Footer, just asked for less padding (lode-l38d.3).
-        # compact=True trims Textual's built-in FooterKey padding from 3 columns
-        # of overhead per entry to 1 -- across 11 entries that alone is 22
-        # columns, which is most of what makes the bar fit. Textual also
-        # auto-adds a 12th "^p palette" entry regardless of BINDINGS;
-        # show_command_palette=False hides only that icon (ctrl+p still opens
-        # the palette) and buys the last few columns, which is what lets all 11
-        # real bindings stay visible without cryptic single-letter labels.
-        yield Footer(compact=True, show_command_palette=False)
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         # Columns are (re)built in _reload_rows, not here: the Summary column's
@@ -1248,13 +1243,19 @@ class EditScreen(Screen[None]):
     inspection, the same standard ``Ctrl+G``'s own candidates were held to.
     """
 
+    # "View content" -> "View" (lode-uczx): this screen is the tightest
+    # footer of the ten (131 columns' worth of content at full length, the
+    # only one that clipped even under the new 100-column bound). Every
+    # other label here stays full -- this one shortening, plus the
+    # App-level "Cfg" (:mod:`lode.tui.app`), is what buys this screen's fit
+    # and the slack lode-11io's not-yet-landed Ask binding needs.
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
         Binding("ctrl+f", "focus_related", "Related"),
         Binding("ctrl+h", "show_history", "History"),
         Binding("ctrl+g", "inspect_selected", "Inspect"),
-        Binding("ctrl+r", "view_content", "View content"),
+        Binding("ctrl+r", "view_content", "View"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -1275,7 +1276,7 @@ class EditScreen(Screen[None]):
             TextArea(id=EDIT_BODY_ID),
             RelatedNotesPanel(exclude_note_id=self.note_id, id=EDIT_RELATED_ID),
         )
-        yield Footer()
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         # Full 36-char id (lode-1gr.2/lode-olmi.2) -- selectable/copyable in
