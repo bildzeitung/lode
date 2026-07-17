@@ -133,3 +133,27 @@ def test_console_highlight_is_disabled() -> None:
     import lode.cli
 
     assert lode.cli.console._highlight is False  # noqa: SLF001 -- no public accessor
+
+
+def test_err_console_highlight_is_disabled() -> None:
+    """``highlight=False`` is a constructor kwarg on ``err_console`` too
+    (lode-9jmv), mirroring the shared ``console`` above rather than being
+    left as a per-call-site kwarg at its one ``print()`` call site — see
+    ``src/lode/cli.py``'s ``console`` docstring, which explicitly warns that
+    "IF A SECOND Console IS EVER ADDED to this module... it MUST also pass
+    highlight=False". ``err_console`` is that second Console (lode-l810).
+
+    Same reasoning as ``test_console_highlight_is_disabled`` above: no
+    subprocess needed (``highlight`` is a plain constructor kwarg, not
+    environment-detected), and the private ``Console._highlight`` is the
+    only accessor rich exposes for this flag.
+
+    NON-VACUOUSNESS, demonstrated by sabotaging the subject: reverting
+    ``cli.py``'s ``err_console = Console(theme=CLI_THEME, stderr=True,
+    highlight=False)`` back to ``Console(theme=CLI_THEME, stderr=True)``
+    (its pre-lode-9jmv form) makes this test FAIL (verified manually
+    against the installed rich 15.0.0).
+    """
+    import lode.cli
+
+    assert lode.cli.err_console._highlight is False  # noqa: SLF001 -- no public accessor

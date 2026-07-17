@@ -207,7 +207,13 @@ console = Console(theme=CLI_THEME, highlight=False)
 #: construction) rather than the TTY/``NO_COLOR`` detection above it, so this
 #: still captures correctly under ``CliRunner``'s per-invocation stderr
 #: redirection, the same way ``typer.echo(err=True)`` already does.
-err_console = Console(theme=CLI_THEME, stderr=True)
+#:
+#: ``highlight=False`` is a constructor kwarg here too (lode-9jmv), per the
+#: hoisted-highlight convention ``console`` above documents: this is the
+#: "second Console" that docstring warned about, and the process-wide policy
+#: applies to it exactly the same as to ``console`` -- not a per-call-site
+#: flag at its one print call.
+err_console = Console(theme=CLI_THEME, stderr=True, highlight=False)
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
@@ -755,9 +761,11 @@ def _report_ambiguous_prefix(
 
     Rows render through ``err_console`` -- a stderr twin of the shared
     ``console`` (lode-l810) -- with the same theme style NAMES, escaping,
-    and ``highlight=False``/``soft_wrap=True`` flags ``notes_`` uses, so the
-    two listings' shared columns (id, date) now look identical rather than
-    one being coloured and the other bare ``typer.echo``.
+    and ``soft_wrap=True`` flag ``notes_`` uses, so the two listings' shared
+    columns (id, date) now look identical rather than one being coloured and
+    the other bare ``typer.echo``. ``highlight`` needs no per-call flag here:
+    ``err_console`` is constructed with ``highlight=False`` (lode-9jmv),
+    mirroring the shared ``console``.
     """
     typer.echo(
         f"ambiguous note id prefix {target!r}: {len(exc.candidates)} matches",
@@ -768,8 +776,10 @@ def _report_ambiguous_prefix(
         # Deliberately the same rendering path as notes_ (lode-l38d.5,
         # lode-l810): the shared theme's note_id/date style NAMES (never a
         # colour literal -- CLI_STYLES stays the one source of truth), the
-        # summary escape()d, and the same two rendering flags. The rationale
-        # for each flag lives at notes_'s loop and is deliberately NOT
+        # summary escape()d, and the same soft_wrap flag. ``highlight=False``
+        # is no longer a per-call flag here -- err_console is constructed
+        # with it (lode-9jmv), mirroring the shared console. The rationale
+        # for soft_wrap lives at notes_'s loop and is deliberately NOT
         # restated here -- both pin rich-version-specific behaviour, and two
         # copies would drift apart (the same call notes_'s own tests make).
         #
@@ -790,7 +800,6 @@ def _report_ambiguous_prefix(
             f"[date]{_short_date(row.created)}[/date]  "
             f"{escape(row.summary + marker)}",
             soft_wrap=True,
-            highlight=False,
         )
     raise typer.Exit(code=1) from None
 
