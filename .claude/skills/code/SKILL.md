@@ -355,6 +355,30 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    hand each builder a worktree at dispatch — `isolation: "worktree"` launches it already cwd'd inside
    `.claude/worktrees/agent-<hash>` on its own branch off `trunk` HEAD.
 
+   > **Claim each resolved ticket from *here*, before dispatch — don't rely on the builder to do it
+   > (lode-xr8v).** `coding.md` step 2 also runs `bd update <id> --claim`, but that is an unverified
+   > soft instruction a builder under load can skip — and nothing downstream catches it: Phase 2's
+   > hand-off verification (below) checks *labels* and the *remote branch*, never `status`. A skipped
+   > claim was observed to carry a ticket all the way to `ready-for-land` while it stayed `open` with a
+   > `null` assignee (lode-gpzn.2), which means it sat in `bd ready` for its whole build (the claim's
+   > "atomic, prevents double-work" protection lost) **and** step 1's stranded-review sweep — which
+   > filters on `--status in_progress` — would be blind to it on an escalation. So for **every dispatch
+   > path where the id is known at dispatch** — an explicitly-named id, several named ids, an
+   > auto-selected id (bare `/code` / `--all-ready` / `--single`), each ticket in a fan-out — claim it
+   > from the orchestrator's own (repo-root) context **before** the Agent dispatch:
+   >
+   > ```bash
+   > rtk bd update <id> --claim     # sets in_progress + assignee; deterministic here, one controlled flow
+   > ```
+   >
+   > This is the same local Dolt DB the builder sees, so the claim is visible to it immediately — no
+   > `bd dolt push` needed here (the builder's hand-off push carries it onward). The builder's own
+   > step-2 claim then becomes an **idempotent backstop** (a second `--claim` is a verified no-op) and
+   > stays the *primary* claim on the **one path with no id at dispatch — free-text**, where `/code`
+   > names a task, not a ticket, and the builder files the issue and claims it itself. Claiming here is
+   > what actually makes the `in_progress` invariant that steps 0/1 and Phase 2 assume hold true, rather
+   > than assumed.
+
    - **Solo** (`/code <id>`, `/code --single`, free-text): dispatch **exactly one** builder in the
      foreground.
    - **Fan-out** (bare `/code`, `--all-ready`, `/code <id> <id> …`): dispatch **one builder per ticket,

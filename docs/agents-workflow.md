@@ -32,6 +32,16 @@ Work moves through three passes, with the human as the hinge:
    launch worktree, runs the technical review (`/code-review` + `/simplify`), re-gates, re-pushes, and
    swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
+   **`/code` claims each resolved ticket itself, before dispatch (lode-xr8v)** — for every path where
+   the id is known at dispatch (a named id, or one auto-selected from `bd ready`). The builder's own
+   `bd update --claim` (its cycle's step 2) is left in place as an *idempotent backstop*, and is the
+   *primary* claim only on the free-text path, where no id exists until the builder files the issue.
+   The claim was previously the builder's alone, and being an unverified soft step nothing downstream
+   checked (Phase 2 verifies labels + the remote branch, never `status`), a builder that skipped it
+   carried a ticket all the way to `ready-for-land` while it stayed `open`/unassigned (lode-gpzn.2) —
+   so it sat in `bd ready` through its whole build and step 1's `--status in_progress` stranded-review
+   sweep would miss it on an escalation. Claiming from the orchestrator, one deterministic flow, makes
+   the `in_progress` invariant that the sweeps and Phase 2 assume actually hold.
 3. **Landing loop — `/land`.** A single lander drains the `ready-for-land` queue: it semantically
    reviews each branch, merges the accepted set into `trunk`, re-gates, closes the tickets, and
    pushes. It is the **only** thing that writes `trunk` (see
@@ -255,18 +265,19 @@ stopped (a build- or review-time escalation) and why.
 ```mermaid
 flowchart TD
     INV["Human: /code &lt;arg&gt;<br>(bare /code fans out — one builder per ready task)"] --> RES{"Resolve arg"}
-    RES -->|"bd id(s)"| T1["Claim that issue"]
-    RES -->|"free text"| T2["Agent files the issue, then codes"]
+    RES -->|"bd id(s)"| T1["Resolve to named id(s)"]
+    RES -->|"free text"| T2["Agent files the issue + claims it, then codes"]
     RES -->|"--single / none / --all-ready"| T3["/code picks from filtered bd ready<br>(human/epic excluded · phase-a order)<br>--single: top entry only"]
 
-    T1 --> DISP["Phase 1 — dispatch coding builder<br>(Sonnet · isolation: worktree)"]
+    T1 --> OCLAIM["/code claims each resolved id<br>(bd update --claim) BEFORE dispatch<br>(lode-xr8v · not the free-text path)"]
+    T3 --> OCLAIM
+    OCLAIM --> DISP["Phase 1 — dispatch coding builder<br>(Sonnet · isolation: worktree)"]
     T2 --> DISP
-    T3 --> DISP
 
     DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off local trunk HEAD)"]
     WT --> GUARD{"pwd is repo root?"}
     GUARD -->|"yes"| BAIL["STOP & report —<br>never write on trunk"]
-    GUARD -->|"no, in worktree"| CLAIM["claim (bd update --claim)"]
+    GUARD -->|"no, in worktree"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
 
     CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
     IMPL --> COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
@@ -292,7 +303,7 @@ flowchart TD
     classDef bad fill:#f2dede,stroke:#a94442,color:#1b1b1b;
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,RES start;
-    class T1,T2,T3,DISP,WT,CLAIM,IMPL,COMMIT,FIXCOMMIT,PUSH,HANDOFF,REV work;
+    class T1,T2,T3,OCLAIM,DISP,WT,CLAIM,IMPL,COMMIT,FIXCOMMIT,PUSH,HANDOFF,REV work;
     class GATES,GFAIL,GUARD,CLEAN1,CLEAN2 gate;
     class BAIL,FIX bad;
     class MARKL,DONE good;

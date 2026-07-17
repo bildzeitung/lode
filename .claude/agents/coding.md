@@ -150,6 +150,13 @@ handed — not a picking procedure I run myself:
 rtk bd update <id> --claim     # sets in_progress + assignee in one step
 ```
 
+For an **id-known dispatch** (the common case — a named id, or one `/code` auto-selected), `/code`
+has **already claimed the ticket from its own context before launching me** (lode-xr8v), so this call
+is an **idempotent backstop** — a second `--claim` is a verified no-op, it never errors or churns
+state. I run it anyway: it costs nothing, and it is the **primary** claim on the **free-text path**,
+where `/code` handed me a *task* with no id and I filed the issue myself in step 1 — there nothing has
+claimed it yet, so this is the real claim. Either way, claim before I touch a file.
+
 ### 3. I already start inside my worktree
 
 The `/code` skill launches me with the harness **`isolation: "worktree"`** option, so I begin
