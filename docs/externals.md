@@ -245,6 +245,44 @@ active PR changes hourly" framing is a real per-source judgment call a future co
 future per-`source_type` override) may want to make — deferred, not built, since there is exactly
 one connector and one judgment to make today.
 
+### Backfill: per-connector re-draw-down (`lode-gpzn.9`)
+
+A connector's routing changes over time — the flagship case: a URL drew down through the generic
+web path (login page => tombstone, or a plain scrape) before a connector like Atlassian
+(`lode-gpzn`) existed or was flagged on, and should now route through that connector's structured
+fetch instead. **`lode backfill`** is the CLI command that re-runs draw-down for a connector's
+already-processed links under **current** routing — `lode.backfill`, `src/lode/cli.py`.
+
+**A framework, not a sweep.** This ticket builds only the command + a registry seam each connector
+plugs its own backfill logic into (`lode.backfill.register_backfill`, mirroring
+`lode.reconcile.register_step`'s shape) — it deliberately does **not** build one monolithic
+"detect everything at once" sweep, and ships no connector registered by default. `lode backfill`
+with no connector argument (or `--list`) reports the registered names instead of running anything.
+**CLI only — no TUI surface**, and it runs per-machine wherever the notes' DB lives (`$LODE_HOME`);
+it does not travel on the Dolt/git wire.
+
+**Shared plumbing, reused not reimplemented per connector:** a connector's handler composes four
+pieces from `lode.backfill` — `iter_user_linked_externals` (walk every existing explicit
+`source='user'` note→external edge), `mint_external` (INSERT a fresh `externals` row for a newly
+computed identity, first-write-wins), `repoint_edges` (re-point `source='user'` edges old→new
+identity — reuses `lode.drawdown._repoint_edges` verbatim, the same function [the redirect
+wrinkle](#url-canonicalization-decided-lode-w0h3-userinfo-stripped-lode-0as) above already rides),
+and `enqueue_fresh_refresh` (one fresh `refresh` job via the single shared enqueue path,
+`lode.jobs.enqueue_derive_jobs`). Each of mint/repoint/enqueue takes a `dry_run` flag, so
+`lode backfill --dry-run` reports what would change without writing anything.
+
+**Tombstone-exclusion override — re-run idempotency only (owner decision D, `/challenge`
+2026-07-17).** A per-connector backfill **mints a brand-new, never-tombstoned** semantic external
+on its first migration and enqueues a **plain** refresh — so on the *first* pass there is nothing
+tombstoned yet, and the override below never needs to fire. `lode.backfill.needs_refresh` mirrors
+the [refresh policy](#refresh-policy-ttl-based-revalidation-decided-for-web-lode-w0h6)'s own
+`s.status != 'tombstone'` predicate by default (excluding a target whose head snapshot already
+tombstoned). The override matters **only** on an **idempotent re-run** where the *new* identity's
+own head snapshot already tombstoned on a prior backfill pass (e.g. a bad token => 401) —
+`lode backfill --retry-tombstoned` is the explicit, human-driven opt-in past that default, for the
+one case a periodic sweep structurally can't cover: an operator who just fixed the underlying
+cause and wants that specific already-tombstoned target retried now, not on a schedule.
+
 ### Externals are directly retrievable
 
 A snapshot's current head is a **direct** lexical/vector candidate on its own content, not only
