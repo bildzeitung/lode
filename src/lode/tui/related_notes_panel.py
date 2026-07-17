@@ -410,8 +410,10 @@ class RelatedNoteModalScreen(ModalScreen[None]):
     the panel itself already relies on, lode-mkc.3).
     """
 
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def __init__(self, note: RelatedNote) -> None:
@@ -429,9 +431,6 @@ class RelatedNoteModalScreen(ModalScreen[None]):
         self.query_one(f"#{RELATED_MODAL_BODY_ID}", Static).update(
             self._highlighted_body(body or "")
         )
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
 
     def _highlighted_body(self, body: str) -> Text:
         """Style ``self._note``'s matched ``char_range`` slice of ``body``.

@@ -127,8 +127,10 @@ def _tag_grid_layout(tags: list[str], available_width: int) -> tuple[int, int]:
 class TagsScreen(Screen[None]):
     """Top panel: every tag, multi-column grid. Bottom: notes carrying ALL of them."""
 
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
         Binding("space", "toggle_tag", "Toggle", show=False),
     ]
 
@@ -320,6 +322,3 @@ class TagsScreen(Screen[None]):
         note_id = event.row_key.value
         if note_id is not None:
             self.app.push_screen(EditScreen(note_id))
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()

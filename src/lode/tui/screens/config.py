@@ -1,7 +1,8 @@
 """Config/diagnostics screen (lode-3r4) — the TUI half of ``lode config``.
 
 A read-only surface reachable from the capture screen via the app-level
-``Ctrl+O`` binding (:meth:`~lode.tui.app.LodeApp.action_show_config`). It renders the exact
+``Ctrl+O`` binding (Textual's builtin ``push_screen('config')`` action string,
+:mod:`lode.tui.app`'s ``LodeApp.BINDINGS`` -- lode-pijc). It renders the exact
 same rows as the CLI's ``lode config``, because both call the ONE shared
 row-builder :func:`lode.config.config_lines` for the resolved on-disk paths
 (lode-u5gh) and the ONE shared row-builder :func:`lode.config.knob_rows` for
@@ -42,8 +43,10 @@ class ConfigScreen(Screen[None]):
     whichever screen was active before.
     """
 
+    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
+    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
-        Binding("escape", "dismiss_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -58,6 +61,3 @@ class ConfigScreen(Screen[None]):
         table = self.query_one(f"#{KNOB_TABLE_ID}", DataTable)
         table.add_columns("Knob", "Value", "Kind")
         table.add_rows(knob_rows(self.app.settings))
-
-    def action_dismiss_screen(self) -> None:
-        self.app.pop_screen()
