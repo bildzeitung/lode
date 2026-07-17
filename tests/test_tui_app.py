@@ -275,12 +275,25 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # ---------------------------------------------------------------------------
 # Compact footer bar (lode-3rvw) -- CaptureScreen.BINDINGS renders 4 entries
 # plus 4 App-level ones (LodeApp.BINDINGS) in one footer line; with the
-# original, full-length descriptions that overflowed 80 columns and Textual
-# clipped the tail (right edge 103/80 on trunk, still 98/80 after
-# lode-l38d.3's App-level "Cfg" shortening alone). The fix stays inside the
-# stock Footer (compact=True + shorter descriptions), the same lever
+# original, full-length descriptions that really consumed 100 columns and
+# Textual clipped the tail. The fix stays inside the stock Footer (compact=True
+# + show_command_palette=False + shorter descriptions), the same levers
 # lode-l38d.3 used for BrowseScreen -- no custom widget, every binding stays
 # visible, nothing is hidden.
+#
+# TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
+# sufficient, so this test does not rely on it alone. Textual separates the
+# FooterKeys with 1-column gutters, and when the bar overflows only SLIGHTLY
+# it squeezes those gutters to 0 to make it fit -- entries visibly run
+# together, yet show_horizontal_scrollbar reports False. Measured against the
+# shorter "New" label this review replaced: with compact=False that footer
+# really consumed 86 columns but rendered at right edge 79/80 with hscroll
+# False, so an hscroll-only assertion passes on the degraded bar. Today's
+# labels overflow by more than the gutters can absorb, so hscroll happens to
+# catch a dropped lever -- luck, not a guarantee, and the labels are the most
+# likely thing to change next. Hence the second assertion, on the real
+# consumed width = sum(key widths) + (n - 1): the formula lode-l38d.3
+# established, and the one that survives the squeeze.
 # ---------------------------------------------------------------------------
 
 
@@ -291,24 +304,28 @@ def test_capture_footer_fits_80_columns_with_every_binding_visible(
     init_db(db_path).close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> tuple[bool, list[str]]:
+    async def _drive() -> tuple[bool, list[str], int]:
         async with app.run_test(size=(80, 24)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
             footer = app.screen.query_one(Footer)
-            descriptions = [
-                c.description for c in footer.children if isinstance(c, FooterKey)
-            ]
-            return footer.show_horizontal_scrollbar, descriptions
+            keys = [c for c in footer.children if isinstance(c, FooterKey)]
+            descriptions = [c.description for c in keys]
+            # Natural width, immune to the gutter squeeze described above.
+            consumed = sum(k.region.width for k in keys) + (len(keys) - 1)
+            return footer.show_horizontal_scrollbar, descriptions, consumed
 
-    has_hscroll, descriptions = asyncio.run(_drive())
+    has_hscroll, descriptions, consumed = asyncio.run(_drive())
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
+    # ...and it fits WITHOUT Textual collapsing the gutters to get there.
+    assert consumed <= 80, f"footer really consumes {consumed}/80 columns"
     # All 4 screen-level + 4 App-level bindings stay visible (none hidden via
-    # show=False) -- only their description text was shortened.
+    # show=False) -- only their description text was shortened, and ctrl+n
+    # keeps its full "Save & new" so it cannot read as a discard-and-restart.
     assert descriptions == [
         "Save",
-        "New",
+        "Save & new",
         "Discard",
         "Related",
         "Quit",

@@ -172,17 +172,22 @@ class CaptureScreen(Screen[None]):
     see :mod:`lode.tui.related_notes_panel`'s module docstring.
     """
 
-    # Descriptions kept short (lode-3rvw, same lever as BrowseScreen's own
-    # lode-l38d.3 fix): the stock Footer renders these 4 plus the 4 App-level
-    # bindings (LodeApp.BINDINGS) on one line, and at full length ("Save &
-    # quit", "Save & new", "Discard & quit") that clipped at 80 columns (right
-    # edge 103/80 on trunk). Every binding stays visible and only the
-    # description text was shortened -- hiding entries via show=False was
-    # ruled out on lode-l38d.3, because the footer is the only surface these
-    # keys are discoverable on.
+    # Descriptions kept short (lode-3rvw) -- same lever and same rationale as
+    # BrowseScreen's lode-l38d.3 fix, which spells both out (see
+    # lode.tui.screens.browse): show=False stays ruled out, only the
+    # description text is shortened. At full length these 4 plus the 4
+    # App-level bindings (LodeApp.BINDINGS) really consumed 100 columns.
+    #
+    # ctrl+n deliberately keeps its full "Save & new" (lode-3rvw review): the
+    # shortened "New" sits next to "Save" and reads as "start a new note"
+    # WITHOUT saving -- the opposite of what it does, which is the same
+    # discoverability cost show=False was ruled out for. Only ONE of the two
+    # long labels fits: "Save & new" alone lands at 77/80, but restoring
+    # "Discard & quit" alongside it clips again at 84/80. Escape keeps the
+    # short form because "Discard" still names its destructive half honestly.
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
-        Binding("ctrl+n", "save_and_new", "New"),
+        Binding("ctrl+n", "save_and_new", "Save & new"),
         Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),
     ]
@@ -195,14 +200,17 @@ class CaptureScreen(Screen[None]):
             # exclude -- see lode.tui.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
         )
-        # Still the stock Footer, just asked for less padding (lode-3rvw,
-        # mirroring BrowseScreen's lode-l38d.3 fix). compact=True trims
-        # Textual's built-in FooterKey padding from 3 columns of overhead per
-        # entry to 1; show_command_palette=False hides only the auto-added
-        # "^p palette" icon (ctrl+p still opens the palette). Measured at
-        # 80x24: right edge lands at 70/80 with every binding visible --
-        # comfortable headroom, unlike Browse's tighter 79/80 fit, because
-        # Capture has only 4 screen-level bindings vs. Browse's 7.
+        # Still the stock Footer, just asked for less padding (lode-3rvw) --
+        # the same two levers as BrowseScreen's lode-l38d.3 fix, which
+        # documents their mechanics (see lode.tui.screens.browse). Measured at
+        # 80x24: 77/80 with every binding visible.
+        #
+        # BOTH levers are load-bearing -- do not "simplify" either away: with
+        # these labels, dropping compact=True needs 93 columns and dropping
+        # show_command_palette=False needs 89. Measure with sum(FooterKey
+        # widths) + (N-1) gutters, never the right edge or
+        # show_horizontal_scrollbar alone -- both under-report a small overflow
+        # (tests/test_tui_app.py documents that trap).
         yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
