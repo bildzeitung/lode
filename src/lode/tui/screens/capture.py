@@ -172,10 +172,23 @@ class CaptureScreen(Screen[None]):
     see :mod:`lode.tui.related_notes_panel`'s module docstring.
     """
 
+    # Descriptions kept short (lode-3rvw) -- same lever and same rationale as
+    # BrowseScreen's lode-l38d.3 fix, which spells both out (see
+    # lode.tui.screens.browse): show=False stays ruled out, only the
+    # description text is shortened. At full length these 4 plus the 4
+    # App-level bindings (LodeApp.BINDINGS) really consumed 100 columns.
+    #
+    # ctrl+n deliberately keeps its full "Save & new" (lode-3rvw review): the
+    # shortened "New" sits next to "Save" and reads as "start a new note"
+    # WITHOUT saving -- the opposite of what it does, which is the same
+    # discoverability cost show=False was ruled out for. Only ONE of the two
+    # long labels fits: "Save & new" alone lands at 77/80, but restoring
+    # "Discard & quit" alongside it clips again at 84/80. Escape keeps the
+    # short form because "Discard" still names its destructive half honestly.
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save & quit"),
+        Binding("ctrl+s", "save", "Save"),
         Binding("ctrl+n", "save_and_new", "Save & new"),
-        Binding("escape", "cancel", "Discard & quit"),
+        Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),
     ]
 
@@ -187,7 +200,18 @@ class CaptureScreen(Screen[None]):
             # exclude -- see lode.tui.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
         )
-        yield Footer()
+        # Still the stock Footer, just asked for less padding (lode-3rvw) --
+        # the same two levers as BrowseScreen's lode-l38d.3 fix, which
+        # documents their mechanics (see lode.tui.screens.browse). Measured at
+        # 80x24: 77/80 with every binding visible.
+        #
+        # BOTH levers are load-bearing -- do not "simplify" either away: with
+        # these labels, dropping compact=True needs 93 columns and dropping
+        # show_command_palette=False needs 89. Measure with sum(FooterKey
+        # widths) + (N-1) gutters, never the right edge or
+        # show_horizontal_scrollbar alone -- both under-report a small overflow
+        # (tests/test_tui_app.py documents that trap).
+        yield Footer(compact=True, show_command_palette=False)
 
     def on_mount(self) -> None:
         self.query_one(f"#{BODY_ID}", TextArea).focus()

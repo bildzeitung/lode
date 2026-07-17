@@ -107,44 +107,48 @@ SnapshotViewerScreen {
 /* Tags screen (lode-olmi.6) -- top panel (tag multi-select) is capped to 30%
  * of the available height so the bottom panel (the filtered notes list)
  * keeps most of the vertical space; each panel scrolls its own overflow
- * independently. */
+ * independently. This is a deliberate override of the blanket DataTable
+ * rule below -- #tags-tag-list is itself a DataTable, and the ID selector's
+ * higher specificity wins over the element selector regardless of rule
+ * order. */
 #tags-tag-list {
     height: 30%;
     border: solid $primary;
 }
 
-#tags-notes-table {
-    height: 1fr;
-}
-
-/* Browse screen (lode-juz8.2) -- without a height constraint, the notes
- * DataTable auto-sizes to its full row count, and Screen's default
- * overflow-y: auto then scrolls the *whole screen* once that exceeds the
- * viewport -- pushing the progressive-search Input (lode-olmi.4, non-docked,
- * laid out just below the table) below the visible area once it's opened.
- * Capping the table to the remaining space (1fr, same pattern as
- * #tags-notes-table above) makes it scroll its own rows internally instead
- * (DataTable is a ScrollView), so the Input -- and the always-docked Footer
- * beneath it -- stay on-screen regardless of list length. */
-#browse-table {
-    height: 1fr;
-}
-
-/* Config screen (lode-l38d.2) -- same class of bug lode-juz8.2 fixed for
- * #browse-table above, and the same one-rule fix. Without a height
- * constraint the knob DataTable auto-sizes toward its full row count
- * (config_lines() + knob_rows(), src/lode/tui/screens/config.py:47-58), so
- * its rendered region runs off the bottom of the viewport, past the docked
- * Footer. Note the screen does NOT scroll to compensate, despite the ticket
- * title: the containing Vertical is not a scroll container, so the
- * overflowing rows are unreachable rather than merely scrolled-away, and
- * Screen.max_scroll_y stays 0 while the Footer itself stays docked and
- * visible. Capping the table to the remaining space (1fr, same pattern as
- * #tags-notes-table/#browse-table) makes it scroll its own rows internally
- * instead (DataTable is a ScrollView), so every knob stays reachable at any
- * terminal height. #config-rows needs no rule of its own -- Static already
- * defaults to height: auto, and adding one changes nothing (verified across
- * terminal sizes). */
-#config-knobs {
+/* Every DataTable gets a bounded height structurally (lode-efn2), rather
+ * than requiring each screen's author to remember a per-id 1fr rule -- that
+ * per-id mechanism had to be applied twice, each time only after a bug
+ * report (#browse-table/lode-juz8.2, #config-knobs/lode-l38d.2).
+ *
+ * WHY A TABLE NEEDS THIS AT ALL (measured against textual 8.2.8 during
+ * lode-efn2's review -- the story this comment used to tell was wrong).
+ * DataTable's own DEFAULT_CSS is `height: auto; max-height: 100%`, and that
+ * `100%` resolves against the PARENT's height -- NOT against the space left
+ * over after the parent's other children. So an unconstrained table
+ * over-claims whenever it has a space-consuming sibling: #config-knobs
+ * renders 7 rows PAST the docked Footer (it shares a Vertical with a 7-row
+ * Static), and #browse-table pushes its non-docked search Input below the
+ * fold. Those rows are UNREACHABLE, not merely scrolled-away -- nothing here
+ * is a scroll container, and Screen.max_scroll_y stays 0 (corrected
+ * diagnosis from lode-l38d.2's review, which had first mis-described this as
+ * "the screen scrolls"). `1fr` fixes it because fr resolves against the
+ * space REMAINING after siblings; DataTable is a ScrollView, so it then
+ * scrolls its own rows internally.
+ *
+ * Note version-history-table and external-picker-table are each their
+ * Screen's SOLE non-docked child, so max-height 100% already bounded them
+ * exactly -- they never overflowed, and lode-efn2 was filed believing
+ * otherwise. They are covered here for uniformity and to survive a future
+ * restructure, not to fix a live bug.
+ *
+ * Re-verified safe as of lode-efn2: all six DataTables in this app live in a
+ * plain, non-modal Screen's layout -- none of the five ModalScreen dialogs
+ * above contains one, so this rule never reaches into an auto/fixed-size
+ * dialog box. Re-check that if a DataTable is ever added inside one. Screens
+ * that genuinely differ (like #tags-tag-list above) keep an explicit per-id
+ * override. Full mechanism, the per-widget DEFAULT_CSS table, and the
+ * convention for non-DataTable panels: docs/tui.md. */
+DataTable {
     height: 1fr;
 }
