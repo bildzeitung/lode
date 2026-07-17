@@ -275,20 +275,28 @@ def test_ctrl_h_from_editor_opens_version_history_newest_first(
 def test_version_history_table_scrolls_within_its_own_pane_not_the_whole_screen(
     tmp_path: Path,
 ) -> None:
-    """Guards lode-efn2: the history table scrolls internally, not the Screen.
+    """Locks in lode-efn2: the history table stays bounded above the Footer.
 
-    Same shape as test_tui_config.py's
-    test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen
-    (lode-l38d.2) -- VersionHistoryScreen.compose is Header()/DataTable/
-    Footer() with no height constraint of its own before lode-efn2,
-    structurally identical to BrowseScreen's shape before lode-juz8.2 and
-    ConfigScreen's before lode-l38d.2. Before the fix (no rule reaching
-    #version-history-table in lode.tcss), a note with a long enough version
-    chain would run the table's auto-computed region past the docked
-    Footer -- the oldest versions rendered but unreachable, not
-    scrolled-away (the containing Screen is not a scroll container). After
-    the fix (the blanket ``DataTable { height: 1fr; }`` rule), the table is
-    bounded at the Footer's row and scrolls its own rows internally.
+    READ THIS BEFORE TRUSTING THE TEST. This is a property guard, NOT proof
+    of a fix -- it passes with lode.tcss's blanket ``DataTable { height:
+    1fr; }`` rule removed, verified at six terminal sizes. That is not a
+    defect in the test; it is a fact about the screen. lode-efn2 was filed
+    believing version-history-table overflowed like #browse-table
+    (lode-juz8.2) and #config-knobs (lode-l38d.2) did. It never did:
+    VersionHistoryScreen.compose is Header()/DataTable/Footer(), so the
+    table is the Screen's SOLE non-docked child, and DataTable's own
+    DEFAULT_CSS (``height: auto; max-height: 100%``) already bounds it to
+    exactly the area between the docked Header and Footer. The two screens
+    that DID overflow each had a second space-consuming sibling, which is
+    what ``max-height: 100%`` cannot account for (it resolves against the
+    parent's height, not the space left after siblings) -- see the mechanism
+    comment in src/lode/tui/lode.tcss and docs/tui.md.
+
+    What this test is still worth: it fails the moment that structural
+    accident stops holding -- e.g. if the table is later wrapped in a
+    container or gains a non-docked sibling AND the blanket rule is gone
+    (verified: sabotaging both together does fail it). It pins the property
+    the user asked for regardless of which mechanism currently supplies it.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -340,9 +348,10 @@ def test_version_history_table_scrolls_within_its_own_pane_not_the_whole_screen(
     assert header_region.y == 0
     assert footer_region.y + footer_region.height == screen_size.height
 
-    # THE assertion that catches the regression: the table's own region ends
-    # at or above the Footer's row, so it never extends past the visible
-    # window.
+    # THE property being pinned: the table's own region ends at or above the
+    # Footer's row, so it never extends past the visible window. (Currently
+    # supplied by DataTable's own max-height: 100% as much as by the blanket
+    # 1fr rule -- see the docstring; this holds either way, by design.)
     assert table_region.y + table_region.height <= footer_region.y
 
 
@@ -2256,18 +2265,15 @@ def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
 def test_external_picker_table_scrolls_within_its_own_pane_not_the_whole_screen(
     tmp_path: Path,
 ) -> None:
-    """Guards lode-efn2: the picker table scrolls internally, not the Screen.
+    """Locks in lode-efn2: the picker table stays bounded above the Footer.
 
-    Same shape as the version-history guard test above and
-    test_tui_config.py's test_knob_table_scrolls_within_its_own_pane_not_the_
-    whole_screen (lode-l38d.2) -- ExternalPickerScreen.compose is Header()/
-    DataTable/Footer() with no height constraint of its own before
-    lode-efn2, structurally identical to BrowseScreen's shape before
-    lode-juz8.2. Before the fix, a note with enough external candidates
-    would run the table's auto-computed region past the docked Footer --
-    the last candidates rendered but unreachable. After the fix (the
-    blanket ``DataTable { height: 1fr; }`` rule), the table is bounded at
-    the Footer's row and scrolls its own rows internally.
+    Same standing as the version-history guard above -- a property guard,
+    NOT proof of a fix. ExternalPickerScreen.compose is Header()/DataTable/
+    Footer(), so the table is the Screen's sole non-docked child and
+    DataTable's own ``max-height: 100%`` already bounded it; this test
+    passes with the blanket ``DataTable { height: 1fr; }`` rule removed.
+    See that test's docstring for the full mechanism and for why the test
+    still earns its keep.
     """
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
@@ -2324,9 +2330,10 @@ def test_external_picker_table_scrolls_within_its_own_pane_not_the_whole_screen(
     assert header_region.y == 0
     assert footer_region.y + footer_region.height == screen_size.height
 
-    # THE assertion that catches the regression: the table's own region ends
-    # at or above the Footer's row, so it never extends past the visible
-    # window.
+    # THE property being pinned: the table's own region ends at or above the
+    # Footer's row, so it never extends past the visible window. (Currently
+    # supplied by DataTable's own max-height: 100% as much as by the blanket
+    # 1fr rule -- see the docstring; this holds either way, by design.)
     assert table_region.y + table_region.height <= footer_region.y
 
 

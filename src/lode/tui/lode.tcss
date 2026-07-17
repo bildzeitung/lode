@@ -118,33 +118,37 @@ SnapshotViewerScreen {
 
 /* Every DataTable gets a bounded height structurally (lode-efn2), rather
  * than requiring each screen's author to remember a per-id 1fr rule -- that
- * per-id mechanism missed two tables outright (version-history-table,
- * external-picker-table, src/lode/tui/screens/browse.py) before this
- * collapse, on top of the two it *did* cover only after separate bug
- * reports (#browse-table/lode-juz8.2, #config-knobs/lode-l38d.2). Without a
- * height constraint, a DataTable auto-sizes to its full row count, and none
- * of the containing Verticals in this app are scroll containers -- so the
- * overflowing rows run past the docked Footer and become UNREACHABLE, not
- * merely scrolled-away (Screen.max_scroll_y stays 0; corrected diagnosis
- * from lode-l38d.2's review, which had first mis-described this as "the
- * screen scrolls"). Capping every table to the remaining space (1fr) makes
- * it scroll its own rows internally instead (DataTable is a ScrollView), so
- * every row stays reachable at any terminal height regardless of which
- * screen the table lives on.
+ * per-id mechanism had to be applied twice, each time only after a bug
+ * report (#browse-table/lode-juz8.2, #config-knobs/lode-l38d.2).
  *
- * Re-verified safe against the tree as of lode-efn2: every DataTable in
- * this app (six: #tags-tag-list, #tags-notes-table, #browse-table,
- * #config-knobs, version-history-table, external-picker-table) lives in a
- * plain, non-modal Screen's top-level layout -- none of the five
- * ModalScreen dialogs in this file (DiscardConfirmScreen,
- * EnrichmentModalScreen, DeleteConfirmScreen, RelatedNoteModalScreen,
- * SnapshotViewerScreen) contain a DataTable, so this rule never reaches
- * into one of the auto/fixed-size dialog boxes above. If a future
- * DataTable is ever added inside such a box, re-check this claim rather
- * than assuming it still holds. Screens that genuinely differ (like
- * #tags-tag-list above) keep an explicit per-id override; docs/tui.md
- * records the convention for non-DataTable middle panels this rule
- * doesn't cover. */
+ * WHY A TABLE NEEDS THIS AT ALL (measured against textual 8.2.8 during
+ * lode-efn2's review -- the story this comment used to tell was wrong).
+ * DataTable's own DEFAULT_CSS is `height: auto; max-height: 100%`, and that
+ * `100%` resolves against the PARENT's height -- NOT against the space left
+ * over after the parent's other children. So an unconstrained table
+ * over-claims whenever it has a space-consuming sibling: #config-knobs
+ * renders 7 rows PAST the docked Footer (it shares a Vertical with a 7-row
+ * Static), and #browse-table pushes its non-docked search Input below the
+ * fold. Those rows are UNREACHABLE, not merely scrolled-away -- nothing here
+ * is a scroll container, and Screen.max_scroll_y stays 0 (corrected
+ * diagnosis from lode-l38d.2's review, which had first mis-described this as
+ * "the screen scrolls"). `1fr` fixes it because fr resolves against the
+ * space REMAINING after siblings; DataTable is a ScrollView, so it then
+ * scrolls its own rows internally.
+ *
+ * Note version-history-table and external-picker-table are each their
+ * Screen's SOLE non-docked child, so max-height 100% already bounded them
+ * exactly -- they never overflowed, and lode-efn2 was filed believing
+ * otherwise. They are covered here for uniformity and to survive a future
+ * restructure, not to fix a live bug.
+ *
+ * Re-verified safe as of lode-efn2: all six DataTables in this app live in a
+ * plain, non-modal Screen's layout -- none of the five ModalScreen dialogs
+ * above contains one, so this rule never reaches into an auto/fixed-size
+ * dialog box. Re-check that if a DataTable is ever added inside one. Screens
+ * that genuinely differ (like #tags-tag-list above) keep an explicit per-id
+ * override. Full mechanism, the per-widget DEFAULT_CSS table, and the
+ * convention for non-DataTable panels: docs/tui.md. */
 DataTable {
     height: 1fr;
 }
