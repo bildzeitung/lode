@@ -139,9 +139,7 @@ def _default_fetcher(settings: Settings, external_id: str) -> JiraHttpFetcher:
     return JiraHttpFetcher(creds, settings)
 
 
-def _fetch_comments(
-    fetcher: Fetcher, api_base: str, external_id: str
-) -> list[dict]:
+def _fetch_comments(fetcher: Fetcher, api_base: str, external_id: str) -> list[dict]:
     """Paginate ``/issue/{key}/comment`` until every comment is collected.
 
     A non-OK response on any page beyond the first stops pagination (logged,

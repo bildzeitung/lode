@@ -20,6 +20,7 @@ override) actually reaches the real `HttpxFetcher`, not just a test-only stub
 tests offline can leave the *default* implementation's wiring unexercised).
 """
 
+import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -751,7 +752,72 @@ class TestRefreshExternalDispatch:
         assert outcome is not None
         assert "ok" in outcome
 
-    def test_jira_source_type_raises_no_fetch_unit_yet(self, conn) -> None:
+    def test_jira_source_type_dispatches_to_jira_fetch_unit(self, conn) -> None:
+        """lode-gpzn.3: JIRA now has a real fetch unit -- dispatch reaches it,
+        rebuilding the request URL from external_id + the api_base persisted
+        on the row (lode-gpzn.2), rather than raising."""
+        api_base = "https://acme.atlassian.net"
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("ABC-123", SOURCE_TYPE_JIRA, api_base),
+        )
+        conn.commit()
+        issue_json = {
+            "fields": {"summary": "Dispatcher JIRA content"},
+            "renderedFields": {
+                "description": (
+                    "<p>" + ("Dispatcher-level JIRA fetch content. " * 20) + "</p>"
+                )
+            },
+        }
+        empty_comments = {"startAt": 0, "maxResults": 0, "total": 0, "comments": []}
+
+        class _JiraQueueFetcher:
+            def __init__(self) -> None:
+                self._responses = [
+                    RawResponse(
+                        final_url=(
+                            f"{api_base}/rest/api/3/issue/ABC-123?expand=renderedFields"
+                        ),
+                        status_code=200,
+                        text=json.dumps(issue_json),
+                    ),
+                    RawResponse(
+                        final_url=(
+                            f"{api_base}/rest/api/3/issue/ABC-123/comment"
+                            "?startAt=0&expand=renderedBody"
+                        ),
+                        status_code=200,
+                        text=json.dumps(empty_comments),
+                    ),
+                ]
+                self.calls: list[str] = []
+
+            def fetch(self, url: str) -> RawResponse:
+                self.calls.append(url)
+                return self._responses.pop(0)
+
+        jira_fetcher = _JiraQueueFetcher()
+
+        outcome = refresh_external(
+            conn, "ABC-123", load_settings(), fetcher=jira_fetcher
+        )
+
+        assert outcome is not None
+        assert "ok" in outcome
+        assert jira_fetcher.calls[0] == (
+            f"{api_base}/rest/api/3/issue/ABC-123?expand=renderedFields"
+        )
+        (status,) = conn.execute(
+            "SELECT status FROM snapshots WHERE external_id = ?", ("ABC-123",)
+        ).fetchone()
+        assert status == "ok"
+
+    def test_jira_source_type_without_credentials_raises(self, conn) -> None:
+        """No fetcher override and no resolvable credentials (default,
+        JIRA-disabled settings) -- the default-fetcher construction inside
+        lode.jira_fetch.fetch_jira_issue raises, naming the external_id."""
         conn.execute(
             "INSERT INTO externals (external_id, source_type, api_base) "
             "VALUES (?, ?, ?)",
@@ -760,6 +826,15 @@ class TestRefreshExternalDispatch:
         conn.commit()
         with pytest.raises(RuntimeError, match="ABC-123"):
             refresh_external(conn, "ABC-123", load_settings())
+
+    def test_jira_source_type_missing_api_base_raises(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+            ("ABC-999", SOURCE_TYPE_JIRA),
+        )
+        conn.commit()
+        with pytest.raises(RuntimeError, match="ABC-999"):
+            refresh_external(conn, "ABC-999", load_settings(), fetcher=_StubFetcher())
 
     def test_confluence_source_type_raises_no_fetch_unit_yet(self, conn) -> None:
         conn.execute(
