@@ -10,8 +10,6 @@ to end against the real ``Repository.save`` CAS path.
 
 import asyncio
 import sqlite3
-import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -24,6 +22,8 @@ from lode.tui.screens.capture import BODY_ID
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
 from lode.versions import save
 
+from conftest import _wait_until
+
 
 def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
     conn = sqlite3.connect(db_path)
@@ -33,68 +33,38 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
         conn.close()
 
 
-#: How often :func:`_wait_until` re-checks its predicate.
-_POLL_INTERVAL = 0.01
-
-
-async def _wait_until(
-    predicate: Callable[[], bool], description: str, *, timeout: float = 5.0
-) -> None:
-    """Poll ``predicate`` until true, bounded by a real ``timeout`` (lode-64jn).
-
-    ``description`` names the condition, so a timeout says *which* wait hung --
-    each test below has two, and "the reconcile screen never composed" and
-    "the keypress never reached its action" are entirely different bugs.
-
-    Yields the event loop via ``asyncio.sleep`` between checks -- a genuine
-    cooperative yield -- rather than Textual's ``pilot.pause()`` no-arg form,
-    which ultimately waits on a CPU-idle *heuristic*
-    (``textual._wait.wait_for_idle``): it compares this process's own CPU time
-    against wall-clock time and calls it "idle" once CPU time stops advancing.
-    Under real machine contention (several agents gating at once, e.g.
-    ``/code`` fan-out) that heuristic can misfire -- a process starved of
-    scheduler time by unrelated load barely advances its own CPU time
-    *regardless* of whether the screen transition it is supposed to be waiting
-    for has finished, and the heuristic reads that starvation as idleness.
-    Polling the real condition instead waits exactly as long as it takes, and
-    fails loudly (an explicit ``AssertionError``, never a silent false-idle
-    pass) if the condition genuinely never becomes true.
-
-    **What that heuristic actually costs these tests, measured** (lode-64jn
-    review, Textual 8.2.8). Neutralising ``wait_for_idle`` -- i.e. modelling a
-    total misfire -- and re-running the pre-fix versions of these three tests:
-
-    * ``test_cas_reject_shows_a_buffer_vs_head_diff`` **fails**, with
-      ``NoMatches: No nodes match '#reconcile-diff'``. The bare
-      ``pilot.pause()`` returned with :class:`ReconcileScreen` on the stack but
-      its ``compose()`` children not yet mounted -- see :func:`_reconcile_ready`.
-      This test was never named in the ticket and had never been *observed*
-      failing, but it is in fact the most exposed of the three.
-    * ``test_reapply_...`` / ``test_discard_...`` **pass** even then -- but only
-      because ``run_test``'s shutdown happens to drain the still-pending
-      keypress, an implicit barrier nothing documents or guarantees. Waiting on
-      the resolution's own observable side effect (the draft's removal) makes
-      that dependency explicit instead of lucky.
-
-    **Historical note, so the record is not misread.** The flake actually
-    observed in ``test_reapply_saves_onto_new_head_and_exits`` was *not* this
-    heuristic: it was the ``ORDER BY created`` version-chain bug, root-caused
-    and fixed in lode-t1y (the wall clock can step backward, so two versions
-    came back in the wrong order). That is why this file's assertion now reads
-    ``ORDER BY rowid``. lode-64jn's other named test,
-    ``test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass``, was
-    likewise already fixed by lode-9vns. The waits below are therefore
-    hardening against a real and demonstrated harness race -- not the fix for
-    either originally-reported failure, both of which were already resolved
-    upstream of this branch.
-    """
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                f"timed out after {timeout}s waiting until {description}"
-            )
-        await asyncio.sleep(_POLL_INTERVAL)
+# _wait_until moved to tests/conftest.py (lode-lcju) -- see docs/tui.md's
+# "Settling TUI tests under load" section for the ruling + mechanism, and
+# tests/conftest.py's own docstring for the helper itself.
+#
+# What the underlying heuristic actually costs these tests, measured
+# (lode-64jn review, Textual 8.2.8). Neutralising ``wait_for_idle`` -- i.e.
+# modelling a total misfire -- and re-running the pre-fix versions of these
+# three tests:
+#
+# * ``test_cas_reject_shows_a_buffer_vs_head_diff`` **fails**, with
+#   ``NoMatches: No nodes match '#reconcile-diff'``. The bare
+#   ``pilot.pause()`` returned with :class:`ReconcileScreen` on the stack but
+#   its ``compose()`` children not yet mounted -- see :func:`_reconcile_ready`.
+#   This test was never named in the ticket and had never been *observed*
+#   failing, but it is in fact the most exposed of the three.
+# * ``test_reapply_...`` / ``test_discard_...`` **pass** even then -- but only
+#   because ``run_test``'s shutdown happens to drain the still-pending
+#   keypress, an implicit barrier nothing documents or guarantees. Waiting on
+#   the resolution's own observable side effect (the draft's removal) makes
+#   that dependency explicit instead of lucky.
+#
+# **Historical note, so the record is not misread.** The flake actually
+# observed in ``test_reapply_saves_onto_new_head_and_exits`` was *not* this
+# heuristic: it was the ``ORDER BY created`` version-chain bug, root-caused
+# and fixed in lode-t1y (the wall clock can step backward, so two versions
+# came back in the wrong order). That is why this file's assertion now reads
+# ``ORDER BY rowid``. lode-64jn's other named test,
+# ``test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass``, was
+# likewise already fixed by lode-9vns. The waits below are therefore
+# hardening against a real and demonstrated harness race -- not the fix for
+# either originally-reported failure, both of which were already resolved
+# upstream of this branch.
 
 
 def _reconcile_ready(app: LodeApp) -> bool:
