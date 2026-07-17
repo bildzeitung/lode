@@ -19,9 +19,11 @@ dependencies = [
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
     "pydantic",    # structured outputs for the derived layer
     "fastembed",   # embeddings + reranker + NLI via bundled ONNX runtime
-    "pyarrow",     # direct import in vectorstore.py (lode-zcoz) -- already a
-                   # transitive lancedb dep, pinned direct since vectorstore.py
-                   # imports it without going through lancedb
+    "pyarrow",     # direct import in vectorstore.py (lode-zcoz) — lancedb's
+                   # schema API, so `_schema()` builds a pa.schema() itself.
+                   # Satisfied transitively via lancedb today; declared anyway
+                   # because we import it directly, so a lancedb release that
+                   # drops it cannot silently break our import.
     "lancedb",     # on-disk vector store (ANN + metadata filtering)
     "networkx",    # in-memory knowledge-graph traversal
     "xxhash",      # 128-bit content-address hash (docs/storage.md)
