@@ -87,7 +87,9 @@ def _fake_bd(tmp_path: Path, show_fixtures: dict[str, list[dict]]) -> Path:
     return bin_dir
 
 
-def _run(id_: str, tmp_path: Path, *, show_fixtures: dict[str, list[dict]]) -> subprocess.CompletedProcess:
+def _run(
+    id_: str, tmp_path: Path, *, show_fixtures: dict[str, list[dict]]
+) -> subprocess.CompletedProcess:
     bin_dir = _fake_bd(tmp_path, show_fixtures)
     return subprocess.run(
         ["bash", str(SCRIPT), id_],
@@ -161,7 +163,9 @@ def test_script_calls_bd_show_with_include_dependents_flag(tmp_path: Path) -> No
     `bd` above refuses (exit 1) any `bd show` call missing that flag, so a
     regression that drops it turns this into a failure, not a silent []."""
     show_fixtures = {
-        "lode-orig": [{"id": "lode-orig", "dependents": [_dependent("lode-dep", "blocks")]}]
+        "lode-orig": [
+            {"id": "lode-orig", "dependents": [_dependent("lode-dep", "blocks")]}
+        ]
     }
     result = _run("lode-orig", tmp_path, show_fixtures=show_fixtures)
     assert result.returncode == 0, result.stderr
