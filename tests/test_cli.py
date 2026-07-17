@@ -4164,19 +4164,15 @@ def test_every_cli_table_construction_routes_through_safe_table() -> None:
     # whole defect class regardless of how a future call site writes its
     # add_row calls.
     source = Path(cli.__file__).read_text(encoding="utf-8")
-    # Drop SafeTable's own class body (it legitimately subclasses Table and
-    # calls super().add_row) before scanning the rest of the module.
-    class_start = source.index("class SafeTable(Table):")
-    next_def = re.search(r"\ndef _tabular_table", source[class_start:])
-    assert next_def, "SafeTable class body boundary not found -- test is stale"
-    class_end = class_start + next_def.start()
-    rest = source[:class_start] + source[class_end:]
     # \bTable\( (not \bSafeTable\() -- word-boundary regex so a legitimate
     # `SafeTable(...)` construction (which itself contains the substring
     # "Table(") never false-positives: there is no \b between "Safe" and
     # "Table" inside one identifier, so this matches only a standalone
-    # `Table(` construction.
-    bare_construction = re.search(r"\bTable\(", rest)
+    # `Table(` construction. SafeTable's own class body needs no exemption:
+    # its base-class reference is `SafeTable(Table):` (a `Table)`, not a
+    # `Table(`) and its override calls `super().add_row`, so it contains no
+    # `\bTable\(` for this scan to trip on.
+    bare_construction = re.search(r"\bTable\(", source)
     assert bare_construction is None, (
         "found a direct rich.table.Table(...) construction in lode.cli "
         "outside SafeTable -- every CLI table must construct a SafeTable "
