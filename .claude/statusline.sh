@@ -180,32 +180,43 @@ if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
     [ -n "$fetch_part" ] && git_part="${git_part} ${fetch_part}"
 fi
 
-# --- Model + tokens ---------------------------------------------------------
+# --- Model + usage meters ---------------------------------------------------
 # Model: only the class matters (Opus/Sonnet/…), so keep the first word and drop
 # the version + "(1M context)" tail that display_name carries.
 model_part=""
 [ -n "$model" ] && model_part="${model%% *}"
 
-# Tokens: one meter instead of separate used/left numbers. A 10-cell bar fills
-# with the share of tokens used (used_tokens / window), the % printed after.
-# Prefer the raw counts; fall back to the pre-baked used_percentage if absent.
-tokens_part=""
-u=""
-if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
-    u=$(( used_tokens * 100 / window ))
-elif [ -n "$used" ]; then
-    u=$(printf '%.0f' "$used")
-fi
-if [ -n "$u" ]; then
-    [ "$u" -lt 0 ] && u=0; [ "$u" -gt 100 ] && u=100
-    width=10
-    filled=$(( u * width / 100 ))
-    bar=""; i=0
+# A 10-cell filled bar for an integer percent 0..100: [████░░░░░░].
+make_bar() {
+    pct=$1; width=10; out=""; i=0
+    [ "$pct" -lt 0 ] && pct=0; [ "$pct" -gt 100 ] && pct=100
+    filled=$(( pct * width / 100 ))
     while [ "$i" -lt "$width" ]; do
-        if [ "$i" -lt "$filled" ]; then bar="${bar}█"; else bar="${bar}░"; fi
+        if [ "$i" -lt "$filled" ]; then out="${out}█"; else out="${out}░"; fi
         i=$((i + 1))
     done
-    tokens_part="[${bar}] ${u}%"
+    printf '%s' "$out"
+}
+
+# Usage meters, matching /usage: the 5-hour "current session" window and the
+# 7-day window (rate-limit budget). Only present for Claude.ai subscribers after
+# the first API response, and each window can be independently absent — omit
+# whatever's missing. When NEITHER is available (early session / non-subscriber),
+# fall back to a context-window meter (labeled "ctx", tokens used / window) so
+# the line is never blank.
+usage_parts=()
+sess=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+week=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+if [ -n "$sess" ]; then p=$(printf '%.0f' "$sess"); usage_parts+=("5h [$(make_bar "$p")] ${p}%"); fi
+if [ -n "$week" ]; then p=$(printf '%.0f' "$week"); usage_parts+=("7d [$(make_bar "$p")] ${p}%"); fi
+if [ ${#usage_parts[@]} -eq 0 ]; then
+    u=""
+    if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
+        u=$(( used_tokens * 100 / window ))
+    elif [ -n "$used" ]; then
+        u=$(printf '%.0f' "$used")
+    fi
+    [ -n "$u" ] && usage_parts+=("ctx [$(make_bar "$u")] ${u}%")
 fi
 
 # --- Assemble (fleet first), skipping empties -------------------------------
@@ -214,7 +225,7 @@ parts=()
 [ -n "$agents_part" ] && parts+=("$agents_part")
 [ -n "$git_part" ] && parts+=("$git_part")
 [ -n "$model_part" ] && parts+=("$model_part")
-[ -n "$tokens_part" ] && parts+=("$tokens_part")
+for up in "${usage_parts[@]}"; do parts+=("$up"); done
 
 # Join with an explicit " | " (IFS+"${arr[*]}" would join on a single space,
 # blurring the pipeline group into the agents group).
