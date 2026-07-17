@@ -31,10 +31,16 @@ _THINKING = "Thinking..."
 
 
 class AskScreen(Screen[None]):
-    """One question input, one results pane. Enter asks; Escape quits."""
+    """One question input, one results pane. Enter asks; Escape pops back.
+
+    Pushed on top of another screen via the App-level ``ctrl+l`` binding
+    (:meth:`~lode.tui.app.LodeApp.action_show_ask`, lode-11io) -- Escape pops
+    back to whatever screen was showing, matching every sibling screen
+    (config/tags/browse/edit all name this action ``dismiss_screen``).
+    """
 
     BINDINGS = [
-        Binding("escape", "quit_screen", "Quit"),
+        Binding("escape", "dismiss_screen", "Back"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -76,6 +82,6 @@ class AskScreen(Screen[None]):
             return
         self.app.call_from_thread(results.update, render_ask_result(result))
 
-    def action_quit_screen(self) -> None:
-        """Escape exits the app -- this screen holds no unsaved state to discard."""
-        self.app.exit()
+    def action_dismiss_screen(self) -> None:
+        """Escape pops back to the screen this was pushed on top of (lode-11io)."""
+        self.app.pop_screen()

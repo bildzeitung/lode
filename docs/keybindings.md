@@ -145,13 +145,15 @@ through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-bo
 | `ctrl+o` | Show Config | "Options" — rekeyed off the function key `f2` by `lode-juz8.1` |
 | `ctrl+b` | Show Browse | "Browse" — rekeyed off the function key `f3` by `lode-juz8.1` |
 | `ctrl+t` | Show Tags | "Tags" — rekeyed off the function key `f5` by `lode-juz8.1` (itself a land-time rekey off `f4` — see the history below) |
+| `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
 
-No App-level function keys remain — see the "No function keys" policy above. The next ticket that
-needs a new App-level (or Screen-level) key should reach for `ctrl+l` or `ctrl+j` first (the two
-formally-safe letters this ticket left unclaimed — both carry a terminal-level caveat flagged in
-that section, so treat them as last resort, not first pick), confirm the full trap checklist, and
-**check every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s** (still the
-operative rule from "Two altitudes" above; only the alphabet changed).
+No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
+claimed (above); **`ctrl+j` is the only formally-safe letter left** for the next ticket that needs a
+new App-level (or Screen-level) key — it still carries the terminal-level caveat flagged in the "No
+function keys" section (the raw LF byte some terminals treat as Enter-adjacent), so confirm the full
+trap checklist before landing it, and **check every screen's own `BINDINGS` for the same key too —
+not just `LodeApp`'s** (still the operative rule from "Two altitudes" above; only the alphabet
+changed).
 
 ### Screen-level
 
@@ -191,7 +193,7 @@ operative rule from "Two altitudes" above; only the alphabet changed).
 | | | `ctrl+n` | Save & new | |
 | | | `escape` | Discard & quit | |
 | | | `ctrl+f` | Focus related-notes panel | |
-| `AskScreen` | `screens/ask.py` | `escape` | Quit screen | — |
+| `AskScreen` | `screens/ask.py` | `escape` | Back | — |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
 | | | `d` | Discard | |
@@ -251,3 +253,16 @@ collided at land time — this doc exists to stop the next one:
   `textual.widgets.TextArea.BINDINGS`, `textual.keys.KEY_ALIASES`, and `textual.app.App.BINDINGS`
   directly rather than by assumption. `l` and `j` were left unclaimed (see the policy section above
   for why) for the next ticket that needs a fifth.
+- **`lode-11io`**: wired up the previously-unreachable `AskScreen` (registered in `SCREENS` but
+  nothing ever pushed it). The mnemonic pick `ctrl+a` was tried and rejected — MEASURED: with a
+  `ctrl+a` → `show_ask` binding added App-level, pressing `ctrl+a` on `CaptureScreen` never reached
+  the app (action did not fire, screen unchanged) and the entry did not even render in the footer,
+  because both `TextArea` and `Input` already claim `ctrl+a` as a builtin (`home,ctrl+a`,
+  cursor-to-line-start) — it would have been dead on exactly the three text-entry screens (Capture,
+  Ask, Edit) and live everywhere else. Landed as **`Ctrl+L`** instead (the letter space was down to
+  `l`/`j`; `ctrl+j` is the raw LF byte, worse), confirmed against all three traps and against every
+  screen's own `BINDINGS` (none uses `ctrl+l`). Also fixed `AskScreen`'s Escape, which called
+  `self.app.exit()` directly (coherent only while Ask was unreachable/standalone) — it now pops like
+  every sibling, which closes `lode-s58y` at the root: that ticket's "footer shows Quit twice" was
+  true, but its proposed fix (relabel to "Back") was wrong, since escape really did quit either way;
+  once Escape genuinely pops, the duplicate *action* disappears and the label is honestly "Back".

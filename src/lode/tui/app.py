@@ -94,7 +94,13 @@ class LodeApp(App[str | None]):
     it pops back to the previous screen on Escape. ``Ctrl+B`` reaches the
     browse screen (lode-0wj.5) the same way, and ``Ctrl+T`` reaches the tags
     screen (lode-olmi.6; no function keys anywhere in the TUI as of
-    lode-juz8.1 — see the module docstring above).
+    lode-juz8.1 — see the module docstring above). ``Ctrl+L`` reaches the ask
+    screen (lode-mkc.2's cited-Q&A screen -- the product's central bet -- left
+    unreachable until lode-11io wired it up) the same way; it pops back to
+    the previous screen on Escape, matching every sibling. ``Ctrl+A`` was the
+    mnemonic pick but is unusable: both ``TextArea`` and ``Input`` claim it as
+    a builtin cursor-to-line-start binding (``docs/keybindings.md``), so it
+    never reaches the app from a text-entry screen.
     Ctrl+Q quits immediately unless the current
     screen has unsaved state to confirm first (lode-0wj.8) — see
     :meth:`action_quit`.
@@ -122,18 +128,29 @@ class LodeApp(App[str | None]):
         # (docs/tui.md), not 80 -- so "buy width for one screen" is no longer
         # the reason: at 100 columns every one of the ten footer-bearing
         # screens fits fine with "Config" spelled out. The real constraint is
-        # width reserved for lode-11io's not-yet-landed App-level Ask binding
-        # (ctrl+l), measured to cost +7 columns wherever it lands, since an
+        # width reserved for the App-level Ask binding below (ctrl+l,
+        # lode-11io), measured to cost +7 columns wherever it lands, since an
         # App-level binding renders in every screen's footer. EditScreen is
         # the tightest of the ten (see lode.tui.screens.browse.EditScreen):
-        # with "Cfg" it lands at 90/100 today and 97/100 once Ask lands; with
-        # "Config" it lands at 93/100 today but 100/100 -- zero slack -- once
-        # Ask lands. "Browse"/"Tags" already stay full words; they aren't the
-        # constraint. Do not restore "Config" without re-measuring
-        # EditScreen's footer against the Ask binding's real cost.
+        # with "Cfg" it lands at 97/100; with "Config" it would land at
+        # 100/100 -- zero slack. "Browse"/"Tags" already stay full words;
+        # they aren't the constraint. Do not restore "Config" without
+        # re-measuring EditScreen's footer against the Ask binding's real
+        # cost.
         Binding("ctrl+o", "show_config", "Cfg"),
         Binding("ctrl+b", "show_browse", "Browse"),
         Binding("ctrl+t", "show_tags", "Tags"),
+        # ctrl+l, not the mnemonic ctrl+a: docs/keybindings.md's "No function
+        # keys" section left ctrl+l and ctrl+j as the only two
+        # formally-checked-safe letters after lode-juz8.1's rekey; ctrl+a is
+        # a TextArea/Input builtin (cursor-to-line-start) and would be
+        # silently unreachable from every text-entry screen (Capture, Ask,
+        # Edit) -- MEASURED: with ctrl+a bound here, pressing it on
+        # CaptureScreen never reached the app and the entry did not even
+        # render in the footer. ctrl+j (the raw LF byte) is worse, so ctrl+l
+        # is the pick despite its own terminal-level clear/redraw
+        # convention -- the letter space is exhausted, not a first choice.
+        Binding("ctrl+l", "show_ask", "Ask"),
     ]
 
     def __init__(
@@ -160,6 +177,10 @@ class LodeApp(App[str | None]):
     def action_show_tags(self) -> None:
         """Push the tags screen (lode-olmi.6) on top of the current one."""
         self.push_screen("tags")
+
+    def action_show_ask(self) -> None:
+        """Push the ask screen (lode-mkc.2) on top of the current one (lode-11io)."""
+        self.push_screen("ask")
 
     def action_quit(self) -> None:
         """Ctrl+Q: quit immediately, unless the current screen has unsaved state.
