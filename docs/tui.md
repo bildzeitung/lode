@@ -112,3 +112,79 @@ combos or `escape`, per the no-function-key / no-bare-printable-key-on-an-editab
 `docs/keybindings.md` documents. Styling only the ~6 bindings out of ~40 that qualify would leave
 two visual idioms in one footer bar — *more* drift than a plain, uniform description list, which is
 the exact bug the shared `LodeFooter` widget exists to eliminate. Do not reopen this a fourth time.
+
+## Settling TUI tests under load: predicate wait vs. keystroke drain, one home in conftest (`lode-lcju`)
+
+Two tickets (`lode-64jn`, `lode-9y68`) independently hit the same root cause — a flaky TUI test
+under real machine load (several agents gating at once) — and independently invented two different
+settle helpers, in two different test files, neither referencing the other. Neither lived in
+`tests/conftest.py`, which had no pilot/settle helper at all. That is the exact failure this
+section exists to close: the next TUI test author must find one documented rule and one home, not
+grep two contradictory docstrings and invent a third dialect.
+
+**The mechanism (verified against Textual 8.2.8's source, not guessed).** Everything below flows
+from one fact: `textual._wait.wait_for_idle` decides "idle" by comparing this process's own CPU
+time (`time.process_time()`) against wall-clock time (`time.monotonic()`). A process that is
+merely *starved of scheduler timeslices* — which this machine legitimately causes, running several
+concurrent `nox -s tests` invocations at once — advances its own CPU time slowly regardless of
+whether the screen transition or keystroke cascade it's supposed to be waiting for has actually
+finished, and the heuristic misreads that starvation as idleness. It is the **only** load-sensitive
+element anywhere in the pilot press/pause path:
+
+- `pilot.press(*keys)` is `App._press_keys(keys)` (paces *between* keystrokes using
+  `wait_for_idle()` alone — no message-count check) **then one** `_wait_for_screen()` (a real
+  message-count drain) at the very end. So a multi-key `press()` can dispatch a later key while an
+  earlier key's reactive cascade is still in flight; only the very last key gets a real drain.
+- `pilot.pause()` is `_wait_for_screen()` (a message-count drain) **plus** `wait_for_idle(0)` (the
+  heuristic).
+- `_wait_for_screen()` snapshots `app.screen`, its child list, and each child's pending-message
+  count **once, up front** — not a live, re-checked observation.
+- **asyncio's ready-queue ordering is *not* perturbed by OS starvation** — starvation slows the
+  whole event loop uniformly; it does not reorder callbacks relative to each other. This is the
+  fact that separates a real settle fix from a placebo: a drain added to fix a *reordering* race
+  reorders nothing, because starvation never disorders anything to begin with. Only a fix that
+  targets `wait_for_idle`'s wall-clock-vs-CPU-time comparison addresses the actual mechanism.
+
+**The rule — two sanctioned patterns, chosen by what's being waited for, not by preference:**
+
+1. **A precondition** ("the screen has transitioned," "the new screen has finished composing") →
+   `_wait_until(predicate, description, timeout=...)` (`tests/conftest.py`): polls a real condition
+   via `asyncio.sleep`, bounded by a wall-clock `timeout`, and fails loudly — a real
+   `AssertionError` naming which condition hung — if it's never met. This is **strictly stronger**
+   than a fixed drain count for a precondition: it waits exactly as long as needed and reports
+   loudly when that's insufficient, where a fixed count of drains neither waits longer under worse
+   load nor reports anything when it fails to be enough.
+
+   **Forbidden use:** never write the predicate in terms of the test's own expected value —
+   `_wait_until(lambda: table.cursor_row == 2, ...)` bakes the assertion into the wait, which is
+   the retry-on-assertion antipattern (masks a real bug as a slow-to-settle one, and a wrong final
+   value just times out instead of failing where it happens). `_wait_until` is for **preconditions
+   the test needs before it can act or assert**, never for the value the assertion itself checks.
+
+2. **A stateful, read-back keystroke cascade** (a later keystroke's behavior depends on state an
+   earlier keystroke's cascade produced — e.g. incremental search, where `_seek_match` reads
+   `table.cursor_row` as its next scan's start) → `_press_and_settle(pilot, *keys)`
+   (`tests/conftest.py`): presses one key at a time via `pilot.press(key)` (whose own trailing
+   `_wait_for_screen()` is a real drain, not the CPU heuristic), so every keystroke is fully settled
+   before the next is dispatched. This is the case `_wait_until` cannot cover: the correct wait
+   *is* the assertion's own precondition ("has the previous key's cascade landed"), and expressing
+   that as a predicate would mean polling for the exact cursor position the test is about to assert
+   on — the forbidden case above. A plain multi-key `pilot.press("down", "down", "down")` remains
+   fine and is deliberately left alone elsewhere in the suite: cursor moves like that are
+   order-preserving with no read-back dependency between keys, and `press()`'s own trailing drain
+   already covers the final read.
+
+**One home: `tests/conftest.py`.** Both helpers now live there — the two rival originals
+(`tests/test_tui_reconcile_screen.py`'s `_wait_until` from `lode-64jn`, and
+`tests/test_tui_browse_screen.py`'s `_press_and_settle` from `lode-9y68`) were moved verbatim, with
+their docstrings updated to point at this section instead of restating the mechanism locally. A
+screen-specific predicate like `_reconcile_ready` (checks `isinstance(app.screen, ReconcileScreen)`
+before reading a screen-specific widget id) stays local to its own test file — it isn't a generic
+settle primitive, just a predicate a test hands to `_wait_until`.
+
+**Out of scope, deliberately:** converting the suite's ~90 remaining bare `pilot.pause()` call
+sites to one of these helpers. Most are simple, order-independent waits (a single keystroke, or a
+cursor move with no read-back dependency) that `pilot.press()`'s own trailing drain already covers
+correctly; forcing every site onto `_wait_until`/`_press_and_settle` would add ceremony with no
+mechanism behind it. Reach for one of the two helpers above only when a test hits the actual
+load-dependent failure mode this section describes.
