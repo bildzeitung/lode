@@ -3210,11 +3210,14 @@ def test_ambiguous_prefix_rows_render_like_notes_through_err_console(
     The whole point of this ticket is that the two listings' shared columns
     cannot diverge again, so the things that made them diverge are pinned
     here rather than left to eye-verification: the suite freezes colour off
-    at import (lode-xgaa), so a regression in the style names or either
-    rendering flag would sail through green -- which is exactly how the
+    at import (lode-xgaa), so a regression in the style names or the
+    soft_wrap flag would sail through green -- which is exactly how the
     ReprHighlighter date-shredding defect reached trunk in lode-l38d.5.
+    (``highlight=False`` is no longer a per-call flag to pin here -- it is
+    hoisted onto ``err_console``'s constructor, lode-9jmv, and pinned by
+    ``test_cli_console.py``'s ``test_err_console_highlight_is_disabled``.)
 
-    Rationale for each flag lives at the cli.py call site, deliberately not
+    Rationale for soft_wrap lives at the cli.py call site, deliberately not
     restated here (see notes_'s equivalent pin).
     """
     db_path = tmp_path / "lode.db"
@@ -3237,7 +3240,6 @@ def test_ambiguous_prefix_rows_render_like_notes_through_err_console(
         # the one source of truth (lode-l38d.11).
         assert "[note_id]" in line and "[/note_id]" in line
         assert "[date]" in line and "[/date]" in line
-        assert kwargs["highlight"] is False
         assert kwargs["soft_wrap"] is True
 
     live_row, deleted_row = printed[0][0], printed[1][0]
