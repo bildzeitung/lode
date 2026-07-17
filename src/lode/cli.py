@@ -806,23 +806,26 @@ def _report_ambiguous_prefix(
     )
     for row in candidate_rows_conn(conn, exc.candidates):
         marker = " [deleted]" if row.deleted else ""
-        # Same rendering path as notes_ (lode-l38d.5, lode-l810): the shared
-        # theme's note_id/date style NAMES (never a colour literal --
-        # CLI_STYLES stays the one source of truth), the summary escape()d
-        # since it is unescaped user/AI text, highlight=False (rich's
-        # ReprHighlighter would otherwise shred the date -- see notes_'s
-        # note above), soft_wrap=True (no width-clamped wrapping, matching
-        # the bare typer.echo this replaced). Routed through err_console
-        # (the stderr twin of the shared stdout `console`) rather than
-        # `console` itself, so this function's stderr + exit-1 contract --
-        # the behaviour all four call sites already depend on -- is
-        # unchanged. The " [deleted]" tombstone marker stays a literal,
-        # uncoloured suffix (lode-l38d.10) -- escape()d along with the
-        # summary, since its own literal "[deleted]" would otherwise be
-        # parsed as a (nonexistent) style tag by rich's markup engine and
-        # silently swallow the rest of the line (verified against rich
-        # 15.0.0: an unescaped "[deleted]" mid-string drops everything from
-        # that point on, with no error raised).
+        # Deliberately the same rendering path as notes_ (lode-l38d.5,
+        # lode-l810): the shared theme's note_id/date style NAMES (never a
+        # colour literal -- CLI_STYLES stays the one source of truth), the
+        # summary escape()d, and the same two rendering flags. The rationale
+        # for each flag lives at notes_'s loop and is deliberately NOT
+        # restated here -- both pin rich-version-specific behaviour, and two
+        # copies would drift apart (the same call notes_'s own tests make).
+        #
+        # The " [deleted]" tombstone marker (lode-l38d.10) stays a literal,
+        # uncoloured suffix -- but it must be escape()d ALONG WITH the
+        # summary, not appended after it. "[deleted]" is otherwise parsed as
+        # a style tag by rich's markup engine: "deleted" is not a valid style
+        # (Style.parse raises StyleSyntaxError on it), yet Console.print does
+        # NOT raise -- it resolves the unknown tag to a null style and
+        # CONSUMES it, so the marker renders as nothing at all and the
+        # tombstone silently vanishes, which is precisely what this ticket's
+        # acceptance forbids. Only the tag itself is swallowed; text after it
+        # survives unharmed (verified against rich 15.0.0). Guarded, not just
+        # asserted by eye: tests/test_cli.py's recover-ambiguous cases fail
+        # if this marker is ever left unescaped.
         err_console.print(
             f"  [note_id]{row.note_id}[/note_id]  "
             f"[date]{_short_date(row.created)}[/date]  "
