@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING
 import typer
 from pydantic import ValidationError
 from rich.console import Console
+from rich.theme import Theme
 
 from lode import __version__, versions
 from lode.config import (
@@ -115,6 +116,32 @@ app = typer.Typer(
     add_completion=False,
 )
 
+#: The one shared rich Theme for the whole CLI (lode-l38d.11) — style names
+#: are SEMANTIC, not colours, so a command writes e.g. ``style="note_id"``
+#: and never a colour literal. Covers exactly what the four colour/table
+#: consumer tickets need and no more:
+#:   * ``note_id`` / ``date`` — lode-l38d.5 ("lode notes"'s id + date
+#:     columns), matched by lode-l38d.10's ambiguous-prefix candidate
+#:     listing so the two look like the same format.
+#:   * ``warn`` / ``danger`` / ``ok`` — lode-l38d.6 ("lode status": a
+#:     dead-letter count > 0 renders ``danger``, action hints render
+#:     ``warn``, the explicit all-clear line renders ``ok``).
+#:   * ``table.header`` — lode-l38d.4 ("lode config"'s rich ``Table``
+#:     column headers).
+#: This ticket does not restyle any command — nothing prints through these
+#: names yet, so defining the theme is a no-op at the user-visible level;
+#: the sibling tickets are what actually consume it.
+CLI_THEME = Theme(
+    {
+        "note_id": "cyan",
+        "date": "dim",
+        "warn": "yellow",
+        "danger": "bold red",
+        "ok": "bold green",
+        "table.header": "bold",
+    }
+)
+
 #: The one shared rich Console for the whole CLI (lode-l38d.1) — every
 #: colour/width-aware command renders through this, never a per-command
 #: ``Console()``, so colour is decided once per process rather than
@@ -136,7 +163,17 @@ app = typer.Typer(
 #:   is read too late, so the assertion passes without exercising anything.
 #:   Assert the ``NO_COLOR`` path in a **subprocess** with ``NO_COLOR=1`` in
 #:   its env, which re-imports and so re-detects (verified in lode-l38d.1).
-console = Console()
+#:
+#: Attached to a shared ``Theme`` (lode-l38d.11) so every colour-rendering
+#: command below references a semantic style NAME (e.g. ``style="note_id"``)
+#: rather than a colour literal. Split out from lode-l38d.1 because
+#: lode-l38d.4/.5/.6/.10 all depend only on that ticket and so reach the
+#: ready frontier together — /code fans them out as four PARALLEL producers
+#: in isolated worktrees that cannot coordinate a palette with each other.
+#: Deciding it once, here, removes the need for that coordination (see the
+#: lode-l38d epic's /challenge finding). See ``CLI_THEME`` below for the
+#: style names and what each sibling ticket uses them for.
+console = Console(theme=CLI_THEME)
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
