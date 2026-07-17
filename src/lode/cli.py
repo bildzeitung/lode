@@ -208,7 +208,36 @@ CLI_THEME = Theme(CLI_STYLES)
 #: Deciding it once, here, removes the need for that coordination (see the
 #: lode-l38d epic's /challenge finding). See ``CLI_STYLES`` above for the
 #: style names and what each sibling ticket uses them for.
-console = Console(theme=CLI_THEME)
+#:
+#: ``highlight=False`` (lode-re0s) is process-wide colour POLICY, hoisted here
+#: rather than left per-call-site: rich's Console applies its ReprHighlighter
+#: to every plain string BY DEFAULT, injecting ``repr.*`` styles that are NOT
+#: in ``CLI_STYLES`` and so bypass the theme entirely. Verified against rich
+#: 15.0.0 (lode-l38d.5's technical review): a rendered date like
+#: "2026-07-16 14:32" gets shredded into bold-cyan numerals + dim dashes + a
+#: bold-GREEN time -- neither uniformly ``date``-styled nor distinct from
+#: ``note_id``'s cyan -- and any number/IP/UUID/True/None inside a user's own
+#: note text gets silently recoloured too. Every current consumer
+#: (``notes_``) wants the highlighter off; none wants it on, and rich Tables
+#: never run it regardless (verified -- ``lode config``'s Table is
+#: unaffected), so there is no blast radius from centralising this. rich
+#: still honours a per-call ``highlight=True`` if a future renderer ever
+#: genuinely wants the highlighter, so nothing is foreclosed.
+#:
+#: IF A SECOND ``Console`` IS EVER ADDED to this module (e.g. a stderr twin
+#: for error-path rendering) -- it MUST also pass ``highlight=False``. This is
+#: process-wide policy, not a property of this one instance; a second Console
+#: constructed without it silently reopens the exact defect this hoist closes.
+#: rich exposes no public accessor for this flag -- only the private
+#: ``Console._highlight`` -- so an assertion pinning it must use that
+#: attribute (see ``tests/test_cli_console.py``'s ``test_console_highlight_is_disabled``),
+#: the same way ``tests/test_cli_theme.py`` pins ``CLI_STYLES`` against the
+#: private declaration rather than the merged-with-defaults ``Theme``.
+#:
+#: ``soft_wrap`` is NOT hoisted alongside this -- it is genuinely per-renderer
+#: (``notes_`` wants no wrap; ``lode config``'s Table wants width-aware
+#: wrapping), so it stays a per-call-site kwarg.
+console = Console(theme=CLI_THEME, highlight=False)
 
 #: A STDERR twin of ``console`` above (lode-l810) -- same theme, same
 #: colour/width auto-detection rules, but writing to stderr rather than
@@ -895,29 +924,19 @@ def notes_(
         # silently break a long summary across lines; the prior
         # ``typer.echo`` never did that ("no truncation, no width clamp" is
         # this ticket's own description of the behaviour being preserved).
-        # ``highlight=False`` -- rich's Console applies ReprHighlighter to
-        # plain strings BY DEFAULT, which is actively wrong for this row.
-        # Verified against rich 15.0.0, it breaks it two ways:
-        #   * The DATE is shredded: ``_short_date``'s "2026-07-16 14:32"
-        #     highlights as bold-cyan numbers + dim dashes + a bold-GREEN
-        #     "14:32", so it is neither uniformly ``date``-styled nor distinct
-        #     from ``note_id``'s cyan -- defeating this ticket's own
-        #     acceptance criterion ("colour the id and date distinctly").
-        #   * The user's own SUMMARY gets recoloured wherever it happens to
-        #     contain a number/IP/URL/True/None, which the ``typer.echo`` this
-        #     replaced never did.
-        # NOTE the asymmetry, which is why this is easy to miss: the note_id
-        # is NOT damaged -- it is a str(uuid.uuid4()) (repository.py:35) and
-        # rich's ReprHighlighter has a ``uuid`` pattern that matches it whole,
-        # so it renders as one clean cyan span. Only the date gives the bug
-        # away, and only in a real terminal (colour is frozen off under the
-        # suite, so no test can see this -- hence the flag is pinned instead).
+        # This is genuinely per-renderer (unlike ``highlight``, hoisted onto
+        # the shared ``console`` itself, lode-re0s) -- ``lode config``'s
+        # Table wants width-aware wrapping instead.
+        #
+        # The shared ``console`` is constructed with ``highlight=False``
+        # (see its docstring above) precisely so this row never needs the
+        # flag here: rich's ReprHighlighter would otherwise shred the date
+        # and recolour numbers/IPs/etc. inside the user's own summary text.
         # The theme styles are the ONLY colour this row should carry.
         console.print(
             f"[note_id]{row.note_id}[/note_id]  "
             f"[date]{_short_date(row.created)}[/date]  {escape(row.summary)}",
             soft_wrap=True,
-            highlight=False,
         )
 
 
