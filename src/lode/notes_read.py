@@ -206,13 +206,23 @@ def list_deleted_notes(db_path: Path) -> list[NoteRow]:
 
 
 def _list_deleted_notes(conn: sqlite3.Connection) -> list[NoteRow]:
+    """Sorted ``ORDER BY n.rowid DESC``, NOT ``n.created`` -- same fix as
+    :func:`_list_notes` (lode-7h8j), applied here (lode-y1er). ``notes.created``
+    is a SQLite-side wall-clock ``DEFAULT`` stamped independently per INSERT, so
+    it can both tie AND invert relative to insertion order under real
+    scheduling load -- a tiebreaker on ``created`` only helps the tie case;
+    when ``created`` values differ but are simply wrong, the tiebreaker never
+    runs and the wrong order ships anyway. Dropping ``created`` from the sort
+    key entirely and ordering by ``rowid`` (insertion order) alone is immune
+    to wall-clock jitter either way.
+    """
     rows = conn.execute(
         "SELECT n.note_id, n.created, v.body, "
         "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
         "FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
         "WHERE v.op = 'delete' "
-        "ORDER BY n.created DESC"
+        "ORDER BY n.rowid DESC"
     ).fetchall()
     return [
         NoteRow(

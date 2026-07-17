@@ -338,6 +338,81 @@ def test_list_deleted_notes_orders_newest_first(tmp_path: Path) -> None:
     assert [row.note_id for row in rows] == ["n2", "n1"]
 
 
+def test_list_deleted_notes_orders_deterministically_on_a_created_tie(
+    tmp_path: Path,
+) -> None:
+    """A tied ``created`` no longer falls back to SQLite's unstable tie-break.
+
+    Same failure mode as lode-7h8j's ``test_list_notes_orders_deterministically_
+    on_a_created_tie``, reproduced here for ``list_deleted_notes``: forcing three
+    tombstoned notes' ``created`` to an identical value used to make
+    ``list_deleted_notes`` return rowid-ASCENDING (oldest-first) order for the
+    tied rows -- the opposite of the newest-first order the CLI's ``--deleted``
+    view assumes. Insertion order here is a, b, c, so newest-first is c, b, a.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "first saved").version_id
+        head_b = save(conn, "note-b", "second saved").version_id
+        head_c = save(conn, "note-c", "third saved").version_id
+        delete(conn, "note-a", parent=head_a)
+        delete(conn, "note-b", parent=head_b)
+        delete(conn, "note-c", parent=head_c)
+        conn.execute("UPDATE notes SET created = '2026-01-01T00:00:00.000Z'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_deleted_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["note-c", "note-b", "note-a"]
+
+
+def test_list_deleted_notes_orders_by_insertion_when_created_regresses(
+    tmp_path: Path,
+) -> None:
+    """A wall-clock ``created`` regression still yields insertion order.
+
+    Same failure mode as lode-7h8j's ``test_list_notes_orders_by_insertion_when_
+    created_regresses``, reproduced here for ``list_deleted_notes``: an
+    earlier-saved note's ``created`` can land *after* a later-saved note's, with
+    no tie involved. A tiebreaker on ``created`` cannot fix this -- it only ever
+    runs when ``created`` values are equal. Here note-a is saved FIRST but is
+    given the LATEST ``created`` timestamp; the correct newest-first order is
+    still insertion order (c, b, a), not created-DESC order (which would
+    wrongly put a first).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head_a = save(conn, "note-a", "first saved").version_id
+        head_b = save(conn, "note-b", "second saved").version_id
+        head_c = save(conn, "note-c", "third saved").version_id
+        delete(conn, "note-a", parent=head_a)
+        delete(conn, "note-b", parent=head_b)
+        delete(conn, "note-c", parent=head_c)
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:52.016Z' "
+            "WHERE note_id = 'note-a'"
+        )
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:51.192Z' "
+            "WHERE note_id = 'note-b'"
+        )
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:51.203Z' "
+            "WHERE note_id = 'note-c'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_deleted_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["note-c", "note-b", "note-a"]
+
+
 def test_list_deleted_notes_summary_falls_back_to_the_tombstones_carried_body(
     tmp_path: Path,
 ) -> None:
