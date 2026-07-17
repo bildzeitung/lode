@@ -11,10 +11,11 @@ Evaluate each item and,
 
 ## Goal
 
-Extend the web external tool to disambiguate between different domains with
-the ability to add per-website ingestion logic.
+Extend the web connector to disambiguate between different domains with
+the ability to filter for web application ingestion logic. Specically, this
+spec targets JIRA and Confluence integration.
 
-## Context
+## Discussion
 
 Fetching public web documents is well-supported by the current platform. For
 this product to be useful in a business context, however, there are instances
@@ -25,6 +26,10 @@ Additionally, some of these web links are human-facing (i.e. a JIRA link takes
 me to the company instance of Atlassian's product and shows me a ticket), but
 given an API key, a structured response far more friendly for AI use could
 be retrieved as a substitute for the original URL.
+
+With respect to other connectors, the differentiator is mechanism. For example,
+email would not be web-based, but rather via an IMAP library. Repository lookups
+are likely a function of pulling files via git tooling.
 
 ## Systems to target
 

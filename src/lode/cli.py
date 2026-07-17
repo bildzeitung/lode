@@ -1,56 +1,13 @@
 """lode command-line entry point.
 
-A Typer app wired to the ``lode`` console-script (``lode --help`` lists the
-subcommand surface). ``add`` (capture + save, lode-y42.1) saves a note and
-enqueues its derive jobs; ``work`` (lode-i05.3) drains the async work queue
-(chunk + embed + FTS via the registered ``embed`` handler); the operational
-``status`` / ``jobs`` read-outs (lode-y42.3), and the ``egress`` audit read-out
-(E8, lode-fk8.3) are real; ``purge`` (E8, lode-7cx) hard-deletes a note via
-:meth:`lode.repository.Repository.purge`; ``notes`` (lode-1gr.1) lists every
-live note's full id, date, and summary via :func:`lode.notes_read.list_notes`
--- the id source for ``purge`` -- or, with ``--deleted`` (lode-d32.2), lists
-only tombstoned notes via the sibling reader
-:func:`lode.notes_read.list_deleted_notes`; ``show`` (lode-1gr.5, brought to
-CONTENT parity with the TUI inspector modal by lode-ay5.3) prints one note's
-head body plus its full derived enrichment -- summary/tags/entities (stale-
-flagged), inferred edges (now with reason+confidence, compact -- and, for an
-edge that draws down a web link, its external-snapshot introspection
-indented beneath, lode-8d2), a three-valued ``enrichment:`` line ({pending,
-failed, ready}), and whether it is embedded -- via the shared
-:mod:`lode.enrichment_view` seam (lode-ay5.1) also consumed by the TUI, so
-on-demand CLI introspection cannot drift from the modal; sharing ``purge``'s
-id/prefix resolution, and flagging a tombstoned head with a ``[deleted]``
-marker (lode-d32.2) rather than rendering it as if live; ``ask``
-(lode-y42.2) runs the cited Q&A loop
-(retrieve → synthesize → faithfulness gate → cite or abstain); ``no-egress``
-(lode-w0h.7) is the no-egress-tier control surface for a drawn-down external
-source -- flips ``externals.no_egress`` via :func:`lode.externals.set_no_egress`
-so it stays locally retrievable but is excluded from enrich/Q&A cloud egress
-(``docs/externals.md`` "No-egress tier"); ``tui`` (E11,
-lode-mkc.1) launches the Textual TUI shell on the instant capture screen;
-``models pull`` (lode-og3, rebuilding the bounced lode-6qh) explicitly warms
-the local ``fastembed`` weights cache (embedder + reranker/NLI cross-encoder)
-so the ~500MB first-run download happens as a deliberate one-time setup step
-rather than silently mid-capture, and turns its most likely failure mode --
-no network, or a cold cache under ``HF_HUB_OFFLINE=1`` -- into an actionable
-message instead of a raw traceback -- see ``docs/onboarding.md`` and
-``docs/configuration.md`` ("Models"); ``dump-html`` (spec 06 item 7c,
-lode-olmi.7) prints a note's drawn-down external's raw fetched markup
-(``snapshots.raw_payload``) to stdout -- the raw counterpart to ``show``'s
-extracted-text ``snapshots.body`` introspection (lode-8d2) -- resolving
-which external via the same :mod:`lode.enrichment_view` seam, and
-disambiguating by listing or by a 1-based-index/id selector when a note has
-more than one drawn-down external; ``--all`` (lode-l38d.8) bulk-dumps every
-live note's dumpable external(s) instead, printing a delimited
-``==> id url <==`` concatenation to stdout or, with ``--file`` (writing
-into ``--dir``, default the cwd), one 0-padded-suffixed ``<note-id>-NNNN.dmp``
-file per external; ``--file``/``--dir`` also apply to the single-target
-path (no ``--all`` required), writing that one resolved dump to a file
-with the same naming instead of stdout.
+A Typer app wired to the lode console-script (lode --help lists the
+subcommand surface). See docs/design.md for the save path, docs/storage.md
+for the async work queue, docs/retrieval.md for the cited Q&A pipeline, and
+docs/externals.md for external sources, no-egress, and hard delete.
 
-The eval harness (``lode.eval.harness.score_golden_set``) is a maintainer/CI
-integration test run via ``nox -s eval`` — it is **not** a shipped end-user
-command (``docs/decisions.md``, the eval-harness entry, Shape A, lode-5y8.5).
+The eval harness (lode.eval.harness.score_golden_set) is a maintainer/CI
+integration test run via "nox -s eval" -- it is not a shipped end-user
+command (see docs/decisions.md).
 """
 
 import json
@@ -250,7 +207,13 @@ console = Console(theme=CLI_THEME, highlight=False)
 #: construction) rather than the TTY/``NO_COLOR`` detection above it, so this
 #: still captures correctly under ``CliRunner``'s per-invocation stderr
 #: redirection, the same way ``typer.echo(err=True)`` already does.
-err_console = Console(theme=CLI_THEME, stderr=True)
+#:
+#: ``highlight=False`` is a constructor kwarg here too (lode-9jmv), per the
+#: hoisted-highlight convention ``console`` above documents: this is the
+#: "second Console" that docstring warned about, and the process-wide policy
+#: applies to it exactly the same as to ``console`` -- not a per-call-site
+#: flag at its one print call.
+err_console = Console(theme=CLI_THEME, stderr=True, highlight=False)
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
@@ -395,25 +358,20 @@ def add(
 ) -> None:
     """Capture a note, enqueue its derive jobs, and fast-track enrichment.
 
-    The save path (``docs/design.md`` / lode-npx.2):
+    The save path (see docs/design.md):
 
-    1. ``Repository.save`` writes the version and enqueues **both** the
-       ``embed`` and ``enrich`` derive jobs atomically — the note is
-       keyword-findable the moment the transaction commits (synchronous FTS5,
-       lode-xyb), and the enrich job exists as ``pending`` from that same
-       instant (no gap for reconcile's ``enrich_gap`` step to misdetect).
-    2. :func:`_enrich_immediately` opportunistically claims and runs that
-       enrich job inline (:func:`lode.worker.claim_and_run_one`) so the fresh
-       note's tags / entities / inferred edges appear without waiting for the
-       async worker (lode-npx.2 "interactive now" path). If it loses the claim
-       race to a concurrent ``lode work``, or the run fails, the job's normal
-       attempts/backoff/dead-letter accounting (:func:`lode.worker.run_one`)
-       takes over — no separate re-enqueue path needed.
-    3. Embedding runs asynchronously via ``lode work`` (lode-x6r.5) so the CLI
-       returns quickly regardless of enrichment latency.
+    1. The note is saved and both its embed and enrich jobs are enqueued
+       atomically -- it is keyword-findable the moment the save commits.
+    2. The enrich job is opportunistically run immediately, so the fresh
+       note's tags, entities, and inferred edges usually appear right away.
+       If that immediate attempt loses to a concurrent "lode work" or
+       fails outright, the job's normal retry/backoff accounting picks it
+       up later -- no separate re-enqueue path needed.
+    3. Embedding always runs asynchronously via "lode work", so this
+       command returns quickly regardless of enrichment latency.
 
-    The body comes from the ``TEXT`` argument or, if omitted, verbatim from
-    stdin; an empty / whitespace-only body is refused.
+    The body comes from the TEXT argument, or -- if omitted -- is read
+    verbatim from stdin. An empty or whitespace-only body is refused.
     """
     db_path = db or default_db_path()
     body = text if text is not None else sys.stdin.read()
@@ -482,16 +440,15 @@ def ask(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Answer a question from your notes — retrieve, synthesize, gate, then cite.
+    """Answer a question from your notes -- retrieve, synthesize, gate, then cite.
 
-    Runs the read pipeline (lexical + dense search → RRF fusion → small-to-big
-    parent expansion → trust-rank) to build a cited context, hands it to the Q&A
-    loop (:func:`lode.cited_answer.ask`, which synthesizes structured claims and
-    runs the faithfulness gate **before display**), and prints either the surviving
-    cited claims — each with its ``version_id`` / ``snapshot_id`` plus the verbatim
-    span it rests on — or an honest abstention when nothing is grounded. Any
-    no_egress material that matched is surfaced as "present, withheld from cloud
-    synthesis" rather than silently dropped.
+    Runs the read pipeline (lexical + dense search, fused and re-ranked) to
+    build a cited context, synthesizes structured claims from it, and checks
+    each one against your notes before showing anything. Prints either the
+    surviving cited claims -- each with its source and the verbatim span it
+    rests on -- or an honest abstention when nothing is grounded. Any
+    no_egress material that matched is surfaced as "present, withheld from
+    cloud synthesis" rather than silently dropped.
     """
     # Imported here, not at module scope: cited_answer / auth pull in the Anthropic
     # SDK, which the instant capture path (``add``) must never load.
@@ -678,18 +635,14 @@ def purge(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Hard-delete a note and its derived data (E8 hard delete, ``docs/externals.md``).
+    """Hard-delete a note and its derived data (see docs/externals.md).
 
-    The deliberate immutability break: overwrite every body in the note's version
-    chain with a ``[purged YYYY-MM-DD]`` marker, stamp ``purged_at``, drop the
-    chain's ``source='ai'`` annotations (keeping ``source='user'`` corrections), and
-    cascade-evict the derived cache through the repository's cache seam. Delegates to
-    :meth:`lode.repository.Repository.purge` — no half-delete. (The cache is a no-op
-    :class:`~lode.repository.NullCache` until the engine wiring lands, lode-1f9.)
+    The deliberate immutability break: every body in the note's version
+    chain is overwritten with a "\\[purged YYYY-MM-DD]" marker, the purge is
+    stamped, AI-generated annotations are dropped (your own corrections are
+    kept), and derived cache entries are evicted. There is no half-delete.
 
-    ``target`` may be a full id or an unambiguous prefix of one (lode-1gr.3),
-    resolved via :meth:`lode.repository.Repository.resolve_note_prefix` — see
-    that method for exactly what a prefix is allowed to match.
+    TARGET may be a full note id or an unambiguous prefix of one.
     """
     conn = _open_db(db)
     try:
@@ -719,38 +672,17 @@ def recover(
 ) -> None:
     """Undo a soft-delete: repoint a tombstoned note's head past the tombstone.
 
-    Reverses :func:`lode.versions.delete` (``lode-d32.3``), the recover leg of
-    the epic ``lode-d32``: delete is a one-way trip to ``lode purge`` without
-    this command.
+    A soft-deleted note is otherwise a one-way trip to "lode purge".
 
-    ``target`` may be a full id or an unambiguous prefix of one, resolved via
-    :meth:`lode.repository.Repository.resolve_note_prefix` with
-    ``include_deleted=True`` — the d32.2 land-review decision (option (a)):
-    unlike ``purge``/``show``, which default that flag to ``False`` and so
-    stay live-only, ``recover``'s only valid input is a tombstoned note, so a
-    prefix here may also resolve one. Ambiguity is judged identically to the
-    live-only path regardless of which state(s) match: a prefix matching one
-    live and one deleted note is still :class:`~lode.repository.AmbiguousNoteIdError`
-    — recover never silently prefers the tombstone — and unknown/ambiguous ids
-    error exactly like ``purge``/``show``.
+    TARGET may be a full id or an unambiguous prefix of one. Unlike
+    "purge"/"show", which only ever resolve a prefix to a live note, a
+    prefix here may also resolve to a tombstoned note, since that is the
+    only valid input. A prefix matching more than one note (live or
+    deleted) is still ambiguous, and unknown ids error the same way
+    "purge"/"show" do.
 
     A resolved note that is not currently tombstoned errors clearly rather
-    than silently no-op'ing (there is nothing to recover). The recover target
-    is the tombstone's own ``parent_version_id`` — by construction that IS the
-    pre-delete head (:func:`lode.versions.delete` writes the tombstone with
-    the live head as its parent, versions.py), so this is one column read, not
-    a chain walk.
-
-    Delegates to :meth:`lode.repository.Repository.recover`, NOT
-    :func:`lode.versions.recover` directly — ``Repository.recover`` is the
-    only path that applies :func:`~lode.redact.redact_before_index` before
-    re-indexing the recovered head (lode-ibv), so a recovered secret-bearing
-    note is not made keyword-findable again via the FTS/lexical cache leg.
-    Uses the same write-path cache composite ``add``/capture/edit/reconcile
-    already use (``CompositeCache([LexicalCacheBackend(conn)])``) — NOT the
-    bare ``Repository(conn)`` -> ``NullCache`` ``purge`` builds, under which
-    ``Repository.recover``'s ``cache.index()`` would be a silent no-op and the
-    FTS row would never be restored.
+    than silently doing nothing.
     """
     conn = _open_db(db)
     try:
@@ -829,9 +761,11 @@ def _report_ambiguous_prefix(
 
     Rows render through ``err_console`` -- a stderr twin of the shared
     ``console`` (lode-l810) -- with the same theme style NAMES, escaping,
-    and ``highlight=False``/``soft_wrap=True`` flags ``notes_`` uses, so the
-    two listings' shared columns (id, date) now look identical rather than
-    one being coloured and the other bare ``typer.echo``.
+    and ``soft_wrap=True`` flag ``notes_`` uses, so the two listings' shared
+    columns (id, date) now look identical rather than one being coloured and
+    the other bare ``typer.echo``. ``highlight`` needs no per-call flag here:
+    ``err_console`` is constructed with ``highlight=False`` (lode-9jmv),
+    mirroring the shared ``console``.
     """
     typer.echo(
         f"ambiguous note id prefix {target!r}: {len(exc.candidates)} matches",
@@ -842,8 +776,10 @@ def _report_ambiguous_prefix(
         # Deliberately the same rendering path as notes_ (lode-l38d.5,
         # lode-l810): the shared theme's note_id/date style NAMES (never a
         # colour literal -- CLI_STYLES stays the one source of truth), the
-        # summary escape()d, and the same two rendering flags. The rationale
-        # for each flag lives at notes_'s loop and is deliberately NOT
+        # summary escape()d, and the same soft_wrap flag. ``highlight=False``
+        # is no longer a per-call flag here -- err_console is constructed
+        # with it (lode-9jmv), mirroring the shared console. The rationale
+        # for soft_wrap lives at notes_'s loop and is deliberately NOT
         # restated here -- both pin rich-version-specific behaviour, and two
         # copies would drift apart (the same call notes_'s own tests make).
         #
@@ -864,7 +800,6 @@ def _report_ambiguous_prefix(
             f"[date]{_short_date(row.created)}[/date]  "
             f"{escape(row.summary + marker)}",
             soft_wrap=True,
-            highlight=False,
         )
     raise typer.Exit(code=1) from None
 
@@ -878,36 +813,22 @@ def notes_(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """List notes -- live by default, tombstoned with ``--deleted``.
+    """List notes -- live by default, tombstoned with --deleted.
 
-    One row per live note, newest first (:func:`lode.notes_read.list_notes`):
-    the full ``note_id`` -- copy-pasteable straight into ``lode purge`` -- a
-    short date, and its summary (the head's ``kind='summary'`` AI annotation,
-    or the note's first line when not yet enriched). Tombstoned notes are
-    excluded, same live-heads-only rule ``purge`` and the TUI browse screen
-    already use. The id and date render via the shared theme's ``note_id``/
-    ``date`` style NAMES (lode-l38d.11, lode-l38d.5) -- never a colour literal,
-    so ``CLI_STYLES`` stays the one source of truth for the palette -- and are
-    auto-disabled when piped or under ``NO_COLOR`` by the shared ``console``
-    (lode-l38d.1). A blank line separates each note from the next (not a
-    trailing one after the last row). The full id is never shortened here
-    (lode-1gr.1):
-    ``lode notes`` is the copy-pasteable, greppable listing Browse/``show``/
-    Tags deliberately don't try to be.
+    One row per note, newest first: its full id (copy-pasteable straight
+    into "lode purge"), a short date, and its summary (the AI-generated one
+    once available, otherwise the note's first line). The full id is never
+    shortened here -- this is the copy-pasteable, greppable listing that
+    Browse and "lode show" deliberately aren't. A blank line separates each
+    note from the next.
 
-    ``--deleted`` (lode-d32.2) flips that: it lists *only* tombstoned notes
-    (via the sibling reader :func:`lode.notes_read.list_deleted_notes`) rather
-    than overloading this command's live-only contract that browse/purge/
-    retrieval/reconcile all depend on. A deleted note vanishes from both
-    Browse and plain ``lode notes``, so this full-id listing is the only route
-    back to an id a later ``lode show``/``lode recover`` can act on.
-
-    Each ``--deleted`` row also carries a trailing ``" [deleted]"`` marker
-    (the human decision at lode-bau6, built here per lode-l38d.12) -- the same
-    convention ``show`` (a tombstoned head) and ``_report_ambiguous_prefix``
-    (lode-l38d.10) already use for the same concept, so this does not invent a
-    third. The live listing is untouched -- the marker is the empty string
-    there, so ``lode notes`` renders byte-identical to before this ticket.
+    --deleted flips that: it lists only tombstoned notes instead of live
+    ones. A deleted note vanishes from a plain listing, so this is the only
+    route back to an id a later "lode show" or "lode recover" can act on.
+    Each row in this mode also carries a trailing " [deleted]" marker -- the
+    same convention "lode show" uses for a tombstoned head -- so a line still
+    reads as a tombstone once copied out of this listing. The live listing is
+    unaffected: no marker, byte-identical to before.
     """
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1016,38 +937,22 @@ def show_(
 ) -> None:
     """Show a note's head body plus its derived enrichment (on-demand introspection).
 
-    specs/03-tui-features.md item 2 (lode-1gr.5), brought to CONTENT parity
-    with the TUI inspector modal (lode-ay5.2) by lode-ay5.3: the CLI surface
-    for introspecting what enrichment has (or hasn't) landed on a note,
-    without opening the TUI. Prints the head body, then renders
-    :func:`~lode.enrichment_view.enrichment_view_conn` -- the ONE seam both
-    this command and the TUI modal consume (lode-ay5.1), so neither re-derives
-    the stale-display policy or the enrichment-state predicate. Every
-    view-model field is surfaced: summary/tags/entities (stale-flagged),
-    inferred edges (now WITH reason+confidence, compact -- e.g.
-    ``-> to_id (reason, 0.82)[stale]``, a net-new field this command gained
-    over the pre-ay5.3 CLI), embed status, and a three-valued
-    ``enrichment:`` line ({pending, failed, ready}) that replaces the old
-    ambiguous bare ``(none)`` -- an un-enriched note now reads
-    ``enrichment: pending``, a dead-lettered one ``enrichment: failed``, both
-    distinct from enriched-but-empty (``enrichment: ready``). Per-field
-    ``(none)`` is unchanged for a genuinely empty section (content is never
-    suppressed by state, lode-ay5.1's pinned predicate) -- ``enrichment:``
-    and a field's own ``(none)`` are complementary, not substitutes.
+    Prints the head body, then every enrichment field: summary, tags, and
+    entities (flagged if stale), inferred edges with their reason and
+    confidence (e.g. "-> to_id (reason, 0.82) \\[stale]"), whether the note
+    is embedded, and an overall enrichment status of pending, failed, or
+    ready. A field that is genuinely empty still shows "(none)" -- that is
+    independent of the overall status line.
 
-    ``target`` may be a full id or an unambiguous prefix of one, resolved via
-    :meth:`lode.repository.Repository.resolve_note_prefix` -- the exact
-    resolver ``purge`` uses (lode-1gr.3), so an unknown or ambiguous id errors
+    TARGET may be a full id or an unambiguous prefix of one, resolved the
+    same way "purge" resolves one, so an unknown or ambiguous id errors
     identically.
 
-    A tombstoned note (lode-d32.2) is not filtered out here -- unlike
-    ``resolve_note_prefix``, which only ever resolves a *prefix* to a live
-    note, a full id still reaches a tombstone unchanged (same "full id always
-    works" contract ``purge`` relies on, repository.py). Rather than render it
-    as if live, the header carries a visible ``[deleted]`` marker (the same
-    ``[stale]``-suffix convention :func:`_render_item` already uses for a
-    flagged-not-hidden annotation) while still printing the carried-forward
-    body -- useful context for deciding whether to ``lode recover`` it.
+    A tombstoned note is not filtered out here -- unlike a prefix, which
+    never resolves to one, a full id still reaches it. Rather than render it
+    as if live, the header carries a visible "\\[deleted]" marker while
+    still printing the carried-forward body -- useful context for deciding
+    whether to "lode recover" it.
     """
     conn = _open_db(db)
     try:
@@ -1298,28 +1203,21 @@ def _cold_model_cache(settings: Settings) -> bool:
 def status(
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Show work-queue health: job counts, dead-letters, an egress summary, and
-    what (if anything) needs your attention.
+    """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
 
-    Reads the ``jobs`` and ``egress_log`` tables (``docs/storage.md`` §8): the
-    pending/running/done/failed/dead job counts (rendered as a table -- the
-    ``dead`` row in ``danger`` red when > 0, lode-l38d.6/.11), the dead-letter
-    (``dead``) jobs with their last error (also ``danger``-styled when > 0),
-    and how much content has left the box, by purpose.
+    Counts of jobs in each status (pending, running, done, failed, dead --
+    the dead count highlighted when nonzero), the dead-letter jobs with
+    their last error, and how much content has left the box, by purpose.
 
-    Status lifecycle: ``pending -> running -> done`` (success);
-    ``running -> failed`` (transient error, retried); ``failed -> dead``
-    (terminal dead-letter at max-attempts gate).
+    Status lifecycle: pending -> running -> done (success); running ->
+    failed (transient error, retried); failed -> dead (terminal, once
+    retries are exhausted).
 
-    Beneath all of that, an action-hint footer (lode-l38d.6) tells you what to
-    do next: a hint to run ``lode work`` if any job is pending or failed
-    (still-retryable), a hint to run ``lode models pull`` if the local
-    fastembed weights cache is cold for any resolved model (see
-    :func:`_cold_model_cache`), or an explicit "No action needed." when
-    neither applies -- so an absent hint is never mistaken for an absent
-    check. Dead-letters deliberately get no hint here: they are already
-    listed above with their errors, and ``lode work`` will not retry them
-    (retries are exhausted) -- colour is what distinguishes them instead.
+    Below that, an action-hint footer tells you what to do next: run
+    "lode work" if anything is pending or still-retryable, run
+    "lode models pull" if the local model cache is cold, or an explicit
+    "No action needed." if neither applies. Dead-letter jobs get no hint --
+    they are already listed above with their errors, and won't be retried.
     """
     conn = _open_db(db)
     try:
@@ -1464,11 +1362,11 @@ def jobs_(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """List the derive jobs on the work queue (``jobs`` table, ``docs/storage.md``).
+    """List the derive jobs on the work queue (see docs/storage.md).
 
-    One row per job — id, type, status, attempts, target version — newest last;
-    a failed job also shows its last error. ``--status`` narrows the list to a
-    single queue state.
+    One row per job -- id, type, status, attempts, target version -- newest
+    last; a failed job also shows its last error. --status narrows the list
+    to a single queue state.
     """
     conn = _open_db(db)
     try:
@@ -1507,13 +1405,12 @@ def egress(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """List what content has left the box for the cloud, and when (``egress_log``).
+    """List what content has left the box for the cloud, and when.
 
-    The audit read-out over ``egress_log`` (``docs/externals.md`` "Egress log") —
-    a straight answer to "what of mine has gone to the cloud, and when?". One row
-    per cloud send, oldest first: id, ts, purpose, model, the version/passage ids
-    sent, and which redactions were applied. ``--purpose`` narrows to ``enrich``
-    or ``qa`` sends.
+    A straight answer to "what of mine has gone to the cloud, and when?"
+    (see docs/externals.md "Egress log"). One row per cloud send, oldest
+    first: id, timestamp, purpose, model, the ids of what was sent, and
+    which redactions were applied. --purpose narrows to enrich or qa sends.
     """
     conn = _open_db(db)
     try:
@@ -1555,19 +1452,16 @@ def no_egress_(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Mark (or ``--clear``) an external source no_egress (``docs/externals.md``).
+    """Mark (or --clear) an external source no_egress (see docs/externals.md).
 
-    The no-egress-tier control surface (lode-w0h.7): a no_egress external is
-    still captured, chunked, embedded, and locally retrievable (keyword +
-    vector) — only cloud egress changes. It is excluded from both the
-    enrichment send and the Q&A context, and any answer that would have cited
-    it surfaces it instead as "present, withheld from cloud synthesis"
-    (:data:`lode.egress.WITHHELD_CITATION`). The flag is read generically off
-    the ``externals`` row by every send path (:mod:`lode.egress`,
-    :mod:`lode.cited_answer`) — this command just flips it.
+    A no_egress external stays captured, chunked, embedded, and locally
+    retrievable (keyword + vector) -- only cloud egress changes. It is
+    excluded from both the enrichment send and the Q&A context, and any
+    answer that would have cited it surfaces it instead as "present,
+    withheld from cloud synthesis".
 
-    ``external_id`` must already exist (e.g. drawn down via a note's pasted
-    URL, ``docs/externals.md``); this command does not create sources.
+    EXTERNAL_ID must already exist (e.g. drawn down via a note's pasted
+    URL) -- this command does not create sources.
     """
     conn = _open_db(db)
     try:
@@ -1777,55 +1671,34 @@ def dump_html(
     ),
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Print a note's drawn-down external's raw HTML (``snapshots.raw_payload``).
+    """Print a note's drawn-down external's raw HTML (its captured snapshot).
 
-    Spec 06 item 7c (lode-olmi.7). ``snapshots.raw_payload`` holds the
-    original fetched bytes/markup a web draw-down mirrored (``lode-w0h.2``);
-    ``snapshots.body`` -- what ``show``'s external-snapshot introspection
-    already surfaces (lode-8d2) -- is the *extracted* text instead. This
-    command is the CLI's route to the raw side.
+    TARGET resolves the same way as "show"/"purge": a full id or an
+    unambiguous prefix. A note reaches an external via one of its
+    enrichment edges; only edges that resolve to a real external count.
 
-    ``target`` resolves exactly like ``show``/``purge``
-    (:meth:`lode.repository.Repository.resolve_note_prefix`): full id or an
-    unambiguous prefix. A note reaches an external via one of its enrichment
-    edges (:mod:`lode.enrichment_view`'s ``EnrichmentEdge.external``, the same
-    seam ``show`` renders) -- only edges that resolve to a real ``externals``
-    row count. Addressing a note with more than one such edge is this
-    ticket's open question, resolved as: with exactly one, no ``selector`` is
-    needed; with more than one and no ``selector``, the command lists them
-    (index, id, source_type, snapshot, state) rather than guessing; a
-    ``selector`` picks by that listing's 1-based index or by the external's
-    id (URL) verbatim.
+    With exactly one such external, no SELECTOR is needed. With more than
+    one and no SELECTOR given, the command lists them (index, id, source
+    type, snapshot, state) instead of guessing; SELECTOR then picks one by
+    that listing's 1-based index or by the external's id (URL) verbatim.
 
-    A tombstoned snapshot, or an ``ok`` one that simply has no captured raw
-    HTML (``raw_payload`` is nullable, ``schema.sql``), reports cleanly to
-    stderr and exits non-zero rather than dumping an empty line.
+    A tombstoned snapshot, or one with no captured raw HTML, reports
+    cleanly to stderr and exits non-zero rather than printing an empty
+    line.
 
-    ``--all`` (lode-l38d.8) switches to bulk mode: every live note's
-    dumpable external(s) instead of one target, so ``target``/``selector``
-    become irrelevant and must be omitted (an explicit one alongside
-    ``--all`` is an arity error, exit 1). Bulk mode never applies the
-    single-target path's "nothing to dump" errors -- a note or external with
-    nothing captured is silently skipped instead. ``--all`` without
-    ``--file`` prints stdout output delimited by ``==> id url <==`` headers;
-    ``--all --file`` (writing into ``--dir``, default the cwd, created if
-    absent) instead writes one ``<note-id>-NNNN.dmp`` file per external,
-    0-padded and unconditionally suffixed even for a note's only external.
+    --all switches to bulk mode: every live note's dumpable external(s)
+    instead of one target -- TARGET/SELECTOR must then be omitted. A note
+    or external with nothing captured is silently skipped rather than
+    erroring. Without --file, output is printed to stdout, each dump
+    preceded by an "==> id url <==" header; with --file (written into
+    --dir, default the current directory), one <note-id>-NNNN.dmp file is
+    written per external instead, 0-padded and numbered by listing
+    position.
 
-    ``--file`` is NOT restricted to ``--all`` (lode-l38d.8, post-review user
-    correction): given alongside a single ``target``, it writes that one
-    resolved external's dump to a file instead of stdout, using the same
-    ``<note-id>-NNNN.dmp`` naming and ``--dir`` handling as the ``--all``
-    path -- NNNN is the external's 1-based position in the note's dumpable-
-    external listing (the same listing/selector numbering above), so it is
-    always ``0001`` when the note has only one. The single-target path's own
-    "nothing to dump" errors (unknown note, no external sources, no captured
-    HTML, tombstone) fire exactly as before and take priority over writing a
-    file. The only arity error left involving these two flags is ``--dir``
-    without ``--file``, which would otherwise be silently ignored while
-    output still went to stdout; ``--file`` with neither a ``target`` nor
-    ``--all`` is still rejected, by the existing "target is required unless
-    --all is given" check above -- no separate check is needed.
+    --file also works with a single TARGET (no --all needed): it writes
+    that one resolved external's dump to a file instead of stdout, using
+    the same naming and --dir handling. The single-target "nothing to
+    dump" errors still apply and take priority over writing a file.
     """
     if all_notes and (target is not None or selector is not None):
         typer.echo(
@@ -1994,30 +1867,18 @@ def config(
 ) -> None:
     """Show the resolved on-disk locations and every runtime/tune knob.
 
-    A read-out of the single-root layout under ``$LODE_HOME`` (default ``~/.lode``)
-    so you can find, back up, or inspect lode's state: the root, the SQLite DB and
-    its sibling lock, the LanceDB vector store, the model-weights cache, the log
-    directory, and the optional ``config.toml`` (shown present/absent) — the same
-    set ``docs/configuration.md`` "Paths & locations" documents. The path rows come
-    from the shared row-builder (:func:`lode.config.config_rows`) that also backs
-    the TUI's Ctrl+O diagnostics screen (via :func:`lode.config.config_lines`, the
-    text shape of those same rows), so the two cannot drift
-    (lode-u5gh); ``--db`` shifts the displayed DB (and its lock + co-located
-    vector store) to an explicit override.
+    A read-out of the single-root layout under $LODE_HOME (default
+    ~/.lode) so you can find, back up, or inspect lode's state: the root,
+    the SQLite DB and its lock, the vector store, the model-weights cache,
+    the log directory, and whether a config.toml is present (see
+    docs/configuration.md). --db shifts the displayed DB (and its lock and
+    co-located vector store) to an explicit override.
 
-    Below the paths, a knob table lists every ``runtime``/``tune`` Settings knob
-    (``Kind.BUILD`` knobs excluded — changing one implies a rebuild/migration,
-    docs/configuration.md) with its CURRENT resolved value (defaults <-
-    config.toml <- overrides), even with no ``config.toml`` present. Fed by the
-    same shared builder (:func:`lode.config.knob_rows`) the TUI's ConfigScreen
-    renders into a table widget (lode-juz8.6) — one row list, not two.
-
-    Both blocks render as terminal-width-aware rich ``Table``\\ s through the
-    shared ``console`` (lode-l38d.4) — column widths come from the actual
-    rendered width (falling back to 80 when piped/non-TTY), and long values
-    (the redaction pattern lists, most notably) wrap within their column
-    instead of inflating every row's padding to the single widest value or
-    running off the edge of the terminal.
+    Below the paths, a knob table lists every runtime/tune setting with its
+    currently resolved value (defaults, then config.toml, then overrides),
+    even with no config.toml present. Both tables adapt to the terminal
+    width, wrapping long values within their column instead of running off
+    the edge.
     """
     console.print(_config_path_table(config_rows(db or default_db_path())))
     console.print()
@@ -2029,27 +1890,11 @@ def tui(
     ctx: typer.Context,
     db: Path | None = _DB_OPTION,
 ) -> None:
-    """Launch the Textual TUI (E11), starting on the instant capture screen.
+    """Launch the Textual TUI, starting on the instant capture screen.
 
-    Deferred import — the rest of the CLI never pays Textual's import cost
-    (same "heavy dep behind the command that needs it" convention as ``ask``'s
-    Anthropic/vector imports). The capture screen's own save path
-    (:mod:`lode.tui.capture`) has no AI call in it at all: only the
-    synchronous version-write + FTS5 tier runs before it returns.
-
-    Re-configures logging file-only (lode-1i8.2): the group callback already
-    ran ``configure_logging(log_dir=...)`` with its default ``console=True``,
-    which attaches a stderr handler that would otherwise dump log lines onto
-    Textual's alternate-screen display, corrupting it. ``console=False`` here
-    removes that stream handler while keeping the file handler, so records
-    still land in ``$LODE_HOME/logs/lode.log`` for telemetry — plain commands
-    (``ask``/``add``/...) are untouched since only this command passes it.
-
-    Passes ``--debug`` (lode-1i8.3) through to this second ``configure_logging``
-    call via ``ctx.obj`` (set by the group callback) so the DEBUG level survives
-    the file-only re-configure: in the TUI, ``--debug`` raises verbosity in the
-    log FILE only, since ``console=False`` here means the console was never
-    reattached in the first place.
+    Logs go to $LODE_HOME/logs/lode.log instead of the terminal, since the
+    TUI takes over the screen. The top-level --debug flag still raises the
+    log file's verbosity.
     """
     level = logging.DEBUG if ctx.obj else None
     configure_logging(level=level, log_dir=log_dir(), console=False)
@@ -2178,41 +2023,28 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
 def models_pull() -> None:
     """Warm the local model cache: download the resolved weights once, deliberately.
 
-    lode-6qh: on a cold cache, the first embed call otherwise downloads ~500MB of
-    ONNX weights from HuggingFace mid-capture -- a surprise phone-home rather than
-    a one-time setup cost. This command forces that download now, up front, so a
-    later ``lode work`` / ``lode ask`` never hits the network unexpectedly.
+    On a cold cache, the first embed call otherwise downloads several
+    hundred MB of model weights from HuggingFace mid-capture -- a surprise
+    phone-home rather than a one-time setup cost. This forces that download
+    now, up front, so a later "lode work" / "lode ask" never hits the
+    network unexpectedly.
 
-    Warms every ``fastembed``-loaded model named by your *resolved* settings
-    (:func:`_resolve_settings`, so a ``$LODE_HOME/config.toml`` override of
-    ``embedding_model`` / ``rerank_model`` / ``entailment_model`` is honored,
-    lode-40g/lode-og3 -- not the pinned :class:`~lode.config.Settings` defaults)
-    -- the embedder (``embedding_model``) and the reranker/NLI cross-encoder
-    (``rerank_model`` / ``entailment_model``, ``docs/configuration.md`` "Models")
-    -- reusing the same lazy-load wrappers the read/gate paths construct
-    (:class:`lode.embedding.FastEmbedEmbedder`,
-    :class:`lode.retrieval.FastEmbedCrossEncoder`,
-    :class:`lode.faithfulness.FastEmbedEntailmentScorer`), so this pulls into
-    the exact ``cache_dir`` (:func:`lode.config.model_cache_dir`,
-    ``$LODE_HOME/models/``) production reads from -- never ``fastembed``'s own
-    ``tempfile.gettempdir()`` default (lode-gmo). ``rerank_model`` and
-    ``entailment_model`` default to the same pinned id (``BAAI/bge-reranker-base``,
-    lode-txh.6): the second load is a same-model cache hit, so it is skipped
-    rather than re-fetched, unless a config override has genuinely split them.
+    Warms every model named by your resolved settings (a config.toml
+    override of the embedding, reranker, or entailment model is honored):
+    the embedder and the reranker/NLI cross-encoder (see
+    docs/configuration.md "Models"). The reranker and entailment models
+    default to the same id, so when they match, the second load is skipped
+    as a cache hit rather than re-fetched.
 
-    Once warmed, every subsequent run is fully offline for indexing/retrieval; to
-    force that even against a cold miss (an air-gapped run against an
-    already-warm cache), set ``HF_HUB_OFFLINE=1`` -- fastembed's own
-    ``local_files_only`` escape hatch (not a lode-specific flag).
+    Once warmed, every subsequent run is fully offline for indexing and
+    retrieval. To force that even against a cold cache miss, set
+    HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific.
 
-    A bad ``config.toml`` gives the same clean stderr message + exit 1 every
-    other command gives (:func:`_resolve_settings`), not a raw traceback.
-
-    On its most likely failure path -- no network, ``HF_HUB_OFFLINE=1`` against a
-    cold cache, or HuggingFace rate-limiting/erroring -- this exits non-zero with
-    a clear, actionable message rather than a raw traceback (lode-96t); see
-    :func:`_warm` for exactly which exceptions are mapped and why anything else
-    still propagates as a real bug.
+    A bad config.toml gives the same clean stderr message and exit 1 every
+    other command gives, not a raw traceback. On its most likely failure
+    path -- no network, HF_HUB_OFFLINE=1 against a cold cache, or a
+    HuggingFace rate limit or error -- this exits non-zero with a clear,
+    actionable message instead.
     """
     from lode.embedding import FastEmbedEmbedder
     from lode.faithfulness import FastEmbedEntailmentScorer
@@ -2293,52 +2125,44 @@ def work(
         "--wait",
         "--until-done",
         help=(
-            "Block, polling every --interval seconds, until the queue is fully "
-            "drained -- including collected Batches API enrich results -- or "
-            "the bounded timeout (Settings.work_wait_timeout_s, "
-            "docs/configuration.md) elapses, whichever comes first. On "
-            "timeout, exits non-zero naming the still-pending/running jobs. "
-            "Suits embed-heavy or small-batch cases; a large async enrich "
-            "load can legitimately outlast the timeout (Batches API SLA up "
-            "to 24h) -- that is expected, just re-run 'lode work' (or "
-            "--wait again) to keep collecting. Mutually exclusive with "
-            "--loop/--watch, which never exits on its own."
+            "Block, polling every --interval seconds, until the queue is "
+            "fully drained or a bounded timeout elapses (see "
+            "docs/configuration.md), whichever comes first. On timeout, "
+            "exits non-zero naming the still-pending/running jobs -- just "
+            "re-run 'lode work' (or --wait again) to keep collecting; a "
+            "large enrich batch can legitimately take a long time to land. "
+            "Mutually exclusive with --loop/--watch, which never exits on "
+            "its own."
         ),
     ),
 ) -> None:
-    """Drain the async work queue: claim → run → retry/dead-letter.
+    """Drain the async work queue: claim, run, retry, or dead-letter each job.
 
-    ONE-SHOT by default: acquires the single-instance advisory lock
-    (lode-i05.2), resets overdue failed jobs, then claims and runs ready
-    pending jobs until none remain and exits.  ``--loop`` / ``--watch`` keeps
-    the loop alive forever, sleeping ``--interval`` seconds between passes.
-    ``--wait`` / ``--until-done`` instead polls only until the queue is fully
-    drained or a bounded timeout fires (see the option help) -- so a caller
-    doesn't have to re-run ``work`` by hand to see an async enrich batch land.
+    One-shot by default: acquires the single-instance lock, resets overdue
+    failed jobs, then claims and runs ready pending jobs until none remain
+    and exits. --loop / --watch keeps the loop alive forever instead,
+    sleeping --interval seconds between passes. --wait / --until-done polls
+    only until the queue is fully drained or a bounded timeout fires (see
+    its own help), so you don't have to re-run this by hand to see an async
+    enrich batch land.
 
-    ``embed`` jobs run synchronously in the main claim-run loop.  ``enrich``
-    jobs are submitted to the Batches API in a pre-step ahead of that loop and
-    collected on a later drain pass (lode-npx.2); ``refresh`` still has no
-    handler and accumulates harmlessly until the connectors step arrives
-    (lode-i05.3 scope fence).  A second ``lode work`` while one is already
-    running is refused.
+    embed jobs run synchronously in the main loop. enrich jobs are
+    submitted to a batch API ahead of that loop and collected on a later
+    pass; refresh jobs have no handler yet and simply accumulate
+    harmlessly. A second "lode work" while one is already running is
+    refused.
 
     Each pass prints a per-job outcome line for what it actually produced
-    (lode-1gr.4) -- e.g. ``enriched <short-id>: 4 tags, 2 entities, 3 edges,
-    summary set`` for a batch collected this pass, or ``embedded <short-id>: 3
-    passages`` for an embed job -- ahead of the existing ``drained N job(s)``
-    summary. A one-shot ``work`` right after capture only *submits* the enrich
-    batch (nothing to collect yet), so the enrich line appears on a later pass
-    (or under ``--wait``).
+    (e.g. "enriched <short-id>: 4 tags, 2 entities, 3 edges, summary set",
+    or "embedded <short-id>: 3 passages"), followed by a "drained N job(s)"
+    summary. A one-shot run right after capture only submits the enrich
+    batch (nothing to collect yet), so its outcome line appears on a later
+    pass instead.
 
-    Without ``--wait``, if jobs are still ``pending``/``running`` once the
-    pass ends (e.g. ``reconcile()`` just re-enqueued a head this pass's
-    ``drain()`` didn't reach), that is reported too -- ``N job(s) still
-    outstanding after this pass: ...`` -- naming each one the same way
-    ``--wait``'s own timeout message does (lode-olmi.13). This is what makes a
-    single one-shot pass over a thrashing head visible instead of a bare
-    ``drained 0 job(s)`` that looks like nothing happened. A clean pass with
-    nothing left still just prints ``drained 0 job(s)``.
+    Without --wait, if jobs are still pending or running once the pass
+    ends, that is reported too -- naming each one -- so a single pass over
+    a thrashing head stays visible instead of a bare "drained 0 job(s)"
+    that looks like nothing happened.
     """
     if wait and loop:
         typer.echo(
