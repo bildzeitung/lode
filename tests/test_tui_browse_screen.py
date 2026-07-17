@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
+from textual.pilot import Pilot
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -1745,6 +1746,55 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
+async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
+    """Press each key one at a time, settling after EACH one (lode-9y68).
+
+    This is the one gap here with a mechanism that is both verified in
+    Textual's source AND load-sensitive.
+
+    ``pilot.press(*keys)`` (``pilot.py``) is::
+
+        await self._app._press_keys(keys)   # ALL keys, paced by heuristic only
+        await self._wait_for_screen()       # ONE real drain, at the very end
+
+    ``App._press_keys`` (``app.py``) paces BETWEEN keystrokes with nothing but
+    ``wait_for_idle()`` -- and that is a wall-clock-vs-``process_time()``
+    comparison, so a process merely *starved of timeslices* (this machine
+    legitimately runs several concurrent ``nox -s tests`` invocations) reads as
+    "idle" while a cascade is still in flight. The real drain comes only once,
+    after the last key. So the next key can be dispatched mid-cascade.
+
+    That matters here because this file's search is a STATEFUL cascade:
+    ``BrowseScreen._seek_match`` reads ``table.cursor_row`` as its *scan start*
+    (``src/lode/tui/screens/browse.py``), so each keystroke's search depends on
+    the previous keystroke's cursor having landed (``Input.Changed`` ->
+    ``on_input_changed`` -> ``_seek_match`` -> ``DataTable.move_cursor``). A key
+    dispatched before that lands corrupts the next scan's start row.
+
+    The fix is just to press ONE key per call: ``pilot.press(key)`` ends with
+    its own ``_wait_for_screen()``, so a real message-count drain -- not the
+    CPU heuristic -- separates every keystroke from the next.
+
+    NARROW BY DESIGN: a plain multi-key ``pilot.press("down", "down", "down")``
+    elsewhere in this file is fine and deliberately left alone -- cursor moves
+    are order-preserving and carry no read-back dependency between keys, and
+    ``press()``'s trailing drain covers the final read. The trigger is the
+    stateful read-back above, not multi-key presses in general.
+
+    The trailing ``pilot.pause()`` below is NOT part of that mechanism -- it is
+    just this file's ordinary post-keystroke dialect, kept so these sites read
+    like their ~90 siblings. ``press(key)`` alone is already sufficient. Do not
+    read it as load-bearing, and do not add more drains to settle a future
+    flake: a fixed count of drains neither waits longer under worse load nor
+    reports anything when it is insufficient. ``wait_for_idle``'s clock
+    comparison is the only load-sensitive element in this path (lode-lcju owns
+    the house-pattern ruling).
+    """
+    for key in keys:
+        await pilot.press(key)
+        await pilot.pause()
+
+
 def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_four_notes(db_path)
@@ -1782,8 +1832,7 @@ def test_incremental_search_forward_jumps_to_the_next_matching_summary(
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             assert table.cursor_row == 0  # starts on delta
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1806,8 +1855,7 @@ def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # now on alpha, the bottom row
             await pilot.press("question_mark")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1830,8 +1878,7 @@ def test_incremental_search_wraps_around_when_scanning_forward(
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # alpha, the bottom row
             await pilot.press("slash")
-            await pilot.press(*"delta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"delta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1849,8 +1896,7 @@ def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"GAMMA")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"GAMMA")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1870,11 +1916,11 @@ def test_empty_query_is_a_no_op(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             assert table.cursor_row == 2
-            await pilot.press("backspace", "backspace", "backspace", "backspace")
-            await pilot.pause()
+            await _press_and_settle(
+                pilot, "backspace", "backspace", "backspace", "backspace"
+            )
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1894,8 +1940,7 @@ def test_escape_closes_the_search_box_and_keeps_the_current_selection(
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             await pilot.press("escape")
             await pilot.pause()
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
@@ -1919,8 +1964,7 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"gamma")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"gamma")
             await pilot.press("enter")
             await pilot.pause()
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
