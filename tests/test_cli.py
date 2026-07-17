@@ -45,7 +45,7 @@ from lode.answer import Claim, Support
 from lode.auth import AuthError
 from lode.cli import app
 from lode.cited_answer import CitedAnswer
-from lode.config import load_settings
+from lode.config import Settings, load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
 from lode.externals import ingest_snapshot
@@ -590,7 +590,33 @@ def _seed_jobs(db_path: Path) -> None:
         conn.close()
 
 
-def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
+@pytest.fixture
+def warm_model_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin `lode status`'s cold-cache probe to "warm", deterministically.
+
+    The probe answers from the REAL machine-level weights cache: the autouse
+    `_isolate_lode_home` fixture symlinks $LODE_HOME/models at
+    `model_cache_dir()` and only `mkdir(exist_ok=True)`s it, so on a machine
+    that has never run `lode models pull` -- a fresh clone, i.e. exactly the
+    CLAUDE.md "New machine setup" path, and any CI runner -- that directory is
+    EMPTY and every resolved model probes cold. A test that asserts the
+    all-clear footer while depending on that ambient state is green only where
+    the weights happen to be present; it fails on the machines least able to
+    explain why (verified: the three tests using this fixture all failed under
+    a $LODE_HOME with no weights before it existed).
+
+    Stubbing the probe here is not a coverage loss: the probe's real cold path
+    is exercised end-to-end by `test_status_hints_cold_model_cache` (a genuinely
+    empty $LODE_HOME), and its resolution logic unit-tested in
+    `test_model_cache_probe_*` -- both hermetic. This fixture isolates the
+    FOOTER's logic, which is what these three tests are actually about.
+    """
+    monkeypatch.setattr("lode.cli._cold_model_cache", lambda _settings: False)
+
+
+def test_status_empty_db_reports_all_zero(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["status", "--db", str(db_path)])
     assert result.exit_code == 0
@@ -609,14 +635,14 @@ def test_status_empty_db_reports_all_zero(tmp_path: Path) -> None:
     assert "dead-letters (dead jobs): 0" in result.stdout
     # All-clear footer: an explicit affirmative line, never silence
     # (lode-l38d.6's decision 3 -- an absent hint must not read as an
-    # absent check). This assumes a warm model cache, which the autouse
-    # `_isolate_lode_home` fixture guarantees by linking the real, durable
-    # weights cache in (see tests/conftest.py) -- if that cache were cold on
-    # the machine running this test, the cold-cache hint would fire instead.
+    # absent check). Warm cache pinned by the fixture, not by whatever the
+    # machine happens to have cached -- see `warm_model_cache`.
     assert "No action needed." in result.stdout
 
 
-def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
+def test_status_summarizes_jobs_egress_and_dead_letters(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
     db_path = tmp_path / "lode.db"
     _seed_jobs(db_path)
     result = runner.invoke(app, ["status", "--db", str(db_path)])
@@ -647,7 +673,9 @@ def test_status_summarizes_jobs_egress_and_dead_letters(tmp_path: Path) -> None:
     assert not any("dead" in ln.lower() for ln in hint_lines)
 
 
-def test_status_no_hint_when_only_dead_letters_present(tmp_path: Path) -> None:
+def test_status_no_hint_when_only_dead_letters_present(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
     # Dead-letters alone (no pending/failed, warm cache) must not trip the
     # 'lode work' hint -- 'lode work' cannot retry an exhausted dead-letter,
     # so a hint here would suggest a command that cannot help (lode-l38d.6).
@@ -686,11 +714,162 @@ def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
     assert "No action needed." not in result.stdout
 
 
-def test_status_all_clear_when_no_pending_failed_and_cache_warm(
-    tmp_path: Path,
+def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
 ) -> None:
-    # Warm cache (the autouse fixture's real-cache symlink) + no pending/
-    # failed jobs -> the explicit all-clear line, not silence.
+    """The dead count must render `danger`, not rich's repr.number cyan (lode-re0s).
+
+    rich's Console runs ReprHighlighter over plain strings BY DEFAULT, repainting
+    bare values from its own repr.* palette -- which is NOT in CLI_STYLES. On this
+    ticket that lands on the one character that matters: with the highlighter on,
+    "dead-letters (dead jobs): 3" renders the 3 in bold CYAN while the rest of the
+    line is danger red, so the digit distinguishing 3 from 0 is the only digit not
+    coloured -- defeating lode-l38d.6's headline requirement ("dead > 0 should
+    render red, which is what stops '3' from looking like '0'"). Fixed at the call
+    site with highlight=False; hoisting it onto the shared Console is deliberately
+    left to lode-re0s, which owns that decision once the sibling branches land.
+
+    The module-level `console` freezes its colour decision at IMPORT (lode-xgaa),
+    which is off under the suite -- so this swaps in a force_terminal Console to
+    make colour observable at all. Without that, any assertion here is vacuous.
+    Proved non-vacuous by sabotage: dropping `highlight=False` from the
+    dead-letters print turns this red assertion cyan and the test fails.
+    """
+    import io
+
+    from rich.console import Console
+
+    from lode.cli import CLI_THEME
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+            )
+    finally:
+        conn.close()
+
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(theme=CLI_THEME, force_terminal=True, width=100, file=buf),
+    )
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    dead_line = next(ln for ln in buf.getvalue().splitlines() if "dead-letters" in ln)
+    # bold red (danger) present, bold cyan (repr.number) absent.
+    assert "\x1b[1;31m" in dead_line
+    assert "\x1b[1;36m" not in dead_line
+
+
+def test_model_cache_probe_warm_and_cold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The probe is keyed by the entry's `sources.hf` repo id, NOT by the
+    # friendly model id in settings -- the two differ for some models, so a
+    # probe keyed on the model id would report a warm cache cold forever. Build
+    # the warm directory the way fastembed's own downloader names it
+    # (models--<hf repo id with / -> -->, verified against
+    # fastembed.common.model_management.download_files_from_huggingface) and
+    # check the probe agrees.
+    from fastembed import TextEmbedding
+
+    from lode.cli import _model_cache_probe
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("LODE_HOME", str(home))
+    model_id = Settings().embedding_model
+    entry = next(
+        m for m in TextEmbedding.list_supported_models() if m["model"] == model_id
+    )
+    hf_source = entry["sources"]["hf"]
+
+    # Nothing on disk yet -> confirmed cold.
+    assert _model_cache_probe(model_id, "embedding") is False
+
+    # An EMPTY dir is still cold: fastembed creates the cache root before it
+    # has fetched anything, so "the directory exists" cannot mean "warm".
+    snapshot = home / "models" / f"models--{hf_source.replace('/', '--')}"
+    snapshot.mkdir(parents=True)
+    assert _model_cache_probe(model_id, "embedding") is False
+
+    # Populated -> warm.
+    (snapshot / "config.json").write_text("{}")
+    assert _model_cache_probe(model_id, "embedding") is True
+
+
+def test_model_cache_probe_matches_model_id_case_insensitively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fastembed resolves model ids case-insensitively, so the probe must too --
+    # otherwise a config.toml with a case-variant id loads fine everywhere else
+    # in lode while the probe reports "cannot judge" and the cold hint can never
+    # fire for it.
+    from fastembed import TextEmbedding
+
+    from lode.cli import _model_cache_probe
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("LODE_HOME", str(home))
+    model_id = Settings().embedding_model
+    entry = next(
+        m for m in TextEmbedding.list_supported_models() if m["model"] == model_id
+    )
+    snapshot = home / "models" / f"models--{entry['sources']['hf'].replace('/', '--')}"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}")
+
+    assert _model_cache_probe(model_id.upper(), "embedding") is True
+    assert _model_cache_probe(model_id.lower(), "embedding") is True
+
+
+def test_model_cache_probe_unknown_model_cannot_judge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An id in no fastembed registry is un-judgeable, which is None ("could not
+    # judge"), NOT False ("confirmed cold") -- the distinction is what stops a
+    # user who pinned a custom model from being nagged to `lode models pull`
+    # forever by a probe that can never turn warm.
+    from lode.cli import _cold_model_cache, _model_cache_probe
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
+    assert _model_cache_probe("not-a-real/model-id", "embedding") is None
+    assert _model_cache_probe("not-a-real/model-id", "cross_encoder") is None
+
+    # ...and None must not read as cold at the caller: an all-unknown settings
+    # set produces no hint, per the probe's non-fatal contract.
+    settings = Settings(
+        embedding_model="not-a-real/model-id",
+        rerank_model="not-a-real/model-id",
+        entailment_model="not-a-real/model-id",
+    )
+    assert _cold_model_cache(settings) is False
+
+
+def test_cold_model_cache_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # lode-l38d.6 requires the probe to be non-fatal: `lode status` was a pure
+    # DB read before it, and a footer hint must never be able to take the
+    # command down. Force the probe's internals to raise and assert the caller
+    # still just answers "not cold".
+    from lode import cli
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("cache dir exploded")
+
+    monkeypatch.setattr(cli, "model_cache_dir", _boom)
+    assert cli._cold_model_cache(Settings()) is False
+
+
+def test_status_all_clear_when_no_pending_failed_and_cache_warm(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # Warm cache (pinned by the fixture) + no pending/failed jobs -> the
+    # explicit all-clear line, not silence.
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:

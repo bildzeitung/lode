@@ -1052,8 +1052,20 @@ def _model_cache_probe(model_name: str, registry: str) -> bool | None:
             from fastembed.rerank.cross_encoder import (
                 TextCrossEncoder as _Registry,
             )
+        # Case-INSENSITIVELY, matching fastembed's own resolution
+        # (ModelManagement._get_model_description compares
+        # model_name.lower()). An exact-match probe silently disagrees with the
+        # loaders: a config.toml carrying "baai/bge-reranker-base" loads
+        # everywhere else in lode but probes as None ("cannot judge") here, so
+        # the cold hint could never fire for it -- decision 3's failure mode
+        # ("an absent hint must not read as an absent check") reached by a
+        # typo's worth of casing.
         entry = next(
-            (m for m in _Registry.list_supported_models() if m["model"] == model_name),
+            (
+                m
+                for m in _Registry.list_supported_models()
+                if m["model"].lower() == model_name.lower()
+            ),
             None,
         )
         if entry is None:
@@ -1137,7 +1149,10 @@ def status(
 
     dead_count = job_counts.get("dead", 0)
 
-    table = Table(header_style="table.header")
+    # No header_style= here: rich's Table already defaults it to "table.header",
+    # the name CLI_STYLES declares (see the palette comment above), so passing it
+    # would restate rich's own default and read as a deliberate override.
+    table = Table()
     table.add_column("Status")
     table.add_column("Count", justify="right")
     table.add_row("Pending", str(job_counts.get("pending", 0)))
@@ -1149,32 +1164,77 @@ def status(
 
     total_egress = sum(n for _, n in egress_counts)
     by_purpose = ", ".join(f"{purpose}: {n}" for purpose, n in egress_counts) or "none"
-    console.print(f"egress: {total_egress} sends ({by_purpose})")
+    # Two console.print defaults must be turned OFF on every prose line below --
+    # each is a behaviour change the typer.echo -> rich switch would otherwise
+    # smuggle in, since the typer.echo these replaced printed plain, verbatim
+    # text:
+    #
+    # markup=False -- console.print parses "[...]" as rich markup, so a job's
+    #   last_error is no longer safe to interpolate: "HTTP 500 [/v1/embed]
+    #   failed" raises MarkupError and takes the whole command down (exit 1),
+    #   and "[red]oops" is silently swallowed to "oops". Both land precisely
+    #   where they hurt most -- `lode status` is what you run when jobs are
+    #   already failing, and the dead-letter's error text is the payload you
+    #   came for. Styling goes through `style=` instead, which needs no parsing.
+    #
+    # highlight=False -- rich runs ReprHighlighter over plain strings by
+    #   default, re-styling numbers/paths from its own repr.* palette, which
+    #   OVERRIDES the line's style= and defeats this ticket's headline
+    #   requirement: with it on, "dead-letters (dead jobs): 3" renders the 3 in
+    #   repr.number CYAN while the rest goes danger red -- the one character
+    #   distinguishing 3 from 0 is the only one not red. repr.* is also
+    #   undeclared colour arriving from rich's inherited defaults, cutting
+    #   against lode-l38d.11's rule that colour comes from CLI_STYLES by
+    #   semantic name. Same defect lode-re0s found in sibling .5; fixed at the
+    #   CALL SITE here, per that ticket -- hoisting the flag onto the shared
+    #   Console (cli.py:~202) is lode-re0s's call to make once .4/.6/.10 land,
+    #   and taking it here would conflict with sibling branches live on this
+    #   file. Table cells need none of this: rich runs no highlighter over them.
+    console.print(
+        f"egress: {total_egress} sends ({by_purpose})", markup=False, highlight=False
+    )
 
-    dead_line = f"dead-letters (dead jobs): {len(dead_letters)}"
-    console.print(f"[danger]{dead_line}[/danger]" if dead_count > 0 else dead_line)
+    # dead_count and len(dead_letters) are the same number by construction --
+    # both read the `jobs` table over one connection, one grouped by status, the
+    # other filtered to status='dead' -- so inside the loop below "is there a
+    # dead job?" is answered by the loop running at all.
+    dead_style = "danger" if dead_count > 0 else None
+    console.print(
+        f"dead-letters (dead jobs): {len(dead_letters)}",
+        style=dead_style,
+        markup=False,
+        highlight=False,
+    )
     for job_id, job_type, target_version, last_error in dead_letters:
-        line = (
+        console.print(
             f"  job {job_id} ({job_type}) target={_short(target_version)}: "
-            f"{last_error or 'no error recorded'}"
+            f"{last_error or 'no error recorded'}",
+            style="danger",
+            markup=False,
+            highlight=False,
         )
-        console.print(f"[danger]{line}[/danger]" if dead_count > 0 else line)
 
     pending_or_failed = job_counts.get("pending", 0) + job_counts.get("failed", 0)
     cache_cold = _cold_model_cache(_resolve_settings())
     console.print()
+    # markup stays ON here -- these strings are author-written, not DB-derived,
+    # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
+    # reason as above: the job count and the quoted 'lode work' would otherwise
+    # pick up rich's undeclared repr.* colours mid-sentence.
     if pending_or_failed > 0:
         console.print(
             f"[warn]Action needed:[/warn] {pending_or_failed} job(s) pending or "
-            "failed -- run 'lode work' to drain the queue."
+            "failed -- run 'lode work' to drain the queue.",
+            highlight=False,
         )
     if cache_cold:
         console.print(
             "[warn]Action needed:[/warn] the local model cache is cold -- run "
-            "'lode models pull' to warm it."
+            "'lode models pull' to warm it.",
+            highlight=False,
         )
     if pending_or_failed == 0 and not cache_cold:
-        console.print("[ok]No action needed.[/ok]")
+        console.print("[ok]No action needed.[/ok]", highlight=False)
 
 
 @app.command(name="jobs")
