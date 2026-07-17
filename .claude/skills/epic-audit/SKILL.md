@@ -55,14 +55,20 @@ rtk bd list --type=epic --label epic-ready-to-audit --status open --json
 rtk bd list --type=epic --status open --exclude-label epic-audited --json
 ```
 
-For each candidate, confirm the child-completion gate from live state (the label is not trusted on its own):
+For each candidate, confirm the child-completion gate from live state (the label is not trusted on its own).
+`scripts/epic-children-closed.sh` is the shared check (also used by `/land` and `/sweep`) — it does
+NOT read `bd show`'s `.dependents` array (populated only with the opt-in `--include-dependents`
+flag; without it `dependent_count` can be non-zero while `.dependents` is entirely absent, which is
+exactly what made this same check dead code in all three skills until lode-v4rk — see the script's
+own header for the full mechanism writeup and tests/test_epic_children_closed.py for the regression
+proof). It derives children via `bd list --parent <epic-id> --all --json` instead:
 
 ```bash
-rtk bd show <epic> --json | jq -r '
+E=$(rtk bd show <epic> --json)
+CHILDREN_CLOSED=$(rtk scripts/epic-children-closed.sh <epic>)
+printf '%s' "$E" | jq -r --arg cc "$CHILDREN_CLOSED" '
   .[0] as $e |
-  (($e.dependents // []) | map(select(.dependency_type=="parent-child"))) as $kids |
-  if ($e.issue_type=="epic") and ($e.status!="closed")
-     and (($kids|length)>0) and (all($kids[]; .status=="closed"))
+  if ($e.issue_type=="epic") and ($e.status!="closed") and ($cc=="true")
   then "AUDITABLE" else "SKIP" end'
 ```
 

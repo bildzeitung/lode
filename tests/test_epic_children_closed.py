@@ -1,0 +1,149 @@
+"""Tests for scripts/epic-children-closed.sh (lode-v4rk).
+
+Shared "are this epic's parent-child children ALL closed" check, factored out
+because three skills each carried their OWN inline copy of the same broken
+derivation: `/land`'s Section-4 epic-completion flag, `/epic-audit`'s
+"confirm from live state" gate, and `/sweep`'s "epics ready for a human
+close-decision" step. All three read `bd show <epic-id> --json`'s
+`.dependents[]` array, which `bd show` only populates with the opt-in
+`--include-dependents` flag -- verified live against bd 1.1.0:
+`dependent_count` is non-zero but the `dependents` key is entirely absent
+without the flag. So every one of the three call sites always saw an empty
+`$kids`, and the `(($kids|length)>0)` false-positive guard always tripped
+short -- dead code in three places, all failing silently safe.
+
+`test_old_dependents_derivation_never_fires_even_when_fully_closed` runs the
+OLD shared snippet's logic directly against a fixture where every child is
+closed and asserts it produces nothing, proving the bug was real everywhere
+it was copied. The rest of the suite exercises the replacement script via a
+fake `bd` on PATH, the same pattern tests/test_epic_debate_gate.py and
+tests/test_epic_completion_check.py use for the sibling scripts.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "epic-children-closed.sh"
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("jq") is None, reason="the script shells out to jq"
+)
+
+
+def _fake_bd(tmp_path: Path, list_fixtures: dict[str, list[dict]]) -> Path:
+    """A PATH dir holding a fake `bd` that serves `list_fixtures[<epic-id>]`
+    for `bd list --parent <epic-id> --all --json`."""
+    list_path = tmp_path / "list_fixtures.json"
+    list_path.write_text(json.dumps(list_fixtures))
+
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+
+    fake_bd = bin_dir / "bd"
+    fake_bd.write_text(
+        textwrap.dedent(f"""\
+            #!/usr/bin/env bash
+            # Fake `bd list --parent` for testing epic-children-closed.sh.
+            set -euo pipefail
+            [ "$1" = "list" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
+            # invoked as: bd list --parent <id> --all --json
+            parent="$3"
+            jq -c --arg id "$parent" \\
+              '.[$id] // error("no list fixture for \\($id)")' "{list_path}"
+            """)
+    )
+    fake_bd.chmod(0o755)
+    return bin_dir
+
+
+def _run(
+    epic_id: str, tmp_path: Path, *, list_fixtures: dict[str, list[dict]]
+) -> subprocess.CompletedProcess:
+    bin_dir = _fake_bd(tmp_path, list_fixtures)
+    return subprocess.run(
+        ["bash", str(SCRIPT), epic_id],
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_all_children_closed_is_true(tmp_path: Path) -> None:
+    fixtures = {
+        "lode-epic": [
+            {"id": "lode-a", "status": "closed"},
+            {"id": "lode-b", "status": "closed"},
+        ]
+    }
+    result = _run("lode-epic", tmp_path, list_fixtures=fixtures)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "true"
+
+
+def test_one_open_child_is_false(tmp_path: Path) -> None:
+    fixtures = {
+        "lode-epic": [
+            {"id": "lode-a", "status": "closed"},
+            {"id": "lode-b", "status": "open"},
+        ]
+    }
+    result = _run("lode-epic", tmp_path, list_fixtures=fixtures)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "false"
+
+
+def test_zero_children_is_false(tmp_path: Path) -> None:
+    """The false-positive guard: `all($kids[]; ...)` is vacuously TRUE on an
+    empty array, so zero children must read `false`, not `true`."""
+    result = _run("lode-epic", tmp_path, list_fixtures={"lode-epic": []})
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "false"
+
+
+def test_old_dependents_derivation_never_fires_even_when_fully_closed() -> None:
+    """Regression proof for the bug this script replaces everywhere it was
+    copied (`/land`, `/epic-audit`, `/sweep`): the OLD inline jq snippet read
+    `$epic.dependents`, which `bd show --json` never populates without the
+    opt-in `--include-dependents` flag. Run against a `bd show`-shaped
+    fixture with NO `dependents` key (matching real bd 1.1.0 output) but a
+    non-zero `dependent_count`, the old derivation must produce an empty
+    `$kids` and therefore never report the epic as having its children
+    closed -- proving this was a real, silent bug in all three copies.
+    """
+    epic = {
+        "id": "lode-epic",
+        "issue_type": "epic",
+        "status": "open",
+        # deliberately no "dependents" key -- matches real bd show --json
+        # without --include-dependents, despite a non-zero dependent_count.
+        "dependent_count": 2,
+    }
+    old_snippet = """
+        .[0] as $e |
+        (($e.dependents // []) | map(select(.dependency_type=="parent-child"))) as $kids |
+        if ($e.issue_type=="epic") and ($e.status!="closed")
+           and (($kids|length)>0) and (all($kids[]; .status=="closed"))
+        then "AUDITABLE" else "SKIP" end
+    """
+    result = subprocess.run(
+        ["jq", "-r", old_snippet],
+        input=json.dumps([epic]),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "SKIP", (
+        "the OLD derivation reported AUDITABLE -- this fixture no longer "
+        "reproduces the bug this ticket exists to fix"
+    )
