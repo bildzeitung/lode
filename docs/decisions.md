@@ -1175,3 +1175,62 @@ are catalogued in [configuration.md](configuration.md).
   (`tests/test_gh_write_guard.py`) are untouched and still pass. If a future `gh` release, or a new
   observed evasion pattern, changes this risk calculus, reopen this entry rather than silently
   widening the wrapper list.
+- **`bd-dolt-push.sh` suspicious-DB guard: a backstop, not a fix for a mechanism nobody could
+  reproduce (lode-fzau).** A code-reviewer/coding launch worktree was observed, live, with a STRAY
+  worktree-local bd DB — bootstrap-hydrated from that branch's committed, passively-lagging
+  `.beads/issues.jsonl` (245 issues) instead of resolving to the ONE shared main-checkout DB (404
+  issues, authoritative). Because the reviewed ticket happened to postdate the stale jsonl snapshot,
+  the write against it failed *loudly* ("no issue found matching …") — the only reason the incident
+  was caught. Had the ticket predated the snapshot (the common case), the write would have succeeded
+  *silently* against the stray DB, and the reviewer's own next step, `bd-dolt-push.sh`, would have
+  published that stale 245-issue DB over `refs/dolt/data`, reverting ~159 issues of real cross-machine
+  state.
+
+  A diagnostic dispatched specifically to pin down the mechanism **could not reproduce it**: 10 probes
+  (9 live worktrees + 1 deliberate re-run of the ticket's own repro, `GIT_TRACE=1`-confirmed hook
+  firing included) all resolved to the ONE shared DB, with `import.auto: false` correctly read from
+  the main checkout's `config.yaml` every time — `bd`'s own binary strings confirm `--git-common-dir`-
+  based worktree DB-sharing is a deliberate, documented feature (1.1.0 changelog: "Enhanced Git
+  Worktree Support — Shared .beads database across worktrees"). **Human decision (recorded in
+  lode-fzau's notes): build the backstop (option (c) from the ticket), not a fix for the DB-resolution
+  mechanism (option (a)) or a doc mandate to always run bd writes from the main checkout (option
+  (b))** — both of those target a failure mode that today looks already structurally prevented by bd
+  itself; a fix for an unreproduced mechanism risks being no fix at all, while the backstop would have
+  caught the real incident regardless of which mechanism eventually turns out to explain it.
+
+  **What was built:** `scripts/bd-dolt-push-guard.sh`, called once at the top of
+  `scripts/bd-dolt-push.sh` — the single highest-value chokepoint, since it is the step that actually
+  publishes cross-machine (guarding *every* bd write was considered and rejected: a much larger
+  surface, for comparatively little extra safety, since a write that lands on a stray DB is invisible
+  and harmless to every other machine until someone publishes it). It refuses (loud stderr, non-zero
+  exit, `bd dolt push` never invoked) when EITHER: (1) the resolved `.beads` directory (`bd where
+  --json`) carries bd's own `.auto-import-issues.jsonl` marker — direct evidence of exactly the
+  hydration-from-jsonl the incident showed; or (2) the current issue count (`bd count --json`) is below
+  `BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT` (default 90%) of a local, per-DB-path high-water-mark cache file
+  that `bd-dolt-push.sh` itself writes immediately after every successful push. That cache is a
+  **network-free proxy** for "wildly below the remote's count": our own last confirmed-pushed count is
+  a hard floor, since the real remote's count can only have grown or matched it since — this avoids
+  needing to contact the remote on top of what the push itself already requires, satisfying the
+  ticket's explicit constraint against gating *every* bd write behind network reachability (the
+  constraint is about ordinary bd writes, not about `bd-dolt-push.sh` itself, which already needs the
+  network to do its job).
+
+  **Deliberately does not false-positive on a fresh clone / `bd init`** (the other named failure mode):
+  `bd init` never calls this script, restores state via `bd dolt pull` (never a jsonl import, so no
+  marker is ever created by it), and a freshly-initialized DB has no high-water-mark cache file yet —
+  the count check treats "no cache" as "no baseline", not "suspicious", and does not fire. Both checks
+  also fail OPEN (do not block) if `bd where`/`bd count` themselves cannot be read, since the real `bd
+  dolt push` will surface that failure on its own. `BD_DOLT_PUSH_GUARD_FORCE=1` bypasses both checks
+  loudly, for the rare deliberate case (disaster recovery, an intentional bulk prune immediately
+  followed by a push). Full mechanism and both env overrides (`BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT`,
+  `BD_DOLT_PUSH_GUARD_FORCE`) are in `scripts/bd-dolt-push-guard.sh`'s own header comment — this is
+  dev-tooling/workflow config, not application config, so (matching `BD_DOLT_PUSH_MAX_ATTEMPTS` /
+  `BD_DOLT_PUSH_BASE_DELAY` just above) it is not duplicated into
+  [configuration.md](configuration.md), which is scoped to what `lode` itself reads at runtime.
+
+  **Known residual, accepted:** the `.auto-import-issues.jsonl` marker, once created, is treated as
+  permanently disqualifying for that DB path unless `BD_DOLT_PUSH_GUARD_FORCE=1` is used — there is no
+  mechanism to "clear" it short of the override. Given the backstop's rarity of firing at all and the
+  override's availability, this was judged acceptable rather than adding logic to distinguish a stale
+  marker from a fresh one. **Revisit if:** the marker check false-positives in practice on a DB that
+  has since become legitimately caught-up via real `bd dolt pull`s.

@@ -20,8 +20,23 @@
 # short backoff-and-retry loop is the correct-weight fix; switching bd to Dolt
 # server mode is deliberately NOT done here (see docs/decisions.md).
 #
+# Before any of that: scripts/bd-dolt-push-guard.sh (lode-fzau) runs once, up
+# front, as a backstop against publishing a suspicious local DB (one that was
+# bootstrap-hydrated from a stale, passive jsonl snapshot instead of built up
+# via ordinary dolt-native writes/pulls -- a code-reviewer/coding worktree was
+# observed with exactly this once, and would have reverted ~159 issues of
+# real cross-machine state had the guard existed then). See that script's own
+# header for the full mechanism and the two failure modes it is deliberately
+# designed NOT to trip on (a fresh clone / `bd init`, and requiring the
+# remote to be reachable on every ordinary bd write).
+#
 # Usage: scripts/bd-dolt-push.sh [any `bd dolt push` flags, e.g. --remote foo]
 # Env overrides (mainly for tests): BD_DOLT_PUSH_MAX_ATTEMPTS, BD_DOLT_PUSH_BASE_DELAY
+# Guard env overrides: BD_DOLT_PUSH_GUARD_MIN_RATIO_PCT, BD_DOLT_PUSH_GUARD_FORCE
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+"$SCRIPT_DIR/bd-dolt-push-guard.sh" || exit 1
 
 MAX_ATTEMPTS="${BD_DOLT_PUSH_MAX_ATTEMPTS:-5}"
 BASE_DELAY="${BD_DOLT_PUSH_BASE_DELAY:-2}"
@@ -31,6 +46,19 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   bd dolt push "$@"
   status=$?
   if [ "$status" -eq 0 ]; then
+    # Record this push's confirmed issue count as bd-dolt-push-guard.sh's
+    # local high-water-mark baseline for next time (lode-fzau). Best-effort
+    # and silent on any failure -- never fail an otherwise-successful push
+    # over bookkeeping, and a missing/stale cache just means the guard's
+    # count check has no baseline next time, which it already treats as
+    # "unknown", not "suspicious".
+    db_dir=$(bd where --json 2>/dev/null | jq -r '.path // empty' 2>/dev/null) || true
+    if [ -n "${db_dir:-}" ]; then
+      count=$(bd count --json 2>/dev/null | jq -r '.count // empty' 2>/dev/null) || true
+      if [ -n "${count:-}" ]; then
+        echo "$count" >"$db_dir/.bd-dolt-push-guard-highwater" 2>/dev/null || true
+      fi
+    fi
     exit 0
   fi
 
