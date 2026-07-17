@@ -1043,6 +1043,58 @@ are catalogued in [configuration.md](configuration.md).
   exemptions) is unchanged. **Superseded for the matching *shape* (not the `jq` question) by the
   `lode-9mbt` entry below**, which inverts that surface from a denylist to an allowlist.
 
+- **The `bd create --deps blocks:` guard collapses backslash-continuations, and deliberately
+  OVER-matches on `;`/`&`/`|` (lode-m6px, portability fix lode-9gm2).** The guard's regex is
+  evaluated per-line by `grep`, and `.` never crosses a newline, so it required `bd create` and
+  `--deps ...blocks:` on the same *physical* line. A backslash-continued invocation — the normal
+  shape for any real filing with a `--title`/`--description`, i.e. essentially every ticket an
+  agent files — puts them on different lines and was silently missed. That is not hypothetical: it
+  reached the live DB on 2026-07-17.
+
+  **Fix, as shipped:** collapse literal backslash-newline sequences to a space before matching,
+  using **only POSIX sh constructs** — capture the command via `$(jq -r ...)`, then pipe it through
+  the classic "join backslash-continued lines" sed idiom: `CMD=$(printf '%s' "$CMD" | sed -e :a -e
+  '/\\$/N; s/\\\n/ /; ta')`. This is safe precisely because it merges only what a continuation
+  *is by definition* — one logical line — so a real, non-continued newline still separates
+  statements and the anchor's per-statement intent survives untouched.
+
+  **The first attempt at this fix (lode-m6px) shipped bash-only syntax and was bounced before
+  landing (lode-9gm2).** It used `CMD="${CMD//$'\n'/ }"` — bash's `${var//pat/repl}` pattern
+  substitution combined with `$'...'` ANSI-C quoting. Both are bash-only; the Claude Code harness
+  runs PreToolUse hook commands under `/bin/sh`, which on Linux is **dash**, and dash rejects that
+  line with a hard `Bad substitution` error. Verified live: the instant `lode-m6px`'s merge commit
+  entered the working tree, the next Bash tool call errored, and the hook then errored on *every*
+  subsequent Bash call — bricking the tool entirely (a hook that errors is not a clean deny; it is
+  strictly worse than the fail-open the fix set out to close, and fails the ticket's own AC4 in
+  spirit). The build's own `nox` gates and land-review both missed it because their test harness
+  drove the hook through `bash -c`, under which the bash-isms work fine — the portability defect
+  only surfaces under the harness's actual interpreter. `tests/test_bd_deps_guard.py` now drives
+  every case through `/bin/sh -c` (dash) instead, and carries a dedicated sabotage test that splices
+  the byte-exact original bash-only line back in and confirms it fails under dash while the shipped
+  line does not — closing the "verified only under the wrong shell" gap that let this ship broken
+  once already.
+
+  **Rejected: also narrowing the interior `.*` to `[^;&|]*`.** The intent was to stop a match
+  crossing a `;`/`&&`/`|` into an unrelated later `--deps blocks:` (a false deny). It was tried and
+  **reverted — it introduced a worse, real fail-open.** A regex cannot parse shell quoting, so it
+  cannot distinguish a `;` separating two statements from one sitting inside a quoted
+  `--description` — and prose containing a semicolon is the *norm* here (this repo's own ticket text
+  is full of them). Measured against the hook as shipped: `bd create --title="Fix A; also B" --deps
+  blocks:lode-1` and five sibling shapes — including the exact prose-heavy filing the ticket was
+  written about — went from **denied** to **falling through**. The narrowing thus re-opened the very
+  hole it shipped alongside, on the common shape, to close a contrived one that has never been
+  observed.
+
+  The two goals are provably unsatisfiable together with a regex, so the tiebreak is decided by
+  `lode-oii9` above, for this same hook: **when the guard cannot evaluate, it denies.** Over-matching
+  costs a confusing deny whose own message states the remedy (`bd dep add <new-id> <id> --type
+  blocks`) and is recoverable in seconds; under-matching silently corrupts the DB and is caught only
+  by luck. The accepted over-matches are pinned as tests (`ACCEPTED_FALSE_DENIES` in
+  `tests/test_bd_deps_guard.py`) rather than left as folklore: narrowing the pattern to "fix" them
+  turns the prose-with-`;` cases in `DENIED` red, so the tradeoff cannot be silently re-traded. If
+  the false denies ever do bite in practice, the answer is a real shell parser (or matching on
+  `tool_input` structurally), **not** a narrower regex.
+
 - **The `gh`-write guard (`lode-o29m`) is inverted from a write-verb DENYLIST to a read-only
   ALLOWLIST, default-deny (`lode-9mbt`).** The original guard enumerated write verbs and denied only
   those — a **list of verbs, not a category**. `lode-9l3d`'s technical review demonstrated this rots

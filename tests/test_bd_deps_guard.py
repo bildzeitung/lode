@@ -7,10 +7,27 @@ a PreToolUse hook that denies the bad form and prints the two-step remedy.
 
 These tests execute the hook *as shipped* — extracted from the real settings.json and run
 exactly as the harness runs it (payload on stdin) — because the guard's failure mode is silent
-UNDER-matching, and its regex has already been wrong three times: it once carried an
+UNDER-matching, and its regex has already been wrong four times: it once carried an
 `else` arm emitting permissionDecision "allow" (auto-approving every Bash call in the repo);
-it once denied harmless prose that merely quoted the bad form; and it once missed the `bd new`
-alias entirely. Nothing but a test table catches the next one.
+it once denied harmless prose that merely quoted the bad form; it once missed the `bd new`
+alias entirely; and it once matched only within a single physical line, silently missing every
+backslash-continued `bd create` — the NORMAL shape for a real call with a `--title`/`--description`
+(lode-m6px). That last one is not hypothetical: it reached the live DB on 2026-07-17. Nothing but
+a test table catches the next one.
+
+The guard deliberately OVER-matches. A regex cannot parse shell quoting, so it cannot tell a ';'
+inside a `--description` from one separating two statements; lode-oii9 settles the tiebreak for
+this hook — when it cannot evaluate, it denies. Hence DENIED carries prose-with-metacharacter
+cases and ACCEPTED_FALSE_DENIES pins the over-match we pay for them (lode-m6px, docs/decisions.md).
+
+CRITICAL (lode-9gm2): the hook runs under the Claude Code harness's `/bin/sh`, which on Linux is
+**dash**, not bash — and dash rejects bash-only constructs (`${var//pat/repl}` pattern
+substitution, `$'...'` ANSI-C quoting) with a hard "Bad substitution" error that bricks the Bash
+tool for the rest of the session (lode-m6px's first attempt shipped exactly that, verified green
+by a test suite that drove the hook through `bash -c` and so could not see the defect). Every
+test below therefore drives the hook through `/bin/sh -c`, never `bash -c` — that is the whole
+point: a test using bash cannot catch this class of bug, which is exactly how it shipped once
+already.
 """
 
 from __future__ import annotations
@@ -23,6 +40,7 @@ from pathlib import Path
 import pytest
 
 SETTINGS = Path(__file__).resolve().parents[1] / ".claude" / "settings.json"
+SH = shutil.which("sh") or "/bin/sh"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -46,18 +64,28 @@ def _hook_command() -> str:
     return matching[0]
 
 
-def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+def _hook_output(
+    command: str, *, path: str | None = None, hook_command: str | None = None
+) -> dict | None:
     """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
 
+    Driven through **`/bin/sh -c`** (dash on Linux), NOT `bash -c` (lode-9gm2): that is the actual
+    interpreter the Claude Code harness uses to run PreToolUse hooks, and dash rejects bash-only
+    syntax that bash silently accepts -- a test using bash cannot see that class of bug, which is
+    exactly how the guard shipped broken once already (lode-m6px).
+
     `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
-    machine (lode-oii9) without touching the real PATH of the process running this test. `bash`
-    itself is invoked by absolute path so a stripped PATH cannot make it unresolvable.
+    machine (lode-oii9) without touching the real PATH of the process running this test. `sh`
+    itself is invoked by absolute/resolved path so a stripped PATH cannot make it unresolvable.
+
+    `hook_command`, when given, overrides the shell one-liner run -- used by the sabotage test to
+    exercise a deliberately-broken variant without touching the real settings.json.
     """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
     proc = subprocess.run(
-        [shutil.which("bash"), "-c", _hook_command()],
+        [SH, "-c", hook_command if hook_command is not None else _hook_command()],
         input=payload,
         capture_output=True,
         text=True,
@@ -105,6 +133,37 @@ DENIED = [
     'cd /r && rtk bd create "x" --deps blocks:lode-1',  # not the first command on the line
     'cd /r; bd create "x" --deps blocks:lode-1',
     'ID=$(bd create "x" --deps blocks:lode-1 --json)',  # command substitution
+    # lode-m6px: backslash-continued -- the NORMAL shape for a real call with a
+    # --title/--description, per this repo's own coding.md examples. `grep`'s `.` never
+    # crosses a newline, so a single-line-only pattern misses these; this is the exact shape
+    # that reached the live DB on 2026-07-17.
+    'rtk bd create --title="x" \\\n  --deps blocks:lode-1',
+    'NEW_ID=$(rtk bd create --title="x" --description="y" \\\n  --type=task --deps blocks:lode-1 --silent)',
+    'bd create \\\n  -t task \\\n  "x" \\\n  --deps blocks:lode-1',  # --deps on its own continued line
+    # lode-m6px: a ';', '&' or '|' INSIDE a quoted --title/--description is ordinary prose, not a
+    # statement separator -- and these ids are exactly the prose-heavy shape a real agent files
+    # (this repo's own ticket text is full of semicolons). An interior pattern that stops at the
+    # first metacharacter -- e.g. `[^;&|]*` instead of `.*` -- silently MISSES every one of these.
+    # That was tried and reverted: a regex cannot tell a quoted ';' from a real separator, so the
+    # only safe direction is to over-match (see ACCEPTED_FALSE_DENIES + docs/decisions.md).
+    'bd create --title="Fix A; also B" --deps blocks:lode-1',
+    'bd create --title="A | B" --deps blocks:lode-1',
+    'bd create --title="A & B" --deps blocks:lode-1',
+    'bd create --title="x" --description="one; two" --deps blocks:lode-1',
+    'rtk bd create --title="t" --description="a; b" \\\n  --deps blocks:lode-1',
+]
+
+# lode-m6px: KNOWN, ACCEPTED false denies. A regex cannot parse shell quoting, so it cannot
+# distinguish a ';'/'&&'/'|' that genuinely separates two statements from one sitting inside a
+# quoted --title/--description. Something has to give, and lode-oii9 settles which way for this
+# exact hook: a guard that cannot evaluate DENIES. Over-matching costs a confusing deny that the
+# message itself tells you how to resolve; under-matching silently corrupts the DB -- which is
+# precisely what happened on 2026-07-17. So these contrived shapes are denied, deliberately.
+# Do NOT "fix" them by narrowing the interior pattern: that reopens the fail-open above.
+ACCEPTED_FALSE_DENIES = [
+    'bd create -t task "x"; echo something --deps blocks:evil',
+    'bd create -t task "x" && echo something --deps blocks:evil',
+    'bd create -t task "x" | grep something --deps blocks:evil',
 ]
 
 # Commands that must NOT be denied. Two families, both load-bearing:
@@ -126,6 +185,9 @@ ALLOWED = [
     "bd dep add lode-dep lode-new",  # /land's supersede rewiring
     'bd create -t task "x" --deps discovered-from:lode-1',  # correct direction, not blocks:
     'bd -C "$cwd" list --status=in_progress --json',  # .claude/statusline.sh
+    # lode-m6px: a real (non-continued) newline genuinely separates two statements --
+    # collapsing must never merge across it the way it merges a backslash-continuation.
+    'bd create -t task "x"\necho unrelated --deps blocks:evil',
 ]
 
 # The hook must never *approve* anything: a non-matching command falls through silently so
@@ -142,6 +204,19 @@ def test_inverted_blocks_edge_is_denied(command: str) -> None:
 @pytest.mark.parametrize("command", ALLOWED + NEVER_AUTO_APPROVED)
 def test_everything_else_falls_through_silently(command: str) -> None:
     assert _run(command) is None, f"guard wrongly decided: {command}"
+
+
+@pytest.mark.parametrize("command", ACCEPTED_FALSE_DENIES)
+def test_known_false_denies_stay_denied(command: str) -> None:
+    """These are over-matches we deliberately keep (lode-m6px).
+
+    Pinned, not tolerated silently: if someone narrows the guard's interior pattern to make these
+    fall through, this test goes green while the prose-with-';' cases in DENIED go red -- naming
+    the tradeoff at the moment it is traded away, rather than letting the fail-open ship unnoticed.
+    """
+    assert _run(command) == "deny", (
+        f"expected the accepted over-match to still deny: {command}"
+    )
 
 
 def test_guard_never_emits_an_allow_decision() -> None:
@@ -182,3 +257,118 @@ def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
     # walks an agent into an infinite deny loop. It must say to install from OUTSIDE Claude Code.
     assert "OUTSIDE Claude Code" in reason
     assert "surface this to the human" in reason
+
+
+# lode-9gm2: lode-m6px's first attempt at collapsing backslash-continuations used bash-only
+# `${CMD//$'\n'/ }` pattern substitution + `$'...'` ANSI-C quoting. Both are rejected by dash
+# with "Bad substitution" -- and dash is what the harness actually invokes as /bin/sh, not bash.
+# That bricked the Bash tool for the rest of the session the moment the fix landed. The build's
+# own gates and land-review both missed it because their test harness drove the hook through
+# `bash -c`, under which the bash-isms work fine. Everything below asserts the shipped hook
+# contains NONE of that syntax, and proves -- by sabotage, not assertion -- that reintroducing it
+# breaks under dash while the real hook does not.
+
+
+def test_collapse_step_uses_no_bash_only_syntax() -> None:
+    """Static guard for the AC's own wording: no `${var//pat/repl}`, no `$'...'` ANYWHERE."""
+    hook = _hook_command()
+    assert "${" not in hook, f"bash-only pattern-substitution syntax found in hook: {hook!r}"
+    assert "$'" not in hook, f"bash-only ANSI-C-quoting syntax found in hook: {hook!r}"
+
+
+def _sabotage_with_m6px_bash_only_collapse(hook: str) -> str:
+    """Splice lode-m6px's ORIGINAL bash-only collapse in place of the shipped one.
+
+    Byte-exact reconstruction of the collapse expression from the closed-but-bounced commit
+    (verified via `git show a6f0862c...:.claude/settings.json | jq -r '...command'`): three
+    literal backslash characters followed by `n`, inside bash's `$'...'` ANSI-C quoting -- NOT a
+    Python-escaped `\\n` (which would silently become a single real newline byte and change what
+    is being tested). Built via explicit concatenation, not a string literal, so the byte sequence
+    can't drift under an editor's whitespace/escape normalization.
+    """
+    three_backslashes_then_n = "\\" + "\\" + "\\" + "n"
+    assert [hex(ord(c)) for c in three_backslashes_then_n] == [
+        "0x5c",
+        "0x5c",
+        "0x5c",
+        "0x6e",
+    ], "byte-exact reconstruction of the m6px collapse drifted"
+    old_collapse = 'CMD="${CMD//$\'' + three_backslashes_then_n + "'/ }\""
+
+    anchor_start = "empty'); "
+    anchor_end = "; if printf '%s' \"$CMD\" | grep -qE"
+    start = hook.index(anchor_start) + len(anchor_start)
+    end = hook.index(anchor_end)
+    assert start < end, "could not locate the collapse expression in the shipped hook"
+    shipped_collapse = hook[start:end]
+    assert "sed" in shipped_collapse, (
+        f"expected the portable sed-based collapse, found: {shipped_collapse!r}"
+    )
+    return hook[:start] + old_collapse + hook[end:]
+
+
+def test_m6px_bash_only_collapse_fails_under_dash_sabotage() -> None:
+    """SABOTAGE, not assertion (lode-9gm2 AC): splice in the exact line that shipped broken and
+    confirm it now breaks the guard under /bin/sh (dash) with "Bad substitution" -- reproducing
+    the live incident -- while the real, shipped hook does not.
+    """
+    sabotaged = _sabotage_with_m6px_bash_only_collapse(_hook_command())
+    payload = json.dumps(
+        {
+            "session_id": "t",
+            "tool_name": "Bash",
+            "tool_input": {"command": 'bd create -t task "x" --deps blocks:lode-1'},
+        }
+    )
+
+    dash_proc = subprocess.run(
+        [SH, "-c", sabotaged], input=payload, capture_output=True, text=True, timeout=30
+    )
+    assert dash_proc.returncode != 0, (
+        "expected the m6px bash-only collapse to fail under dash; it did not -- "
+        "the sabotage is not non-vacuous"
+    )
+    assert "Bad substitution" in dash_proc.stderr, (
+        f"expected dash's 'Bad substitution' error, got: {dash_proc.stderr!r}"
+    )
+
+
+def test_m6px_bash_only_collapse_would_have_worked_under_bash() -> None:
+    """The control for the sabotage above: the SAME sabotaged line runs fine under bash --
+    proving the defect is dash-vs-bash portability, not a typo, and explaining exactly why the
+    original build's bash-driven test suite (47/47 passing) never caught it.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not available")
+    sabotaged = _sabotage_with_m6px_bash_only_collapse(_hook_command())
+    payload = json.dumps(
+        {
+            "session_id": "t",
+            "tool_name": "Bash",
+            "tool_input": {"command": 'bd create -t task "x" --deps blocks:lode-1'},
+        }
+    )
+    proc = subprocess.run(
+        [bash, "-c", sabotaged], input=payload, capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"expected the sabotaged hook to run cleanly under bash: {proc.stderr}"
+    assert proc.stdout.strip(), "expected a deny decision under bash"
+
+
+def test_shipped_hook_runs_cleanly_under_dash_end_to_end() -> None:
+    """Direct regression test for the incident: the REAL hook, unsabotaged, must not error under
+    /bin/sh for the exact command shape that bricked the Bash tool live (a plain deny case).
+    """
+    payload = json.dumps(
+        {
+            "session_id": "t",
+            "tool_name": "Bash",
+            "tool_input": {"command": 'bd create -t task "x" --deps blocks:lode-1'},
+        }
+    )
+    proc = subprocess.run(
+        [SH, "-c", _hook_command()], input=payload, capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, f"guard errored under dash: {proc.stderr}"
+    assert "Bad substitution" not in proc.stderr
