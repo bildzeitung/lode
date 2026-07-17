@@ -1,22 +1,14 @@
 """Tests for scripts/blocks-dependents.sh (lode-verb).
 
-lode-v4rk found four sites in `.claude/skills/land/SKILL.md` and sibling
-skills walking bd dependency arrays and fixed three of them (the epic-
-completion checks in `/land`, `/epic-audit`, `/sweep`) by extracting to
-`scripts/epic-children-closed.sh` + `scripts/epic-completion-check.sh`,
-each with fixture-backed regression tests. It fixed the fourth -- `/land`'s
-Bounce section, which re-points a superseded ticket's `blocks`-dependents
-onto the rebuild ticket so they stay blocked rather than unblocking
-prematurely -- correctly, but left it as an ungated inline jq snippet in
-the markdown, with no test to catch a future regression.
+WHY the script's `--include-dependents` flag is required, and why THIS site
+(unlike the three sibling checks lode-v4rk extracted) fails silently UNSAFE
+without it: see the header comment of scripts/blocks-dependents.sh. That
+rationale is deliberately NOT restated here -- it lives next to the code it
+constrains, so it cannot drift out of sync with a second copy.
 
-That distinction matters more here than for the three extracted sites: a
-dropped `--include-dependents` flag there fails silently SAFE (a missed
-epic-completion flag reads identically to "not complete yet"). Here it
-fails silently UNSAFE: `bd supersede` still closes the original ticket, so
-a dropped re-point lets every `blocks`-dependent unblock immediately
-against a rebuild that was never built -- and /code's fan-out can then
-dispatch a builder onto it.
+What this file adds on top of that: the regression gate. These tests exist
+so a future edit that drops the flag fails LOUDLY here, rather than silently
+re-pointing nothing at the one site where "nothing" is the unsafe answer.
 
 `test_old_dependents_derivation_without_flag_never_fires` is a pinned
 demonstration of that failure mode: it embeds the pre-extraction jq snippet
