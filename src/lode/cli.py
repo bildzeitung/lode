@@ -131,16 +131,41 @@ app = typer.Typer(
 #: This ticket does not restyle any command — nothing prints through these
 #: names yet, so defining the theme is a no-op at the user-visible level;
 #: the sibling tickets are what actually consume it.
-CLI_THEME = Theme(
-    {
-        "note_id": "cyan",
-        "date": "dim",
-        "warn": "yellow",
-        "danger": "bold red",
-        "ok": "bold green",
-        "table.header": "bold",
-    }
-)
+#:
+#: Declared as a plain dict, and NOT inlined into the ``Theme(...)`` call
+#: below, because ``Theme.__init__`` DESTROYS the declaration: it does
+#: ``self.styles = DEFAULT_STYLES.copy()`` (``inherit=True`` is the default)
+#: and then ``.update()``s these on top. Any name whose value equals rich's
+#: own default is therefore indistinguishable, on the constructed ``Theme``,
+#: from a name that was never declared at all — see ``table.header`` below.
+#: Keeping the declaration reachable is what lets tests/test_cli_theme.py
+#: assert this palette rather than rich's.
+CLI_STYLES: dict[str, str] = {
+    "note_id": "cyan",
+    "date": "dim",
+    "warn": "yellow",
+    "danger": "bold red",
+    "ok": "bold green",
+    # NOTE: a deliberate RESTATEMENT of rich's own default —
+    # rich.default_styles.DEFAULT_STYLES["table.header"] is already "bold",
+    # and rich's Table already defaults header_style="table.header", so
+    # lode-l38d.4 would render bold headers even if this line were deleted.
+    # Declared anyway so the palette has ONE source of truth: lode-l38d.4's
+    # builder works in an isolated parallel worktree and cannot ask what the
+    # header style is — it reads this dict. Were the name absent here it would
+    # invent its own literal, which is the exact coordination failure this
+    # ticket was split out of lode-l38d.1 to prevent. The cost of the
+    # redundancy: no assertion against the constructed Theme/Console can prove
+    # this entry exists (the inherited value is identical), so
+    # tests/test_cli_theme.py pins it against CLI_STYLES — the reason this
+    # dict is named rather than inlined above.
+    "table.header": "bold",
+}
+
+#: The shared ``Theme`` built from :data:`CLI_STYLES` — ``inherit=True`` (the
+#: default) is deliberate: rich's own ~150 defaults (``repr.*``, ``progress.*``,
+#: traceback and pretty-printing styles) must keep working underneath ours.
+CLI_THEME = Theme(CLI_STYLES)
 
 #: The one shared rich Console for the whole CLI (lode-l38d.1) — every
 #: colour/width-aware command renders through this, never a per-command
@@ -171,7 +196,7 @@ CLI_THEME = Theme(
 #: ready frontier together — /code fans them out as four PARALLEL producers
 #: in isolated worktrees that cannot coordinate a palette with each other.
 #: Deciding it once, here, removes the need for that coordination (see the
-#: lode-l38d epic's /challenge finding). See ``CLI_THEME`` below for the
+#: lode-l38d epic's /challenge finding). See ``CLI_STYLES`` above for the
 #: style names and what each sibling ticket uses them for.
 console = Console(theme=CLI_THEME)
 
