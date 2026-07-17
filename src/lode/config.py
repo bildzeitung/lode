@@ -512,6 +512,74 @@ def model_cache_dir() -> Path:
     return lode_home() / "models"
 
 
+#: On-disk cache identity for lode's pinned local models (``embedding_model``
+#: and the shared ``rerank_model``/``entailment_model`` id, lode-txh.6) --
+#: ``fastembed``'s own ``list_supported_models()`` entry for each, reduced to
+#: just what a filesystem cache probe needs: the HuggingFace repo id its
+#: downloader actually caches weights under (``sources.hf``, which can differ
+#: from the friendly model id lode's settings carry -- e.g.
+#: ``BAAI/bge-small-en-v1.5`` caches under ``qdrant/bge-small-en-v1.5-onnx-q``)
+#: and the specific weight file within it (``model_file``).
+#:
+#: Pinned here so ``lode status``'s cold-cache probe (lode-l38d.6) can answer
+#: "is this repo already on disk" with a pure
+#: ``huggingface_hub.try_to_load_from_cache`` filesystem lookup and NEVER
+#: ``import fastembed`` -- that import drags in onnxruntime + numpy (~830
+#: modules, ~740ms warm), which measurably slowed a pure-sqlite-read command
+#: just to print "No action needed." (the lode-l38d.6 review escalation this
+#: pin resolves, decided 2026-07-16).
+#:
+#: Measured on the WARM path -- the steady state -- as ``lode status`` min-of-11,
+#: two interleaved passes on one machine (the only fair shape: figures taken on
+#: different machines/loads are not comparable, which is what made the
+#: escalation and the implementing run disagree 2.4x about this very cost):
+#:
+#: ===========================  =========  =========
+#: ``lode status``              pass 1     pass 2
+#: ===========================  =========  =========
+#: trunk, no probe               864ms      919ms
+#: probe via ``import fastembed``  1320ms   1244ms
+#: probe via this pin            1019ms     1039ms
+#: ===========================  =========  =========
+#:
+#: So the probe's real cost was ~+330-460ms (~1.4x, NOT the "2-4x" the
+#: escalation reported and this comment once repeated -- that figure came from a
+#: 3.03s outlier no later run reproduced), and the pin removes ~65-70% of it.
+#: The residual ~+120-155ms is ``huggingface_hub``'s own import and is the
+#: accepted price of the hint: the pin does NOT make ``lode status`` as fast as
+#: trunk, and cannot -- it strictly adds work to a pure DB read.
+#:
+#: Keyed by the model id LOWERCASED, matching fastembed's own
+#: case-insensitive resolution (``ModelManagement._get_model_description``
+#: compares ``model_name.lower()``) -- a ``config.toml`` override spelled in a
+#: different case still probes correctly.
+#:
+#: DRIFT GUARD: a fastembed upgrade could in principle change a pinned id's
+#: ``sources.hf``/``model_file``. ``tests/test_model_cache_identity.py``
+#: asserts this dict still matches the installed fastembed's
+#: ``list_supported_models()`` -- that test may import fastembed; this module
+#: and ``cli.py``'s cold-cache probe must not.
+_MODEL_CACHE_IDENTITY: dict[str, tuple[str, str]] = {
+    "nomic-ai/nomic-embed-text-v1.5": (
+        "nomic-ai/nomic-embed-text-v1.5",
+        "onnx/model.onnx",
+    ),
+    "baai/bge-reranker-base": ("BAAI/bge-reranker-base", "onnx/model.onnx"),
+}
+
+
+def model_cache_identity(model_name: str) -> tuple[str, str] | None:
+    """Pinned ``(hf_source_repo_id, model_file)`` for ``model_name``, or ``None``.
+
+    Case-insensitive lookup against :data:`_MODEL_CACHE_IDENTITY`, matching
+    ``fastembed``'s own resolution. Returns ``None`` for any model id outside
+    lode's two pinned models (e.g. a user's custom ``config.toml`` override) --
+    callers fall back to importing ``fastembed`` to resolve those, same as
+    before this id set was pinned.
+    """
+    return _MODEL_CACHE_IDENTITY.get(model_name.lower())
+
+
 def config_path() -> Path:
     """The optional user config file under the root: ``$LODE_HOME/config.toml``.
 

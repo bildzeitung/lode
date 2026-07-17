@@ -248,20 +248,37 @@ disqualify a branch is a **textual conflict** with current `trunk` — and disco
 merge time (Section 3) means I've already paid for a full `land-review` on contents the rebase will
 change. So I test it cheaply, up front, with a no-checkout trial merge against current `trunk`
 (the pass already brought local `trunk` current with `origin/trunk` in Section 1, and I have not
-merged anything yet this pass, so `origin/trunk` is the right base for every branch here):
+merged anything yet this pass, so `origin/trunk` is the right base for every branch here), via
+[`scripts/merge-precheck.sh`](../../../scripts/merge-precheck.sh) (extracted from an inline snippet
+per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, with fixture-backed
+tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
-# git merge-tree --write-tree exits 0 on a clean merge, non-zero on conflict — no working tree touched.
-# (Requires git >= 2.38.)
-if MT=$(rtk git merge-tree --write-tree --name-only origin/trunk "origin/land/<id>" 2>/dev/null); then
-  :                                        # clean — proceed to the semantic gate (2c)
+# A command substitution inside an `if` condition is exempt from `set -e` —
+# unlike a bare `VAR=$(cmd)` assignment, which would abort the shell on a
+# non-zero exit before `rc=$?` is ever reached. Same idiom the snippet this
+# replaced used, for the same reason.
+if CONFLICTS=$(rtk scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); then
+  rc=0
 else
-  CONFLICTS=$(printf '%s\n' "$MT" | tail -n +2)   # merge-tree lists the conflicting paths after the tree OID
-  # → needs-rebase kick-back (see "Needs rebase — kick back"): skip land-review, leave the merge set.
+  rc=$?
 fi
 ```
 
-A conflict here is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
+- **`rc=0`** → clean — proceed to the semantic gate (2c). (Prints nothing.)
+- **`rc=1`** → textual conflict. `$CONFLICTS` holds exactly the conflicting path(s), one per line —
+  no tree OID, no chatter. → needs-rebase kick-back (see "Needs rebase — kick back"): skip
+  `land-review`, leave the merge set.
+- **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
+  `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
+  `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
+  this branch back `needs-rebase`. A machine fault blaming an innocent branch is exactly the defect
+  this extraction closed (defect 2, in the script's header). Instead I **stop the pass** and surface
+  the script's own stderr diagnostic verbatim as a human decision — it names the cause and the
+  remedy, and only a human can fix the machine. This is the one behaviour change from the inline
+  snippet this replaced; do not "simplify" it back into a kick-back.
+
+A conflict (`rc=1`) is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
 fine, it simply can't replay onto where `trunk` now is. I handle it per
 [Needs rebase — kick back](#needs-rebase--kick-back): remove `ready-for-land`, add `needs-rebase`,
 **keep the branch and the build worktree**, and move on — **without dispatching `land-review`**. The
@@ -1110,10 +1127,59 @@ against `<id>`'s tip — that is the tip test 1a exists to avoid.
   it currently carries (it may not even be at `ready-for-land` yet) — this bounce escalation doesn't
   touch it.
 
-**No descendants — the ordinary bounce.** I create the rebuild ticket first, then mark the original
-superseded with **`bd supersede`** (the dedicated command — `supersedes` is **not** a `--deps` type):
+**No descendants — the ordinary bounce.** First derive the blocks-dependent set with its exit status
+tested, THEN create the rebuild ticket, THEN mark the original superseded with **`bd supersede`** (the
+dedicated command — `supersedes` is **not** a `--deps` type):
 
 ```bash
+# Derive blocks-dependents FIRST, before anything else changes state (lode-xm1h). Capture the
+# output so the exit status is testable -- a bare `for DEP in $(...)` discards it. If OTHER tickets
+# depend on <id> via a `blocks` edge (e.g. a diagnosis spike that gates its follow-ups), supersede
+# below CLOSES <id> -- so bd treats that blocker as satisfied and those dependents unblock
+# PREMATURELY, while the real work still sits unbuilt in the rebuild. Re-pointing each dependent
+# onto the rebuild (below) is what keeps that from happening; if this derivation itself can't be
+# trusted, nothing downstream can be either, so escalate instead of guessing.
+#
+# Extracted to scripts/blocks-dependents.sh (lode-verb), unlike the inline jq this replaced: that
+# snippet was correct but ungated, and unlike the epic-completion checks lode-v4rk extracted (which
+# fail silently SAFE on a schema/flag regression), a dropped re-point here fails silently UNSAFE --
+# the dependent unblocks immediately against a rebuild that was never built. The script carries its
+# own fixture-backed regression tests (tests/test_blocks_dependents.py) so a DERIVATION regression
+# (e.g. the required --include-dependents flag getting dropped) fails a gate instead of failing
+# silently. But a derivation regression isn't the only way this goes wrong (lode-xm1h): a bd
+# RUNTIME failure (bd missing, Dolt DB locked, an id bd can't resolve) makes the script itself exit
+# non-zero, which no gate on the script's internals can catch -- only the caller reading its exit
+# status can. That is what this `if !` does.
+if ! DEPS=$(rtk scripts/blocks-dependents.sh <id>); then
+  # Do NOT proceed blind to the supersede: continuing here would close <id> while never having
+  # confirmed its blocks-dependents (if any), which unblocks them immediately against a rebuild
+  # that doesn't exist yet -- the exact unsafe outcome lode-verb extracted this script to prevent.
+  # Nothing has been created or changed yet at this point (no $NEW, no re-parent, no supersede), so
+  # escalating here is a clean stop, not a partial one.
+  rtk bd update <id> --add-label land-escalated --remove-label ready-for-land \
+    --append-notes "ESCALATION (bounce): scripts/blocks-dependents.sh <id> failed at runtime (bd
+missing, Dolt DB locked, or an id it couldn't resolve) while deriving blocks-dependents ahead of a
+supersede. Bounce does not proceed blind -- superseding without a reliable dependent list risks
+re-pointing nothing while blocks-dependents silently unblock against an unbuilt rebuild. No rebuild
+ticket was created; land/<id> is kept. Retry the bounce once the underlying bd failure clears."
+  rtk scripts/bd-dolt-push.sh
+  # STOP here -- and stop with a STATEMENT, not a comment. A bare `# STOP` is INERT: control
+  # would fall through the `fi` straight into `NEW=$(bd create ...)` / `bd supersede` (which
+  # CLOSES <id>) / `git push --delete` below, superseding the ticket anyway -- the exact
+  # "proceed blind to the supersede" outcome this guard exists to prevent (lode-xm1h). The
+  # `exit 1` is what actually enforces the stop; do not drop it back to a comment. (Nothing has
+  # been created or changed beyond the land-escalated label above, so this exit is a clean stop.)
+  exit 1
+fi
+
+# UNGATED, unlike the derivation above: this `if !`/escalate structure lives in this markdown file,
+# not in scripts/blocks-dependents.sh, so no automated test covers a regression to it (e.g. someone
+# "simplifying" this back to a bare `for DEP in $(...)`) the way test_blocks_dependents.py covers
+# the script's own derivation logic (lode-verb's own comment states the identical limitation for the
+# jq-vs-script split; this is the same limitation, one level up, for lode-xm1h's fix). A future
+# editor changing this block should either add a check that reads it directly, or preserve the
+# `if !` shape as-is.
+
 NEW=$(rtk bd create --type=<same-type-as-original> \
   --title="<original title> (rebuild after land bounce)" \
   --description="Rebuild of <id>, bounced by /land semantic review.
@@ -1128,24 +1194,16 @@ REBUILD BRIEF (from land-review):
 # epic's completion accounting honest: the superseded child closes, but NEW is an open child, so the
 # epic stays incomplete until the rebuild lands (and /epic-audit sees the real work).
 # `.parent` (verified against real bd 1.1.0 output, lode-v4rk's audit) is the direct top-level
-# field bd show already populates for a parent-child child -- simpler and no schema/flag pitfall
-# to get wrong, unlike `.dependencies[]?`/`.dependents[]?` walks elsewhere in this file.
+# field bd show already populates for a parent-child child -- simpler and no schema/flag pitfall to
+# get wrong, unlike the blocks-dependent derivation below, which needs the opt-in
+# --include-dependents walk and so lives in scripts/blocks-dependents.sh (no
+# `.dependencies[]?`/`.dependents[]?` walk survives inline in this file -- lode-v4rk's audit
+# extracted every other one; confirmed by grep).
 PARENT=$(rtk bd show <id> --json | jq -r '.[0].parent // empty')
 [ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
 
-# Re-point non-parent dependents. If OTHER tickets depend on <id> via a `blocks` edge (e.g. a
-# diagnosis spike that gates its follow-ups), supersede CLOSES <id> — so bd treats that blocker as
-# satisfied and those dependents unblock PREMATURELY, while the real work still sits unbuilt in NEW.
-# Re-point each dependent onto NEW so the graph stays honest: they remain blocked until the rebuild
-# lands. Same principle as the epic re-parent above — keep the dependency graph accurate across a
-# supersede, not just the parentage.
-# Extracted to scripts/blocks-dependents.sh (lode-verb), unlike the inline jq this replaced: that
-# snippet was correct but ungated, and unlike the epic-completion checks lode-v4rk extracted (which
-# fail silently SAFE on a schema/flag regression), a dropped re-point here fails silently UNSAFE --
-# the dependent unblocks immediately against a rebuild that was never built. The script carries its
-# own fixture-backed regression tests (tests/test_blocks_dependents.py) so a future regression (e.g.
-# the required --include-dependents flag getting dropped) fails a gate instead of failing silently.
-for DEP in $(rtk scripts/blocks-dependents.sh <id>); do
+# Re-point the non-parent dependents derived above ($DEPS, captured before $NEW existed).
+for DEP in $DEPS; do
   rtk bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
 done
 
@@ -1160,6 +1218,11 @@ rtk scripts/bd-dolt-push.sh                            # publish the new ticket 
 `NEW` is the live work. That is the right outcome for a bounce: the bounced attempt is done-as-replaced,
 not lingering open. (It is the one case where landing-side closes an `in_progress` producer ticket; a
 normal **accept**/land closes via Section 4, an **escalate** never closes.)
+
+**This same escalation shape applies to the [Escalate → land-escalated](#escalate--genuine-decision)
+path's own bounce-like rebuild** below: it defers to "see Bounce above for why" rather than
+duplicating the loop, so it inherits this fix by reference — a runtime failure there is handled
+exactly as above, not a separate case to design.
 
 ### Branch disposition on a bounce — drop (default) vs. keep-for-lift (lode-02v)
 

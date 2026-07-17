@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
-from textual.pilot import Pilot
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -49,6 +48,8 @@ from lode.tui.screens.browse import (
 )
 from lode.tui.screens.capture import CaptureScreen
 from lode.versions import save
+
+from conftest import _press_and_settle
 
 
 def test_app_registers_browse_screen(tmp_path: Path) -> None:
@@ -1746,53 +1747,16 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
-async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
-    """Press each key one at a time, settling after EACH one (lode-9y68).
-
-    This is the one gap here with a mechanism that is both verified in
-    Textual's source AND load-sensitive.
-
-    ``pilot.press(*keys)`` (``pilot.py``) is::
-
-        await self._app._press_keys(keys)   # ALL keys, paced by heuristic only
-        await self._wait_for_screen()       # ONE real drain, at the very end
-
-    ``App._press_keys`` (``app.py``) paces BETWEEN keystrokes with nothing but
-    ``wait_for_idle()`` -- and that is a wall-clock-vs-``process_time()``
-    comparison, so a process merely *starved of timeslices* (this machine
-    legitimately runs several concurrent ``nox -s tests`` invocations) reads as
-    "idle" while a cascade is still in flight. The real drain comes only once,
-    after the last key. So the next key can be dispatched mid-cascade.
-
-    That matters here because this file's search is a STATEFUL cascade:
-    ``BrowseScreen._seek_match`` reads ``table.cursor_row`` as its *scan start*
-    (``src/lode/tui/screens/browse.py``), so each keystroke's search depends on
-    the previous keystroke's cursor having landed (``Input.Changed`` ->
-    ``on_input_changed`` -> ``_seek_match`` -> ``DataTable.move_cursor``). A key
-    dispatched before that lands corrupts the next scan's start row.
-
-    The fix is just to press ONE key per call: ``pilot.press(key)`` ends with
-    its own ``_wait_for_screen()``, so a real message-count drain -- not the
-    CPU heuristic -- separates every keystroke from the next.
-
-    NARROW BY DESIGN: a plain multi-key ``pilot.press("down", "down", "down")``
-    elsewhere in this file is fine and deliberately left alone -- cursor moves
-    are order-preserving and carry no read-back dependency between keys, and
-    ``press()``'s trailing drain covers the final read. The trigger is the
-    stateful read-back above, not multi-key presses in general.
-
-    The trailing ``pilot.pause()`` below is NOT part of that mechanism -- it is
-    just this file's ordinary post-keystroke dialect, kept so these sites read
-    like their ~90 siblings. ``press(key)`` alone is already sufficient. Do not
-    read it as load-bearing, and do not add more drains to settle a future
-    flake: a fixed count of drains neither waits longer under worse load nor
-    reports anything when it is insufficient. ``wait_for_idle``'s clock
-    comparison is the only load-sensitive element in this path (lode-lcju owns
-    the house-pattern ruling).
-    """
-    for key in keys:
-        await pilot.press(key)
-        await pilot.pause()
+# _press_and_settle moved to tests/conftest.py (lode-lcju) -- see docs/tui.md's
+# "Settling TUI tests under load" section for the ruling + mechanism, and
+# tests/conftest.py's own docstring for the helper itself. In brief: this
+# file's search is a STATEFUL cascade (``BrowseScreen._seek_match`` reads
+# ``table.cursor_row`` as its scan start), so a key dispatched before the
+# previous one's cascade lands corrupts the next scan -- pressing one key per
+# call, each with its own real drain, fixes it. NARROW BY DESIGN: a plain
+# multi-key ``pilot.press("down", "down", "down")`` elsewhere in this file is
+# fine and deliberately left alone -- cursor moves are order-preserving with
+# no read-back dependency between keys.
 
 
 def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
@@ -2658,6 +2622,9 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # (docs/tui.md) -- this test's bound moved accordingly, and the extra room
 # lets the labels this shortened ("Insp"/"Del"/"Exp") go back to full words.
 #
+# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
+# footer, including this one.
+#
 # The consumed-width assert (lode-3aen's backport) is the same lever
 # tests/test_tui_app.py's Capture footer test documents: show_horizontal_
 # scrollbar alone is necessary but not sufficient (Textual can squeeze
@@ -2697,7 +2664,7 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 7 screen-level + 4 App-level bindings stay visible (none hidden via
+    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- restored to full words at the new 100-column bound.
     assert descriptions == [
         "Back",
@@ -2711,6 +2678,7 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
         "Cfg",
         "Browse",
         "Tags",
+        "Ask",
     ]
 
 
@@ -2727,6 +2695,12 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
 # ``Footer()`` and the original "View content" label measures
 # consumed=131/hscroll=True at 100 columns -- both asserts below would have
 # caught it.
+#
+# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
+# footer too, taking this screen -- the tightest of the ten -- from 90/100 to
+# 97/100 (measured; this is exactly the 3 columns of slack app.py's own "Cfg"
+# rationale comment reserved room for, by keeping "Cfg" abbreviated rather
+# than restoring "Config").
 # ---------------------------------------------------------------------------
 
 
@@ -2757,7 +2731,7 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 6 screen-level + 4 App-level bindings stay visible (none hidden via
+    # All 6 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False); only "View content" -> "View" was shortened.
     assert descriptions == [
         "Save",
@@ -2770,4 +2744,5 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
         "Cfg",
         "Browse",
         "Tags",
+        "Ask",
     ]

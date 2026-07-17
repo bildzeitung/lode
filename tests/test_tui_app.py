@@ -274,7 +274,7 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 
 # ---------------------------------------------------------------------------
 # Compact footer bar (lode-3rvw, widget lode-uczx) -- CaptureScreen.BINDINGS
-# renders 4 entries plus 4 App-level ones (LodeApp.BINDINGS) in one footer
+# renders 4 entries plus 5 App-level ones (LodeApp.BINDINGS) in one footer
 # line; with the original, full-length descriptions that really consumed 100
 # columns and Textual clipped the tail against the 80-column bound this
 # screen was originally sized to. The fix stays inside the stock Footer
@@ -284,8 +284,11 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 #
 # lode-uczx: lode's minimum supported terminal width is 100 columns, not 80
 # (docs/tui.md) -- this test's bound moved accordingly. Consumed width is
-# intrinsic to the labels (identical at 80 and 100; only the budget moved),
-# so it is unchanged by the bound: still 77.
+# intrinsic to the labels (identical at 80 and 100; only the budget moved).
+#
+# lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
+# footer, including this one -- consumed moved from 77 to 84 (+7, matching
+# the measurement app.py's own "Cfg" rationale comment records).
 #
 # TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
 # sufficient, so this test does not rely on it alone. Textual separates the
@@ -326,7 +329,7 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 4 screen-level + 4 App-level bindings stay visible (none hidden via
+    # All 4 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- only their description text was shortened, and ctrl+n
     # keeps its full "Save & new" so it cannot read as a discard-and-restart.
     assert descriptions == [
@@ -338,6 +341,7 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
         "Cfg",
         "Browse",
         "Tags",
+        "Ask",
     ]
 
 
