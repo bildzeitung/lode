@@ -1299,3 +1299,52 @@ are catalogued in [configuration.md](configuration.md).
   the guard is precisely what makes committing it costly, which is why ignoring it belongs to this
   change and not to bd. Neither was ignored by default (`git check-ignore` matched neither), and
   `.beads/` is exactly the directory CLAUDE.md warns a `git add -A` sweeps into.
+- **The stray-DB label-swap stranding residual: accepted, won't fix (lode-zz7x).** `lode-fzau`'s guard
+  (above) covers only the incident's *larger* harm — publishing a stale DB over `refs/dolt/data`. Its
+  own description names a second harm the guard structurally cannot see: `bd update <id> --add-label
+  ready-for-code-review` succeeding *silently* against a stray, worktree-local DB. No push is involved
+  at all, so the guard never runs; the ticket is simply stranded at `ready-for-code-review` forever,
+  invisible to `/land`. This entry is `lode-zz7x`'s own decision record — the reasoning was previewed
+  inside the `lode-fzau` entry above (point 2) as "an explicit accepted, won't fix is a valid outcome
+  there"; this makes that outcome the actual, recorded decision rather than leaving it implied.
+
+  **Decision: accepted, won't fix.** Not option (a) (a post-write read-back in the producer loops) and
+  not option (b) (a dedicated staleness sweep over `ready-for-code-review`) — both from `lode-zz7x`'s
+  own list of directions.
+
+  **Why (a) doesn't actually work as stated.** A read-back that re-queries immediately after the write,
+  from the same worktree cwd, resolves to the *same* DB the write just landed on. If that DB is the
+  stray one, the read-back sees the label present — it confirms the write against the very DB that is
+  wrong, not against the authoritative one. The only way a read-back could actually catch this is by
+  querying from an *independent* vantage point (the main checkout, by a fixed path, ignoring whatever
+  the worktree's own `cwd`-based resolution did) — on *every* producer hand-off, forever, to guard a
+  mechanism that has now been probed 11 times (10 in `lode-fzau`'s diagnostic, plus this ticket's own
+  review of the option) and reproduced exactly once, not at all. That is a permanent tax on the hot path
+  of every single build and review for a mechanism nobody can currently make happen on demand.
+
+  **Why (b) doesn't close the gap either.** A staleness sweep over `ready-for-code-review` (`/code`'s
+  own step-1 stranded-review sweep already exists and does something adjacent — see
+  `.claude/skills/code/SKILL.md`) cannot see this specific failure at all: from the *authoritative* DB's
+  perspective, a ticket stranded this way never actually carries the `ready-for-code-review` label —
+  the write that would have added it landed on the stray copy instead. The authoritative view of a
+  stranded ticket is indistinguishable from an ordinary ticket that is still legitimately `in_progress`.
+  There is no clean signal here to sweep for beyond the generic "this ticket has sat `in_progress` a
+  long time," which is already visible to a human (or a future `/sweep` staleness check) without any
+  new machinery specific to this mechanism.
+
+  **Why accepting it is consistent with `lode-fzau`'s own risk posture, not a lower bar.** That entry
+  already rejected guarding every `bd` write as too large a surface for too little benefit given the
+  local, recoverable blast radius (a stalled ticket, not corrupted cross-machine state). Both (a) and
+  (b), done correctly, amount to exactly that: new checking machinery run on every ordinary `bd` write
+  or hand-off, in service of a mechanism that remains unreproduced and whose actual harm — a build sits
+  claimed but silently makes no further progress — is a symptom an operator (or `/code`'s own fan-out
+  bookkeeping) already has a fair chance of noticing on its own.
+
+  **No code change.** No new guard, no new sweep, no change to `.claude/agents/coding.md` or
+  `.claude/agents/code-reviewer.md`'s hand-off steps.
+
+  **Revisit if:** the stray-DB mechanism itself is ever reproduced again (even once, on any machine) —
+  at that point a real repro exists to design a targeted fix or detector against, rather than guarding
+  speculatively; or if tickets are observed sitting `in_progress` with no visible builder/reviewer
+  activity for an extended period and no other explanation surfaces, which would be the first empirical
+  sign this residual is firing in practice rather than remaining purely theoretical.
