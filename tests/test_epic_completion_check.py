@@ -121,9 +121,7 @@ def _epic(*, status: str = "open", labels: list[str] | None = None) -> list[dict
 def test_no_parent_prints_nothing(tmp_path: Path) -> None:
     """A ticket with no parent epic — nothing to flag."""
     show_fixtures = {"lode-solo": [{"id": "lode-solo", "parent": None}]}
-    result = _run(
-        "lode-solo", tmp_path, show_fixtures=show_fixtures, list_fixtures={}
-    )
+    result = _run("lode-solo", tmp_path, show_fixtures=show_fixtures, list_fixtures={})
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == ""
 
