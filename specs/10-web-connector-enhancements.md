@@ -27,6 +27,9 @@ me to the company instance of Atlassian's product and shows me a ticket), but
 given an API key, a structured response far more friendly for AI use could
 be retrieved as a substitute for the original URL.
 
+The capabilities to add are the ability to leveral REST services and APIs in
+contrasted to parsing and extracting information from bare web pages.
+
 With respect to other connectors, the differentiator is mechanism. For example,
 email would not be web-based, but rather via an IMAP library. Repository lookups
 are likely a function of pulling files via git tooling.
