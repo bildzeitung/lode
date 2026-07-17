@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
-from textual.pilot import Pilot
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -49,6 +48,8 @@ from lode.tui.screens.browse import (
 )
 from lode.tui.screens.capture import CaptureScreen
 from lode.versions import save
+
+from conftest import _press_and_settle
 
 
 def test_app_registers_browse_screen(tmp_path: Path) -> None:
@@ -1746,53 +1747,16 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
-async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
-    """Press each key one at a time, settling after EACH one (lode-9y68).
-
-    This is the one gap here with a mechanism that is both verified in
-    Textual's source AND load-sensitive.
-
-    ``pilot.press(*keys)`` (``pilot.py``) is::
-
-        await self._app._press_keys(keys)   # ALL keys, paced by heuristic only
-        await self._wait_for_screen()       # ONE real drain, at the very end
-
-    ``App._press_keys`` (``app.py``) paces BETWEEN keystrokes with nothing but
-    ``wait_for_idle()`` -- and that is a wall-clock-vs-``process_time()``
-    comparison, so a process merely *starved of timeslices* (this machine
-    legitimately runs several concurrent ``nox -s tests`` invocations) reads as
-    "idle" while a cascade is still in flight. The real drain comes only once,
-    after the last key. So the next key can be dispatched mid-cascade.
-
-    That matters here because this file's search is a STATEFUL cascade:
-    ``BrowseScreen._seek_match`` reads ``table.cursor_row`` as its *scan start*
-    (``src/lode/tui/screens/browse.py``), so each keystroke's search depends on
-    the previous keystroke's cursor having landed (``Input.Changed`` ->
-    ``on_input_changed`` -> ``_seek_match`` -> ``DataTable.move_cursor``). A key
-    dispatched before that lands corrupts the next scan's start row.
-
-    The fix is just to press ONE key per call: ``pilot.press(key)`` ends with
-    its own ``_wait_for_screen()``, so a real message-count drain -- not the
-    CPU heuristic -- separates every keystroke from the next.
-
-    NARROW BY DESIGN: a plain multi-key ``pilot.press("down", "down", "down")``
-    elsewhere in this file is fine and deliberately left alone -- cursor moves
-    are order-preserving and carry no read-back dependency between keys, and
-    ``press()``'s trailing drain covers the final read. The trigger is the
-    stateful read-back above, not multi-key presses in general.
-
-    The trailing ``pilot.pause()`` below is NOT part of that mechanism -- it is
-    just this file's ordinary post-keystroke dialect, kept so these sites read
-    like their ~90 siblings. ``press(key)`` alone is already sufficient. Do not
-    read it as load-bearing, and do not add more drains to settle a future
-    flake: a fixed count of drains neither waits longer under worse load nor
-    reports anything when it is insufficient. ``wait_for_idle``'s clock
-    comparison is the only load-sensitive element in this path (lode-lcju owns
-    the house-pattern ruling).
-    """
-    for key in keys:
-        await pilot.press(key)
-        await pilot.pause()
+# _press_and_settle moved to tests/conftest.py (lode-lcju) -- see docs/tui.md's
+# "Settling TUI tests under load" section for the ruling + mechanism, and
+# tests/conftest.py's own docstring for the helper itself. In brief: this
+# file's search is a STATEFUL cascade (``BrowseScreen._seek_match`` reads
+# ``table.cursor_row`` as its scan start), so a key dispatched before the
+# previous one's cascade lands corrupts the next scan -- pressing one key per
+# call, each with its own real drain, fixes it. NARROW BY DESIGN: a plain
+# multi-key ``pilot.press("down", "down", "down")`` elsewhere in this file is
+# fine and deliberately left alone -- cursor moves are order-preserving with
+# no read-back dependency between keys.
 
 
 def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
