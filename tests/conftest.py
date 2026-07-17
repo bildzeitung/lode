@@ -92,6 +92,7 @@ says what it means.
 import ipaddress
 import socket
 import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -165,6 +166,60 @@ def _isolate_lode_home(
     home = tmp_path_factory.mktemp("lode-home")
     (home / "models").symlink_to(durable_models, target_is_directory=True)
     monkeypatch.setenv("LODE_HOME", str(home))
+
+
+@pytest.fixture
+def set_console_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[int], None]:
+    """Force ``lode.cli``'s shared ``console`` to a given width for one test.
+
+    rich's ``Console()`` reads ``COLUMNS`` from the environment ONCE, at
+    CONSTRUCTION -- but only CONDITIONALLY: ``Console.__init__`` sets
+    ``self._width`` from ``os.environ["COLUMNS"]`` whenever the ``width``
+    constructor arg is ``None`` (lode's case) AND ``COLUMNS`` happens to be
+    present in the environment at that moment (verified against the installed
+    rich 15.0.0). Once baked, ``Console.size`` short-circuits on ``self._width
+    is not None`` and never re-reads the environment again -- for the REST OF
+    THE PROCESS'S LIFETIME.
+
+    For a real one-shot ``lode config`` invocation that is harmless (import time
+    and render time are the same moment). It is NOT harmless in this test suite:
+    pytest-xdist imports ``lode.cli`` ONCE per worker process and reuses the same
+    ``console`` singleton across every test that worker runs -- so whichever
+    ``COLUMNS`` happened to be in THAT worker's environment at its first import
+    of ``lode.cli`` (observed here: '80', inherited from outside pytest's own
+    control) freezes the console's width for every subsequent test in that
+    worker, and a later ``runner.invoke(..., env={"COLUMNS": ...})`` override has
+    NO effect -- confirmed empirically: it changes ``os.environ`` for the call,
+    but ``console.size``'s early-return never re-reads it.
+
+    This reaches past that freeze by monkeypatching the private
+    ``_width``/``_height`` attributes (auto-reverted after the test). Reaching
+    into a private attribute is deliberate: lode-l38d.1 decided AGAINST adding a
+    production test seam to the shared ``Console`` (``docs/stack.md``), so a
+    test-only reach-in is the compromise that decision implies.
+
+    It is also deliberately NOT the NO_COLOR subprocess technique used in
+    tests/test_cli_console.py: that module exists to verify rich's *env detection
+    mechanism itself*, whereas callers of this fixture only care about
+    Table/``overflow="fold"`` *rendering* behaviour at a given width, which does
+    not require re-proving env detection.
+
+    Shared here rather than copied per module (lode-l38d.4 review): the rationale
+    above is pinned to rich's internals, so two copies would silently drift apart
+    on a rich upgrade.
+    """
+
+    def _set(width: int) -> None:
+        # Imported lazily: lode.cli's import graph is expensive (~1.3s), and a
+        # module-level import here would charge every test session for it.
+        from lode.cli import console
+
+        monkeypatch.setattr(console, "_width", width)
+        monkeypatch.setattr(console, "_height", 24)
+
+    return _set
 
 
 #: Every module that must NOT be resident for an "is the SDK imported?" assertion

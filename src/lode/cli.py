@@ -69,16 +69,18 @@ from typing import TYPE_CHECKING, NoReturn
 
 import typer
 from pydantic import ValidationError
+from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 from lode import __version__, versions
 from lode.config import (
     Settings,
-    config_lines,
     config_path,
+    config_rows,
     default_db_path,
     knob_rows,
     lance_dir,
@@ -1835,21 +1837,74 @@ def dump_html(
     typer.echo(raw_payload)
 
 
-def _format_knob_table(rows: list[tuple[str, str, str]]) -> list[str]:
-    """Render :func:`~lode.config.knob_rows`' output as aligned text, with header.
+def _config_path_table(rows: list[tuple[str, str, str]]) -> Table:
+    """Render :func:`~lode.config.config_rows`' output as a terminal-width-aware
+    rich ``Table`` (lode-l38d.4). No header -- this block is a labelled dump,
+    not a column-semantic listing, so its look is unchanged from before this
+    ticket. The parenthetical annotation (``($LODE_HOME)``, ``(present)``/
+    ``(absent)``) lands in a real ``Note`` column instead of being
+    string-baked into ``Value`` (the TUI's Ctrl+O screen still bakes it in --
+    it renders :func:`lode.config.config_lines` untouched).
 
-    The CLI's own renderer around the shared ``knob_rows`` builder (lode-juz8.6)
-    -- the TUI renders the same rows into a ``DataTable`` widget instead
-    (:mod:`lode.tui.screens.config`); only the row data is shared, not this
-    text formatting.
+    ``overflow="fold"`` on ``Value``/``Note``: rich's ``Column`` default,
+    ``overflow="ellipsis"``, DROPS characters off any unbreakable single-token
+    string (e.g. a long absolute path) wider than its column instead of
+    wrapping it -- verified against the installed rich (15.0.0). Unacceptable
+    here, since this command's entire point is showing exact paths; nothing
+    may ever be silently truncated. ``"fold"`` hard-breaks mid-word when it
+    must, which is ugly but lossless.
+
+    Every cell is wrapped in :class:`rich.text.Text` rather than passed as a
+    bare ``str`` -- a bare string renders through rich's markup parser (the
+    shared ``console``'s default), which reads a literal ``[...]`` in a path
+    (or, for the knob table below, a regex character class) as a markup tag
+    and SILENTLY DROPS it. Verified against the installed rich: an unwrapped
+    ``"gh[pousr]_..."`` cell rendered as ``"gh_..."``, quietly losing
+    ``[pousr]``. ``Text(...)`` bypasses markup parsing entirely, so arbitrary
+    path/value content round-trips byte-for-byte.
     """
-    all_rows = [("Knob", "Value", "Kind"), *rows]
-    name_width = max(len(name) for name, _, _ in all_rows)
-    value_width = max(len(value) for _, value, _ in all_rows)
-    return [
-        f"{name:<{name_width}}  {value:<{value_width}}  {kind}"
-        for name, value, kind in all_rows
-    ]
+    table = Table(show_header=False, box=None, pad_edge=False)
+    table.add_column("Label")
+    table.add_column("Value", overflow="fold")
+    table.add_column("Note", overflow="fold")
+    for label, value, note in rows:
+        # Parenthesized to match the pre-lode-l38d.4 baked-in text
+        # (f"{value}  ({note})") -- moving it to its own column fixes the
+        # actual bug (that text used to distort the Value column's computed
+        # width), not the visual convention of wrapping it in parens.
+        table.add_row(Text(label), Text(value), Text(f"({note})" if note else ""))
+    return table
+
+
+def _config_knob_table(rows: list[tuple[str, str, str]]) -> Table:
+    """Render :func:`~lode.config.knob_rows`' output as a terminal-width-aware
+    rich ``Table`` (lode-l38d.4), with a header + separator rule
+    (``box.SIMPLE_HEAD``, closing the ticket's "no header separator rule"
+    gap) but no side borders, keeping the previous plain-list look. The TUI
+    renders the same row data into a ``DataTable`` widget instead
+    (:mod:`lode.tui.screens.config`); only the row DATA is shared, not this
+    formatting.
+
+    A list-valued knob (comma+space-joined by :func:`~lode.config.knob_rows`)
+    wraps at the space boundaries "for free" under ``overflow="fold"`` -- no
+    need to un-join it or render it specially. This, plus terminal-width-aware
+    column sizing instead of padding every row to the single widest value in
+    the table, is what removes the original bug.
+
+    Every cell is wrapped in :class:`rich.text.Text`, not passed as a bare
+    ``str`` -- several knob values here are regex character classes
+    (``redact_before_egress_patterns`` et al: ``gh[pousr]_...``,
+    ``xox[baprs]-...``), and a bare string renders through rich's markup
+    parser, which reads a literal ``[...]`` as a markup tag and silently
+    drops it. See :func:`_config_path_table` for the verification.
+    """
+    table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False)
+    table.add_column("Knob")
+    table.add_column("Value", overflow="fold")
+    table.add_column("Kind")
+    for name, value, kind in rows:
+        table.add_row(Text(name), Text(value), Text(kind))
+    return table
 
 
 @app.command()
@@ -1863,10 +1918,11 @@ def config(
     its sibling lock, the LanceDB vector store, the model-weights cache, the log
     directory, and the optional ``config.toml`` (shown present/absent) — the same
     set ``docs/configuration.md`` "Paths & locations" documents. The path rows come
-    from the shared row-builder (:func:`lode.config.config_lines`) that the TUI's
-    Ctrl+O diagnostics screen renders from too, so the two cannot drift (lode-u5gh);
-    ``--db`` shifts the displayed DB (and its lock + co-located vector store) to
-    an explicit override.
+    from the shared row-builder (:func:`lode.config.config_rows`) that also backs
+    the TUI's Ctrl+O diagnostics screen (via :func:`lode.config.config_lines`, the
+    text shape of those same rows), so the two cannot drift
+    (lode-u5gh); ``--db`` shifts the displayed DB (and its lock + co-located
+    vector store) to an explicit override.
 
     Below the paths, a knob table lists every ``runtime``/``tune`` Settings knob
     (``Kind.BUILD`` knobs excluded — changing one implies a rebuild/migration,
@@ -1874,12 +1930,17 @@ def config(
     config.toml <- overrides), even with no ``config.toml`` present. Fed by the
     same shared builder (:func:`lode.config.knob_rows`) the TUI's ConfigScreen
     renders into a table widget (lode-juz8.6) — one row list, not two.
+
+    Both blocks render as terminal-width-aware rich ``Table``\\ s through the
+    shared ``console`` (lode-l38d.4) — column widths come from the actual
+    rendered width (falling back to 80 when piped/non-TTY), and long values
+    (the redaction pattern lists, most notably) wrap within their column
+    instead of inflating every row's padding to the single widest value or
+    running off the edge of the terminal.
     """
-    for line in config_lines(db or default_db_path()):
-        typer.echo(line)
-    typer.echo("")
-    for line in _format_knob_table(knob_rows(_resolve_settings())):
-        typer.echo(line)
+    console.print(_config_path_table(config_rows(db or default_db_path())))
+    console.print()
+    console.print(_config_knob_table(knob_rows(_resolve_settings())))
 
 
 @app.command()
