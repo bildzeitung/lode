@@ -935,8 +935,12 @@ def test_notes_excludes_a_tombstoned_note(
 
 def _capture_console_print(
     monkeypatch: pytest.MonkeyPatch,
+    console: object | None = None,
 ) -> list[tuple[str, dict[str, object]]]:
-    """Capture every ROW passed to the shared ``console.print``, with kwargs.
+    """Capture every ROW passed to a shared Console's ``print``, with kwargs.
+
+    Defaults to the stdout ``cli.console``; pass ``cli.err_console`` to
+    capture the stderr twin instead (lode-l810).
 
     Rows only: the bare ``console.print()`` that separates notes carries no
     argument and is skipped, so a caller can add a second note without the
@@ -948,7 +952,7 @@ def _capture_console_print(
         if args:
             printed.append((str(args[0]), kwargs))
 
-    monkeypatch.setattr(cli.console, "print", _capture)
+    monkeypatch.setattr(cli.console if console is None else console, "print", _capture)
     return printed
 
 
@@ -2849,6 +2853,54 @@ def test_recover_ambiguous_prefix_across_live_and_deleted_candidates(
         result.stderr,
         re.MULTILINE,
     )
+
+
+def test_ambiguous_prefix_rows_render_like_notes_through_err_console(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-l810: candidate rows render on notes_'s exact rendering path.
+
+    The whole point of this ticket is that the two listings' shared columns
+    cannot diverge again, so the things that made them diverge are pinned
+    here rather than left to eye-verification: the suite freezes colour off
+    at import (lode-xgaa), so a regression in the style names or either
+    rendering flag would sail through green -- which is exactly how the
+    ReprHighlighter date-shredding defect reached trunk in lode-l38d.5.
+
+    Rationale for each flag lives at the cli.py call site, deliberately not
+    restated here (see notes_'s equivalent pin).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-fff111", "a summary with a [bracket] in it")
+        r2 = save(conn, "note-fff222", "gone")
+        delete(conn, "note-fff222", parent=r2.version_id)
+    finally:
+        conn.close()
+
+    printed = _capture_console_print(monkeypatch, cli.err_console)
+
+    result = runner.invoke(app, ["recover", "note-fff", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert len(printed) == 2
+    for line, kwargs in printed:
+        # Semantic style NAMES, never a colour literal -- CLI_STYLES stays
+        # the one source of truth (lode-l38d.11).
+        assert "[note_id]" in line and "[/note_id]" in line
+        assert "[date]" in line and "[/date]" in line
+        assert kwargs["highlight"] is False
+        assert kwargs["soft_wrap"] is True
+
+    live_row, deleted_row = printed[0][0], printed[1][0]
+    # Markup in the user's summary must be escaped, not left to corrupt the
+    # row or the styles around it.
+    assert "\\[bracket]" in live_row
+    assert "[bracket]" not in live_row.replace("\\[bracket]", "")
+    # The tombstone marker must reach rich ESCAPED -- unescaped, rich parses
+    # "[deleted]" as a style tag and consumes it, and the marker vanishes.
+    assert "\\[deleted]" in deleted_row
 
 
 def test_recover_ambiguous_prefix_across_two_deleted_notes(tmp_path: Path) -> None:
