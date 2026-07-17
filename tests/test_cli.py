@@ -1221,6 +1221,10 @@ def test_notes_lists_the_full_id_date_and_summary(
         0
     ][0]
     assert created[:16].replace("T", " ") in result.stdout
+    # Regression pin (lode-bau6/lode-l38d.12): the live listing must render
+    # byte-identical to before the --deleted marker was added -- no marker
+    # leaks onto a live row.
+    assert "[deleted]" not in result.stdout
 
 
 def test_notes_date_column_renders_in_local_time(
@@ -1417,13 +1421,83 @@ def test_notes_deleted_flag_lists_only_tombstoned_notes(
     assert "gone soon" in result.stdout
 
 
+def test_notes_deleted_flag_marks_each_row_with_the_deleted_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-bau6/lode-l38d.12: the human decision was to DISTINGUISH tombstoned
+    rows with a trailing ``" [deleted]"`` marker (the same convention ``show``
+    and ``_report_ambiguous_prefix``/lode-l38d.10 already use), not a colour
+    cue.
+
+    Asserted against REAL rendered stdout (not just the pre-render markup
+    string) because the marker text itself -- ``" [deleted]"`` -- contains
+    ``[...]``, which rich's ``Console.print`` parses as a markup tag. Verified
+    against rich 15.0.0 (the same finding lode-l810 made at a sibling call
+    site): an unknown style name like "deleted" does not raise, it resolves to
+    a null style and is silently eaten, so an unescaped marker would render as
+    nothing at all -- the tombstone cue vanishing is exactly the regression
+    this test exists to catch. This is NOT dependent on colour: color being
+    frozen off under the suite (lode-xgaa) only means no ANSI is emitted, not
+    that markup tags stop being parsed -- an unescaped ``[deleted]`` vanishes
+    from plain rendered stdout with or without a real terminal.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    gone_id = runner.invoke(
+        app, ["add", "gone soon", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (gone_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, gone_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "gone soon [deleted]" in result.stdout
+
+
+def test_notes_deleted_flag_marker_survives_a_summary_containing_brackets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A summary that itself contains ``"[deleted]"`` must still be escaped,
+    and the row must still end with exactly one trailing marker -- the
+    escape(summary) call already guarded against confusion with markup
+    (lode-l38d.5); this pins that the marker addition doesn't regress it.
+    """
+    _noop_enrich(monkeypatch)
+    db_path = tmp_path / "lode.db"
+    gone_id = runner.invoke(
+        app, ["add", "note text with [deleted] already in it", "--db", str(db_path)]
+    ).stdout.strip()
+    (head_version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (gone_id,)
+    )[0]
+    conn = init_db(db_path)
+    try:
+        delete(conn, gone_id, parent=head_version_id)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["notes", "--deleted", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    # The summary's own literal "[deleted]" plus the trailing marker -- both
+    # survive rendering, verbatim, as plain text.
+    assert "note text with [deleted] already in it [deleted]" in result.stdout
+
+
 def test_notes_deleted_flag_also_colours_id_and_date(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--deleted`` renders through the SAME styled path as the live listing
-    (lode-l38d.5) -- no separate hand-rolled formatting for tombstoned rows.
-    The two currently look identical; whether a tombstoned note deserves its
-    own visual distinction is raised, not resolved, in this ticket's hand-off.
+    (lode-l38d.5) -- no separate hand-rolled formatting for tombstoned rows --
+    but now also appends the trailing ``" [deleted]"`` marker (lode-bau6's
+    human decision, built here per lode-l38d.12).
     """
     _noop_enrich(monkeypatch)
     db_path = tmp_path / "lode.db"
@@ -1448,6 +1522,13 @@ def test_notes_deleted_flag_also_colours_id_and_date(
     line, kwargs = printed[0]
     assert f"[note_id]{gone_id}[/note_id]" in line
     assert "[date]" in line and "[/date]" in line
+    # The marker is escaped TOGETHER with the summary (a bare "\[deleted]" in
+    # the pre-render markup string, rich's escape() convention for a literal
+    # "[") -- not appended after escaping, which would leave an unescaped,
+    # swallowed markup tag. See this module's rendered-output test
+    # (test_notes_deleted_flag_marks_each_row_with_the_deleted_marker) for the
+    # behavioural proof; this pins the mechanism.
+    assert "gone soon \\[deleted]" in line
     # ``highlight`` is no longer a per-call kwarg (lode-re0s hoisted it onto
     # the shared ``console`` itself) -- see test_cli_console.py's
     # test_console_highlight_is_disabled for that pin instead.
