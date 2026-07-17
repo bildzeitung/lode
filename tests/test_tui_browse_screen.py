@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
+from textual.pilot import Pilot
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -1745,6 +1746,54 @@ def _seed_four_notes(db_path: Path) -> None:
         conn.close()
 
 
+async def _settle(pilot: Pilot) -> None:
+    """Wait for Textual's message queue to fully drain -- TWICE (lode-9y68).
+
+    ``pilot.pause()`` drains via ``Pilot._wait_for_screen``, which snapshots
+    each widget's pending-message count ONCE, up front, and waits only for
+    *those* specific messages to be processed. A message that gets enqueued
+    as a DELAYED side effect of processing an earlier one -- e.g. a
+    screen-pop's ``ScreenResume`` landing on the resumed screen only once the
+    popped screen finishes tearing down, or a ``DataTable`` cursor-move's
+    reactive fan-out posting a follow-up highlight event -- can arrive
+    *after* that snapshot already reported the target widget "idle" with
+    zero pending messages, so a single ``pause()`` does not reliably wait
+    for it. Calling ``pause()`` again re-snapshots from the (now later)
+    state and drains that second wave too. Confirmed empirically as the
+    live mechanism (not merely theoretical): reproduced under artificial
+    plus real concurrent-agent CPU load, a bare single ``pause()`` after a
+    keystroke/screen-transition sequence occasionally read a stale
+    ``cursor_row``/highlighted-row a first read would have missed.
+    """
+    await pilot.pause()
+    await pilot.pause()
+
+
+async def _press_and_settle(pilot: Pilot, *keys: str) -> None:
+    """Press each key one at a time, settling after EACH one (lode-9y68).
+
+    ``pilot.press(*keys)`` sends a whole sequence through Textual's own
+    ``App._press_keys``, which paces itself BETWEEN keystrokes using only
+    ``wait_for_idle()`` (``textual/_wait.py``) -- a heuristic that compares
+    this *process's own* CPU time against wall-clock time to guess whether
+    it has gone idle. Under CPU contention (this machine legitimately runs
+    several concurrent ``nox -s tests`` invocations at once), the OS
+    scheduler can starve this process of timeslices; ``wait_for_idle()``
+    then sees low CPU time relative to elapsed wall time and concludes
+    "idle" before a keystroke's full reactive cascade (Input value update ->
+    ``Input.Changed`` message -> ``on_input_changed`` -> ``_seek_match`` ->
+    ``DataTable.move_cursor``) has actually run -- so the next keystroke can
+    be dispatched while the previous one is still in flight. Pressing one
+    key at a time and settling with :func:`_settle` (which drains Textual's
+    message queues via ``_wait_for_screen``, not just the CPU-idle
+    heuristic) after EACH keystroke closes that gap: the next key is only
+    sent once the previous one's full cascade has been verified drained.
+    """
+    for key in keys:
+        await pilot.press(key)
+        await _settle(pilot)
+
+
 def test_slash_opens_a_hidden_search_box_and_focuses_it(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     _seed_four_notes(db_path)
@@ -1782,8 +1831,7 @@ def test_incremental_search_forward_jumps_to_the_next_matching_summary(
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             assert table.cursor_row == 0  # starts on delta
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1806,8 +1854,7 @@ def test_incremental_search_backward_jumps_to_the_previous_matching_summary(
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # now on alpha, the bottom row
             await pilot.press("question_mark")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1830,8 +1877,7 @@ def test_incremental_search_wraps_around_when_scanning_forward(
             await pilot.press("down", "down", "down")
             assert table.cursor_row == 3  # alpha, the bottom row
             await pilot.press("slash")
-            await pilot.press(*"delta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"delta")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1849,8 +1895,7 @@ def test_incremental_search_matches_case_insensitively(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"GAMMA")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"GAMMA")
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1870,11 +1915,11 @@ def test_empty_query_is_a_no_op(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             assert table.cursor_row == 2
-            await pilot.press("backspace", "backspace", "backspace", "backspace")
-            await pilot.pause()
+            await _press_and_settle(
+                pilot, "backspace", "backspace", "backspace", "backspace"
+            )
             return table.cursor_row
 
     cursor_row = asyncio.run(_drive())
@@ -1894,10 +1939,9 @@ def test_escape_closes_the_search_box_and_keeps_the_current_selection(
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"beta")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"beta")
             await pilot.press("escape")
-            await pilot.pause()
+            await _settle(pilot)
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
             still_browsing = isinstance(app.screen, BrowseScreen)
             return still_browsing, search_input.display, table.cursor_row
@@ -1919,10 +1963,9 @@ def test_enter_confirms_and_closes_the_search_box(tmp_path: Path) -> None:
             await pilot.press("ctrl+b")
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             await pilot.press("slash")
-            await pilot.press(*"gamma")
-            await pilot.pause()
+            await _press_and_settle(pilot, *"gamma")
             await pilot.press("enter")
-            await pilot.pause()
+            await _settle(pilot)
             search_input = app.screen.query_one(f"#{SEARCH_INPUT_ID}", Input)
             return search_input.display, table.cursor_row
 
@@ -2014,11 +2057,11 @@ def test_escape_from_editor_keeps_the_same_row_highlighted(
             await pilot.press("down")
             before = _highlighted_note_id(table)
             await pilot.press("enter")
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, EditScreen)
             assert app.screen.note_id == "note-b"
             await pilot.press("escape")  # unchanged buffer -- pops immediately
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, BrowseScreen)
             after = _highlighted_note_id(
                 app.screen.query_one(f"#{TABLE_ID}", DataTable)
@@ -2057,10 +2100,10 @@ def test_fresh_f3_after_editing_keeps_the_same_row_highlighted(
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
             await pilot.press("enter")
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, EditScreen)
             await pilot.press("escape")  # unchanged buffer -- pops immediately
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, BrowseScreen)
             return _highlighted_note_id(app.screen.query_one(f"#{TABLE_ID}", DataTable))
 
@@ -2095,7 +2138,7 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
             await pilot.press("down")  # highlight note-b
             assert _highlighted_note_id(table) == "note-b"
             await pilot.press("enter")
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, EditScreen)
             # note-b is deleted while its editor is open, out from under the
             # still-highlighted row.
@@ -2105,7 +2148,7 @@ def test_returning_falls_back_to_top_when_the_highlighted_note_is_gone(
             finally:
                 conn.close()
             await pilot.press("escape")
-            await pilot.pause()
+            await _settle(pilot)
             assert isinstance(app.screen, BrowseScreen)
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             summaries = [str(table.get_row_at(i)[3]) for i in range(table.row_count)]
