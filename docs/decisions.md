@@ -1301,12 +1301,14 @@ are catalogued in [configuration.md](configuration.md).
   `.beads/` is exactly the directory CLAUDE.md warns a `git add -A` sweeps into.
 - **The stray-DB label-swap stranding residual: accepted, won't fix (lode-zz7x).** `lode-fzau`'s guard
   (above) covers only the incident's *larger* harm — publishing a stale DB over `refs/dolt/data`. Its
-  own description names a second harm the guard structurally cannot see: `bd update <id> --add-label
-  ready-for-code-review` succeeding *silently* against a stray, worktree-local DB. No push is involved
-  at all, so the guard never runs; the ticket is simply stranded at `ready-for-code-review` forever,
-  invisible to `/land`. This entry is `lode-zz7x`'s own decision record — the reasoning was previewed
-  inside the `lode-fzau` entry above (point 2) as "an explicit accepted, won't fix is a valid outcome
-  there"; this makes that outcome the actual, recorded decision rather than leaving it implied.
+  own description names a second harm the guard structurally cannot see: the reviewer's hand-off swap,
+  `bd update <id> --remove-label ready-for-code-review --add-label ready-for-land`, succeeding
+  *silently* against a stray, worktree-local DB. No push is involved at all, so the guard never runs;
+  the ticket is simply stranded at `ready-for-code-review` forever — the label swap that would have
+  promoted it never reached the authoritative DB, so `/land` never picks it up. This entry is
+  `lode-zz7x`'s own decision record — the reasoning was previewed inside the `lode-fzau` entry above
+  (point 2) as "an explicit accepted, won't fix is a valid outcome there"; this makes that outcome the
+  actual, recorded decision rather than leaving it implied.
 
   **Decision: accepted, won't fix.** Not option (a) (a post-write read-back in the producer loops) and
   not option (b) (a dedicated staleness sweep over `ready-for-code-review`) — both from `lode-zz7x`'s
@@ -1318,27 +1320,45 @@ are catalogued in [configuration.md](configuration.md).
   wrong, not against the authoritative one. The only way a read-back could actually catch this is by
   querying from an *independent* vantage point (the main checkout, by a fixed path, ignoring whatever
   the worktree's own `cwd`-based resolution did) — on *every* producer hand-off, forever, to guard a
-  mechanism that has now been probed 11 times (10 in `lode-fzau`'s diagnostic, plus this ticket's own
-  review of the option) and reproduced exactly once, not at all. That is a permanent tax on the hot path
-  of every single build and review for a mechanism nobody can currently make happen on demand.
+  mechanism *observed* exactly once (the original live incident) and *reproduced* zero times across 11
+  probes: the 10 in `lode-fzau`'s diagnostic (9 live worktrees + 1 deliberate re-run of the repro), plus
+  an 11th taken live from this ticket's own review worktree, where `bd where --json` resolved to the
+  main checkout's `.beads` and `bd count` matched the main checkout exactly (421/421), with no
+  worktree-local `embeddeddolt` and no `.auto-import-issues.jsonl` marker. That is a permanent tax on
+  the hot path of every single build and review for a mechanism nobody can currently make happen on
+  demand.
 
-  **Why (b) doesn't close the gap either.** A staleness sweep over `ready-for-code-review` (`/code`'s
-  own step-1 stranded-review sweep already exists and does something adjacent — see
-  `.claude/skills/code/SKILL.md`) cannot see this specific failure at all: from the *authoritative* DB's
-  perspective, a ticket stranded this way never actually carries the `ready-for-code-review` label —
-  the write that would have added it landed on the stray copy instead. The authoritative view of a
-  stranded ticket is indistinguishable from an ordinary ticket that is still legitimately `in_progress`.
-  There is no clean signal here to sweep for beyond the generic "this ticket has sat `in_progress` a
-  long time," which is already visible to a human (or a future `/sweep` staleness check) without any
-  new machinery specific to this mechanism.
+  **Why (b) is not worth building — but not for the reason it first looks like.** The residual has two
+  variants, and they differ sharply in how visible they are. Do not collapse them:
+
+  1. **The reviewer-side variant — the one both `lode-fzau` and `lode-zz7x` actually document — is
+     already covered, so (b) is not unbuildable, it is *already built*.** When the reviewer's swap to
+     `ready-for-land` lands on a stray DB, the authoritative DB is left holding exactly
+     `status=in_progress` + label `ready-for-code-review` — an entirely *clean*, targeted signal, not an
+     ambiguous one. And `/code`'s step-1 stranded-review sweep already runs precisely that query
+     (`bd list --label ready-for-code-review --status in_progress --json`, `.claude/skills/code/SKILL.md`
+     step 1), confirms `review_head` is non-empty, and re-dispatches a `code-reviewer` — which re-reviews
+     and re-swaps, clearing the stranding. That sweep exists for a different reason (a human's exit-(a)
+     re-entry, lode-t83), but it is label-and-status keyed, not cause-keyed, so it catches this variant
+     for free on the next `/code` invocation. A dedicated detector would duplicate it.
+  2. **The builder-side variant genuinely has no clean signal — which is why no *targeted* sweep is
+     designable for it.** If a builder's own hand-off write (`--add-label ready-for-code-review`) is the
+     one that lands on the stray copy, the authoritative DB never receives the label at all, and the
+     ticket is indistinguishable from one legitimately still `in_progress`. There is nothing to key on
+     beyond the generic "this ticket has sat `in_progress` a long time" — already visible to a human (or
+     a future `/sweep` staleness check) without new machinery specific to this mechanism.
+
+  So (b) is redundant where the signal is clean, and impossible to target where it is not. Neither half
+  argues for building it.
 
   **Why accepting it is consistent with `lode-fzau`'s own risk posture, not a lower bar.** That entry
   already rejected guarding every `bd` write as too large a surface for too little benefit given the
-  local, recoverable blast radius (a stalled ticket, not corrupted cross-machine state). Both (a) and
-  (b), done correctly, amount to exactly that: new checking machinery run on every ordinary `bd` write
-  or hand-off, in service of a mechanism that remains unreproduced and whose actual harm — a build sits
-  claimed but silently makes no further progress — is a symptom an operator (or `/code`'s own fan-out
-  bookkeeping) already has a fair chance of noticing on its own.
+  local, recoverable blast radius (a stalled ticket, not corrupted cross-machine state). Option (a),
+  done correctly, is exactly that rejected shape: a cross-checkout read-back on every ordinary producer
+  hand-off, forever, in service of a mechanism that remains unreproduced. Option (b) fails a different
+  test, as above. Both land in the same place: the actual harm — a build sits claimed but silently makes
+  no further progress — is a symptom an operator (or `/code`'s own fan-out bookkeeping) already has a
+  fair chance of noticing on its own.
 
   **No code change.** No new guard, no new sweep, no change to `.claude/agents/coding.md` or
   `.claude/agents/code-reviewer.md`'s hand-off steps.
