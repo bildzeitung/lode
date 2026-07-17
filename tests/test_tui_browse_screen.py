@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from rich.text import Text
-from textual.widgets import DataTable, Footer, Input, Static, TextArea
+from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
 from lode.ids import short_version_id
@@ -270,6 +270,80 @@ def test_ctrl_h_from_editor_opens_version_history_newest_first(
     assert rows[1][1] == "v1"
     assert rows[0][2] == "update"
     assert rows[1][2] == "create"
+
+
+def test_version_history_table_scrolls_within_its_own_pane_not_the_whole_screen(
+    tmp_path: Path,
+) -> None:
+    """Guards lode-efn2: the history table scrolls internally, not the Screen.
+
+    Same shape as test_tui_config.py's
+    test_knob_table_scrolls_within_its_own_pane_not_the_whole_screen
+    (lode-l38d.2) -- VersionHistoryScreen.compose is Header()/DataTable/
+    Footer() with no height constraint of its own before lode-efn2,
+    structurally identical to BrowseScreen's shape before lode-juz8.2 and
+    ConfigScreen's before lode-l38d.2. Before the fix (no rule reaching
+    #version-history-table in lode.tcss), a note with a long enough version
+    chain would run the table's auto-computed region past the docked
+    Footer -- the oldest versions rendered but unreachable, not
+    scrolled-away (the containing Screen is not a scroll container). After
+    the fix (the blanket ``DataTable { height: 1fr; }`` rule), the table is
+    bounded at the Footer's row and scrolls its own rows internally.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        parent = save(conn, "note-a", "v1 body").version_id
+        for i in range(2, 31):
+            parent = save(conn, "note-a", f"v{i} body", parent=parent).version_id
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[object, ...]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+h")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, VersionHistoryScreen)
+            table = screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+            header = screen.query_one(Header)
+            footer = screen.query_one(Footer)
+            return (
+                screen.size,
+                screen.max_scroll_y,
+                header.region,
+                footer.region,
+                table.region,
+                table.virtual_size,
+            )
+
+    (
+        screen_size,
+        screen_max_scroll_y,
+        header_region,
+        footer_region,
+        table_region,
+        table_virtual_size,
+    ) = asyncio.run(_drive())
+
+    # 30 versions is genuinely more content than fits an 80x24 terminal --
+    # this test would be vacuous without it.
+    assert table_virtual_size.height > table_region.height
+
+    # The screen itself never scrolls...
+    assert screen_max_scroll_y == 0
+    # ...and Header/Footer -- both docked -- stay on-screen.
+    assert header_region.y == 0
+    assert footer_region.y + footer_region.height == screen_size.height
+
+    # THE assertion that catches the regression: the table's own region ends
+    # at or above the Footer's row, so it never extends past the visible
+    # window.
+    assert table_region.y + table_region.height <= footer_region.y
 
 
 def test_bare_h_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
@@ -2177,6 +2251,83 @@ def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
     assert short_version_id("snap-view-b") in str(rows[1][1])
     # Selected the second (b.example.com) row -- its body, not a's.
     assert body_text == "body b"
+
+
+def test_external_picker_table_scrolls_within_its_own_pane_not_the_whole_screen(
+    tmp_path: Path,
+) -> None:
+    """Guards lode-efn2: the picker table scrolls internally, not the Screen.
+
+    Same shape as the version-history guard test above and
+    test_tui_config.py's test_knob_table_scrolls_within_its_own_pane_not_the_
+    whole_screen (lode-l38d.2) -- ExternalPickerScreen.compose is Header()/
+    DataTable/Footer() with no height constraint of its own before
+    lode-efn2, structurally identical to BrowseScreen's shape before
+    lode-juz8.2. Before the fix, a note with enough external candidates
+    would run the table's auto-computed region past the docked Footer --
+    the last candidates rendered but unreachable. After the fix (the
+    blanket ``DataTable { height: 1fr; }`` rule), the table is bounded at
+    the Footer's row and scrolls its own rows internally.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        urls = [f"https://example.com/article-{i}" for i in range(30)]
+        head = save(conn, "note-a", "see " + " and ".join(urls)).version_id
+        for i, url in enumerate(urls):
+            _insert_external(
+                conn,
+                external_id=url,
+                snapshot_id=f"snap-scroll-{i}",
+                fetched_at=f"2026-07-{(i % 28) + 1:02d}T00:00:00.000000Z",
+            )
+            _insert_edge(conn, from_id="note-a", to_id=url, source_version=head)
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> tuple[object, ...]:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("v")
+            await pilot.pause()
+            screen = app.screen
+            assert isinstance(screen, ExternalPickerScreen)
+            table = screen.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
+            header = screen.query_one(Header)
+            footer = screen.query_one(Footer)
+            return (
+                screen.size,
+                screen.max_scroll_y,
+                header.region,
+                footer.region,
+                table.region,
+                table.virtual_size,
+            )
+
+    (
+        screen_size,
+        screen_max_scroll_y,
+        header_region,
+        footer_region,
+        table_region,
+        table_virtual_size,
+    ) = asyncio.run(_drive())
+
+    # 30 externals is genuinely more content than fits an 80x24 terminal --
+    # this test would be vacuous without it.
+    assert table_virtual_size.height > table_region.height
+
+    # The screen itself never scrolls...
+    assert screen_max_scroll_y == 0
+    # ...and Header/Footer -- both docked -- stay on-screen.
+    assert header_region.y == 0
+    assert footer_region.y + footer_region.height == screen_size.height
+
+    # THE assertion that catches the regression: the table's own region ends
+    # at or above the Footer's row, so it never extends past the visible
+    # window.
+    assert table_region.y + table_region.height <= footer_region.y
 
 
 def test_escape_steps_back_picker_then_browse(tmp_path: Path) -> None:
