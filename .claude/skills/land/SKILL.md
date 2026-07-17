@@ -1405,6 +1405,37 @@ export-only passive artifact, never a sync wire.** I honor that exactly:
 - **Trust `builds_on` bd metadata as the mechanism for detecting a stacked branch.** It's a producer
   breadcrumb only; I always derive the stacked-branch graph from git containment
   ([1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)).
+- **File a bd ticket for an incidental discovery** — something I notice about /land's own mechanics
+  mid-pass, not a per-branch verdict. I **report** it in [Stop and report](#stop-and-report) instead,
+  and the **human reading that report** decides whether it becomes a ticket. Not `/sweep` — it only
+  surfaces what is already *in bd*, so it cannot see a discovery I never filed. That is the point, not
+  a gap to close by filing one so `/sweep` can find it: filing *is* the dupe generator this rule
+  removes. The rule is scoped narrowly and does **not** touch the two sanctioned `bd create` paths,
+  which stay exactly as written: the [Bounce](#bounce--clear-failure) rebuild ticket, and exit-(b) of
+  [Resolving a `land-escalated` branch](#resolving-a-land-escalated-branch). Both are per-branch
+  verdicts — /land's actual job — not incidental discoveries.
+
+  *Why not-filing loses nothing:* every pass **executes** this skill's own code, so every pass gets
+  the same opportunity to notice the same flaw — the observation recurs on its own, without a ticket
+  to carry it between passes. lode-v4rk's dead epic-completion check is the proof: three independent
+  /land passes noticed it (lode-95yo, lode-3kdm, and the finding that became lode-v4rk itself) and
+  each time the finding survived to be reconciled, with no ticket required to keep it alive between
+  passes — passes two and three re-derived it from scratch without consulting the existing ticket.
+  So *not* filing loses nothing, and it removes the dupe generator those three filings are evidence
+  of.
+
+  *Rejected alternative — "search bd before filing":* the intuitive fix, and the weakest available.
+  It codifies the improvised filing path instead of removing it, expanding /land's scope in the one
+  direction its charter (surface, don't decide) says it should not go. It also aims at a step that
+  never happened: all three filings created the ticket **first** and searched afterwards or not at
+  all — lode-3kdm's close note records a pass that "searched bd only AFTER creating". A search-first
+  caveat only binds an agent already consulting this file's filing guidance, and an agent improvising
+  a filing path this file does not sanction is, by construction, not that agent — so the caveat would
+  have prevented none of the three. And it's prose discipline layered onto a file already saturated
+  with prose, where the two dedup mechanisms this repo actually relies on are structural instead:
+  `/epic-audit`'s `epic-audited` label and `/sweep`'s durable digest issue. Do not reintroduce a
+  search-then-file step here on the strength of this being re-derived as "the obvious fix" — it was
+  considered and rejected (lode-9t7u).
 
 ## Stop and report
 
@@ -1414,7 +1445,9 @@ never reached `land-review`); which I **bounced** (and the new superseding ticke
 **escalated** (and the decision each owes a human — including a bounce that turned into a strand
 escalation, per [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)/[Bounce](#bounce--clear-failure));
 which I **held** as an orphaned stacked dependent (Section 3a) and what base it's waiting on; any
-**epic** I flagged `epic-ready-to-audit` because this pass closed its last child; and anything that
-**drifted**. On any
+**epic** I flagged `epic-ready-to-audit` because this pass closed its last child; anything that
+**drifted**; and any **incidental discovery** — something I noticed about /land's own mechanics
+mid-pass that isn't a per-branch verdict (see [What I never do](#what-i-never-do)) — named here
+rather than filed as a ticket. On any
 genuine ambiguity in the landing mechanics themselves — not a per-branch verdict, which `land-review`
 owns — I stop and surface it rather than guess.
