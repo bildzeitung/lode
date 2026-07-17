@@ -115,6 +115,73 @@ def test_list_notes_orders_newest_first(tmp_path: Path) -> None:
     assert [row.note_id for row in rows] == ["n2", "n1"]
 
 
+def test_list_notes_orders_deterministically_on_a_created_tie(
+    tmp_path: Path,
+) -> None:
+    """A tied ``created`` no longer falls back to SQLite's unstable tie-break.
+
+    Failure mode 1 from lode-7h8j's investigation: forcing three notes'
+    ``created`` to an identical value used to make ``list_notes`` return
+    rowid-ASCENDING (oldest-first) order for the tied rows -- the opposite of
+    the newest-first order the whole Browse UI assumes. Insertion order here
+    is a, b, c, so newest-first is c, b, a.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first saved")
+        save(conn, "note-b", "second saved")
+        save(conn, "note-c", "third saved")
+        conn.execute("UPDATE notes SET created = '2026-01-01T00:00:00.000Z'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["note-c", "note-b", "note-a"]
+
+
+def test_list_notes_orders_by_insertion_when_created_regresses(
+    tmp_path: Path,
+) -> None:
+    """A wall-clock ``created`` regression still yields insertion order.
+
+    Failure mode 2 from lode-7h8j's investigation, reproduced live under CPU
+    load (not merely forced): an earlier-saved note's ``created`` can land
+    *after* a later-saved note's, with no tie involved. A tiebreaker on
+    ``created`` cannot fix this -- it only ever runs when ``created`` values
+    are equal. Here note-a is saved FIRST but is given the LATEST ``created``
+    timestamp; the correct newest-first order is still insertion order
+    (c, b, a), not created-DESC order (which would wrongly put a first).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "first saved")
+        save(conn, "note-b", "second saved")
+        save(conn, "note-c", "third saved")
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:52.016Z' "
+            "WHERE note_id = 'note-a'"
+        )
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:51.192Z' "
+            "WHERE note_id = 'note-b'"
+        )
+        conn.execute(
+            "UPDATE notes SET created = '2026-01-01T00:00:51.203Z' "
+            "WHERE note_id = 'note-c'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = list_notes(db_path)
+
+    assert [row.note_id for row in rows] == ["note-c", "note-b", "note-a"]
+
+
 def test_list_notes_excludes_a_deleted_note(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)

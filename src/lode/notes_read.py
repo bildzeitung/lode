@@ -149,13 +149,31 @@ def _list_notes(
     :func:`_list_notes_with_all_tags`' per-tag ``EXISTS`` clauses -- reuses this
     one query and row-mapping instead of copying both. Empty ``extra_where``
     (the plain :func:`list_notes` call) leaves the query exactly as it was.
+
+    Sorted ``ORDER BY n.rowid DESC``, NOT ``n.created`` (lode-7h8j).
+    ``notes.created`` is a SQLite-side wall-clock ``DEFAULT``
+    (millisecond resolution, stamped independently per INSERT), so it can
+    both tie AND invert relative to insertion order under real scheduling
+    load -- demonstrated live: 5/3200 trials of three back-to-back ``save()``
+    calls under CPU load came back with an earlier-saved note's ``created``
+    landing *after* a later-saved note's, not merely tied. A tiebreaker on
+    ``created`` (e.g. ``ORDER BY n.created DESC, n.rowid DESC``) only helps
+    the tie case -- when ``created`` values differ but are simply wrong, the
+    tiebreaker never runs and the wrong order ships anyway (verified). The
+    fix mirrors :func:`lode.versions.version_ids` (docs/storage.md, lode-t1y):
+    drop ``created`` from the sort key entirely and order by ``rowid``
+    (insertion order) alone, immune to wall-clock jitter either way. Opposite
+    *direction* from that precedent, deliberately: a version chain needs
+    oldest-first (``ASC``, parent before child), while this listing needs
+    newest-first *display* order (``DESC``) -- a different requirement, not
+    a copy-paste of that clause.
     """
     rows = conn.execute(
         "SELECT n.note_id, n.created, n.head_version_id, v.body, "
         "(SELECT COUNT(*) FROM versions vc WHERE vc.note_id = n.note_id) "
         "FROM notes n "
         "JOIN versions v ON v.version_id = n.head_version_id "
-        "WHERE v.op != 'delete' " + extra_where + "ORDER BY n.created DESC",
+        "WHERE v.op != 'delete' " + extra_where + "ORDER BY n.rowid DESC",
         params,
     ).fetchall()
     return [
