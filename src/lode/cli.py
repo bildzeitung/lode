@@ -27,8 +27,9 @@ from typing import TYPE_CHECKING, NoReturn
 import typer
 from pydantic import ValidationError
 from rich import box
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.markup import escape
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -214,6 +215,67 @@ console = Console(theme=CLI_THEME, highlight=False)
 #: applies to it exactly the same as to ``console`` -- not a per-call-site
 #: flag at its one print call.
 err_console = Console(theme=CLI_THEME, stderr=True, highlight=False)
+
+
+class SafeTable(Table):
+    """``rich.table.Table`` with the bare-str markup-injection guard built
+    into ``add_row`` itself (lode-9tmd) -- the ONE shared seam every CLI
+    table in this module must construct through, instead of ``rich.table
+    .Table`` directly.
+
+    THE INVARIANT, verified against the installed rich 15.0.0: a bare
+    ``str`` cell passed to ``Table.add_row`` is parsed as rich MARKUP, so a
+    literal ``[...]`` substring -- a redaction regex character class like
+    ``gh[pousr]_[0-9a-zA-Z]{36}``, an absolute path, anything -- is read as
+    a tag and SILENTLY DROPPED (``"gh[pousr]_..."`` renders as
+    ``"gh_..."``). The corruption is DATA-DEPENDENT (it depends on whether a
+    cell happens to contain something that parses as a tag), so it will not
+    reliably show up in any one eyeball check or narrow test.
+
+    lode-l38d.4 hit this for real (the ``redact_before_egress_patterns``
+    knob values) and fixed it correctly by wrapping every cell in
+    ``rich.text.Text(...)`` -- ``Text`` bypasses markup parsing entirely --
+    but PER CALL SITE, with nothing stopping a third table from
+    reintroducing the bug by passing a bare ``str``. ``SafeTable.add_row``
+    does that wrapping here, once, structurally: a bare ``str`` argument is
+    wrapped in ``Text(...)`` before delegating to ``Table.add_row``; any
+    renderable that already isn't a plain ``str`` (an existing ``Text``,
+    ``None``, another renderable) passes through untouched. A call site
+    building a ``SafeTable`` needs no per-cell wrapping and cannot forget
+    it, because there is nothing left for it to remember.
+    """
+
+    def add_row(
+        self,
+        *renderables: RenderableType | None,
+        style: str | Style | None = None,
+        end_section: bool = False,
+    ) -> None:
+        safe = tuple(
+            Text(cell) if isinstance(cell, str) else cell for cell in renderables
+        )
+        super().add_row(*safe, style=style, end_section=end_section)
+
+
+def _tabular_table() -> SafeTable:
+    """Construct a ``SafeTable`` in lode's house style for a real columnar
+    listing -- header + separator rule, no side borders, no cell padding at
+    the table's own edges (``box.SIMPLE_HEAD, show_edge=False,
+    pad_edge=False``).
+
+    This is the ONE style every CLI table with column-semantic headers uses
+    (lode-9tmd) -- before this, the knob table (lode-l38d.4) and the
+    status/jobs table (lode-l38d.6) each independently picked their own box
+    convention for the same "listing with headers" shape (the knob table
+    landed on exactly these three kwargs; the jobs table used rich's own
+    unconfigured default -- a full box with side borders). Reconciled into
+    one house style rather than reviewed/re-derived per call site.
+
+    The one sanctioned exception is a label:value dump with no column
+    semantics -- see ``_config_path_table``, which explicitly opts out of a
+    header (and any box) instead of using this helper.
+    """
+    return SafeTable(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False)
 
 
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
@@ -1226,7 +1288,14 @@ def status(
     # No header_style= here: rich's Table already defaults it to "table.header",
     # the name CLI_STYLES declares (see the palette comment above), so passing it
     # would restate rich's own default and read as a deliberate override.
-    table = Table()
+    #
+    # _tabular_table() (lode-9tmd) is the shared seam every CLI table with
+    # column-semantic headers builds through, both for the markup-injection
+    # guard (SafeTable.add_row) and for the one house box/header style --
+    # cell values below are passed as bare str, same as before; SafeTable
+    # wraps them in Text() structurally, so there is no per-cell wrapping to
+    # remember here.
+    table = _tabular_table()
     table.add_column("Status")
     table.add_column("Count", justify="right")
     table.add_row("Pending", str(job_counts.get("pending", 0)))
@@ -1772,14 +1841,16 @@ def dump_html(
     typer.echo(raw_payload)
 
 
-def _config_path_table(rows: list[tuple[str, str, str]]) -> Table:
+def _config_path_table(rows: list[tuple[str, str, str]]) -> SafeTable:
     """Render :func:`~lode.config.config_rows`' output as a terminal-width-aware
-    rich ``Table`` (lode-l38d.4). No header -- this block is a labelled dump,
-    not a column-semantic listing, so its look is unchanged from before this
-    ticket. The parenthetical annotation (``($LODE_HOME)``, ``(present)``/
-    ``(absent)``) lands in a real ``Note`` column instead of being
-    string-baked into ``Value`` (the TUI's Ctrl+O screen still bakes it in --
-    it renders :func:`lode.config.config_lines` untouched).
+    ``SafeTable`` (lode-l38d.4). No header, no box -- this block is a labelled
+    dump, not a column-semantic listing, so it explicitly opts out of
+    :func:`_tabular_table`'s house style rather than using it; its look is
+    unchanged from before this ticket. The parenthetical annotation
+    (``($LODE_HOME)``, ``(present)``/``(absent)``) lands in a real ``Note``
+    column instead of being string-baked into ``Value`` (the TUI's Ctrl+O
+    screen still bakes it in -- it renders :func:`lode.config.config_lines`
+    untouched).
 
     ``overflow="fold"`` on ``Value``/``Note``: rich's ``Column`` default,
     ``overflow="ellipsis"``, DROPS characters off any unbreakable single-token
@@ -1789,16 +1860,13 @@ def _config_path_table(rows: list[tuple[str, str, str]]) -> Table:
     may ever be silently truncated. ``"fold"`` hard-breaks mid-word when it
     must, which is ugly but lossless.
 
-    Every cell is wrapped in :class:`rich.text.Text` rather than passed as a
-    bare ``str`` -- a bare string renders through rich's markup parser (the
-    shared ``console``'s default), which reads a literal ``[...]`` in a path
-    (or, for the knob table below, a regex character class) as a markup tag
-    and SILENTLY DROPS it. Verified against the installed rich: an unwrapped
-    ``"gh[pousr]_..."`` cell rendered as ``"gh_..."``, quietly losing
-    ``[pousr]``. ``Text(...)`` bypasses markup parsing entirely, so arbitrary
-    path/value content round-trips byte-for-byte.
+    Cells are passed as bare ``str`` -- ``SafeTable.add_row`` wraps each in
+    :class:`rich.text.Text` structurally (lode-9tmd), so a literal ``[...]``
+    in a path (or, for the knob table below, a regex character class) can
+    never be silently dropped by rich's markup parser. See ``SafeTable``'s
+    docstring for the verification.
     """
-    table = Table(show_header=False, box=None, pad_edge=False)
+    table = SafeTable(show_header=False, box=None, pad_edge=False)
     table.add_column("Label")
     table.add_column("Value", overflow="fold")
     table.add_column("Note", overflow="fold")
@@ -1807,18 +1875,18 @@ def _config_path_table(rows: list[tuple[str, str, str]]) -> Table:
         # (f"{value}  ({note})") -- moving it to its own column fixes the
         # actual bug (that text used to distort the Value column's computed
         # width), not the visual convention of wrapping it in parens.
-        table.add_row(Text(label), Text(value), Text(f"({note})" if note else ""))
+        table.add_row(label, value, f"({note})" if note else "")
     return table
 
 
-def _config_knob_table(rows: list[tuple[str, str, str]]) -> Table:
+def _config_knob_table(rows: list[tuple[str, str, str]]) -> SafeTable:
     """Render :func:`~lode.config.knob_rows`' output as a terminal-width-aware
-    rich ``Table`` (lode-l38d.4), with a header + separator rule
-    (``box.SIMPLE_HEAD``, closing the ticket's "no header separator rule"
-    gap) but no side borders, keeping the previous plain-list look. The TUI
-    renders the same row data into a ``DataTable`` widget instead
-    (:mod:`lode.tui.screens.config`); only the row DATA is shared, not this
-    formatting.
+    ``SafeTable`` (lode-l38d.4) built via :func:`_tabular_table`'s house
+    style -- header + separator rule (``box.SIMPLE_HEAD``, closing the
+    ticket's "no header separator rule" gap), no side borders, keeping the
+    previous plain-list look. The TUI renders the same row data into a
+    ``DataTable`` widget instead (:mod:`lode.tui.screens.config`); only the
+    row DATA is shared, not this formatting.
 
     A list-valued knob (comma+space-joined by :func:`~lode.config.knob_rows`)
     wraps at the space boundaries "for free" under ``overflow="fold"`` -- no
@@ -1826,19 +1894,19 @@ def _config_knob_table(rows: list[tuple[str, str, str]]) -> Table:
     column sizing instead of padding every row to the single widest value in
     the table, is what removes the original bug.
 
-    Every cell is wrapped in :class:`rich.text.Text`, not passed as a bare
-    ``str`` -- several knob values here are regex character classes
-    (``redact_before_egress_patterns`` et al: ``gh[pousr]_...``,
-    ``xox[baprs]-...``), and a bare string renders through rich's markup
-    parser, which reads a literal ``[...]`` as a markup tag and silently
-    drops it. See :func:`_config_path_table` for the verification.
+    Cells are passed as bare ``str`` -- several knob values here are regex
+    character classes (``redact_before_egress_patterns`` et al:
+    ``gh[pousr]_...``, ``xox[baprs]-...``), and ``SafeTable.add_row`` wraps
+    each cell in :class:`rich.text.Text` structurally (lode-9tmd) before it
+    ever reaches rich's markup parser, so a literal ``[...]`` can never be
+    silently dropped. See ``SafeTable``'s docstring for the verification.
     """
-    table = Table(box=box.SIMPLE_HEAD, show_edge=False, pad_edge=False)
+    table = _tabular_table()
     table.add_column("Knob")
     table.add_column("Value", overflow="fold")
     table.add_column("Kind")
     for name, value, kind in rows:
-        table.add_row(Text(name), Text(value), Text(kind))
+        table.add_row(name, value, kind)
     return table
 
 
