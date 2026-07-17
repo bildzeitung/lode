@@ -97,10 +97,8 @@ class LodeApp(App[str | None]):
     lode-juz8.1 — see the module docstring above). ``Ctrl+L`` reaches the ask
     screen (lode-mkc.2's cited-Q&A screen -- the product's central bet -- left
     unreachable until lode-11io wired it up) the same way; it pops back to
-    the previous screen on Escape, matching every sibling. ``Ctrl+A`` was the
-    mnemonic pick but is unusable: both ``TextArea`` and ``Input`` claim it as
-    a builtin cursor-to-line-start binding (``docs/keybindings.md``), so it
-    never reaches the app from a text-entry screen.
+    the previous screen on Escape, matching every sibling — and not the
+    mnemonic ``Ctrl+A``, for the reason recorded at the binding below.
     Ctrl+Q quits immediately unless the current
     screen has unsaved state to confirm first (lode-0wj.8) — see
     :meth:`action_quit`.
@@ -140,16 +138,15 @@ class LodeApp(App[str | None]):
         Binding("ctrl+o", "show_config", "Cfg"),
         Binding("ctrl+b", "show_browse", "Browse"),
         Binding("ctrl+t", "show_tags", "Tags"),
-        # ctrl+l, not the mnemonic ctrl+a: docs/keybindings.md's "No function
-        # keys" section left ctrl+l and ctrl+j as the only two
-        # formally-checked-safe letters after lode-juz8.1's rekey; ctrl+a is
-        # a TextArea/Input builtin (cursor-to-line-start) and would be
-        # silently unreachable from every text-entry screen (Capture, Ask,
-        # Edit) -- MEASURED: with ctrl+a bound here, pressing it on
-        # CaptureScreen never reached the app and the entry did not even
-        # render in the footer. ctrl+j (the raw LF byte) is worse, so ctrl+l
-        # is the pick despite its own terminal-level clear/redraw
-        # convention -- the letter space is exhausted, not a first choice.
+        # ctrl+l, not the mnemonic ctrl+a: TextArea/Input claim ctrl+a as a
+        # builtin, so it would sit silently dead on every text-entry screen
+        # (Capture/Ask/Edit). ctrl+l and ctrl+j were the last two
+        # formally-safe letters after lode-juz8.1's rekey, and ctrl+j is the
+        # raw LF byte -- so ctrl+l wins despite its own terminal-level
+        # clear/redraw convention: the letter space is exhausted, not a first
+        # choice. Full rationale and measurements: docs/keybindings.md. The
+        # ctrl+a rule is enforced by tests/test_tui_ask_screen.py, not by this
+        # comment -- a later ticket that re-binds it fails there.
         Binding("ctrl+l", "show_ask", "Ask"),
     ]
 

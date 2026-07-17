@@ -17,9 +17,11 @@ escape-pop tests below drive it the real way instead: pressing ``ctrl+l``.
 """
 
 import asyncio
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
+from textual.binding import Binding
 from textual.widgets import Footer, Input, TextArea
 from textual.widgets._footer import FooterKey
 
@@ -54,27 +56,35 @@ def test_ctrl_l_pushes_the_ask_screen_from_the_default_screen(tmp_path: Path) ->
     asyncio.run(_drive())
 
 
-def test_ctrl_a_does_not_reach_the_app_from_a_text_entry_screen(
-    tmp_path: Path,
-) -> None:
+def test_ctrl_a_is_not_bound_app_level_because_text_widgets_swallow_it() -> None:
     """ctrl+a is NOT used for Ask (ctrl+l is) -- it is the mnemonic pick that
     doesn't work: both ``TextArea`` (CaptureScreen/EditScreen's body) and
     ``Input`` (AskScreen's question field) already claim ``ctrl+a`` as a
     builtin cursor-to-line-start binding (``home,ctrl+a`` in their own
-    ``BINDINGS``), so it never reaches an App-level action from any
-    text-entry screen -- confirmed structurally here so a later ticket
-    doesn't re-spring the trap (docs/keybindings.md).
+    ``BINDINGS``), so an App-level ``ctrl+a`` never fires from any text-entry
+    screen and does not even render in the footer (docs/keybindings.md).
+
+    The last assert is the actual guard, and it is the point of this test: it
+    asserts the RULE (``LodeApp`` must not bind ctrl+a), not merely the reason
+    the rule exists. Asserting only the two widget builtins would leave a
+    later ticket free to re-spring the exact trap this test is named for --
+    binding ctrl+a App-level keeps every widget assert true, renders nothing
+    in any footer, and so passes the whole suite while the action sits
+    silently dead on Capture/Ask/Edit.
     """
 
-    def _claims_ctrl_a(bindings: object) -> bool:
-        for binding in bindings:  # type: ignore[attr-defined]
-            key = binding.key if hasattr(binding, "key") else binding[0]
-            if "ctrl+a" in key.split(","):
-                return True
-        return False
+    def _claims_ctrl_a(bindings: Iterable[Binding]) -> bool:
+        return any("ctrl+a" in binding.key.split(",") for binding in bindings)
 
+    # Why ctrl+a cannot work: the focused text widget claims the key first.
     assert _claims_ctrl_a(TextArea.BINDINGS)
     assert _claims_ctrl_a(Input.BINDINGS)
+    # The rule that follows -- ctrl+l (test above) is the App-level route to Ask.
+    assert not _claims_ctrl_a(LodeApp.BINDINGS), (
+        "ctrl+a is bound App-level, but TextArea/Input swallow it: the action "
+        "is silently dead on the text-entry screens (Capture/Ask/Edit) and "
+        "renders in no footer. Use ctrl+l instead (docs/keybindings.md)."
+    )
 
 
 def test_asking_a_question_renders_the_cited_claim_with_provenance(
@@ -158,10 +168,7 @@ def test_escape_pops_back_to_the_previous_screen(tmp_path: Path) -> None:
     db_path = tmp_path / "lode.db"
     app = LodeApp(db_path=db_path)
 
-    still_running = False
-
     async def _drive() -> None:
-        nonlocal still_running
         async with app.run_test() as pilot:
             assert isinstance(app.screen, CaptureScreen)
             await pilot.press("ctrl+l")
@@ -169,12 +176,14 @@ def test_escape_pops_back_to_the_previous_screen(tmp_path: Path) -> None:
             assert isinstance(app.screen, AskScreen)
             await pilot.press("escape")
             await pilot.pause()
+            # Two complementary levers, both load-bearing: the screen assert
+            # catches an escape that fails to pop back, is_running catches the
+            # old ``self.app.exit()`` (which leaves AskScreen showing while the
+            # app tears down, so the screen assert alone would misreport why).
             assert isinstance(app.screen, CaptureScreen)
-            still_running = app.is_running  # the app itself never exited
+            assert app.is_running, "escape exited the app instead of popping"
 
     asyncio.run(_drive())
-
-    assert still_running
 
 
 # ---------------------------------------------------------------------------
