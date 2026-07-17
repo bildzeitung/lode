@@ -49,9 +49,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
     )
-    assert result.returncode == 0, (
-        f"git {' '.join(args)} failed: {result.stderr}"
-    )
+    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
 
 
