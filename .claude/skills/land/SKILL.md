@@ -248,20 +248,37 @@ disqualify a branch is a **textual conflict** with current `trunk` — and disco
 merge time (Section 3) means I've already paid for a full `land-review` on contents the rebase will
 change. So I test it cheaply, up front, with a no-checkout trial merge against current `trunk`
 (the pass already brought local `trunk` current with `origin/trunk` in Section 1, and I have not
-merged anything yet this pass, so `origin/trunk` is the right base for every branch here):
+merged anything yet this pass, so `origin/trunk` is the right base for every branch here), via
+[`scripts/merge-precheck.sh`](../../../scripts/merge-precheck.sh) (extracted from an inline snippet
+per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, with fixture-backed
+tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
-# git merge-tree --write-tree exits 0 on a clean merge, non-zero on conflict — no working tree touched.
-# (Requires git >= 2.38.)
-if MT=$(rtk git merge-tree --write-tree --name-only origin/trunk "origin/land/<id>" 2>/dev/null); then
-  :                                        # clean — proceed to the semantic gate (2c)
+# A command substitution inside an `if` condition is exempt from `set -e` —
+# unlike a bare `VAR=$(cmd)` assignment, which would abort the shell on a
+# non-zero exit before `rc=$?` is ever reached. Same idiom the snippet this
+# replaced used, for the same reason.
+if CONFLICTS=$(rtk scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); then
+  rc=0
 else
-  CONFLICTS=$(printf '%s\n' "$MT" | tail -n +2)   # merge-tree lists the conflicting paths after the tree OID
-  # → needs-rebase kick-back (see "Needs rebase — kick back"): skip land-review, leave the merge set.
+  rc=$?
 fi
 ```
 
-A conflict here is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
+- **`rc=0`** → clean — proceed to the semantic gate (2c). (Prints nothing.)
+- **`rc=1`** → textual conflict. `$CONFLICTS` holds exactly the conflicting path(s), one per line —
+  no tree OID, no chatter. → needs-rebase kick-back (see "Needs rebase — kick back"): skip
+  `land-review`, leave the merge set.
+- **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
+  `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
+  `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
+  this branch back `needs-rebase`. A machine fault blaming an innocent branch is exactly the defect
+  this extraction closed (defect 2, in the script's header). Instead I **stop the pass** and surface
+  the script's own stderr diagnostic verbatim as a human decision — it names the cause and the
+  remedy, and only a human can fix the machine. This is the one behaviour change from the inline
+  snippet this replaced; do not "simplify" it back into a kick-back.
+
+A conflict (`rc=1`) is **neither a bounce nor an escalate** — the branch's *content* may be perfectly
 fine, it simply can't replay onto where `trunk` now is. I handle it per
 [Needs rebase — kick back](#needs-rebase--kick-back): remove `ready-for-land`, add `needs-rebase`,
 **keep the branch and the build worktree**, and move on — **without dispatching `land-review`**. The
