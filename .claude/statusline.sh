@@ -203,10 +203,27 @@ make_bar() {
     printf '%s%s' "$out" "$RESET"
 }
 
+# Compact "time remaining" until a Unix-epoch instant: "2h05m", "45m", or empty
+# if the instant is absent, non-numeric, or already past. Tolerates epoch given
+# in seconds or milliseconds.
+countdown() {
+    ts=$1
+    [ -z "$ts" ] && return
+    ts=$(printf '%.0f' "$ts" 2>/dev/null) || return
+    case "$ts" in ''|*[!0-9]*) return ;; esac
+    [ "$ts" -gt 100000000000 ] && ts=$(( ts / 1000 ))   # epoch ms -> s
+    rem=$(( ts - $(date +%s) ))
+    [ "$rem" -le 0 ] && return
+    h=$(( rem / 3600 )); m=$(( (rem % 3600) / 60 ))
+    if [ "$h" -gt 0 ]; then printf '%dh%02dm' "$h" "$m"; else printf '%dm' "$m"; fi
+}
+
 # Usage meters: the 5-hour "current session" rate-limit window (matching /usage)
 # and a context-window occupancy meter. The 5h window is only present for
-# Claude.ai subscribers after the first API response — omit it when absent. The
-# context meter (labeled "ctx", tokens used / window size) is always shown when
+# Claude.ai subscribers after the first API response — omit it when absent; when
+# present it carries a compact "↻" countdown to when the window rolls over
+# (rate_limits.five_hour.resets_at), shown only when that reset instant is given.
+# The context meter (labeled "ctx", tokens used / window size) is always shown when
 # context data is present, so the line is never blank early in a session.
 #
 # COMPACT_THRESHOLD: once context occupancy reaches this percent, the ctx meter
@@ -217,7 +234,12 @@ usage_parts=()
 sess=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 if [ -n "$sess" ]; then
     p=$(printf '%.0f' "$sess"); col=$(heat_color "$p")
-    usage_parts+=("5h $(make_bar "$p") ${col}${p}%${RESET}")
+    meter="5h $(make_bar "$p") ${col}${p}%${RESET}"
+    # Countdown to when the 5h window rolls over, if the reset instant is present.
+    reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
+    cd=$(countdown "$reset")
+    [ -n "$cd" ] && meter="${meter} ↻${cd}"
+    usage_parts+=("$meter")
 fi
 u=""
 if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
