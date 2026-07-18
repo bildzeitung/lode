@@ -79,7 +79,7 @@ preserved. This screen now only composes the widget, forwards its text area's
 ``Changed`` text to :meth:`~lode.tui.related_notes_panel.RelatedNotesPanel.
 update_draft`, and calls :meth:`~lode.tui.related_notes_panel.
 RelatedNotesPanel.reset` wherever it used to cancel/clear a pass of its own
-(:meth:`CaptureScreen.action_save_and_new`). :class:`~lode.tui.screens.browse.
+(:meth:`CaptureScreen.action_save_and_new`). :class:`~lode.tui.screens.edit.
 EditScreen` composes the same widget for parity (the ticket this extraction
 was done for).
 """

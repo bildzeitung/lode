@@ -22,31 +22,32 @@ from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.dates import format_adaptive_date
-from lode.tui.screens.browse import (
+from lode.tui.screens.browse import SEARCH_INPUT_ID, TABLE_ID, BrowseScreen
+from lode.tui.screens.capture import CaptureScreen
+from lode.tui.screens.delete_confirm import (
     DELETE_CONFIRM_MESSAGE_ID,
-    EDIT_BODY_ID,
-    EXTERNAL_PICKER_TABLE_ID,
-    HISTORY_TABLE_ID,
+    DeleteConfirmScreen,
+)
+from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
+from lode.tui.screens.enrichment_modal import (
     INSPECTOR_EDGES_ID,
     INSPECTOR_EMBED_ID,
     INSPECTOR_ENTITIES_ID,
     INSPECTOR_STATE_ID,
     INSPECTOR_SUMMARY_ID,
     INSPECTOR_TAGS_ID,
-    SEARCH_INPUT_ID,
-    SNAPSHOT_VIEWER_BODY_ID,
-    TABLE_ID,
-    VERSION_BODY_ID,
-    BrowseScreen,
-    DeleteConfirmScreen,
-    EditScreen,
     EnrichmentModalScreen,
-    ExternalPickerScreen,
-    SnapshotViewerScreen,
-    VersionHistoryScreen,
-    VersionViewScreen,
 )
-from lode.tui.screens.capture import CaptureScreen
+from lode.tui.screens.external_picker import (
+    EXTERNAL_PICKER_TABLE_ID,
+    ExternalPickerScreen,
+)
+from lode.tui.screens.snapshot_viewer import (
+    SNAPSHOT_VIEWER_BODY_ID,
+    SnapshotViewerScreen,
+)
+from lode.tui.screens.version_history import HISTORY_TABLE_ID, VersionHistoryScreen
+from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
 from lode.versions import save
 
 from conftest import _press_and_settle

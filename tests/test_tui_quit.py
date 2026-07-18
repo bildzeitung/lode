@@ -12,7 +12,7 @@ buffer quits immediately, and a non-capture screen (config, reached via
 Ctrl+O) quits immediately regardless of what the capture screen underneath is
 holding.
 
-**lode-b14** extends the same guard to :class:`~lode.tui.screens.browse.EditScreen`
+**lode-b14** extends the same guard to :class:`~lode.tui.screens.edit.EditScreen`
 (lode-0wj.6): Ctrl+Q there must end in ``self.app.exit()`` /
 ``self.app.exit(note_id)`` -- quitting the whole app -- never
 ``pop_screen`` (Escape's "back to browse" contract), and its dirty check is
@@ -26,10 +26,10 @@ from pathlib import Path
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.browse import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.capture import BODY_ID
 from lode.tui.screens.config import ConfigScreen
 from lode.tui.screens.discard_confirm import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
+from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import save
 
@@ -324,7 +324,7 @@ def test_ctrl_q_confirm_save_with_cas_conflict_shows_reconcile_then_quits_on_res
     """A conflict on Ctrl+Q's save still ends in quitting the app, not browse.
 
     ``ReconcileScreen`` is pushed with no ``on_resolved`` override here (see
-    :meth:`~lode.tui.screens.browse.EditScreen._on_quit_confirm`), so its
+    :meth:`~lode.tui.screens.edit.EditScreen._on_quit_confirm`), so its
     default -- exit the app -- is exactly Ctrl+Q's own "quit the whole app"
     contract, unlike the Ctrl+S/Escape save path which pops back to browse.
     """

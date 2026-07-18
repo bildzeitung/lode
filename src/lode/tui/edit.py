@@ -2,7 +2,7 @@
 
 Pure I/O, no widget/App state — same convention as :mod:`lode.tui.capture` /
 :mod:`lode.notes_read` — so it is unit-testable without spinning up a Textual
-app; :class:`~lode.tui.screens.browse.EditScreen` is its only caller.
+app; :class:`~lode.tui.screens.edit.EditScreen` is its only caller.
 
 **Update, never create — the whole point of this module.** :func:`save_capture`
 always mints a fresh ``uuid4`` note id (a capture only ever creates); this
@@ -70,7 +70,7 @@ def load_head(db_path: Path, note_id: str) -> tuple[str, str] | None:
     ``None`` if the note is absent or its head is a soft-delete tombstone
     (``op = 'delete'``) — same "live heads only" guard :func:`lode.notes_read.
     list_notes` applies, since a tombstoned note has nothing editable to load.
-    :class:`~lode.tui.screens.browse.EditScreen` uses this both to seed the
+    :class:`~lode.tui.screens.edit.EditScreen` uses this both to seed the
     editable buffer and to remember the CAS ``parent`` its save must reparent
     onto.
     """

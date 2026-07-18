@@ -469,7 +469,7 @@ def test_on_unmount_cancels_a_pending_related_notes_timer(
     that gap generically, at the widget's own lifecycle hook, rather than
     needing a ``reset()`` call duplicated into every exit path of every screen
     that composes this widget (capture *and*
-    :class:`~lode.tui.screens.browse.EditScreen`).
+    :class:`~lode.tui.screens.edit.EditScreen`).
 
     Calls ``on_unmount`` directly rather than driving it through an actual
     screen pop or app exit: Textual's *own* generic per-widget teardown

@@ -8,13 +8,13 @@ uses). This screen owns no read logic of its own -- it only renders the rows
 :func:`lode.notes_read.list_notes` returns into a ``DataTable`` (Id | Date |
 Version | Summary, newest-first, live notes only) and reacts to a row select.
 
-Selecting a row -- Enter, or a mouse click -- pushes :class:`EditScreen`
-directly (lode-olmi.2): editing an existing note *is* the point of opening
-it, so there is no separate read-only detour first. ``EditScreen`` needs a
-``note_id`` to push, so (like ``ReconcileScreen`` and ``CaptureScreen``'s own
-``DiscardConfirmScreen``) it is not itself an entry in
-:data:`~lode.tui.app.LodeApp.SCREENS` -- only this screen is, per the app
-shell's registration convention.
+Selecting a row -- Enter, or a mouse click -- pushes
+:class:`~lode.tui.screens.edit.EditScreen` directly (lode-olmi.2): editing an
+existing note *is* the point of opening it, so there is no separate read-only
+detour first. ``EditScreen`` needs a ``note_id`` to push, so (like
+``ReconcileScreen`` and ``CaptureScreen``'s own ``DiscardConfirmScreen``) it
+is not itself an entry in :data:`~lode.tui.app.LodeApp.SCREENS` -- only this
+screen is, per the app shell's registration convention.
 
 Escape pops back one level at a time -- editor to list, list to capture --
 which falls out of Textual's own screen stack for free: both screens' Escape
@@ -35,20 +35,12 @@ again (a fresh ``Ctrl+B``, or popping back from ``EditScreen``), not only on
 first mount.
 
 **View prior versions (lode-0wj.7, moved lode-olmi.2).** ``Ctrl+H`` on
-:class:`EditScreen` pushes :class:`VersionHistoryScreen` -- a Date | Version |
-Op table over the note's whole chain (:func:`lode.notes_read.list_versions`),
-newest (the head) first. This used to be a bare ``h`` on the now-retired
-``NoteViewScreen``; it moved into the editor as ``Ctrl+H`` (not bare ``h``)
-because ``EditScreen``'s body is an editable ``TextArea``, which consumes
-every printable keypress -- including bare ``h`` -- before a Screen-level
-binding ever sees it (the same reason this screen's save binding is
-``Ctrl+S``, not a bare letter). Selecting a row in the history table pushes
-:class:`VersionViewScreen`, a read-only view of that exact version's body
-(:func:`lode.notes_read.version_body`) -- a read-only ``TextArea``, keyed to
-a specific ``version_id`` instead of always the live head. Escape pops one
-level at a time here too: version body -> history list -> editor, falling out
-of the same Textual screen-stack pop every other Escape in this module
-already relies on.
+``EditScreen`` pushes :class:`~lode.tui.screens.version_history.
+VersionHistoryScreen` -- a Date | Version | Op table over the note's whole
+chain, newest (the head) first; selecting a row there pushes
+:class:`~lode.tui.screens.version_view.VersionViewScreen`, a read-only view
+of that exact version's body. See those two modules' own docstrings for the
+full detail (extracted lode-s5kp.1; previously part of this module).
 
 **Expose the note id (lode-1gr.2, moved lode-olmi.2).** Before this, nothing
 in the TUI showed a note's id, so a user could see a note in Browse but not
@@ -57,88 +49,83 @@ in the TUI showed a note's id, so a user could see a note in Browse but not
 abbreviation :func:`lode.cli` will use for ``lode show``, lode-1gr.5) --
 enough to feed ``lode purge <prefix>`` (lode-1gr.3) unambiguously in
 practice, without widening the table for a 36-char id most rows never need in
-full. :class:`EditScreen` shows the *full* id instead, in its header's
+full. ``EditScreen`` shows the *full* id instead, in its header's
 ``sub_title`` -- selectable/copyable there, where there is no width budget to
 protect (moved from the retired ``NoteViewScreen``).
 
-**Adaptive dates (lode-1gr.8).** Both this screen's Date column and
-:class:`VersionHistoryScreen`'s render :func:`lode.tui.dates.
-format_adaptive_date` instead of the raw ISO-8601 ``created`` string --
-today's time, this week's weekday+time, this year's month+day, or an older
-plain ISO date. Shorter on every bucket but the last, which is what frees more
-of :meth:`BrowseScreen._reload_rows`'s natural-width budget for Summary.
+**Adaptive dates (lode-1gr.8).** This screen's Date column renders
+:func:`lode.tui.dates.format_adaptive_date` instead of the raw ISO-8601
+``created`` string -- today's time, this week's weekday+time, this year's
+month+day, or an older plain ISO date. Shorter on every bucket but the last,
+which is what frees more of :meth:`BrowseScreen._reload_rows`'s natural-width
+budget for Summary. ``VersionHistoryScreen`` renders the same helper for its
+own Date column.
 
 **Enrichment inspector modal (lode-ay5.2).** ``i`` on a highlighted row pushes
-:class:`EnrichmentModalScreen` -- a glance-and-dismiss popup (``Esc`` pops it,
-same one-level-at-a-time contract as everywhere else in this module) showing
-that note's enrichment: summary, tags, entities, inferred edges
-(reason+confidence+stale), embed status, and the three-valued
-``enrichment_state``. It renders :func:`lode.enrichment_view.enrichment_view`
-directly -- the shared TUI+CLI view-model seam (lode-ay5.1, lode-0qc) -- and
-holds **no** copy of the stale-display policy or any independent display
-assembly; :mod:`lode.cli`'s ``show_`` (lode-ay5.3) consumes the same seam so
-the two surfaces cannot drift. Registered like
-:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`: a bare
-``ModalScreen`` pushed over the still-visible list rather than a
+:class:`~lode.tui.screens.enrichment_modal.EnrichmentModalScreen` -- a
+glance-and-dismiss popup (``Esc`` pops it, same one-level-at-a-time contract
+as everywhere else in this module) showing that note's enrichment. See that
+module's own docstring for the full detail (extracted lode-s5kp.1). Registered
+like :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`: a bare
+``ModalScreen`` pushed over the still-visible table rather than a
 ``SCREENS``-registry entry, dimming the table underneath for free via
 ``ModalScreen``'s own ``DEFAULT_CSS``.
 
 **External-snapshot introspection (lode-8d2).** When an edge draws down a web
-link, its line in the Edges block gains a second, indented line showing that
-external's :class:`~lode.enrichment_view.ExternalView` -- source_type,
-snapshot id, ``fetched_at``, and its three-valued ``state``
-(``un-refreshed``/``stale``/``withheld``, dimmed like a stale edge already
-is). Renders :attr:`~lode.enrichment_view.EnrichmentEdge.external` verbatim,
-already assembled by the same :func:`~lode.enrichment_view.enrichment_view`
-call -- no second DB read, no second policy. The edge's own target label
-switches from the truncated :func:`~lode.notes_read.short_note_id` prefix to
-the bare ``to_id`` when it resolves to an external, since that ``to_id`` is
-the full source URL, not a note id worth abbreviating.
+link, its line in the enrichment modal's Edges block gains a second, indented
+line showing that external's :class:`~lode.enrichment_view.ExternalView` --
+rendered by :func:`~lode.tui.screens._browse_render._external_text`. No
+second DB read, no second policy -- see that leaf module's own docstring.
 
 **Content viewer + 'v' addressing flow (lode-olmi.8's decision, lode-0sjj).**
-Neither this screen nor :class:`EditScreen` could show a note's actually-
-retrieved external content before this -- :class:`EnrichmentModalScreen`
-(above) carries only :class:`~lode.enrichment_view.ExternalView` metadata
-(source_type, snapshot id, fetched_at, state), never the snapshot's stored
-``body``/``raw_payload``. :class:`SnapshotViewerScreen` is the new modal that
-reads them, keyed to one ``snapshot_id``: it shows the extracted ``body`` by
-default in a read-only ``TextArea`` and ``t`` toggles to ``raw_payload``
-(nullable -- a clean notify-and-stay when it isn't captured, never a blank
-toggle). ``_resolve_externals`` + ``_view_note_external_content`` implement
-the shared zero/one/many addressing rule both screens' bindings call into --
-mirroring ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose,
-so the CLI and TUI can't drift onto two different rules for the same
-question: zero externals notifies ``'no retrieved content for this note'``;
-exactly one pushes the viewer directly; more than one pushes
-:class:`ExternalPickerScreen` first, a DataTable-then-select list (mirroring
-:class:`VersionHistoryScreen`'s own pattern above) showing each candidate's
-source_type/snapshot id/fetched_at/state -- the same fields
-:func:`~lode.tui.screens._browse_render._external_text` already renders -- before the chosen row pushes the
-viewer.
+Neither this screen nor ``EditScreen`` could show a note's actually-retrieved
+external content before this -- the enrichment modal carries only
+:class:`~lode.enrichment_view.ExternalView` metadata (source_type, snapshot
+id, fetched_at, state), never the snapshot's stored ``body``/``raw_payload``.
+:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` is the modal
+that reads them, keyed to one ``snapshot_id``. ``_resolve_externals`` +
+``_view_note_external_content`` (below) implement the shared zero/one/many
+addressing rule both this screen's and ``EditScreen``'s bindings call into --
+mirroring ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose, so
+the CLI and TUI can't drift onto two different rules for the same question:
+zero externals notifies ``'no retrieved content for this note'``; exactly one
+pushes the viewer directly; more than one pushes
+:class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first, a
+DataTable-then-select list (mirroring ``VersionHistoryScreen``'s own pattern
+above) showing each candidate's source_type/snapshot id/fetched_at/state --
+the same fields :func:`~lode.tui.screens._browse_render._external_text`
+already renders -- before the chosen row pushes the viewer.
+
+These two functions stay in this module rather than moving with the other
+seven screens (lode-s5kp.1/lode-s5kp.4): they push
+``SnapshotViewerScreen``/``ExternalPickerScreen`` directly, so they are
+navigation glue, not a pure render helper, and this screen (``BrowseScreen``)
+is one of their two callers.
 
 This screen's binding is bare ``v`` (``action_view_content``): the focused
 widget here is the notes ``DataTable``, not an editable ``TextArea``, so a
 bare printable key reaches a Screen-level binding fine -- the same reason
-``i``/``d`` are already bare on this screen. :class:`EditScreen`'s own
-binding for the identical action is **not** the same key -- see that class's
-docstring and ``docs/keybindings.md`` for why an editable-body screen can't
-reuse a bare letter here, and which non-printable key it uses instead.
+``i``/``d`` are already bare on this screen. ``EditScreen``'s own binding for
+the identical action is **not** the same key -- see that class's docstring
+and ``docs/keybindings.md`` for why an editable-body screen can't reuse a
+bare letter here, and which non-printable key it uses instead.
 
 **Delete from browse (lode-d32.1).** ``d`` on a highlighted row soft-deletes
 that note via :func:`~lode.tui.edit.delete_note` -- the CAS-guarded
 ``op='delete'`` tombstone (:func:`lode.versions.delete`, routed through
 :class:`~lode.repository.Repository` so the FTS/lexical cache leg is evicted
 too) that :func:`lode.versions.recover` can later undo. It reuses the
-*pattern* :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen` established
-(a small bordered popup dialog, lode-1i8.4) rather than that exact class --
-its fixed Save/Discard/Cancel prompt doesn't fit "delete this note," so
-:class:`DeleteConfirmScreen` is its own small Yes/No modal. A delete has no
-buffer to preserve, so a CAS reject (:class:`~lode.versions.
-HeadConflictError` -- someone else changed or deleted the note first) is not
-routed through :class:`~lode.tui.screens.reconcile.ReconcileScreen` the way a
-save conflict is; it is simplest to notify and reload the table, which
-already reflects the current state either way. Declining the confirm, or an
-empty table, is a no-op.
+*pattern* :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`
+established (a small bordered popup dialog, lode-1i8.4) rather than that exact
+class -- its fixed Save/Discard/Cancel prompt doesn't fit "delete this note,"
+so :class:`~lode.tui.screens.delete_confirm.DeleteConfirmScreen` is its own
+small Yes/No modal (extracted lode-s5kp.1). A delete has no buffer to
+preserve, so a CAS reject (:class:`~lode.versions.HeadConflictError` --
+someone else changed or deleted the note first) is not routed through
+:class:`~lode.tui.screens.reconcile.ReconcileScreen` the way a save conflict
+is; it is simplest to notify and reload the table, which already reflects the
+current state either way. Declining the confirm, or an empty table, is a
+no-op.
 
 **Progressive incremental search (lode-olmi.4).** ``/`` opens a one-line
 :class:`~textual.widgets.Input` at the bottom of the screen (hidden the rest
@@ -168,19 +155,21 @@ it between the 1-line-capped summary the whole list otherwise shows
 (lode-juz8.3) and its full, untruncated text -- highlighted row only, so the
 rest of the list stays scannable while one row is read in full.
 :meth:`BrowseScreen._reload_rows` renders that one row with
-:func:`~lode.tui.screens._browse_render._wrap_summary_full` (no line cap, ``height=`` its actual wrapped line
-count) instead of :func:`~lode.tui.screens._browse_render._clip_summary_to_row_height`; every other row is
-unaffected. Tracked as :attr:`BrowseScreen._expanded_note_id`, a plain
-``note_id | None`` rather than a set, since only one row can be expanded at a
-time. Unlike the cursor (preserved across a reload, lode-olmi.1), expansion
-does **not** survive a ``_reload_rows`` triggered by :meth:`on_screen_resume`
-or :meth:`on_resize` -- both reset :attr:`_expanded_note_id` to ``None``
-before reloading, so tabbing away to edit and back, or resizing the
-terminal, collapses an expanded row (confirmed acceptable by the user
-2026-07-16, over a `challenge` finding that raised the inconsistency with
-the cursor's own preservation). The toggle action itself calls
-``_reload_rows`` too, but *after* setting/clearing ``_expanded_note_id`` --
-that reload is what renders the just-toggled state, not a reset.
+:func:`~lode.tui.screens._browse_render._wrap_summary_full` (no line cap,
+``height=`` its actual wrapped line count) instead of
+:func:`~lode.tui.screens._browse_render._clip_summary_to_row_height`; every
+other row is unaffected. Tracked as :attr:`BrowseScreen._expanded_note_id`, a
+plain ``note_id | None`` rather than a set, since only one row can be
+expanded at a time. Unlike the cursor (preserved across a reload,
+lode-olmi.1), expansion does **not** survive a ``_reload_rows`` triggered by
+:meth:`on_screen_resume` or :meth:`on_resize` -- both reset
+:attr:`_expanded_note_id` to ``None`` before reloading, so tabbing away to
+edit and back, or resizing the terminal, collapses an expanded row (confirmed
+acceptable by the user 2026-07-16, over a `challenge` finding that raised the
+inconsistency with the cursor's own preservation). The toggle action itself
+calls ``_reload_rows`` too, but *after* setting/clearing
+``_expanded_note_id`` -- that reload is what renders the just-toggled state,
+not a reset.
 
 **Search box stays on-screen with a long list (lode-juz8.2).** Before this,
 the table had no height constraint from ``lode.tcss``, leaving it on
@@ -204,90 +193,58 @@ problem for its own notes table: ``1fr`` resolves against the space
 table (a ``ScrollView`` subclass) scrolls its own rows internally instead of
 growing the layout, and the search box -- and the footer beneath it --
 always land in-viewport.
+
+**Split into one module per screen (lode-s5kp.1).** The other seven
+top-level ``Screen``/``ModalScreen`` classes this module used to hold --
+``VersionHistoryScreen``, ``VersionViewScreen``, ``ExternalPickerScreen``,
+``SnapshotViewerScreen``, ``EnrichmentModalScreen``, ``DeleteConfirmScreen``,
+``EditScreen`` -- now live in their own modules under
+:mod:`lode.tui.screens`, per the one-Screen-per-module fiat
+(``docs/conventions.md``). Pure move -- no behavior change. This module keeps
+only :class:`BrowseScreen` plus ``_resolve_externals``/
+``_view_note_external_content`` (navigation glue used by both this screen and
+``EditScreen``, so it lives at the point both import from -- see those
+functions' own docstrings for why they didn't move into the leaf
+``_browse_render`` module instead, lode-s5kp.4). Every cross-screen
+``push_screen`` reference below is a plain top-level import except
+``EditScreen``'s own reach back into ``_view_note_external_content``, which
+is a local (function-body) import to avoid a module-level import cycle --
+see :mod:`lode.tui.screens.edit`'s docstring.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
-from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Header, Input, Static, TextArea
+from textual.screen import Screen
+from textual.widgets import DataTable, Header, Input
 from textual.widgets.data_table import RowDoesNotExist
 
 from lode.enrichment_view import ExternalView, enrichment_view
-from lode.ids import short_version_id
-from lode.notes_read import (
-    SnapshotRow,
-    list_notes,
-    list_versions,
-    read_snapshot,
-    short_note_id,
-    version_body,
-)
+from lode.notes_read import list_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
-from lode.tui.edit import (
-    EditConflict,
-    EmptyEditError,
-    delete_note,
-    load_head,
-    save_edit,
-)
+from lode.tui.edit import delete_note, load_head
 from lode.tui.lode_footer import LodeFooter
-from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
     _clip_summary_to_row_height,
-    _edges_text,
-    _items_line,
-    _summary_text,
     _wrap_summary_full,
 )
-from lode.tui.screens.discard_confirm import DiscardConfirmScreen
-from lode.tui.screens.reconcile import ReconcileScreen
-from lode.versions import HeadConflictError, SaveResult
+from lode.tui.screens.delete_confirm import DeleteConfirmScreen
+from lode.tui.screens.edit import EditScreen
+from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
+from lode.tui.screens.external_picker import ExternalPickerScreen
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
+from lode.versions import HeadConflictError
 
 #: The notes table's widget id -- read back in tests.
 TABLE_ID = "browse-table"
-#: The editable note body's widget id -- read back in tests.
-EDIT_BODY_ID = "note-edit-body"
-#: The delete-confirm dialog's message widget id -- read back in tests.
-DELETE_CONFIRM_MESSAGE_ID = "delete-confirm-message"
 #: The progressive-search one-line input's widget id (lode-olmi.4) -- read
 #: back in tests.
 SEARCH_INPUT_ID = "browse-search-input"
-#: The edit screen's passive related-notes panel widget id (lode-aoc) -- read
-#: back in tests.
-EDIT_RELATED_ID = "edit-related-notes"
-#: The version-history table's widget id -- read back in tests.
-HISTORY_TABLE_ID = "version-history-table"
-#: The read-only prior-version body's widget id -- read back in tests.
-VERSION_BODY_ID = "version-view-body"
-#: The enrichment inspector modal's dialog container id -- read back in tests.
-INSPECTOR_DIALOG_ID = "enrichment-inspector-dialog"
-#: The inspector's ``enrichment_state`` line id -- read back in tests.
-INSPECTOR_STATE_ID = "inspector-state"
-#: The inspector's summary line id -- read back in tests.
-INSPECTOR_SUMMARY_ID = "inspector-summary"
-#: The inspector's tags line id -- read back in tests.
-INSPECTOR_TAGS_ID = "inspector-tags"
-#: The inspector's entities line id -- read back in tests.
-INSPECTOR_ENTITIES_ID = "inspector-entities"
-#: The inspector's inferred-edges block id -- read back in tests.
-INSPECTOR_EDGES_ID = "inspector-edges"
-#: The inspector's embed-status line id -- read back in tests.
-INSPECTOR_EMBED_ID = "inspector-embed"
-#: The content-viewer modal's body ``TextArea`` widget id (lode-0sjj) -- read
-#: back in tests.
-SNAPSHOT_VIEWER_BODY_ID = "snapshot-viewer-body"
-#: The content-viewer modal's dialog container id -- read back in tests.
-SNAPSHOT_VIEWER_DIALOG_ID = "snapshot-viewer-dialog"
-#: The many-externals picker table's widget id -- read back in tests.
-EXTERNAL_PICKER_TABLE_ID = "external-picker-table"
 
 #: Left+right cell padding a ``DataTable`` adds *per column* -- used to work out
 #: how much horizontal room the Summary column may claim without pushing the
@@ -298,99 +255,21 @@ _CELL_PADDING = 2
 _MIN_SUMMARY_WIDTH = 10
 
 
-class VersionHistoryScreen(Screen[None]):
-    """A note's version chain, newest (the head) first (lode-0wj.7).
-
-    Pushed from :class:`EditScreen` via ``Ctrl+H`` (moved from the now-retired
-    read-only note view, lode-olmi.2). Each row is one version (Date | Version
-    | Op, mirroring :class:`BrowseScreen`'s own column style); selecting one
-    pushes :class:`VersionViewScreen`, a read-only view of that exact
-    version's body -- deliberately every row, including the current head,
-    rather than filtering it out: picking the head row just shows the same
-    body :class:`EditScreen` already has loaded, which is harmless and
-    avoids an off-by-one special case for no real benefit.
-
-    Escape pops back to :class:`EditScreen`, the same "one level at a time"
-    contract every other browse-family screen uses.
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-    ]
-
-    def __init__(self, note_id: str) -> None:
-        super().__init__()
-        self.note_id = note_id
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield DataTable(id=HISTORY_TABLE_ID, cursor_type="row")
-        yield LodeFooter()
-
-    def on_mount(self) -> None:
-        table = self.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
-        table.add_columns("Date", "Version", "Op")
-        for row in list_versions(self.app.db_path, self.note_id):
-            table.add_row(
-                format_adaptive_date(row.created),
-                f"v{row.seq}",
-                row.op,
-                key=row.version_id,
-            )
-        table.focus()
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        version_id = event.row_key.value
-        if version_id is not None:
-            self.app.push_screen(VersionViewScreen(self.note_id, version_id))
-
-
-class VersionViewScreen(Screen[None]):
-    """A read-only view of one specific (possibly non-head) version's body.
-
-    Pushed from :class:`VersionHistoryScreen` on row-select. Escape pops back
-    to that history list -- one level at a time, same as everywhere else in
-    this module.
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-    ]
-
-    def __init__(self, note_id: str, version_id: str) -> None:
-        super().__init__()
-        self.note_id = note_id
-        self.version_id = version_id
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield TextArea("", read_only=True, id=VERSION_BODY_ID)
-        yield LodeFooter()
-
-    def on_mount(self) -> None:
-        body = version_body(self.app.db_path, self.note_id, self.version_id)
-        self.query_one(f"#{VERSION_BODY_ID}", TextArea).text = body or ""
-
-
 def _resolve_externals(db_path: Path, note_id: str) -> list[ExternalView]:
     """*note_id*'s drawn-down external edges, in edge order (lode-0sjj).
 
     The one place the "which externals does this note have" question is
     answered for the content-viewer feature -- both
     :meth:`BrowseScreen.action_view_content` and
-    :meth:`EditScreen.action_view_content` resolve through this (via
-    :func:`_view_note_external_content`) rather than each independently
-    filtering :func:`~lode.enrichment_view.enrichment_view`'s edges, which
-    would risk the two screens silently drifting onto different rules. A
-    missing note (should never happen -- both callers only ever have a real,
-    live ``note_id`` in hand) returns an empty list rather than raising; an
-    empty result and "note exists but has no external edges" are
-    indistinguishable to the caller, which is fine -- both mean "notify, don't
-    view anything."
+    :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` resolve
+    through this (via :func:`_view_note_external_content`) rather than each
+    independently filtering :func:`~lode.enrichment_view.enrichment_view`'s
+    edges, which would risk the two screens silently drifting onto different
+    rules. A missing note (should never happen -- both callers only ever have
+    a real, live ``note_id`` in hand) returns an empty list rather than
+    raising; an empty result and "note exists but has no external edges" are
+    indistinguishable to the caller, which is fine -- both mean "notify,
+    don't view anything."
     """
     view = enrichment_view(db_path, note_id)
     if view is None:
@@ -402,13 +281,14 @@ def _view_note_external_content(screen: Screen[None], note_id: str) -> None:
     """Resolve *note_id*'s externals and push the right viewer (lode-0sjj).
 
     Shared by :meth:`BrowseScreen.action_view_content` (bare ``v``) and
-    :meth:`EditScreen.action_view_content` (a Ctrl-prefixed key) so the
-    zero/one/many addressing rule lives in exactly one place -- mirroring
-    ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose. Zero
-    externals notifies cleanly; exactly one pushes
-    :class:`SnapshotViewerScreen` directly; more than one pushes
-    :class:`ExternalPickerScreen` first, which pushes the viewer itself once
-    a row is chosen.
+    :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` (a
+    Ctrl-prefixed key) so the zero/one/many addressing rule lives in exactly
+    one place -- mirroring ``lode dump-html``'s CLI disambiguation
+    (lode-olmi.7) on purpose. Zero externals notifies cleanly; exactly one
+    pushes :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`
+    directly; more than one pushes :class:`~lode.tui.screens.external_picker.
+    ExternalPickerScreen` first, which pushes the viewer itself once a row is
+    chosen.
     """
     externals = _resolve_externals(screen.app.db_path, note_id)
     if not externals:
@@ -417,245 +297,6 @@ def _view_note_external_content(screen: Screen[None], note_id: str) -> None:
         screen.app.push_screen(SnapshotViewerScreen(externals[0].snapshot_id))
     else:
         screen.app.push_screen(ExternalPickerScreen(externals))
-
-
-class ExternalPickerScreen(Screen[None]):
-    """List a note's external edges so the user can pick one to view (lode-0sjj).
-
-    Pushed by :func:`_view_note_external_content` only when a note has more
-    than one external edge -- the "many" branch of the zero/one/many
-    addressing rule shared with ``lode dump-html`` (lode-olmi.7). Each row is
-    one :class:`~lode.enrichment_view.ExternalView` (Source | Snapshot |
-    Fetched | State -- the same fields :func:`~lode.tui.screens._browse_render._external_text` already renders
-    beneath an edge line in :class:`EnrichmentModalScreen`); selecting one
-    pushes :class:`SnapshotViewerScreen` for that row's ``snapshot_id``.
-
-    Mirrors :class:`VersionHistoryScreen`'s DataTable-then-select shape
-    exactly (a plain, non-modal ``Screen``, not a ``ModalScreen`` -- there is
-    no "dimmed screen underneath" need here, just a list to pick from).
-    Escape pops back one level, the same contract every other screen in this
-    module uses.
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-    ]
-
-    def __init__(self, externals: list[ExternalView]) -> None:
-        super().__init__()
-        self._externals = externals
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield DataTable(id=EXTERNAL_PICKER_TABLE_ID, cursor_type="row")
-        yield LodeFooter()
-
-    def on_mount(self) -> None:
-        table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
-        table.add_columns("Source", "Snapshot", "Fetched", "State")
-        for external in self._externals:
-            table.add_row(
-                external.source_type,
-                short_version_id(external.snapshot_id),
-                external.fetched_at,
-                external.state,
-                key=external.snapshot_id,
-            )
-        table.focus()
-
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        snapshot_id = event.row_key.value
-        if snapshot_id is not None:
-            self.app.push_screen(SnapshotViewerScreen(snapshot_id))
-
-
-class SnapshotViewerScreen(ModalScreen[None]):
-    """A retrieved external's stored content -- body by default, raw on toggle (lode-0sjj).
-
-    Pushed keyed to one ``snapshot_id`` by :func:`_view_note_external_content`
-    -- directly, for a note with exactly one external edge, or after
-    :class:`ExternalPickerScreen` resolves which of several. Shows
-    ``snapshots.body`` (the extracted text -- ``NOT NULL``, ``schema.sql``;
-    even a tombstone snapshot carries a stable placeholder body,
-    :func:`lode.externals.tombstone_body`) in a read-only ``TextArea`` by
-    default. ``Binding('t', 'toggle_raw', ...)`` switches to
-    ``snapshots.raw_payload`` instead -- the same nullable raw-HTML column
-    ``lode dump-html`` (lode-olmi.7) prints to stdout -- and back again on a
-    second press. Unlike that CLI command, a missing ``raw_payload`` here
-    isn't an error: it notifies ``'no raw HTML captured for this source'``
-    and stays on the body, since the body is still perfectly viewable and the
-    toggle simply has nothing to switch to (never a blank toggle).
-
-    ``Esc`` dismisses -- the same one-level-at-a-time contract every other
-    modal in this module uses. Bare printable ``t`` is safe here (unlike
-    :class:`EditScreen`'s own binding for reaching this screen,
-    ``docs/keybindings.md``): this screen's body ``TextArea`` is
-    ``read_only=True``, so it never intercepts a printable keypress before a
-    Screen-level binding sees it (the same reason ``NoteViewScreen``'s
-    read-only body could bind bare ``h``, back when that screen existed).
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-        Binding("t", "toggle_raw", "Toggle raw HTML"),
-    ]
-
-    def __init__(self, snapshot_id: str) -> None:
-        super().__init__()
-        self.snapshot_id = snapshot_id
-        self._snapshot: SnapshotRow | None = None
-        self._showing_raw = False
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            TextArea("", read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
-            id=SNAPSHOT_VIEWER_DIALOG_ID,
-        )
-
-    def on_mount(self) -> None:
-        snapshot = read_snapshot(self.app.db_path, self.snapshot_id)
-        if snapshot is None:
-            # Only ever pushed for a snapshot_id an already-assembled
-            # ExternalView carried, so a missing row here would be a real
-            # bug, not a normal race worth a soft fallback -- the same stance
-            # EnrichmentModalScreen.on_mount takes for a missing note.
-            raise LookupError(f"no snapshot {self.snapshot_id!r} to view")
-        self._snapshot = snapshot
-        self._show_body()
-
-    def _show_body(self) -> None:
-        self._showing_raw = False
-        assert self._snapshot is not None
-        self.query_one(
-            f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
-        ).text = self._snapshot.body
-
-    def action_toggle_raw(self) -> None:
-        """``t``: switch to the raw HTML, or back to the body from there."""
-        assert self._snapshot is not None
-        if self._showing_raw:
-            self._show_body()
-            return
-        if not self._snapshot.raw_payload:
-            self.notify("no raw HTML captured for this source", severity="warning")
-            return
-        self._showing_raw = True
-        self.query_one(
-            f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
-        ).text = self._snapshot.raw_payload
-
-
-class EnrichmentModalScreen(ModalScreen[None]):
-    """A glance-and-dismiss popup over one note's full enrichment (lode-ay5.2).
-
-    Pushed from :meth:`BrowseScreen.action_inspect_selected` via ``i`` on the
-    highlighted row, keyed to that row's ``note_id`` the same way ``e``
-    resolves one for :class:`EditScreen`. Renders
-    :func:`lode.enrichment_view.enrichment_view` verbatim -- summary, tags,
-    entities, inferred edges (reason+confidence+stale), embed status, and the
-    three-valued ``enrichment_state`` -- with **no** DB access or display
-    policy of its own; this screen only shapes the already-decided fields into
-    widgets. The ``_item_text``/``_items_line``/``_edges_text`` helpers in
-    :mod:`~lode.tui.screens._browse_render` (lode-s5kp.4) do the one bit of
-    real work this modal owns: styling ``stale`` dim instead of
-    string-sniffing a suffix (lode-0qc; see ``docs/storage.md``'s
-    "Enrichment view-model" section).
-
-    Content lives in a :class:`~textual.containers.VerticalScroll` (not a
-    fixed :class:`~textual.containers.Vertical`, unlike
-    :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s small fixed
-    dialog) so a note with many tags/entities/edges scrolls within the popup
-    rather than overflowing or truncating. ``Esc`` pops back to
-    :class:`BrowseScreen` -- the same one-level-at-a-time contract every other
-    screen in this module already uses. Like ``DiscardConfirmScreen``, this is
-    a bare ``ModalScreen`` pushed directly (not a :data:`~lode.tui.app.
-    LodeApp.SCREENS` entry): it dims the table underneath for free via
-    ``ModalScreen``'s own ``DEFAULT_CSS``, and ``lode.tcss`` adds only sizing
-    and centering for :data:`INSPECTOR_DIALOG_ID`.
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-    ]
-
-    def __init__(self, note_id: str) -> None:
-        super().__init__()
-        self.note_id = note_id
-
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(
-            Static("", id=INSPECTOR_STATE_ID),
-            Static("", id=INSPECTOR_SUMMARY_ID),
-            Static("", id=INSPECTOR_TAGS_ID),
-            Static("", id=INSPECTOR_ENTITIES_ID),
-            Static("", id=INSPECTOR_EDGES_ID),
-            Static("", id=INSPECTOR_EMBED_ID),
-            id=INSPECTOR_DIALOG_ID,
-        )
-
-    def on_mount(self) -> None:
-        view = enrichment_view(self.app.db_path, self.note_id)
-        if view is None:
-            # BrowseScreen only ever pushes this for a row already in the
-            # (live-only) table, so a missing note here would be a real bug,
-            # not a normal race worth a soft fallback -- the same stance
-            # EditScreen.on_mount takes for a missing head.
-            raise LookupError(f"no live note {self.note_id!r} to inspect")
-
-        self.query_one(f"#{INSPECTOR_STATE_ID}", Static).update(
-            f"Enrichment: {view.enrichment_state}"
-        )
-        self.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).update(
-            Text("Summary: ") + _summary_text(view.summary)
-        )
-        self.query_one(f"#{INSPECTOR_TAGS_ID}", Static).update(
-            Text("Tags: ") + _items_line(view.tags)
-        )
-        self.query_one(f"#{INSPECTOR_ENTITIES_ID}", Static).update(
-            Text("Entities: ") + _items_line(view.entities)
-        )
-        self.query_one(f"#{INSPECTOR_EDGES_ID}", Static).update(
-            Text("Edges:\n") + _edges_text(view.edges)
-        )
-        self.query_one(f"#{INSPECTOR_EMBED_ID}", Static).update(
-            f"Embedded: {'yes' if view.embedded else 'no'} "
-            f"({view.passage_count} passages)"
-        )
-
-
-class DeleteConfirmScreen(ModalScreen[bool]):
-    """A small Yes/No confirm before a browse-row soft-delete (lode-d32.1).
-
-    Mirrors :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s popup
-    *styling* (bordered, centered dialog over the dimmed screen beneath,
-    lode-1i8.4) but not its Save/Discard/Cancel choices -- there is nothing to
-    save here, just "yes, delete" or "no, don't." Dismisses with a ``bool``:
-    ``True`` on confirm, ``False`` on decline or Escape.
-    """
-
-    BINDINGS = [
-        Binding("y", "choose(True)", "Yes, delete"),
-        Binding("n", "choose(False)", "No, cancel"),
-        Binding("escape", "choose(False)", "Cancel", show=False),
-    ]
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(
-                "Delete this note? (Y)es / (N)o",
-                id=DELETE_CONFIRM_MESSAGE_ID,
-            ),
-            id="delete-confirm-dialog",
-        )
-
-    def action_choose(self, confirmed: bool) -> None:
-        self.dismiss(confirmed)
 
 
 class BrowseScreen(Screen[None]):
@@ -1016,330 +657,3 @@ class BrowseScreen(Screen[None]):
             self._close_search()
             return
         self.app.pop_screen()
-
-
-class EditScreen(Screen[None]):
-    """An existing note's live head, loaded editable (lode-0wj.6).
-
-    Saving reparents the buffer onto the loaded head via the CAS path
-    (:func:`lode.tui.edit.save_edit`) -- a new *version* on this note's
-    chain, never a new note. Escape returns to the browse list, reusing
-    capture's Save/Discard/Cancel confirm
-    (:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`, lode-0wj.1) --
-    but **this is the first screen where the dirty check can't be "is the
-    buffer non-empty"**: a freshly loaded existing version is non-empty by
-    construction, so that check would wrongly confirm on every Escape even
-    with zero edits. :meth:`action_cancel` instead compares the live buffer
-    against the body loaded at :meth:`on_mount` -- "changed since it was
-    opened," the same standard the CAS layer itself uses for the head.
-
-    **App-level Ctrl+Q (lode-b14).** :meth:`confirm_quit` gives
-    ``LodeApp.action_quit`` (lode-0wj.8's generic "ask the current screen"
-    hook) the same unchanged-vs-edited dirty check, but its own
-    Save/Discard/Cancel resolution ends in ``self.app.exit()`` /
-    ``self.app.exit(note_id)`` -- never ``pop_screen`` -- matching Ctrl+Q's
-    global "quit the whole app" contract rather than Escape's "back to
-    browse" one. The two can't share a method (see :meth:`action_cancel`'s
-    docstring); mirrors :meth:`~lode.tui.screens.capture.CaptureScreen.confirm_quit`'s
-    contract exactly.
-
-    **Passive related-notes panel (lode-aoc).** Composes the same
-    :class:`~lode.tui.related_notes_panel.RelatedNotesPanel` widget
-    :class:`~lode.tui.screens.capture.CaptureScreen` uses, for parity --
-    "you wrote about this before" while editing, not just while capturing a
-    brand-new note. Constructed with ``exclude_note_id=self.note_id`` so the
-    note being edited never matches its own (near-identical) draft. Needs no
-    reset call of its own anywhere this screen exits: unlike capture's Ctrl+N
-    (which keeps the screen alive for a fresh note), every exit here either
-    pops or tears down this screen, and Textual cancels a screen's workers on
-    unmount -- the same guarantee the panel's own module docstring relies on.
-
-    **Row-select opens here directly; full id; version history (lode-olmi.2).**
-    Before this, row-select pushed a separate read-only note view first, and
-    this screen was only reached via a distinct ``e`` keypress -- both now
-    retired, since selecting a row *is* "I want to edit this note." Two things
-    that screen used to own move in along with it: the header's ``sub_title``
-    now shows the full 36-char ``note_id`` (:meth:`on_mount`, same as the
-    retired screen did -- selectable/copyable, unlike the Browse table's
-    8-char abbreviation, which has a width budget to protect), and ``Ctrl+H``
-    pushes :class:`VersionHistoryScreen` for this note (:meth:`action_show_history`).
-    ``Ctrl+H``, not bare ``h``: this screen's body ``TextArea`` is editable
-    (unlike the retired note view's), and Textual's ``TextArea`` consumes
-    every ``is_printable`` keypress -- including a bare ``h`` -- before a
-    Screen-level, non-priority ``Binding`` ever sees it (confirmed empirically
-    -- a bare ``h`` binding here would insert the literal letter into the note
-    body instead of opening history). ``Ctrl+S``/``Ctrl+N`` already use this
-    same non-printable-key escape hatch on this and capture's screen, for the
-    identical reason.
-
-    **Enrichment inspector, Ctrl+G not bare ``i`` (lode-g5es).**
-    :meth:`action_inspect_selected` pushes the same
-    :class:`EnrichmentModalScreen` :meth:`BrowseScreen.action_inspect_selected`
-    does, keyed to ``self.note_id`` -- "was anything retrieved for this note,"
-    reachable while editing, not just from the browse row. It is bound to
-    ``Ctrl+G``, not ``BrowseScreen``'s bare ``i``: this screen's body
-    ``TextArea`` is editable, so a bare ``i`` would type a literal letter
-    instead of opening the modal, the identical trap ``Ctrl+H`` above exists
-    to dodge. Two more letters that look tempting fail for their own
-    reasons: ``Ctrl+I`` is *not* a safe substitute for bare ``i`` -- terminals
-    encode Ctrl+I as the Tab control character, and Textual's ``KEY_ALIASES``
-    reflects that (``"tab": ["ctrl+i"]``), so a ``ctrl+i`` binding is
-    indistinguishable from ``tab`` -- a non-printable navigation key -- and
-    would be silently unreachable too (confirmed empirically: pressing it with
-    the body focused neither opens the inspector nor types anything)
-    -- and ``Ctrl+P`` (a natural "peek" pick, matching this modal's own
-    glance-and-dismiss contract) collides with Textual's own App-level
-    command-palette binding, which is registered with ``priority=True`` and
-    so wins over *any* Screen-level binding on the same key, confirmed
-    empirically (pressing it opened ``CommandPalette``, never the inspector).
-    ``Ctrl+G`` ("glance") is free of all three traps. This is project
-    practice, not a one-off: every action this screen binds beyond Escape
-    uses a ``Ctrl+``-prefixed (or otherwise non-printable) key for exactly
-    this reason -- see ``docs/keybindings.md``.
-
-    **Content viewer, Ctrl+R not bare ``v`` (lode-0sjj).**
-    :meth:`action_view_content` resolves this note's external edges the same
-    way :meth:`BrowseScreen.action_view_content` does (via the shared
-    :func:`_view_note_external_content`) and pushes
-    :class:`SnapshotViewerScreen` (zero/one) or :class:`ExternalPickerScreen`
-    (many). ``BrowseScreen``'s binding for the identical feature is bare
-    ``v`` -- safe there because its focused widget is a ``DataTable``, not an
-    editable ``TextArea``. Here the body is editable, so the literal ``v``
-    key lode-olmi.8's design named would just type a letter, exactly the
-    ``Ctrl+H``/``Ctrl+G`` trap above; a human resolved this 2026-07-15 as a
-    Ctrl-prefixed key, consistent with every other action on this screen.
-    ``Ctrl+R`` ("retrieved") was checked against all three traps
-    ``docs/keybindings.md`` catalogs before landing on it: it is not one of
-    ``TextArea``'s own builtin bindings (``ctrl+a/e/w/d/x/c/v/u/k/z/y``, see
-    that doc's table), Textual's ``KEY_ALIASES`` does not alias it to a
-    non-printable key (unlike ``ctrl+i`` -> ``tab``, ``ctrl+m`` -> ``enter``),
-    and it is not one of ``App``'s own ``priority=True`` reservations (unlike
-    ``ctrl+p``, the command palette) -- confirmed empirically, not just by
-    inspection, the same standard ``Ctrl+G``'s own candidates were held to.
-    """
-
-    # "View content" -> "View" (lode-uczx): this screen is the tightest
-    # footer of the ten (131 columns' worth of content at full length, the
-    # only one that clipped even under the new 100-column bound). Every
-    # other label here stays full -- this one shortening, plus the
-    # App-level "Cfg" (:mod:`lode.tui.app`), is what buys this screen's fit
-    # and the slack lode-11io's not-yet-landed Ask binding needs.
-    BINDINGS = [
-        Binding("ctrl+s", "save", "Save"),
-        Binding("escape", "cancel", "Back"),
-        Binding("ctrl+f", "focus_related", "Related"),
-        Binding("ctrl+h", "show_history", "History"),
-        Binding("ctrl+g", "inspect_selected", "Inspect"),
-        Binding("ctrl+r", "view_content", "View"),
-    ]
-
-    def __init__(self, note_id: str) -> None:
-        super().__init__()
-        self.note_id = note_id
-        #: The head this screen loaded and will CAS against on save; also the
-        #: unchanged-vs-edited baseline for the dirty check. Set in
-        #: :meth:`on_mount` from the note's live head -- ``BrowseScreen``
-        #: only ever pushes this screen for a row already in the (live-only)
-        #: table, so a missing/tombstoned note here would be a real bug, not
-        #: a normal race worth a soft fallback.
-        self._loaded_head = ""
-        self._loaded_body = ""
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Vertical(
-            TextArea(id=EDIT_BODY_ID),
-            RelatedNotesPanel(exclude_note_id=self.note_id, id=EDIT_RELATED_ID),
-        )
-        yield LodeFooter()
-
-    def on_mount(self) -> None:
-        # Full 36-char id (lode-1gr.2/lode-olmi.2) -- selectable/copyable in
-        # the header, unlike Browse's 8-char abbreviated Id column, which has
-        # a width budget to protect.
-        self.sub_title = self.note_id
-        head = load_head(self.app.db_path, self.note_id)
-        if head is None:
-            raise LookupError(f"no live note {self.note_id!r} to edit")
-        self._loaded_head, self._loaded_body = head
-        text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
-        # Setting .text posts a TextArea.Changed message (load_text), so this
-        # also primes the related-notes panel with the just-loaded body via
-        # on_text_area_changed below -- editing an existing note surfaces
-        # related notes for its starting content, not only once the user
-        # types further.
-        text_area.text = self._loaded_body
-        text_area.focus()
-
-    def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Forward the body's text to the related-notes panel (lode-aoc).
-
-        Guarded to this screen's own body id, mirroring
-        :meth:`~lode.tui.screens.capture.CaptureScreen.on_text_area_changed`.
-        """
-        if event.text_area.id != EDIT_BODY_ID:
-            return
-        self.query_one(RelatedNotesPanel).update_draft(event.text_area.text)
-
-    def action_focus_related(self) -> None:
-        """Ctrl+F: move focus onto the related-notes panel (lode-olmi.9).
-
-        Its own Up/Down/Enter bindings only fire while it holds focus (see
-        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
-        ``TextArea`` consumes those keys itself while typing, so this is the
-        only way to reach them.
-        """
-        self.query_one(RelatedNotesPanel).focus()
-
-    def action_show_history(self) -> None:
-        """Ctrl+H: push this note's version-history list (lode-0wj.7/lode-olmi.2).
-
-        Not bare ``h`` -- the body ``TextArea`` is editable here and consumes
-        every printable keypress before a Screen-level binding can fire (see
-        this class's docstring).
-        """
-        self.app.push_screen(VersionHistoryScreen(self.note_id))
-
-    def action_inspect_selected(self) -> None:
-        """Ctrl+G: open this note's enrichment inspector modal (lode-g5es).
-
-        Mirrors :meth:`BrowseScreen.action_inspect_selected` -- same modal,
-        same glance-and-dismiss contract, keyed to ``self.note_id`` directly
-        (this screen always has exactly one note loaded, unlike Browse's
-        table, which needs the highlighted row). See this class's docstring
-        for why ``Ctrl+G`` rather than bare ``i``, ``Ctrl+I``, or ``Ctrl+P``.
-        """
-        self.app.push_screen(EnrichmentModalScreen(self.note_id))
-
-    def action_view_content(self) -> None:
-        """Ctrl+R: view this note's retrieved external content, if any (lode-0sjj).
-
-        Not bare ``v`` -- this screen's body ``TextArea`` is editable and
-        consumes every printable keypress before a Screen-level binding ever
-        fires, the identical trap ``Ctrl+H``/``Ctrl+G`` above exist to dodge
-        (this class's docstring; ``docs/keybindings.md``). ``Ctrl+R``
-        ("retrieved") is free of the same three traps checked there: it isn't
-        a builtin ``TextArea`` binding (``ctrl+a/e/w/d/x/c/v/u/k/z/y`` are, see
-        that doc), Textual's ``KEY_ALIASES`` doesn't remap it to a
-        non-printable key the way ``ctrl+i``/``ctrl+m`` are, and ``App``
-        doesn't reserve it with ``priority=True`` the way ``ctrl+p`` is for
-        the command palette.
-        """
-        _view_note_external_content(self, self.note_id)
-
-    def action_save(self) -> None:
-        """Ctrl+S: append a new version onto this note's chain, or explain why not."""
-        body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
-        result = self._attempt_save(body)
-        if result is None:
-            return
-        if isinstance(result, EditConflict):
-            self.app.push_screen(
-                ReconcileScreen(result, on_resolved=self._on_reconcile_resolved)
-            )
-            return
-        self.app.pop_screen()
-
-    def _attempt_save(self, body: str) -> SaveResult | EditConflict | None:
-        """Try the CAS save; ``None`` means refused-as-empty (already notified).
-
-        Shared by :meth:`action_save` (Ctrl+S) and :meth:`_on_quit_confirm`
-        (Ctrl+Q's confirm-then-save) -- both need the identical save attempt,
-        they only differ on what happens *after* a clean save or a conflict
-        (back to browse vs. quit the app).
-        """
-        app = self.app
-        try:
-            return save_edit(
-                app.db_path,
-                self.note_id,
-                body,
-                parent=self._loaded_head,
-                settings=app.settings,
-            )
-        except EmptyEditError:
-            self.notify("Refusing to save an empty note.", severity="warning")
-            return None
-
-    def _on_reconcile_resolved(self, result: SaveResult | None) -> None:
-        """The pushed ``ReconcileScreen`` resolved (re-applied or discarded).
-
-        Unlike capture's root-screen use of ``ReconcileScreen`` (which ends
-        the whole app on resolve), this screen is itself pushed on top of
-        ``BrowseScreen`` -- "resolved" here means popping back to the list:
-        first this reconcile screen, then this edit screen underneath it.
-        """
-        del result  # Same next step either way: back to the browse list.
-        self.app.pop_screen()  # ReconcileScreen
-        self.app.pop_screen()  # this EditScreen -> BrowseScreen
-
-    def action_cancel(self) -> None:
-        """Escape: return to the list immediately if unchanged, else confirm first.
-
-        Deliberately **not** named ``confirm_quit`` -- that name is
-        ``LodeApp.action_quit``'s app-level Ctrl+Q hook (lode-0wj.8), whose
-        contract is "confirm, then *quit the whole app*." This screen's
-        Escape means "confirm, then go back to the browse list" instead, a
-        different final action -- reusing this method for Ctrl+Q would make
-        it silently just navigate back rather than quit, so Ctrl+Q instead
-        gets its own :meth:`confirm_quit` (lode-b14) that ends in
-        ``self.app.exit()`` rather than ``pop_screen``.
-        """
-        body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
-        if body == self._loaded_body:
-            self.app.pop_screen()
-            return
-        self.app.push_screen(DiscardConfirmScreen(), self._on_discard_confirm)
-
-    def _on_discard_confirm(self, choice: str) -> None:
-        """Act on the confirm dialog's answer: save, discard, or resume editing."""
-        if choice == "save":
-            self.action_save()
-        elif choice == "discard":
-            self.app.pop_screen()
-        # "cancel" (or the dialog dismissing with no answer): stay right here,
-        # buffer untouched.
-
-    def confirm_quit(self) -> None:
-        """Exit the whole app immediately if unchanged, else confirm first.
-
-        ``LodeApp.action_quit``'s app-level Ctrl+Q hook (lode-0wj.8) calls
-        this generically, the same way it calls
-        :meth:`~lode.tui.screens.capture.CaptureScreen.confirm_quit` -- and
-        mirrors that method's contract exactly. The dirty check is the same
-        "changed since :meth:`on_mount` loaded it" comparison
-        :meth:`action_cancel` uses (not "is the buffer empty" -- a freshly
-        loaded existing version is never empty). Unlike
-        :meth:`action_cancel`/:meth:`_on_discard_confirm` (Escape's "back to
-        browse" contract, ``pop_screen``), every branch here ends in
-        ``self.app.exit()`` / ``self.app.exit(note_id)``, matching Ctrl+Q's
-        global "quit the whole app" contract.
-        """
-        body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
-        if body == self._loaded_body:
-            self.app.exit()
-            return
-        self.app.push_screen(DiscardConfirmScreen(), self._on_quit_confirm)
-
-    def _on_quit_confirm(self, choice: str) -> None:
-        """Act on Ctrl+Q's confirm dialog answer: save-then-quit, quit, or resume.
-
-        A conflict on save pushes :class:`~lode.tui.screens.reconcile.ReconcileScreen`
-        with no ``on_resolved`` override -- its default already ends in
-        ``self.app.exit()`` / ``self.app.exit(note_id)`` (the same default
-        :meth:`~lode.tui.screens.capture.CaptureScreen` relies on), which is
-        exactly this method's own "quit the app" contract.
-        """
-        if choice == "save":
-            body = self.query_one(f"#{EDIT_BODY_ID}", TextArea).text
-            result = self._attempt_save(body)
-            if result is None:
-                return
-            if isinstance(result, EditConflict):
-                self.app.push_screen(ReconcileScreen(result))
-                return
-            self.app.exit(self.note_id)
-        elif choice == "discard":
-            self.app.exit()
-        # "cancel" (or the dialog dismissing with no answer): stay right here,
-        # buffer untouched.

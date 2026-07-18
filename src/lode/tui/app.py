@@ -34,7 +34,7 @@ reachable from anywhere" way ``Ctrl+O`` reaches config — a plain, non-priority
 ``App`` binding, since (unlike Ctrl+Q) no screen needs to intercept it. It
 lists every live note (Id | Date | Version | Summary, newest-first);
 selecting one pushes its editor directly
-(:class:`~lode.tui.screens.browse.EditScreen`), and Escape steps back one
+(:class:`~lode.tui.screens.edit.EditScreen`), and Escape steps back one
 screen at a time (editor -> list -> capture) via each screen's own
 ``pop_screen``.
 
@@ -43,7 +43,7 @@ screen at a time (editor -> list -> capture) via each screen's own
 anywhere" way as ``Ctrl+O``/``Ctrl+B``. Top panel: every distinct tag,
 multi-select; bottom panel: live notes carrying **every** selected tag
 (AND/intersection; no selection shows every note). Selecting a note there
-pushes :class:`~lode.tui.screens.browse.EditScreen` directly.
+pushes :class:`~lode.tui.screens.edit.EditScreen` directly.
 
 **No-function-key policy (lode-juz8.1).** Every App-level and Screen-level
 binding in this module (and every screen it registers) uses a ``ctrl+``
@@ -129,7 +129,7 @@ class LodeApp(App[str | None]):
         # width reserved for the App-level Ask binding below (ctrl+l,
         # lode-11io), measured to cost +7 columns wherever it lands, since an
         # App-level binding renders in every screen's footer. EditScreen is
-        # the tightest of the ten (see lode.tui.screens.browse.EditScreen):
+        # the tightest of the ten (see lode.tui.screens.edit.EditScreen):
         # with "Cfg" it lands at 97/100; with "Config" it would land at
         # 100/100 -- zero slack. "Browse"/"Tags" already stay full words;
         # they aren't the constraint. Do not restore "Config" without

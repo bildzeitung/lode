@@ -6,7 +6,7 @@ ago") originally landed wired directly into
 extracts that machinery — the debounce timer, the ``@work(exclusive=True)``
 search pass, the lazy shared query embedder, cancel-in-flight logic, and the
 panel's own rendering — into a self-contained widget any screen can compose,
-so :class:`~lode.tui.screens.browse.EditScreen` gets the same passive
+so :class:`~lode.tui.screens.edit.EditScreen` gets the same passive
 surfacing capture already has without a copy-pasted ~100 lines.
 
 **Composition, not inheritance (decided 2026-07-09, with user).** A common
@@ -20,7 +20,7 @@ a screen composes it and forwards its own ``TextArea.Changed`` text via
 wherever it used to cancel/clear the in-flight pass. Nothing about a screen's
 save/dirty/reconcile flow needs to know this widget exists.
 
-**Self-exclusion.** :class:`~lode.tui.screens.browse.EditScreen` constructs
+**Self-exclusion.** :class:`~lode.tui.screens.edit.EditScreen` constructs
 this widget with ``exclude_note_id`` set to the note being edited — its own
 freshly-typed draft would otherwise trivially match itself, since editing
 does not change a note's id. :class:`~lode.tui.screens.capture.CaptureScreen`
@@ -50,7 +50,7 @@ for cursor movement, newline insertion, and indentation while *it* holds
 focus, so identical bindings on the panel would be unreachable while the note
 body is being typed into. Each composing screen
 (:class:`~lode.tui.screens.capture.CaptureScreen`,
-:class:`~lode.tui.screens.browse.EditScreen`) therefore adds its own
+:class:`~lode.tui.screens.edit.EditScreen`) therefore adds its own
 screen-level binding that calls this panel's inherited ``focus()`` to move
 focus onto it deliberately; nothing here changes what happens while the body
 still holds focus (the passive debounce/render path above is untouched).
@@ -229,7 +229,7 @@ class RelatedNotesPanel(Static):
         ``Unmount`` to every mounted widget as a screen is popped or the app
         exits, so this single hook -- not a cancel call duplicated into each
         exit path of every screen that composes this widget (capture *and*
-        :class:`~lode.tui.screens.browse.EditScreen`) -- catches all of them
+        :class:`~lode.tui.screens.edit.EditScreen`) -- catches all of them
         uniformly. Purely a timer-lifecycle efficiency cleanup: a post-
         teardown firing was already harmless (:func:`lode.tui.related.
         find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its

@@ -30,8 +30,8 @@ from textual.widgets import DataTable
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.browse import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.capture import CaptureScreen
+from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.tags import NOTES_TABLE_ID, TAG_LIST_ID, TagsScreen
 from lode.versions import save
 

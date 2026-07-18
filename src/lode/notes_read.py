@@ -361,7 +361,7 @@ class VersionRow:
 def list_versions(db_path: Path, note_id: str) -> list[VersionRow]:
     """Return ``note_id``'s full version chain, newest (the head) first.
 
-    Feeds :class:`~lode.tui.screens.browse.VersionHistoryScreen` (lode-0wj.7):
+    Feeds :class:`~lode.tui.screens.version_history.VersionHistoryScreen` (lode-0wj.7):
     "list its prior versions" off a note already opened in the browse screen.
     Walks ``parent_version_id`` back from the live head rather than sorting by
     ``created`` -- the chain link is the actual ancestry, so this stays correct
@@ -413,7 +413,7 @@ def version_body(db_path: Path, note_id: str, version_id: str) -> str | None:
     """Return one specific version's body, or ``None`` if it isn't in this chain.
 
     The history list's row-select opens a read-only view of a *prior* version
-    (:class:`~lode.tui.screens.browse.VersionViewScreen`, lode-0wj.7) -- unlike
+    (:class:`~lode.tui.screens.version_view.VersionViewScreen`, lode-0wj.7) -- unlike
     a live-head-only lookup, this is keyed to an exact ``version_id``, live or
     not, since viewing history is precisely about seeing a version that is no
     longer the head.
@@ -447,7 +447,7 @@ class SnapshotRow:
 def read_snapshot(db_path: Path, snapshot_id: str) -> SnapshotRow | None:
     """Return one snapshot's stored body/raw_payload, or ``None`` if missing.
 
-    Feeds :class:`~lode.tui.screens.browse.SnapshotViewerScreen` (lode-0sjj):
+    Feeds :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (lode-0sjj):
     a plain ``snapshot_id`` lookup, the read-side counterpart to
     :func:`lode.cli.dump_html`'s (lode-olmi.7) ``raw_payload`` SELECT. That
     query now has a name of its own -- ``cli._raw_payload`` (lode-l38d.8,
