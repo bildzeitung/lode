@@ -164,9 +164,10 @@ fi
 model_part=""
 [ -n "$model" ] && model_part="${model%% *}"
 
-# Colour-coded usage meters. Both the 5h window and the context meter are shaded
-# green (little used) -> red (heavily used) so fullness reads at a glance, and the
-# context meter carries a /compact hint once it crosses COMPACT_THRESHOLD.
+# Colour-coded usage meters. Both the 5h window and the context meter render as a
+# green->red gradient bar (the fill reaches further into the red the fuller it is)
+# with the percent number coloured at the current level, so fullness reads at a
+# glance; the context meter carries a /compact hint once it crosses COMPACT_THRESHOLD.
 RESET=$(printf '\033[0m')
 DIM=$(printf '\033[38;2;90;90;90m')   # unfilled cells
 
@@ -182,16 +183,24 @@ heat_color() {
     printf '\033[38;2;%d;%d;%dm' "$r" "$g" "$b"
 }
 
-# A 10-cell heat bar for an integer percent 0..100: filled cells in the percent's
-# green->red heat colour, unfilled cells dim: [████░░░░░░].
+# A 10-cell heat bar for an integer percent 0..100. The bar is a fixed green->red
+# GRADIENT across its width — cell 0 green ... cell 9 red — and fill lights cells
+# left to right, so a fuller bar reaches further into the red. Each lit cell wears
+# its own position colour; unfilled cells are dim: ████░░░░░░ (green→…→dim).
 make_bar() {
     pct=$1; width=10
     [ "$pct" -lt 0 ] && pct=0; [ "$pct" -gt 100 ] && pct=100
-    filled=$(( pct * width / 100 )); empty=$(( width - filled ))
-    col=$(heat_color "$pct")
-    fbar=""; i=0; while [ "$i" -lt "$filled" ]; do fbar="${fbar}█"; i=$((i + 1)); done
-    ebar=""; i=0; while [ "$i" -lt "$empty" ];  do ebar="${ebar}░"; i=$((i + 1)); done
-    printf '%s%s%s%s%s' "$col" "$fbar" "$DIM" "$ebar" "$RESET"
+    filled=$(( pct * width / 100 ))
+    out=""; i=0
+    while [ "$i" -lt "$width" ]; do
+        if [ "$i" -lt "$filled" ]; then
+            out="${out}$(heat_color $(( (i * 100 + 50) / width )))█"   # cell's own gradient colour
+        else
+            out="${out}${DIM}░"
+        fi
+        i=$((i + 1))
+    done
+    printf '%s%s' "$out" "$RESET"
 }
 
 # Usage meters: the 5-hour "current session" rate-limit window (matching /usage)
@@ -208,7 +217,7 @@ usage_parts=()
 sess=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 if [ -n "$sess" ]; then
     p=$(printf '%.0f' "$sess"); col=$(heat_color "$p")
-    usage_parts+=("5h [$(make_bar "$p")] ${col}${p}%${RESET}")
+    usage_parts+=("5h $(make_bar "$p") ${col}${p}%${RESET}")
 fi
 u=""
 if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
@@ -218,7 +227,7 @@ elif [ -n "$used" ]; then
 fi
 if [ -n "$u" ]; then
     col=$(heat_color "$u")
-    ctx_part="ctx [$(make_bar "$u")] ${col}${u}%${RESET}"
+    ctx_part="ctx $(make_bar "$u") ${col}${u}%${RESET}"
     if [ "$u" -ge "$COMPACT_THRESHOLD" ]; then
         ctx_part="${ctx_part} $(heat_color 100)⚠ /compact${RESET}"
     fi
