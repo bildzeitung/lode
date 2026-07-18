@@ -76,10 +76,39 @@ def enqueue_derive_jobs(
     ``enrich``). Callers that want a targeted single-type enqueue (e.g. the
     reconciliation scan's embed-gap step) pass an explicit subset; the underlying
     INSERT is the same in both cases.
+
+    **``next_attempt_at`` is stamped from :func:`now_iso`, not the schema's own
+    ``strftime('now')`` default (lode-0dnk).** Both defaulted to the OS wall clock
+    independently, which is exactly the crack :func:`now`'s own docstring warns
+    about: ``CLOCK_REALTIME`` can step *backward* (NTP correction, or a
+    hypervisor catching a descheduled guest back up — routine on a WSL2 VM). A
+    freshly-enqueued job's own ``next_attempt_at`` — read from SQLite's clock —
+    could then land *ahead of* a same-process claim's ``now()`` reading moments
+    later, because ``now()``'s forward-only ratchet only protects **its own**
+    repeat calls (docs/storage.md); on the first ``now()`` call in a process
+    there is no prior high-water mark to ratchet against, so that first read
+    could come out *behind* an independent, already-committed SQLite timestamp
+    taken a moment earlier. The CLI's immediate-enrich fast path
+    (:func:`lode.worker.claim_and_run_one`, called moments after this enqueue in
+    the very same process) hit exactly this: the job it had just enqueued
+    intermittently read as "not yet due" and silently sat pending
+    (``tests/test_cli.py::test_add_claims_own_job_not_backlog_job``, confirmed
+    via a scripted backward-step repro, not reproducible by CPU load alone).
+    Routing both the enqueue and the claim through the same ratcheted clock
+    closes the gap: the enqueue's own call becomes the ratchet's first (or a
+    later) reading, so guarantee 1 — *never decreases within this process* —
+    now covers the claim that follows it, no matter how soon after. A
+    cross-process claim (the plain ``lode work`` drain loop, run by a different
+    process than the one that enqueued) is unaffected either way — it was
+    already relying on guarantee 2 (never behind ``CLOCK_REALTIME``) alone, and
+    still does; that accepted "a job retried a hair late beats a job stranded"
+    trade-off is unchanged.
     """
+    next_attempt = now_iso()
     conn.executemany(
-        "INSERT INTO jobs (type, target_version) VALUES (?, ?) ON CONFLICT DO NOTHING",
-        [(job_type, target_version) for job_type in types],
+        "INSERT INTO jobs (type, target_version, next_attempt_at) VALUES (?, ?, ?) "
+        "ON CONFLICT DO NOTHING",
+        [(job_type, target_version, next_attempt) for job_type in types],
     )
 
 
