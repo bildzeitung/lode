@@ -55,13 +55,12 @@ Confluence-specific branch needed there.
   acceptance criteria call for body-only mapping via ``body.view`` ->
   trafilatura, nothing more. A parity follow-up (comments-in-snapshot) is a
   separate future decision, not resolved here.
-- **Wiring into :func:`lode.drawdown.refresh_external`'s dispatcher:** that
-  dispatcher currently raises ``RuntimeError`` for ``source_type ==
-  "confluence"`` (see its own docstring). This ticket's acceptance criteria
-  are scoped to the fetch unit itself (offline-tested in isolation); wiring
-  it into the dispatcher — alongside the JIRA leg, which is a sibling
-  in-flight ticket touching the very same function — is left to a follow-up
-  so the two don't race each other editing the same lines.
+- **Wiring into :func:`lode.drawdown.refresh_external`'s dispatcher:** this
+  ticket's acceptance criteria are scoped to the fetch unit itself (offline-
+  tested in isolation) — the dispatcher wiring, alongside the JIRA leg (a
+  sibling in-flight ticket touching the very same function), was left to a
+  follow-up so the two don't race each other editing the same lines. That
+  follow-up (lode-mfts) has since wired both legs in.
 """
 
 from __future__ import annotations

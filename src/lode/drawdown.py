@@ -150,6 +150,7 @@ import sqlite3
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from lode import jobs
+from lode.confluence import fetch_confluence_page
 from lode.config import Settings, confluence_active, jira_active
 from lode.externals import ingest_fetch_result
 from lode.jira_fetch import fetch_jira_issue
@@ -597,6 +598,42 @@ def _refresh_jira(
     return f"refreshed {target_external_id}: {ingest.status}"
 
 
+def _refresh_confluence(
+    conn: sqlite3.Connection,
+    target_external_id: str,
+    settings: Settings,
+    *,
+    fetcher: Fetcher | None = None,
+) -> str | None:
+    """Fetch + ingest a Confluence Cloud page -- the ``SOURCE_TYPE_CONFLUENCE`` leg (lode-gpzn.4).
+
+    Mirrors :func:`_refresh_jira` exactly: ``target_external_id`` here is a
+    semantic page id, not itself a fetchable URL — the request URL is
+    rebuilt inside :func:`~lode.confluence.fetch_confluence_page` from the
+    ``api_base`` persisted on the ``externals`` row at link-detection time
+    (lode-gpzn.2). No redirect/repoint step is needed here either, for the
+    same reason as the JIRA leg.
+    """
+    row = conn.execute(
+        "SELECT api_base FROM externals WHERE external_id = ?",
+        (target_external_id,),
+    ).fetchone()
+    api_base = row[0] if row is not None else None
+    if not api_base:
+        raise RuntimeError(
+            f"_refresh_confluence: no api_base persisted for "
+            f"external_id={target_external_id!r}"
+        )
+
+    result = fetch_confluence_page(
+        target_external_id, api_base, fetcher=fetcher, settings=settings
+    )
+    ingest = ingest_fetch_result(
+        conn, target_external_id, SOURCE_TYPE_CONFLUENCE, result, settings=settings
+    )
+    return f"refreshed {target_external_id}: {ingest.status}"
+
+
 def refresh_external(
     conn: sqlite3.Connection,
     target_external_id: str,
@@ -625,19 +662,14 @@ def refresh_external(
     - **``source_type == SOURCE_TYPE_JIRA``:** the JIRA Cloud REST fetch
       unit (:func:`_refresh_jira`, lode-gpzn.3).
     - **``source_type == SOURCE_TYPE_CONFLUENCE``:** the Confluence Cloud
-      REST fetch unit — not yet built (lode-gpzn.4, blocked on this ticket
-      landing first). Until then this raises ``RuntimeError`` rather than
-      silently mis-fetching: reachable in production only if an operator
-      flags Confluence on before its fetch unit exists, since
-      :func:`_classify_atlassian` only ever writes ``"confluence"`` when
-      :func:`~lode.config.confluence_active` is already true. The raise
-      rides the worker's ordinary attempts/backoff/dead-letter accounting
-      like any other handler exception (:func:`lode.worker.run_one`) — no
-      special-casing needed here.
+      REST fetch unit (:func:`_refresh_confluence`, lode-gpzn.4).
+    - **Anything else:** an unrecognized ``source_type`` raises
+      ``RuntimeError`` naming both the value and the ``external_id`` —
+      reachable only via direct DB tampering or a future connector adding
+      a value here before its dispatch leg exists.
 
     ``fetcher`` is passed straight through to :func:`_refresh_web` /
-    :func:`_refresh_jira`; the still-unbuilt Confluence leg will take its
-    own fetch seam when gpzn.4 lands.
+    :func:`_refresh_jira` / :func:`_refresh_confluence`.
     """
     row = conn.execute(
         "SELECT source_type FROM externals WHERE external_id = ?",
@@ -650,10 +682,7 @@ def refresh_external(
     if source_type == SOURCE_TYPE_JIRA:
         return _refresh_jira(conn, target_external_id, settings, fetcher=fetcher)
     if source_type == SOURCE_TYPE_CONFLUENCE:
-        raise RuntimeError(
-            f"refresh_external: no fetch unit yet for source_type={source_type!r} "
-            f"external_id={target_external_id!r} (lode-gpzn.4)"
-        )
+        return _refresh_confluence(conn, target_external_id, settings, fetcher=fetcher)
     raise RuntimeError(
         f"refresh_external: unknown source_type={source_type!r} "
         f"external_id={target_external_id!r}"
