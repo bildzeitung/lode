@@ -164,37 +164,65 @@ fi
 model_part=""
 [ -n "$model" ] && model_part="${model%% *}"
 
-# A 10-cell filled bar for an integer percent 0..100: [████░░░░░░].
-make_bar() {
-    pct=$1; width=10; out=""; i=0
+# Colour-coded usage meters. Both the 5h window and the context meter are shaded
+# green (little used) -> red (heavily used) so fullness reads at a glance, and the
+# context meter carries a /compact hint once it crosses COMPACT_THRESHOLD.
+RESET=$(printf '\033[0m')
+DIM=$(printf '\033[38;2;90;90;90m')   # unfilled cells
+
+# ANSI truecolor escape for a green->yellow->red heat colour at integer pct 0..100.
+heat_color() {
+    pct=$1
     [ "$pct" -lt 0 ] && pct=0; [ "$pct" -gt 100 ] && pct=100
-    filled=$(( pct * width / 100 ))
-    while [ "$i" -lt "$width" ]; do
-        if [ "$i" -lt "$filled" ]; then out="${out}█"; else out="${out}░"; fi
-        i=$((i + 1))
-    done
-    printf '%s' "$out"
+    if [ "$pct" -lt 50 ]; then          # green (60,200,60) -> yellow (220,200,0)
+        r=$(( 60 + pct * (220 - 60) / 50 )); g=200; b=$(( 60 - pct * 60 / 50 ))
+    else                                # yellow (220,200,0) -> red (220,40,40)
+        t=$(( pct - 50 )); r=220; g=$(( 200 - t * (200 - 40) / 50 )); b=$(( t * 40 / 50 ))
+    fi
+    printf '\033[38;2;%d;%d;%dm' "$r" "$g" "$b"
 }
 
-# Usage meters, matching /usage: the 5-hour "current session" window and the
-# 7-day window (rate-limit budget). Only present for Claude.ai subscribers after
-# the first API response, and each window can be independently absent — omit
-# whatever's missing. When NEITHER is available (early session / non-subscriber),
-# fall back to a context-window meter (labeled "ctx", tokens used / window) so
-# the line is never blank.
+# A 10-cell heat bar for an integer percent 0..100: filled cells in the percent's
+# green->red heat colour, unfilled cells dim: [████░░░░░░].
+make_bar() {
+    pct=$1; width=10
+    [ "$pct" -lt 0 ] && pct=0; [ "$pct" -gt 100 ] && pct=100
+    filled=$(( pct * width / 100 )); empty=$(( width - filled ))
+    col=$(heat_color "$pct")
+    fbar=""; i=0; while [ "$i" -lt "$filled" ]; do fbar="${fbar}█"; i=$((i + 1)); done
+    ebar=""; i=0; while [ "$i" -lt "$empty" ];  do ebar="${ebar}░"; i=$((i + 1)); done
+    printf '%s%s%s%s%s' "$col" "$fbar" "$DIM" "$ebar" "$RESET"
+}
+
+# Usage meters: the 5-hour "current session" rate-limit window (matching /usage)
+# and a context-window occupancy meter. The 5h window is only present for
+# Claude.ai subscribers after the first API response — omit it when absent. The
+# context meter (labeled "ctx", tokens used / window size) is always shown when
+# context data is present, so the line is never blank early in a session.
+#
+# COMPACT_THRESHOLD: once context occupancy reaches this percent, the ctx meter
+# appends a red "⚠ /compact" hint — a nudge to compact before auto-compaction /
+# a hard context limit forces it. Tune to taste.
+COMPACT_THRESHOLD=80
 usage_parts=()
 sess=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-week=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
-if [ -n "$sess" ]; then p=$(printf '%.0f' "$sess"); usage_parts+=("5h [$(make_bar "$p")] ${p}%"); fi
-if [ -n "$week" ]; then p=$(printf '%.0f' "$week"); usage_parts+=("7d [$(make_bar "$p")] ${p}%"); fi
-if [ ${#usage_parts[@]} -eq 0 ]; then
-    u=""
-    if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
-        u=$(( used_tokens * 100 / window ))
-    elif [ -n "$used" ]; then
-        u=$(printf '%.0f' "$used")
+if [ -n "$sess" ]; then
+    p=$(printf '%.0f' "$sess"); col=$(heat_color "$p")
+    usage_parts+=("5h [$(make_bar "$p")] ${col}${p}%${RESET}")
+fi
+u=""
+if [ -n "$used_tokens" ] && [ -n "$window" ] && [ "$window" -gt 0 ] 2>/dev/null; then
+    u=$(( used_tokens * 100 / window ))
+elif [ -n "$used" ]; then
+    u=$(printf '%.0f' "$used")
+fi
+if [ -n "$u" ]; then
+    col=$(heat_color "$u")
+    ctx_part="ctx [$(make_bar "$u")] ${col}${u}%${RESET}"
+    if [ "$u" -ge "$COMPACT_THRESHOLD" ]; then
+        ctx_part="${ctx_part} $(heat_color 100)⚠ /compact${RESET}"
     fi
-    [ -n "$u" ] && usage_parts+=("ctx [$(make_bar "$u")] ${u}%")
+    usage_parts+=("$ctx_part")
 fi
 
 # --- Assemble (fleet first), skipping empties -------------------------------
