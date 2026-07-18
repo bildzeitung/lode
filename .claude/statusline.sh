@@ -238,7 +238,7 @@ if [ -n "$sess" ]; then
     # Countdown to when the 5h window rolls over, if the reset instant is present.
     reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
     cd=$(countdown "$reset")
-    [ -n "$cd" ] && meter="${meter} ↻${cd}"
+    [ -n "$cd" ] && meter="${meter} ↻ ${cd}"
     usage_parts+=("$meter")
 fi
 u=""
