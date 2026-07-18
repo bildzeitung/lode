@@ -22,3 +22,7 @@ Does **not** apply to inline helper widgets: a small, one-off `Widget`/`Static` 
 next to its sole caller and used nowhere else may stay in that caller's module. The line is reuse
 and standing — a screen, or a widget that any other module imports, gets its own file; a private
 helper that exists only to serve one parent does not.
+
+## Python: Typer, never argparse
+
+Every Python CLI in this repo is built with **Typer**. Never `argparse`.
