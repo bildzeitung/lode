@@ -296,6 +296,20 @@ onto its semantic key is revisited too, so `needs_refresh` gets rechecked agains
 current head snapshot instead of the migration step silently losing track of it after the first
 pass.
 
+**`confluence` connector (`lode-gpzn.11`).** `lode.confluence_backfill` re-classifies every
+existing `web`-typed `source='user'` edge via `lode.drawdown._classify_atlassian` (the exact same
+detection `detect_and_enqueue_drawdown` already runs on a fresh paste, reused rather than
+re-derived) filtered to a Confluence-shaped match, then composes the four shared pieces above.
+Reusing `_classify_atlassian` also means the handler automatically honors the connector's own
+active-flag gate: with Confluence flagged off, no match is ever found and the backfill is a no-op,
+exactly like a fresh paste under the same settings. `lode backfill` (`src/lode/cli.py`) registers
+it explicitly on **every invocation** — not via a bare module-level `register_backfill(...)` call
+at import time, which would only ever fire once per process (Python's import caching) and cannot
+be relied on to survive an in-process test suite that deliberately clears the registry before each
+test. `refresh_external`'s (`lode.drawdown`) `SOURCE_TYPE_CONFLUENCE` dispatch leg was wired
+separately by `lode-mfts` (mirroring `lode-gpzn.3`'s identical JIRA-leg wiring), landing ahead of
+this connector.
+
 ### Externals are directly retrievable
 
 A snapshot's current head is a **direct** lexical/vector candidate on its own content, not only
