@@ -1,5 +1,10 @@
 # lode
 
+[![License: Apache 2.0](https://img.shields.io/github/license/bildzeitung/lode)](LICENSE)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Built with Textual](https://img.shields.io/badge/TUI-Textual-5A4FCF.svg)](https://textual.textualize.io/)
+
 An AI-first, TUI-first personal knowledge base for **things you learn during your day at work** —
 meeting notes, technical instructions, decisions. Fast to capture, intelligent to retrieve.
 
