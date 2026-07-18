@@ -593,6 +593,21 @@ class TestRefreshExternal:
         ).fetchone()
         assert status == "tombstone"
 
+    def test_tombstone_outcome_names_the_reason(self, conn) -> None:
+        """lode-pmx0: a web tombstone's outcome line names WHY, mirroring the
+        Atlassian legs (lode-gpzn.5) -- e.g. 'tombstone (http_401)', not a bare
+        'tombstone'.
+        """
+        fetcher = _StubFetcher(
+            response=RawResponse(final_url=_URL, status_code=401, text="unauthorized")
+        )
+        outcome = refresh_external(conn, _URL, load_settings(), fetcher=fetcher)
+        assert outcome is not None
+        assert "tombstone (http_401)" in outcome
+        # The reason tag is the fetch unit's own short machine tag, never an
+        # interpolated response body -- the raw 401 body text never appears.
+        assert "unauthorized" not in outcome
+
     def test_transient_failure_propagates_uncaught(self, conn) -> None:
         fetcher = _StubFetcher(raises=TransientFetchError("boom"))
         with pytest.raises(TransientFetchError):

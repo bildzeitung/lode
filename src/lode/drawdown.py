@@ -543,6 +543,14 @@ def _refresh_web(
 
     Returns a one-line human-readable outcome (mirrors the ``embed``/
     ``enrich`` handler convention, ``lode-1gr.4``) for ``lode work``'s echo.
+    When the fetch permanently failed, :attr:`~lode.webfetch.FetchResult.
+    tombstone_reason` (a short machine tag such as ``"http_404"``, never an
+    interpolated body) is appended in parens -- e.g. ``"refreshed <url>:
+    tombstone (http_404)"`` -- mirroring the Atlassian legs' reason-surfacing
+    (``lode-gpzn.5``, ``lode-pmx0``). The redirect/repoint suffix and the
+    reason suffix never co-occur (a redirect suffix only fires on a
+    200-after-3xx success; a tombstone_reason only on failure), so the two
+    compose without ambiguity when both conditions are checked.
     """
     result = fetch_and_extract(target_external_id, fetcher=fetcher, settings=settings)
     final_external_id = canonicalize_url(result.final_url, settings)
@@ -556,6 +564,8 @@ def _refresh_web(
         repointed = _repoint_edges(conn, target_external_id, final_external_id)
 
     outcome = f"refreshed {target_external_id}: {ingest.status}"
+    if result.tombstone_reason:
+        outcome += f" ({result.tombstone_reason})"
     if final_external_id != target_external_id:
         outcome += f" -> {final_external_id} (repointed {repointed} edge(s))"
     return outcome
