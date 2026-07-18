@@ -43,12 +43,13 @@ parse as console markup, lode-mkc.3).
 **Interactive stepping + a highlighted-context modal (lode-olmi.9).** The
 panel is no longer purely passive: it is now focusable (:attr:`can_focus`) and
 binds Up/Down to move a selection cursor through :attr:`_related` and Enter to
-open :class:`RelatedNoteModalScreen` for the selected note. These bindings
-only fire once the panel itself holds focus — Textual's stock ``TextArea``
-already consumes bare Up/Down/Enter/Tab for cursor movement, newline
-insertion, and indentation while *it* holds focus, so identical bindings on
-the panel would be unreachable while the note body is being typed into. Each
-composing screen (:class:`~lode.tui.screens.capture.CaptureScreen`,
+open :class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` for
+the selected note. These bindings only fire once the panel itself holds
+focus — Textual's stock ``TextArea`` already consumes bare Up/Down/Enter/Tab
+for cursor movement, newline insertion, and indentation while *it* holds
+focus, so identical bindings on the panel would be unreachable while the note
+body is being typed into. Each composing screen
+(:class:`~lode.tui.screens.capture.CaptureScreen`,
 :class:`~lode.tui.screens.browse.EditScreen`) therefore adds its own
 screen-level binding that calls this panel's inherited ``focus()`` to move
 focus onto it deliberately; nothing here changes what happens while the body
@@ -57,7 +58,9 @@ Highlighted context is the exact matched passage span — ``RelatedNote.
 char_range`` (:mod:`lode.tui.related`) offsets into the exact ``version_id``
 the retrieval pipeline matched, looked up via :func:`lode.notes_read.
 version_body` (not the note's possibly-since-edited live head) — not the
-whole note passively dumped; see :class:`RelatedNoteModalScreen`.
+whole note passively dumped; see
+:class:`~lode.tui.screens.related_note_modal.RelatedNoteModalScreen` (its own
+module, per the one-Screen/Widget-per-module fiat, lode-s5kp.3).
 """
 
 from __future__ import annotations
@@ -70,28 +73,19 @@ from typing import TYPE_CHECKING
 from rich.text import Text
 from textual import work
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Static
 
-from lode.notes_read import version_body
+from lode.tui.screens.related_note_modal import RelatedNoteModalScreen
 
 if TYPE_CHECKING:
     # Type-only; the runtime import lives inside _ensure_embedder so this
     # module's own import stays free of the embedder (fastembed) until a
     # passive-surfacing pass actually runs.
-    from textual.app import ComposeResult
-
     from lode.embedding import Embedder
     from lode.tui.related import RelatedNote
 
 log = logging.getLogger(__name__)
-
-#: Dialog id for :class:`RelatedNoteModalScreen`'s scrollable body (lode.tcss).
-RELATED_MODAL_DIALOG_ID = "related-note-modal-dialog"
-#: The ``Static`` inside that dialog holding the (possibly highlighted) body.
-RELATED_MODAL_BODY_ID = "related-note-modal-body"
 
 
 class RelatedNotesPanel(Static):
@@ -384,70 +378,3 @@ class RelatedNotesPanel(Static):
         self.app.push_screen(
             RelatedNoteModalScreen(self._related[self._selected_index])
         )
-
-
-class RelatedNoteModalScreen(ModalScreen[None]):
-    """A glance-and-dismiss popup showing one related note's matched context.
-
-    Pushed by :meth:`RelatedNotesPanel.action_open_selected` (lode-olmi.9) for
-    the currently selected :class:`~lode.tui.related.RelatedNote`. Defined in
-    this module rather than :mod:`lode.tui.screens.browse` (which already
-    imports :class:`RelatedNotesPanel` from here — the reverse import would
-    cycle) — same "self-contained, any screen can compose it" stance the
-    module docstring already takes for the panel itself.
-
-    **Highlighted context = the matched passage span, not the whole note**
-    (the design question the ticket posed, decided in ``--design``): loads
-    the note's *exact* ``target_version`` body via :func:`lode.notes_read.
-    version_body` — not a current-live-head lookup — because ``char_range``
-    is only guaranteed valid against the precise version it was computed
-    from; the note's live head can have moved on since. The ``[start:end)``
-    slice is styled ``reverse`` in the surrounding body
-    (:meth:`_highlighted_body`) via a plain Rich
-    :class:`~rich.text.Text` object (not ``markup=True`` on the ``Static`` —
-    verbatim note text commonly contains bracket sequences Textual would
-    otherwise parse as console markup, the same ``markup=False`` reasoning
-    the panel itself already relies on, lode-mkc.3).
-    """
-
-    # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
-    # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-    ]
-
-    def __init__(self, note: RelatedNote) -> None:
-        super().__init__()
-        self._note = note
-
-    def compose(self) -> ComposeResult:
-        yield VerticalScroll(
-            Static("", id=RELATED_MODAL_BODY_ID, markup=False),
-            id=RELATED_MODAL_DIALOG_ID,
-        )
-
-    def on_mount(self) -> None:
-        body = version_body(self.app.db_path, self._note.note_id, self._note.version_id)
-        self.query_one(f"#{RELATED_MODAL_BODY_ID}", Static).update(
-            self._highlighted_body(body or "")
-        )
-
-    def _highlighted_body(self, body: str) -> Text:
-        """Style ``self._note``'s matched ``char_range`` slice of ``body``.
-
-        Falls back to the plain, unhighlighted body whenever ``char_range``
-        can't be trusted against *this* ``body`` — malformed
-        (``"start:end"`` fails to parse), or out of bounds (``body`` came back
-        empty/``None``, e.g. the version row is gone) — rather than raising
-        out of a glance-and-dismiss popup or highlighting the wrong span.
-        """
-        text = Text(body)
-        start_str, _, end_str = self._note.char_range.partition(":")
-        try:
-            start, end = int(start_str), int(end_str)
-        except ValueError:
-            return text
-        if not (0 <= start < end <= len(body)):
-            return text
-        text.stylize("reverse", start, end)
-        return text
