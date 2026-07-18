@@ -229,8 +229,12 @@ class TestBackfillConfluence:
         _insert_web_external(conn, _PAGE_URL, note_id="note-1", quoted_text=_PAGE_URL)
         settings = _confluence_settings()
 
-        first = backfill_confluence(conn, settings, dry_run=False, retry_tombstoned=False)
-        second = backfill_confluence(conn, settings, dry_run=False, retry_tombstoned=False)
+        first = backfill_confluence(
+            conn, settings, dry_run=False, retry_tombstoned=False
+        )
+        second = backfill_confluence(
+            conn, settings, dry_run=False, retry_tombstoned=False
+        )
 
         assert first == "migrated 1 link(s)"
         # The edge now points at the confluence-typed external (no longer

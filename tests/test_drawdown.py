@@ -853,12 +853,21 @@ class TestRefreshExternalDispatch:
         page_json = json.dumps(
             {
                 "id": "999",
+                "title": "Dispatcher-level Confluence page",
                 "body": {
                     "view": {
                         "value": (
-                            "<div><p>"
-                            + ("Dispatcher-level Confluence fetch content. " * 20)
-                            + "</p></div>"
+                            "<div>"
+                            "<h1>Dispatcher-level Confluence page</h1>"
+                            "<p>This page proves refresh_external's dispatcher "
+                            "reaches the real Confluence fetch unit rather than "
+                            "raising, rebuilding the request URL from the "
+                            "external_id and the api_base persisted on the row "
+                            "at link-detection time.</p>"
+                            "<p>A second paragraph gives trafilatura enough "
+                            "distinct prose to clear the minimum extract-length "
+                            "floor without looking like repeated boilerplate.</p>"
+                            "</div>"
                         )
                     }
                 },
@@ -887,15 +896,17 @@ class TestRefreshExternalDispatch:
     def test_confluence_source_type_without_credentials_raises(self, conn) -> None:
         """No fetcher override and no resolvable credentials (default,
         Confluence-disabled settings) -- the default-fetcher construction
-        inside lode.confluence.fetch_confluence_page raises, naming the
-        external_id."""
+        inside lode.confluence.fetch_confluence_page raises. Unlike JIRA's
+        equivalent (_default_fetcher), fetch_confluence_page's credential
+        check does not name the external_id in its message -- match on the
+        fixed text it does raise instead."""
         conn.execute(
             "INSERT INTO externals (external_id, source_type, api_base) "
             "VALUES (?, ?, ?)",
             ("999", SOURCE_TYPE_CONFLUENCE, "https://acme.atlassian.net"),
         )
         conn.commit()
-        with pytest.raises(RuntimeError, match="999"):
+        with pytest.raises(RuntimeError, match="Confluence Cloud credentials"):
             refresh_external(conn, "999", load_settings())
 
     def test_confluence_source_type_missing_api_base_raises(self, conn) -> None:
