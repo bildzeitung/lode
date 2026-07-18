@@ -1420,3 +1420,81 @@ are catalogued in [configuration.md](configuration.md).
   speculatively; or if tickets are observed sitting `in_progress` with no visible builder/reviewer
   activity for an extended period and no other explanation surfaces, which would be the first empirical
   sign this residual is firing in practice rather than remaining purely theoretical.
+
+- **Atlassian connectors (JIRA + Confluence Cloud, `lode-gpzn`) — locked scope + `/challenge`
+  refinements, resolved (owner, 2026-07-17).** Extends the web draw-down connector so it recognizes
+  Atlassian **Cloud** links and ingests them via authenticated REST APIs instead of
+  trafilatura-scraping a login page. Full write-up: [externals.md](externals.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn);
+  knobs: [configuration.md](configuration.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn).
+  **Locked scope decisions:**
+  1. **Cloud only** — Basic auth (account email + API token), JIRA REST v3, Confluence Cloud REST.
+     Data Center / Server is explicitly out of scope. (Deferred, not rejected — see the entry below.)
+  2. **Credential resolution: env var primary, `config.toml` fallback.** `LODE_JIRA_TOKEN` /
+     `LODE_JIRA_EMAIL` / `LODE_CONFLUENCE_TOKEN` / `LODE_CONFLUENCE_EMAIL` checked first; a matching
+     `config.toml` key is an optional fallback. No secret is *required* to live in `config.toml`, but
+     may. Feature-flagged per product, default **off**.
+  3. **`external_id` is the semantic key** (`JIRA-1234` / a Confluence page id) parsed from the pasted
+     URL, not the canonical URL — so a browser permalink, an API URL, and any other id-bearing URL
+     form of the same issue/page collapse to one `externals` node.
+  4. **Raw `httpx`, no Atlassian SDK** — reuses the existing injectable `Fetcher` seam
+     (`lode.webfetch.Fetcher`) for offline tests, exactly as the web connector does.
+  5. **Flag off / no credentials ⇒ fall through to the generic web connector** (login page ⇒
+     tombstone). A connector activates only when flagged on **and** a token resolves
+     (`lode.config.jira_active` / `confluence_active`).
+  **Refinements resolved via `/challenge` (owner, 2026-07-17):**
+  - **(A) Persisted API-base seam.** Because a semantic `external_id` is no longer itself a
+    fetchable URL, the inferred-or-configured API base is persisted on a new `externals.api_base`
+    column at link-detection time (one schema migration); the async fetch units rebuild
+    `{base}+{key}` from it. A general seam for any future non-URL-keyed connector, not
+    Atlassian-specific plumbing.
+  - **(C) Shared, connector-neutral fetch-outcome classifier.** The HTTP-status half of the
+    fetch-outcome taxonomy is factored into one function, `lode.fetch_outcome.classify_http_status`
+    (prerequisite child `lode-gpzn.13`, extracted behavior-preservingly out of `lode.webfetch`) —
+    reused by the web, JIRA, and Confluence legs rather than copied per connector. The dead-letter
+    hook (`lode.worker._refresh_dead_letter_hook`) is generalized off `SOURCE_TYPE_WEB` the same way.
+  - **(D) Backfill mints a fresh semantic external.** A per-connector backfill pass mints a
+    **fresh, never-tombstoned** semantic external on first migration and enqueues a **plain**
+    refresh; the tombstone-exclusion override (`lode backfill --retry-tombstoned`) is re-run
+    idempotency only — it matters solely when the *new* identity's own head snapshot already
+    tombstoned on a prior backfill pass, never on the first migration itself. Full detail:
+    [externals.md](externals.md#backfill-per-connector-re-draw-down-lode-gpzn9).
+  - **(E) Body representation: rendered HTML, the existing extractor.** Both connectors request
+    the product's own server-rendered HTML (JIRA `expand=renderedFields`/`renderedBody`;
+    Confluence `expand=body.view`) and reuse the existing `lode.webfetch._extract` (trafilatura)
+    extractor, rather than writing a bespoke ADF walker or storage-format XHTML parser. Raw JSON is
+    kept verbatim as `raw_payload` for anyone who later wants it.
+  - **(F) Confluence routes only id-bearing URLs.** Only `/wiki/spaces/{SPACE}/pages/{id}/...`
+    routes to the connector; a tiny-link (`/wiki/x/...`) or legacy `/display/{SPACE}/{Title}` form
+    carries no page id and falls through to the generic web path, keeping link-detection
+    synchronous and network-free. See the deferred-gap entry below for the tracked consequence.
+
+- **Atlassian connectors — deferred, not built (three separate gaps, tracked here).**
+  - **Data Center / Server support.** Locked decision 1 above scopes the connector to Atlassian
+    **Cloud** only (`*.atlassian.net`-shaped hosts, Cloud REST APIs, Basic auth with an API token).
+    JIRA/Confluence **Data Center or Server** (self-hosted, a different auth model — PATs or OAuth,
+    not the same Basic-auth-with-API-token flow — and a different REST base path) is out of scope
+    entirely; a Data Center link falls through to the generic web connector today, same as any other
+    non-Cloud host. Revisit if self-hosted Atlassian becomes a real target.
+  - **OS-keyring secret storage.** Credentials resolve env-var-primary with an optional
+    `config.toml` fallback ([externals.md](externals.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn),
+    `src/lode/config.py::_resolve_atlassian_credentials`) — a `config.toml`-stored token sits in
+    **plaintext** on disk, the same as every other runtime knob. There is no integration with an
+    OS-level credential store (macOS Keychain, the Secret Service API / GNOME Keyring, Windows
+    Credential Manager, …). This is a deliberate simplest-thing-that-works choice, not an oversight:
+    it mirrors every other secret-shaped knob this codebase already has (e.g. `jira_token`/
+    `confluence_token`'s `secret=True` only controls display, not storage) and a cross-platform
+    keyring dependency is real added surface for a single-user, single-machine tool. Revisit if
+    multi-user/shared-machine use, or a real credential-leak concern, makes plaintext-on-disk
+    storage genuinely insufficient.
+  - **The id-less-Confluence gap is a known, tracked scope boundary, not a bug.** Refinement F above
+    means a Confluence tiny-link (`/wiki/x/AbCdE`) or legacy display URL
+    (`/display/{SPACE}/{Title}`) never routes to the structured connector — resolving either to a
+    page id would need a synchronous API round-trip that link-detection must not make. Both forms
+    silently fall through to the generic web path (login page ⇒ tombstone) on an otherwise-active,
+    correctly-flagged-and-credentialed Confluence connector — the *same* outcome as if Confluence
+    were flagged off entirely, which is exactly what makes this worth tracking explicitly rather
+    than leaving implicit: a user pasting a tiny-link gets no signal that a structured connector
+    exists and simply isn't reachable from that URL shape. No resolution mechanism is planned (an
+    async two-step "detect as unresolved, defer id resolution to the refresh job" redesign would
+    close it, at real complexity cost) unless this proves to matter in practice — revisit if
+    tiny-links/legacy URLs turn out to be a common paste shape for real Confluence usage.
