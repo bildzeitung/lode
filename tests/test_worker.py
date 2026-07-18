@@ -3026,6 +3026,83 @@ def test_now_never_decreases_across_a_forward_step_then_a_correction_back(
     assert readings == sorted(readings)
 
 
+def test_claim_and_run_one_claims_a_job_enqueued_moments_before_a_backward_clock_step(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    clock: _FakeClock,
+) -> None:
+    """lode-0dnk: enqueue_derive_jobs's ``next_attempt_at`` and _claim_one's
+    ``now`` comparison must share the SAME clock, or the CLI's immediate-enrich
+    fast path (``claim_and_run_one``, called moments after the enqueue in the
+    very same process) can silently fail to claim the job it just enqueued.
+
+    Before this fix, ``next_attempt_at`` came from the schema's raw SQLite
+    ``strftime('now')`` DEFAULT (``CLOCK_REALTIME``), while the claim compares
+    against ``jobs.now_iso()`` (the forward-ratcheted queue clock, lode-t1y). A
+    backward ``CLOCK_REALTIME`` step (NTP correction / hypervisor catch-up --
+    routine under load, ``docs/storage.md``) landing between the enqueue and
+    the very next ``now()`` call in that process -- which, being the FIRST
+    ``now()`` call in a fresh process/worker, has no prior ratchet reading to
+    protect it -- could make the freshly-enqueued job's own
+    ``next_attempt_at`` read as "in the future" relative to the claim, so it
+    silently stayed 'pending' instead of running immediately. This is the
+    mechanism behind ``test_cli.py::test_add_claims_own_job_not_backlog_job``'s
+    intermittent xdist flake (confirmed via a scripted backward-step repro --
+    not reproducible by CPU load alone, since it needs a genuine
+    ``CLOCK_REALTIME`` step, not mere scheduling contention).
+
+    Anchored in the future (2030, like the sibling lode-bmg9 test) so the
+    assertion below -- that the stored ``next_attempt_at`` lands strictly
+    AFTER a real, unfaked ``datetime.now(UTC)`` reading -- holds regardless of
+    when this test actually runs, and only holds *because* the fix routes the
+    enqueue through the same fake-clock-driven ``now_iso()`` the claim reads.
+    """
+    clock.wall = datetime(2030, 1, 1, tzinfo=UTC)
+
+    enqueue_derive_jobs(conn, "ver-1", types=("enrich",))
+
+    # OS steps CLOCK_REALTIME backward right after the enqueue -- the exact
+    # hazard jobs.now()'s ratchet exists to absorb (lode-t1y). This is also
+    # the FIRST now() call in this (fake) process, so there is no earlier
+    # ratchet reading protecting it unless the enqueue itself established one
+    # -- proving the fix (stamping next_attempt_at from now_iso(), not the raw
+    # DEFAULT) is what closes the gap, not an accidental earlier now() call.
+    clock.tick(0.010)
+    clock.step_wall(-90)
+
+    # This really is the bug's precondition: a real (unfaked) wall-clock
+    # reading right now is nowhere near 2030 -- so the schema's raw SQLite
+    # DEFAULT (which the pre-fix enqueue relied on, and which our fake clock
+    # cannot reach -- SQLite reads the real OS clock, not lode.jobs's
+    # monkeypatched one) would have stamped this row far BEFORE where it
+    # actually landed. Only because the fix routes the enqueue through the
+    # SAME fake-clock-driven now_iso() does next_attempt_at land in 2030 too,
+    # anchored ahead of the backward step exactly like claimed_at is in the
+    # sibling lode-bmg9 test above.
+    (stored_next_attempt_at,) = conn.execute(
+        "SELECT next_attempt_at FROM jobs WHERE target_version = ? AND type = 'enrich'",
+        ("ver-1",),
+    ).fetchone()
+    assert jobs.iso(datetime.now(UTC)) < stored_next_attempt_at
+
+    enrich_registry: dict[str, HandlerFn] = {"enrich": lambda conn, tv, db, s: None}
+    ran = claim_and_run_one(
+        conn,
+        db_path,
+        settings,
+        ("enrich",),
+        _registry=enrich_registry,
+        target_version="ver-1",
+    )
+
+    assert ran is True
+    (job_id,) = conn.execute(
+        "SELECT id FROM jobs WHERE target_version = ? AND type = 'enrich'", ("ver-1",)
+    ).fetchone()
+    assert _job(conn, job_id)["status"] == "done"
+
+
 def test_reclaim_dead_letter_hook_survives_a_backward_clock_step(
     conn: sqlite3.Connection,
     db_path: Path,

@@ -615,6 +615,39 @@ process — safe to compare against `now()` without routing every writer through
 alone would **not** have been safe. The cost of absorbing a backward step is running slightly ahead of
 true time until the wall clock catches up: a job retried a hair late, which beats a job stranded.
 
+**A residual gap in guarantee (2) — closed for the same-process enqueue-then-claim case (lode-0dnk).**
+Guarantee (2) only holds relative to `CLOCK_REALTIME` *at the moment of that specific `now()` call* —
+it says nothing about an *earlier*, independently-stamped raw timestamp once a genuine backward step
+has landed in between. Guarantee (1) — never decreases within this process — is what would normally
+cover that gap, but only *after* the ratchet has a baseline: on the very **first** `now()` call in a
+fresh process, `_now_epoch` is still `datetime.min`, so that first read has no prior high-water mark to
+protect it. The CLI's immediate-enrich fast path (`lode.worker.claim_and_run_one`, called moments after
+`enqueue_derive_jobs` in the very same process) hit exactly this: `next_attempt_at` was stamped from the
+schema's raw `strftime('now')` DEFAULT, an independent `CLOCK_REALTIME` read from `now()`'s own — so a
+backward step landing between the enqueue and the claim's first-ever `now()` call in that (often
+freshly-spawned, e.g. a `pytest-xdist` worker) process could read the job as "not yet due" and leave it
+silently pending instead of running immediately
+(`tests/test_cli.py::test_add_claims_own_job_not_backlog_job`'s intermittent xdist flake — reproduced
+deterministically with a scripted backward-step, never with CPU load alone, since the trigger is a
+genuine `CLOCK_REALTIME` step, not scheduling contention). **Fix:** `enqueue_derive_jobs` now stamps
+`next_attempt_at` explicitly from `jobs.now_iso()` instead of falling through to the DEFAULT, so the
+enqueue's own call becomes (or reinforces) the ratchet's baseline and guarantee (1) — not just (2) —
+now covers the claim that follows it, no matter how soon after. A cross-process claim (the plain `lode
+work` drain loop, run by a different process than the one that enqueued) is unaffected either way — it
+was already relying on guarantee (2) alone, and still does; the accepted "a job retried a hair late
+beats a job stranded" trade-off is unchanged there. Regression test:
+`test_claim_and_run_one_claims_a_job_enqueued_moments_before_a_backward_clock_step`
+(`tests/test_worker.py`) forces a backward wall-clock step between the enqueue and the claim and asserts
+the job is still claimed and run. This is the same class of clock-domain mismatch lode-bmg9 closed for
+`snapshots.fetched_at` (below) — found independently, in the enqueue path rather than the ingest path.
+
+**Aside, resolved as part of this investigation: `pytest-randomly` is deliberately NOT installed.**
+`conftest.py`'s `_cache_cross_encoder_model_load` docstring discusses a *different*, already-fixed
+order-dependent flake it would have caused (a coin-flip on test order); that reference describes a
+hypothetical, not a live dependency. Test order under `pytest-xdist` is otherwise fixed per worker, so
+the flake above is not order-dependent — it is a clock race, gated by which test happens to make the
+first `jobs.now()` call in a given worker process, not by execution order itself.
+
 The clock lives in `lode.jobs` (moved from `lode.worker` in lode-ajda), not because the worker stopped
 needing it, but so `lode.enrich`'s own retry/backoff transition (`_mark_job_failed`, applied to an
 errored/expired/canceled Batches API result) could share it too instead of reading a second, raw
