@@ -547,10 +547,12 @@ def _refresh_web(
     tombstone_reason` (a short machine tag such as ``"http_404"``, never an
     interpolated body) is appended in parens -- e.g. ``"refreshed <url>:
     tombstone (http_404)"`` -- mirroring the Atlassian legs' reason-surfacing
-    (``lode-gpzn.5``, ``lode-pmx0``). The redirect/repoint suffix and the
-    reason suffix never co-occur (a redirect suffix only fires on a
-    200-after-3xx success; a tombstone_reason only on failure), so the two
-    compose without ambiguity when both conditions are checked.
+    (``lode-gpzn.5``, ``lode-pmx0``). It precedes the redirect/repoint suffix.
+    The two are independent -- the redirect suffix fires on any final-URL
+    change, not only a 200 success -- so a redirect that lands on a permanent
+    failure (a 3xx to a URL that then 404s) sets both; they are appended by
+    separate ``if``\\s, not an ``if``/``elif``, and compose unambiguously as
+    ``"tombstone (http_404) -> <final> (repointed N edge(s))"``.
     """
     result = fetch_and_extract(target_external_id, fetcher=fetcher, settings=settings)
     final_external_id = canonicalize_url(result.final_url, settings)
