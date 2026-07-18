@@ -283,6 +283,21 @@ own head snapshot already tombstoned on a prior backfill pass (e.g. a bad token 
 one case a periodic sweep structurally can't cover: an operator who just fixed the underlying
 cause and wants that specific already-tombstoned target retried now, not on a schedule.
 
+**Confluence is the first registered connector (`lode-gpzn.11`).** `lode.confluence_backfill`
+re-classifies every existing `web`-typed `source='user'` edge via
+`lode.drawdown._classify_atlassian` (the exact same detection `detect_and_enqueue_drawdown` already
+runs on a fresh paste, reused rather than re-derived) filtered to a Confluence-shaped match, then
+composes the four shared pieces above. Reusing `_classify_atlassian` also means the handler
+automatically honors the connector's own active-flag gate: with Confluence flagged off, no match is
+ever found and the backfill is a no-op, exactly like a fresh paste under the same settings. `lode
+backfill` (`src/lode/cli.py`) registers it explicitly on **every invocation** — not via a bare
+module-level `register_backfill(...)` call at import time, which would only ever fire once per
+process (Python's import caching) and cannot be relied on to survive an in-process test suite that
+deliberately clears the registry before each test. `refresh_external` (`lode.drawdown`) also gained
+its `SOURCE_TYPE_CONFLUENCE` dispatch leg here — `lode-gpzn.4`'s own fetch unit landed with that
+wiring deliberately deferred to a follow-up (to avoid a race with `lode-gpzn.3`'s identical JIRA-leg
+edit to the same function); this ticket is that follow-up.
+
 ### Externals are directly retrievable
 
 A snapshot's current head is a **direct** lexical/vector candidate on its own content, not only

@@ -2379,9 +2379,11 @@ def backfill(
 
     A "connector" here is whatever has registered itself into the backfill
     framework's registry (lode.backfill.register_backfill) -- this command
-    is just the dispatcher; no connector ships registered by default. With
-    no CONNECTOR argument (or --list), the registered names are printed
-    instead of running anything.
+    is just the dispatcher. "confluence" (lode-gpzn.11) is the first
+    built-in, registered on every invocation of this command; a connector
+    with no backfill logic yet simply doesn't appear. With no CONNECTOR
+    argument (or --list), the registered names are printed instead of
+    running anything.
 
     --dry-run reports what the connector's handler would change without
     writing. --retry-tombstoned is the explicit, human-driven opt-in to also
@@ -2389,6 +2391,15 @@ def backfill(
     backfill pass -- see the command's own help on that flag.
     """
     from lode.backfill import BackfillError, registered_backfills, run_backfill
+
+    # Built-in connectors register themselves here, explicitly, on every
+    # invocation -- see lode.confluence_backfill.register's own docstring
+    # for why this must be a function call rather than relying on a
+    # connector module's import to trigger a bare module-level
+    # register_backfill(...) side effect.
+    from lode.confluence_backfill import register as _register_confluence
+
+    _register_confluence()
 
     if list_connectors or connector is None:
         names = registered_backfills()

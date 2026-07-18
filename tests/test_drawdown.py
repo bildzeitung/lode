@@ -836,7 +836,59 @@ class TestRefreshExternalDispatch:
         with pytest.raises(RuntimeError, match="ABC-999"):
             refresh_external(conn, "ABC-999", load_settings(), fetcher=_StubFetcher())
 
-    def test_confluence_source_type_raises_no_fetch_unit_yet(self, conn) -> None:
+    def test_confluence_source_type_dispatches_to_confluence_fetch_unit(
+        self, conn
+    ) -> None:
+        """lode-gpzn.11: Confluence now has a real fetch unit (lode-gpzn.4)
+        AND the dispatch leg wired -- dispatch reaches it, rebuilding the
+        request URL from external_id + the api_base persisted on the row
+        (lode-gpzn.2), rather than raising."""
+        api_base = "https://acme.atlassian.net"
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("999", SOURCE_TYPE_CONFLUENCE, api_base),
+        )
+        conn.commit()
+        page_json = json.dumps(
+            {
+                "id": "999",
+                "body": {
+                    "view": {
+                        "value": (
+                            "<div><p>"
+                            + ("Dispatcher-level Confluence fetch content. " * 20)
+                            + "</p></div>"
+                        )
+                    }
+                },
+            }
+        )
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{api_base}/wiki/rest/api/content/999?expand=body.view",
+                status_code=200,
+                text=page_json,
+            )
+        )
+
+        outcome = refresh_external(conn, "999", load_settings(), fetcher=fetcher)
+
+        assert outcome is not None
+        assert "ok" in outcome
+        assert fetcher.calls == [
+            f"{api_base}/wiki/rest/api/content/999?expand=body.view"
+        ]
+        (status,) = conn.execute(
+            "SELECT status FROM snapshots WHERE external_id = ?", ("999",)
+        ).fetchone()
+        assert status == "ok"
+
+    def test_confluence_source_type_without_credentials_raises(self, conn) -> None:
+        """No fetcher override and no resolvable credentials (default,
+        Confluence-disabled settings) -- the default-fetcher construction
+        inside lode.confluence.fetch_confluence_page raises, naming the
+        external_id."""
         conn.execute(
             "INSERT INTO externals (external_id, source_type, api_base) "
             "VALUES (?, ?, ?)",
@@ -845,6 +897,15 @@ class TestRefreshExternalDispatch:
         conn.commit()
         with pytest.raises(RuntimeError, match="999"):
             refresh_external(conn, "999", load_settings())
+
+    def test_confluence_source_type_missing_api_base_raises(self, conn) -> None:
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type) VALUES (?, ?)",
+            ("998", SOURCE_TYPE_CONFLUENCE),
+        )
+        conn.commit()
+        with pytest.raises(RuntimeError, match="998"):
+            refresh_external(conn, "998", load_settings(), fetcher=_StubFetcher())
 
     def test_unknown_source_type_raises(self, conn) -> None:
         conn.execute(
