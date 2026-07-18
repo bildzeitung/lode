@@ -548,8 +548,10 @@ the same transaction that writes `source_type` and `external_id`. `lode.jira_fet
 and `lode.confluence.fetch_confluence_page` both take `external_id` + `api_base` as explicit
 parameters and rebuild the request URL as `{api_base}+{external_id}` (JIRA:
 `{api_base}/rest/api/3/issue/{key}`; Confluence: `{api_base}/wiki/rest/api/content/{page_id}`),
-reading `api_base` off the row (`lode.drawdown`'s `_refresh_jira`/`_refresh_confluence` legs of
-`refresh_external`'s dispatcher). This is a general seam, not Atlassian-specific plumbing: any
+reading `api_base` off the row (`lode.drawdown`'s shared `_refresh_atlassian` leg of
+`refresh_external`'s dispatcher, parameterized on the fetch callable and `SOURCE_TYPE_*` — lode-40zj
+deduped what were originally two byte-identical `_refresh_jira`/`_refresh_confluence` functions).
+This is a general seam, not Atlassian-specific plumbing: any
 future connector whose semantic id isn't itself a URL can reuse the same "persist the base at
 detection, rebuild at fetch time" shape.
 

@@ -20,7 +20,8 @@ the request is rebuilt from ``external_id`` plus the ``api_base`` persisted
 on the ``externals`` row at link-detection time
 (:func:`lode.drawdown._resolve_api_base`). :func:`fetch_jira_issue` takes
 ``api_base`` as an explicit parameter; the caller (:mod:`lode.drawdown`'s
-``_refresh_jira``) is responsible for reading it off the row.
+shared ``_refresh_atlassian`` leg, lode-40zj) is responsible for reading it
+off the row.
 
 ## Body representation (owner decision E, ``/challenge`` 2026-07-17)
 
