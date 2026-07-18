@@ -732,6 +732,36 @@ def test_reclaim_refresh_dead_letter_writes_tombstone_snapshot(
     assert status == "tombstone"
 
 
+def test_reclaim_dead_letter_logs_per_job_source(
+    conn: sqlite3.Connection,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """lode-ympb: a crash-reclaimed job dead-lettered by _reclaim_stale_running
+    must log a per-job line naming job_type/target_version, not just the
+    aggregate 'reclaimed %d stale running job(s)' count -- mirroring
+    run_one's own dead-letter/failed log lines (job_type + short(target)) so
+    a connector job (JIRA/Confluence/web refresh) that crash-reclaims
+    straight to dead is identifiable by source.
+    """
+    external_id = "https://example.com/crashed-source-visibility"
+    job_id = _insert_job(
+        conn,
+        job_type="refresh",
+        target_version=external_id,
+        status="running",
+        attempts=settings.retry_max_attempts - 1,
+        claimed_at=_past_iso(settings.stale_running_timeout_s + 60),
+    )
+    with caplog.at_level(logging.ERROR):
+        count = _reclaim_stale_running(conn, settings)
+    assert count == 1
+    assert _job(conn, job_id)["status"] == "dead"
+
+    assert f"job {job_id} (refresh target=" in caplog.text
+    assert "dead-lettered by crash-reclaim" in caplog.text
+
+
 def test_reclaim_dead_letter_hook_does_not_beat_a_real_snapshot(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
