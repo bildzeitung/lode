@@ -152,6 +152,7 @@ from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 from lode import jobs
 from lode.config import Settings, confluence_active, jira_active
 from lode.externals import ingest_fetch_result
+from lode.jira_fetch import fetch_jira_issue
 from lode.webfetch import Fetcher, fetch_and_extract
 
 log = logging.getLogger(__name__)
@@ -558,6 +559,44 @@ def _refresh_web(
     return outcome
 
 
+def _refresh_jira(
+    conn: sqlite3.Connection,
+    target_external_id: str,
+    settings: Settings,
+    *,
+    fetcher: Fetcher | None = None,
+) -> str | None:
+    """Fetch + ingest a JIRA Cloud issue -- the ``SOURCE_TYPE_JIRA`` leg (lode-gpzn.3).
+
+    Unlike the web leg, ``target_external_id`` here is a semantic issue key
+    (e.g. ``"ABC-123"``), not itself a fetchable URL — the request URL is
+    rebuilt inside :func:`~lode.jira_fetch.fetch_jira_issue` from the
+    ``api_base`` persisted on the ``externals`` row at link-detection time
+    (lode-gpzn.2). No redirect/repoint step is needed here (unlike
+    :func:`_refresh_web`): an issue key has no redirect concept, and
+    :attr:`~lode.webfetch.FetchResult.final_url` is purely informational for
+    this leg — :func:`~lode.externals.ingest_fetch_result` never reads it.
+    """
+    row = conn.execute(
+        "SELECT api_base FROM externals WHERE external_id = ?",
+        (target_external_id,),
+    ).fetchone()
+    api_base = row[0] if row is not None else None
+    if not api_base:
+        raise RuntimeError(
+            f"_refresh_jira: no api_base persisted for "
+            f"external_id={target_external_id!r}"
+        )
+
+    result = fetch_jira_issue(
+        target_external_id, api_base, fetcher=fetcher, settings=settings
+    )
+    ingest = ingest_fetch_result(
+        conn, target_external_id, SOURCE_TYPE_JIRA, result, settings=settings
+    )
+    return f"refreshed {target_external_id}: {ingest.status}"
+
+
 def refresh_external(
     conn: sqlite3.Connection,
     target_external_id: str,
@@ -583,22 +622,22 @@ def refresh_external(
       :func:`lode.externals.ingest_snapshot`, on the first successful
       fetch, does) — see :func:`lode.worker._refresh_dead_letter_hook`'s
       matching fallback for the same reasoning.
-    - **``source_type in (SOURCE_TYPE_JIRA, SOURCE_TYPE_CONFLUENCE)``:**
-      the corresponding Cloud REST fetch unit — built in lode-gpzn.3 (JIRA)
-      / lode-gpzn.4 (Confluence), both blocked on this ticket landing
-      first. Until then this raises ``RuntimeError`` rather than silently
-      mis-fetching: reachable in production only if an operator flags a
-      product on before its fetch unit exists, since :func:`_classify_
-      atlassian` only ever writes ``"jira"``/``"confluence"`` when
-      :func:`~lode.config.jira_active` / :func:`~lode.config.
-      confluence_active` is already true. The raise rides the worker's
-      ordinary attempts/backoff/dead-letter accounting like any other
-      handler exception (:func:`lode.worker.run_one`) — no special-casing
-      needed here.
+    - **``source_type == SOURCE_TYPE_JIRA``:** the JIRA Cloud REST fetch
+      unit (:func:`_refresh_jira`, lode-gpzn.3).
+    - **``source_type == SOURCE_TYPE_CONFLUENCE``:** the Confluence Cloud
+      REST fetch unit — not yet built (lode-gpzn.4, blocked on this ticket
+      landing first). Until then this raises ``RuntimeError`` rather than
+      silently mis-fetching: reachable in production only if an operator
+      flags Confluence on before its fetch unit exists, since
+      :func:`_classify_atlassian` only ever writes ``"confluence"`` when
+      :func:`~lode.config.confluence_active` is already true. The raise
+      rides the worker's ordinary attempts/backoff/dead-letter accounting
+      like any other handler exception (:func:`lode.worker.run_one`) — no
+      special-casing needed here.
 
-    ``fetcher`` is passed straight through to :func:`_refresh_web`; the
-    still-unbuilt JIRA/Confluence legs will take their own httpx-based
-    fetch seam when gpzn.3/gpzn.4 land.
+    ``fetcher`` is passed straight through to :func:`_refresh_web` /
+    :func:`_refresh_jira`; the still-unbuilt Confluence leg will take its
+    own fetch seam when gpzn.4 lands.
     """
     row = conn.execute(
         "SELECT source_type FROM externals WHERE external_id = ?",
@@ -608,10 +647,12 @@ def refresh_external(
 
     if source_type == SOURCE_TYPE_WEB:
         return _refresh_web(conn, target_external_id, settings, fetcher=fetcher)
-    if source_type in (SOURCE_TYPE_JIRA, SOURCE_TYPE_CONFLUENCE):
+    if source_type == SOURCE_TYPE_JIRA:
+        return _refresh_jira(conn, target_external_id, settings, fetcher=fetcher)
+    if source_type == SOURCE_TYPE_CONFLUENCE:
         raise RuntimeError(
             f"refresh_external: no fetch unit yet for source_type={source_type!r} "
-            f"external_id={target_external_id!r} (lode-gpzn.3/lode-gpzn.4)"
+            f"external_id={target_external_id!r} (lode-gpzn.4)"
         )
     raise RuntimeError(
         f"refresh_external: unknown source_type={source_type!r} "
