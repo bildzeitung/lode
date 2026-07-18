@@ -395,6 +395,109 @@ SQLite's write lock, rather than as a separate caller-side read beforehand — c
 rather than merely narrowing its window. See `docs/storage.md`'s "A dead-letter hook's write can race
 a late success too" for the mechanism and its empirical verification.
 
+### Developer validation: offline fixtures + manual live-test procedure (`lode-gpzn.6`)
+
+Spec 10's "Live Testing" section is explicit that no live testing of the Atlassian connectors is
+automatable — there is no way to hit a real JIRA/Confluence Cloud tenant from the offline test gate.
+Validation is therefore two-tiered: an offline fixture matrix that runs on every `nox -s tests`, plus
+a documented manual procedure a developer or agent runs by hand against one real issue/page.
+
+**Offline fixtures (already in the `nox -s tests` gate — no new fixtures needed for this ticket).**
+`tests/test_jira_fetch.py` and `tests/test_confluence.py` inject canned JSON through the injectable
+`Fetcher` seam (`_QueueFetcher` / `_StubFetcher` — the same offline pattern `tests/test_webfetch.py`
+uses) and already cover every outcome the spec's "Live Testing" ask names:
+
+| Connector | ok | 401 | 404 | 429 | paginated comments |
+|---|---|---|---|---|---|
+| JIRA (`tests/test_jira_fetch.py`) | `test_ok_issue_maps_to_nonempty_structured_body_including_paginated_comments` | `test_permanent_http_failure_on_issue_yields_tombstone[401]` | `test_permanent_http_failure_on_issue_yields_tombstone[404]` | `TestJiraHttpFetcher::test_transient_status_codes_raise_via_shared_classifier[429]` | same OK test — a 2-comment-page fixture, second page's text asserted present |
+| Confluence (`tests/test_confluence.py`) | `test_ok_page_returns_clean_text_and_raw_json_payload` | `test_auth_and_404_failures_yield_tombstone[401]` | `test_auth_and_404_failures_yield_tombstone[404]` | `TestHttpxConfluenceFetcher::test_transient_status_codes_raise[429]` | n/a — Confluence maps page body only, deliberately (`lode.confluence`'s "Explicitly out of scope for this ticket") |
+
+This table exists to make that coverage explicit and auditable against the spec's own wording; the
+tests themselves are unchanged.
+
+**Manual live-test procedure.** The fixtures above prove the fetch/classify/extract *logic*; they
+cannot prove the real Cloud REST APIs actually respond the way the fixtures assume. Run this by hand
+whenever validating a change that touches either connector.
+
+*Prerequisites*
+- A JIRA Cloud and/or Confluence Cloud account, plus an API token
+  (https://id.atlassian.com/manage-profile/security/api-tokens) and the account email used to create
+  it.
+- A real, readable JIRA issue key (`PROJ-123`) and/or a Confluence page's full, id-bearing URL
+  (`https://<site>.atlassian.net/wiki/spaces/<SPACE>/pages/<id>/<slug>` — a tiny-link or
+  `/display/...` URL will not route through this connector, by design; see
+  [Draw-down rules](#draw-down-rules) above).
+- Confluence only: `lode-mfts` ("Wire JIRA + Confluence fetch units into `refresh_external`'s
+  dispatcher") must be landed on `trunk`. JIRA's dispatch leg has been wired in since `lode-gpzn.3`;
+  Confluence's fetch unit (`lode-gpzn.4`) shipped standalone and offline-tested, deliberately *not*
+  wired into `refresh_external` yet — to avoid two in-flight tickets racing on the same dispatcher
+  lines (see `lode.confluence`'s module docstring, "Explicitly out of scope for this ticket"). Before
+  `lode-mfts` lands, a Confluence refresh job fails immediately with `RuntimeError: refresh_external:
+  no fetch unit yet for source_type='confluence' ...`; `bd show lode-mfts` shows whether it has landed.
+
+*Steps*
+
+1. Set the token env vars (env vars are the primary credential source — a real token should never
+   live in `config.toml`):
+   ```
+   export LODE_JIRA_TOKEN=<api-token>
+   export LODE_JIRA_EMAIL=<account-email>
+   # and/or
+   export LODE_CONFLUENCE_TOKEN=<api-token>
+   export LODE_CONFLUENCE_EMAIL=<account-email>
+   ```
+2. Flag the product(s) on in `$LODE_HOME/config.toml` (default `~/.lode/config.toml`; create the file
+   if it doesn't exist yet):
+   ```toml
+   jira_enabled = true
+   confluence_enabled = true
+   ```
+   Leave `jira_base_url` / `confluence_base_url` empty to infer the API base from the pasted link's
+   `*.atlassian.net` host; set one only if your Cloud site's API host differs from the link itself.
+3. Confirm the flags took (`lode config` never prints a secret, but does print these two):
+   ```
+   lode config
+   ```
+4. Paste a real link into a new note — the JIRA permalink shape is `/browse/{KEY}`, the Confluence
+   shape is `/wiki/spaces/{SPACE}/pages/{id}/...`:
+   ```
+   lode add "Debugging https://<site>.atlassian.net/browse/PROJ-123"
+   lode add "Runbook: https://<site>.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
+   ```
+5. Run a work pass to drain the enqueued `refresh` job(s):
+   ```
+   lode work
+   ```
+6. Inspect the result:
+   ```
+   lode show <note-id>
+   lode dump-html <note-id>
+   ```
+
+*Exact expected outputs*
+
+- **Step 4:** each `lode add` prints a note id and exits `0`.
+- **Step 5:** `lode work`'s output includes one outcome line per link, exactly
+  `refreshed PROJ-123: ok` / `refreshed 123456: ok` (the literal string
+  `lode.drawdown.refresh_external` returns on success), followed by `drained N job(s)` with
+  `N >= 1`. No `RuntimeError` should appear: `no api_base persisted for external_id=...` means the
+  flag/token wasn't resolved yet at `lode add` time (redo from step 1 and re-paste); `no fetch unit
+  yet for source_type='confluence'` means `lode-mfts` hasn't landed (see Prerequisites).
+- **Step 6, `lode show <note-id>`:** the note body, then `edges:` listing `-> PROJ-123` (or
+  `-> 123456`) with a nested line `       jira · snapshot <id> · as of <timestamp> [un-refreshed]`
+  (or `confluence · ...`) — `un-refreshed` is the fresh, non-tombstoned, non-withheld state
+  (`lode.enrichment_view`'s naming — not a warning). `embedded: yes (N passage(s))`, `N >= 1`, once
+  the snapshot's own `embed` job has also drained (a separate queued job from `refresh` — re-run
+  `lode work` once more if it still reads `embedded: no`).
+- **Step 6, `lode dump-html <note-id>`:** prints the snapshot's raw JSON payload verbatim — for JIRA,
+  valid JSON with an `"issue"` key (`fields.summary`, `renderedFields.description`) and a
+  `"comments"` key (a list); for Confluence, valid JSON with `"id"` matching the pasted page id and a
+  `body.view.value` string holding the page's real rendered HTML.
+- **Optional negative check:** a deliberately wrong token reproduces the offline 401 fixture case —
+  `lode work` still reports `refreshed ...: tombstone` (never a crash), and `lode show <note-id>`'s
+  external line reads `[stale]` instead of `[un-refreshed]` (`lode.enrichment_view`: `stale` is the
+  state name for a tombstoned head snapshot).
+
 ---
 
 ## Link-rot immunity (the payoff that justifies draw-down)
