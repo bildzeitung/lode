@@ -73,3 +73,7 @@ scripts/validate-mermaid.sh   # parse every ```mermaid block in docs/, fail on s
 ```
 
 `docker` is the only host requirement.
+
+## License
+
+[Apache-2.0](LICENSE).
