@@ -24,8 +24,9 @@ blocks typing or Ctrl+S/Escape.
 **Confirm-on-unsaved guard for Escape (lode-0wj.1) and app-level Ctrl+Q
 (lode-0wj.8).** Escape used to discard silently regardless of buffer state —
 an easy vi-muscle-memory footgun. Now Escape on a non-empty/non-whitespace
-buffer pops :class:`DiscardConfirmScreen` (Save/Discard/Cancel) instead of
-exiting straight away; an empty/whitespace buffer still exits immediately, so
+buffer pops :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`
+(Save/Discard/Cancel) instead of exiting straight away; an empty/whitespace
+buffer still exits immediately, so
 the fast "get in, dump, get out" path for a genuinely empty capture is
 untouched. Ctrl+S is unaffected either way. Ctrl+Q is a *global*
 ``App``-priority binding (:mod:`lode.tui.app`) that this screen can't bind
@@ -92,13 +93,14 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.screen import ModalScreen, Screen
-from textual.widgets import Header, Static, TextArea
+from textual.screen import Screen
+from textual.widgets import Header, TextArea
 
 from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
 from lode.tui.latency_probe import probe_event_loop_lag
 from lode.tui.lode_footer import LodeFooter
 from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 
 if TYPE_CHECKING:
@@ -112,49 +114,6 @@ BODY_ID = "capture-body"
 #: The passive "related past notes" panel's widget id (lode-mkc.3) — read back
 #: in tests.
 RELATED_ID = "related-notes"
-
-#: The confirm dialog's message widget id (lode-0wj.1) — read back in tests.
-CONFIRM_MESSAGE_ID = "capture-confirm-message"
-
-
-class DiscardConfirmScreen(ModalScreen[str]):
-    """Save / Discard / Cancel confirm, popped on Escape over a dirty buffer.
-
-    Dismisses with one of ``"save"``, ``"discard"``, ``"cancel"`` — the caller
-    (:meth:`CaptureScreen.confirm_quit`, reached from both Escape and the
-    app-level Ctrl+Q) decides what each means; this screen owns only the
-    prompt and the three keys.
-
-    **Popup styling (lode-1i8.4).** Pushed via ``push_screen`` (not
-    ``switch_screen``), so :class:`CaptureScreen` stays mounted underneath on
-    the app's screen stack rather than being replaced — this dialog is an
-    overlay, not a navigation. :class:`~textual.screen.ModalScreen`'s own
-    ``DEFAULT_CSS`` already dims that screen underneath
-    (``background: $background 60%``); ``lode.tcss`` (:mod:`lode.tui`, loaded
-    via ``LodeApp.CSS_PATH``) adds only what was missing — centering and
-    sizing the ``#capture-confirm-dialog`` box itself — so the prompt reads
-    as a bounded, bordered popup over the still-visible editor instead of a
-    blank full screen.
-    """
-
-    BINDINGS = [
-        Binding("s", "choose('save')", "Save & quit"),
-        Binding("d", "choose('discard')", "Discard & quit"),
-        Binding("c", "choose('cancel')", "Cancel"),
-        Binding("escape", "choose('cancel')", "Cancel", show=False),
-    ]
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Static(
-                "Unsaved note. (S)ave, (D)iscard, or (C)ancel?",
-                id=CONFIRM_MESSAGE_ID,
-            ),
-            id="capture-confirm-dialog",
-        )
-
-    def action_choose(self, choice: str) -> None:
-        self.dismiss(choice)
 
 
 class CaptureScreen(Screen[None]):
@@ -312,8 +271,8 @@ class CaptureScreen(Screen[None]):
         lose, so it keeps the old "discard and exit" behaviour unprompted —
         the fast path a genuine empty capture (opened by mistake, or just
         backed out of) still wants. A non-empty buffer instead pops
-        :class:`DiscardConfirmScreen`; its answer is handled by
-        :meth:`_on_discard_confirm`.
+        :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`; its
+        answer is handled by :meth:`_on_discard_confirm`.
         """
         body = self.query_one(f"#{BODY_ID}", TextArea).text
         if not body.strip():

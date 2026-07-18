@@ -22,7 +22,7 @@ from lode.tui.screens.browse import (
     BrowseScreen,
     EditScreen,
 )
-from lode.tui.screens.capture import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
+from lode.tui.screens.discard_confirm import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
 from lode.versions import save
 
