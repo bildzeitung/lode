@@ -605,15 +605,14 @@ def _refresh_confluence(
     *,
     fetcher: Fetcher | None = None,
 ) -> str | None:
-    """Fetch + ingest a Confluence Cloud page -- the ``SOURCE_TYPE_CONFLUENCE`` leg (lode-gpzn.11).
+    """Fetch + ingest a Confluence Cloud page -- the ``SOURCE_TYPE_CONFLUENCE`` leg (lode-gpzn.4).
 
     Mirrors :func:`_refresh_jira` exactly: ``target_external_id`` here is a
-    semantic page id (lode-gpzn.2), not a URL — the request URL is rebuilt
-    inside :func:`~lode.confluence.fetch_confluence_page` from the
-    ``api_base`` persisted on the ``externals`` row at link-detection time.
-    No redirect/repoint step, same reasoning as the JIRA leg: a page id has
-    no redirect concept, and :attr:`~lode.webfetch.FetchResult.final_url` is
-    purely informational for this leg.
+    semantic page id, not itself a fetchable URL — the request URL is
+    rebuilt inside :func:`~lode.confluence.fetch_confluence_page` from the
+    ``api_base`` persisted on the ``externals`` row at link-detection time
+    (lode-gpzn.2). No redirect/repoint step is needed here either, for the
+    same reason as the JIRA leg.
     """
     row = conn.execute(
         "SELECT api_base FROM externals WHERE external_id = ?",
@@ -663,10 +662,11 @@ def refresh_external(
     - **``source_type == SOURCE_TYPE_JIRA``:** the JIRA Cloud REST fetch
       unit (:func:`_refresh_jira`, lode-gpzn.3).
     - **``source_type == SOURCE_TYPE_CONFLUENCE``:** the Confluence Cloud
-      REST fetch unit (:func:`_refresh_confluence`, lode-gpzn.4 built the
-      fetch unit; lode-gpzn.11 wired this dispatch leg — gpzn.4's own
-      docstring deliberately deferred the wiring to a follow-up so it
-      wouldn't race gpzn.3's identical JIRA-leg wiring over the same lines).
+      REST fetch unit (:func:`_refresh_confluence`, lode-gpzn.4).
+    - **Anything else:** an unrecognized ``source_type`` raises
+      ``RuntimeError`` naming both the value and the ``external_id`` —
+      reachable only via direct DB tampering or a future connector adding
+      a value here before its dispatch leg exists.
 
     ``fetcher`` is passed straight through to :func:`_refresh_web` /
     :func:`_refresh_jira` / :func:`_refresh_confluence`.

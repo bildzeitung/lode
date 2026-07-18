@@ -839,10 +839,9 @@ class TestRefreshExternalDispatch:
     def test_confluence_source_type_dispatches_to_confluence_fetch_unit(
         self, conn
     ) -> None:
-        """lode-gpzn.11: Confluence now has a real fetch unit (lode-gpzn.4)
-        AND the dispatch leg wired -- dispatch reaches it, rebuilding the
-        request URL from external_id + the api_base persisted on the row
-        (lode-gpzn.2), rather than raising."""
+        """lode-gpzn.4 + lode-mfts: Confluence has a real fetch unit -- dispatch
+        reaches it, rebuilding the request URL from external_id + the
+        api_base persisted on the row (lode-gpzn.2), rather than raising."""
         api_base = "https://acme.atlassian.net"
         conn.execute(
             "INSERT INTO externals (external_id, source_type, api_base) "
@@ -850,34 +849,25 @@ class TestRefreshExternalDispatch:
             ("999", SOURCE_TYPE_CONFLUENCE, api_base),
         )
         conn.commit()
-        page_json = json.dumps(
-            {
-                "id": "999",
-                "title": "Dispatcher-level Confluence page",
-                "body": {
-                    "view": {
-                        "value": (
-                            "<div>"
-                            "<h1>Dispatcher-level Confluence page</h1>"
-                            "<p>This page proves refresh_external's dispatcher "
-                            "reaches the real Confluence fetch unit rather than "
-                            "raising, rebuilding the request URL from the "
-                            "external_id and the api_base persisted on the row "
-                            "at link-detection time.</p>"
-                            "<p>A second paragraph gives trafilatura enough "
-                            "distinct prose to clear the minimum extract-length "
-                            "floor without looking like repeated boilerplate.</p>"
-                            "</div>"
-                        )
-                    }
-                },
+        page_json = {
+            "body": {
+                "view": {
+                    "value": (
+                        "<div><h1>Dispatcher Confluence content</h1>"
+                        "<p>"
+                        + ("Dispatcher-level Confluence fetch content. " * 20)
+                        + "</p><p>"
+                        + ("A second paragraph of real prose content. " * 20)
+                        + "</p></div>"
+                    )
+                }
             }
-        )
+        }
         fetcher = _StubFetcher(
             response=RawResponse(
-                final_url=f"{api_base}/wiki/rest/api/content/999?expand=body.view",
+                final_url=(f"{api_base}/wiki/rest/api/content/999?expand=body.view"),
                 status_code=200,
-                text=page_json,
+                text=json.dumps(page_json),
             )
         )
 
@@ -896,10 +886,9 @@ class TestRefreshExternalDispatch:
     def test_confluence_source_type_without_credentials_raises(self, conn) -> None:
         """No fetcher override and no resolvable credentials (default,
         Confluence-disabled settings) -- the default-fetcher construction
-        inside lode.confluence.fetch_confluence_page raises. Unlike JIRA's
-        equivalent (_default_fetcher), fetch_confluence_page's credential
-        check does not name the external_id in its message -- match on the
-        fixed text it does raise instead."""
+        inside lode.confluence.fetch_confluence_page raises (unlike the JIRA
+        leg's equivalent error, this one does not name the external_id --
+        existing lode-gpzn.4 behavior, unchanged here)."""
         conn.execute(
             "INSERT INTO externals (external_id, source_type, api_base) "
             "VALUES (?, ?, ?)",

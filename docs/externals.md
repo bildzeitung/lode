@@ -283,20 +283,32 @@ own head snapshot already tombstoned on a prior backfill pass (e.g. a bad token 
 one case a periodic sweep structurally can't cover: an operator who just fixed the underlying
 cause and wants that specific already-tombstoned target retried now, not on a schedule.
 
-**Confluence is the first registered connector (`lode-gpzn.11`).** `lode.confluence_backfill`
-re-classifies every existing `web`-typed `source='user'` edge via
-`lode.drawdown._classify_atlassian` (the exact same detection `detect_and_enqueue_drawdown` already
-runs on a fresh paste, reused rather than re-derived) filtered to a Confluence-shaped match, then
-composes the four shared pieces above. Reusing `_classify_atlassian` also means the handler
-automatically honors the connector's own active-flag gate: with Confluence flagged off, no match is
-ever found and the backfill is a no-op, exactly like a fresh paste under the same settings. `lode
-backfill` (`src/lode/cli.py`) registers it explicitly on **every invocation** — not via a bare
-module-level `register_backfill(...)` call at import time, which would only ever fire once per
-process (Python's import caching) and cannot be relied on to survive an in-process test suite that
-deliberately clears the registry before each test. `refresh_external` (`lode.drawdown`) also gained
-its `SOURCE_TYPE_CONFLUENCE` dispatch leg here — `lode-gpzn.4`'s own fetch unit landed with that
-wiring deliberately deferred to a follow-up (to avoid a race with `lode-gpzn.3`'s identical JIRA-leg
-edit to the same function); this ticket is that follow-up.
+**`jira` connector (`lode-gpzn.10`).** `lode.jira_backfill` registers `"jira"` — the first real
+connector plugged into the framework. Its handler reclassifies every existing explicit
+(`source='user'`) edge's *original* `quoted_text` through `lode.drawdown._classify_atlassian`, the
+exact same synchronous, network-free classifier the live paste-time path uses — so a link migrates
+only when it would route to JIRA **under current routing** (flag on, credentials resolved, matched
+host, `/browse/{KEY}` shape). A match mints the semantic issue-key external, re-points the edge, and
+enqueues a fresh refresh through the four shared plumbing pieces above. Reclassifying from the
+edge's original `quoted_text` on every pass (rather than filtering on the edge's current
+`source_type`) is what makes `--retry-tombstoned` reachable on a re-run: an edge already repointed
+onto its semantic key is revisited too, so `needs_refresh` gets rechecked against that identity's
+current head snapshot instead of the migration step silently losing track of it after the first
+pass.
+
+**`confluence` connector (`lode-gpzn.11`).** `lode.confluence_backfill` re-classifies every
+existing `web`-typed `source='user'` edge via `lode.drawdown._classify_atlassian` (the exact same
+detection `detect_and_enqueue_drawdown` already runs on a fresh paste, reused rather than
+re-derived) filtered to a Confluence-shaped match, then composes the four shared pieces above.
+Reusing `_classify_atlassian` also means the handler automatically honors the connector's own
+active-flag gate: with Confluence flagged off, no match is ever found and the backfill is a no-op,
+exactly like a fresh paste under the same settings. `lode backfill` (`src/lode/cli.py`) registers
+it explicitly on **every invocation** — not via a bare module-level `register_backfill(...)` call
+at import time, which would only ever fire once per process (Python's import caching) and cannot
+be relied on to survive an in-process test suite that deliberately clears the registry before each
+test. `refresh_external`'s (`lode.drawdown`) `SOURCE_TYPE_CONFLUENCE` dispatch leg was wired
+separately by `lode-mfts` (mirroring `lode-gpzn.3`'s identical JIRA-leg wiring), landing ahead of
+this connector.
 
 ### Externals are directly retrievable
 
@@ -396,6 +408,219 @@ the head read happens *inside* `ingest_snapshot`'s own transaction, after it has
 SQLite's write lock, rather than as a separate caller-side read beforehand — closing the race outright
 rather than merely narrowing its window. See `docs/storage.md`'s "A dead-letter hook's write can race
 a late success too" for the mechanism and its empirical verification.
+
+### Developer validation: offline fixtures + manual live-test procedure (`lode-gpzn.6`)
+
+Spec 10's "Live Testing" section is explicit that no live testing of the Atlassian connectors is
+automatable — there is no way to hit a real JIRA/Confluence Cloud tenant from the offline test gate.
+Validation is therefore two-tiered: an offline fixture matrix that runs on every `nox -s tests`, plus
+a documented manual procedure a developer or agent runs by hand against one real issue/page.
+
+**Offline fixtures (already in the `nox -s tests` gate — no new fixtures needed for this ticket).**
+`tests/test_jira_fetch.py` and `tests/test_confluence.py` inject canned JSON through the injectable
+`Fetcher` seam (`_QueueFetcher` / `_StubFetcher` — the same offline pattern `tests/test_webfetch.py`
+uses) and already cover every outcome the spec's "Live Testing" ask names:
+
+| Connector | ok | 401 | 404 | 429 | paginated comments |
+|---|---|---|---|---|---|
+| JIRA (`tests/test_jira_fetch.py`) | `test_ok_issue_maps_to_nonempty_structured_body_including_paginated_comments` | `test_permanent_http_failure_on_issue_yields_tombstone[401]` | `test_permanent_http_failure_on_issue_yields_tombstone[404]` | `TestJiraHttpFetcher::test_transient_status_codes_raise_via_shared_classifier[429]` | same OK test — a 2-comment-page fixture, second page's text asserted present |
+| Confluence (`tests/test_confluence.py`) | `test_ok_page_returns_clean_text_and_raw_json_payload` | `test_auth_and_404_failures_yield_tombstone[401]` | `test_auth_and_404_failures_yield_tombstone[404]` | `TestHttpxConfluenceFetcher::test_transient_status_codes_raise[429]` | n/a — Confluence maps page body only, deliberately (`lode.confluence`'s "Explicitly out of scope for this ticket") |
+
+This table exists to make that coverage explicit and auditable against the spec's own wording; the
+tests themselves are unchanged.
+
+**Manual live-test procedure.** The fixtures above prove the fetch/classify/extract *logic*; they
+cannot prove the real Cloud REST APIs actually respond the way the fixtures assume. Run this by hand
+whenever validating a change that touches either connector.
+
+*Prerequisites*
+- A JIRA Cloud and/or Confluence Cloud account, plus an API token
+  (https://id.atlassian.com/manage-profile/security/api-tokens) and the account email used to create
+  it.
+- A real, readable JIRA issue key (`PROJ-123`) and/or a Confluence page's full, id-bearing URL
+  (`https://<site>.atlassian.net/wiki/spaces/<SPACE>/pages/<id>/<slug>` — a tiny-link or
+  `/display/...` URL will not route through this connector, by design; see
+  [Draw-down rules](#draw-down-rules) above).
+- Confluence only: `lode-mfts` ("Wire JIRA + Confluence fetch units into `refresh_external`'s
+  dispatcher") must be landed on `trunk`. JIRA's dispatch leg has been wired in since `lode-gpzn.3`;
+  Confluence's fetch unit (`lode-gpzn.4`) shipped standalone and offline-tested, deliberately *not*
+  wired into `refresh_external` yet — to avoid two in-flight tickets racing on the same dispatcher
+  lines (see `lode.confluence`'s module docstring, "Explicitly out of scope for this ticket"). Before
+  `lode-mfts` lands, a Confluence refresh job fails immediately with `RuntimeError: refresh_external:
+  no fetch unit yet for source_type='confluence' ...`; `bd show lode-mfts` shows whether it has landed.
+
+*Steps*
+
+1. Set the token env vars (env vars are the primary credential source — a real token should never
+   live in `config.toml`):
+   ```
+   export LODE_JIRA_TOKEN=<api-token>
+   export LODE_JIRA_EMAIL=<account-email>
+   # and/or
+   export LODE_CONFLUENCE_TOKEN=<api-token>
+   export LODE_CONFLUENCE_EMAIL=<account-email>
+   ```
+2. Flag the product(s) on in `$LODE_HOME/config.toml` (default `~/.lode/config.toml`; create the file
+   if it doesn't exist yet):
+   ```toml
+   jira_enabled = true
+   confluence_enabled = true
+   ```
+   Leave `jira_base_url` / `confluence_base_url` empty to infer the API base from the pasted link's
+   `*.atlassian.net` host; set one only if your Cloud site's API host differs from the link itself.
+3. Confirm the flags took (`lode config` never prints a secret, but does print these two):
+   ```
+   lode config
+   ```
+4. Paste a real link into a new note — the JIRA permalink shape is `/browse/{KEY}`, the Confluence
+   shape is `/wiki/spaces/{SPACE}/pages/{id}/...`:
+   ```
+   lode add "Debugging https://<site>.atlassian.net/browse/PROJ-123"
+   lode add "Runbook: https://<site>.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook"
+   ```
+5. Run a work pass to drain the enqueued `refresh` job(s):
+   ```
+   lode work
+   ```
+6. Inspect the result:
+   ```
+   lode show <note-id>
+   lode dump-html <note-id>
+   ```
+
+*Exact expected outputs*
+
+- **Step 4:** each `lode add` prints a note id and exits `0`.
+- **Step 5:** `lode work`'s output includes one outcome line per link, exactly
+  `refreshed PROJ-123: ok` / `refreshed 123456: ok` (the literal string
+  `lode.drawdown.refresh_external` returns on success), followed by `drained N job(s)` with
+  `N >= 1`. No `RuntimeError` should appear: `no api_base persisted for external_id=...` means the
+  flag/token wasn't resolved yet at `lode add` time (redo from step 1 and re-paste); `no fetch unit
+  yet for source_type='confluence'` means `lode-mfts` hasn't landed (see Prerequisites).
+- **Step 6, `lode show <note-id>`:** the note body, then `edges:` listing `-> PROJ-123` (or
+  `-> 123456`) with a nested line `       jira · snapshot <id> · as of <timestamp> [un-refreshed]`
+  (or `confluence · ...`) — `un-refreshed` is the fresh, non-tombstoned, non-withheld state
+  (`lode.enrichment_view`'s naming — not a warning). `embedded: yes (N passage(s))`, `N >= 1`, once
+  the snapshot's own `embed` job has also drained (a separate queued job from `refresh` — re-run
+  `lode work` once more if it still reads `embedded: no`).
+- **Step 6, `lode dump-html <note-id>`:** prints the snapshot's raw JSON payload verbatim — for JIRA,
+  valid JSON with an `"issue"` key (`fields.summary`, `renderedFields.description`) and a
+  `"comments"` key (a list); for Confluence, valid JSON with `"id"` matching the pasted page id and a
+  `body.view.value` string holding the page's real rendered HTML.
+- **Optional negative check:** a deliberately wrong token reproduces the offline 401 fixture case —
+  `lode work` still reports `refreshed ...: tombstone` (never a crash), and `lode show <note-id>`'s
+  external line reads `[stale]` instead of `[un-refreshed]` (`lode.enrichment_view`: `stale` is the
+  state name for a tombstoned head snapshot).
+
+---
+
+## Atlassian connectors (JIRA + Confluence Cloud, `lode-gpzn`)
+
+A second and third connector alongside the generic web path above: JIRA and Confluence
+**Cloud** links draw down via authenticated REST APIs into structured snapshots, instead of
+trafilatura-scraping an auth-fronted login page (what the web path alone would do against
+either product today). **Data Center / Server is explicitly out of scope, deferred** — see
+[decisions.md](decisions.md). Each product is its own feature flag, **default off**:
+`jira_enabled` / `confluence_enabled` ([configuration.md](configuration.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn)
+has the full knob table — base-URL overrides, the env-var-primary/config.toml-fallback token
+resolution, the `secret=True` exclusion from `lode config` — not repeated here). A connector is
+*active* only when its flag is on **and** Basic-auth credentials (account email + API token)
+resolve (`lode.config.jira_active` / `confluence_active`); flag-off or unresolved credentials
+means a matching link falls straight through to the unchanged generic web path (login page ⇒
+tombstone) — never an error, always a quiet degrade. Credentials resolve **env-var primary**
+(`LODE_JIRA_TOKEN`/`LODE_JIRA_EMAIL`, `LODE_CONFLUENCE_TOKEN`/`LODE_CONFLUENCE_EMAIL`), with an
+optional `config.toml` fallback — no secret is *required* to live on disk, but one *may*, in
+plaintext; there is no OS-keyring integration ([decisions.md](decisions.md) records this as a
+deliberate deferral, not an oversight).
+
+**Raw `httpx`, no Atlassian SDK.** Both `lode.jira_fetch.JiraHttpFetcher` and
+`lode.confluence.HttpxConfluenceFetcher` are single-purpose, hand-rolled clients that implement
+the exact same `lode.webfetch.Fetcher` protocol (`fetch(url: str) -> RawResponse`) the web
+connector's `HttpxFetcher` already does — production wires the real client, tests inject a
+stub, so the offline gate never makes a network call. No SDK dependency, no parallel fetch
+abstraction; this is the same seam applied to two more connectors, not a new one.
+
+### Semantic `external_id`, not a URL (locked decision 3 + refinement A)
+
+Unlike a web `external_id` (a canonical URL string), an Atlassian `external_id` is the
+**semantic** identity the pasted link encodes — a JIRA issue key (`ABC-123`) or a Confluence
+page id — parsed out by `lode.drawdown._classify_atlassian` at link-detection time, synchronously,
+with **no network I/O** (owner decision F: this step must never block the note-save transaction
+on an auth round-trip). The payoff: a browser permalink, an API URL, and (where the id is
+present) any other URL form of the *same* issue/page all parse to the same key and dedup onto
+one `externals` row — the identical "one canonical node per identity" guarantee
+[External identity](#external-identity--same-two-id-split) above states for the web connector,
+now true across URL *shape* too, not just across repeated pastes of one exact URL.
+
+**Consequence — the persisted API-base seam (decision A).** Because `external_id` is no longer
+itself a fetchable URL, the async `refresh` job handler can't rebuild a request from `external_id`
+alone the way the web path does. The inferred-or-configured API base
+(`jira_base_url`/`confluence_base_url` when set; otherwise the pasted URL's own `*.atlassian.net`
+scheme+host, inferred by `lode.drawdown._resolve_api_base`) is therefore **persisted synchronously
+at detection time**, on a new `api_base` column on the `externals` row (`src/lode/schema.sql`) —
+the same transaction that writes `source_type` and `external_id`. `lode.jira_fetch.fetch_jira_issue`
+and `lode.confluence.fetch_confluence_page` both take `external_id` + `api_base` as explicit
+parameters and rebuild the request URL as `{api_base}+{external_id}` (JIRA:
+`{api_base}/rest/api/3/issue/{key}`; Confluence: `{api_base}/wiki/rest/api/content/{page_id}`),
+reading `api_base` off the row (`lode.drawdown`'s `_refresh_jira`/`_refresh_confluence` legs of
+`refresh_external`'s dispatcher). This is a general seam, not Atlassian-specific plumbing: any
+future connector whose semantic id isn't itself a URL can reuse the same "persist the base at
+detection, rebuild at fetch time" shape.
+
+### Confluence: only an id-bearing URL routes (decision F)
+
+Only `/wiki/spaces/{SPACE}/pages/{id}/...` — Confluence Cloud's page-id-bearing URL shape — routes
+to the connector (`lode.drawdown._CONFLUENCE_PAGE_RE`). A **tiny-link** (`/wiki/x/AbCdE`) or a
+**legacy display URL** (`/display/{SPACE}/{Title}`) carries no page id in the URL itself, and
+resolving one to an id would need an API round-trip — exactly the network I/O link-detection must
+not do (same owner-decision-F reasoning as the API-base seam above: detection stays synchronous).
+Both forms fall through to the generic web path today (login page ⇒ tombstone), **on a matched
+Confluence host, same as flag-off** — this is a deliberate scope boundary, not a routing bug, and
+is tracked as a known, unfixed gap in [decisions.md](decisions.md) rather than silently accepted.
+JIRA has no analogous gap: its only Cloud permalink shape, `/browse/{KEY}`, already carries the
+issue key directly (`lode.drawdown._JIRA_ISSUE_RE`); anything else on a matched JIRA host (a
+board, a dashboard, a search) has no semantic id either and falls through the same way.
+
+### Body representation: rendered HTML, the existing extractor (decision E)
+
+Neither connector writes a bespoke parser for its product's native body format — JIRA REST v3's
+Atlassian Document Format (ADF, a nested JSON doc) or Confluence's storage-format XHTML (full of
+`ac:structured-macro`/`ri:...` macro elements). Both instead request the product's own
+**server-side rendered HTML** — JIRA: `expand=renderedFields` on the issue plus
+`expand=renderedBody` on each paginated comment (`lode.jira_fetch._fetch_comments` loops
+`/rest/api/3/issue/{key}/comment?startAt=…` until every comment is collected); Confluence:
+`expand=body.view` — and run that HTML through the **existing** readability extractor,
+`lode.webfetch._extract` (trafilatura), the same one the web connector already uses. No
+connector-specific extraction code exists for either product. The full raw JSON response is kept
+verbatim as `raw_payload` either way (via `FetchResult.raw_html`, the same field name the web leg
+uses for provenance, holding JSON here instead of HTML) — for anyone who later wants the ADF or
+the storage-format markup, it isn't discarded, just not what gets extracted.
+
+### Shared classification, shared taxonomy (decision C, `lode-gpzn.13`)
+
+Both connectors classify every HTTP outcome through the same connector-neutral
+`lode.fetch_outcome.classify_http_status` the web path uses — see
+[Fetch-outcome taxonomy](#fetch-outcome-taxonomy-decided-lode-w0h1) above for the full OK /
+TOMBSTONE / TRANSIENT mapping and its worker-queue consequences (401/403/404 ⇒ tombstone;
+408/429/5xx/network/timeout ⇒ raise into the existing attempts/backoff/dead-letter machinery). No
+connector reimplements the status-code mapping locally; `lode.worker._refresh_dead_letter_hook`
+is generic over `source_type` for the same reason (reuses whatever `source_type` the `externals`
+row already carries rather than assuming `web`). This was a **prerequisite refactor**
+(`lode-gpzn.13`, extracted out of `lode.webfetch` behavior-preservingly) that both `lode-gpzn.3`
+(JIRA) and `lode-gpzn.4` (Confluence) built on rather than each carrying their own copy of the
+401/403/404-vs-408/429/5xx split.
+
+### Refresh policy and backfill are reused unchanged
+
+Neither connector introduces a second staleness/scheduling mechanism or a second re-draw-down
+command. [Refresh policy](#refresh-policy-ttl-based-revalidation-decided-for-web-lode-w0h6)'s TTL
+sweep and [Backfill](#backfill-per-connector-re-draw-down-lode-gpzn9)'s framework both operate on
+`externals` rows generically, keyed on `source_type`/`external_id`/`api_base` — a JIRA or
+Confluence row is just another row to either mechanism, needing no per-connector branch in either.
+The [Backfill](#backfill-per-connector-re-draw-down-lode-gpzn9) section above already documents
+the one connector-specific nuance that follows from decision D — a fresh migration mints a
+never-tombstoned semantic external and enqueues a plain refresh; the tombstone-exclusion override
+matters only on an idempotent re-run — so it isn't restated here.
 
 ---
 

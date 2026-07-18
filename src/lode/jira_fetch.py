@@ -4,10 +4,13 @@ Mirrors :mod:`lode.webfetch`'s shape deliberately, so
 :func:`lode.externals.ingest_fetch_result` consumes this unit's output
 unchanged: this module reuses :class:`~lode.webfetch.FetchResult`,
 :class:`~lode.webfetch.FetchStatus`, the :class:`~lode.webfetch.Fetcher`
-protocol, :class:`~lode.webfetch.RawResponse`, and
-:class:`~lode.webfetch.TransientFetchError` directly rather than defining
-parallel types — this is *the same seam*, applied to a second connector, not
-a new one.
+protocol, and :class:`~lode.webfetch.TransientFetchError` directly rather
+than defining parallel types — this is *the same seam*, applied to a second
+connector, not a new one. :class:`JiraHttpFetcher` itself is a thin
+:class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv): the httpx.Client
+construction, the four-arm except ladder, the classify_http_status/
+:class:`~lode.webfetch.RawResponse` handling all live once in the parent —
+this module supplies only the auth/header deltas.
 
 ## Request URL reconstruction
 
@@ -39,9 +42,9 @@ HTTP status classification goes through the shared, connector-neutral
 :class:`~lode.webfetch.HttpxFetcher` uses — not a local re-derivation: 401/
 403/404 (and any other non-408/429 4xx) become a tombstone;
 408/429/5xx/network/timeout raise :class:`~lode.webfetch.TransientFetchError`
-inside :class:`JiraHttpFetcher.fetch`, exactly where
-:class:`~lode.webfetch.HttpxFetcher` raises it, and propagate uncaught to the
-caller (the worker's existing attempts/backoff/dead-letter machinery).
+inside the inherited :meth:`~lode.webfetch.HttpxFetcher.fetch` and propagate
+uncaught to the caller (the worker's existing attempts/backoff/dead-letter
+machinery).
 
 ## Comments
 
@@ -66,9 +69,8 @@ from lode.webfetch import (
     Fetcher,
     FetchResult,
     FetchStatus,
-    RawResponse,
+    HttpxFetcher,
     TooManyRedirectsError,
-    TransientFetchError,
     _extract,
     _tombstone,
 )
@@ -81,52 +83,25 @@ log = logging.getLogger(__name__)
 _USER_AGENT = "lode-jira-fetch/1"
 
 
-class JiraHttpFetcher:
+class JiraHttpFetcher(HttpxFetcher):
     """Default JIRA :class:`~lode.webfetch.Fetcher`: one authenticated GET.
 
-    Structurally satisfies :class:`lode.webfetch.Fetcher` (same
-    ``fetch(url) -> RawResponse`` shape) — credentials are baked in at
-    construction (Basic auth), since the ``Fetcher`` protocol's ``fetch``
-    takes only a URL. Classification (transient vs. not) mirrors
-    :class:`~lode.webfetch.HttpxFetcher` exactly, via the same shared
-    :func:`~lode.fetch_outcome.classify_http_status`.
+    A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv) —
+    credentials become Basic auth and an ``Accept: application/json`` header,
+    passed straight through to the parent's ``__init__``; ``fetch`` itself
+    (the httpx.Client construction, the four-arm except ladder, and the
+    classify_http_status/RawResponse handling) is entirely inherited, not
+    re-housed here.
     """
 
     def __init__(
         self, credentials: AtlassianCredentials, settings: Settings | None = None
     ) -> None:
-        self._credentials = credentials
-        self._settings = settings or Settings()
-
-    def fetch(self, url: str) -> RawResponse:
-        settings = self._settings
-        try:
-            with httpx.Client(
-                follow_redirects=True,
-                max_redirects=settings.fetch_max_redirects,
-                timeout=settings.fetch_timeout_s,
-                headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
-                auth=httpx.BasicAuth(self._credentials.email, self._credentials.token),
-            ) as client:
-                response = client.get(url)
-        except httpx.TooManyRedirects as exc:
-            raise TooManyRedirectsError(str(exc)) from exc
-        except httpx.TimeoutException as exc:
-            raise TransientFetchError(f"timeout: {exc}") from exc
-        except httpx.NetworkError as exc:
-            raise TransientFetchError(f"network error: {exc}") from exc
-        except (httpx.HTTPError, httpx.InvalidURL) as exc:
-            # See lode.webfetch.HttpxFetcher.fetch's identical clause:
-            # httpx.InvalidURL is NOT an httpx.HTTPError subclass.
-            raise TransientFetchError(f"http client error: {exc}") from exc
-
-        if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
-            raise TransientFetchError(f"http {response.status_code}")
-
-        return RawResponse(
-            final_url=str(response.url),
-            status_code=response.status_code,
-            text=response.text,
+        super().__init__(
+            settings,
+            user_agent=_USER_AGENT,
+            auth=httpx.BasicAuth(credentials.email, credentials.token),
+            extra_headers={"Accept": "application/json"},
         )
 
 

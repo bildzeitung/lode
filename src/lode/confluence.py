@@ -55,13 +55,12 @@ Confluence-specific branch needed there.
   acceptance criteria call for body-only mapping via ``body.view`` ->
   trafilatura, nothing more. A parity follow-up (comments-in-snapshot) is a
   separate future decision, not resolved here.
-- **Wiring into :func:`lode.drawdown.refresh_external`'s dispatcher:** that
-  dispatcher currently raises ``RuntimeError`` for ``source_type ==
-  "confluence"`` (see its own docstring). This ticket's acceptance criteria
-  are scoped to the fetch unit itself (offline-tested in isolation); wiring
-  it into the dispatcher — alongside the JIRA leg, which is a sibling
-  in-flight ticket touching the very same function — is left to a follow-up
-  so the two don't race each other editing the same lines.
+- **Wiring into :func:`lode.drawdown.refresh_external`'s dispatcher:** this
+  ticket's acceptance criteria are scoped to the fetch unit itself (offline-
+  tested in isolation) — the dispatcher wiring, alongside the JIRA leg (a
+  sibling in-flight ticket touching the very same function), was left to a
+  follow-up so the two don't race each other editing the same lines. That
+  follow-up (lode-mfts) has since wired both legs in.
 """
 
 from __future__ import annotations
@@ -69,16 +68,13 @@ from __future__ import annotations
 import json
 from urllib.parse import quote
 
-import httpx
-
 from lode.config import AtlassianCredentials, Settings, resolve_confluence_credentials
 from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.webfetch import (
     Fetcher,
     FetchResult,
     FetchStatus,
-    RawResponse,
-    TransientFetchError,
+    HttpxFetcher,
     _extract,
     _tombstone,
 )
@@ -91,57 +87,30 @@ from lode.webfetch import (
 _USER_AGENT = "lode-confluence/1"
 
 
-class HttpxConfluenceFetcher:
+class HttpxConfluenceFetcher(HttpxFetcher):
     """Default :class:`~lode.webfetch.Fetcher` for the Confluence Cloud REST API.
 
-    Same shape as :class:`lode.webfetch.HttpxFetcher` — a single synchronous
-    GET via ``httpx``, classified through the exact same
-    :func:`~lode.fetch_outcome.classify_http_status` contract (raises
-    :class:`~lode.webfetch.TransientFetchError` for 408/429/5xx/network/
-    timeout, returns a :class:`~lode.webfetch.RawResponse` for everything
-    else) — but adds HTTP Basic auth (the resolved Confluence
-    :class:`~lode.config.AtlassianCredentials`) and an
-    ``Accept: application/json`` header, and follows **no** redirects: a
+    A thin :class:`~lode.webfetch.HttpxFetcher` subclass (lode-88iv): the
+    httpx.Client construction, the except ladder, and the
+    classify_http_status/:class:`~lode.webfetch.RawResponse` handling are
+    all inherited unchanged. This subclass supplies HTTP Basic auth (the
+    resolved Confluence :class:`~lode.config.AtlassianCredentials`), an
+    ``Accept: application/json`` header, and ``follow_redirects=False``: a
     REST API endpoint answering an authenticated GET has no legitimate
-    reason to 3xx the way a user-pasted web page does (:class:`~lode.
-    webfetch.HttpxFetcher` follows up to ``fetch_max_redirects`` hops for
-    exactly that reason; this fetcher has no analogous need and no
-    ``TooManyRedirectsError`` path).
+    reason to 3xx the way a user-pasted web page does (the parent follows up
+    to ``fetch_max_redirects`` hops for exactly that reason; this fetcher has
+    no analogous need and never sees a ``TooManyRedirectsError``).
     """
 
     def __init__(
         self, credentials: AtlassianCredentials, settings: Settings | None = None
     ) -> None:
-        self._credentials = credentials
-        self._settings = settings or Settings()
-
-    def fetch(self, url: str) -> RawResponse:
-        try:
-            with httpx.Client(
-                auth=(self._credentials.email, self._credentials.token),
-                timeout=self._settings.fetch_timeout_s,
-                headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
-            ) as client:
-                response = client.get(url)
-        except httpx.TimeoutException as exc:
-            raise TransientFetchError(f"timeout: {exc}") from exc
-        except httpx.NetworkError as exc:
-            raise TransientFetchError(f"network error: {exc}") from exc
-        except (httpx.HTTPError, httpx.InvalidURL) as exc:
-            # Same defensive default as HttpxFetcher: any other httpx-level
-            # failure (a malformed response, an unparseable URL — InvalidURL
-            # is NOT an HTTPError subclass and must be named explicitly)
-            # defaults to retryable rather than silently tombstoning on an
-            # unrecognized condition.
-            raise TransientFetchError(f"http client error: {exc}") from exc
-
-        if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
-            raise TransientFetchError(f"http {response.status_code}")
-
-        return RawResponse(
-            final_url=str(response.url),
-            status_code=response.status_code,
-            text=response.text,
+        super().__init__(
+            settings,
+            user_agent=_USER_AGENT,
+            auth=(credentials.email, credentials.token),
+            extra_headers={"Accept": "application/json"},
+            follow_redirects=False,
         )
 
 

@@ -54,6 +54,17 @@ from lode.enrichment_view import (
     enrichment_view_conn,
 )
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
+
+# Registers the "jira" connector into lode.backfill's registry on import
+# (lode-gpzn.10) -- deliberately a MODULE-LEVEL import here, not the lazy,
+# inside-the-command-function style `backfill`/`reconcile`/`work` otherwise
+# use to keep CLI startup light. Registration must happen exactly once, at
+# collection/process-start time, before any test's own registry-isolation
+# fixture runs -- a lazy import inside the `backfill` command races
+# tests/test_cli_backfill.py's fake-handler injection under pytest-xdist
+# (parallel worker processes make "which test calls `backfill()` first"
+# non-deterministic run to run).
+import lode.jira_backfill  # noqa: F401
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
@@ -2379,11 +2390,14 @@ def backfill(
 
     A "connector" here is whatever has registered itself into the backfill
     framework's registry (lode.backfill.register_backfill) -- this command
-    is just the dispatcher. "confluence" (lode-gpzn.11) is the first
-    built-in, registered on every invocation of this command; a connector
-    with no backfill logic yet simply doesn't appear. With no CONNECTOR
-    argument (or --list), the registered names are printed instead of
-    running anything.
+    is just the dispatcher; the framework itself ships no connector logic of
+    its own (see 'jira', lode-gpzn.10, and 'confluence', lode-gpzn.11 --
+    both built in). 'confluence' registers itself explicitly on every
+    invocation of this command rather than relying on a bare module-level
+    register_backfill(...) import-time side effect (see
+    lode.confluence_backfill.register's own docstring for why). With no
+    CONNECTOR argument (or --list), the registered names are printed instead
+    of running anything.
 
     --dry-run reports what the connector's handler would change without
     writing. --retry-tombstoned is the explicit, human-driven opt-in to also
