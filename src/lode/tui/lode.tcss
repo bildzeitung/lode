@@ -2,9 +2,9 @@
  *
  * Before this file the repo had no TUI CSS at all -- every screen rendered
  * with Textual's bare unstyled layout. Most visibly,
- * :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s Save/Discard/
- * Cancel prompt had no sizing or centering, so it read as a blank full
- * screen with a floating line of text rather than a popup dialog.
+ * :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s
+ * Save/Discard/Cancel prompt had no sizing or centering, so it read as a
+ * blank full screen with a floating line of text rather than a popup dialog.
  *
  * :class:`~textual.screen.ModalScreen`'s own ``DEFAULT_CSS`` already dims the
  * screen underneath (``background: $background 60%``) -- confirmed against

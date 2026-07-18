@@ -7,7 +7,7 @@ without disturbing its existing debounce/render behavior (that's
 the related-notes bits of ``tests/test_tui_app.py``/
 ``tests/test_tui_capture_save_and_new.py`` -- untouched here). This file adds:
 stepping through :attr:`RelatedNotesPanel._related` with Up/Down once the
-panel holds focus, opening :class:`~lode.tui.related_notes_panel.
+panel holds focus, opening :class:`~lode.tui.screens.related_note_modal.
 RelatedNoteModalScreen` for the selected note with Enter, Ctrl+F moving focus
 onto the panel from each composing screen, and the modal's highlighted-context
 rendering itself (:meth:`RelatedNoteModalScreen._highlighted_body`).
@@ -21,13 +21,13 @@ from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.related import RelatedNote
-from lode.tui.related_notes_panel import (
-    RELATED_MODAL_BODY_ID,
-    RelatedNoteModalScreen,
-    RelatedNotesPanel,
-)
+from lode.tui.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.browse import EDIT_RELATED_ID, EditScreen
 from lode.tui.screens.capture import RELATED_ID, CaptureScreen
+from lode.tui.screens.related_note_modal import (
+    RELATED_MODAL_BODY_ID,
+    RelatedNoteModalScreen,
+)
 
 _RELATED = [
     RelatedNote(note_id="note-a", snippet="a", age="1 day ago"),

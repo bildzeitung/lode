@@ -200,7 +200,7 @@ changed).
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
 | | | `ctrl+r` | View retrieved content | |
-| `DiscardConfirmScreen` | `screens/capture.py` | `s` | Save & quit | — |
+| `DiscardConfirmScreen` | `screens/discard_confirm.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |
 | | | `escape` | Cancel (`show=False`) | |
@@ -215,7 +215,7 @@ changed).
 | `RelatedNotesPanel` (focusable widget, not a `Screen`) | `related_notes_panel.py` | `up` | Select previous related | — (only active once the panel holds focus, per the trap above) |
 | | | `down` | Select next related | |
 | | | `enter` | Open selected (modal) | |
-| `RelatedNoteModalScreen` | `related_notes_panel.py` | `escape` | Back | — |
+| `RelatedNoteModalScreen` | `screens/related_note_modal.py` | `escape` | Back | — |
 
 `ctrl+s`/`ctrl+n` on `EditScreen`/`CaptureScreen` already predate this doc and are the precedent
 `lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, and `lode-0sjj`'s `Ctrl+R` all follow: every
