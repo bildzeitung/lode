@@ -78,7 +78,7 @@ directly -- the shared TUI+CLI view-model seam (lode-ay5.1, lode-0qc) -- and
 holds **no** copy of the stale-display policy or any independent display
 assembly; :mod:`lode.cli`'s ``show_`` (lode-ay5.3) consumes the same seam so
 the two surfaces cannot drift. Registered like
-:class:`~lode.tui.screens.capture.DiscardConfirmScreen`: a bare
+:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`: a bare
 ``ModalScreen`` pushed over the still-visible list rather than a
 ``SCREENS``-registry entry, dimming the table underneath for free via
 ``ModalScreen``'s own ``DEFAULT_CSS``.
@@ -129,7 +129,7 @@ that note via :func:`~lode.tui.edit.delete_note` -- the CAS-guarded
 ``op='delete'`` tombstone (:func:`lode.versions.delete`, routed through
 :class:`~lode.repository.Repository` so the FTS/lexical cache leg is evicted
 too) that :func:`lode.versions.recover` can later undo. It reuses the
-*pattern* :class:`~lode.tui.screens.capture.DiscardConfirmScreen` established
+*pattern* :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen` established
 (a small bordered popup dialog, lode-1i8.4) rather than that exact class --
 its fixed Save/Discard/Cancel prompt doesn't fit "delete this note," so
 :class:`DeleteConfirmScreen` is its own small Yes/No modal. A delete has no
@@ -245,7 +245,7 @@ from lode.tui.edit import (
 )
 from lode.tui.lode_footer import LodeFooter
 from lode.tui.related_notes_panel import RelatedNotesPanel
-from lode.tui.screens.capture import DiscardConfirmScreen
+from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import HeadConflictError, SaveResult
 
@@ -687,7 +687,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
 
     Content lives in a :class:`~textual.containers.VerticalScroll` (not a
     fixed :class:`~textual.containers.Vertical`, unlike
-    :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s small fixed
+    :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s small fixed
     dialog) so a note with many tags/entities/edges scrolls within the popup
     rather than overflowing or truncating. ``Esc`` pops back to
     :class:`BrowseScreen` -- the same one-level-at-a-time contract every other
@@ -752,7 +752,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
 class DeleteConfirmScreen(ModalScreen[bool]):
     """A small Yes/No confirm before a browse-row soft-delete (lode-d32.1).
 
-    Mirrors :class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s popup
+    Mirrors :class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s popup
     *styling* (bordered, centered dialog over the dimmed screen beneath,
     lode-1i8.4) but not its Save/Discard/Cancel choices -- there is nothing to
     save here, just "yes, delete" or "no, don't." Dismisses with a ``bool``:
@@ -1145,7 +1145,7 @@ class EditScreen(Screen[None]):
     (:func:`lode.tui.edit.save_edit`) -- a new *version* on this note's
     chain, never a new note. Escape returns to the browse list, reusing
     capture's Save/Discard/Cancel confirm
-    (:class:`~lode.tui.screens.capture.DiscardConfirmScreen`, lode-0wj.1) --
+    (:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`, lode-0wj.1) --
     but **this is the first screen where the dirty check can't be "is the
     buffer non-empty"**: a freshly loaded existing version is non-empty by
     construction, so that check would wrongly confirm on every Escape even

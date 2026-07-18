@@ -61,9 +61,9 @@ TUI.
 shipped with the package via ``[tool.setuptools.package-data]``
 (``pyproject.toml``). It is the repo's first TUI stylesheet and the pattern
 future screens' styling should extend; today it sizes and centers
-:class:`~lode.tui.screens.capture.DiscardConfirmScreen`'s dialog box (see
-that module's docstring for why ``ModalScreen``'s built-in dimming already
-covers the rest).
+:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`'s dialog box
+(see that module's docstring for why ``ModalScreen``'s built-in dimming
+already covers the rest).
 """
 
 from __future__ import annotations

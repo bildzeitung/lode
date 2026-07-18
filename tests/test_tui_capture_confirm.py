@@ -2,8 +2,9 @@
 
 Escape used to discard a dirty buffer silently -- an easy vi-muscle-memory
 footgun. Now a non-empty/non-whitespace buffer's Escape pops
-:class:`~lode.tui.screens.capture.DiscardConfirmScreen` (Save/Discard/Cancel)
-instead of exiting straight away; an empty/whitespace buffer still exits
+:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`
+(Save/Discard/Cancel) instead of exiting straight away; an empty/whitespace
+buffer still exits
 immediately (covered in ``tests/test_tui_app.py``, alongside the Discard leg
 of this same confirm flow). This file drives the remaining two legs -- Save
 and Cancel -- plus that the dialog actually appears and leaves the buffer
@@ -26,12 +27,8 @@ import sqlite3
 from pathlib import Path
 
 from lode.tui.app import LodeApp
-from lode.tui.screens.capture import (
-    BODY_ID,
-    CONFIRM_MESSAGE_ID,
-    CaptureScreen,
-    DiscardConfirmScreen,
-)
+from lode.tui.screens.capture import BODY_ID, CaptureScreen
+from lode.tui.screens.discard_confirm import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
 
 
 def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:

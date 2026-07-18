@@ -200,7 +200,7 @@ changed).
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
 | | | `ctrl+r` | View retrieved content | |
-| `DiscardConfirmScreen` | `screens/capture.py` | `s` | Save & quit | — |
+| `DiscardConfirmScreen` | `screens/discard_confirm.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |
 | | | `escape` | Cancel (`show=False`) | |

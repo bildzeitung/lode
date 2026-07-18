@@ -27,8 +27,9 @@ from pathlib import Path
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.browse import EDIT_BODY_ID, EditScreen
-from lode.tui.screens.capture import BODY_ID, CONFIRM_MESSAGE_ID, DiscardConfirmScreen
+from lode.tui.screens.capture import BODY_ID
 from lode.tui.screens.config import ConfigScreen
+from lode.tui.screens.discard_confirm import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import save
 
