@@ -173,14 +173,20 @@ class TestBackfillConfluence:
         assert edge == (url,)  # untouched
 
     def test_ignores_jira_links(self, conn: sqlite3.Connection):
-        # A matched Atlassian host but the JIRA shape, not Confluence's --
-        # _classify_atlassian would route this to SOURCE_TYPE_JIRA, which
-        # this handler must not touch (that's lode-gpzn.10's own handler).
+        # A matched Atlassian host but the JIRA shape, not Confluence's. JIRA
+        # is flagged on *too* here so _classify_atlassian genuinely returns a
+        # SOURCE_TYPE_JIRA classification -- exercising the handler's real
+        # classified[0] != SOURCE_TYPE_CONFLUENCE discrimination branch, not
+        # merely the "connector inactive -> None" path. This handler must not
+        # touch a JIRA link (that's lode-gpzn.10's own handler).
         url = "https://acme.atlassian.net/browse/ABC-123"
         _insert_web_external(conn, url, note_id="note-1", quoted_text=url)
 
+        settings = _confluence_settings(
+            jira_enabled=True, jira_token="tok", jira_email="a@example.com"
+        )
         summary = backfill_confluence(
-            conn, _confluence_settings(), dry_run=False, retry_tombstoned=False
+            conn, settings, dry_run=False, retry_tombstoned=False
         )
 
         assert summary == "migrated 0 link(s)"
