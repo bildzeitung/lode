@@ -22,8 +22,8 @@ show`` still want their own, longer-but-still-shortened form, per
 ``lode.cli._short_date``'s docstring, which explicitly defers this adaptive
 format to Browse); only the two TUI render sites
 (:meth:`~lode.tui.screens.browse.BrowseScreen._reload_rows`,
-:meth:`~lode.tui.screens.browse.VersionHistoryScreen.on_mount`) call this to
-shorten what they display.
+:meth:`~lode.tui.screens.version_history.VersionHistoryScreen.on_mount`) call
+this to shorten what they display.
 """
 
 from __future__ import annotations

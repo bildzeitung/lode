@@ -1,24 +1,25 @@
-"""Pure ``Text``-rendering helpers shared across :mod:`browse.py <lode.tui.screens.browse>`'s screens (lode-s5kp.4).
+"""Pure ``Text``-rendering helpers shared across the browse-family screens (lode-s5kp.4).
 
 Promoted out of ``browse.py`` into this leaf module because these 7 functions
 are pure formatting -- no widget, no navigation, no DB access beyond the args
-already passed in -- and are reused by several of that module's screens
-(:class:`~lode.tui.screens.browse.VersionViewScreen`,
-:class:`~lode.tui.screens.browse.EnrichmentModalScreen`,
-:class:`~lode.tui.screens.browse.ExternalPickerScreen`,
+already passed in -- and are reused by several browse-family screens
+(:class:`~lode.tui.screens.version_view.VersionViewScreen`,
+:class:`~lode.tui.screens.enrichment_modal.EnrichmentModalScreen`,
+:class:`~lode.tui.screens.external_picker.ExternalPickerScreen`,
 :class:`~lode.tui.screens.browse.BrowseScreen`). Giving them their own home
-removes the shared-helper-home ambiguity the later screen-extraction ticket
-(lode-s5kp.1) would otherwise have to settle on its own.
+removed the shared-helper-home ambiguity the later screen-extraction ticket
+(lode-s5kp.1, since done -- those screens now each live in their own module
+too) would otherwise have had to settle on its own.
 
 **Deliberately imports no ``Screen``/``Widget`` subclass** -- that is the
 whole point of putting these here rather than leaving them in ``browse.py``:
-a leaf module any of that module's (eventually split) screens can import
-from without reintroducing a cycle. ``_view_note_external_content`` and
-``_resolve_externals`` stay behind in ``browse.py`` on purpose: the former
-pushes :class:`~lode.tui.screens.browse.SnapshotViewerScreen` and
-:class:`~lode.tui.screens.browse.ExternalPickerScreen` directly, so it is
-navigation glue, not a pure render helper, and moving it here would pull
-those two screens into this otherwise Screen-free module.
+a leaf module any browse-family screen can import from without introducing a
+cycle. ``_view_note_external_content`` and ``_resolve_externals`` stay behind
+in ``browse.py`` on purpose: the former pushes
+:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` and
+:class:`~lode.tui.screens.external_picker.ExternalPickerScreen` directly, so
+it is navigation glue, not a pure render helper, and moving it here would
+pull those two screens into this otherwise Screen-free module.
 
 Pure move -- no behavior change; ``docs/conventions.md``'s underscore-prefix
 module naming marks this as not itself a screen, so it doesn't count against

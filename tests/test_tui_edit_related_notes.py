@@ -21,7 +21,7 @@ from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.related_notes_panel import RelatedNotesPanel
-from lode.tui.screens.browse import EDIT_BODY_ID, EDIT_RELATED_ID, EditScreen
+from lode.tui.screens.edit import EDIT_BODY_ID, EDIT_RELATED_ID, EditScreen
 
 
 class _StubEmbedder:

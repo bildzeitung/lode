@@ -27,7 +27,7 @@ module's existing "screens own no read logic of their own" convention
 (:mod:`lode.tui.screens.browse`'s own docstring).
 
 **Selecting a note opens the editor (consistent with lode-olmi.2's intent).**
-Row-select on the bottom panel pushes :class:`~lode.tui.screens.browse.
+Row-select on the bottom panel pushes :class:`~lode.tui.screens.edit.
 EditScreen` directly -- this ticket's own acceptance criterion, independent
 of whether/when lode-olmi.2 itself (retiring Browse's own read-only
 ``NoteViewScreen``) lands; Escape from the pushed ``EditScreen`` pops back to
@@ -93,7 +93,7 @@ from textual.widgets import DataTable, Header
 from lode.notes_read import list_notes_with_all_tags, list_tags, short_note_id
 from lode.tui.dates import format_adaptive_date
 from lode.tui.lode_footer import LodeFooter
-from lode.tui.screens.browse import EditScreen
+from lode.tui.screens.edit import EditScreen
 
 #: The top panel's tag grid widget id -- read back in tests.
 TAG_LIST_ID = "tags-tag-list"

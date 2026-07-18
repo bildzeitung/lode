@@ -121,7 +121,7 @@ def find_related_notes(
 
     ``exclude_note_id`` (lode-aoc) drops that one note from the results before
     the dedup/limit cap — the note being *edited* trivially matches its own
-    still-fresh draft, so :class:`~lode.tui.screens.browse.EditScreen` passes
+    still-fresh draft, so :class:`~lode.tui.screens.edit.EditScreen` passes
     its ``note_id`` here to keep a note from ever surfacing as "related" to
     itself. ``None`` (the default, and what capture's brand-new-note pass
     uses — there is no id yet to exclude) excludes nothing.

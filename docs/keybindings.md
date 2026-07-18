@@ -59,7 +59,7 @@ checklist rather than assumed safe.
 ## The hard rule: editable-TextArea screens use non-printable keys
 
 A screen that composes an **editable** `TextArea` (`read_only` not set, or explicitly `False`) —
-today `EditScreen` (`src/lode/tui/screens/browse.py`) and `CaptureScreen`
+today `EditScreen` (`src/lode/tui/screens/edit.py`) and `CaptureScreen`
 (`src/lode/tui/screens/capture.py`) — must bind new actions to a **non-printable** key: a
 `ctrl+<letter>` combo or a named key like `escape`/`tab`. **Never a bare printable
 character** (a letter, digit, or punctuation key without a modifier), and — per the "No function
@@ -176,10 +176,10 @@ changed).
 |---|---|---|---|---|
 | `NoteViewScreen` | `screens/browse.py` | `escape` | Back | read-only |
 | | | `h` | Show history | |
-| `VersionHistoryScreen` | `screens/browse.py` | `escape` | Back | — |
-| `VersionViewScreen` | `screens/browse.py` | `escape` | Back | read-only |
-| `EnrichmentModalScreen` | `screens/browse.py` | `escape` | Back | — |
-| `DeleteConfirmScreen` | `screens/browse.py` | `y` | Yes, delete | — |
+| `VersionHistoryScreen` | `screens/version_history.py` | `escape` | Back | — |
+| `VersionViewScreen` | `screens/version_view.py` | `escape` | Back | read-only |
+| `EnrichmentModalScreen` | `screens/enrichment_modal.py` | `escape` | Back | — |
+| `DeleteConfirmScreen` | `screens/delete_confirm.py` | `y` | Yes, delete | — |
 | | | `n` | No, cancel | |
 | | | `escape` | Cancel (`show=False`) | |
 | `BrowseScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
@@ -189,12 +189,12 @@ changed).
 | | | `x` | Expand/collapse summary | |
 | | | `slash` | Search forward | |
 | | | `question_mark` | Search backward | |
-| `ExternalPickerScreen` | `screens/browse.py` | `escape` | Back | — (DataTable) |
+| `ExternalPickerScreen` | `screens/external_picker.py` | `escape` | Back | — (DataTable) |
 | `TagsScreen` | `screens/tags.py` | `escape` | Back | — (DataTable grid, `lode-l38d.9`) |
 | | | `space` | Toggle tag (`show=False`) | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same. Hidden to match the `SelectionList` it replaced, whose own `space` binding was `show=False` too |
-| `SnapshotViewerScreen` | `screens/browse.py` | `escape` | Back | read-only |
+| `SnapshotViewerScreen` | `screens/snapshot_viewer.py` | `escape` | Back | read-only |
 | | | `t` | Toggle raw HTML | |
-| `EditScreen` | `screens/browse.py` | `ctrl+s` | Save | **editable** |
+| `EditScreen` | `screens/edit.py` | `ctrl+s` | Save | **editable** |
 | | | `escape` | Back (cancel) | |
 | | | `ctrl+f` | Focus related-notes panel | |
 | | | `ctrl+h` | Show version history | |

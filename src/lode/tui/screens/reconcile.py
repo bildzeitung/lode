@@ -18,7 +18,7 @@ app-shell's registration convention.
 :class:`~lode.tui.screens.capture.CaptureScreen` is the app's *root* screen,
 so a resolved conflict there ends the whole session (``self.app.exit(...)``)
 — that is what every existing test above pins. The edit flow
-(:class:`~lode.tui.screens.browse.EditScreen`) instead pushes this screen from
+(:class:`~lode.tui.screens.edit.EditScreen`) instead pushes this screen from
 *inside* an already-multi-screen session (capture → browse → edit), where
 "resolved" has to mean "pop back to the browse list," not "exit the app."
 Rather than hardcoding either convention, the optional ``on_resolved``

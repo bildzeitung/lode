@@ -16,13 +16,9 @@ from pathlib import Path
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens.browse import (
-    EDIT_BODY_ID,
-    TABLE_ID,
-    BrowseScreen,
-    EditScreen,
-)
+from lode.tui.screens.browse import TABLE_ID, BrowseScreen
 from lode.tui.screens.discard_confirm import CONFIRM_MESSAGE_ID, DiscardConfirmScreen
+from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
 from lode.versions import save
 

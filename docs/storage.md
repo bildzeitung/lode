@@ -295,7 +295,7 @@ Async enrichment makes an empty section ambiguous ("hasn't run yet" vs. "ran and
 "ran and died") — this three-way split is what makes all three distinguishable on both surfaces.
 
 **The TUI inspector modal (implemented lode-ay5.2).** `BrowseScreen`'s `i` binding (`Esc` to
-dismiss) pushes `EnrichmentModalScreen` (`src/lode/tui/screens/browse.py`), a scrollable popup that
+dismiss) pushes `EnrichmentModalScreen` (`src/lode/tui/screens/enrichment_modal.py`), a scrollable popup that
 renders `enrichment_view` directly — summary, tags, entities, edges (reason+confidence+stale),
 embed status, `enrichment_state` — with no DB access or stale-display logic of its own. Consistent
 with the `EnrichmentItem`/`EnrichmentEdge` `stale` bit being structured data rather than a baked-in
