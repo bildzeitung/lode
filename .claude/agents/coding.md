@@ -222,8 +222,9 @@ rtk bd show <id> --json | jq -r '.[0].design // empty'
 
 - **Create new files with the `Write` tool**, not `bash` heredocs/echo (a `\n#` in a quoted bash
   arg — comments, section headers — trips a security prompt; Write avoids it).
-- Match the surrounding code's idiom, naming, and comment density. Every Python CLI uses **Typer**,
-  never argparse. The venv lives at **`./venv`** (repo root).
+- Match the surrounding code's idiom, naming, and comment density, and honor the coding-style fiats
+  in [`docs/conventions.md`](../../docs/conventions.md) (e.g. Typer never argparse — `@import`'d into
+  my context via CLAUDE.md). The venv lives at **`./venv`** (repo root).
 - Track work you **discover** mid-task as its own issue, linked to the parent — don't silently
   expand scope or bury it in this commit. **Pick the dependency type deliberately — bd allows only
   one type per pair, so this is a choice, not a default** (lode-c0t3; full rationale:
@@ -734,7 +735,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Venv | `./venv` via `./scripts/python-init.sh` |
 | Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
-| CLI framework | **Typer** (never argparse) |
+| Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Shell | prefix with `rtk` |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
 | Task tracker | **bd only** |

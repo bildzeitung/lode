@@ -109,9 +109,10 @@ These mirror `challenge`'s axes, turned from *plan* onto *result*:
 - Does it do **less** than the ticket and hide it? Under-scope is as much a finding as over-scope.
 
 **Design & invariants — does it honor the record?** (challenge's *assumptions*, after the fact)
-- Are the **lode invariants** kept? **Typer, never argparse**; venv at `./venv`; design decisions in
-  `docs/` (never a bd note or memory — that forks the record); **simplest thing that works** (no
-  abstraction or flexibility nobody asked for).
+- Are the **lode invariants** and the coding-style fiats in [`docs/conventions.md`](../../../docs/conventions.md)
+  kept? e.g. **Typer, never argparse**; one `Screen`/custom `Widget` per module; venv at `./venv`;
+  design decisions in `docs/` (never a bd note or memory — that forks the record); **simplest thing
+  that works** (no abstraction or flexibility nobody asked for).
 - Does the implementation match the ticket's `design` / the settled `docs/`, or did it quietly take a
   different architecture? A defensible-but-different approach is a *decision*, not automatically a
   failure — see the escalate rule.

@@ -382,6 +382,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | I never | merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
 | External trackers | never WRITE (`gh issue/pr create`, comment, review, close, merge, `gh api` non-GET, …) under the user's identity — draft the text and record PENDING A HUMAN instead; read-only `gh`/`WebFetch` and internal bd filing stay legal (lode-o29m) |
 | Technical review | `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
+| Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
 | Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
