@@ -113,7 +113,7 @@ exactly one pushes the viewer directly; more than one pushes
 :class:`ExternalPickerScreen` first, a DataTable-then-select list (mirroring
 :class:`VersionHistoryScreen`'s own pattern above) showing each candidate's
 source_type/snapshot id/fetched_at/state -- the same fields
-:func:`_external_text` already renders -- before the chosen row pushes the
+:func:`~lode.tui.screens._browse_render._external_text` already renders -- before the chosen row pushes the
 viewer.
 
 This screen's binding is bare ``v`` (``action_view_content``): the focused
@@ -168,8 +168,8 @@ it between the 1-line-capped summary the whole list otherwise shows
 (lode-juz8.3) and its full, untruncated text -- highlighted row only, so the
 rest of the list stays scannable while one row is read in full.
 :meth:`BrowseScreen._reload_rows` renders that one row with
-:func:`_wrap_summary_full` (no line cap, ``height=`` its actual wrapped line
-count) instead of :func:`_clip_summary_to_row_height`; every other row is
+:func:`~lode.tui.screens._browse_render._wrap_summary_full` (no line cap, ``height=`` its actual wrapped line
+count) instead of :func:`~lode.tui.screens._browse_render._clip_summary_to_row_height`; every other row is
 unaffected. Tracked as :attr:`BrowseScreen._expanded_note_id`, a plain
 ``note_id | None`` rather than a set, since only one row can be expanded at a
 time. Unlike the cursor (preserved across a reload, lode-olmi.1), expansion
@@ -208,7 +208,6 @@ always land in-viewport.
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
 
 from rich.text import Text
@@ -220,12 +219,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Header, Input, Static, TextArea
 from textual.widgets.data_table import RowDoesNotExist
 
-from lode.enrichment_view import (
-    EnrichmentEdge,
-    EnrichmentItem,
-    ExternalView,
-    enrichment_view,
-)
+from lode.enrichment_view import ExternalView, enrichment_view
 from lode.ids import short_version_id
 from lode.notes_read import (
     SnapshotRow,
@@ -245,6 +239,14 @@ from lode.tui.edit import (
 )
 from lode.tui.lode_footer import LodeFooter
 from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.screens._browse_render import (
+    _SUMMARY_ROW_HEIGHT,
+    _clip_summary_to_row_height,
+    _edges_text,
+    _items_line,
+    _summary_text,
+    _wrap_summary_full,
+)
 from lode.tui.screens.capture import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import HeadConflictError, SaveResult
@@ -286,8 +288,6 @@ SNAPSHOT_VIEWER_BODY_ID = "snapshot-viewer-body"
 SNAPSHOT_VIEWER_DIALOG_ID = "snapshot-viewer-dialog"
 #: The many-externals picker table's widget id -- read back in tests.
 EXTERNAL_PICKER_TABLE_ID = "external-picker-table"
-#: Placeholder text for an empty section -- never suppressed, just labeled.
-_NONE_TEXT = "(none)"
 
 #: Left+right cell padding a ``DataTable`` adds *per column* -- used to work out
 #: how much horizontal room the Summary column may claim without pushing the
@@ -296,47 +296,6 @@ _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
 #: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
-#: Fixed row height (lode-olmi.3, tightened from 2 to 1 by lode-juz8.3) -- a
-#: long summary used to grow the row (and so the whole list) as tall as it
-#: needed via ``height=None``; every row is now capped to this many lines,
-#: with overflow ellipsized instead of wrapped. Summaries are prompted
-#: lede-first (lode-juz8.5) so the single visible line still carries the
-#: note's point.
-_SUMMARY_ROW_HEIGHT = 1
-
-
-def _wrap_summary_full(summary: str, width: int) -> tuple[str, int]:
-    """Wrap *summary* to *width* with no line cap -- the full untruncated text.
-
-    Companion to :func:`_clip_summary_to_row_height`, used for the one
-    highlighted row a user has expanded (lode-juz8.4) instead of the
-    1-line-capped rendering every other row gets. Returns the wrapped text
-    and its line count together since the caller needs both in the same
-    ``add_row`` call: the cell content and the row's ``height=``.
-    """
-    lines = textwrap.wrap(summary, width=width) or [""]
-    return "\n".join(lines), len(lines)
-
-
-def _clip_summary_to_row_height(summary: str, width: int) -> str:
-    """Wrap *summary* to *width* and cap it at :data:`_SUMMARY_ROW_HEIGHT` lines.
-
-    A ``DataTable`` row given a fixed ``height`` doesn't ellipsize overflow on
-    its own -- it just clips whatever doesn't fit, mid-word, with no visual
-    cue that anything is missing. So the wrapping is done here instead: the
-    text is pre-wrapped to *width* and, if that produces more than
-    :data:`_SUMMARY_ROW_HEIGHT` lines, the last visible line is truncated and
-    given a trailing ellipsis so the cut is visible rather than silent.
-    """
-    if width <= 0:
-        return summary
-    lines = textwrap.wrap(summary, width=width) or [""]
-    if len(lines) <= _SUMMARY_ROW_HEIGHT:
-        return "\n".join(lines)
-    kept = lines[:_SUMMARY_ROW_HEIGHT]
-    last = kept[-1][: max(width - 1, 0)].rstrip()
-    kept[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
-    return "\n".join(kept)
 
 
 class VersionHistoryScreen(Screen[None]):
@@ -417,86 +376,6 @@ class VersionViewScreen(Screen[None]):
         self.query_one(f"#{VERSION_BODY_ID}", TextArea).text = body or ""
 
 
-def _item_text(item: EnrichmentItem) -> Text:
-    """One tag/entity/summary value, dimmed if stale.
-
-    Styles the ``stale`` bit directly rather than printing a baked-in suffix
-    (lode-0qc) -- the whole reason :class:`~lode.enrichment_view.
-    EnrichmentItem` carries ``stale`` as a structured flag instead of a
-    ``" [stale]"``-suffixed string is so a consumer that wants to *style* a
-    stale item (as this modal does) never has to string-sniff for the marker.
-    """
-    return Text(item.value, style="dim" if item.stale else "")
-
-
-def _items_line(items: list[EnrichmentItem]) -> Text:
-    """Every tag/entity on one comma-separated line, each styled by its own bit."""
-    if not items:
-        return Text(_NONE_TEXT)
-    line = Text()
-    for index, item in enumerate(items):
-        if index:
-            line.append(", ")
-        line.append_text(_item_text(item))
-    return line
-
-
-def _summary_text(summary: EnrichmentItem | None) -> Text:
-    """The note's one summary line, or the placeholder when it has none at all."""
-    if summary is None:
-        return Text(_NONE_TEXT)
-    return _item_text(summary)
-
-
-def _external_text(external: ExternalView) -> Text:
-    """One edge's external-snapshot introspection sub-line (lode-8d2).
-
-    Rendered directly beneath its edge's own line in the same Edges block --
-    the external analogue of a note's tags/entities, through the exact
-    :class:`~lode.enrichment_view.ExternalView` fields
-    :func:`~lode.enrichment_view.enrichment_view` already assembled (no
-    second DB read, no re-derived policy). Dimmed for ``stale``/``withheld``
-    the same way a stale tag/edge already is (lode-0qc); the default
-    ``un-refreshed`` state renders plain, but is still printed explicitly so
-    all three states are equally visible in the modal.
-    """
-    line = (
-        f"     {external.source_type} · snapshot "
-        f"{short_version_id(external.snapshot_id)} · as of {external.fetched_at} "
-        f"[{external.state}]"
-    )
-    return Text(line, style="dim" if external.state != "un-refreshed" else "")
-
-
-def _edges_text(edges: list[EnrichmentEdge]) -> Text:
-    """One inferred edge per line: target, reason, confidence -- dimmed if stale.
-
-    ``reason``/``confidence`` are nullable on the seam (a user-curated edge may
-    carry neither); missing values render as an explicit placeholder rather
-    than a blank so the line never reads as truncated. When an edge draws down
-    an external (``edge.external`` is not ``None``, lode-8d2), the target
-    label is the bare ``to_id`` (the source URL) rather than the truncated
-    :func:`~lode.notes_read.short_note_id` prefix -- that prefix is an
-    8-char slice meant for note ids, not a URL -- and a second, indented line
-    shows that external's snapshot introspection (:func:`_external_text`).
-    """
-    if not edges:
-        return Text(_NONE_TEXT)
-    block = Text()
-    for index, edge in enumerate(edges):
-        if index:
-            block.append("\n")
-        reason = edge.reason if edge.reason is not None else "no reason recorded"
-        confidence = f"{edge.confidence:.2f}" if edge.confidence is not None else "n/a"
-        target = edge.to_id if edge.external is not None else short_note_id(edge.to_id)
-        line = f"-> {target} ({reason}, {confidence})"
-        block.append(line, style="dim" if edge.stale else "")
-        if edge.external is not None:
-            block.append("\n")
-            block.append_text(_external_text(edge.external))
-    return block
-
-
 def _resolve_externals(db_path: Path, note_id: str) -> list[ExternalView]:
     """*note_id*'s drawn-down external edges, in edge order (lode-0sjj).
 
@@ -547,7 +426,7 @@ class ExternalPickerScreen(Screen[None]):
     than one external edge -- the "many" branch of the zero/one/many
     addressing rule shared with ``lode dump-html`` (lode-olmi.7). Each row is
     one :class:`~lode.enrichment_view.ExternalView` (Source | Snapshot |
-    Fetched | State -- the same fields :func:`_external_text` already renders
+    Fetched | State -- the same fields :func:`~lode.tui.screens._browse_render._external_text` already renders
     beneath an edge line in :class:`EnrichmentModalScreen`); selecting one
     pushes :class:`SnapshotViewerScreen` for that row's ``snapshot_id``.
 
@@ -680,10 +559,11 @@ class EnrichmentModalScreen(ModalScreen[None]):
     entities, inferred edges (reason+confidence+stale), embed status, and the
     three-valued ``enrichment_state`` -- with **no** DB access or display
     policy of its own; this screen only shapes the already-decided fields into
-    widgets. The module-level ``_item_text``/``_items_line``/``_edges_text``
-    helpers above do the one bit of real work this modal owns: styling
-    ``stale`` dim instead of string-sniffing a suffix (lode-0qc; see
-    ``docs/storage.md``'s "Enrichment view-model" section).
+    widgets. The ``_item_text``/``_items_line``/``_edges_text`` helpers in
+    :mod:`~lode.tui.screens._browse_render` (lode-s5kp.4) do the one bit of
+    real work this modal owns: styling ``stale`` dim instead of
+    string-sniffing a suffix (lode-0qc; see ``docs/storage.md``'s
+    "Enrichment view-model" section).
 
     Content lives in a :class:`~textual.containers.VerticalScroll` (not a
     fixed :class:`~textual.containers.Vertical`, unlike
@@ -883,14 +763,14 @@ class BrowseScreen(Screen[None]):
         summary wrapped down over as many lines as it needed and a busy list
         became hard to scan. Every row is now a fixed :data:`_SUMMARY_ROW_HEIGHT`
         tall -- one line -- and the summary text is pre-wrapped and ellipsized
-        to that budget by :func:`_clip_summary_to_row_height` before it ever
+        to that budget by :func:`~lode.tui.screens._browse_render._clip_summary_to_row_height` before it ever
         reaches the table -- overflow is truncated, not wrapped further.
         Summaries are prompted lede-first (lode-juz8.5) so the truncated line
         still carries the note's point.
 
         **One row can opt out (lode-juz8.4).** When :attr:`_expanded_note_id`
         names a row still present in *rows*, that one row is rendered with
-        :func:`_wrap_summary_full` instead -- the full, untruncated summary,
+        :func:`~lode.tui.screens._browse_render._wrap_summary_full` instead -- the full, untruncated summary,
         at its own actual wrapped ``height=`` rather than the fixed
         :data:`_SUMMARY_ROW_HEIGHT` -- while every other row keeps the
         1-line-capped rendering above.
