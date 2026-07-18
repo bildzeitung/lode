@@ -2341,5 +2341,82 @@ def work(
         conn.close()
 
 
+@app.command()
+def backfill(
+    connector: str | None = typer.Argument(
+        None,
+        help=(
+            "Registered connector name (see 'lode backfill --list'). Omit to "
+            "list registered connectors."
+        ),
+    ),
+    list_connectors: bool = typer.Option(
+        False,
+        "--list",
+        help="List registered connectors and exit.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Report what would change without writing anything.",
+    ),
+    retry_tombstoned: bool = typer.Option(
+        False,
+        "--retry-tombstoned",
+        help=(
+            "Also re-enqueue a fresh refresh for a target whose head "
+            "snapshot already tombstoned on a prior backfill pass. Idempotent "
+            "re-run only -- never needed on a first migration, since a first "
+            "migration mints a brand-new, never-tombstoned target."
+        ),
+    ),
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Re-run a connector's draw-down for its already-processed links under CURRENT routing.
+
+    CLI only -- no TUI surface. Runs per-machine, wherever this DB lives
+    ($LODE_HOME); it does not travel on the Dolt/git wire.
+
+    A "connector" here is whatever has registered itself into the backfill
+    framework's registry (lode.backfill.register_backfill) -- this command
+    is just the dispatcher; no connector ships registered by default. With
+    no CONNECTOR argument (or --list), the registered names are printed
+    instead of running anything.
+
+    --dry-run reports what the connector's handler would change without
+    writing. --retry-tombstoned is the explicit, human-driven opt-in to also
+    retry a target that already permanently failed (tombstoned) on a prior
+    backfill pass -- see the command's own help on that flag.
+    """
+    from lode.backfill import BackfillError, registered_backfills, run_backfill
+
+    if list_connectors or connector is None:
+        names = registered_backfills()
+        if not names:
+            typer.echo("no connectors registered for backfill")
+        else:
+            for name in names:
+                typer.echo(name)
+        return
+
+    settings = _resolve_settings()
+    conn = _open_db(db)
+    try:
+        try:
+            summary = run_backfill(
+                conn,
+                settings,
+                connector,
+                dry_run=dry_run,
+                retry_tombstoned=retry_tombstoned,
+            )
+        except BackfillError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from None
+        typer.echo(summary)
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
