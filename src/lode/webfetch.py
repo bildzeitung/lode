@@ -224,22 +224,47 @@ class Fetcher(Protocol):
 
 
 class HttpxFetcher:
-    """Default :class:`Fetcher`: a single synchronous GET via ``httpx``."""
+    """Default :class:`Fetcher`: a single synchronous GET via ``httpx``.
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    The JIRA and Confluence connectors
+    (:class:`lode.jira_fetch.JiraHttpFetcher`,
+    :class:`lode.confluence.HttpxConfluenceFetcher`) subclass this rather
+    than re-housing :meth:`fetch`'s try/except+classify+:class:`RawResponse`
+    ladder (lode-88iv) — the only real per-connector deltas are the
+    ``User-Agent`` value, an optional auth credential, extra headers (e.g.
+    ``Accept: application/json``), and whether redirects are followed at
+    all, so those are the seams exposed here rather than duplicating the
+    whole method.
+    """
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        user_agent: str = _USER_AGENT,
+        auth: httpx.Auth | tuple[str, str] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> None:
         self._settings = settings or Settings()
+        self._headers = {"User-Agent": user_agent, **(extra_headers or {})}
+        self._auth = auth
+        self._follow_redirects = follow_redirects
 
     def fetch(self, url: str) -> RawResponse:
         settings = self._settings
         try:
             # max_redirects is a Client-constructor knob, not accepted by the
             # module-level httpx.get() shortcut — a short-lived client is the
-            # correct way to set it for one request.
+            # correct way to set it for one request. Harmless to pass even
+            # when follow_redirects=False (a subclass's choice, e.g.
+            # HttpxConfluenceFetcher): httpx simply never consults it then.
             with httpx.Client(
-                follow_redirects=True,
+                follow_redirects=self._follow_redirects,
                 max_redirects=settings.fetch_max_redirects,
                 timeout=settings.fetch_timeout_s,
-                headers={"User-Agent": _USER_AGENT},
+                headers=self._headers,
+                auth=self._auth,
             ) as client:
                 response = client.get(url)
         except httpx.TooManyRedirects as exc:
