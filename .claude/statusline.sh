@@ -129,12 +129,7 @@ fi
 # --- Git (fleet-aware short form) -------------------------------------------
 # Beyond branch + dirty count, show how far this branch sits from its merge
 # TARGET — that's the git-side analogue of the bd pipeline view. On trunk the
-# target is origin/trunk; on a feature/worktree branch it's local trunk. We add
-# the same freshness honesty as the bd staleness gate: an ahead/behind computed
-# against origin is only as current as the last fetch, so on trunk we surface a
-# "fetch:<age>" token once that knowledge starts going stale. We NEVER fetch from
-# the statusline (must stay side-effect-free) — we only read FETCH_HEAD's age,
-# and from the COMMON git dir, since a worktree's own git-dir has no FETCH_HEAD.
+# target is origin/trunk; on a feature/worktree branch it's local trunk.
 git_part=""
 if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
     branch=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null || git -C "$cwd" rev-parse --short HEAD 2>/dev/null)
@@ -159,25 +154,8 @@ if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir > /dev/null 2>&1; then
         [ "${behind:-0}" -gt 0 ] && div="${div:+$div }↓${behind}"
     fi
 
-    # Fetch-age honesty: only when the target is origin/* (i.e. on trunk), and
-    # only once the last fetch is old enough that the ↓behind may be understated.
-    fetch_part=""
-    case "$base" in
-        origin/*)
-            fh="$(git -C "$cwd" rev-parse --git-common-dir 2>/dev/null)/FETCH_HEAD"
-            if [ -f "$fh" ]; then
-                age=$(( $(date +%s) - $(stat -c %Y "$fh" 2>/dev/null || echo 0) ))
-                if   [ "$age" -ge 86400 ]; then fetch_part="fetch:$((age/86400))d"
-                elif [ "$age" -ge 3600 ];  then fetch_part="fetch:$((age/3600))h"
-                elif [ "$age" -ge 900 ];   then fetch_part="fetch:$((age/60))m"
-                fi
-            fi
-            ;;
-    esac
-
     git_part="git:${branch} ${git_status}"
     [ -n "$div" ] && git_part="${git_part} ${div}"
-    [ -n "$fetch_part" ] && git_part="${git_part} ${fetch_part}"
 fi
 
 # --- Model + usage meters ---------------------------------------------------
