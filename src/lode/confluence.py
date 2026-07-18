@@ -1,0 +1,271 @@
+"""Confluence Cloud fetch unit: REST page -> structured snapshot (lode-gpzn.4).
+
+A **pure** fetch/extract unit, no storage coupling — the Confluence-Cloud
+sibling of :mod:`lode.webfetch` (the web draw-down connector). Given a page's
+semantic ``external_id`` (the numeric page id captured by
+:mod:`lode.drawdown`'s Confluence link detection, lode-gpzn.2) and the
+``api_base`` persisted alongside it on the ``externals`` row,
+:func:`fetch_confluence_page` rebuilds the REST request, fetches the page,
+and returns a :class:`~lode.webfetch.FetchResult` — the **exact same**
+dataclass :mod:`lode.webfetch` uses, so
+:func:`lode.externals.ingest_fetch_result` consumes it unchanged, with no
+Confluence-specific branch needed there.
+
+## Design decisions (owner, via ``/challenge``, 2026-07-17 — see bd lode-gpzn.4)
+
+- **(A) URL reconstruction:** ``external_id`` is a *semantic* key (a page
+  id), not a URL — since lode-gpzn.2, it is no longer directly fetchable the
+  way a web ``external_id`` is. The request URL is rebuilt from
+  ``{api_base}/wiki/rest/api/content/{external_id}?expand=body.view``, where
+  ``api_base`` is exactly what :mod:`lode.drawdown` persisted onto the
+  ``externals`` row at link-detection time (its own ``_resolve_api_base``) —
+  this unit never re-derives it from the original pasted URL, which it never
+  sees.
+- **(E) Body representation:** request the server-rendered ``body.view``
+  representation (``expand=body.view``), **not** raw storage-format XHTML.
+  Confluence storage format is custom XHTML full of
+  ``ac:structured-macro``/``ri:...`` macro elements that would need a
+  bespoke parser to strip correctly; ``body.view`` is Confluence's own
+  server-rendered HTML with every macro already expanded, so the
+  **existing** :func:`lode.webfetch._extract` (trafilatura) — the identical
+  extractor the web path and the JIRA unit (lode-gpzn.3) both use — turns it
+  into ``clean_text`` with no Confluence-specific extraction code at all.
+  The full raw JSON response (not just the ``body.view`` fragment) is kept
+  as ``raw_payload`` for provenance, mirroring :attr:`~lode.webfetch.
+  FetchResult.raw_html`'s field on the web leg even though what it holds
+  here is JSON, not HTML.
+- **(C) Classification:** every HTTP outcome is classified via the shared,
+  connector-neutral :func:`lode.fetch_outcome.classify_http_status`
+  (lode-gpzn.13) — 401/403/404 (and any other non-408/429 4xx) tombstone;
+  429/any 5xx/network/timeout raise :class:`~lode.webfetch.
+  TransientFetchError`, riding the worker's existing attempts/backoff/
+  dead-letter machinery exactly like the web and JIRA legs. No local
+  reimplementation of the status-code mapping.
+- **Injectable offline seam:** :func:`fetch_confluence_page` accepts a
+  ``fetcher`` implementing the exact same :class:`lode.webfetch.Fetcher`
+  protocol (``fetch(url: str) -> RawResponse``) the web and JIRA units use —
+  production supplies :class:`HttpxConfluenceFetcher` (Basic auth baked in
+  at construction), tests supply a stub, so the offline gate never makes a
+  real request.
+
+## Explicitly out of scope for this ticket
+
+- **Page comments:** unlike the JIRA unit (lode-gpzn.3), which paginates and
+  includes issue comments, this unit maps **only the page body** — the
+  acceptance criteria call for body-only mapping via ``body.view`` ->
+  trafilatura, nothing more. A parity follow-up (comments-in-snapshot) is a
+  separate future decision, not resolved here.
+- **Wiring into :func:`lode.drawdown.refresh_external`'s dispatcher:** that
+  dispatcher currently raises ``RuntimeError`` for ``source_type ==
+  "confluence"`` (see its own docstring). This ticket's acceptance criteria
+  are scoped to the fetch unit itself (offline-tested in isolation); wiring
+  it into the dispatcher — alongside the JIRA leg, which is a sibling
+  in-flight ticket touching the very same function — is left to a follow-up
+  so the two don't race each other editing the same lines.
+"""
+
+from __future__ import annotations
+
+import json
+from urllib.parse import quote
+
+import httpx
+
+from lode.config import AtlassianCredentials, Settings, resolve_confluence_credentials
+from lode.fetch_outcome import HttpOutcome, classify_http_status
+from lode.webfetch import (
+    Fetcher,
+    FetchResult,
+    FetchStatus,
+    RawResponse,
+    TransientFetchError,
+    _extract,
+    _tombstone,
+)
+
+#: Sent on every Confluence REST call. A bare product token, no ``(+<url>)``
+#: contact link — same reasoning as :mod:`lode.webfetch`'s ``_USER_AGENT``
+#: (lode-yzv): this project has no owned URL to publish, and the party
+#: actually making the call is the end user's own machine, not a centrally
+#: operated crawler.
+_USER_AGENT = "lode-confluence/1"
+
+
+class HttpxConfluenceFetcher:
+    """Default :class:`~lode.webfetch.Fetcher` for the Confluence Cloud REST API.
+
+    Same shape as :class:`lode.webfetch.HttpxFetcher` — a single synchronous
+    GET via ``httpx``, classified through the exact same
+    :func:`~lode.fetch_outcome.classify_http_status` contract (raises
+    :class:`~lode.webfetch.TransientFetchError` for 408/429/5xx/network/
+    timeout, returns a :class:`~lode.webfetch.RawResponse` for everything
+    else) — but adds HTTP Basic auth (the resolved Confluence
+    :class:`~lode.config.AtlassianCredentials`) and an
+    ``Accept: application/json`` header, and follows **no** redirects: a
+    REST API endpoint answering an authenticated GET has no legitimate
+    reason to 3xx the way a user-pasted web page does (:class:`~lode.
+    webfetch.HttpxFetcher` follows up to ``fetch_max_redirects`` hops for
+    exactly that reason; this fetcher has no analogous need and no
+    ``TooManyRedirectsError`` path).
+    """
+
+    def __init__(
+        self, credentials: AtlassianCredentials, settings: Settings | None = None
+    ) -> None:
+        self._credentials = credentials
+        self._settings = settings or Settings()
+
+    def fetch(self, url: str) -> RawResponse:
+        try:
+            with httpx.Client(
+                auth=(self._credentials.email, self._credentials.token),
+                timeout=self._settings.fetch_timeout_s,
+                headers={"Accept": "application/json", "User-Agent": _USER_AGENT},
+            ) as client:
+                response = client.get(url)
+        except httpx.TimeoutException as exc:
+            raise TransientFetchError(f"timeout: {exc}") from exc
+        except httpx.NetworkError as exc:
+            raise TransientFetchError(f"network error: {exc}") from exc
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            # Same defensive default as HttpxFetcher: any other httpx-level
+            # failure (a malformed response, an unparseable URL — InvalidURL
+            # is NOT an HTTPError subclass and must be named explicitly)
+            # defaults to retryable rather than silently tombstoning on an
+            # unrecognized condition.
+            raise TransientFetchError(f"http client error: {exc}") from exc
+
+        if classify_http_status(response.status_code) is HttpOutcome.TRANSIENT:
+            raise TransientFetchError(f"http {response.status_code}")
+
+        return RawResponse(
+            final_url=str(response.url),
+            status_code=response.status_code,
+            text=response.text,
+        )
+
+
+def _build_url(external_id: str, api_base: str) -> str:
+    """Rebuild the Confluence Cloud REST request URL from persisted fields.
+
+    ``{api_base}/wiki/rest/api/content/{page_id}?expand=body.view`` —
+    ``api_base`` is exactly what :mod:`lode.drawdown` persisted at
+    detection time (already stripped of a trailing slash by its own
+    ``_resolve_api_base``, but stripped again here defensively since this
+    function has no other way to guarantee that invariant holds).
+    """
+    return (
+        f"{api_base.rstrip('/')}/wiki/rest/api/content/"
+        f"{quote(external_id, safe='')}?expand=body.view"
+    )
+
+
+def fetch_confluence_page(
+    external_id: str,
+    api_base: str,
+    *,
+    fetcher: Fetcher | None = None,
+    settings: Settings | None = None,
+) -> FetchResult:
+    """Fetch one Confluence Cloud page and extract it into a :class:`~lode.webfetch.FetchResult`.
+
+    Pure function, no DB writes — mirrors :func:`lode.webfetch.
+    fetch_and_extract`'s contract exactly, so :func:`lode.externals.
+    ingest_fetch_result` consumes the result unchanged. See the module
+    docstring for the full design.
+
+    1. Rebuild the request URL from ``external_id`` (semantic page id) +
+       ``api_base`` (:func:`_build_url`).
+    2. GET it via ``fetcher`` (production: :class:`HttpxConfluenceFetcher`,
+       built from the resolved Confluence credentials when ``fetcher`` is
+       not supplied — raises :class:`RuntimeError` if credentials are
+       unresolved, since a caller reaching this function is expected to have
+       already checked :func:`lode.config.confluence_active`).
+    3. Classify the response status via :func:`~lode.fetch_outcome.
+       classify_http_status`. A conforming ``fetcher`` already raises
+       :class:`~lode.webfetch.TransientFetchError` for 408/429/5xx/network
+       conditions before returning (see :class:`HttpxConfluenceFetcher`), so
+       this only ever needs to turn a non-OK *returned* status (401/403/404/
+       ...) into a tombstone — the same defensive "not OK -> tombstone"
+       shape :func:`lode.webfetch.fetch_and_extract` uses, in case of a
+       non-conforming custom ``fetcher``.
+    4. Parse the JSON body and pull ``body.view.value`` (the server-rendered
+       HTML). A response that isn't valid JSON, or lacks that path, is
+       treated the same as an unextractable page: tombstoned rather than
+       raised, since retrying an identical request yields an identical
+       malformed response.
+    5. Run the HTML through :func:`lode.webfetch._extract` (trafilatura) —
+       the exact same extractor the web path and the JIRA unit use, no
+       bespoke Confluence markup handling. ``None`` or too-short output (the
+       existing ``fetch_min_extract_chars`` floor) tombstones exactly like
+       the web leg's own "2xx but no real content" case.
+
+    The full raw JSON response text is kept as ``raw_html`` on the returned
+    ``FetchResult`` either way (on tombstone, when a response was actually
+    read) — the field name is the web leg's, but here it carries the raw
+    JSON payload per this ticket's decision, and :func:`ingest_fetch_result`
+    stores it verbatim as ``raw_payload``.
+    """
+    settings = settings or Settings()
+    if fetcher is None:
+        credentials = resolve_confluence_credentials(settings)
+        if credentials is None:
+            raise RuntimeError(
+                "fetch_confluence_page: Confluence Cloud credentials are "
+                "unresolved -- the caller should have already checked "
+                "lode.config.confluence_active() before reaching this unit"
+            )
+        fetcher = HttpxConfluenceFetcher(credentials, settings)
+
+    url = _build_url(external_id, api_base)
+    response = fetcher.fetch(url)
+
+    # Defensive, mirrors fetch_and_extract's own "not OK -> tombstone" shape
+    # (see its comment): a conforming Fetcher already raised
+    # TransientFetchError for a 408/429/5xx before returning, so this
+    # branch is only ever reached for a genuine tombstone status in
+    # practice, but stays correct for a non-conforming custom fetcher too.
+    if classify_http_status(response.status_code) is not HttpOutcome.OK:
+        return _tombstone(
+            final_url=response.final_url,
+            reason=f"http_{response.status_code}",
+            http_status=response.status_code,
+            raw_html=response.text,
+        )
+
+    try:
+        payload = json.loads(response.text)
+        html = payload["body"]["view"]["value"]
+        if not isinstance(html, str):
+            raise TypeError("body.view.value is not a string")
+    except json.JSONDecodeError, KeyError, TypeError:
+        return _tombstone(
+            final_url=response.final_url,
+            reason="malformed_response",
+            http_status=response.status_code,
+            raw_html=response.text,
+        )
+
+    clean_text = _extract(html)
+    if clean_text is None or len(clean_text) < settings.fetch_min_extract_chars:
+        return _tombstone(
+            final_url=response.final_url,
+            reason="empty_extract",
+            http_status=response.status_code,
+            raw_html=response.text,
+        )
+
+    return FetchResult(
+        status=FetchStatus.OK,
+        final_url=response.final_url,
+        clean_text=clean_text,
+        raw_html=response.text,
+        http_status=response.status_code,
+        tombstone_reason=None,
+    )
+
+
+__all__ = [
+    "HttpxConfluenceFetcher",
+    "fetch_confluence_page",
+]
