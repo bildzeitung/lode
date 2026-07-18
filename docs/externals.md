@@ -283,6 +283,19 @@ own head snapshot already tombstoned on a prior backfill pass (e.g. a bad token 
 one case a periodic sweep structurally can't cover: an operator who just fixed the underlying
 cause and wants that specific already-tombstoned target retried now, not on a schedule.
 
+**`jira` connector (`lode-gpzn.10`).** `lode.jira_backfill` registers `"jira"` — the first real
+connector plugged into the framework. Its handler reclassifies every existing explicit
+(`source='user'`) edge's *original* `quoted_text` through `lode.drawdown._classify_atlassian`, the
+exact same synchronous, network-free classifier the live paste-time path uses — so a link migrates
+only when it would route to JIRA **under current routing** (flag on, credentials resolved, matched
+host, `/browse/{KEY}` shape). A match mints the semantic issue-key external, re-points the edge, and
+enqueues a fresh refresh through the four shared plumbing pieces above. Reclassifying from the
+edge's original `quoted_text` on every pass (rather than filtering on the edge's current
+`source_type`) is what makes `--retry-tombstoned` reachable on a re-run: an edge already repointed
+onto its semantic key is revisited too, so `needs_refresh` gets rechecked against that identity's
+current head snapshot instead of the migration step silently losing track of it after the first
+pass.
+
 ### Externals are directly retrievable
 
 A snapshot's current head is a **direct** lexical/vector candidate on its own content, not only

@@ -54,6 +54,17 @@ from lode.enrichment_view import (
     enrichment_view_conn,
 )
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
+
+# Registers the "jira" connector into lode.backfill's registry on import
+# (lode-gpzn.10) -- deliberately a MODULE-LEVEL import here, not the lazy,
+# inside-the-command-function style `backfill`/`reconcile`/`work` otherwise
+# use to keep CLI startup light. Registration must happen exactly once, at
+# collection/process-start time, before any test's own registry-isolation
+# fixture runs -- a lazy import inside the `backfill` command races
+# tests/test_cli_backfill.py's fake-handler injection under pytest-xdist
+# (parallel worker processes make "which test calls `backfill()` first"
+# non-deterministic run to run).
+import lode.jira_backfill  # noqa: F401
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
@@ -2379,9 +2390,9 @@ def backfill(
 
     A "connector" here is whatever has registered itself into the backfill
     framework's registry (lode.backfill.register_backfill) -- this command
-    is just the dispatcher; no connector ships registered by default. With
-    no CONNECTOR argument (or --list), the registered names are printed
-    instead of running anything.
+    is just the dispatcher; the framework itself ships no connector logic of
+    its own (see 'jira', lode-gpzn.10). With no CONNECTOR argument (or
+    --list), the registered names are printed instead of running anything.
 
     --dry-run reports what the connector's handler would change without
     writing. --retry-tombstoned is the explicit, human-driven opt-in to also
