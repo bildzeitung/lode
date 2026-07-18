@@ -57,6 +57,17 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
 - `requirements.txt` is a single editable-install line (`-e .[dev]`) so `pyproject.toml` is the one source of truth for dependencies; the actual dep list lives there (`[project].dependencies` + the `dev` extra), seeded from the decided stack (`docs/stack.md`) and unpinned until the build starts.
 
+## Coding conventions
+
+Prescriptive style **fiats** (unilateral maintainer preferences, no independent rationale) live in
+their own single source of truth, imported below so they load into the main session **and** every
+non-fork subagent — the `coding` producer, the `code-reviewer`, and the `land`/`land-review` session
+read the identical text, so a fiat cannot drift between who writes code and who reviews it. Add new
+style fiats to [`docs/conventions.md`](docs/conventions.md), not here. (Reasoned architecture still
+goes in the relevant `docs/` design doc — the litmus is in that file's preamble.)
+
+@docs/conventions.md
+
 ## New machine setup
 
 Everything portable travels on two wires from the same git remote: **git** (code, docs, committed `.claude/` config — settings, skills, agents) and **Dolt** (`refs/dolt/data` — the bd issue DB *and* `bd remember` memories). On a fresh clone:
