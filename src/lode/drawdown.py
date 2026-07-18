@@ -595,7 +595,10 @@ def _refresh_jira(
     ingest = ingest_fetch_result(
         conn, target_external_id, SOURCE_TYPE_JIRA, result, settings=settings
     )
-    return f"refreshed {target_external_id}: {ingest.status}"
+    outcome = f"refreshed {target_external_id}: {ingest.status}"
+    if result.tombstone_reason:
+        outcome += f" ({result.tombstone_reason})"
+    return outcome
 
 
 def _refresh_confluence(
@@ -631,7 +634,10 @@ def _refresh_confluence(
     ingest = ingest_fetch_result(
         conn, target_external_id, SOURCE_TYPE_CONFLUENCE, result, settings=settings
     )
-    return f"refreshed {target_external_id}: {ingest.status}"
+    outcome = f"refreshed {target_external_id}: {ingest.status}"
+    if result.tombstone_reason:
+        outcome += f" ({result.tombstone_reason})"
+    return outcome
 
 
 def refresh_external(

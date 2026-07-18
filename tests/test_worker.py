@@ -435,6 +435,30 @@ def test_run_max_attempts_dead_letters(
     assert "poison" in row["last_error"]
 
 
+def test_run_max_attempts_dead_letters_logs_job_type_and_target(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The dead-letter log line names the source (job_type + target_version),
+    not just the job id and error -- lode-gpzn.5. Before this fix a job
+    exhausting retries (e.g. a JIRA/Confluence refresh hitting a bad/
+    unreachable base URL, which rides this generic retry/dead-letter path via
+    TransientFetchError) was unidentifiable by source once dead-lettered; the
+    sibling still-retrying 'failed' log line one branch up already includes
+    both fields, so this mirrors that format exactly."""
+    job_id = _insert_job(
+        conn, target_version="ver-42", attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("embed",), _now_iso())
+    with caplog.at_level(logging.ERROR):
+        run_one(conn, job_id, db_path, settings, _failing_registry("unreachable host"))
+
+    assert f"job {job_id} (embed target=ver-42) dead-lettered" in caplog.text
+    assert "unreachable host" in caplog.text
+
+
 def test_run_dead_does_not_overwrite_with_backoff(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
