@@ -150,8 +150,8 @@ import sqlite3
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from lode import jobs
-from lode.confluence import fetch_confluence_page
 from lode.config import Settings, confluence_active, jira_active
+from lode.confluence import fetch_confluence_page
 from lode.externals import ingest_fetch_result
 from lode.jira_fetch import fetch_jira_issue
 from lode.webfetch import Fetcher, fetch_and_extract
