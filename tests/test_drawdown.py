@@ -814,6 +814,41 @@ class TestRefreshExternalDispatch:
         ).fetchone()
         assert status == "ok"
 
+    def test_jira_source_type_401_outcome_names_source_and_reason(self, conn) -> None:
+        """lode-gpzn.5: a forced 401 on the JIRA leg produces a visible outcome
+        line naming both the source (the JIRA issue key) and the reason
+        (the classified tombstone reason, e.g. "http_401") -- not just a bare
+        "tombstone" with no indication of why. The failure still tombstones
+        per the fetch-outcome taxonomy (docs/externals.md), and the response
+        text used here never contains a credential, so this also proves the
+        token is never echoed back into the visible outcome line.
+        """
+        api_base = "https://acme.atlassian.net"
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("ABC-401", SOURCE_TYPE_JIRA, api_base),
+        )
+        conn.commit()
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=f"{api_base}/rest/api/3/issue/ABC-401?expand=renderedFields",
+                status_code=401,
+                text="Unauthorized",
+            )
+        )
+
+        outcome = refresh_external(conn, "ABC-401", load_settings(), fetcher=fetcher)
+
+        assert outcome is not None
+        assert "ABC-401" in outcome, "outcome must name the source"
+        assert "tombstone" in outcome
+        assert "http_401" in outcome, "outcome must name the reason"
+        (status,) = conn.execute(
+            "SELECT status FROM snapshots WHERE external_id = ?", ("ABC-401",)
+        ).fetchone()
+        assert status == "tombstone"
+
     def test_jira_source_type_without_credentials_raises(self, conn) -> None:
         """No fetcher override and no resolvable credentials (default,
         JIRA-disabled settings) -- the default-fetcher construction inside

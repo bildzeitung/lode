@@ -4465,6 +4465,53 @@ def test_work_prints_per_job_embed_outcome_line(
     assert outcome_idx < drained_idx
 
 
+def test_work_prints_jira_401_outcome_naming_source_and_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """lode-gpzn.5: a forced 401 on a JIRA refresh job produces a visible,
+    actionable line in 'lode work' output naming the source (the JIRA issue
+    key) and the reason (the classified tombstone reason) -- the ticket's own
+    acceptance criterion, exercised end-to-end through the CLI (not just at
+    the drawdown/worker unit level). Token-safety itself is covered where the
+    credential is actually in scope: tests/test_jira_fetch.py.
+    """
+    import lode.worker as worker_mod
+    from lode.drawdown import SOURCE_TYPE_JIRA, refresh_external
+    from lode.webfetch import RawResponse
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type, api_base) "
+                "VALUES (?, ?, ?)",
+                ("ABC-401", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
+            )
+            conn.execute(
+                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
+                ("refresh", "ABC-401"),
+            )
+    finally:
+        conn.close()
+
+    class _UnauthorizedFetcher:
+        def fetch(self, url: str) -> RawResponse:
+            return RawResponse(final_url=url, status_code=401, text="Unauthorized")
+
+    def _refresh_handler(conn, target_version, db, settings):
+        return refresh_external(
+            conn, target_version, settings, fetcher=_UnauthorizedFetcher()
+        )
+
+    monkeypatch.setattr(worker_mod, "_REGISTRY", {"refresh": _refresh_handler})
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "ABC-401" in result.stdout, "outcome must name the source"
+    assert "http_401" in result.stdout, "outcome must name the reason"
+
+
 def test_work_never_dead_letters_enrich(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
