@@ -435,30 +435,6 @@ def test_run_max_attempts_dead_letters(
     assert "poison" in row["last_error"]
 
 
-def test_run_max_attempts_dead_letters_logs_job_type_and_target(
-    conn: sqlite3.Connection,
-    db_path: Path,
-    settings: Settings,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The dead-letter log line names the source (job_type + target_version),
-    not just the job id and error -- lode-gpzn.5. Before this fix a job
-    exhausting retries (e.g. a JIRA/Confluence refresh hitting a bad/
-    unreachable base URL, which rides this generic retry/dead-letter path via
-    TransientFetchError) was unidentifiable by source once dead-lettered; the
-    sibling still-retrying 'failed' log line one branch up already includes
-    both fields, so this mirrors that format exactly."""
-    job_id = _insert_job(
-        conn, target_version="ver-42", attempts=settings.retry_max_attempts - 1
-    )
-    _claim_one(conn, ("embed",), _now_iso())
-    with caplog.at_level(logging.ERROR):
-        run_one(conn, job_id, db_path, settings, _failing_registry("unreachable host"))
-
-    assert f"job {job_id} (embed target=ver-42) dead-lettered" in caplog.text
-    assert "unreachable host" in caplog.text
-
-
 def test_run_dead_does_not_overwrite_with_backoff(
     conn: sqlite3.Connection, db_path: Path, settings: Settings
 ) -> None:
@@ -629,6 +605,51 @@ def test_run_refresh_dead_letter_writes_tombstone_snapshot(
         "SELECT head_snapshot_id FROM externals WHERE external_id = ?", (external_id,)
     ).fetchone()
     assert head_snapshot_id is not None, "head must point at the tombstone, not NULL"
+
+
+def test_run_refresh_dead_letter_log_names_source_and_reason(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """lode-gpzn.5: the dead-letter log line names the failing source and the
+    reason, not just the bare job id -- e.g. a JIRA/Confluence connector
+    hitting an unreachable/bad base URL (a TransientFetchError riding this
+    same generic retry/dead-letter machinery, per _always_raising_refresh_
+    registry's own docstring) must be identifiable in ``lode work``'s output
+    once it exhausts retries, not just "job 5 dead-lettered ...: <error>"
+    with no indication of *what* died.
+
+    Before this fix, run_one's dead-letter log call passed only ``job_id``
+    and ``err`` -- unlike the sibling 'failed' (still-retrying) log line a
+    few lines above it, which already includes ``job_type``/``target``.
+    """
+    external_id = "ABC-999"
+    job_id = _insert_job(
+        conn, "refresh", external_id, attempts=settings.retry_max_attempts - 1
+    )
+    _claim_one(conn, ("refresh",), _now_iso())
+    with caplog.at_level(logging.ERROR):
+        ok = run_one(
+            conn,
+            job_id,
+            db_path,
+            settings,
+            _always_raising_refresh_registry("bad base url: unreachable host"),
+        )
+    assert ok is False
+    assert _job(conn, job_id)["status"] == "dead"
+
+    dead_letter_lines = [
+        line for line in caplog.text.splitlines() if "dead-lettered" in line
+    ]
+    assert len(dead_letter_lines) == 1
+    (line,) = dead_letter_lines
+    assert external_id in line, "dead-letter log line must name the source"
+    assert "bad base url: unreachable host" in line, (
+        "dead-letter log line must name the reason"
+    )
 
 
 def test_refresh_dead_letter_hook_is_generic_over_source_type(

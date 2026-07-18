@@ -577,6 +577,20 @@ def _refresh_jira(
     :func:`_refresh_web`): an issue key has no redirect concept, and
     :attr:`~lode.webfetch.FetchResult.final_url` is purely informational for
     this leg — :func:`~lode.externals.ingest_fetch_result` never reads it.
+
+    **Work-pass error visibility (lode-gpzn.5):** on a tombstone (e.g. a 401/
+    403/404 the fetch unit classified as permanent — :mod:`lode.jira_fetch`'s
+    module docstring), the returned outcome line names *why*, not just that
+    it happened: :class:`~lode.externals.IngestResult` only carries
+    ``status`` ("ok"/"tombstone"), losing :attr:`~lode.webfetch.
+    FetchResult.tombstone_reason` (e.g. ``"http_401"``) — so that reason is
+    appended here, from ``result`` (still in scope), rather than lost. A
+    reason tag is always a short machine tag the fetch unit itself
+    constructed (``f"http_{status_code}"``, ``"too_many_redirects"``,
+    ``"empty_extract"`` — see :func:`~lode.jira_fetch.fetch_jira_issue`),
+    never an interpolated exception or response body, so this can never leak
+    the JIRA API token (bd lode-gpzn.5's acceptance criterion: "the token
+    value is never printed").
     """
     row = conn.execute(
         "SELECT api_base FROM externals WHERE external_id = ?",
@@ -616,6 +630,11 @@ def _refresh_confluence(
     ``api_base`` persisted on the ``externals`` row at link-detection time
     (lode-gpzn.2). No redirect/repoint step is needed here either, for the
     same reason as the JIRA leg.
+
+    **Work-pass error visibility (lode-gpzn.5, owner decision D):** mirrors
+    :func:`_refresh_jira`'s reason-surfacing fix exactly -- the outcome line
+    appends ``result.tombstone_reason`` when set, for the identical reason
+    (the token is never printed; only a short machine tag is ever appended).
     """
     row = conn.execute(
         "SELECT api_base FROM externals WHERE external_id = ?",
