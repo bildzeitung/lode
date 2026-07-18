@@ -619,8 +619,10 @@ def run_one(
             return False
         if dead:
             log.error(
-                "job %d dead-lettered after %d attempt(s): %s",
+                "job %d (%s target=%s) dead-lettered after %d attempt(s): %s",
                 job_id,
+                job_type,
+                short,
                 new_attempts,
                 err,
             )

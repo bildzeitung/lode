@@ -593,6 +593,20 @@ def _refresh_atlassian(
     redirect concept, and :attr:`~lode.webfetch.FetchResult.final_url` is
     purely informational for this leg — :func:`~lode.externals.
     ingest_fetch_result` never reads it.
+
+    **Work-pass error visibility (lode-gpzn.5):** on a tombstone (e.g. a 401/
+    403/404 the fetch unit classified as permanent — see
+    :mod:`lode.jira_fetch`'s / :mod:`lode.confluence`'s module docstrings),
+    the returned outcome line names *why*, not just that it happened:
+    :class:`~lode.externals.IngestResult` only carries ``status`` ("ok"/
+    "tombstone"), losing :attr:`~lode.webfetch.FetchResult.tombstone_reason`
+    (e.g. ``"http_401"``) — so that reason is appended here, from ``result``
+    (still in scope), rather than lost. A reason tag is always a short
+    machine tag the fetch unit itself constructed (``f"http_{status_code}"``,
+    ``"too_many_redirects"``, ``"empty_extract"``), never an interpolated
+    exception or response body, so this can never leak the JIRA/Confluence
+    API token (bd lode-gpzn.5's acceptance criterion: "the token value is
+    never printed").
     """
     row = conn.execute(
         "SELECT api_base FROM externals WHERE external_id = ?",
@@ -608,7 +622,10 @@ def _refresh_atlassian(
     ingest = ingest_fetch_result(
         conn, external_id, source_type, result, settings=settings
     )
-    return f"refreshed {external_id}: {ingest.status}"
+    outcome = f"refreshed {external_id}: {ingest.status}"
+    if result.tombstone_reason:
+        outcome += f" ({result.tombstone_reason})"
+    return outcome
 
 
 def refresh_external(

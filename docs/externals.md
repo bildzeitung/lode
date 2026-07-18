@@ -508,9 +508,11 @@ whenever validating a change that touches either connector.
   `"comments"` key (a list); for Confluence, valid JSON with `"id"` matching the pasted page id and a
   `body.view.value` string holding the page's real rendered HTML.
 - **Optional negative check:** a deliberately wrong token reproduces the offline 401 fixture case —
-  `lode work` still reports `refreshed ...: tombstone` (never a crash), and `lode show <note-id>`'s
-  external line reads `[stale]` instead of `[un-refreshed]` (`lode.enrichment_view`: `stale` is the
-  state name for a tombstoned head snapshot).
+  `lode work` still reports `refreshed ...: tombstone (http_401)` (never a crash; the classified
+  reason is appended in parens per `lode-gpzn.5` -- work-pass error visibility -- never the token or
+  response body, only the fetch unit's own short machine tag), and `lode show <note-id>`'s external
+  line reads `[stale]` instead of `[un-refreshed]` (`lode.enrichment_view`: `stale` is the state name
+  for a tombstoned head snapshot).
 
 ---
 

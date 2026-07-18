@@ -836,6 +836,62 @@ class TestRefreshExternalDispatch:
         with pytest.raises(RuntimeError, match="ABC-999"):
             refresh_external(conn, "ABC-999", load_settings(), fetcher=_StubFetcher())
 
+    def test_jira_source_type_forced_401_outcome_names_reason(self, conn) -> None:
+        """lode-gpzn.5: a forced 401 (auth failure) still tombstones per the
+        taxonomy, but the outcome string now surfaces the classified reason
+        (e.g. 'http_401') rather than a bare 'tombstone' -- visible in
+        ``lode work``'s per-job outcome echo, naming both source and reason."""
+        api_base = "https://acme.atlassian.net"
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("ABC-401", SOURCE_TYPE_JIRA, api_base),
+        )
+        conn.commit()
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=(
+                    f"{api_base}/rest/api/3/issue/ABC-401?expand=renderedFields"
+                ),
+                status_code=401,
+                text="denied",
+            )
+        )
+
+        outcome = refresh_external(conn, "ABC-401", load_settings(), fetcher=fetcher)
+
+        assert outcome == "refreshed ABC-401: tombstone (http_401)"
+        (status,) = conn.execute(
+            "SELECT status FROM snapshots WHERE external_id = ?", ("ABC-401",)
+        ).fetchone()
+        assert status == "tombstone"
+
+    def test_confluence_source_type_forced_401_outcome_names_reason(self, conn) -> None:
+        """Owner decision D: the Confluence leg mirrors the JIRA leg's
+        reason-surfacing exactly."""
+        api_base = "https://acme.atlassian.net"
+        conn.execute(
+            "INSERT INTO externals (external_id, source_type, api_base) "
+            "VALUES (?, ?, ?)",
+            ("997", SOURCE_TYPE_CONFLUENCE, api_base),
+        )
+        conn.commit()
+        fetcher = _StubFetcher(
+            response=RawResponse(
+                final_url=(f"{api_base}/wiki/rest/api/content/997?expand=body.view"),
+                status_code=401,
+                text="denied",
+            )
+        )
+
+        outcome = refresh_external(conn, "997", load_settings(), fetcher=fetcher)
+
+        assert outcome == "refreshed 997: tombstone (http_401)"
+        (status,) = conn.execute(
+            "SELECT status FROM snapshots WHERE external_id = ?", ("997",)
+        ).fetchone()
+        assert status == "tombstone"
+
     def test_confluence_source_type_dispatches_to_confluence_fetch_unit(
         self, conn
     ) -> None:

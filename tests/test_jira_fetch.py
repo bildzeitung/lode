@@ -381,3 +381,35 @@ class TestFetchJiraIssueDefaultFetcherWiring:
             fetch_jira_issue(_KEY, _API_BASE, settings=settings)
 
         assert isinstance(captured["auth"], httpx.BasicAuth)
+
+    def test_401_tombstone_never_echoes_the_token(self, monkeypatch):
+        """lode-gpzn.5 acceptance: "the token value is never printed."
+
+        Exercises the real, credential-consuming path (the default
+        JiraHttpFetcher -- no stub fetcher override) with a real token
+        wired all the way into httpx.BasicAuth, forces a 401, and asserts
+        the resulting FetchResult -- the object drawdown._refresh_jira folds
+        into 'lode work's visible outcome line (lode-gpzn.5) -- carries no
+        trace of the token anywhere: not in the classified tombstone
+        reason, not in the raw payload it keeps for provenance.
+        """
+        captured: dict = {}
+        monkeypatch.setattr(httpx, "Client", _fake_client_cls(401, captured))
+
+        fake_token = "super-secret-jira-token-xyz"
+        settings = load_settings(
+            jira_enabled=True, jira_token=fake_token, jira_email="a@example.com"
+        )
+
+        result = fetch_jira_issue(_KEY, _API_BASE, settings=settings)
+
+        # Proves the real credential-consuming path was reached (same check
+        # as the sibling wiring test above), token included.
+        auth = captured["auth"]
+        assert isinstance(auth, httpx.BasicAuth)
+
+        assert result.status is FetchStatus.TOMBSTONE
+        assert result.tombstone_reason == "http_401"
+        assert fake_token not in (result.tombstone_reason or "")
+        assert fake_token not in (result.raw_html or "")
+        assert fake_token not in (result.clean_text or "")
