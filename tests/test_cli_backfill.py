@@ -46,10 +46,15 @@ def test_no_argument_lists_registered_connectors(tmp_path: Path):
     assert "jira" in result.output
 
 
-def test_no_argument_reports_none_registered(tmp_path: Path):
+def test_no_argument_lists_confluence_as_a_built_in_connector(tmp_path: Path):
+    """lode-gpzn.11: unlike test_no_argument_lists_registered_connectors above
+    (manually-registered fakes), "confluence" is now a real, always-available
+    built-in -- lode.cli.backfill registers it itself on every invocation, no
+    manual registration needed. This supersedes the old "no connectors
+    registered" behavior from before any connector shipped (lode-gpzn.9)."""
     result = runner.invoke(app, ["backfill", "--db", str(tmp_path / "lode.db")])
     assert result.exit_code == 0
-    assert "no connectors registered" in result.output
+    assert "confluence" in result.output
 
 
 def test_list_flag_lists_without_running_anything(tmp_path: Path):
@@ -121,10 +126,17 @@ def test_flags_default_false(tmp_path: Path):
 def test_unknown_connector_exits_nonzero_and_names_available(tmp_path: Path):
     from lode.backfill import register_backfill
 
+    # "confluence" is a real built-in as of lode-gpzn.11 (registered by
+    # lode.cli.backfill itself on every invocation), so it's no longer a
+    # usable stand-in for "an unregistered name" here -- use one that
+    # genuinely has no handler.
     register_backfill("jira", lambda *a: "ok")
     result = runner.invoke(
-        app, ["backfill", "confluence", "--db", str(tmp_path / "lode.db")]
+        app, ["backfill", "not-a-real-connector", "--db", str(tmp_path / "lode.db")]
     )
     assert result.exit_code == 1
-    assert "confluence" in result.output
+    assert "not-a-real-connector" in result.output
     assert "jira" in result.output
+    # Names "confluence" too -- proof the built-in registration actually
+    # reached the registry BackfillError reports from.
+    assert "confluence" in result.output

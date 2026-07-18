@@ -372,8 +372,8 @@ class TestFetchJiraIssueDefaultFetcherWiring:
         )
 
         with pytest.raises(json.JSONDecodeError):
-            # No fetcher= override -- the exact call _refresh_jira makes in
-            # production. The fake client returns empty text, so JSON
+            # No fetcher= override -- the exact call drawdown._refresh_atlassian
+            # makes in production. The fake client returns empty text, so JSON
             # parsing fails -- proof enough that a *real* JiraHttpFetcher
             # (not a stub) was built and actually called through to httpx,
             # with credentials, without asserting anything about a full

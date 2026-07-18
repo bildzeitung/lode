@@ -356,6 +356,21 @@ def _reclaim_stale_running(conn: sqlite3.Connection, settings: Settings) -> int:
                 )
                 if claim_held:
                     newly_dead.append((job_type, target_version, claimed_at))
+                    # Per-job source name (lode-ympb) -- mirrors run_one's
+                    # sibling "failed"/dead-letter log lines (job_type +
+                    # short(target)) so a connector job (JIRA/Confluence/web
+                    # refresh) crash-reclaimed straight to dead is identifiable
+                    # by source, not just counted in drain()'s aggregate
+                    # "reclaimed %d stale running job(s)" line.
+                    log.error(
+                        "job %d (%s target=%s) dead-lettered by crash-reclaim "
+                        "after %d attempt(s): %s",
+                        job_id,
+                        job_type,
+                        short_version_id(target_version),
+                        new_attempts,
+                        err,
+                    )
             else:
                 claim_held = jobs.cas_update_running(
                     conn,
