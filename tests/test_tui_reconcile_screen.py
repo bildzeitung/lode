@@ -60,8 +60,9 @@ def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:
 # and fixed in lode-t1y (the wall clock can step backward, so two versions
 # came back in the wrong order). That is why this file's assertion now reads
 # ``ORDER BY rowid``. lode-64jn's other named test,
-# ``test_ctrl_n_reset_does_not_schedule_a_stale_related_notes_pass``, was
-# likewise already fixed by lode-9vns. The waits below are therefore
+# ``test_ctrl_s_reset_does_not_schedule_a_stale_related_notes_pass`` (Ctrl+N
+# before lode-bsmc consolidated it onto Ctrl+S), was likewise already fixed by
+# lode-9vns. The waits below are therefore
 # hardening against a real and demonstrated harness race -- not the fix for
 # either originally-reported failure, both of which were already resolved
 # upstream of this branch.
