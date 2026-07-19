@@ -83,24 +83,38 @@ external content before this -- the enrichment modal carries only
 :class:`~lode.enrichment_view.ExternalView` metadata (source_type, snapshot
 id, fetched_at, state), never the snapshot's stored ``body``/``raw_payload``.
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` is the modal
-that reads them, keyed to one ``snapshot_id``. ``_resolve_externals`` +
-``_view_note_external_content`` (below) implement the shared zero/one/many
-addressing rule both this screen's and ``EditScreen``'s bindings call into --
-mirroring ``lode dump-html``'s CLI disambiguation (lode-olmi.7) on purpose, so
-the CLI and TUI can't drift onto two different rules for the same question:
-zero externals notifies ``'no retrieved content for this note'``; exactly one
-pushes the viewer directly; more than one pushes
-:class:`~lode.tui.screens.external_picker.ExternalPickerScreen` first, a
-DataTable-then-select list (mirroring ``VersionHistoryScreen``'s own pattern
-above) showing each candidate's source_type/snapshot id/fetched_at/state --
-the same fields :func:`~lode.tui.screens._browse_render._external_text`
-already renders -- before the chosen row pushes the viewer.
+that reads them, keyed to one ``snapshot_id``.
+:func:`~lode.tui.screens._content_view._resolve_externals` +
+:func:`~lode.tui.screens._content_view._view_note_external_content`
+implement the shared zero/one/many addressing rule both this screen's and
+``EditScreen``'s bindings call into -- mirroring ``lode dump-html``'s CLI
+disambiguation (lode-olmi.7) on purpose, so the CLI and TUI can't drift onto
+two different rules for the same question: zero externals notifies ``'no
+retrieved content for this note'``; exactly one pushes the viewer directly;
+more than one pushes :class:`~lode.tui.screens.external_picker.
+ExternalPickerScreen` first, a DataTable-then-select list (mirroring
+``VersionHistoryScreen``'s own pattern above) showing each candidate's
+source_type/snapshot id/fetched_at/state -- the same fields
+:func:`~lode.tui.screens._browse_render._external_text` already renders --
+before the chosen row pushes the viewer.
 
-These two functions stay in this module rather than moving with the other
-seven screens (lode-s5kp.1/lode-s5kp.4): they push
-``SnapshotViewerScreen``/``ExternalPickerScreen`` directly, so they are
-navigation glue, not a pure render helper, and this screen (``BrowseScreen``)
-is one of their two callers.
+**Dissolved the browse<->edit import cycle (lode-2zj0).** These two
+functions used to stay in this module rather than moving with the other
+seven screens (lode-s5kp.1/lode-s5kp.4) because they push
+``SnapshotViewerScreen``/``ExternalPickerScreen`` directly -- navigation
+glue, not a pure render helper -- and this screen was one of their two
+callers, the other being ``EditScreen``. That left them the one thing
+``EditScreen`` had to reach back into this module for, forcing a
+method-local (not top-level) import there to avoid a cycle
+(``BrowseScreen`` importing ``EditScreen`` to push it on row-select, vs.
+``EditScreen`` importing this module's ``_view_note_external_content``).
+Both functions are leaf-eligible on their own terms -- a generic
+``Screen[None]`` signature, depending only on ``enrichment_view``,
+``SnapshotViewerScreen``, and ``ExternalPickerScreen``, none of which reach
+back into ``browse``/``edit`` -- so they now live in their own leaf module,
+:mod:`lode.tui.screens._content_view`, which both this module and
+``edit.py`` import at top level. See that module's own docstring for the
+full detail.
 
 This screen's binding is bare ``v`` (``action_view_content``): the focused
 widget here is the notes ``DataTable``, not an editable ``TextArea``, so a
@@ -200,21 +214,20 @@ top-level ``Screen``/``ModalScreen`` classes this module used to hold --
 ``SnapshotViewerScreen``, ``EnrichmentModalScreen``, ``DeleteConfirmScreen``,
 ``EditScreen`` -- now live in their own modules under
 :mod:`lode.tui.screens`, per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pure move -- no behavior change. This module keeps
+(``docs/conventions.md``). Pure move -- no behavior change. This module kept
 only :class:`BrowseScreen` plus ``_resolve_externals``/
-``_view_note_external_content`` (navigation glue used by both this screen and
-``EditScreen``, so it lives at the point both import from -- see those
-functions' own docstrings for why they didn't move into the leaf
-``_browse_render`` module instead, lode-s5kp.4). Every cross-screen
-``push_screen`` reference below is a plain top-level import except
-``EditScreen``'s own reach back into ``_view_note_external_content``, which
-is a local (function-body) import to avoid a module-level import cycle --
-see :mod:`lode.tui.screens.edit`'s docstring.
+``_view_note_external_content`` at the time, since those two functions
+pushed screens on both this screen's and ``EditScreen``'s behalf and
+``EditScreen`` (imported here) could not import back without a cycle --
+``EditScreen``'s own reach back into ``_view_note_external_content`` used a
+local (function-body) import to dodge it. Both functions have since moved to
+their own leaf module (lode-2zj0, see the "Dissolved the browse<->edit
+import cycle" section above); this module now keeps only
+:class:`BrowseScreen`, and every cross-screen ``push_screen`` reference
+below is a plain top-level import.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from textual import events
 from textual.app import ComposeResult
@@ -223,7 +236,6 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Header, Input
 from textual.widgets.data_table import RowDoesNotExist
 
-from lode.enrichment_view import ExternalView, enrichment_view
 from lode.notes_read import list_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
 from lode.tui.edit import delete_note, load_head
@@ -233,11 +245,10 @@ from lode.tui.screens._browse_render import (
     _clip_summary_to_row_height,
     _wrap_summary_full,
 )
+from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens.delete_confirm import DeleteConfirmScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
-from lode.tui.screens.external_picker import ExternalPickerScreen
-from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.versions import HeadConflictError
 
 #: The notes table's widget id -- read back in tests.
@@ -253,50 +264,6 @@ _CELL_PADDING = 2
 #: Floor for the computed Summary width -- purely a crash guard so a very narrow
 #: terminal can't hand ``add_column`` a zero/negative width.
 _MIN_SUMMARY_WIDTH = 10
-
-
-def _resolve_externals(db_path: Path, note_id: str) -> list[ExternalView]:
-    """*note_id*'s drawn-down external edges, in edge order (lode-0sjj).
-
-    The one place the "which externals does this note have" question is
-    answered for the content-viewer feature -- both
-    :meth:`BrowseScreen.action_view_content` and
-    :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` resolve
-    through this (via :func:`_view_note_external_content`) rather than each
-    independently filtering :func:`~lode.enrichment_view.enrichment_view`'s
-    edges, which would risk the two screens silently drifting onto different
-    rules. A missing note (should never happen -- both callers only ever have
-    a real, live ``note_id`` in hand) returns an empty list rather than
-    raising; an empty result and "note exists but has no external edges" are
-    indistinguishable to the caller, which is fine -- both mean "notify,
-    don't view anything."
-    """
-    view = enrichment_view(db_path, note_id)
-    if view is None:
-        return []
-    return [edge.external for edge in view.edges if edge.external is not None]
-
-
-def _view_note_external_content(screen: Screen[None], note_id: str) -> None:
-    """Resolve *note_id*'s externals and push the right viewer (lode-0sjj).
-
-    Shared by :meth:`BrowseScreen.action_view_content` (bare ``v``) and
-    :meth:`~lode.tui.screens.edit.EditScreen.action_view_content` (a
-    Ctrl-prefixed key) so the zero/one/many addressing rule lives in exactly
-    one place -- mirroring ``lode dump-html``'s CLI disambiguation
-    (lode-olmi.7) on purpose. Zero externals notifies cleanly; exactly one
-    pushes :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`
-    directly; more than one pushes :class:`~lode.tui.screens.external_picker.
-    ExternalPickerScreen` first, which pushes the viewer itself once a row is
-    chosen.
-    """
-    externals = _resolve_externals(screen.app.db_path, note_id)
-    if not externals:
-        screen.notify("no retrieved content for this note", severity="warning")
-    elif len(externals) == 1:
-        screen.app.push_screen(SnapshotViewerScreen(externals[0].snapshot_id))
-    else:
-        screen.app.push_screen(ExternalPickerScreen(externals))
 
 
 class BrowseScreen(Screen[None]):

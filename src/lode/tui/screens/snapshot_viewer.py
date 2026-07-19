@@ -2,7 +2,7 @@
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
 (``docs/conventions.md``). Pushed keyed to one ``snapshot_id`` by
-:func:`~lode.tui.screens.browse._view_note_external_content` -- directly, for
+:func:`~lode.tui.screens._content_view._view_note_external_content` -- directly, for
 a note with exactly one external edge, or after
 :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` resolves which
 of several.
@@ -29,7 +29,7 @@ class SnapshotViewerScreen(ModalScreen[None]):
     """A retrieved external's stored content -- body by default, raw on toggle (lode-0sjj).
 
     Pushed keyed to one ``snapshot_id`` by
-    :func:`~lode.tui.screens.browse._view_note_external_content` -- directly,
+    :func:`~lode.tui.screens._content_view._view_note_external_content` -- directly,
     for a note with exactly one external edge, or after
     :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` resolves
     which of several. Shows ``snapshots.body`` (the extracted text --

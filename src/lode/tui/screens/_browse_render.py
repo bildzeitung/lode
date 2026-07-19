@@ -14,12 +14,14 @@ too) would otherwise have had to settle on its own.
 **Deliberately imports no ``Screen``/``Widget`` subclass** -- that is the
 whole point of putting these here rather than leaving them in ``browse.py``:
 a leaf module any browse-family screen can import from without introducing a
-cycle. ``_view_note_external_content`` and ``_resolve_externals`` stay behind
-in ``browse.py`` on purpose: the former pushes
+cycle. ``_view_note_external_content`` and ``_resolve_externals`` never
+joined this module, on purpose: the former pushes
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` and
 :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` directly, so
 it is navigation glue, not a pure render helper, and moving it here would
-pull those two screens into this otherwise Screen-free module.
+pull those two screens into this otherwise Screen-free module. They instead
+got their own leaf module, :mod:`lode.tui.screens._content_view`
+(lode-2zj0).
 
 Pure move -- no behavior change; ``docs/conventions.md``'s underscore-prefix
 module naming marks this as not itself a screen, so it doesn't count against
