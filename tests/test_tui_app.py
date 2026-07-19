@@ -55,25 +55,34 @@ def test_app_registers_the_reconcile_screen(tmp_path: Path) -> None:
 # whole plugin for that is unwarranted when wrapping the body in one is free.
 
 
-def test_ctrl_s_saves_the_typed_note_and_exits(tmp_path: Path) -> None:
+def test_ctrl_s_saves_the_typed_note_and_stays_in_the_app(tmp_path: Path) -> None:
+    """Ctrl+S on the capture screen is stack-aware "Save & New" (lode-bsmc):
+
+    this screen is always the bottom of the stack, so a clean save resets the
+    buffer and stays in the app rather than exiting. The dedicated Ctrl+S
+    coverage (reset, focus, notify, CAS conflict, related-notes cleanup) lives
+    in ``tests/test_tui_capture_save_and_new.py``; this is the screen-level
+    twin of that file's save-path assertion.
+    """
     db_path = tmp_path / "lode.db"
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> None:
+    async def _drive() -> bool:
         async with app.run_test() as pilot:
             text_area = app.screen.query_one(f"#{BODY_ID}")
             text_area.text = "hello from the capture screen"
             await pilot.press("ctrl+s")
+            await pilot.pause()
+            return app.is_running
 
-    asyncio.run(_drive())
+    still_running = asyncio.run(_drive())
 
-    # The screen's Ctrl+S handler exits the app with the saved note id.
-    note_id = app.return_value
-    assert note_id is not None
+    # The screen's Ctrl+S handler saves and stays -- it no longer exits.
+    assert still_running
+    assert app.return_value is None
     assert _rows(
         db_path,
-        "SELECT body, op FROM versions WHERE note_id = ?",
-        (note_id,),
+        "SELECT body, op FROM versions",
     ) == [("hello from the capture screen", "create")]
 
 
@@ -274,12 +283,13 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 
 # ---------------------------------------------------------------------------
 # Compact footer bar (lode-3rvw, widget lode-uczx) -- CaptureScreen.BINDINGS
-# renders 4 entries plus 5 App-level ones (LodeApp.BINDINGS) in one footer
-# line; with the original, full-length descriptions that really consumed 100
-# columns and Textual clipped the tail against the 80-column bound this
-# screen was originally sized to. The fix stays inside the stock Footer
-# (compact=True + show_command_palette=False + shorter descriptions), now
-# baked into the shared :class:`~lode.tui.lode_footer.LodeFooter` every
+# renders 3 entries (4 before lode-bsmc folded ctrl+n's "Save & new" onto
+# ctrl+s and freed the letter) plus 5 App-level ones (LodeApp.BINDINGS) in one
+# footer line; with the original, full-length descriptions that really
+# consumed 100 columns and Textual clipped the tail against the 80-column
+# bound this screen was originally sized to. The fix stays inside the stock
+# Footer (compact=True + show_command_palette=False + shorter descriptions),
+# now baked into the shared :class:`~lode.tui.lode_footer.LodeFooter` every
 # screen composes instead of repeating the two flags per call site.
 #
 # lode-uczx: lode's minimum supported terminal width is 100 columns, not 80
@@ -329,11 +339,11 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 4 screen-level + 5 App-level bindings stay visible (none hidden via
-    # show=False) -- only their description text was shortened, and ctrl+n
-    # keeps its full "Save & new" so it cannot read as a discard-and-restart.
+    # All 3 screen-level + 5 App-level bindings stay visible (none hidden via
+    # show=False) -- only their description text was shortened, and ctrl+s
+    # keeps its full "Save & new" (lode-bsmc: folded onto ctrl+s from the now-
+    # retired ctrl+n) so it cannot read as a discard-and-restart.
     assert descriptions == [
-        "Save",
         "Save & new",
         "Discard",
         "Related",

@@ -113,6 +113,15 @@ combos or `escape`, per the no-function-key / no-bare-printable-key-on-an-editab
 two visual idioms in one footer bar — *more* drift than a plain, uniform description list, which is
 the exact bug the shared `LodeFooter` widget exists to eliminate. Do not reopen this a fourth time.
 
+## Capture screen: Ctrl+S is "Save & New," never "Save & Browse" (`lode-bsmc`)
+
+`CaptureScreen`'s consolidated Ctrl+S (`docs/keybindings.md`) saves and resets the buffer for a
+fresh note, staying on the capture screen — it deliberately does **not** navigate to Browse.
+Considered and rejected: landing on Browse after a save makes the just-saved note feel like an
+*incomplete task* (as if it weren't really saved), turning "remember to look at it later" into an
+easily-overlooked step. Staying put and clearing the buffer gives clean closure instead — the task
+is done, so do the next thing right here. Don't re-litigate this.
+
 ## Settling TUI tests under load: predicate wait vs. keystroke drain, one home in conftest (`lode-lcju`)
 
 Two tickets (`lode-64jn`, `lode-9y68`) independently hit the same root cause — a flaky TUI test
