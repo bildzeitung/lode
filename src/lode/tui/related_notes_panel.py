@@ -209,9 +209,10 @@ class RelatedNotesPanel(Static):
     def reset(self) -> None:
         """Drop any scheduled/in-flight pass and clear the panel immediately.
 
-        For a screen's own "start fresh" moment (capture's Ctrl+N reset,
-        lode-d32.4) -- the reset drops any scheduled *and* any in-flight pass
-        first (:meth:`_cancel_related_pass`), so a slow pass started for the
+        For a screen's own "start fresh" moment (capture's Ctrl+S "Save & New"
+        reset -- lode-d32.4's Ctrl+N, folded onto Ctrl+S by lode-bsmc) -- the
+        reset drops any scheduled *and* any in-flight pass first
+        (:meth:`_cancel_related_pass`), so a slow pass started for the
         just-abandoned draft cannot land afterwards and paint its results into
         the freshly-cleared panel.
         """
@@ -222,10 +223,12 @@ class RelatedNotesPanel(Static):
         """Drop any scheduled/in-flight pass when this widget goes away (lode-ivu).
 
         :meth:`reset` is called explicitly only from
-        :meth:`~lode.tui.screens.capture.CaptureScreen.action_save_and_new` --
-        every *other* way a composing screen goes away (Ctrl+S save-and-exit,
-        Escape/Ctrl+Q discard, a future navigation) left the debounce timer
-        (and a since-started worker) running unattended. Textual dispatches
+        :meth:`~lode.tui.screens.capture.CaptureScreen.action_save`'s "Save &
+        New" -- every *other* way a composing screen goes away (the
+        quit/discard confirm's save-and-exit, Escape/Ctrl+Q discard,
+        :class:`~lode.tui.screens.edit.EditScreen`'s Ctrl+S save-and-pop, a
+        future navigation) left the debounce timer (and a since-started
+        worker) running unattended. Textual dispatches
         ``Unmount`` to every mounted widget as a screen is popped or the app
         exits, so this single hook -- not a cancel call duplicated into each
         exit path of every screen that composes this widget (capture *and*
