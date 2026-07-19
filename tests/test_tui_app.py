@@ -4,12 +4,12 @@ Drives the real widgets end to end via Textual's ``run_test`` pilot: typing
 into the capture screen's text area, pressing Ctrl+S, and asserting the note
 actually landed via the same ``Repository.save`` seam ``lode add`` uses — the
 screen-level twin of ``tests/test_tui_capture.py``'s direct unit coverage of
-:func:`lode.tui.capture.save_capture`. Also covers the shell's screen
+:func:`lode.tui.services.capture.save_capture`. Also covers the shell's screen
 registration (``LodeApp.SCREENS``), the discard-without-saving path, and
 (lode-mkc.3) that typing actually drives the passive related-notes panel
 end to end through the real debounce timer + Textual worker — the
 screen-level twin of ``tests/test_tui_related.py``'s direct unit coverage of
-:func:`lode.tui.related.find_related_notes`.
+:func:`lode.tui.services.related.find_related_notes`.
 """
 
 import asyncio
@@ -26,7 +26,7 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 
@@ -170,7 +170,7 @@ def test_typing_surfaces_a_related_past_note(
     # panel constructs its own shared embedder (RelatedNotesPanel._ensure_embedder,
     # lode-aoc) rather than leaving find_related_notes build one internally, so
     # the patch target is lode.embedding (what _ensure_embedder imports from),
-    # not lode.tui.related.
+    # not lode.tui.services.related.
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
@@ -249,7 +249,7 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
     (lode-mkc.3). Drives ``RelatedNotesPanel._render_related`` on the real
     mounted widget.
     """
-    from lode.tui.related import RelatedNote
+    from lode.tui.services.related import RelatedNote
 
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
@@ -279,7 +279,7 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # columns and Textual clipped the tail against the 80-column bound this
 # screen was originally sized to. The fix stays inside the stock Footer
 # (compact=True + show_command_palette=False + shorter descriptions), now
-# baked into the shared :class:`~lode.tui.lode_footer.LodeFooter` every
+# baked into the shared :class:`~lode.tui.widgets.lode_footer.LodeFooter` every
 # screen composes instead of repeating the two flags per call site.
 #
 # lode-uczx: lode's minimum supported terminal width is 100 columns, not 80

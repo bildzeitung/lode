@@ -18,7 +18,7 @@ external citation's is its snapshot's fetch time (``snapshots.fetched_at``).
 
 :func:`run_ask` is the screen's only entry point -- pure I/O (DB + the Q&A
 send), no widget/App state, so it is unit-testable without spinning up a
-Textual app, exactly like :mod:`lode.tui.capture`. :func:`render_ask_result`
+Textual app, exactly like :mod:`lode.tui.services.capture`. :func:`render_ask_result`
 turns its output into the screen's display text: cited claims each followed
 by their citation + as-of line, withheld markers, and the abstention line --
 the ticket's acceptance surface.

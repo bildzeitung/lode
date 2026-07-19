@@ -27,7 +27,7 @@ pushed a separate read-only ``NoteViewScreen`` and a distinct ``e`` keypress
 was needed to reach the editor -- now removed along with the now-redundant
 ``e`` binding, since row-select opens the editor directly. Saving there
 appends a new version onto that note's chain via the CAS head path
-(:mod:`lode.tui.edit`), never a new note; the table is stale the moment that
+(:mod:`lode.tui.services.edit`), never a new note; the table is stale the moment that
 happens (its Version/Summary columns no longer match the just-written head),
 so :meth:`BrowseScreen.on_screen_resume` -- Textual's hook for "this screen is
 visible again" -- reloads the table every time browse becomes the top screen
@@ -111,7 +111,7 @@ and ``docs/keybindings.md`` for why an editable-body screen can't reuse a
 bare letter here, and which non-printable key it uses instead.
 
 **Delete from browse (lode-d32.1).** ``d`` on a highlighted row soft-deletes
-that note via :func:`~lode.tui.edit.delete_note` -- the CAS-guarded
+that note via :func:`~lode.tui.services.edit.delete_note` -- the CAS-guarded
 ``op='delete'`` tombstone (:func:`lode.versions.delete`, routed through
 :class:`~lode.repository.Repository` so the FTS/lexical cache leg is evicted
 too) that :func:`lode.versions.recover` can later undo. It reuses the
@@ -226,8 +226,8 @@ from textual.widgets.data_table import RowDoesNotExist
 from lode.enrichment_view import ExternalView, enrichment_view
 from lode.notes_read import list_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
-from lode.tui.edit import delete_note, load_head
-from lode.tui.lode_footer import LodeFooter
+from lode.tui.services.edit import delete_note, load_head
+from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
     _clip_summary_to_row_height,

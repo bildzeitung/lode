@@ -2,7 +2,7 @@
 
 Feedback said typing in the capture screen feels laggy. The prime suspect
 (``docs/decisions.md`` / the lode-0wj debate) was the passive related-notes pass
-(:mod:`lode.tui.related`, wired into :mod:`lode.tui.screens.capture`): it is
+(:mod:`lode.tui.services.related`, wired into :mod:`lode.tui.screens.capture`): it is
 *already* off the UI thread via ``asyncio.to_thread`` + a Textual
 ``@work(exclusive=True)`` worker, so on paper it should not block input. The one
 mechanism that would make it block anyway: ``asyncio.to_thread`` only relieves
@@ -17,7 +17,7 @@ using the REAL ``fastembed``/ONNX embedder (not the offline hash stub the eval
 *scorer* uses, since that stub is deliberately model-free and would hide the one
 question this spike exists to answer). No behaviour change: this only observes
 the landed pipeline through its existing public seams
-(:func:`lode.tui.related.find_related_notes`, :class:`lode.embedding.FastEmbedEmbedder`).
+(:func:`lode.tui.services.related.find_related_notes`, :class:`lode.embedding.FastEmbedEmbedder`).
 
 **Pass/fail target.** ``LATENCY_TARGET_P95_MS`` (100ms) is this spike's keystroke
 -> render latency target: the standard "feels instant" interactive-response
@@ -58,7 +58,7 @@ from lode.eval.seed import seed_notes
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.tui.related import find_related_notes
+from lode.tui.services.related import find_related_notes
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("LODE_DIAGNOSE_LAG") != "1",

@@ -20,7 +20,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Header, Static
 
 from lode.config import config_lines, knob_rows
-from lode.tui.lode_footer import LodeFooter
+from lode.tui.widgets.lode_footer import LodeFooter
 
 #: The resolved-paths readout widget id — read back in tests.
 ROWS_ID = "config-rows"

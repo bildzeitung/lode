@@ -92,7 +92,7 @@ def find_related_notes(
     """Surface past notes related to the in-progress ``draft``, best-first.
 
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
-    convention as :func:`lode.tui.capture.save_capture` — this runs off the
+    convention as :func:`lode.tui.services.capture.save_capture` — this runs off the
     UI thread (see the capture screen's worker), so it cannot share the app's
     connection across threads.
 

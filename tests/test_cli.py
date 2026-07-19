@@ -3993,7 +3993,7 @@ def test_format_cited_answer_renders_snapshot_citation_with_fetched_at() -> None
 
 def test_format_citation_marks_an_unresolved_target_as_of_unknown() -> None:
     """Practically unreachable (the gate already verified the body exists), but
-    rendered honestly rather than assumed away — mirrors ``lode.tui.ask``."""
+    rendered honestly rather than assumed away — mirrors ``lode.tui.services.ask``."""
     line = cli._format_citation(Support(version_id="missing", quoted_span="x"), None)
 
     assert "as of unknown" in line

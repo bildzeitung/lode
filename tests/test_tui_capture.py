@@ -1,4 +1,4 @@
-"""Tests for lode.tui.capture — the TUI capture screen's save wiring (lode-mkc.1).
+"""Tests for lode.tui.services.capture — the TUI capture screen's save wiring (lode-mkc.1).
 
 Pins the ticket's acceptance criterion directly: saving through
 ``save_capture`` persists the note via the same ``Repository.save`` /
@@ -16,8 +16,8 @@ import pytest
 
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
-from lode.tui import capture as capture_mod
-from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
+from lode.tui.services import capture as capture_mod
+from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_capture
 from lode.versions import SaveResult, save
 
 

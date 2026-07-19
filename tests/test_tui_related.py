@@ -1,4 +1,4 @@
-"""Tests for lode.tui.related — passive connection surfacing (lode-mkc.3).
+"""Tests for lode.tui.services.related — passive connection surfacing (lode-mkc.3).
 
 Pins the ticket's acceptance criterion directly: while writing, related past
 notes surface from the **existing** retrieval/graph layer (``lode.retrieval``)
@@ -19,7 +19,7 @@ from lode.embedding import EmbeddingCacheBackend
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.tui.related import find_related_notes, humanize_age
+from lode.tui.services.related import find_related_notes, humanize_age
 
 # A vocabulary mapped 1:1 onto the (overridden, tiny) vector dimension — same
 # convention as tests/test_retrieval.py's _BagEmbedder.
@@ -80,7 +80,7 @@ def repo(db_path, settings) -> Repository:
 def lexical_only_repo(db_path, settings) -> Repository:
     """A repository indexed by the lexical leg only — no vectors ever land.
 
-    Mirrors ``lode.tui.capture.save_capture``'s cache composition (embed
+    Mirrors ``lode.tui.services.capture.save_capture``'s cache composition (embed
     stays async/pending), so a test built on this fixture proves related
     notes surface via the lexical leg alone, before any embedding runs.
     """

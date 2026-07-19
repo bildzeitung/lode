@@ -11,7 +11,7 @@ printed as plain text instead of a ``DataTable``.
 
 This module lives outside :mod:`lode.tui` (relocated by lode-1gr.1) because it
 is pure I/O, no widget/App state -- originally written alongside
-:mod:`lode.tui.capture` / :mod:`lode.tui.ask` / :mod:`lode.tui.related` for
+:mod:`lode.tui.services.capture` / :mod:`lode.tui.services.ask` / :mod:`lode.tui.services.related` for
 that same reason, but a CLI command reading through ``lode.tui.*`` would have
 the dependency direction backwards (cli -> tui). :mod:`lode.tui.screens.browse`
 imports these functions the same way it always has; nothing about them changed
@@ -107,7 +107,7 @@ def list_notes(db_path: Path) -> list[NoteRow]:
     """Return every live note, newest-first, for the browse screen's table.
 
     Opens its own short-lived connection (:func:`lode.storage.init_db`), same
-    convention as :func:`lode.tui.capture.save_capture` / :func:`lode.tui.ask.
+    convention as :func:`lode.tui.services.capture.save_capture` / :func:`lode.tui.services.ask.
     run_ask` -- this is a plain top-level read, not tied to any open
     connection a caller might hold. A caller that already holds one wants
     :func:`list_notes_conn` instead.

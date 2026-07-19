@@ -1,6 +1,6 @@
 """Edit-path save wiring for the TUI's browse-to-edit flow (lode-0wj.6).
 
-Pure I/O, no widget/App state — same convention as :mod:`lode.tui.capture` /
+Pure I/O, no widget/App state — same convention as :mod:`lode.tui.services.capture` /
 :mod:`lode.notes_read` — so it is unit-testable without spinning up a Textual
 app; :class:`~lode.tui.screens.edit.EditScreen` is its only caller.
 
@@ -14,12 +14,12 @@ that loaded head via the exact same CAS-guarded
 "event-sourced, linear per-note chains") — a live head that moved since the
 buffer was loaded (a second edit session, a concurrent process) is rejected
 exactly like any other update, and handed to
-:func:`lode.tui.reconcile.conflict_from_error` for the same preserved-draft,
+:func:`lode.tui.services.reconcile.conflict_from_error` for the same preserved-draft,
 manual-reconciliation contract every other TUI save path shares. No new note
 is ever minted here.
 
 **Empty-body refusal mirrors capture's (lode-mkc.1).** A whitespace-only save
-is refused the same way :func:`~lode.tui.capture.save_capture` refuses an
+is refused the same way :func:`~lode.tui.services.capture.save_capture` refuses an
 empty capture — this module does not grow "clear the buffer to delete the
 note" semantics; deletion is :meth:`~lode.repository.Repository.delete`'s own
 explicit, separately-confirmed path, not an accidental side effect of saving
@@ -34,7 +34,7 @@ directly, so the FTS/lexical cache leg is evicted along with the tombstone
 write (the epic's own ``/debate`` pass on lode-d32 called this out: skipping
 Repository would leave a "deleted" note still keyword-findable). Unlike
 :func:`save_edit`, a CAS reject is **not** turned into a preserved-draft
-:class:`~lode.tui.reconcile.Conflict` here — a delete carries no user buffer
+:class:`~lode.tui.services.reconcile.Conflict` here — a delete carries no user buffer
 to preserve, so it is simplest for the caller to let
 :class:`~lode.versions.HeadConflictError` propagate, notify, and reload the
 list (which already reflects the current state either way).
@@ -48,18 +48,18 @@ from lode.config import Settings
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.tui.reconcile import Conflict, conflict_from_error
+from lode.tui.services.reconcile import Conflict, conflict_from_error
 from lode.versions import HeadConflictError, SaveResult
 
 #: Alias kept for readability at edit's call sites — an edit-path CAS reject
-#: is a :class:`lode.tui.reconcile.Conflict` like any other TUI save path's.
+#: is a :class:`lode.tui.services.reconcile.Conflict` like any other TUI save path's.
 EditConflict = Conflict
 
 
 class EmptyEditError(Exception):
     """Raised by :func:`save_edit` on an empty/whitespace-only buffer.
 
-    Mirrors :class:`~lode.tui.capture.EmptyCaptureError` so the same "refuse
+    Mirrors :class:`~lode.tui.services.capture.EmptyCaptureError` so the same "refuse
     an empty note" rule holds however a note reaches the store.
     """
 
@@ -105,7 +105,7 @@ def delete_note(
 
     Unlike :func:`save_edit`, a CAS reject (:class:`~lode.versions.
     HeadConflictError` — someone else edited or deleted the note first) is
-    **not** converted into a preserved-draft :class:`~lode.tui.reconcile.
+    **not** converted into a preserved-draft :class:`~lode.tui.services.reconcile.
     Conflict` here: a delete carries no user buffer to preserve, so there is
     nothing to reconcile. It is simplest for the caller
     (:class:`~lode.tui.screens.browse.BrowseScreen`) to let the exception
@@ -136,8 +136,8 @@ def save_edit(
     capture-path cache composite (:class:`~lode.lexical.LexicalCacheBackend`
     only — embedding stays async). A CAS reject (the head moved since
     ``parent`` was loaded) is handed to
-    :func:`lode.tui.reconcile.conflict_from_error`, which preserves the
-    buffer as a draft and returns the :class:`~lode.tui.reconcile.Conflict`
+    :func:`lode.tui.services.reconcile.conflict_from_error`, which preserves the
+    buffer as a draft and returns the :class:`~lode.tui.services.reconcile.Conflict`
     the caller resolves (re-apply / discard) exactly like a capture-path
     reject would.
 

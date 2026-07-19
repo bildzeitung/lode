@@ -6,7 +6,7 @@ carries a verbatim-verified citation, no_egress matches surface as withheld
 rather than silently dropped, and an unsupported question abstains rather
 than hallucinating. This screen owns none of that; it only asks a question,
 runs the pipeline off the UI thread, and displays what
-:func:`lode.tui.ask.run_ask` / :func:`lode.tui.ask.render_ask_result` return.
+:func:`lode.tui.services.ask.run_ask` / :func:`lode.tui.services.ask.render_ask_result` return.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Header, Input, Static
 
-from lode.tui.ask import render_ask_result, run_ask
-from lode.tui.lode_footer import LodeFooter
+from lode.tui.services.ask import render_ask_result, run_ask
+from lode.tui.widgets.lode_footer import LodeFooter
 
 #: The question input's widget id -- read back in tests.
 QUESTION_ID = "ask-question"

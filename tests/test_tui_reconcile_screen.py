@@ -16,7 +16,7 @@ import pytest
 
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
-from lode.tui import capture as capture_mod
+from lode.tui.services import capture as capture_mod
 from lode.tui.app import LodeApp
 from lode.tui.screens.capture import BODY_ID
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen

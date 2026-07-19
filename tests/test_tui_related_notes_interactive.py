@@ -1,7 +1,7 @@
 """Interactive stepping + highlighted-context modal for the related-notes panel (lode-olmi.9).
 
 Covers the acceptance criterion straight: the passive panel
-(:class:`~lode.tui.related_notes_panel.RelatedNotesPanel`) is made interactive
+(:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`) is made interactive
 without disturbing its existing debounce/render behavior (that's
 ``tests/test_tui_related.py``, ``tests/test_tui_edit_related_notes.py``, and
 the related-notes bits of ``tests/test_tui_app.py``/
@@ -20,8 +20,8 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.related import RelatedNote
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.services.related import RelatedNote
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import RELATED_ID, CaptureScreen
 from lode.tui.screens.edit import EDIT_RELATED_ID, EditScreen
 from lode.tui.screens.related_note_modal import (

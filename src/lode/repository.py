@@ -33,7 +33,7 @@ from lode.redact import redact_before_index
 from lode.versions import SaveResult
 
 # A full note_id is a str(uuid.uuid4()) — 32 hex digits + 4 dashes = 36 chars
-# (lode.cli.add, lode.tui.capture.save_capture). Anything shorter is treated
+# (lode.cli.add, lode.tui.services.capture.save_capture). Anything shorter is treated
 # as a prefix to resolve (lode-1gr.3).
 NOTE_ID_LENGTH = 36
 

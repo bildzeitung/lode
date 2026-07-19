@@ -19,7 +19,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.notes_read import version_body
-from lode.tui.lode_footer import LodeFooter
+from lode.tui.widgets.lode_footer import LodeFooter
 
 #: The read-only prior-version body's widget id -- read back in tests.
 VERSION_BODY_ID = "version-view-body"

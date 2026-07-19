@@ -1670,8 +1670,8 @@ def test_delete_head_conflict_notifies_and_reloads_instead_of_crashing(
     is handled gracefully -- notify and reload, never an unhandled crash.
 
     Forcing this precisely requires the live head to move in the narrow gap
-    between ``BrowseScreen`` re-resolving it (:func:`~lode.tui.edit.load_head`)
-    and calling :func:`~lode.tui.edit.delete_note` -- not reachable from a
+    between ``BrowseScreen`` re-resolving it (:func:`~lode.tui.services.edit.load_head`)
+    and calling :func:`~lode.tui.services.edit.delete_note` -- not reachable from a
     single-threaded pilot flow without patching that gap directly, so
     ``load_head`` is monkeypatched to hand back a stale parent while the real
     head has already moved on.
@@ -2616,7 +2616,7 @@ def test_bare_v_from_editor_types_into_the_body_instead(tmp_path: Path) -> None:
 # 80-column bound this screen was originally sized to and Textual clipped
 # the tail. The fix stays inside the stock Footer (compact=True +
 # show_command_palette=False), now baked into the shared
-# :class:`~lode.tui.lode_footer.LodeFooter` every screen composes instead of
+# :class:`~lode.tui.widgets.lode_footer.LodeFooter` every screen composes instead of
 # repeating the two flags per call site.
 #
 # lode-uczx: lode's minimum supported terminal width is 100 columns, not 80

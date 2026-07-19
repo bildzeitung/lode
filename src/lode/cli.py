@@ -683,7 +683,7 @@ def _resolve_as_of(conn: sqlite3.Connection, support: "Support") -> str | None:
     A note ``version_id``'s as-of is its write time (``versions.created``); an
     external ``snapshot_id``'s is its fetch time (``snapshots.fetched_at`` —
     ``docs/externals.md`` "Every AI claim from an external must cite 'as of
-    fetched_at'"). Mirrors :func:`lode.tui.ask._resolve_as_of`, which the TUI ask
+    fetched_at'"). Mirrors :func:`lode.tui.services.ask._resolve_as_of`, which the TUI ask
     screen uses for the same lookup. Returns ``None`` for a target absent from the
     store (practically unreachable — the faithfulness gate already verified the
     span against the stored body — but handled rather than assumed away).
