@@ -1498,3 +1498,52 @@ are catalogued in [configuration.md](configuration.md).
     async two-step "detect as unresolved, defer id resolution to the refresh job" redesign would
     close it, at real complexity cost) unless this proves to matter in practice — revisit if
     tiny-links/legacy URLs turn out to be a common paste shape for real Confluence usage.
+
+- **`tui/` top-level reorg — target layout locked, move discipline + acceptance pinned
+  (`lode-zlmz.1`, `/challenge`-resolved 2026-07-19).** Follows the one-Screen/Widget-per-module
+  fiat (`lode-s5kp`, [conventions.md](conventions.md#textual-one-screen-or-custom-widget-per-module)),
+  which left `tui/` top level a grab-bag of four different kinds of module. This is a
+  **decision-only** entry — no code moves here; the move children (`lode-zlmz.3`, `lode-2zj0`)
+  build against it.
+  - **Target layout (4-way split).** `src/lode/tui/` top level holds **only** `app.py` +
+    utilities (`dates.py`, `latency_probe.py`) + `__init__.py`. Custom Widgets — `lode_footer.py`
+    (`LodeFooter`) and `related_notes_panel.py` (`RelatedNotesPanel`) — move to a new
+    `tui/widgets/`, mirroring the existing `tui/screens/`. The 5 non-UI service modules — `ask.py`
+    (`run_ask`), `capture.py` (`save_capture`), `reconcile.py` (`Conflict`/`reapply`), `edit.py`
+    (`load_head`/`delete_note`/`save_edit`), `related.py` (`find_related_notes`) — move to a new
+    `tui/services/`. **Decided: `tui/services/`, not `lode/services/`** — all 5 import zero
+    Textual, so the split is structurally clean, but nothing outside `tui/` actually *imports* any
+    of them today (the `cli.py`/`notes_read.py`/`repository.py`/`timestamps.py` references are
+    Sphinx `:mod:`/`:func:` docstring xrefs, not real imports), so the minimal collision-killing
+    move wins; a broader "`lode/services/` app-service-layer" claim is a bigger claim than the
+    evidence supports and is explicitly **deferred, not taken**. This kills the 3 existing name
+    collisions: `tui/{ask,capture,reconcile}.py` vs. `tui/screens/{ask,capture,reconcile}.py`
+    (disambiguated only by import path today).
+  - **Move discipline (with the challenge carve-out).** Move children relocate class/function
+    bodies **byte-identical, except the module/symbol's own import lines and Sphinx**
+    **`:mod:`/`:func:`/`:class:` xref path strings** — this is how `lode-s5kp` actually operated.
+    A literal "byte-identical bodies, no diff at all" reading is self-contradictory: the moving
+    modules carry `:func:`/`:mod:` xrefs to *sibling moving modules* inside their own docstrings
+    (e.g. `edit.py::save_edit`'s docstring cites `:func:`lode.tui.reconcile.conflict_from_error``),
+    so once `reconcile.py` moves to `tui/services/reconcile.py`, that xref must change too or it
+    points at a dead path — a diff in the moved symbol's body that the naive reading would wrongly
+    bounce.
+  - **Acceptance for the move child `lode-zlmz.3` (replaces the old "~38 files" estimate).**
+    Full `nox -s tests` green **and**
+    `grep -rn 'lode\.tui\.\(ask\|capture\|reconcile\|edit\|related\|lode_footer\|related_notes_panel\)\b' src tests`
+    returns **only** new-path (`services/`, `widgets/`) lines — zero old-path references, whether
+    import or xref. The "~38 files carry path refs" figure was an estimate, not a testable
+    boundary (the actual count is 54 files touching `lode.tui.*`, including non-moving
+    `screens/`/`app.py` files); the grep gate is mechanical and writable as a test.
+  - **Sequencing.** `lode-zlmz.3` (the pure move: widgets + services in one pass) lands **first**;
+    `lode-2zj0` (dissolving the browse↔edit import cycle via a content-view leaf module) rebases
+    onto the new `tui/services/` paths afterward — `lode-2zj0` touches `edit.py` (a mover) and
+    `browse.py`, so building it first would force `lode-zlmz.3` to rebase onto a moving target
+    instead. The content-view leaf module `lode-2zj0` introduces lives in **`tui/screens/`** (it
+    is UI — a navigation-glue leaf imported by the browse/edit screens — not a service).
+  - **Why `lode-zlmz.3` is one pass, not two.** The widgets move and the services move both
+    rewrite import lines in the same shared screen files (`screens/{ask,capture,edit,reconcile}.py`
+    each import both a moving service and the moving `LodeFooter` widget, often on adjacent
+    lines). Splitting them into two tickets would be two overlapping import-rewrite passes over
+    the same 38–54 files, landing in either order — a guaranteed conflict on the shared files.
+    Bundling them into one move avoids that by construction.
