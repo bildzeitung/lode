@@ -214,17 +214,13 @@ top-level ``Screen``/``ModalScreen`` classes this module used to hold --
 ``SnapshotViewerScreen``, ``EnrichmentModalScreen``, ``DeleteConfirmScreen``,
 ``EditScreen`` -- now live in their own modules under
 :mod:`lode.tui.screens`, per the one-Screen-per-module fiat
-(``docs/conventions.md``). Pure move -- no behavior change. This module kept
-only :class:`BrowseScreen` plus ``_resolve_externals``/
-``_view_note_external_content`` at the time, since those two functions
-pushed screens on both this screen's and ``EditScreen``'s behalf and
-``EditScreen`` (imported here) could not import back without a cycle --
-``EditScreen``'s own reach back into ``_view_note_external_content`` used a
-local (function-body) import to dodge it. Both functions have since moved to
-their own leaf module (lode-2zj0, see the "Dissolved the browse<->edit
-import cycle" section above); this module now keeps only
-:class:`BrowseScreen`, and every cross-screen ``push_screen`` reference
-below is a plain top-level import.
+(``docs/conventions.md``). Pure move -- no behavior change. At the time this
+module also kept ``_resolve_externals``/``_view_note_external_content``, the
+navigation glue both this screen and ``EditScreen`` pushed through; those two
+have since moved to their own leaf module (lode-2zj0 -- see the "Dissolved
+the browse<->edit import cycle" section above for the cycle it broke), so
+this module now keeps only :class:`BrowseScreen`, and every cross-screen
+``push_screen`` reference below is a plain top-level import.
 """
 
 from __future__ import annotations
