@@ -1516,9 +1516,10 @@ are catalogued in [configuration.md](configuration.md).
     of them today (the `cli.py`/`notes_read.py`/`repository.py`/`timestamps.py` references are
     Sphinx `:mod:`/`:func:` docstring xrefs, not real imports), so the minimal collision-killing
     move wins; a broader "`lode/services/` app-service-layer" claim is a bigger claim than the
-    evidence supports and is explicitly **deferred, not taken**. This kills the 3 existing name
-    collisions: `tui/{ask,capture,reconcile}.py` vs. `tui/screens/{ask,capture,reconcile}.py`
-    (disambiguated only by import path today).
+    evidence supports and is explicitly **deferred, not taken**. This kills the 4 existing name
+    collisions: `tui/{ask,capture,edit,reconcile}.py` vs. `tui/screens/{ask,capture,edit,reconcile}.py`
+    (disambiguated only by import path today; the `edit` pair is the newest — `screens/edit.py`
+    arrived with the `lode-s5kp` browse.py split this reorg follows).
   - **Move discipline (with the challenge carve-out).** Move children relocate class/function
     bodies **byte-identical, except the module/symbol's own import lines and Sphinx**
     **`:mod:`/`:func:`/`:class:` xref path strings** — this is how `lode-s5kp` actually operated.
