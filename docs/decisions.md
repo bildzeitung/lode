@@ -432,6 +432,64 @@ are catalogued in [configuration.md](configuration.md).
   pass (see `.claude/agents/code-reviewer.md` step 4 and `docs/agents-workflow.md`'s landing-loop
   section).
 
+  **Update (lode-905v, 2026-07-20) — the multi-agent bug hunt is rebuilt as a Workflow, invoked by the
+  `/code` ORCHESTRATOR, not by the reviewer.** lode-axyq made the definitions honest about the loss
+  above; this ticket restores the CAPABILITY without touching the two rejected paths (extraction from
+  the Claude Code binary, a hand-rolled skill impersonating `/code-review` — both stay rejected).
+
+  The first build attempt (superseded — see below) wired the workflow *inside* `code-reviewer.md` step
+  4, on the assumption the reviewer's own dispatched context could invoke the `Workflow` tool. That
+  assumption was checked and falsified: **two direct probes, both invocation-gated (a `ToolSearch`
+  attempt, not just a tool-list inspection), on both a `coding` producer and a `code-reviewer`,
+  dispatched the same way this pipeline dispatches every producer and reviewer (Agent tool, `isolation:
+  "worktree"`), found `Workflow` absent from the tool set in both cases.** The `/code` orchestrator's
+  own (main) session is the only context confirmed to reach it. So the boundary is main-session-only
+  vs. every dispatched subagent, not a coding-vs-reviewer difference — and the agent registry's own
+  "Tools: All tools" label for both subagent types is not a reliable guide to their actual runtime tool
+  surface.
+
+  **Rescoped design (shipped): the orchestrator runs the workflow, the reviewer consumes its output as
+  input.** `.claude/workflows/correctness-review.js` (FIND — one agent per correctness dimension:
+  logic/edge cases, error handling, concurrency/ordering, API/contract misuse, test adequacy, sensitive
+  data exposure — → VERIFY, a refute-biased skeptic per finding, default-refuted when uncertain → REPORT,
+  ranked survivors; `pipeline()` over the dimensions so one dimension's findings verify while another is
+  still finding, no barrier without a cross-item reason) is unchanged from the first attempt — its
+  defect was *where it was invoked from*, not what it does, so it is salvaged rather than rewritten.
+  What moved is the call site: `.claude/skills/code/SKILL.md` Phase 2 now runs
+  `Workflow({ scriptPath: ".claude/workflows/correctness-review.js", args: { refRange: "trunk...land/<id>" } })`
+  itself, right after verifying each builder's hand-off and right before dispatching that ticket's
+  `code-reviewer`, and folds the surviving findings into the reviewer's dispatch prompt as
+  **orchestrator-supplied, pre-computed candidates** — the reviewer still independently confirms each
+  one against the real diff before acting on it (`.claude/agents/code-reviewer.md` step 4), and still
+  runs its own hand-reasoned pass regardless of whether the workflow ran, errored, or returned nothing.
+  This preserves the property that mattered from the start: the main session did not write the code
+  under review, so an orchestrator-run correctness pass is still not the author's own review.
+
+  **Concurrency (lode-2cf): one workflow call at a time, chosen over capping its internal fan-out.**
+  The workflow fans one agent out per correctness dimension (six today) inside a *single* call; running
+  two calls concurrently for two different tickets in a fan-out batch would silently double that
+  fan-out on top of whatever builders/reviewers are already in flight, against the same memory budget
+  `CODE_MAX_CONCURRENT_AGENTS` protects. `/code` Phase 2 runs each ticket's workflow call to completion
+  before starting the next ticket's — the *reviewer dispatches themselves* still run concurrently as
+  before, since each reviewer receives its own findings already computed and needs nothing further from
+  the workflow once dispatched. Chosen over capping the workflow's own internal concurrency because it
+  needs no new per-workflow knob and the added serialization is bounded (six agents' worth of one
+  correctness pass per ticket, not a whole review pipeline).
+
+  **The benchmark acceptance criteria remain open — both comparisons need a `Workflow`-capable session,
+  which no producer dispatch is.** The ticket requires (a) a live head-to-head against a
+  keystroke-invoked `/code-review high trunk...HEAD` on a real branch, and (b) a retrospective run
+  against a genuine pre-upgrade review commit, with the exact verified ref ranges for five candidates
+  already recorded on the ticket (`bd show lode-905v`) — best first candidate `b70be43`/lode-gpzn.13
+  (`77960d8...22e4341`), which alone contains two distinct genuine correctness catches spanning two
+  different dimensions. Neither comparison is buildable from a `coding` producer's dispatched context
+  (this build's own re-probe reconfirmed `Workflow` absent, matching the first attempt) — (a) never was,
+  since no model context can type a keystroke, and (b), even though the rescoped design makes the
+  *production* wiring run from a `Workflow`-capable session, still needs a human (or the maintainer's own
+  interactive session) to actually invoke it and record the result; a `coding` producer building this
+  ticket is not that session. Do not declare parity or close this ticket's comparison criteria until both
+  have actually been run and recorded here.
+
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
