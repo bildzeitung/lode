@@ -76,15 +76,34 @@ a test literal because nothing in `docs/` said otherwise. Design facts belong in
 (`CLAUDE.md`), so it is recorded here: **when sizing a screen's footer (or any other width-
 sensitive layout), 100 columns is the bound to design against, not 80.**
 
-**One shared footer widget, not ten call sites each managing their own flags.** Every
+**One shared footer widget, not a call site per screen each managing its own flags.** Every
 footer-bearing screen composes `lode.tui.widgets.lode_footer.LodeFooter` — a ~4-line `Footer` subclass
 that bakes in `compact=True, show_command_palette=False` — instead of calling Textual's stock
-`Footer()` directly. Before `lode-uczx`, only two of the ten screens (`BrowseScreen`,
-`CaptureScreen`) passed those two flags explicitly, because each had independently hit an overflow
-bug and fixed it locally; the other eight stayed bare. That is drift-by-default: a new screen that
-forgets the flags regresses silently, which is exactly how `CaptureScreen` — the app's own
-default/landing screen — clipped past `BrowseScreen`'s fix undetected (`lode-3rvw`). `LodeFooter`
-is the one seam for any future footer-wide style change; a screen never repeats the flags itself.
+`Footer()` directly. Before `lode-uczx`, only two of the ten screens that existed at the time
+(`BrowseScreen`, `CaptureScreen`) passed those two flags explicitly, because each had independently
+hit an overflow bug and fixed it locally; the other eight stayed bare. That is drift-by-default: a
+new screen that forgets the flags regresses silently, which is exactly how `CaptureScreen` — the
+app's own default/landing screen — clipped past `BrowseScreen`'s fix undetected (`lode-3rvw`).
+`LodeFooter` is the one seam for any future footer-wide style change; a screen never repeats the
+flags itself.
+
+The app has grown since: **15** screen modules live under `src/lode/tui/screens/` today (excluding
+`__init__` and underscore-prefixed leaf modules), up from the ten `lode-uczx` converted. Not every
+one of them carries a footer, though — see the modal-footer rule just below for which do and which
+stay bare by design.
+
+**Modals are footerless unless they carry standing actions (`lode-ev5j.3`).** A modal that is a
+transient glance-and-dismiss popup — a confirm dialog or an inline picker/detail view
+(`DiscardConfirmScreen`, `DeleteConfirmScreen`, `EnrichmentModalScreen`, `RelatedNoteModalScreen`) —
+stays footerless on purpose: it has no standing, discoverable action worth a permanent on-screen
+reminder. A modal earns a footer once it carries real, standing actions with nowhere else to show
+them. `SnapshotViewerScreen` is the precedent: it already had two such actions (`Back`, `Toggle raw
+HTML`) with no footer to list them in; once a third binding (open-link-under-cursor,
+`lode-ev5j.3`) needed the same on-screen discoverability its sibling screens (`edit.py`,
+`version_view.py`) already gave it, the gap became a blocker rather than a pre-existing quirk to
+leave alone, so it was closed rather than deferred. When adding a new modal, ask the same question:
+does it have a standing action worth keeping visible, or is it a glance-and-dismiss popup? The
+latter stays bare.
 
 Both of those flags are load-bearing at the 100-column bound, and neither is the `show=False`
 binding-hiding that `lode-l38d.3` ruled out and this epic has held to since: `compact=True` only
