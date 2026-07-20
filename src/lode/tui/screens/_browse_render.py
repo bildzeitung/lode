@@ -84,14 +84,14 @@ def _clip_summary_to_row_height(summary: str, width: int) -> Text:
     :func:`_wrap_summary_full`'s docstring for why.
     """
     if width <= 0:
-        return Text(summary)
-    lines = textwrap.wrap(summary, width=width) or [""]
-    if len(lines) <= _SUMMARY_ROW_HEIGHT:
-        return Text("\n".join(lines))
-    kept = lines[:_SUMMARY_ROW_HEIGHT]
-    last = kept[-1][: max(width - 1, 0)].rstrip()
-    kept[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
-    return Text("\n".join(kept))
+        lines = [summary]
+    else:
+        lines = textwrap.wrap(summary, width=width) or [""]
+        if len(lines) > _SUMMARY_ROW_HEIGHT:
+            lines = lines[:_SUMMARY_ROW_HEIGHT]
+            last = lines[-1][: max(width - 1, 0)].rstrip()
+            lines[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
+    return Text("\n".join(lines))
 
 
 def _item_text(item: EnrichmentItem) -> Text:

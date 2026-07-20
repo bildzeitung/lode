@@ -61,17 +61,16 @@ class ExternalPickerScreen(Screen[None]):
         yield LodeFooter()
 
     def on_mount(self) -> None:
-        """Populate the picker table.
+        """Populate the picker table, one row per external.
 
         ``source_type``/``fetched_at``/``state`` are wrapped in
-        :class:`~rich.text.Text` before they reach ``add_row`` (lode-ix4i) --
-        a bare ``str`` cell is rendered through Rich console *markup*, which
-        would silently eat a bracketed value. Low-severity today (these are
-        enum-ish fields, unlikely to contain ``[``), but the sibling renderer
-        :func:`~lode.tui.screens._browse_render._external_text` already
-        returns ``Text`` for the same data (and writes a literal
-        ``[{state}]``), so this duplicates that data through the undefended
-        path otherwise.
+        :class:`~rich.text.Text` so a bracketed value survives the render
+        (lode-ix4i) -- see
+        :func:`~lode.tui.screens._browse_render._wrap_summary_full` for why a
+        bare ``str`` cell is unsafe. The sibling renderer
+        :func:`~lode.tui.screens._browse_render._external_text` already returns
+        ``Text`` for this same data, so the picker would otherwise be the one
+        undefended path to it.
         """
         table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
         table.add_columns("Source", "Snapshot", "Fetched", "State")

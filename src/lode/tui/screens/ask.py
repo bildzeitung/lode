@@ -50,15 +50,11 @@ class AskScreen(Screen[None]):
         yield Vertical(
             Input(id=QUESTION_ID, placeholder=_PLACEHOLDER),
             VerticalScroll(
-                # markup=False (lode-ix4i, precedent: related_note_modal.py's
-                # own body Static): render_ask_result's output is arbitrary
-                # user text -- note bodies/web snapshots quoted verbatim as
-                # citation spans -- plus its own literal bracket groups
-                # ("[version <id>, as of <ts>]", "[withheld] ..."). A
-                # markup=True Static (the default) parses those brackets as
-                # Rich console markup and silently drops them; this is the
-                # highest-priority instance of that hazard since it corrupts
-                # every cited answer, not just hostile input.
+                # markup=False (lode-ix4i, same reasoning as
+                # related_note_modal.py's body Static): render_ask_result emits
+                # literal bracket groups ("[version <id>, as of <ts>]",
+                # "[withheld] ...") around verbatim user text, and a markup=True
+                # Static -- the default -- would silently eat them.
                 Static(_PLACEHOLDER, id=RESULTS_ID, markup=False),
                 id="ask-results-pane",
             ),
