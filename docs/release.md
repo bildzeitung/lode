@@ -36,9 +36,8 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
    green — check-only; it never runs `nox -t fix`, which mutates the tree and would violate the
    clean-tree guard at tag time), computes/confirms the next `vX.Y.Z`, creates the annotated tag on
    the release commit — with the confirmed release notes as the tag body, when a notes file is
-   passed as its second argument — and pushes the tag. It also runs `nox -s build` (below) as a
-   local sanity check before spending a push — the same packaging assertion the tag-triggered CI
-   build re-runs a moment later regardless, so this is fail-fast, not the only gate.
+   passed as its second argument — and pushes the tag. It also runs `nox -s build` as a local
+   fail-fast check (rationale below).
 2. **CI builds on tag push** — `.github/workflows/release.yml` (lode-0ru.3) triggers on `v*` tag
    push and runs `nox -s build -- dist` (wheel + sdist into `./dist`; the `Version` metadata comes
    straight from `git describe` against the pushed tag), then publishes a GitHub release with both
@@ -77,7 +76,8 @@ on:
   the tag-exclusion as documented-but-unobserved.
 - **This matters far more for the heavier siblings than for `build.yml` itself.** Cost is $0 (public
   repo, free Actions minutes) — this is noise/latency, not spend — and `build.yml`'s own job is cheap
-  (`pip install build` + `python -m build`). But `nox -s tests` (lode-qxdn.2) and coverage
+  (`pip install build nox` + `nox -s build`, ~4s, zero runtime deps). But `nox -s tests`
+  (lode-qxdn.2) and coverage
   (lode-qxdn.3) are heavy: a full `-e .[dev]` install (lancedb/fastembed/textual) plus a
   FastEmbedCrossEncoder model download, minutes per run. An unfiltered `push:` there would burn real
   wall-clock on every producer push — coding handoff, code-reviewer re-push, every rebase pickup —

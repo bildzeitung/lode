@@ -234,8 +234,18 @@ def build(session: nox.Session) -> None:
         session.run("python", "-m", "build", "--outdir", outdir)
         wheels = list(Path(outdir).glob("*.whl"))
         sdists = list(Path(outdir).glob("*.tar.gz"))
-        if not wheels or not sdists:
-            session.error("python -m build did not produce both a wheel and an sdist")
+        # Exactly one of each, not merely "at least one": with a caller-supplied
+        # outdir the dir is no longer guaranteed fresh, and a leftover wheel from
+        # an earlier run would make the check below inspect an arbitrary
+        # glob-order wheel while release.yml's `gh release create ... dist/*`
+        # uploads every file present. Asserted artifact == published artifact is
+        # the whole point of routing release.yml through this session (lode-zuqp).
+        if len(wheels) != 1 or len(sdists) != 1:
+            session.error(
+                f"expected exactly one wheel and one sdist in {outdir}, found "
+                f"{len(wheels)} wheel(s) and {len(sdists)} sdist(s) — a build "
+                "failure, or stale artifacts left in a reused output directory"
+            )
         with zipfile.ZipFile(wheels[0]) as zf:
             names = zf.namelist()
         for expected in ("lode/schema.sql", "lode/tui/lode.tcss"):
