@@ -375,10 +375,14 @@ evidence of a harness bug, not a routine hiccup to swallow silently. Two precond
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
 understood:
 
-- **It only ever runs in an isolated launch worktree.** Each site checks its `git rev-parse
-  --show-toplevel` is under `.claude/worktrees/` and stops otherwise. Without that, an agent whose
-  `isolation: "worktree"` dispatch silently failed would run `reset --hard`/`clean -fd` in the user's
-  **main checkout** — turning a contamination guard into the more damaging bug.
+- **It only ever runs in an isolated launch worktree.** Two of the three sites — `coding.md`'s
+  rebase-pickup step and `code-reviewer.md`'s step — carry an explicit `case "$TOP" in
+  */.claude/worktrees/*) ;; ... esac` guard ahead of the remediation, checking `git rev-parse
+  --show-toplevel` and stopping otherwise. `coding.md`'s fresh-build site relies instead on the prose
+  `pwd` safety check immediately above it in that document, not a repeated `case` guard — a documented
+  asymmetry, not an inconsistency: either way, an agent whose `isolation: "worktree"` dispatch silently
+  failed is stopped before `reset --hard`/`clean -fd` could run in the user's **main checkout**, which
+  is what would turn a contamination guard into the more damaging bug.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
   reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
@@ -408,7 +412,7 @@ same as *no* exposure: `land/SKILL.md` §2c argues `land-review`'s scratch workt
 because "its worktree's HEAD never diverges from the `trunk` HEAD it was branched from" and so
 "qualifies by construction" for the backstop reclaim sweep — an assumption this incident falsifies, so
 a recycled `land-review` worktree would fail the sweep's ancestor predicate and leak. That is a real
-but separate defect; it is tracked on its own ticket rather than widened into this one.
+but separate defect; it is tracked on its own ticket, `lode-qv5t`, rather than widened into this one.
 
 ### Concurrency cap (lode-2cf)
 
