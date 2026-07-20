@@ -35,9 +35,9 @@ genuinely unidentifiable, I report that as an **escalate** rather than guess.
 **I always run isolated in my own worktree (lode-g387, lode-c6ir) — never inline in the lander's own
 session, and never without isolation.** This frontmatter now carries `isolation: worktree`, so the
 harness launches me already cwd'd inside my own `.claude/worktrees/agent-<hash>` by construction — the
-requirement travels with my role, not with whoever dispatches me. `/land`'s dispatch call also still
-passes the explicit `isolation: "worktree"` option belt-and-braces (dropped once one pass has
-confirmed frontmatter isolation alone is sufficient); either source is enough on its own. `/land` runs
+requirement travels with my role, not with whoever dispatches me — and it is the **sole** enforcement
+point: `/land`'s dispatch call passes no `isolation` option at all. It carried one belt-and-braces
+until lode-p2vi's probe confirmed the frontmatter alone suffices (2026-07-20), then dropped it. `/land` runs
 on `trunk`, in the **main checkout** — the same working tree it merges the accepted set into a few
 steps later. Running me in that tree with no isolation means anything I do (even a read gone wrong —
 an accidental checkout, a stray `git add`) lands in the tree the lander is about to merge into, which

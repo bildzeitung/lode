@@ -286,24 +286,27 @@ branch leaves this pass's merge set and the producer rebases it (this is where t
 
 ### 2c. Run the semantic gate
 
-**Dispatch `subagent_type: "land-review"` (its own dedicated agent, lode-c6ir) via the Agent tool,
-AND still pass `isolation: "worktree"` explicitly at the call site — belt-and-braces, not redundant
-noise (lode-g387).** `land-review`'s own agent definition (`.claude/agents/land-review.md`) now
-carries `isolation: worktree` in its frontmatter, so the requirement travels with the role and no
-longer depends on this call site remembering the option — but the call site keeps passing it too
-until one full pass has confirmed frontmatter-only isolation actually holds; a follow-up ticket drops
-the call-site param once that's confirmed. I run on **trunk, in the main checkout** (see above) — the
-same working tree Section 3 merges into. A `land-review` dispatch with no isolation (neither source)
-would run *in that same tree*, and nothing stops a reviewer, mid-inspection, from leaving files staged
+**Dispatch `subagent_type: "land-review"` (its own dedicated agent, lode-c6ir) via the Agent tool —
+no `isolation` argument at the call site.** `land-review`'s own agent definition
+(`.claude/agents/land-review.md`) carries `isolation: worktree` in its frontmatter, so the
+requirement travels with the *role*: any dispatch of `subagent_type: "land-review"` lands isolated
+whether or not the call site remembers to ask for it. That frontmatter is the **sole** enforcement
+point for this dispatch — empirically confirmed by a dedicated probe (lode-p2vi, 2026-07-20); the
+probe design and its control are recorded in [`docs/decisions.md`](../../../docs/decisions.md).
+I run on **trunk, in the main checkout** (see above) — the same working tree Section 3 merges into. A
+`land-review` dispatch that was *not* isolated would run *in that same tree*, and nothing stops a
+reviewer, mid-inspection, from leaving files staged
 or modified there (OBSERVED, 2026-07-19: three `land-review` agents dispatched with no isolation all
 ran in the main checkout; one left `lode-2zj0`'s full diff staged, and the next branch's `git merge
 --no-ff` aborted with "would be overwritten by merge" — with `git ls-files -u` empty, so it hit
 neither `merge_one`'s jsonl-restore retry path nor its real-conflict path, and the failure silently
-read as an unretried conflict rather than what it was). `isolation: "worktree"` launches the reviewer
-already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD — the
-same mechanism `code/SKILL.md` already mandates for the `coding` and `code-reviewer` dispatches. From
-there it `git fetch`es `origin/land/<id>` (and
-`origin/land/<base-id>` if stacked) and diffs entirely by ref — it never needs to check anything
+read as an unretried conflict rather than what it was). Frontmatter `isolation: worktree` launches the
+reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk`
+HEAD — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
+`code-reviewer` dispatches, though those two still request it at the call site: their agent
+definitions carry no `isolation:` frontmatter key, so for them the call-site option remains
+load-bearing. From there it `git fetch`es `origin/land/<id>` (and `origin/land/<base-id>` if
+stacked) and diffs entirely by ref — it never needs to check anything
 out — so under isolation any tree mutation it performs (accidental or not) lands in that disposable
 worktree, never in the one Section 3 is about to merge into. **No special cleanup is needed for that
 scratch worktree**: `land-review` never commits (its own "What I don't do" — no merge, no push, no

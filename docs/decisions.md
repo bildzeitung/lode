@@ -1642,13 +1642,25 @@ are catalogued in [configuration.md](configuration.md).
   matching the peer `code-reviewer` agent) in its frontmatter. This makes the requirement a property of
   the **role** — anyone dispatching `subagent_type: "land-review"` gets isolation whether or not they
   remember to ask for it — rather than a boolean every call site must independently remember, which is
-  the exact class of gap lode-g387 fell into twice. `/land`'s dispatch (`land/SKILL.md` §2c) still
-  passes the explicit `isolation: "worktree"` call-site option too, deliberately redundant for now: this
-  is the **first** use of agent-definition `isolation` frontmatter anywhere in the repo, so dropping the
-  known-working call-site mechanism before one full `/land` pass has confirmed frontmatter isolation
-  alone actually launches the reviewer isolated would risk silently reintroducing lode-g387's bug under
-  a corrected-looking dispatch. A follow-up ticket drops the call-site parameter once that pass is
-  confirmed.
+  the exact class of gap lode-g387 fell into twice. `/land`'s dispatch (`land/SKILL.md` §2c) initially
+  kept passing the explicit `isolation: "worktree"` call-site option too, deliberately redundant: this
+  was the **first** use of agent-definition `isolation` frontmatter anywhere in the repo, so dropping the
+  known-working call-site mechanism before one full `/land` pass had confirmed frontmatter isolation
+  alone actually launches the reviewer isolated would have risked silently reintroducing lode-g387's bug
+  under a corrected-looking dispatch. A follow-up ticket (lode-p2vi) carried the confirmation and the
+  drop — though *not* by the "one full `/land` pass" this plan originally anticipated: every real pass
+  dispatched `land-review` **with** the call-site option, which can prove nothing either way about the
+  frontmatter. It took a dedicated probe with the option deliberately absent.
+
+  **Confirmed and dropped (lode-p2vi, 2026-07-20).** Two dedicated probe dispatches — both with no
+  call-site `isolation` argument, differing only in `subagent_type` — isolated the variable cleanly:
+  `subagent_type: "land-review"` landed in its own `.claude/worktrees/agent-<hash>` (branched from
+  local `trunk` HEAD, `HEAD` matching `trunk`'s, as designed), while the control
+  (`subagent_type: "claude"`, otherwise identical) ran in the main checkout on `trunk` — the exact
+  lode-g387 hazard. Since the only variable between the two dispatches was the agent definition, the
+  isolation is attributable to `.claude/agents/land-review.md`'s frontmatter alone. `land/SKILL.md`
+  §2c no longer passes the call-site `isolation: "worktree"` option; frontmatter is the sole
+  enforcement point for this dispatch.
 
   **Deliberately scoped to `land-review` alone — no consistency requirement across `coding` /
   `code-reviewer`.** Those two are *already* dedicated agent definitions (`.claude/agents/coding.md`,
