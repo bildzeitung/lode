@@ -1,11 +1,13 @@
 ---
 name: land-review
 description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (`/code-review` + `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
+isolation: worktree
+model: opus
 ---
 
 # land-review
 
-I am the **land-side semantic review** — the build-side twin of [`challenge`](../challenge/SKILL.md).
+I am the **land-side semantic review** — the build-side twin of [`challenge`](../skills/challenge/SKILL.md).
 `challenge` critiques a *plan* before it's built; I critique the *result* before it lands. I take one
 **built, ready-for-land branch** and its **ticket**, and I answer a single question: **should this
 land?** I return a structured verdict — **accept | bounce | escalate** — with findings precise
@@ -30,25 +32,30 @@ field, read via `bd show <id> --json`. If I'm handed only an ID, I derive the br
 handed only a branch, I derive the ticket from its name. If either the ticket or the branch is
 genuinely unidentifiable, I report that as an **escalate** rather than guess.
 
-**I always run dispatched via the Agent tool with `isolation: "worktree"` (lode-g387) — never inline
-in the lander's own session, and never without isolation.** `/land` runs on `trunk`, in the **main
-checkout** — the same working tree it merges the accepted set into a few steps later. Dispatching me
-into that tree with no isolation means anything I do (even a read gone wrong — an accidental
-checkout, a stray `git add`) lands in the tree the lander is about to merge into, which is exactly
-what dirtied it in an observed incident (three non-isolated dispatches; one left a full branch diff
-staged, and the next merge misread the resulting dirty tree as a conflict). Isolation gives me my
-own disposable worktree, branched from local `trunk` HEAD, entirely separate from the lander's
-checkout — I never open or touch the lander's tree at all. This changes nothing about *how* I work:
+**I always run isolated in my own worktree (lode-g387, lode-c6ir) — never inline in the lander's own
+session, and never without isolation.** This frontmatter now carries `isolation: worktree`, so the
+harness launches me already cwd'd inside my own `.claude/worktrees/agent-<hash>` by construction — the
+requirement travels with my role, not with whoever dispatches me. `/land`'s dispatch call also still
+passes the explicit `isolation: "worktree"` option belt-and-braces (dropped once one pass has
+confirmed frontmatter isolation alone is sufficient); either source is enough on its own. `/land` runs
+on `trunk`, in the **main checkout** — the same working tree it merges the accepted set into a few
+steps later. Running me in that tree with no isolation means anything I do (even a read gone wrong —
+an accidental checkout, a stray `git add`) lands in the tree the lander is about to merge into, which
+is exactly what dirtied it in an observed incident (three non-isolated dispatches; one left a full
+branch diff staged, and the next merge misread the resulting dirty tree as a conflict). Isolation
+gives me my own disposable worktree, branched from local `trunk` HEAD, entirely separate from the
+lander's checkout — I never open or touch the lander's tree at all. This changes nothing about *how*
+I work:
 I still only `git fetch` the branch(es) and diff by ref (below), never checking anything out, so my
 own worktree stays untouched too — the isolation is a guardrail against a mistake, not a workflow
 change. My worktree needs no cleanup from me: I commit nothing, so it never diverges from the
 `trunk` HEAD it was branched from, and `/land`'s own end-of-pass backstop sweep reclaims it like any
 other zero-divergence, unlocked, clean worktree. Full rationale:
-[docs/agents-workflow.md — Isolating land-review dispatches](../../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+[docs/agents-workflow.md — Isolating land-review dispatches](../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see
-[docs/agents-workflow.md#stacked-land-branches-lode-02v](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) —
+[docs/agents-workflow.md#stacked-land-branches-lode-02v](../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) —
 the lander also hands me the live **base** branch it detected from git containment. I diff against
 that base instead of `trunk` (below). `/land` derives this from git, never from a bd field; if the
 lander hands me nothing, I assume unstacked and diff against `trunk` as before.
@@ -125,7 +132,7 @@ These mirror `challenge`'s axes, turned from *plan* onto *result*:
 - Does it do **less** than the ticket and hide it? Under-scope is as much a finding as over-scope.
 
 **Design & invariants — does it honor the record?** (challenge's *assumptions*, after the fact)
-- Are the **lode invariants** and the coding-style fiats in [`docs/conventions.md`](../../../docs/conventions.md)
+- Are the **lode invariants** and the coding-style fiats in [`docs/conventions.md`](../../docs/conventions.md)
   kept? e.g. **Typer, never argparse**; one `Screen`/custom `Widget` per module; venv at `./venv`;
   design decisions in `docs/` (never a bd note or memory — that forks the record); **simplest thing
   that works** (no abstraction or flexibility nobody asked for).

@@ -60,8 +60,9 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 
 Prescriptive style **fiats** (unilateral maintainer preferences, no independent rationale) live in
 their own single source of truth, imported below so they load into the main session **and** every
-non-fork subagent — the `coding` producer, the `code-reviewer`, and the `land`/`land-review` session
-read the identical text, so a fiat cannot drift between who writes code and who reviews it. Add new
+non-fork subagent — the `coding` producer, the `code-reviewer`, the `land-review` agent, and the
+`land` session that dispatches it read the identical text, so a fiat cannot drift between who writes
+code and who reviews it. Add new
 style fiats to [`docs/conventions.md`](docs/conventions.md), not here. (Reasoned architecture still
 goes in the relevant `docs/` design doc — the litmus is in that file's preamble.)
 

@@ -1589,7 +1589,7 @@ are catalogued in [configuration.md](configuration.md).
 
   **Costs nothing in capability, needs no new cleanup mechanism.** `land-review` only ever `git
   fetch`es the branch(es) under review and diffs them by ref (never checks anything out —
-  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where*
+  [`land-review.md`](../.claude/agents/land-review.md)), so isolation changes *where*
   that happens, never *what* it does. And because `land-review` never commits, its scratch worktree's
   HEAD never diverges from the `trunk` HEAD it was branched from, so the existing worktree-GC
   backstop (lode-h1vn / lode-amif, above) reclaims it under its existing predicate with no dedicated
@@ -1598,7 +1598,63 @@ are catalogued in [configuration.md](configuration.md).
   instruction-only, deliberately:** there is no `PreToolUse` guard on agent dispatch, matching how
   the identical `isolation: "worktree"` requirement for `coding`/`code-reviewer` has always been
   specified in `code/SKILL.md`. Whether that class of rule should be mechanically enforced the way
-  `gh` writes are (lode-o29m) is deferred to lode-kt6g, not settled here. Documented in
-  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
-  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md#how-to-use-me), and
+  `gh` writes are (lode-o29m) was **resolved by lode-kt6g** (below): `land-review` moved from a skill
+  to a dedicated agent definition (`.claude/agents/land-review.md`) carrying `isolation: worktree` in
+  its own frontmatter, so the requirement travels with the role rather than staying call-site prose.
+  Documented in [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
+  [`land-review.md`](../.claude/agents/land-review.md#how-to-use-me), and
+  [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+- **`land-review` moves from a skill to a dedicated agent definition, carrying `isolation: worktree`
+  in its own frontmatter (lode-kt6g / lode-c6ir, 2026-07-20).** lode-kt6g asked a narrow question left
+  open by lode-g387 (above): every agent dispatch in the repo that needs `isolation: "worktree"` has
+  enforced it as an **instruction at the call site** (an Agent-tool parameter the dispatcher remembers
+  to pass) rather than mechanically — an asymmetry against the `gh`-write guard (lode-o29m), which
+  *is* mechanically enforced (a committed `PreToolUse(Bash)` hook). lode-g387's own dispatch is the one
+  instance that had already **failed twice** from exactly this gap, so the asymmetry was worth
+  resolving rather than filing away as consistent-with-precedent.
+
+  **Two options were on the table, and the human picked a third.** (a) a `PreToolUse` hook matching
+  the agent-dispatch tool, shaped like the two existing `Bash` guards. (b) explicitly accept
+  instruction-only enforcement for this class of rule and record why. **Rejected the hook (a):**
+  `.claude/settings.json` grants a blanket `Agent(*)` allow (every subagent dispatch, of every type,
+  needs to keep working), `subagent_type` arrives as unverified `tool_input` the hook would have to
+  trust, and — the sharpest problem — a fail-tight guard denying a non-isolated dispatch of
+  `land-review`/`coding`/`code-reviewer` would have to deny **all** `Agent` calls to stay fail-tight
+  the way the `gh`-write guard does (lode-o29m's hook denies outright on a `jq` failure, e.g. missing
+  `jq`), which would also deny the very dispatches that *fix* a broken guard — a hook that can brick
+  agent dispatch entirely is a categorically worse failure mode than the one it's closing. **Rejected
+  plain acceptance (b) too:** instruction-only had already cost two recoverable-but-manual incidents on
+  this exact dispatch; recording "we accept the risk" without changing anything about *how easy it is
+  to forget the option* would leave the same gap open for the next dispatch that needs it.
+
+  **Why the gh-write default-deny posture doesn't transfer here (the asymmetry lode-kt6g named, now
+  answered):** a `gh` write is **irreversible and public** — it files something under the user's real
+  identity on a third party's server the moment it executes; no local undo reaches it. A non-isolated
+  `land-review` dispatch is **local and recoverable** — the two observed incidents both resolved with
+  a human `git reset --hard` and zero data loss, because everything a non-isolated dispatch can dirty
+  lives in the lander's own working tree, never off-machine. Irreversibility earns a default-deny
+  mechanical fence; a recoverable local mistake earns a structural fix that makes the mistake harder to
+  make, which is what frontmatter isolation is.
+
+  **The shape actually chosen:** move `land-review` out of `.claude/skills/land-review/` into a
+  dedicated `.claude/agents/land-review.md`, with `isolation: worktree` **and** `model: opus` (a
+  related, deliberate pin — land-review is a judgment call, and Opus tokens are worth spending on it,
+  matching the peer `code-reviewer` agent) in its frontmatter. This makes the requirement a property of
+  the **role** — anyone dispatching `subagent_type: "land-review"` gets isolation whether or not they
+  remember to ask for it — rather than a boolean every call site must independently remember, which is
+  the exact class of gap lode-g387 fell into twice. `/land`'s dispatch (`land/SKILL.md` §2c) still
+  passes the explicit `isolation: "worktree"` call-site option too, deliberately redundant for now: this
+  is the **first** use of agent-definition `isolation` frontmatter anywhere in the repo, so dropping the
+  known-working call-site mechanism before one full `/land` pass has confirmed frontmatter isolation
+  alone actually launches the reviewer isolated would risk silently reintroducing lode-g387's bug under
+  a corrected-looking dispatch. A follow-up ticket drops the call-site parameter once that pass is
+  confirmed.
+
+  **Deliberately scoped to `land-review` alone — no consistency requirement across `coding` /
+  `code-reviewer`.** Those two have carried the identical instruction-only requirement since they were
+  written (`code/SKILL.md`) and have not produced this failure; converting them to dedicated agent
+  frontmatter too is not ruled out, but nothing about this decision obligates it, and doing so
+  speculatively would be scope this ticket never asked for. Revisit only if a comparable incident shows
+  up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
