@@ -1527,11 +1527,12 @@ are catalogued in [configuration.md](configuration.md).
     module is** (the app shell; a full-screen UI; a reusable UI component; a non-UI service
     function) — it says nothing about which directories may import which. As landed, the
     `widgets/`↔`screens/` edge is **bidirectional**: `widgets/related_notes_panel.py` imports
-    `screens.related_note_modal` (widget → screen), while `screens/{ask,capture,edit,reconcile}.py`
-    import `widgets.lode_footer` (screen → widget). The move relocated existing imports byte-for-byte
-    (per the move discipline below) and introduced no new cycle — this bidirectionality predates the
-    reorg — but grouping-by-kind is exactly why it's unproblematic: nothing about this layout claims
-    or requires widgets to sit "below" screens.
+    `screens.related_note_modal` (widget → screen), while ten screen modules — `ask`, `browse`,
+    `capture`, `config`, `edit`, `external_picker`, `reconcile`, `tags`, `version_history`,
+    `version_view` — import `widgets.lode_footer` (screen → widget). The move only rewrote import
+    paths (per the move discipline below) and introduced no new cycle — the same widget→screen import
+    existed at `tui/related_notes_panel.py` before the reorg — but grouping-by-kind is exactly why
+    it's unproblematic: nothing about this layout claims or requires widgets to sit "below" screens.
   - **Move discipline (with the challenge carve-out).** Move children relocate class/function
     bodies **byte-identical, except the module/symbol's own import lines and Sphinx**
     **`:mod:`/`:func:`/`:class:` xref path strings** — this is how `lode-s5kp` actually operated.
