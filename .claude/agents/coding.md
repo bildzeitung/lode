@@ -193,20 +193,29 @@ if ! rtk git merge-base --is-ancestor HEAD trunk; then
        "ancestor of trunk -- this worktree carries commit(s) foreign to trunk (recycled from a" \
        "previous ticket's build rather than freshly branched off trunk HEAD). Resetting onto" \
        "current local trunk HEAD before doing any work."
+  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
   rtk git reset --hard trunk
   rtk git clean -fd
 fi
 ```
+
+**The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
+ref* — and in a recycled worktree that ref belongs to **another ticket** (the observed reproductions
+were on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had committed but
+not yet pushed, the reset is the only thing standing between its work and oblivion. Tagging `HEAD`
+first makes the whole operation reversible, and it turns the "report it explicitly" below into
+something a human can actually inspect rather than a description of deleted state. Name the rescue
+ref in that report.
 
 `HEAD` being an ancestor of `trunk` is exactly what "freshly branched off `trunk` HEAD, zero commits
 of my own yet" means — a worktree that is merely *behind* current `trunk` (because `trunk` advanced
 after this worktree was created, a normal race in a fan-out) still passes this check trivially; only
 a worktree carrying commits `trunk` doesn't have — someone else's unreviewed work — fails it. On a
 failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
-bug, not a routine hiccup) rather than silently building on top of contamination. This check runs
-**only** in this fresh-build cycle — the Rebase pickup cycle below runs the identical assertion in
-its own step 2, worded for that cycle's different follow-up (it doesn't build fresh, it checks out an
-existing `land/<id>` on purpose right after).
+bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/`
+ref in that report. The Rebase pickup cycle below carries its own copy of this guard, with one
+addition: an explicit `.claude/worktrees/` check, which that cycle needs because it has no `pwd`
+safety check of its own above it and this one does.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
@@ -502,19 +511,35 @@ never kicked back), I stop and report — nothing to pick up.
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
 branch, carrying that ticket's commits, instead of a fresh branch off `trunk` HEAD — confirmed in
 production for both a fresh-build producer and a `code-reviewer` (lode-eshl's technical review; full
-account in [`docs/agents-workflow.md`](../../docs/agents-workflow.md)). The `git checkout -B …
-FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless — but if the recycled worktree
-carries uncommitted contamination that checkout would refuse to clobber, that failure is confusing
-rather than diagnostic. So, before the fetch, I assert this launch worktree actually started clean:
+account in
+[`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B …
+FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
+makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
+leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
+`nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean:
 
 ```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
+esac
 if ! rtk git merge-base --is-ancestor HEAD trunk; then
   echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
        "ancestor of trunk -- resetting onto current local trunk HEAD before my own fetch+checkout."
+  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
   rtk git reset --hard trunk
   rtk git clean -fd
 fi
 ```
+
+**Both preconditions are load-bearing.** The `case` is what keeps `reset --hard`/`clean -fd` off the
+user's main checkout if isolation ever fails to take — this cycle has no `pwd` safety check of its own
+above it, unlike the fresh-build cycle. The `rescue/` branch keeps another ticket's unpushed commits
+recoverable, since the ref being rewound is *theirs*, not mine (see the fresh-build cycle above).
+Note what the predicate does **not** cover: it reads the commit graph only, so a recycled worktree
+whose HEAD *is* an ancestor of `trunk` but whose working tree is dirty passes untouched — check
+`git status --short` yourself before gating if it looks wrong.
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout
@@ -784,7 +809,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
-| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git reset --hard trunk && git clean -fd`, reported explicitly (lode-nt98) |
+| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk && git clean -fd` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
