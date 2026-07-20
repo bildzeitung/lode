@@ -34,6 +34,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "code-concurrency-cap.sh"
 NOXFILE = REPO_ROOT / "noxfile.py"
@@ -117,7 +119,10 @@ def test_31gib_24core_auto_is_5(tmp_path: Path) -> None:
     assert _cap(tmp_path, available_kib=30_408_704, nproc=24, workers="auto") == "5"
 
 
-def test_non_numeric_widths_are_nproc_scaled_never_the_floor(tmp_path: Path) -> None:
+@pytest.mark.parametrize("bad_width", ["auto", "logical", "not-a-number", "0", ""])
+def test_non_numeric_widths_are_nproc_scaled_never_the_floor(
+    tmp_path: Path, bad_width: str
+) -> None:
     """The fail-tight case this ticket exists for: every shape of an
     unparseable width -- 'auto', xdist's 'logical', a plain typo, literal
     '0', and an exported-but-empty var -- must resolve identically to the
@@ -127,15 +132,28 @@ def test_non_numeric_widths_are_nproc_scaled_never_the_floor(tmp_path: Path) -> 
     exactly when the gate is at its widest and heaviest -- over-dispatch is
     what crashed the host twice (lode-2cf). So this asserts both: equal to
     the known-correct nproc-scaled value, and not equal to the floor-bug
-    value."""
-    for bad_width in ("auto", "logical", "not-a-number", "0", ""):
-        cap = _cap(tmp_path, available_kib=30_408_704, nproc=24, workers=bad_width)
-        assert cap == "5", (
-            f"LODE_TEST_WORKERS={bad_width!r} -> {cap}, want nproc-scaled 5"
-        )
-        assert cap != "12", (
-            f"LODE_TEST_WORKERS={bad_width!r} collapsed to the 2GiB floor bug"
-        )
+    value.
+
+    Parametrized rather than looped so a regression names the exact width
+    that broke, and so xdist can spread the five subprocess spawns."""
+    cap = _cap(tmp_path, available_kib=30_408_704, nproc=24, workers=bad_width)
+    assert cap == "5", f"LODE_TEST_WORKERS={bad_width!r} -> {cap}, want nproc-scaled 5"
+    assert cap != "12", (
+        f"LODE_TEST_WORKERS={bad_width!r} collapsed to the 2GiB floor bug"
+    )
+
+
+def test_memtotal_used_when_memavailable_absent(tmp_path: Path) -> None:
+    """A /proc/meminfo carrying MemTotal but no MemAvailable (older kernels,
+    some containers) must fall back to MemTotal rather than to the
+    meminfo-unreadable by_mem=4 branch. 30GiB MemTotal / 24-core, workers=8
+    -> by_mem=10, by_cpu=12 -> cap 10; the 4-fallback would be visibly
+    different, so this pins that the fallback chain is actually wired."""
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:       31457280 kB\nSwapTotal:  0 kB\n")
+    result = _run({"LODE_CAP_MEMINFO": str(meminfo), "LODE_CAP_NPROC": "24"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "10"
 
 
 def test_tiny_box_floors_at_1(tmp_path: Path) -> None:

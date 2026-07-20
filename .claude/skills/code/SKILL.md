@@ -60,8 +60,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> CODE_MAX_CONCURRENT_AGENTS="$(scripts/code-concurrency-cap.sh)"
+> CODE_MAX_CONCURRENT_AGENTS="$(rtk scripts/code-concurrency-cap.sh)" || CODE_MAX_CONCURRENT_AGENTS=4
 > ```
+>
+> The `|| …=4` is not decoration. The inline block this replaced could not fail — it had no file to
+> find — whereas a relative-path call resolves against the session's cwd, so from the wrong directory
+> the substitution yields the **empty string** and an empty cap reads as *no* cap. 4 is the same
+> conservative fallback the script itself uses when it cannot read `/proc/meminfo`. **Never proceed on
+> an empty or non-numeric cap**: if that fallback fires, say so and fix the cwd — silently guessing a
+> number here is the over-dispatch that crashed this host twice.
 >
 > - **`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no
 >   derivation; a static per-machine number the user sets beats a heuristic that guesses wrong. Set it
