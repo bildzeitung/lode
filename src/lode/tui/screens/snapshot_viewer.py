@@ -53,17 +53,10 @@ class SnapshotViewerScreen(ModalScreen[None]):
     ``read_only=True``, so it never intercepts a printable keypress before a
     Screen-level binding sees it.
 
-    **``LodeFooter`` added (lode-ev5j.3), the first of this module's small
-    popups to get one.** The confirm-style modals elsewhere in the tree
-    (``DiscardConfirmScreen``, ``DeleteConfirmScreen``, ``EnrichmentModalScreen``,
-    ``RelatedNoteModalScreen``) are transient glance-and-dismiss popups that
-    stay footerless on purpose. This screen already carried two real,
-    discoverable actions before this ticket (``Back``, ``Toggle raw HTML``)
-    with nowhere to show them; lode-ev5j.3's own acceptance criterion --
-    the open-link binding shown in the footer on every one of its three
-    target screens, this one included -- makes that gap a blocker rather
-    than a pre-existing quirk to leave alone, so it's closed here rather
-    than deferred.
+    ``LodeFooter`` added (lode-ev5j.3) once a third standing action
+    (open-link-under-cursor) joined ``Back`` and ``Toggle raw HTML`` --
+    see ``docs/tui.md``'s footer section for the modal-footer rule this
+    screen is the precedent for.
     """
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
