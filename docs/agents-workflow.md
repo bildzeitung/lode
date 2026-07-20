@@ -268,9 +268,12 @@ stopped (a build- or review-time escalation) and why.
 > this worktree's `tests/` but exercise the main checkout's source: a false FAIL when the branch's
 > fix isn't exercised, or a false PASS when the branch's regression is masked by the other
 > checkout's already-correct code — either way, nothing warns and the run just reports a result for
-> the wrong tree. `noxfile.py`'s `_assert_correct_source_tree` preflight (run at the top of both
-> sessions) now catches this mechanically: it resolves `lode.__file__` and fails loudly, naming the
-> wrong path and the fix, before pytest ever runs. The underlying rule doesn't change — build the
+> the wrong tree. `tests/conftest.py`'s `pytest_configure` guard 0 now catches this mechanically: it
+> resolves `lode.__file__` and, if it isn't under the checkout that owns the tests being collected,
+> fails the run loudly with a `UsageError` naming the wrong path and the fix, before a single test
+> runs. It lives in `conftest.py` rather than as a `nox` preflight so it covers **every** pytest
+> invocation — `nox -s tests`/`unit`/`eval` and a bare `pytest -k foo` alike — with nothing to
+> remember to wire up per session. The underlying rule doesn't change — build the
 > worktree's own venv (`./scripts/python-init.sh` from inside it) rather than reusing the main
 > checkout's — the preflight is a backstop for the times that rule gets forgotten, not a
 > replacement for following it.
