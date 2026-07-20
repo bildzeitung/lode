@@ -331,8 +331,12 @@ work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — 
 [`land-review.md`](../../agents/land-review.md) and
 [docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
-way or was just reset there — so the sweep's existing, unmodified predicate reclaims it same as
-before; nothing about Section 4 itself needed to change.
+way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
+about Section 4 itself needed to change. That survives the guard's own detection blind spot
+(lode-ix4i) intact, since what the guard fails to notice already satisfies that predicate. It does
+**not** cover the sweep's *other* arm: in the blind-spot case the remediation's `git clean -fd` never
+runs, so untracked leftovers survive and the [lode-9hgu dirty-tree guard](#4-land-the-survivors)
+below keeps the worktree anyway — open residual **lode-3v1p**, not closed here.
 
 Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that

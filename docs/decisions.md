@@ -1693,7 +1693,15 @@ are catalogued in [configuration.md](configuration.md).
   worktree's `HEAD` **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims
   it under its unmodified predicate — Section 4 itself needed no change, and neither did the
   worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
-  lode-nt98's fix for the other two roles. **The two halves stay distinct, deliberately:**
+  lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
+  The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
+  is already an ancestor of `trunk` — lode-ix4i, observed live). On the ancestry axis that is
+  self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
+  **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
+  worktree's untracked leftovers survive, and the lode-9hgu dirty-tree guard keeps the worktree, so it
+  leaks for a different reason. Left open as **lode-3v1p** rather than absorbed here, because the fix
+  is a genuine choice (clean unconditionally / have the sweep judge recycling-dirt / assert clean after
+  the guard) and picking one belongs on its own ticket. **The two halves stay distinct, deliberately:**
   `land-review`'s correctness exposure to a recycled worktree was, and remains, nil — it never reads
   anything from the checked-out state, recycled or not, because it only ever fetches and diffs by ref.
   This is purely a worktree-leak fix. Documented in

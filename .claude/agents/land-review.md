@@ -92,9 +92,13 @@ keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever 
 first keeps that ticket's unpushed commits recoverable rather than silently destroyed. If it fires, I
 report it explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
-`trunk` by construction — zero divergence, either because it started that way or because I just reset
-it there — so my worktree needs no cleanup from me: I commit nothing, and `/land`'s own end-of-pass
-backstop sweep reclaims it like any other zero-divergence, unlocked, clean worktree.
+`trunk` — either because it started that way or because I just reset it there — so my worktree needs
+no cleanup from me: I commit nothing, and `/land`'s own end-of-pass backstop sweep reclaims it like
+any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`. (Known and deliberately not
+closed here: the guard can't detect a worktree recycled onto an already-landed `land/<other-id>`, so
+that case leaks on dirt rather than ancestry — lode-ix4i / **lode-3v1p**, reasoned out in
+[docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98). Nothing
+for me to do differently either way.)
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see

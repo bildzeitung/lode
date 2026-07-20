@@ -416,7 +416,11 @@ now closed the same way: `land-review.md`'s own frontmatter role carries the ide
 above (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
 rescue the rewound ref and reset onto local `trunk` HEAD). The two halves stay distinct on purpose —
 the guard exists here for the **worktree-leak** reason, never because `land-review`'s judgment was
-ever at risk. Full account: [land-review.md](../.claude/agents/land-review.md) and
+ever at risk. That closes the **ancestry** axis only: the guard cannot detect a worktree recycled onto
+a `land/<other-id>` that has since landed (lode-ix4i), so there its `git clean -fd` never runs and the
+surviving untracked leftovers make the sweep keep the worktree anyway — open residual **lode-3v1p**.
+Full account, including why the blind spot is harmless on the ancestry axis but not the dirt one:
+[land-review.md](../.claude/agents/land-review.md) and
 [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
 ### Concurrency cap (lode-2cf)
@@ -1368,9 +1372,29 @@ reviewer: `land-review.md`'s frontmatter role now carries the identical recycled
 the rewound ref and resets onto local `trunk` HEAD — see
 [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98), above). Once that guard has run, the
 worktree's HEAD **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims it
-under its unmodified predicate — no change to Section 4 itself was needed. This is purely a
-worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree was, and remains,
-nil, since it never reads anything from the checked-out state regardless of what that state is.
+under its unmodified predicate — no change to Section 4 itself was needed. Note this argument does
+**not** inherit the guard's known detection blind spot (lode-ix4i: `merge-base --is-ancestor HEAD
+trunk` cannot recognize a recycled worktree whose HEAD *is already* an ancestor of `trunk`, e.g. one
+recycled onto a `land/<other-id>` that has since landed — observed live). It doesn't, because the
+guard's predicate **is** the sweep's trunk-arm predicate: any recycling the guard fails to detect is,
+by that very fact, already satisfying the reclaim condition. The blind spot is a *correctness* blind
+spot (foreign content goes unnoticed), and `land-review`'s correctness exposure is nil regardless —
+so on the leak axis the two cancel.
+
+**Residual, on the other axis: dirt, not ancestry.** The sweep's actual reclaim condition is
+`unlocked` **and** ancestry **and** a clean tree (the lode-9hgu dirty-tree guard, which *keeps* a
+dirty worktree). The guard closes the ancestry half unconditionally, per above — but in the
+undetected case it never fires, so its `git clean -fd` never runs either, and a recycled worktree's
+untracked leftovers survive. `land-review` neither commits nor cleans, so that dirt is still there at
+exit and the dirty-tree guard keeps the worktree: it still leaks, for a different reason. This is the
+same residual `code-reviewer.md`'s guard already documents ("the predicate reads the commit graph
+only") and is **not** closed here — closing it means either widening the guard's remediation to run
+unconditionally or making the sweep judge dirt-from-recycling separately, both larger changes than
+this ticket. Tracked as **lode-3v1p**, not silently absorbed.
+
+This is purely a worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree
+was, and remains, nil, since it never reads anything from the checked-out state regardless of what
+that state is.
 
 **One precision on "the same pass," because the fix's no-new-GC claim rests on it.** Section 4 is
 reached even when the accepted set is empty — no early exit sits between the 2c dispatch and the
