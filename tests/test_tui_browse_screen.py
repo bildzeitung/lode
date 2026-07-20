@@ -2702,6 +2702,13 @@ def test_browse_footer_fits_100_columns_with_every_binding_visible(
 # 97/100 (measured; this is exactly the 3 columns of slack app.py's own "Cfg"
 # rationale comment reserved room for, by keeping "Cfg" abbreviated rather
 # than restoring "Config").
+#
+# lode-ev5j.3: the new Ctrl+N "Link" binding (open-link-under-cursor) reopened
+# this budget -- MEASURED at 105/100 with "Related"/"History" still
+# full-length, the first clip since lode-uczx. Closed by shortening those two
+# labels ("Related" -> "Rel", "History" -> "Hist") to 98/100 (measured; see
+# EditScreen's own BINDINGS comment in src/lode/tui/screens/edit.py for why
+# those two and not "Inspect"/"View").
 # ---------------------------------------------------------------------------
 
 
@@ -2732,15 +2739,17 @@ def test_edit_footer_fits_100_columns_with_every_binding_visible(
 
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 6 screen-level + 5 App-level bindings stay visible (none hidden via
-    # show=False); only "View content" -> "View" was shortened.
+    # All 7 screen-level + 5 App-level bindings stay visible (none hidden via
+    # show=False); "View content" -> "View" (lode-uczx), "Related" -> "Rel"
+    # and "History" -> "Hist" (lode-ev5j.3, to make room for the new "Link").
     assert descriptions == [
         "Save",
         "Back",
-        "Related",
-        "History",
+        "Rel",
+        "Hist",
         "Inspect",
         "View",
+        "Link",
         "Quit",
         "Cfg",
         "Browse",

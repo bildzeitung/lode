@@ -164,13 +164,14 @@ tree by `lode-pijc`.
 | `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
-claimed (above); **`ctrl+n` and `ctrl+j` are the two formally-safe letters left** for the next
-ticket that needs a new App-level (or Screen-level) key — `ctrl+n` was freed by `lode-bsmc`'s
-Ctrl+S consolidation (below) and carries no known caveat, while `ctrl+j` still carries the
-terminal-level caveat flagged in the "No function keys" section (the raw LF byte some terminals
-treat as Enter-adjacent) — so confirm the full trap checklist before landing either, and **check
-every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s** (still the operative
-rule from "Two altitudes" above; only the alphabet changed).
+claimed (above); `ctrl+n` is now claimed too, at the **Screen** level — `EditScreen`,
+`VersionViewScreen`, and `SnapshotViewerScreen`'s shared open-link-under-cursor binding
+(`lode-ev5j.3`, below). **`ctrl+j` is the one formally-safe letter left** for the next ticket that
+needs a new App-level (or Screen-level) key — it still carries the terminal-level caveat flagged in
+the "No function keys" section (the raw LF byte some terminals treat as Enter-adjacent), so confirm
+the full trap checklist before landing it, and **check every screen's own `BINDINGS` for the same
+key too — not just `LodeApp`'s** (still the operative rule from "Two altitudes" above; only the
+alphabet changed).
 
 ### Screen-level
 
@@ -180,6 +181,7 @@ rule from "Two altitudes" above; only the alphabet changed).
 | | | `h` | Show history | |
 | `VersionHistoryScreen` | `screens/version_history.py` | `escape` | Back | — |
 | `VersionViewScreen` | `screens/version_view.py` | `escape` | Back | read-only |
+| | | `ctrl+n` | Open link under cursor | |
 | `EnrichmentModalScreen` | `screens/enrichment_modal.py` | `escape` | Back | — |
 | `DeleteConfirmScreen` | `screens/delete_confirm.py` | `y` | Yes, delete | — |
 | | | `n` | No, cancel | |
@@ -196,12 +198,14 @@ rule from "Two altitudes" above; only the alphabet changed).
 | | | `space` | Toggle tag (`show=False`) | hand-rolled multi-select; `enter` (DataTable's own native binding) does the same. Hidden to match the `SelectionList` it replaced, whose own `space` binding was `show=False` too |
 | `SnapshotViewerScreen` | `screens/snapshot_viewer.py` | `escape` | Back | read-only |
 | | | `t` | Toggle raw HTML | |
+| | | `ctrl+n` | Open link under cursor | |
 | `EditScreen` | `screens/edit.py` | `ctrl+s` | Save | **editable** |
 | | | `escape` | Back (cancel) | |
 | | | `ctrl+f` | Focus related-notes panel | |
 | | | `ctrl+h` | Show version history | |
 | | | `ctrl+g` | Inspect (enrichment modal) | |
 | | | `ctrl+r` | View retrieved content | |
+| | | `ctrl+n` | Open link under cursor | |
 | `DiscardConfirmScreen` | `screens/discard_confirm.py` | `s` | Save & quit | — |
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |
@@ -219,12 +223,24 @@ rule from "Two altitudes" above; only the alphabet changed).
 | `RelatedNoteModalScreen` | `screens/related_note_modal.py` | `escape` | Back | — |
 
 `ctrl+s` on `EditScreen`/`CaptureScreen` already predates this doc and is the precedent
-`lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, and `lode-0sjj`'s `Ctrl+R` all follow: every
-existing binding on a screen with an editable body uses a non-printable key — a `ctrl+` combo like
-these, or the named key `escape` — never a bare letter, and (per the "No function keys" policy
-above) never a function key either. (`CaptureScreen` also bound `ctrl+n` until `lode-bsmc`
-consolidated it onto the same stack-aware `ctrl+s` and freed the letter — see the "Current keymap"
-table above and the letter-space accounting earlier in this doc.)
+`lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, `lode-0sjj`'s `Ctrl+R`, and `lode-ev5j.3`'s
+`Ctrl+N` all follow: every existing binding on a screen with an editable body uses a non-printable
+key — a `ctrl+` combo like these, or the named key `escape` — never a bare letter, and (per the "No
+function keys" policy above) never a function key either. (`CaptureScreen` also bound `ctrl+n`
+until `lode-bsmc` consolidated it onto the same stack-aware `ctrl+s` and freed the letter, which
+`lode-ev5j.3` then reclaimed for the open-link binding — see the "Current keymap" table above and
+the letter-space accounting earlier in this doc.)
+
+**`lode-ev5j.3`'s open-link binding is the same `Ctrl+N` on all three of its screens on purpose,
+even though only `EditScreen`'s body is editable.** `VersionViewScreen` and `SnapshotViewerScreen`
+both have `read_only=True` bodies, so a bare printable key would have reached a Screen-level binding
+there too (see the read-only-body exception noted above) — but a feature reachable by a *different*
+key depending on which screen happens to be showing it is worse than one that costs a `ctrl+`
+prefix on two screens that didn't strictly need it. One key, three screens, no exceptions.
+`SnapshotViewerScreen` also gained a `LodeFooter` for the first time as part of this ticket — it had
+no footer at all before, so its two pre-existing bindings (`escape`/`t`) were technically
+undiscoverable too; `lode-ev5j.3`'s own "shown in the footer" acceptance criterion closed that gap
+rather than leaving the new binding as a third invisible one.
 
 ## Resolved collisions (history, for context)
 
@@ -284,3 +300,18 @@ collided at land time — this doc exists to stop the next one:
   every sibling, which closes `lode-s58y` at the root: that ticket's "footer shows Quit twice" was
   true, but its proposed fix (relabel to "Back") was wrong, since escape really did quit either way;
   once Escape genuinely pops, the duplicate *action* disappears and the label is honestly "Back".
+- **`lode-ev5j.3`**: the open-link-under-cursor binding (Feature 3 of the `lode-ev5j` markdown
+  epic). The letter space was down to `n`/`j` after `lode-11io` claimed `l`; `ctrl+n` won outright
+  (no known caveat, freed by `lode-bsmc`'s Ctrl+S consolidation) over `ctrl+j` (the raw LF byte
+  caveat flagged in the "No function keys" section) — confirmed against all three traps and against
+  every screen's own `BINDINGS` (none used `ctrl+n`). Bound identically on all three of its target
+  screens (`EditScreen`/`VersionViewScreen`/`SnapshotViewerScreen`) even though only `EditScreen`'s
+  body is editable — see the note above the table for why. Landing it also reopened `EditScreen`'s
+  footer-width budget: MEASURED at 105/100 with every other label full-length (the first time this
+  screen has clipped since `lode-uczx`), closed by shortening two more labels — "Related" → "Rel"
+  and "History" → "Hist" — to 98/100 (measured; see `EditScreen`'s own `BINDINGS` comment in
+  `src/lode/tui/screens/edit.py`). `SnapshotViewerScreen` gained a `LodeFooter` for the first time
+  (previously footerless, with no way to show its own pre-existing `escape`/`t` bindings either) —
+  the first `ModalScreen` in the tree to get one; the small glance-and-dismiss popups
+  (`DiscardConfirmScreen`, `DeleteConfirmScreen`, `EnrichmentModalScreen`, `RelatedNoteModalScreen`)
+  stay footerless on purpose, unaffected.

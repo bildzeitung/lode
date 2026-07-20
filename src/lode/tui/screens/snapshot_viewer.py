@@ -17,6 +17,8 @@ from textual.screen import ModalScreen
 from textual.widgets import TextArea
 
 from lode.notes_read import SnapshotRow, read_snapshot
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.screens._link_open import open_link_under_cursor
 
 #: The content-viewer modal's body ``TextArea`` widget id (lode-0sjj) -- read
 #: back in tests.
@@ -49,6 +51,18 @@ class SnapshotViewerScreen(ModalScreen[None]):
     this screen, ``docs/keybindings.md``): this screen's body ``TextArea`` is
     ``read_only=True``, so it never intercepts a printable keypress before a
     Screen-level binding sees it.
+
+    **``LodeFooter`` added (lode-ev5j.3), the first of this module's small
+    popups to get one.** The confirm-style modals elsewhere in the tree
+    (``DiscardConfirmScreen``, ``DeleteConfirmScreen``, ``EnrichmentModalScreen``,
+    ``RelatedNoteModalScreen``) are transient glance-and-dismiss popups that
+    stay footerless on purpose. This screen already carried two real,
+    discoverable actions before this ticket (``Back``, ``Toggle raw HTML``)
+    with nowhere to show them; lode-ev5j.3's own acceptance criterion --
+    the open-link binding shown in the footer on every one of its three
+    target screens, this one included -- makes that gap a blocker rather
+    than a pre-existing quirk to leave alone, so it's closed here rather
+    than deferred.
     """
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
@@ -56,6 +70,7 @@ class SnapshotViewerScreen(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("t", "toggle_raw", "Toggle raw HTML"),
+        Binding("ctrl+n", "open_link", "Link"),
     ]
 
     def __init__(self, snapshot_id: str) -> None:
@@ -69,6 +84,7 @@ class SnapshotViewerScreen(ModalScreen[None]):
             TextArea("", read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
             id=SNAPSHOT_VIEWER_DIALOG_ID,
         )
+        yield LodeFooter()
 
     def on_mount(self) -> None:
         snapshot = read_snapshot(self.app.db_path, self.snapshot_id)
@@ -101,3 +117,14 @@ class SnapshotViewerScreen(ModalScreen[None]):
         self.query_one(
             f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
         ).text = self._snapshot.raw_payload
+
+    def action_open_link(self) -> None:
+        """Ctrl+N: open the URL under the cursor, or explain there isn't one (lode-ev5j.3).
+
+        Works against whichever body is currently showing -- the extracted
+        text or the raw HTML, per :attr:`_showing_raw` -- since both are the
+        same ``TextArea`` (:data:`SNAPSHOT_VIEWER_BODY_ID`), just swapped by
+        :meth:`action_toggle_raw`.
+        """
+        text_area = self.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea)
+        open_link_under_cursor(self, text_area)
