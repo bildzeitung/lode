@@ -286,13 +286,18 @@ branch leaves this pass's merge set and the producer rebases it (this is where t
 
 ### 2c. Run the semantic gate
 
-**Dispatch `subagent_type: "land-review"` (its own dedicated agent, lode-c6ir) via the Agent tool,
-AND still pass `isolation: "worktree"` explicitly at the call site — belt-and-braces, not redundant
-noise (lode-g387).** `land-review`'s own agent definition (`.claude/agents/land-review.md`) now
-carries `isolation: worktree` in its frontmatter, so the requirement travels with the role and no
-longer depends on this call site remembering the option — but the call site keeps passing it too
-until one full pass has confirmed frontmatter-only isolation actually holds; a follow-up ticket drops
-the call-site param once that's confirmed. I run on **trunk, in the main checkout** (see above) — the
+**Dispatch `subagent_type: "land-review"` (its own dedicated agent, lode-c6ir) via the Agent tool —
+no `isolation` argument at the call site.** `land-review`'s own agent definition
+(`.claude/agents/land-review.md`) carries `isolation: worktree` in its frontmatter, so the
+requirement travels with the *role*: any dispatch of `subagent_type: "land-review"` lands isolated
+whether or not the call site remembers to ask for it, and the call site no longer needs to. This was
+empirically confirmed (lode-p2vi, 2026-07-20) — a `land-review` dispatch with no call-site isolation
+option still landed in its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD,
+while a control dispatch (`subagent_type: "claude"`, also no isolation option) ran in the main
+checkout on `trunk` — ruling out "the harness isolates every agent by default" as an alternative
+explanation. The call-site `isolation: "worktree"` parameter this section used to carry as
+belt-and-braces (lode-c6ir) has been dropped as redundant. I run on **trunk, in the main checkout**
+(see above) — the
 same working tree Section 3 merges into. A `land-review` dispatch with no isolation (neither source)
 would run *in that same tree*, and nothing stops a reviewer, mid-inspection, from leaving files staged
 or modified there (OBSERVED, 2026-07-19: three `land-review` agents dispatched with no isolation all
