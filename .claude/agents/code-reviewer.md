@@ -127,9 +127,50 @@ consumer — the backstop sweep that replaced it discovers worktrees live off `g
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree
 
-My launch worktree starts clean, off `trunk` HEAD, with no changes of its own — exactly the tree that
-made an earlier review silently analyze an empty diff (lode-k5e). Instead of driving the builder's
-worktree via `git -C`, I bring the branch to *my own* worktree, where every tool works natively:
+My launch worktree is *supposed* to start clean, off `trunk` HEAD, with no changes of its own —
+exactly the tree that made an earlier review silently analyze an empty diff (lode-k5e). **That
+assumption doesn't always hold**: the harness's `isolation: "worktree"` hand-off has been observed
+handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
+branch instead — confirmed for a reviewer specifically (lode-nt98: this reviewer's own launch
+worktree started life checked out on a different ticket's `land/<id>` branch, at that ticket's
+*pre-review* commit, rather than clean off `trunk` HEAD). The `git checkout -B … FETCH_HEAD` below
+will land me on the correct `land/<id>` regardless of what I started on, so this guard is **not** what
+makes the checkout correct. What it buys is a clean tree to review in: `checkout -B` carries
+**untracked** leftovers from a recycled worktree straight through, and those go on to pollute the
+`git status --short` assertions I gate on (steps 5 and 8) and the `nox` run itself. So, before
+fetching, I assert the starting state instead of trusting it:
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
+esac
+if ! rtk git merge-base --is-ancestor HEAD trunk; then
+  echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
+       "ancestor of trunk -- resetting onto current local trunk HEAD before my own fetch+checkout."
+  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
+  rtk git reset --hard trunk
+  rtk git clean -fd
+fi
+```
+
+**Both preconditions are load-bearing.** The `case` is what keeps `reset --hard`/`clean -fd` off the
+user's main checkout if isolation ever fails to take — it is the executable form of the "if my cwd is
+the repo root, stop and report" non-negotiable above, placed where the destructive command actually
+is. The `rescue/` branch matters because the ref `reset --hard` rewinds belongs to **another ticket**
+(the observed reproduction had this reviewer's worktree sitting on a different ticket's `land/<id>`);
+tagging `HEAD` first keeps that ticket's unpushed commits recoverable and makes the harness bug
+inspectable instead of deleted. Name the rescue ref in my hand-off. Note what the predicate does
+**not** cover: it reads the commit graph only, so a recycled worktree whose HEAD *is* an ancestor of
+`trunk` but whose working tree is dirty passes untouched.
+
+This never conflicts with checking out `land/<id>` next — that's exactly this step's own job; the
+guard only cleans up the *starting* state before that intentional checkout happens. If it fires, I
+report it explicitly in my final hand-off as live evidence of the harness bug, not a routine hiccup.
+
+Instead of driving the builder's worktree via `git -C`, I bring the branch to *my own* worktree, where
+every tool works natively:
 
 ```bash
 rtk git fetch origin land/<id> trunk
@@ -356,6 +397,10 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
+- **Assuming my launch worktree started clean off `trunk` HEAD just because that's how it's supposed
+  to work.** The harness has handed a dispatched reviewer a recycled worktree still on a *previous*
+  ticket's branch (lode-nt98) — assert `git merge-base --is-ancestor HEAD trunk` (step 2) before the
+  fetch, don't just trust the design.
 - **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
   currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
   — I neither remove it nor need to report it.
@@ -376,6 +421,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 |---|---|
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
+| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before the fetch (step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk && git clean -fd` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98) |
 | Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |

@@ -293,7 +293,10 @@ flowchart TD
     DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off local trunk HEAD)"]
     WT --> GUARD{"pwd is repo root?"}
     GUARD -->|"yes"| BAIL["STOP & report —<br>never write on trunk"]
-    GUARD -->|"no, in worktree"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
+    GUARD -->|"no, in worktree"| RGUARD{"HEAD ancestor<br>of trunk?"}
+    RGUARD -->|"no — recycled worktree,<br>foreign commits (lode-nt98)"| RESET["git reset --hard trunk<br>+ git clean -fd · report it"]
+    RESET --> CLAIM
+    RGUARD -->|"yes — clean"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
 
     CLAIM --> IMPL["Read issue + acceptance + design,<br>then implement (Typer · ./venv ·<br>simplest thing that works)"]
     IMPL --> COMMIT["Commit in worktree<br>(Co-Authored-By trailer)"]
@@ -320,10 +323,92 @@ flowchart TD
     classDef good fill:#dff0d8,stroke:#3c763d,color:#1b1b1b;
     class INV,RES start;
     class T1,T2,T3,OCLAIM,DISP,WT,CLAIM,IMPL,COMMIT,FIXCOMMIT,PUSH,HANDOFF,REV work;
-    class GATES,GFAIL,GUARD,CLEAN1,CLEAN2 gate;
-    class BAIL,FIX bad;
+    class GATES,GFAIL,GUARD,RGUARD,CLEAN1,CLEAN2 gate;
+    class BAIL,FIX,RESET bad;
     class MARKL,DONE good;
 ```
+
+### Recycled-worktree guard (lode-nt98)
+
+`isolation: "worktree"` is supposed to hand a dispatched agent a **fresh** worktree, branched off
+local `trunk` HEAD with zero commits of its own. That assumption was falsified in production,
+discovered while technically reviewing `lode-eshl`: the harness handed the `lode-eshl` **builder** a
+**recycled** worktree still checked out on `lode-7abi`'s build branch (`worktree-agent-a6b4350c…`),
+carrying `lode-7abi`'s own (pre-review) commit. The eshl builder merged `trunk` in on top of that
+foreign commit and committed its own work there, so `land/lode-eshl` was pushed carrying three
+commits instead of one — a different ticket's *unreviewed* changes riding along, attributed to the
+wrong ticket. Had `lode-7abi` been bounced or escalated instead of eventually landing clean, `trunk`
+would have silently gained its unreviewed code the moment `land/lode-eshl` landed. The same
+`lode-eshl` review turned up corroborating evidence that it isn't builder-only: the **reviewer's own**
+launch worktree also started life checked out on `land/lode-7abi` rather than clean off `trunk` HEAD.
+
+What ships here is a **defensive assertion** — a mitigation that makes each agent safe against the
+symptom. It is deliberately *not* a root-cause fix, and the root cause is **not** established. One
+committed configuration surface governs exactly this and has not been ruled out: `.claude/settings.json`
+carries an undocumented `"worktree": { "baseRef": "head" }` (added in the drive-by chore commit
+`2d8c9da`, described in no doc). `baseRef: "head"` means a dispatched worktree branches from whatever
+`HEAD` currently is — which is **not** the same guarantee as "branched from local `trunk` HEAD", the
+phrasing this file and the agent definitions assert in several places. Whether that setting causes,
+contributes to, or is merely orthogonal to the recycling is untested; changing it affects every
+dispatched agent in the repo, so it is a human's call, tracked separately. Until then, do not read the
+guard below as evidence that the harness offers no lever — it means nobody has pulled one yet.
+
+Given that, the assertion is defence in depth rather than the answer. Both `coding.md` and
+`code-reviewer.md` now assert, as the first thing they do after confirming they're in a worktree at
+all (never on `pwd` or the branch name alone — a recycled worktree's branch still looks like a normal
+`worktree-agent-…` name), that `HEAD` is an ancestor of local `trunk`:
+
+```bash
+git merge-base --is-ancestor HEAD trunk
+```
+
+A worktree that is merely *behind* current `trunk` (because `trunk` advanced after this worktree was
+created — a normal race in a fan-out) still passes trivially, since being behind on the same line of
+history is exactly what "ancestor" means; only a worktree carrying commits `trunk` doesn't have —
+someone else's unreviewed work — fails it. The predicate reads the **commit graph only**: a recycled
+worktree whose HEAD happens to be an ancestor of `trunk` but whose *working tree* is dirty passes
+untouched, so this is not a general "is my tree clean" check.
+
+On a failure the agent resets onto current local `trunk` HEAD (`git reset --hard trunk && git clean
+-fd`) before doing anything else, and reports the fact explicitly in its hand-off — this is live
+evidence of a harness bug, not a routine hiccup to swallow silently. Two preconditions wrap that
+remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
+understood:
+
+- **It only ever runs in an isolated launch worktree.** Each site checks its `git rev-parse
+  --show-toplevel` is under `.claude/worktrees/` and stops otherwise. Without that, an agent whose
+  `isolation: "worktree"` dispatch silently failed would run `reset --hard`/`clean -fd` in the user's
+  **main checkout** — turning a contamination guard into the more damaging bug.
+- **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
+  *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
+  reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
+  committed but not pushed, the reset would be the only thing between its work and oblivion. Tagging
+  `HEAD` first makes the repair reversible and leaves the evidence inspectable; the hand-off names the
+  ref. Note the asymmetry that motivates this: contamination is *recoverable* (bounce the branch),
+  whereas an unrescued `reset --hard` is not.
+
+**Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
+state (`coding.md`'s rebase-pickup step 2, `code-reviewer.md` step 2) — never a reason to avoid the
+deliberate non-trunk checkouts those latter two cycles perform right afterward.** A rebase pickup
+fetches and checks out an existing `land/<id>` on purpose (it's mid-flight work being resumed, not a
+fresh build), and a `code-reviewer` always checks out the branch it's reviewing on purpose — both are
+supposed to end up off `trunk` HEAD, and this guard doesn't fight that. It only guarantees the
+*starting* point, before that intentional checkout, is a clean `trunk` rather than silent
+contamination. In both of those cycles the `git checkout -B … FETCH_HEAD` immediately afterward
+overwrites the checked-out ref regardless, so the guard is not what makes the checkout correct — its
+value there is the **working tree**: `checkout -B` carries *untracked* leftovers from a recycled
+worktree straight through, and those would otherwise pollute the clean-tree assertions and the `nox`
+run those cycles gate on.
+
+`/land`'s own landing loop and `land-review` are out of scope for this fix. The reason is not merely
+that the two reproductions were a `coding` builder and a `code-reviewer`: `land-review` **never checks
+anything out** — it fetches and diffs entirely by ref (`origin/trunk`, `origin/land/<id>`), so a
+contaminated working tree cannot reach its verdict. Its correctness exposure is nil. That is not the
+same as *no* exposure: `land/SKILL.md` §2c argues `land-review`'s scratch worktree needs no cleanup
+because "its worktree's HEAD never diverges from the `trunk` HEAD it was branched from" and so
+"qualifies by construction" for the backstop reclaim sweep — an assumption this incident falsifies, so
+a recycled `land-review` worktree would fail the sweep's ancestor predicate and leak. That is a real
+but separate defect; it is tracked on its own ticket rather than widened into this one.
 
 ### Concurrency cap (lode-2cf)
 
@@ -838,6 +923,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
+| Recycled-worktree guard | builder and reviewer both assert `git merge-base --is-ancestor HEAD trunk` as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s undocumented `worktree.baseRef: "head"` is un-ruled-out — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
