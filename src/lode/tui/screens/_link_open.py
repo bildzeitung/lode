@@ -11,6 +11,14 @@ so there is no parse-tree node to read at the cursor for an ordinary inline
 link. This module scans the cursor's own line with plain regexes instead,
 which is both simpler and independent of whatever highlighting exists.
 
+**Bare URLs are matched by :func:`lode.drawdown.iter_url_spans`, not by a
+regex of this module's own.** That is the same matcher (and the same
+trailing-prose-punctuation trimming) that decides which URLs a note body
+opens *external edges* for, and the two must not disagree: a second regex
+here means Ctrl+N can open a different URL than the one lode recorded as the
+external for that very character position. Only the two markdown shapes
+below -- which drawdown has no interest in -- are matched locally.
+
 Split into a leaf module (underscore-prefixed per `docs/conventions.md` --
 it hosts no `Screen`/`Widget` of its own, so it doesn't count against the
 one-Screen/Widget-per-module fiat), shared by
@@ -38,6 +46,8 @@ import webbrowser
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from lode.drawdown import iter_url_spans
+
 if TYPE_CHECKING:
     from textual.screen import Screen
     from textual.widgets import TextArea
@@ -51,16 +61,21 @@ _TERMINAL_BROWSER_DENYLIST = frozenset({"w3m", "lynx", "links", "elinks"})
 #: `[text](url)` -- the whole construct (brackets, text, parens, url) is the
 #: match span, so a cursor anywhere in the visible link -- not just over the
 #: raw URL -- counts as "on" it.
-_INLINE_LINK_RE = re.compile(r"\[[^\[\]]*\]\(([^()\s]+)\)")
+#:
+#: The target allows ONE level of balanced parens (`\([^()\s]*\)`) as well as
+#: paren-free runs, so a Wikipedia-style `.../wiki/Foo_(bar)` target matches
+#: as an inline link rather than falling through to the bare-URL scan -- which
+#: would still find the URL, but only with the cursor on the URL itself, not
+#: on the link *text*. One level is deliberate: it covers the disambiguation
+#: -suffix case that actually occurs in notes, and a fully balanced matcher
+#: isn't expressible as a regex.
+_INLINE_LINK_RE = re.compile(r"\[[^\[\]]*\]\(((?:[^()\s]|\([^()\s]*\))+)\)")
 
 #: `[label]: url` -- a reference-style link *definition*, the one shape
 #: textual's own block-grammar `markdown.scm` can already see (lode-ev5j.1's
 #: spike). The whole line is the match span -- there is nothing else useful
 #: on a reference-definition line.
 _REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\[\]]+\]:\s*(\S+)")
-
-#: A bare URL with no markdown syntax around it at all.
-_BARE_URL_RE = re.compile(r"https?://\S+")
 
 
 def extract_link_at_cursor(line: str, column: int) -> str | None:
@@ -77,27 +92,28 @@ def extract_link_at_cursor(line: str, column: int) -> str | None:
     sits *between* characters. When several links share one line, the first
     whose span contains *column* wins -- their spans cannot legitimately
     overlap for well-formed markdown.
-    """
-    candidates: list[tuple[int, int, str]] = []
 
+    The three shapes are tried in precedence order, returning on the first
+    hit, so a bare URL nested inside an inline link's parens never shadows
+    the inline match that contains it.
+    """
     for match in _INLINE_LINK_RE.finditer(line):
-        candidates.append((match.start(), match.end(), match.group(1)))
+        if match.start() <= column < match.end():
+            return match.group(1)
 
     reference_match = _REFERENCE_LINK_RE.match(line)
-    if reference_match is not None:
-        candidates.append(
-            (reference_match.start(), reference_match.end(), reference_match.group(1))
-        )
+    if reference_match is not None and column < reference_match.end():
+        return reference_match.group(1)
 
-    for match in _BARE_URL_RE.finditer(line):
-        # Skip a bare-URL match already covered by an inline/reference span
-        # above (e.g. the URL substring inside `[text](url)`) -- it would
-        # just duplicate that span's url for no benefit.
-        if any(start <= match.start() < end for start, end, _ in candidates):
-            continue
-        candidates.append((match.start(), match.end(), match.group(0)))
-
-    for start, end, url in candidates:
+    # Bare-URL spans come from `drawdown.iter_url_spans` -- the SAME matcher
+    # and trailing-prose-punctuation trimming that decides which URLs a note
+    # body opens external edges for (`drawdown.extract_urls`). Sharing it is
+    # load-bearing, not tidiness: a second regex here drifted from that one
+    # (plain `https?://\S+`, no trimming), so `see https://example.com.` fed
+    # Ctrl+N the trailing period and `(https://example.com)` the wrapping
+    # paren -- opening a URL that differed from the one lode recorded as the
+    # external edge for that very character position.
+    for start, end, url in iter_url_spans(line):
         if start <= column < end:
             return url
     return None
