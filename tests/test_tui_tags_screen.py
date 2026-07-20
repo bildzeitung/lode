@@ -496,3 +496,36 @@ def test_selected_checkbox_renders_literally_not_as_rich_markup(tmp_path: Path) 
     buffer = io.StringIO()
     Console(file=buffer, width=40, legacy_windows=False).print(cell)
     assert buffer.getvalue().strip() == "[x] rrsp"
+
+
+def test_note_summary_with_brackets_renders_literally_in_the_notes_table(
+    tmp_path: Path,
+) -> None:
+    """A note summary containing ``[...]`` renders literally (lode-ix4i).
+
+    Same hazard as the checkbox cell above, at a different seam:
+    ``_reload_notes`` fed ``row.summary`` to ``add_row`` as a bare ``str``,
+    50 lines below :meth:`~lode.tui.screens.tags.TagsScreen._tag_cell_text`'s
+    own docstring explaining exactly this. Goes through a real Rich console,
+    not ``get_cell_at``, for the same "stored value, not the render" reason
+    the checkbox test above documents.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "reviewed [draft] spec")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> object:
+        async with app.run_test(size=_NARROW) as pilot:
+            await pilot.press("ctrl+t")
+            table = app.screen.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+            return table.get_row_at(0)[3]
+
+    cell = asyncio.run(_drive())
+
+    buffer = io.StringIO()
+    Console(file=buffer, width=40, legacy_windows=False).print(cell)
+    assert buffer.getvalue().strip() == "reviewed [draft] spec"
