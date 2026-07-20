@@ -2,8 +2,14 @@ name: build
 
 # Push/PR-triggered packaging check — catches a packaging regression
 # (pyproject/setuptools-scm/package-data) before a release cuts, rather than
-# only on a vX.Y.Z tag like release.yml. Workflow name is FROZEN: lode-qxdn.4's
-# badge URL hard-codes workflows/build.yml/badge.svg.
+# only on a vX.Y.Z tag like release.yml. Workflow FILENAME is FROZEN: README's
+# build badge (lode-qxdn.4) hard-codes build.yml twice — in the shields.io
+# endpoint .../actions/workflow/status/bildzeitung/lode/build.yml?branch=trunk
+# and in the link target .../actions/workflows/build.yml. Renaming this file
+# breaks both. Note it is the FILENAME, not the `name:` key above, that is
+# load-bearing; the ?branch=trunk pin is deliberate (it makes the badge report
+# trunk unconditionally, rather than relying on a default-branch fallback), so
+# keep it on any sibling badge added by lode-qxdn.2/.3.
 #
 # push trigger convention (lode-bmvy) — mirror this in any sibling push-
 # triggered CI workflow (lode-qxdn.2, lode-qxdn.3): narrowed to trunk +
