@@ -131,6 +131,7 @@ from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._content_view import _view_note_external_content
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -149,17 +150,27 @@ class EditScreen(Screen[None]):
 
     # "View content" -> "View" (lode-uczx): this screen is the tightest
     # footer of the ten (131 columns' worth of content at full length, the
-    # only one that clipped even under the new 100-column bound). Every
-    # other label here stays full -- this one shortening, plus the
-    # App-level "Cfg" (:mod:`lode.tui.app`), is what buys this screen's fit
-    # and the slack lode-11io's not-yet-landed Ask binding needs.
+    # only one that clipped even under the new 100-column bound). The
+    # App-level "Cfg" (:mod:`lode.tui.app`) is the other shortening that
+    # bought this screen's fit for lode-11io's Ask binding.
+    #
+    # lode-ev5j.3's new "Link" entry (Ctrl+N) reopened that budget: measured
+    # at 105/100 with "Related"/"History" full-length -- the first time this
+    # screen has clipped since lode-uczx. Two more labels shortened to close
+    # the gap: "Related" -> "Rel" (10 cols -> 6) and "History" -> "Hist" (10
+    # -> 7), for 98/100 with the new binding included (measured; 2 columns'
+    # slack, not zero, so a future single-letter binding still fits without
+    # another round of this). "Inspect"/"View" were left alone -- shortening
+    # either alone wasn't enough on its own, and two 3-4 letter cuts read
+    # better than one very short one.
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
-        Binding("ctrl+f", "focus_related", "Related"),
-        Binding("ctrl+h", "show_history", "History"),
+        Binding("ctrl+f", "focus_related", "Rel"),
+        Binding("ctrl+h", "show_history", "Hist"),
         Binding("ctrl+g", "inspect_selected", "Inspect"),
         Binding("ctrl+r", "view_content", "View"),
+        Binding("ctrl+n", "open_link", "Link"),
     ]
 
     def __init__(self, note_id: str) -> None:
@@ -251,6 +262,23 @@ class EditScreen(Screen[None]):
         ("retrieved") is free of the same three traps checked there.
         """
         _view_note_external_content(self, self.note_id)
+
+    def action_open_link(self) -> None:
+        """Ctrl+N: open the URL under the cursor, or explain there isn't one (lode-ev5j.3).
+
+        Not bare ``o``/``l`` -- this screen's body ``TextArea`` is editable
+        and consumes every printable keypress before a Screen-level binding
+        ever fires, the identical trap ``Ctrl+H``/``Ctrl+G``/``Ctrl+R`` above
+        exist to dodge. ``Ctrl+N`` is the only formally-checked-safe letter
+        left with no known caveat (``docs/keybindings.md``'s letter-space
+        accounting) -- freed by ``lode-bsmc``'s Ctrl+S consolidation.
+        :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
+        actual extraction + browser-safety work, shared with
+        :class:`~lode.tui.screens.version_view.VersionViewScreen` and
+        :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`.
+        """
+        text_area = self.query_one(f"#{EDIT_BODY_ID}", TextArea)
+        open_link_under_cursor(self, text_area)
 
     def action_save(self) -> None:
         """Ctrl+S: append a new version onto this note's chain, or explain why not."""

@@ -19,6 +19,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.notes_read import version_body
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 
@@ -38,6 +39,7 @@ class VersionViewScreen(Screen[None]):
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
+        Binding("ctrl+n", "open_link", "Link"),
     ]
 
     def __init__(self, note_id: str, version_id: str) -> None:
@@ -53,3 +55,16 @@ class VersionViewScreen(Screen[None]):
     def on_mount(self) -> None:
         body = version_body(self.app.db_path, self.note_id, self.version_id)
         self.query_one(f"#{VERSION_BODY_ID}", TextArea).text = body or ""
+
+    def action_open_link(self) -> None:
+        """Ctrl+N: open the URL under the cursor, or explain there isn't one (lode-ev5j.3).
+
+        This body ``TextArea`` is ``read_only=True``, so a bare printable key
+        would have been reachable too (see ``docs/keybindings.md``'s
+        read-only-body exception) -- ``Ctrl+N`` is used anyway, matching
+        :class:`~lode.tui.screens.edit.EditScreen`'s binding exactly, so the
+        same keypress opens a link on every screen that has one, whether the
+        body happens to be editable here or not.
+        """
+        text_area = self.query_one(f"#{VERSION_BODY_ID}", TextArea)
+        open_link_under_cursor(self, text_area)

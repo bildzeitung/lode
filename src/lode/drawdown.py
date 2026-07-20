@@ -147,7 +147,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from lode import jobs
@@ -274,15 +274,23 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 # ---------------------------------------------------------------------------
 
 
-def extract_urls(body: str) -> list[str]:
-    """Extract distinct http(s) URLs from ``body``, in first-seen order.
+def iter_url_spans(text: str) -> Iterator[tuple[int, int, str]]:
+    """Yield ``(start, end, url)`` for every http(s) URL run in *text*, in order.
 
-    A deliberately narrow heuristic for a personal-notes paste, not a
-    general-purpose URL extractor: matches ``https?://`` runs of non-
-    whitespace/angle-bracket/quote characters, then trims trailing prose
-    punctuation that is not part of the URL (the period in "see
-    https://example.com." or the wrapping parens in
-    "(https://example.com)").
+    The span-yielding half of :func:`extract_urls`, split out (lode-ev5j.3) so
+    the trailing-punctuation rule below has exactly one home. Two callers need
+    it in two different shapes: :func:`extract_urls` wants a deduped list of
+    URLs to open external edges from, while
+    :func:`lode.tui.screens._link_open.extract_link_at_cursor` needs the
+    *spans* too, to test whether the TUI cursor's column falls inside one.
+    Both must agree on where a URL ends — otherwise Ctrl+N opens a different
+    URL than the one lode recorded as an external edge for the same note body.
+
+    Matches ``https?://`` runs of non-whitespace/angle-bracket/quote
+    characters, then trims trailing prose punctuation that is not part of the
+    URL (the period in "see https://example.com." or the wrapping parens in
+    "(https://example.com)"). A deliberately narrow heuristic for a
+    personal-notes paste, not a general-purpose URL extractor.
 
     A trailing ``)`` is kept when the matched URL's own open-paren count is
     ``>=`` its close-paren count — i.e. the parens are balanced or the URL
@@ -290,19 +298,34 @@ def extract_urls(body: str) -> list[str]:
     ``.../wiki/Foo_(bar)``) — and stripped otherwise (an extra, unmatched
     closing paren wrapping the URL from surrounding prose).
 
+    The yielded *end* is the end of the **trimmed** URL, not of the raw
+    match, so a cursor sitting on the stripped sentence period is correctly
+    outside the span.
+    """
+    for match in _URL_RE.finditer(text):
+        url = match.group(0)
+        while url and url[-1] in _TRAILING_STRIP:
+            if url[-1] == ")" and url.count("(") >= url.count(")"):
+                break
+            url = url[:-1]
+        if url:
+            yield match.start(), match.start() + len(url), url
+
+
+def extract_urls(body: str) -> list[str]:
+    """Extract distinct http(s) URLs from ``body``, in first-seen order.
+
+    Trimming and match rules live in :func:`iter_url_spans`; this is the
+    dedupe-and-drop-spans wrapper over it.
+
     Deduped on the *literal* matched string; two different-looking URLs that
     canonicalize to the same ``external_id`` are deduped later, by
     :func:`detect_and_enqueue_drawdown`'s edge-existence check, not here.
     """
     seen: set[str] = set()
     urls: list[str] = []
-    for match in _URL_RE.finditer(body):
-        url = match.group(0)
-        while url and url[-1] in _TRAILING_STRIP:
-            if url[-1] == ")" and url.count("(") >= url.count(")"):
-                break
-            url = url[:-1]
-        if url and url not in seen:
+    for _start, _end, url in iter_url_spans(body):
+        if url not in seen:
             seen.add(url)
             urls.append(url)
     return urls
