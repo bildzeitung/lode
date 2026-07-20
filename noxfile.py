@@ -106,6 +106,7 @@ measured, and that is the only ground this default stands on. A flake that
 went quiet here is a defect that went *unobserved*, not one that went away.
 """
 
+import contextlib
 import os
 import subprocess
 import tempfile
@@ -214,13 +215,37 @@ def build(session: nox.Session) -> None:
     the lode-1i8.4 footgun (the TUI's ``.tcss`` almost shipped without it).
     Build into a scratch dir, then inspect the wheel's file list directly
     rather than just trusting a clean exit.
+
+    This is the SINGLE implementation of that assertion — both build.yml
+    (push/PR) and release.yml (the ``vX.Y.Z`` tag push that ships the
+    published wheel, lode-zuqp) call this session rather than each keeping
+    their own copy. Pass an output directory as a posarg
+    (``nox -s build -- dist``) to keep the built artifacts on disk — release.yml
+    needs them to survive for its ``gh release create ... dist/*`` upload. With
+    no posarg, builds into a throwaway ``TemporaryDirectory`` and discards the
+    artifacts (build.yml's push/PR check only cares about the assertion).
     """
-    with tempfile.TemporaryDirectory() as outdir:
+    with contextlib.ExitStack() as stack:
+        outdir = (
+            session.posargs[0]
+            if session.posargs
+            else stack.enter_context(tempfile.TemporaryDirectory())
+        )
         session.run("python", "-m", "build", "--outdir", outdir)
         wheels = list(Path(outdir).glob("*.whl"))
         sdists = list(Path(outdir).glob("*.tar.gz"))
-        if not wheels or not sdists:
-            session.error("python -m build did not produce both a wheel and an sdist")
+        # Exactly one of each, not merely "at least one": with a caller-supplied
+        # outdir the dir is no longer guaranteed fresh, and a leftover wheel from
+        # an earlier run would make the check below inspect an arbitrary
+        # glob-order wheel while release.yml's `gh release create ... dist/*`
+        # uploads every file present. Asserted artifact == published artifact is
+        # the whole point of routing release.yml through this session (lode-zuqp).
+        if len(wheels) != 1 or len(sdists) != 1:
+            session.error(
+                f"expected exactly one wheel and one sdist in {outdir}, found "
+                f"{len(wheels)} wheel(s) and {len(sdists)} sdist(s) — a build "
+                "failure, or stale artifacts left in a reused output directory"
+            )
         with zipfile.ZipFile(wheels[0]) as zf:
             names = zf.namelist()
         for expected in ("lode/schema.sql", "lode/tui/lode.tcss"):

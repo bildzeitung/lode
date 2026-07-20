@@ -7,8 +7,9 @@
 # Guards that we're on trunk with a clean working tree, that local trunk is
 # up to date with origin/trunk, that X.Y.Z is well-formed SemVer strictly
 # greater than the latest existing tag, that vX.Y.Z doesn't already exist
-# (locally or on origin), and that the full test suite (nox -s tests) is
-# green; then creates an annotated tag on HEAD and pushes it to origin.
+# (locally or on origin), and that the full test suite (nox -s tests) plus
+# the packaging assertion (nox -s build, lode-zuqp) are green; then creates
+# an annotated tag on HEAD and pushes it to origin.
 # An optional notes-file becomes the tag BODY — the release notes that
 # .github/workflows/release.yml publishes; the subject stays "lode vX.Y.Z"
 # either way. Stops there — the workflow (lode-0ru.3) owns the actual
@@ -96,6 +97,7 @@ if [ ! -f ./venv/bin/activate ]; then
 fi
 . ./venv/bin/activate
 nox -s tests
+nox -s build
 
 if [ -n "$NOTES_FILE" ]; then
   # --cleanup=whitespace: the default 'strip' deletes '#'-prefixed lines,
