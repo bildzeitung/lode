@@ -334,7 +334,7 @@ work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — 
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
 way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
 about Section 4 itself needed to change. That survives the guard's own detection blind spot
-(lode-ix4i) intact, since what the guard fails to notice already satisfies that predicate. It does
+(tracked as lode-3v1p) intact, since what the guard fails to notice already satisfies that predicate. It does
 **not** cover the sweep's *other* arm: in the blind-spot case the remediation's `git clean -fd` never
 runs, so untracked leftovers survive and the [lode-9hgu dirty-tree guard](#4-land-the-survivors)
 below keeps the worktree anyway — open residual **lode-3v1p**, not closed here.

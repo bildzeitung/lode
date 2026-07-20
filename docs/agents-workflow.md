@@ -425,7 +425,7 @@ above (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff
 rescue the rewound ref and reset onto local `trunk` HEAD). The two halves stay distinct on purpose —
 the guard exists here for the **worktree-leak** reason, never because `land-review`'s judgment was
 ever at risk. That closes the **ancestry** axis only: the guard cannot detect a worktree recycled onto
-a `land/<other-id>` that has since landed (lode-ix4i), so there its `git clean -fd` never runs and the
+a `land/<other-id>` that has since landed (tracked as lode-3v1p), so there its `git clean -fd` never runs and the
 surviving untracked leftovers make the sweep keep the worktree anyway — open residual **lode-3v1p**.
 Full account, including why the blind spot is harmless on the ancestry axis but not the dirt one:
 [land-review.md](../.claude/agents/land-review.md) and
@@ -1450,9 +1450,10 @@ the rewound ref and resets onto local `trunk` HEAD — see
 [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98), above). Once that guard has run, the
 worktree's HEAD **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims it
 under its unmodified predicate — no change to Section 4 itself was needed. Note this argument does
-**not** inherit the guard's known detection blind spot (lode-ix4i: `merge-base --is-ancestor HEAD
-trunk` cannot recognize a recycled worktree whose HEAD *is already* an ancestor of `trunk`, e.g. one
-recycled onto a `land/<other-id>` that has since landed — observed live). It doesn't, because the
+**not** inherit the guard's known detection blind spot (tracked as lode-3v1p: `merge-base
+--is-ancestor HEAD trunk` cannot recognize a recycled worktree whose HEAD *is already* an ancestor of
+`trunk`, e.g. one recycled onto a `land/<other-id>` that has since landed — observed live during
+lode-nt98's and lode-qv5t's own reviews). It doesn't, because the
 guard's predicate **is** the sweep's trunk-arm predicate: any recycling the guard fails to detect is,
 by that very fact, already satisfying the reclaim condition. The blind spot is a *correctness* blind
 spot (foreign content goes unnoticed), and `land-review`'s correctness exposure is nil regardless —

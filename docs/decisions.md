@@ -1737,7 +1737,8 @@ are catalogued in [configuration.md](configuration.md).
   worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
   lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
   The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
-  is already an ancestor of `trunk` — lode-ix4i, observed live). On the ancestry axis that is
+  is already an ancestor of `trunk` — tracked as lode-3v1p; observed live during lode-nt98's and
+  lode-qv5t's own reviews). On the ancestry axis that is
   self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
   **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
   worktree's untracked leftovers survive, and the lode-9hgu dirty-tree guard keeps the worktree, so it
