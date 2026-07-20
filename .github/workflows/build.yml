@@ -38,35 +38,15 @@ jobs:
           python-version: "3.14"
 
       - name: Install build front-end
-        run: pip install build
+        run: pip install build nox
 
       - name: Build wheel + sdist
-        run: python -m build --outdir dist
-
-      - name: Assert package-data shipped in the wheel
-        # A clean `python -m build` exit doesn't prove package-data made it
-        # in — that's the lode-1i8.4 footgun (the TUI's .tcss almost shipped
-        # without it). Inspect the wheel's file list directly, mirroring the
-        # assertion in noxfile.py's `build` session.
-        run: |
-          python - <<'EOF'
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          wheels = list(Path("dist").glob("*.whl"))
-          sdists = list(Path("dist").glob("*.tar.gz"))
-          if not wheels or not sdists:
-              sys.exit("python -m build did not produce both a wheel and an sdist")
-
-          with zipfile.ZipFile(wheels[0]) as zf:
-              names = zf.namelist()
-
-          missing = [
-              expected
-              for expected in ("lode/schema.sql", "lode/tui/lode.tcss")
-              if expected not in names
-          ]
-          if missing:
-              sys.exit(f"wheel is missing expected package-data: {missing}")
-          EOF
+        # noxfile.py's `build` session is the single source of truth for
+        # this check: it builds a wheel + sdist and inspects the wheel's
+        # file list directly rather than trusting a clean `python -m build`
+        # exit, since that alone doesn't prove package-data made it in (the
+        # lode-1i8.4 footgun: the TUI's .tcss almost shipped without it).
+        # Reusing the nox session instead of hand-copying its assertion here
+        # keeps the two checks from drifting apart — the earlier inline copy
+        # already did once, shipping without the sdist half of this assertion.
+        run: nox -s build
