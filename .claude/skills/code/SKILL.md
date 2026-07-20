@@ -60,15 +60,23 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> CODE_MAX_CONCURRENT_AGENTS="$(rtk scripts/code-concurrency-cap.sh)" || CODE_MAX_CONCURRENT_AGENTS=4
+> REPO_ROOT="$(rtk git rev-parse --show-toplevel)"
+> CODE_MAX_CONCURRENT_AGENTS="$(rtk "$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
 > ```
 >
-> The `|| …=4` is not decoration. The inline block this replaced could not fail — it had no file to
-> find — whereas a relative-path call resolves against the session's cwd, so from the wrong directory
-> the substitution yields the **empty string** and an empty cap reads as *no* cap. 4 is the same
-> conservative fallback the script itself uses when it cannot read `/proc/meminfo`. **Never proceed on
-> an empty or non-numeric cap**: if that fallback fires, say so and fix the cwd — silently guessing a
-> number here is the over-dispatch that crashed this host twice.
+> The call is anchored to the repo root rather than resolved against the session's cwd — the same
+> `git rev-parse --show-toplevel` idiom this file already uses elsewhere (e.g. the rebase-pickup local
+> branch naming below) — so *finding* the script no longer depends on cwd, matching the script's own
+> `REPO="$(cd "$(dirname "$0")/.." && pwd)"` anchoring for *reading* `noxfile.py` (lode-54mo). The
+> `|| …=4` fallback stays regardless — defense in depth for a genuinely absent or unexecutable script
+> costs nothing. Its mechanism is **exit-status propagation, not emptiness**: a `VAR="$(cmd)"`
+> assignment inherits its command substitution's exit status, so a non-zero exit (a missing file, or
+> `git rev-parse` itself failing) trips the `||` regardless of what stdout held — an empty-but-exit-0
+> result is actually the one case this guard does *not* catch. 4 is the same conservative fallback the
+> script itself uses when it cannot read `/proc/meminfo`. **Never proceed on an empty or non-numeric
+> cap**: if that fallback fires, say so before continuing — a script that can't be found or run is
+> worth surfacing, even though it should now be rare, since the call above no longer depends on the
+> session's cwd to find the script.
 >
 > - **`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no
 >   derivation; a static per-machine number the user sets beats a heuristic that guesses wrong. Set it
