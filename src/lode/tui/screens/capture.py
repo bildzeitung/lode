@@ -79,9 +79,24 @@ preserved. This screen now only composes the widget, forwards its text area's
 ``Changed`` text to :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
 update_draft`, and calls :meth:`~lode.tui.widgets.related_notes_panel.
 RelatedNotesPanel.reset` wherever it used to cancel/clear a pass of its own
-(:meth:`CaptureScreen.action_save_and_new`). :class:`~lode.tui.screens.edit.
+(:meth:`CaptureScreen.action_save`). :class:`~lode.tui.screens.edit.
 EditScreen` composes the same widget for parity (the ticket this extraction
 was done for).
+
+**One stack-aware Ctrl+S; Ctrl+N retired (lode-bsmc).** This screen used to
+bind its own "Save & quit" to Ctrl+S and a separate "Save & new" to Ctrl+N
+(lode-d32.4). Both saved through the identical no-AI path
+(:meth:`_save_buffer`); the only difference was what happened after: exit, or
+reset-and-stay. Consolidated onto one stack-aware Ctrl+S -- this screen is
+always the bottom of the stack (a brand-new note, nothing pushed on top), so
+its Ctrl+S is unconditionally "Save & New" now (:meth:`action_save`, the
+renamed former ``action_save_and_new``); :class:`~lode.tui.screens.edit.
+EditScreen`'s Ctrl+S (a screen *is* on the stack there) was already "Save &
+pop" and is unchanged. "Save & quit" survives only inside the quit/discard
+confirm dialog's own "Save" answer, decoupled onto its own exit path
+(:meth:`_save_and_exit`) rather than reusing :meth:`action_save`, precisely
+because that method no longer exits. ``ctrl+n`` is freed --
+``docs/keybindings.md``'s letter-space accounting.
 """
 
 from __future__ import annotations
@@ -119,17 +134,21 @@ RELATED_ID = "related-notes"
 class CaptureScreen(Screen[None]):
     """One text area plus a passive related-notes panel.
 
-    Ctrl+S saves and exits. Ctrl+N saves the same way but resets the buffer
-    for a fresh note instead of exiting, so a second (or third...) note never
-    requires leaving the TUI (lode-d32.4, :meth:`action_save_and_new`).
-    Escape discards and exits immediately if the buffer is empty/whitespace-
-    only; otherwise it pops a Save/Discard/Cancel confirm (lode-0wj.1) rather
-    than discarding silently. The app-level Ctrl+Q binding
-    (:mod:`lode.tui.app`) applies the same guard via :meth:`confirm_quit`
-    (lode-0wj.8). The related-notes panel stays passive by default while the
-    body holds focus, but is itself interactive (lode-olmi.9) — Ctrl+F moves
-    focus onto it to step through results and open one's highlighted context;
-    see :mod:`lode.tui.widgets.related_notes_panel`'s module docstring.
+    Ctrl+S saves via the no-AI path, then resets the buffer for a fresh note
+    instead of exiting, so a second (or third...) note never requires leaving
+    the TUI (lode-d32.4's "Save & new", folded onto Ctrl+S by lode-bsmc --
+    this screen is always the bottom of the stack, so its Ctrl+S is
+    unconditionally "Save & New"; see :meth:`action_save`). There is no more
+    "Save & quit" here -- that survives only inside the quit/discard confirm
+    dialog's own "Save" answer (:meth:`_save_and_exit`). Escape discards and
+    exits immediately if the buffer is empty/whitespace-only; otherwise it
+    pops a Save/Discard/Cancel confirm (lode-0wj.1) rather than discarding
+    silently. The app-level Ctrl+Q binding (:mod:`lode.tui.app`) applies the
+    same guard via :meth:`confirm_quit` (lode-0wj.8). The related-notes panel
+    stays passive by default while the body holds focus, but is itself
+    interactive (lode-olmi.9) — Ctrl+F moves focus onto it to step through
+    results and open one's highlighted context; see
+    :mod:`lode.tui.widgets.related_notes_panel`'s module docstring.
     """
 
     # Descriptions kept short (lode-3rvw), unchanged by the LodeFooter
@@ -138,9 +157,10 @@ class CaptureScreen(Screen[None]):
     # shared footer widget exists instead of per-screen compact/palette
     # flags.
     #
-    # ctrl+n deliberately keeps its full "Save & new" (lode-3rvw review): the
-    # shortened "New" sits next to "Save" and reads as "start a new note"
-    # WITHOUT saving -- the opposite of what it does, which is the same
+    # ctrl+s deliberately keeps its full "Save & new" (lode-3rvw review,
+    # carried over from the retired ctrl+n binding by lode-bsmc): the
+    # shortened "Save" alone no longer names what happens next -- the buffer
+    # stays and resets, it doesn't exit -- so spelling out "& new" is the
     # discoverability cost show=False was ruled out for. Only ONE of "Save &
     # new" and "Discard & quit" can be spelled out in full without the other
     # -- Escape keeps the short "Discard" because it still names its
@@ -148,8 +168,7 @@ class CaptureScreen(Screen[None]):
     # unchanged by lode-uczx's 100-column bound (docs/tui.md): they already
     # fit comfortably within it.
     BINDINGS = [
-        Binding("ctrl+s", "save", "Save"),
-        Binding("ctrl+n", "save_and_new", "Save & new"),
+        Binding("ctrl+s", "save", "Save & new"),
         Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),
     ]
@@ -184,10 +203,12 @@ class CaptureScreen(Screen[None]):
     def _save_buffer(self) -> SaveResult | None:
         """Save the buffer instantly (no AI call); ``None`` if nothing was saved.
 
-        The single save path Ctrl+S (:meth:`action_save`) and Ctrl+N
-        (:meth:`action_save_and_new`) share, so lode-d32.4's "identical no-AI
-        save path as Ctrl+S" is structural rather than a promise two copies of
-        the same eight lines have to keep. Returning ``None`` means the caller
+        The single save path :meth:`action_save` (Ctrl+S, "Save & New") and
+        :meth:`_save_and_exit` (the quit/discard confirm's "Save" answer,
+        "Save & quit") share, so lode-d32.4's "identical no-AI save path" is
+        structural rather than a promise two copies of the same eight lines
+        have to keep (lode-bsmc kept that structural guarantee when the two
+        callers' identities changed). Returning ``None`` means the caller
         must *not* treat the save as done: either the buffer was empty (refused
         with the same notify ``lode add`` gives) or the compare-and-swap was
         rejected, in which case the buffer is already preserved as a draft and
@@ -199,8 +220,9 @@ class CaptureScreen(Screen[None]):
         still narrowed here rather than assumed away, because ``save_capture``
         is *typed* to return it: one branch in one place is cheaper than either
         caller mistaking a :class:`~lode.tui.services.capture.CaptureConflict` for a
-        successful save and reporting it as one (Ctrl+N would clear the buffer
-        and announce "Saved."). This is the whole of the CAS handling — there
+        successful save and reporting it as one (:meth:`action_save` would
+        clear the buffer and announce "Saved."). This is the whole of the CAS
+        handling — there
         is deliberately no reconcile-then-continue flow.
         """
         body = self.query_one(f"#{BODY_ID}", TextArea).text
@@ -216,14 +238,19 @@ class CaptureScreen(Screen[None]):
         return result
 
     def action_save(self) -> None:
-        """Ctrl+S: save the buffer instantly (no AI call) and exit, or explain why not."""
-        result = self._save_buffer()
-        if result is None:
-            return
-        self.app.exit(result.note_id)
+        """Ctrl+S: save instantly (no AI call), then reset for a fresh note.
 
-    def action_save_and_new(self) -> None:
-        """Ctrl+N: save exactly like Ctrl+S, then reset for a fresh note (lode-d32.4).
+        This screen is always the bottom of the stack -- a brand-new capture,
+        nothing pushed on top -- so its stack-aware Ctrl+S contract (lode-bsmc)
+        is unconditionally "Save & New": it never exits the app. (Contrast
+        :class:`~lode.tui.screens.edit.EditScreen`, where a screen already *is*
+        on the stack and Ctrl+S pops back to it instead.) Formerly Ctrl+N's
+        ``action_save_and_new`` (lode-d32.4); renamed onto ``action_save`` when
+        the two screens' Ctrl+S bindings were consolidated onto one save path,
+        freeing Ctrl+N. "Save & quit" is no longer reachable from this binding
+        at all -- it survives only inside the quit/discard confirm dialog's own
+        "Save" answer, which calls :meth:`_save_and_exit` instead, decoupled
+        from this method precisely because this method no longer exits.
 
         A clean save does not exit the app: it clears the text area and the
         related-notes panel and leaves focus in the editor, so the next note
@@ -246,6 +273,22 @@ class CaptureScreen(Screen[None]):
         text_area.clear()
         text_area.focus()
         self.notify("Saved. New note.")
+
+    def _save_and_exit(self) -> None:
+        """Save instantly (no AI call) and exit -- the quit-confirm "Save" path.
+
+        Decoupled from :meth:`action_save` (lode-bsmc): once Ctrl+S became
+        "Save & New" (stays in the app), reusing it here would have made the
+        quit/discard confirm dialog's "Save & quit" answer silently save-and-
+        *stay* instead, contradicting its own label and the user's evident
+        intent (they asked to leave via Escape or Ctrl+Q). This is the only
+        remaining save-and-exit path in the screen; :meth:`_on_discard_confirm`
+        is its sole caller.
+        """
+        result = self._save_buffer()
+        if result is None:
+            return
+        self.app.exit(result.note_id)
 
     def action_cancel(self) -> None:
         """Escape: exit immediately if the buffer is empty, else confirm first."""
@@ -283,7 +326,7 @@ class CaptureScreen(Screen[None]):
     def _on_discard_confirm(self, choice: str) -> None:
         """Act on the confirm dialog's answer: save, discard, or resume editing."""
         if choice == "save":
-            self.action_save()
+            self._save_and_exit()
         elif choice == "discard":
             self.app.exit()
         # "cancel" (or the dialog dismissing with no answer): stay right here,

@@ -37,10 +37,11 @@ checklist below before landing it.
 
 **The letter space is nearly exhausted — check it, don't guess.** 26 letters, minus 11 already
 claimed by `TextArea`'s own builtin bindings (`ctrl+a/e/w/d/x/c/v/u/k/z/y` — cursor/line-start/end,
-cut/copy/paste, delete-word, undo/redo, …), minus the six letters already in live App/Screen use
-(`ctrl+g/h/n/q/r/s`), minus two `KEY_ALIASES` traps (`ctrl+i` → `tab`, `ctrl+m` → `enter`) and one
+cut/copy/paste, delete-word, undo/redo, …), minus the five letters already in live App/Screen use
+(`ctrl+g/h/q/r/s` — `ctrl+n` freed by `lode-bsmc`'s Ctrl+S consolidation, back in the candidate
+pool below), minus two `KEY_ALIASES` traps (`ctrl+i` → `tab`, `ctrl+m` → `enter`) and one
 `App`-level `priority=True` reservation (`ctrl+p`, the command palette) — leaves exactly **`b`,
-`f`, `j`, `l`, `o`, `t`** as formally-checked-safe candidates. Of those, `l` and `o` are
+`f`, `j`, `l`, `n`, `o`, `t`** as formally-checked-safe candidates. Of those, `l` and `o` are
 conventional terminal-driver control characters (`ctrl+l` clear/redraw, `ctrl+o` — termios
 `VDISCARD` — flush) and `ctrl+j` is the raw LF byte some terminals treat as Enter-adjacent; but none
 of the three is *aliased away* to a different key the way the two `KEY_ALIASES` traps above are —
@@ -163,12 +164,13 @@ tree by `lode-pijc`.
 | `ctrl+l` | Show Ask | Claimed by `lode-11io` — the mnemonic `ctrl+a` is NOT available (a `TextArea`/`Input` builtin, cursor-to-line-start); confirmed against all three traps below and against every screen's own `BINDINGS` |
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
-claimed (above); **`ctrl+j` is the only formally-safe letter left** for the next ticket that needs a
-new App-level (or Screen-level) key — it still carries the terminal-level caveat flagged in the "No
-function keys" section (the raw LF byte some terminals treat as Enter-adjacent), so confirm the full
-trap checklist before landing it, and **check every screen's own `BINDINGS` for the same key too —
-not just `LodeApp`'s** (still the operative rule from "Two altitudes" above; only the alphabet
-changed).
+claimed (above); **`ctrl+n` and `ctrl+j` are the two formally-safe letters left** for the next
+ticket that needs a new App-level (or Screen-level) key — `ctrl+n` was freed by `lode-bsmc`'s
+Ctrl+S consolidation (below) and carries no known caveat, while `ctrl+j` still carries the
+terminal-level caveat flagged in the "No function keys" section (the raw LF byte some terminals
+treat as Enter-adjacent) — so confirm the full trap checklist before landing either, and **check
+every screen's own `BINDINGS` for the same key too — not just `LodeApp`'s** (still the operative
+rule from "Two altitudes" above; only the alphabet changed).
 
 ### Screen-level
 
@@ -204,8 +206,7 @@ changed).
 | | | `d` | Discard & quit | |
 | | | `c` | Cancel | |
 | | | `escape` | Cancel (`show=False`) | |
-| `CaptureScreen` (default screen) | `screens/capture.py` | `ctrl+s` | Save & quit | **editable** |
-| | | `ctrl+n` | Save & new | |
+| `CaptureScreen` (default screen) | `screens/capture.py` | `ctrl+s` | Save & new | **editable** |
 | | | `escape` | Discard & quit | |
 | | | `ctrl+f` | Focus related-notes panel | |
 | `AskScreen` | `screens/ask.py` | `escape` | Back | — |
@@ -217,11 +218,13 @@ changed).
 | | | `enter` | Open selected (modal) | |
 | `RelatedNoteModalScreen` | `screens/related_note_modal.py` | `escape` | Back | — |
 
-`ctrl+s`/`ctrl+n` on `EditScreen`/`CaptureScreen` already predate this doc and are the precedent
+`ctrl+s` on `EditScreen`/`CaptureScreen` already predates this doc and is the precedent
 `lode-olmi.2`'s `Ctrl+H`, `lode-g5es`'s `Ctrl+G`, and `lode-0sjj`'s `Ctrl+R` all follow: every
 existing binding on a screen with an editable body uses a non-printable key — a `ctrl+` combo like
 these, or the named key `escape` — never a bare letter, and (per the "No function keys" policy
-above) never a function key either.
+above) never a function key either. (`CaptureScreen` also bound `ctrl+n` until `lode-bsmc`
+consolidated it onto the same stack-aware `ctrl+s` and freed the letter — see the "Current keymap"
+table above and the letter-space accounting earlier in this doc.)
 
 ## Resolved collisions (history, for context)
 

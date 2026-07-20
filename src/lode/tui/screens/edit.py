@@ -87,7 +87,7 @@ non-printable) key for exactly this reason -- see ``docs/keybindings.md``.
 :meth:`EditScreen.action_view_content` resolves this note's external edges
 the same way :meth:`~lode.tui.screens.browse.BrowseScreen.
 action_view_content` does (via the shared
-:func:`~lode.tui.screens.browse._view_note_external_content`) and pushes
+:func:`~lode.tui.screens._content_view._view_note_external_content`) and pushes
 :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` (zero/one) or
 :class:`~lode.tui.screens.external_picker.ExternalPickerScreen` (many).
 ``BrowseScreen``'s binding for the identical feature is bare ``v`` -- safe
@@ -105,15 +105,17 @@ and it is not one of ``App``'s own ``priority=True`` reservations (unlike
 ``ctrl+p``, the command palette) -- confirmed empirically, not just by
 inspection, the same standard ``Ctrl+G``'s own candidates were held to.
 
-**Import cycle (lode-s5kp.1).** :func:`~lode.tui.screens.browse.
-_view_note_external_content` lives in :mod:`lode.tui.screens.browse`
-(navigation glue, per that module's docstring), and
+**Import cycle, dissolved (lode-s5kp.1, lode-2zj0).**
 :class:`~lode.tui.screens.browse.BrowseScreen` imports :class:`EditScreen`
-from here to push it on row-select -- a top-level import the other way
-(this module importing that function from ``browse`` at module load time)
-would form a cycle. :meth:`EditScreen.action_view_content` instead imports
-it locally, inside the method, so both modules load cleanly regardless of
-which one Python happens to import first.
+from here to push it on row-select. Originally,
+``_view_note_external_content`` lived in :mod:`lode.tui.screens.browse`
+itself, so this module had to reach back into ``browse`` for it -- a
+top-level import the other way would have formed a cycle, worked around
+with a method-local import inside :meth:`EditScreen.action_view_content`.
+That function (and its helper ``_resolve_externals``) has since moved to
+its own leaf module, :mod:`lode.tui.screens._content_view`, which neither
+``browse`` nor ``edit`` reach back from -- both import it at module level
+now, and the cycle no longer exists.
 """
 
 from __future__ import annotations
@@ -127,6 +129,7 @@ from textual.widgets import Header, TextArea
 from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
+from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -245,13 +248,7 @@ class EditScreen(Screen[None]):
         fires, the identical trap ``Ctrl+H``/``Ctrl+G`` above exist to dodge
         (this class's docstring; ``docs/keybindings.md``). ``Ctrl+R``
         ("retrieved") is free of the same three traps checked there.
-
-        The import below is local, not at module level, to break the
-        ``browse`` <-> ``edit`` import cycle -- see this module's docstring's
-        "Import cycle" section.
         """
-        from lode.tui.screens.browse import _view_note_external_content
-
         _view_note_external_content(self, self.note_id)
 
     def action_save(self) -> None:

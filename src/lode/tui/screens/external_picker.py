@@ -2,7 +2,7 @@
 
 Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
 (``docs/conventions.md``). Pushed by
-:func:`~lode.tui.screens.browse._view_note_external_content` only when a note
+:func:`~lode.tui.screens._content_view._view_note_external_content` only when a note
 has more than one external edge -- the "many" branch of the zero/one/many
 addressing rule shared with ``lode dump-html`` (lode-olmi.7).
 """
@@ -26,7 +26,7 @@ EXTERNAL_PICKER_TABLE_ID = "external-picker-table"
 class ExternalPickerScreen(Screen[None]):
     """List a note's external edges so the user can pick one to view (lode-0sjj).
 
-    Pushed by :func:`~lode.tui.screens.browse._view_note_external_content`
+    Pushed by :func:`~lode.tui.screens._content_view._view_note_external_content`
     only when a note has more than one external edge -- the "many" branch of
     the zero/one/many addressing rule shared with ``lode dump-html``
     (lode-olmi.7). Each row is one :class:`~lode.enrichment_view.
