@@ -18,8 +18,11 @@ dependencies = [
     "textual[syntax]", # TUI, plus the tree-sitter grammar bundle (~15
                        # languages, no markdown-only extra) -- HARD dep for
                        # live markdown syntax colouring in the note body
-                       # TextAreas (lode-ev5j.2). Deps stay unpinned; no
-                       # private Textual API is used by this feature.
+                       # TextAreas (lode-ev5j.2). Deps stay unpinned; the
+                       # feature's SOURCE uses no private Textual API. Its
+                       # tests do (TextArea._highlights) -- deliberately, per
+                       # the ticket, to avoid a pytest-textual-snapshot dev
+                       # dep; see tests/test_tui_markdown_syntax.py.
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)

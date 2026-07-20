@@ -20,12 +20,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from textual.screen import Screen
 from textual.widgets import TextArea
 from textual.widgets.text_area import LanguageDoesNotExist
 
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.screens._markdown_area import markdown_text_area
+from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
 from lode.tui.screens.snapshot_viewer import (
@@ -35,6 +36,25 @@ from lode.tui.screens.snapshot_viewer import (
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
 from lode.versions import save
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _pushed_screen_language(app: LodeApp, screen: Screen, widget_id: str) -> str | None:
+    """Push ``screen`` onto ``app`` and read back its ``TextArea``'s language.
+
+    Shared by the three ``push_screen``-shaped cases below (the EditScreen case
+    drives the keyboard instead, so it keeps its own driver).
+    """
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            app.push_screen(screen)
+            await pilot.pause()
+            return app.screen.query_one(f"#{widget_id}", TextArea).language
+
+    return asyncio.run(_drive())
+
+
 # ---------------------------------------------------------------------------
 # textual[syntax] is a HARD dependency (pyproject.toml), not an optional extra.
 # ---------------------------------------------------------------------------
@@ -42,7 +62,7 @@ from lode.versions import save
 
 def test_textual_syntax_extra_is_a_hard_dependency() -> None:
     """``textual[syntax]`` -- not the plain, ungrammared ``textual`` -- is declared."""
-    pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text()
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text()
 
     assert 'textual[syntax]"' in pyproject
 
@@ -72,7 +92,7 @@ def test_markdown_text_area_falls_back_to_plain_text_when_grammar_missing(
 
     monkeypatch.setattr(TextArea, "__init__", _raise_missing_language)
 
-    widget = markdown_text_area("some body", id="body", read_only=True)
+    widget = _markdown_text_area("some body", id="body", read_only=True)
 
     assert widget.language is None
     assert widget.text == "some body"
@@ -80,8 +100,52 @@ def test_markdown_text_area_falls_back_to_plain_text_when_grammar_missing(
     assert widget.id == "body"
 
 
+def test_markdown_text_area_falls_back_when_grammar_abi_is_incompatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The *other* broken-env path: ``tree_sitter.Language()`` raises ValueError.
+
+    ``textual._tree_sitter.get_language`` catches ImportError/OSError/AttributeError
+    and returns None (which Textual turns into ``LanguageDoesNotExist``), but it
+    does **not** catch the ``ValueError`` that ``tree_sitter.Language()`` raises
+    when the grammar's compiled ABI and the installed ``tree-sitter`` core
+    disagree -- so that one propagates straight out of ``TextArea.__init__``.
+    With deps deliberately unpinned (pyproject.toml), an independently-resolved
+    ``tree-sitter`` / ``tree-sitter-markdown`` pair makes this the more likely of
+    the two failures, so the helper must degrade here too rather than kill the
+    screen.
+    """
+    real_init = TextArea.__init__
+
+    def _raise_abi_mismatch(self: TextArea, *args: object, **kwargs: object) -> None:
+        if kwargs.get("language") is not None:
+            raise ValueError("invalid language ID")
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TextArea, "__init__", _raise_abi_mismatch)
+
+    widget = _markdown_text_area("some body", id="body", read_only=True)
+
+    assert widget.language is None
+    assert widget.text == "some body"
+    assert widget.read_only is True
+    assert widget.id == "body"
+
+
+def test_markdown_text_area_does_not_swallow_a_malformed_widget_id() -> None:
+    """The ValueError arm stays narrow: a real construction bug still raises.
+
+    ``textual.dom.BadIdentifier`` derives directly from ``Exception``, not from
+    ``ValueError``, so broadening the guard above does not mask it.
+    """
+    from textual.dom import BadIdentifier
+
+    with pytest.raises(BadIdentifier):
+        _markdown_text_area("some body", id="not a valid id!")
+
+
 def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> None:
-    widget = markdown_text_area("some body", id="body")
+    widget = _markdown_text_area("some body", id="body")
 
     assert widget.language == "markdown"
     assert widget.text == "some body"
@@ -122,13 +186,11 @@ def test_version_view_screen_body_is_markdown_language(tmp_path: Path) -> None:
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> str | None:
-        async with app.run_test() as pilot:
-            app.push_screen(VersionViewScreen("note-a", version_id))
-            await pilot.pause()
-            return app.screen.query_one(f"#{VERSION_BODY_ID}", TextArea).language
+    language = _pushed_screen_language(
+        app, VersionViewScreen("note-a", version_id), VERSION_BODY_ID
+    )
 
-    assert asyncio.run(_drive()) == "markdown"
+    assert language == "markdown"
 
 
 def _insert_snapshot(conn: sqlite3.Connection, *, snapshot_id: str, body: str) -> None:
@@ -153,15 +215,11 @@ def test_snapshot_viewer_screen_body_is_markdown_language(tmp_path: Path) -> Non
         conn.close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> str | None:
-        async with app.run_test() as pilot:
-            app.push_screen(SnapshotViewerScreen("snap-1"))
-            await pilot.pause()
-            return app.screen.query_one(
-                f"#{SNAPSHOT_VIEWER_BODY_ID}", TextArea
-            ).language
+    language = _pushed_screen_language(
+        app, SnapshotViewerScreen("snap-1"), SNAPSHOT_VIEWER_BODY_ID
+    )
 
-    assert asyncio.run(_drive()) == "markdown"
+    assert language == "markdown"
 
 
 def test_reconcile_screen_diff_view_is_not_markdown_language(tmp_path: Path) -> None:
@@ -180,13 +238,9 @@ def test_reconcile_screen_diff_view_is_not_markdown_language(tmp_path: Path) -> 
     )
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> str | None:
-        async with app.run_test() as pilot:
-            app.push_screen(ReconcileScreen(conflict))
-            await pilot.pause()
-            return app.screen.query_one(f"#{DIFF_ID}", TextArea).language
+    language = _pushed_screen_language(app, ReconcileScreen(conflict), DIFF_ID)
 
-    assert asyncio.run(_drive()) is None
+    assert language is None
 
 
 # ---------------------------------------------------------------------------
@@ -217,26 +271,44 @@ _FIXTURE = (
 )
 
 
+#: (line, expected entry, which construct on that line it stands for). Keyed
+#: to ``_FIXTURE`` above.
+_EXPECTED_HIGHLIGHTS = [
+    (0, (0, 1, "heading.marker"), "heading marker"),
+    (0, (2, 9, "heading"), "heading text"),
+    (2, (0, 3, "punctuation.delimiter"), "opening code fence"),
+    (4, (0, 3, "punctuation.delimiter"), "closing code fence"),
+    (3, (0, None, "text.literal"), "fenced code content"),
+    (6, (0, 2, "list.marker"), "list marker"),
+    (8, (0, 2, "punctuation.special"), "block-quote marker"),
+    (10, (0, None, "list.marker"), "thematic break"),
+    (12, (0, 9, "link.label"), "reference-link label"),
+    (12, (3, 5, "string.escape"), "backslash escape"),
+    (12, (11, 30, "link.uri"), "reference-link URI"),
+]
+
+
 def test_highlights_cover_the_agreed_stock_token_set() -> None:
-    text_area = markdown_text_area(_FIXTURE, id="fixture")
+    """Canary over Textual's bundled ``markdown.scm``, not over lode's own code.
+
+    The exact ``(start_col, end_col, capture)`` entries below were derived
+    empirically against textual 8.2.8 / tree-sitter-markdown 0.5.1 and are the
+    approach the ticket settled on (asserting the private ``_highlights``, in
+    preference to adding a ``pytest-textual-snapshot`` dev dep). Because those
+    deps are deliberately **unpinned**, a grammar or query bump upstream can
+    legitimately rename a capture or shift a span -- so each assertion reports
+    what the grammar actually produced. A failure here means "the upstream
+    markdown grammar changed", NOT "lode is broken": re-derive the expectations
+    and confirm the token set is still covered before treating it as a defect.
+    """
+    text_area = _markdown_text_area(_FIXTURE, id="fixture")
 
     highlights = text_area._highlights
 
-    # Heading + heading marker (line 0: "# Heading").
-    assert (0, 1, "heading.marker") in highlights[0]
-    assert (2, 9, "heading") in highlights[0]
-    # Fenced code: fence delimiters (lines 2 and 4) and content (line 3).
-    assert (0, 3, "punctuation.delimiter") in highlights[2]
-    assert (0, 3, "punctuation.delimiter") in highlights[4]
-    assert (0, None, "text.literal") in highlights[3]
-    # List marker (line 6: "- item").
-    assert (0, 2, "list.marker") in highlights[6]
-    # Block-quote marker (line 8: "> quote").
-    assert (0, 2, "punctuation.special") in highlights[8]
-    # Thematic break (line 10: "---").
-    assert (0, None, "list.marker") in highlights[10]
-    # Reference-style link definition + a backslash escape in its label
-    # (line 12: "[la\*bel]: https://example.com").
-    assert (0, 9, "link.label") in highlights[12]
-    assert (3, 5, "string.escape") in highlights[12]
-    assert (11, 30, "link.uri") in highlights[12]
+    for line, entry, construct in _EXPECTED_HIGHLIGHTS:
+        assert entry in highlights[line], (
+            f"{construct}: expected {entry} on line {line} of the fixture, but the "
+            f"installed grammar produced {sorted(highlights[line])}. If a textual / "
+            f"tree-sitter-markdown bump changed this, re-derive _EXPECTED_HIGHLIGHTS "
+            f"rather than assuming a lode regression."
+        )

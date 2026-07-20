@@ -127,7 +127,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
-from lode.tui.screens._markdown_area import markdown_text_area
+from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._content_view import _view_note_external_content
@@ -177,7 +177,7 @@ class EditScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            markdown_text_area(id=EDIT_BODY_ID),
+            _markdown_text_area(id=EDIT_BODY_ID),
             RelatedNotesPanel(exclude_note_id=self.note_id, id=EDIT_RELATED_ID),
         )
         yield LodeFooter()
