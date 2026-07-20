@@ -1557,16 +1557,10 @@ are catalogued in [configuration.md](configuration.md).
 
   **Observed twice, not once** — a 2026-07-19 pass reproduced an earlier, deliberately-unticketed
   occurrence symptom-by-symptom, which is what promoted it from "plausible one-off" to "systematic."
-  Three non-isolated `land-review` dispatches all ran in the main checkout; one left a full branch
-  diff (`lode-2zj0`'s: a new module plus several modified screens) staged there. The next branch's
-  `git merge --no-ff` then aborted with "Your local changes to the following files would be
-  overwritten by merge," with `git ls-files -u` **empty** — so the failure matched neither
-  `merge_one`'s jsonl-restore retry path (only restores `.beads/issues.jsonl`, not arbitrary
-  reviewer-left files) nor its real-conflict path (needs a genuinely unmerged index). It silently
-  read as an unretried conflict rather than what it was: a lander tree dirtied by something other
-  than the branch actually being merged. A human had to confirm the staged content was safe on
-  `origin/land/lode-2zj0` and hand-reset the tree; no work was lost, but the recovery needed human
-  judgment `/land` should never require mid-pass.
+  The incident and its forensics (why the dirtied tree read as an unretried conflict rather than as
+  what it was) are recorded once, in
+  [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387);
+  what belongs here is the choice it forced.
 
   **Decision: fix the isolation gap at dispatch, not the symptom in `merge_one`.** The ticket's own
   reasoning is the deciding factor — the repeat across two independent occurrences is evidence the
@@ -1583,12 +1577,15 @@ are catalogued in [configuration.md](configuration.md).
   **Costs nothing in capability, needs no new cleanup mechanism.** `land-review` only ever `git
   fetch`es the branch(es) under review and diffs them by ref (never checks anything out —
   [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where*
-  that happens, never *what* it does. And because `land-review` never commits (no merge, no push, no
-  `bd` write — its own "What I don't do"), its scratch worktree's HEAD never diverges from the
-  `trunk` HEAD it was branched from — the existing worktree-GC backstop (lode-h1vn / lode-amif,
-  above) already reclaims any unlocked, clean worktree under `.claude/worktrees/` whose HEAD is an
-  ancestor of `trunk`, so this scratch worktree is reclaimed by the very same pass's own GC step,
-  with no dedicated code. Documented in
+  that happens, never *what* it does. And because `land-review` never commits, its scratch worktree's
+  HEAD never diverges from the `trunk` HEAD it was branched from, so the existing worktree-GC
+  backstop (lode-h1vn / lode-amif, above) reclaims it under its existing predicate with no dedicated
+  code — that pass's own GC step normally, and the next pass that reaches it if this one aborts
+  early (see the agents-workflow.md section above for the exact bound). **Enforcement is
+  instruction-only, deliberately:** there is no `PreToolUse` guard on agent dispatch, matching how
+  the identical `isolation: "worktree"` requirement for `coding`/`code-reviewer` has always been
+  specified in `code/SKILL.md`. Whether that class of rule should be mechanically enforced the way
+  `gh` writes are (lode-o29m) is deferred to lode-kt6g, not settled here. Documented in
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
   [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md#how-to-use-me), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).

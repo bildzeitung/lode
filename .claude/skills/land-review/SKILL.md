@@ -43,7 +43,8 @@ I still only `git fetch` the branch(es) and diff by ref (below), never checking 
 own worktree stays untouched too — the isolation is a guardrail against a mistake, not a workflow
 change. My worktree needs no cleanup from me: I commit nothing, so it never diverges from the
 `trunk` HEAD it was branched from, and `/land`'s own end-of-pass backstop sweep reclaims it like any
-other zero-divergence, unlocked, clean worktree.
+other zero-divergence, unlocked, clean worktree. Full rationale:
+[docs/agents-workflow.md — Isolating land-review dispatches](../../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see

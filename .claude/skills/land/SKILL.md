@@ -305,7 +305,15 @@ scratch worktree**: `land-review` never commits (its own "What I don't do" — n
 `bd` writes), so its worktree's HEAD never diverges from the `trunk` HEAD it was branched from, and
 the existing backstop sweep in [Section 4](#4-land-the-survivors) already reclaims any unlocked,
 clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this one qualifies
-by construction, at the end of this very pass, with no dedicated code. Full rationale:
+by construction, with no dedicated code. Normally that is the end of this very pass: Section 4 is
+reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that
+account — the merge loop simply iterates zero times), so the sweep is not conditional on anything
+having landed. The exception is a pass that **aborts** after 2c has already spun up scratch
+worktrees — the 2b precheck machine-fault stop, the `validate-mermaid.sh` exit-2 stop, and the
+bounce path's `blocks-dependents.sh` `exit 1`. Those leak the scratch worktrees past the pass, and
+the next pass that reaches Section 4 reclaims them (they are clean, unlocked, and ancestors of
+`trunk`, so they still qualify) — bounded and self-healing, not a hazard, but don't read the
+same-pass reclaim as unconditional. Full rationale:
 [docs/agents-workflow.md — Isolating land-review dispatches](../../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 
 Pass the ticket ID and its `land/<id>` branch. **If

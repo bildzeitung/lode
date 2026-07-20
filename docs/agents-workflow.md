@@ -1217,7 +1217,18 @@ merge, no push, no `bd` write — its own "What I don't do"), so its scratch wor
 diverges from the `trunk` HEAD it was branched from. The existing worktree-GC backstop (lode-h1vn /
 lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)) already reclaims any unlocked,
 clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this scratch
-worktree qualifies by construction, at the end of the very same pass, with no new mechanism.
+worktree qualifies by construction, with no new mechanism.
+
+**One precision on "the same pass," because the fix's no-new-GC claim rests on it.** Section 4 is
+reached even when the accepted set is empty — no early exit sits between the 2c dispatch and the
+sweep on that account, and the merge loop just iterates zero times — so a pass that lands nothing
+still reclaims its scratch worktrees. What does *not* hold is the unconditional reading: a pass that
+**aborts** after 2c has already spun up scratch worktrees (the 2b precheck machine-fault stop, the
+`validate-mermaid.sh` exit-2 stop, or the bounce path's `blocks-dependents.sh` `exit 1`) never
+reaches Section 4, and leaks them past the pass. That leak is bounded and self-healing rather than a
+hazard — the leaked worktrees are clean, unlocked, and ancestors of `trunk`, so the next pass that
+does reach Section 4 reclaims them under the same predicate — but the justification is "the backstop
+reclaims it, next pass at the latest," not "always this pass."
 
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
