@@ -17,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import TextArea
 
 from lode.notes_read import SnapshotRow, read_snapshot
+from lode.tui.screens._markdown_area import _markdown_text_area
 
 #: The content-viewer modal's body ``TextArea`` widget id (lode-0sjj) -- read
 #: back in tests.
@@ -66,7 +67,7 @@ class SnapshotViewerScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            TextArea("", read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
+            _markdown_text_area(read_only=True, id=SNAPSHOT_VIEWER_BODY_ID),
             id=SNAPSHOT_VIEWER_DIALOG_ID,
         )
 
