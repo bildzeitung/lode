@@ -389,6 +389,19 @@ def test_snapshot_viewer_screen_footer_shows_the_link_binding(
 
 # ---------------------------------------------------------------------------
 # CaptureScreen (lode-5ill)
+#
+# ONE wiring test, deliberately -- the same scope VersionViewScreen and
+# SnapshotViewerScreen get above, not the four EditScreen carries. EditScreen
+# was first, so it drove the guard scenarios (generic-browser controller,
+# headless, no-link-under-cursor) end to end once; those guards live entirely
+# inside open_link_under_cursor, which takes (screen, text_area) and so cannot
+# behave differently per screen, and each is already covered in isolation in
+# tests/test_link_open.py. Re-running them here would assert the same facts a
+# third time and pin the guards' wording in one more place. What IS
+# screen-specific -- that Ctrl+N is bound and reaches the helper -- is what
+# this test covers. CaptureScreen's footer entry is covered by
+# test_tui_app.py::test_capture_footer_fits_100_columns_with_every_binding_visible.
+# (lode-5ill technical review)
 # ---------------------------------------------------------------------------
 
 
@@ -428,113 +441,3 @@ def test_capture_screen_ctrl_n_on_a_link_opens_it(
 
     assert opened == ["https://example.com/path"]
     assert any("https://example.com/path" in message for message in messages)
-
-
-def test_capture_screen_ctrl_n_with_generic_browser_controller_does_not_open_but_notifies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("DISPLAY", ":0")
-    db_path = tmp_path / "lode.db"
-    init_db(db_path).close()
-    app = LodeApp(db_path=db_path)
-    messages: list[str] = []
-    opened: list[str] = []
-    monkeypatch.setattr(
-        "lode.tui.screens._link_open.webbrowser.open",
-        lambda url: opened.append(url),
-    )
-    monkeypatch.setattr(
-        "lode.tui.screens._link_open.webbrowser.get",
-        lambda *a, **kw: webbrowser.GenericBrowser("w3m"),
-    )
-
-    async def _drive() -> None:
-        async with app.run_test() as pilot:
-            text_area = app.screen.query_one(f"#{CAPTURE_BODY_ID}")
-            text_area.text = "see [my link](https://example.com/path) please"
-            text_area.move_cursor((0, 8))
-            monkeypatch.setattr(
-                app, "notify", lambda message, **kw: messages.append(message)
-            )
-            await pilot.press("ctrl+n")
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-
-    asyncio.run(_drive())
-
-    assert opened == []  # never handed to a terminal browser -- would corrupt the TUI
-    assert any("https://example.com/path" in message for message in messages)
-
-
-def test_capture_screen_ctrl_n_headless_notifies_without_opening(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("DISPLAY", raising=False)
-    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    db_path = tmp_path / "lode.db"
-    init_db(db_path).close()
-    app = LodeApp(db_path=db_path)
-    messages: list[str] = []
-    opened: list[str] = []
-    monkeypatch.setattr(
-        "lode.tui.screens._link_open.webbrowser.open",
-        lambda url: opened.append(url),
-    )
-    # A perfectly safe, GUI-capable controller -- proves the refusal below is
-    # driven by the missing display, not by the controller type.
-    monkeypatch.setattr(
-        "lode.tui.screens._link_open.webbrowser.get",
-        lambda *a, **kw: _FakeGuiBrowser(),
-    )
-
-    async def _drive() -> None:
-        async with app.run_test() as pilot:
-            text_area = app.screen.query_one(f"#{CAPTURE_BODY_ID}")
-            text_area.text = "see [my link](https://example.com/path) please"
-            text_area.move_cursor((0, 8))
-            monkeypatch.setattr(
-                app, "notify", lambda message, **kw: messages.append(message)
-            )
-            await pilot.press("ctrl+n")
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-
-    asyncio.run(_drive())
-
-    assert opened == []
-    assert any("https://example.com/path" in message for message in messages)
-
-
-def test_capture_screen_ctrl_n_with_no_link_under_cursor_notifies_clearly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("DISPLAY", ":0")
-    db_path = tmp_path / "lode.db"
-    init_db(db_path).close()
-    app = LodeApp(db_path=db_path)
-    messages: list[str] = []
-    opened: list[str] = []
-    monkeypatch.setattr(
-        "lode.tui.screens._link_open.webbrowser.open",
-        lambda url: opened.append(url),
-    )
-
-    async def _drive() -> bool:
-        async with app.run_test() as pilot:
-            text_area = app.screen.query_one(f"#{CAPTURE_BODY_ID}")
-            text_area.text = "no links on this line at all"
-            text_area.move_cursor((0, 3))
-            monkeypatch.setattr(
-                app, "notify", lambda message, **kw: messages.append(message)
-            )
-            await pilot.press("ctrl+n")
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            return isinstance(app.screen, CaptureScreen)
-
-    still_capture_screen = asyncio.run(_drive())
-
-    assert opened == []
-    assert any("no link under the cursor" in message for message in messages)
-    # No crash, no silence -- still on the same screen with a clear message.
-    assert still_capture_screen

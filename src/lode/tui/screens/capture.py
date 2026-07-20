@@ -98,16 +98,9 @@ confirm dialog's own "Save" answer, decoupled onto its own exit path
 because that method no longer exits. ``ctrl+n`` is freed --
 ``docs/keybindings.md``'s letter-space accounting.
 
-**Ctrl+N reclaimed for open-link (lode-5ill).** ``lode-ngk2`` gave this screen's body live
-markdown colouring, matching the other three note-body ``TextArea``\\ s (``docs/editing.md``), but
-the Ctrl+N open-link binding those three screens share (``lode-ev5j.3``) was never revisited to
-match -- leaving this screen able to *show* a coloured link with no way to *open* one. Freed by
-``lode-bsmc`` above and still unclaimed at the screen level, ``ctrl+n`` closes that gap here the
-same way: :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the actual
-extraction/browser-safety work, unchanged and shared with the other three screens. Link extraction
-itself never depended on the colouring (:mod:`lode.tui.screens._link_open`'s module docstring) --
-it regex-scans the cursor's line -- so this binding was always safe to add independent of when the
-colouring landed.
+**...and reclaimed for open-link (lode-5ill)** -- a different action on the same
+letter, so the retirement above is history, not a free key. Rationale lives on
+:meth:`action_open_link`; ``docs/editing.md`` carries the design record.
 """
 
 from __future__ import annotations
