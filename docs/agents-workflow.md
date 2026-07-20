@@ -1051,9 +1051,9 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    builder's real branch, so driving the builder's worktree in place both fought a guard *and*
    produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
 2. **Runs the technical review** — its own reasoned pass against the diff for bugs (`/code-review` is
-   a bundled Claude Code skill that is user-gated and unreachable from any model context, confirmed by
-   keystroke test, lode-axyq — see `.claude/agents/code-reviewer.md` step 4 for the full mechanism and
-   what the correctness pass covers) and the genuinely tool-backed `/simplify` (over-design /
+   unreachable from any model context, lode-axyq; `.claude/agents/code-reviewer.md` step 4 has the
+   mechanism and what the pass covers, `docs/decisions.md` the version pin) and the tool-backed
+   `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
 3. **Re-pushes `land/<id>`** and **swaps the ticket to `ready-for-land`** (refreshed head SHA +

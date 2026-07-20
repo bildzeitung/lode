@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Runs the producer's TECHNICAL review on a built lode branch that a coding producer left at ready-for-code-review — fetches the pushed land/<id> branch and checks it out into its own launch worktree, runs a correctness pass (its own reasoning against the diff — /code-review is user-gated and unreachable from any model context, lode-axyq) plus /simplify (genuinely tool-backed), re-gates, commits, re-pushes land/<id>, and swaps the ticket to ready-for-land (or escalates). It is the build-side technical gate, done by an agent that did NOT write the code. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Runs on Opus.
+description: Runs the producer's TECHNICAL review on a built lode branch that a coding producer left at ready-for-code-review — fetches the pushed land/<id> branch and checks it out into its own launch worktree, runs the technical review — a hand-reasoned correctness pass plus /simplify — re-gates, commits, re-pushes land/<id>, and swaps the ticket to ready-for-land (or escalates). It is the build-side technical gate, done by an agent that did NOT write the code. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Runs on Opus.
 model: opus
 ---
 
@@ -44,9 +44,9 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `Bash`/`Write` to my own launch worktree regardless, so driving the builder's worktree in place could
   only ever *read* it, never write a fix into it without a `bash` single-match workaround — and worse,
   a launch worktree freshly branched off `trunk` HEAD has an *empty* diff against the builder's actual
-  branch, so `/simplify` (cwd-relative) would silently review nothing (lode-k5e) — and at the time this
-  was believed to apply to `/code-review` too, before lode-axyq established `/code-review` is
-  unreachable from any model context regardless of cwd (step 4).
+  branch, so `/simplify` (cwd-relative) would silently review nothing (lode-k5e) — which at the time
+  applied to `/code-review` equally, since the model could still invoke it then; `/code-review` has
+  since become unreachable from any model context regardless of cwd (lode-axyq, step 4).
   Checking the pushed branch out into my own worktree sidesteps the guard entirely and gives the tools
   the real diff. See `docs/decisions.md` for the full record. If I ever find my own cwd is the repo
   root / `trunk`, I **stop and report** rather than write.
@@ -193,11 +193,14 @@ For a docs-only branch there is no Python gate.
    Claude Code skill and it is **USER-GATED**: a human keystroke can invoke it anywhere, but confirmed
    by a direct keystroke test, **no model context — main session or subagent — can invoke it at all**.
    It never appears in the skill listing handed to a subagent (or the main session), so there is no
-   `Skill`-tool handle for it and nothing that resolves. I do **not** attempt to invoke it, and I do
-   **not** hand-roll a local copy of its logic into a project skill so it becomes nominally
-   invocable — that forks a prompt I cannot see the source of, drifts silently as the real bundled
-   skill gains features, and reads as official while being a local hand-roll: precisely how this class
-   of bug regenerates under a new name (both rejected explicitly in lode-axyq). Instead I run the
+   `Skill`-tool handle for it and nothing that resolves. **This is an upstream change, not a
+   longstanding constraint** — Claude Code 2.1.215 removed model invocation of `/code-review` and
+   `/verify` deliberately, so the earlier design that *did* call it was correct for its day and simply
+   went stale; the version pin and the watch item live in `docs/decisions.md` (lode-axyq).
+   I do **not** attempt to invoke it, and I do **not** hand-roll a local copy of its logic into a
+   project skill so it becomes nominally invocable — that forks a prompt I cannot see the source of,
+   drifts silently as the real bundled skill gains features, and reads as official while being a local
+   hand-roll: precisely how this class of bug regenerates under a new name. Instead I run the
    correctness pass myself, with my own tools, against the real diff (`git diff` against the base I
    established in step 2 — `trunk...HEAD`, or the off-trunk merge-base for a stacked branch):
    - Read every changed hunk and judge it against the ticket's acceptance criteria: does it do what

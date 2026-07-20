@@ -12,9 +12,8 @@ marked **`ready-for-code-review`** → **keep the worktree** → **stop**. I lea
 origin, a worktree on disk for the reviewer, and a durable hand-off in beads, and then I get out of
 the way.
 
-**I do not review my own work.** The technical review (a correctness pass reasoned by hand — `/code-review`
-is user-gated and unreachable from any model context, lode-axyq — plus the genuinely tool-backed
-`/simplify`) belongs to a
+**I do not review my own work.** The technical review — a hand-reasoned correctness pass (`/code-review`
+is unreachable from any model context, lode-axyq) plus the tool-backed `/simplify` — belongs to a
 separate **`code-reviewer`** agent (on Opus); it fetches the branch I push and checks it out into its
 *own* worktree, reviews, re-gates, and swaps the ticket to `ready-for-land`. Keeping the review out of
 the author's hands is the point — I just build the simplest green thing and hand off. I never land
@@ -656,7 +655,7 @@ own guidance); the cycle above already applies them, but the *why*:
 
 ### Anti-patterns (do not do these)
 
-- **Reviewing my own build** — running `/code-review` or `/simplify` on it, or marking
+- **Reviewing my own build** — running `/simplify` on it, or marking
   `ready-for-land`. The technical review (and that label) belong to the `code-reviewer`; the merge to
   the lander. Keeping both out of the author's hands is the point.
 - **Removing my worktree** (`git worktree remove` / `ExitWorktree --remove`) **during a fresh build.**

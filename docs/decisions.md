@@ -390,21 +390,47 @@ are catalogued in [configuration.md](configuration.md).
   marketplace command ever shadows the built-in in some environment, this review step would silently
   no-op again in a new way (the same failure shape as the `git -C` false-green above).
 
-  **Update (lode-axyq, 2026-07-20) — (4) above is superseded and now known to be misleading as
-  written.** A later, more rigorous test (a direct keystroke test by the maintainer, plus confirmation
-  that `/code-review` never appears in the skill listing handed to any subagent or the main session)
-  established that `/code-review` is **USER-GATED**: a human keystroke can invoke it anywhere, but *no
-  model context — main session or subagent — can invoke it at all*, regardless of cwd or which
-  `/code-review` would resolve if it could run. This directly contradicts (4)'s claim that the call
-  "wrote a fix directly to the reviewer's own working tree" while running autonomously inside a
-  subagent. The two records cannot both be literally true; the most plausible reconciliation is that
-  the 2026-07-09 test involved a human typing the command into that subagent's session (still "inside
-  a subagent" in the sense of *which worktree* it operated in, but not the model invoking it on its
-  own), which the 2026-07-09 note did not distinguish. Left as a discrepancy rather than silently
-  corrected, since this record was not re-verified first-hand for this entry — but the design decision
-  going forward does not depend on resolving it: `code-reviewer.md` no longer attempts `/code-review`
-  under any circumstance, autonomous or not, and instead runs its own reasoned correctness pass (see
-  `.claude/agents/code-reviewer.md` step 4 and `docs/agents-workflow.md`'s landing-loop section).
+  **Update (lode-axyq, 2026-07-20) — (4) is not wrong, it is STALE: an upstream dependency changed
+  underneath it.** `/code-review` is now **USER-GATED** — a human keystroke can invoke it anywhere, but
+  *no model context, main session or subagent, can invoke it at all*, regardless of cwd or which
+  `/code-review` would resolve. Two independent confirmations: a direct keystroke test by the
+  maintainer (it runs when typed), and its absence from the model-invocable skill listing handed to
+  both subagents and the main session (so there is no `Skill`-tool handle and nothing resolves).
+
+  **This does not impugn (4)'s 2026-07-09 behavioral test.** Both records are literally true, because
+  the capability was removed between them, deliberately, by upstream. The Claude Code 2.1.215
+  changelog entry reads verbatim:
+
+  > Claude no longer runs the `/verify` and `/code-review` skills on its own; invoke them with
+  > `/verify` or `/code-review` when you want them
+
+  The installed version is exactly 2.1.215 (`claude --version`), and 2.1.215 is the newest published
+  release, so nothing has restored it since. On 2026-07-09 the model *could* invoke `/code-review` and
+  (4) recorded that faithfully; the upgrade to 2.1.215 removed it, which is why the breakage surfaced
+  abruptly rather than having always been there. So the pipeline was never built on a false premise —
+  this is dependency drift, not a design defect, and the earlier claim that step 1 "has been inert for
+  every branch this pipeline has reviewed" is retracted: the inert window is only branches reviewed
+  after the 2.1.215 upgrade.
+
+  **This claim is therefore version-bound, and that is the one thing a future reader must not lose.**
+  Every other file states it flatly ("unreachable from any model context") and points here; *here* is
+  where the version pin lives. **WATCH ITEM:** because this was a deliberate upstream product decision
+  rather than a stable constraint, a later release could revise it or add an opt-in — re-check the
+  changelog for an entry restoring model invocation before assuming this still holds. If it is
+  restored, the correct fix collapses to simply un-breaking the old step 1 rather than keeping the
+  hand-reasoned pass. **Tracked as lode-ebhk** so this does not live only as prose here — a watch item
+  with no owner goes stale exactly the way (4) above did. Likely rationale for the removal (LIKELY — not stated in the changelog):
+  `/code-review` and `/verify` are both expensive multi-agent skills and the `ultra` variant is
+  separately billed, so gating them behind a human keystroke stops an autonomous agent firing them in
+  a loop at unbounded cost.
+
+  Either way, one thing stays rejected regardless of what upstream does: do **not** hand-roll a local
+  copy of the bundled skill into a project-scope `.claude/skills/code-review/SKILL.md` to make it
+  nominally invocable. That forks a prompt whose source we cannot see, drifts silently as the real
+  skill gains features, and reads as official while being a local hand-roll — precisely how this class
+  of bug regenerates under a new name. `code-reviewer.md` instead runs its own reasoned correctness
+  pass (see `.claude/agents/code-reviewer.md` step 4 and `docs/agents-workflow.md`'s landing-loop
+  section).
 
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether

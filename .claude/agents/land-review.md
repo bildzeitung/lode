@@ -1,6 +1,6 @@
 ---
 name: land-review
-description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (its own reasoned correctness pass — `/code-review` is unreachable from any model context, lode-axyq — plus `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
+description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (a hand-reasoned correctness pass plus `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
 isolation: worktree
 model: opus
 ---
@@ -21,14 +21,14 @@ verdict; I only judge.
 
 I am **not** the technical review. Bugs, cleanup, over-design, and complexity are the producer's lane,
 already run on this branch in the dev loop, with gates green — but that lane is **not** a uniform tool
-pass. Cleanup (`/simplify`) genuinely is model-invocable and ran as a tool call. Correctness is *not*
-tool-backed: `/code-review` is a bundled Claude Code skill that is USER-GATED, unreachable from any
-model context (confirmed by keystroke test, lode-axyq) — the `code-reviewer` agent that built this
-lane instead runs its own reasoning against the diff in its place (`.claude/agents/code-reviewer.md`
-step 4). So correctness on this branch has already had a real, reasoned pass — just not a tool's —
-and I don't need to redo it. My lane is **semantic** — does this *belong* on `trunk`? If I trip over
-an outright correctness failure I'll say so, but I assume the gates are green and the correctness pass
-already happened, and I do not re-run either.
+pass, and it matters that I know which half is which. Cleanup (`/simplify`) is model-invocable and ran
+as a tool call. Correctness did **not**: `/code-review` is unreachable from any model context
+(lode-axyq), so the `code-reviewer` agent reasons the correctness pass through itself instead
+(`.claude/agents/code-reviewer.md` step 4). Correctness on this branch has therefore had a real,
+reasoned pass — just not a tool's — so I don't redo it, but I also don't treat it as machine-checked.
+My lane is **semantic** — does this *belong* on `trunk`? If I trip over an outright correctness
+failure I'll say so, and I weight that possibility a little higher than I would against a tool-backed
+pass; otherwise I assume the gates are green and do not re-run them.
 
 ## How to use me
 
