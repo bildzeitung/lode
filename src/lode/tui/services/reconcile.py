@@ -12,7 +12,7 @@ is that store: the **one** place any TUI save path turns a CAS reject into a
 for the diff), and the **one** place a conflict is resolved — re-applied
 (re-parented onto the new head, via the exact same
 :meth:`~lode.repository.Repository.save` CAS path every other save uses) or
-discarded (the draft dropped). :mod:`lode.tui.capture` is one caller today;
+discarded (the draft dropped). :mod:`lode.tui.services.capture` is one caller today;
 a future edit screen would be another, through the same two functions.
 
 No merge machinery here, on purpose (``docs/storage.md``): a renewed conflict
@@ -93,7 +93,7 @@ def reapply(
     """Re-parent ``conflict``'s buffer onto the new head and save it.
 
     Drives the identical ``Repository.save`` + synchronous-FTS5-only cache
-    seam :func:`lode.tui.capture.save_capture` uses, so a re-applied edit is
+    seam :func:`lode.tui.services.capture.save_capture` uses, so a re-applied edit is
     indexed exactly like any other TUI save. On success the now-resolved
     draft is deleted. If the head moved *again* in the meantime, this raises
     no exception — it returns a fresh :class:`Conflict` (a new draft, the

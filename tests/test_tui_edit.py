@@ -1,4 +1,4 @@
-"""Tests for lode.tui.edit — the TUI edit screen's save wiring (lode-0wj.6).
+"""Tests for lode.tui.services.edit — the TUI edit screen's save wiring (lode-0wj.6).
 
 The direct unit-level twin of ``tests/test_tui_capture.py``: pins that
 ``save_edit`` appends a *version* onto an existing note's chain via the CAS
@@ -19,7 +19,7 @@ import pytest
 
 from lode.repository import Repository
 from lode.storage import init_db
-from lode.tui.edit import (
+from lode.tui.services.edit import (
     EditConflict,
     EmptyEditError,
     delete_note,
@@ -187,7 +187,7 @@ def test_delete_note_cas_reject_raises_head_conflict(tmp_path: Path) -> None:
 
     Unlike :func:`save_edit`, :func:`delete_note` has no draft to preserve on a
     reject -- it lets :class:`HeadConflictError` propagate rather than
-    converting it to a :class:`~lode.tui.reconcile.Conflict`.
+    converting it to a :class:`~lode.tui.services.reconcile.Conflict`.
     """
     db_path = tmp_path / "lode.db"
     stale_head = _seed(db_path, "note-a", "original body")

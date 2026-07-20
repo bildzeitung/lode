@@ -77,7 +77,7 @@ a test literal because nothing in `docs/` said otherwise. Design facts belong in
 sensitive layout), 100 columns is the bound to design against, not 80.**
 
 **One shared footer widget, not ten call sites each managing their own flags.** Every
-footer-bearing screen composes `lode.tui.lode_footer.LodeFooter` — a ~4-line `Footer` subclass
+footer-bearing screen composes `lode.tui.widgets.lode_footer.LodeFooter` — a ~4-line `Footer` subclass
 that bakes in `compact=True, show_command_palette=False` — instead of calling Textual's stock
 `Footer()` directly. Before `lode-uczx`, only two of the ten screens (`BrowseScreen`,
 `CaptureScreen`) passed those two flags explicitly, because each had independently hit an overflow
@@ -91,7 +91,7 @@ binding-hiding that `lode-l38d.3` ruled out and this epic has held to since: `co
 trims Textual's per-entry padding, and `show_command_palette=False` drops only the footer's
 auto-added "^p palette" icon — `ctrl+p` still opens the palette (verified), and the palette was
 never one of lode's declared `BINDINGS`. Measured costs of dropping either, plus the tests that
-enforce it, are in [`lode.tui.lode_footer`](../src/lode/tui/lode_footer.py)'s docstring.
+enforce it, are in [`lode.tui.widgets.lode_footer`](../src/lode/tui/widgets/lode_footer.py)'s docstring.
 
 Rejected alternatives, so the question isn't reopened:
 

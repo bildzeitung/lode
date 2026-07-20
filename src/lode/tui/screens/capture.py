@@ -3,19 +3,19 @@
 ``docs/design.md`` §1/§2: "No AI in the capture path" and explicitly not
 autocomplete / "improve my note" / chat-to-add — this screen is one text area
 and two keys. Saving delegates entirely to
-:func:`lode.tui.capture.save_capture`, which drives the same
+:func:`lode.tui.services.capture.save_capture`, which drives the same
 ``Repository.save`` + synchronous-FTS5-only cache seam ``lode add`` uses but
 never runs the CLI's opportunistic immediate-enrich call, so no AI call can
 land in this screen's save path. This screen owns no persistence logic of its
-own — it only reads the text area, calls :func:`~lode.tui.capture.save_capture`,
-and reacts to the result. A CAS reject (see :class:`~lode.tui.capture.CaptureConflict`)
+own — it only reads the text area, calls :func:`~lode.tui.services.capture.save_capture`,
+and reacts to the result. A CAS reject (see :class:`~lode.tui.services.capture.CaptureConflict`)
 is handed straight to :class:`~lode.tui.screens.reconcile.ReconcileScreen`
 (lode-mkc.4) rather than handled here — this screen's job ends at "the save
 was rejected," the reconcile screen's job is the diff and the resolution.
 
 **Passive connection surfacing (lode-mkc.3, ``docs/design.md`` §2 "Surfacing
 connections").** While the user types, an idle-debounced background pass
-(:func:`lode.tui.related.find_related_notes`) surfaces related past notes into
+(:func:`lode.tui.services.related.find_related_notes`) surfaces related past notes into
 a small panel below the text area — "you wrote about this 3 weeks ago". This
 stays out of the save path entirely (it never touches ``save_capture``) and
 runs off the UI thread via a Textual worker, so a slow or in-flight pass never
@@ -55,7 +55,7 @@ the lode-5y8.4 seed corpus and the measured verdict.
 **Latency fix: reuse one embedder instead of one per pass (lode-0wj.4).** The
 lag-diagnosis spike (lode-0wj.2) found the related-notes pass itself
 non-blocking -- but only tested it with a *pre-warmed* embedder. This screen's
-real wiring never passed one, so :func:`~lode.tui.related.find_related_notes`
+real wiring never passed one, so :func:`~lode.tui.services.related.find_related_notes`
 built a *fresh* :class:`~lode.embedding.FastEmbedEmbedder` every debounce fire
 -- and unlike ONNX *inference* (which releases the GIL, per the spike), the
 ONNX model's *construction* does not: measured against the lode-5y8.4 seed
@@ -63,7 +63,7 @@ corpus with the real embedder (the same diagnostic harness the spike used,
 but driving the real screen through Textual's pilot rather than an isolated
 function call), this cost the event loop ~1.5s of stall on *every* pause in
 typing, for the whole session -- exactly the felt "typing blocks" complaint.
-The shared embedder now lives in :class:`~lode.tui.related_notes_panel.
+The shared embedder now lives in :class:`~lode.tui.widgets.related_notes_panel.
 RelatedNotesPanel` (below) and is reused for the panel's lifetime, so only the
 *first* pass in a session pays the ONNX model's cold-load cost; every pass
 after it reuses the already-loaded model and pays only the single-digit-ms
@@ -72,12 +72,12 @@ inference cost lode-0wj.2's spike measured.
 **Extracted into a shared widget (lode-aoc).** The debounce timer, the
 ``@work(exclusive=True)`` search pass, the lazy shared embedder, cancel-in-
 flight logic, and the panel's own rendering all now live in
-:class:`~lode.tui.related_notes_panel.RelatedNotesPanel`, not this screen --
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`, not this screen --
 see that module's docstring for why (composition over a shared base class,
 decided 2026-07-09) and for the full behaviour-contract list this extraction
 preserved. This screen now only composes the widget, forwards its text area's
-``Changed`` text to :meth:`~lode.tui.related_notes_panel.RelatedNotesPanel.
-update_draft`, and calls :meth:`~lode.tui.related_notes_panel.
+``Changed`` text to :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
+update_draft`, and calls :meth:`~lode.tui.widgets.related_notes_panel.
 RelatedNotesPanel.reset` wherever it used to cancel/clear a pass of its own
 (:meth:`CaptureScreen.action_save`). :class:`~lode.tui.screens.edit.
 EditScreen` composes the same widget for parity (the ticket this extraction
@@ -111,10 +111,10 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
-from lode.tui.capture import CaptureConflict, EmptyCaptureError, save_capture
+from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_capture
 from lode.tui.latency_probe import probe_event_loop_lag
-from lode.tui.lode_footer import LodeFooter
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 
@@ -148,12 +148,12 @@ class CaptureScreen(Screen[None]):
     stays passive by default while the body holds focus, but is itself
     interactive (lode-olmi.9) — Ctrl+F moves focus onto it to step through
     results and open one's highlighted context; see
-    :mod:`lode.tui.related_notes_panel`'s module docstring.
+    :mod:`lode.tui.widgets.related_notes_panel`'s module docstring.
     """
 
     # Descriptions kept short (lode-3rvw), unchanged by the LodeFooter
     # extraction (lode-uczx): show=False stays ruled out, only description
-    # text is ever shortened -- see :mod:`lode.tui.lode_footer` for why a
+    # text is ever shortened -- see :mod:`lode.tui.widgets.lode_footer` for why a
     # shared footer widget exists instead of per-screen compact/palette
     # flags.
     #
@@ -178,7 +178,7 @@ class CaptureScreen(Screen[None]):
         yield Vertical(
             TextArea(id=BODY_ID, placeholder="What did you learn today?"),
             # exclude_note_id=None: a brand-new capture has no note id yet to
-            # exclude -- see lode.tui.related_notes_panel's module docstring.
+            # exclude -- see lode.tui.widgets.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
         )
         yield LodeFooter()
@@ -215,11 +215,11 @@ class CaptureScreen(Screen[None]):
         :class:`~lode.tui.screens.reconcile.ReconcileScreen` now owns the diff.
 
         A capture-path CAS reject is practically unreachable —
-        :func:`~lode.tui.capture.save_capture` mints a fresh ``uuid4`` per call,
+        :func:`~lode.tui.services.capture.save_capture` mints a fresh ``uuid4`` per call,
         so there is nothing for the compare-and-swap to collide with. It is
         still narrowed here rather than assumed away, because ``save_capture``
         is *typed* to return it: one branch in one place is cheaper than either
-        caller mistaking a :class:`~lode.tui.capture.CaptureConflict` for a
+        caller mistaking a :class:`~lode.tui.services.capture.CaptureConflict` for a
         successful save and reporting it as one (:meth:`action_save` would
         clear the buffer and announce "Saved."). This is the whole of the CAS
         handling — there
@@ -259,7 +259,7 @@ class CaptureScreen(Screen[None]):
         otherwise be indistinguishable from a discard — hence the notify.
 
         The reset drops any scheduled *and* any in-flight related-notes pass
-        first (:meth:`~lode.tui.related_notes_panel.RelatedNotesPanel.reset`),
+        first (:meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.reset`),
         so a slow pass started for the just-saved note cannot land afterwards
         and paint its results into the freshly-cleared panel. A refused
         (empty) or CAS-rejected save resets nothing: ``_save_buffer`` returned
@@ -298,7 +298,7 @@ class CaptureScreen(Screen[None]):
         """Ctrl+F: move focus onto the related-notes panel (lode-olmi.9).
 
         Its own Up/Down/Enter bindings only fire while it holds focus (see
-        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
+        :mod:`lode.tui.widgets.related_notes_panel`'s module docstring) — the body
         ``TextArea`` consumes those keys itself while typing, so this is the
         only way to reach them.
         """
@@ -339,7 +339,7 @@ class CaptureScreen(Screen[None]):
         message (bubbling through the same handler name) can never
         mis-trigger this. All of the debounce/search/cancel-in-flight
         machinery this used to own directly now lives in
-        :class:`~lode.tui.related_notes_panel.RelatedNotesPanel` — see that
+        :class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` — see that
         module's docstring.
         """
         if event.text_area.id != BODY_ID:

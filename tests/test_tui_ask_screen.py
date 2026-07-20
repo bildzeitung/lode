@@ -2,7 +2,7 @@
 
 Drives the real widgets end to end via Textual's ``run_test`` pilot -- the
 screen-level twin of ``tests/test_tui_ask.py``'s direct unit coverage of
-:mod:`lode.tui.ask`. The pipeline itself is monkeypatched at
+:mod:`lode.tui.services.ask`. The pipeline itself is monkeypatched at
 ``lode.tui.screens.ask.run_ask`` (it does network I/O), the same way
 ``tests/test_cli.py`` keeps ``lode ask`` offline -- this file only proves the
 screen wires question input -> background worker -> results pane, that the
@@ -29,7 +29,7 @@ from lode.answer import Claim, Support
 from lode.cited_answer import CitedAnswer
 from lode.egress import WithheldCitation
 from lode.tui.app import LodeApp
-from lode.tui.ask import AskResult
+from lode.tui.services.ask import AskResult
 from lode.tui.screens.ask import QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
 

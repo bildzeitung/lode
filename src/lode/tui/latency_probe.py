@@ -1,6 +1,6 @@
 """Lightweight, toggleable event-loop-lag instrumentation (lode-0wj.2 lag-diagnosis spike).
 
-The capture screen's passive related-notes pass (:func:`lode.tui.related.find_related_notes`)
+The capture screen's passive related-notes pass (:func:`lode.tui.services.related.find_related_notes`)
 runs off the UI thread via ``asyncio.to_thread`` (:mod:`lode.tui.screens.capture`), which
 only actually relieves typing if the offloaded call releases the GIL while it runs. This
 module gives that claim an observable signal in the real app: an asyncio "heartbeat" that

@@ -5,9 +5,9 @@ reconciliation, never auto-merge, never clobber. This screen shows a diff of
 the caller's buffer against the new head and offers **re-apply** (re-parent
 the buffer onto the new head as the next version) or **discard**; both the
 draft persistence and the CAS retry are delegated to
-:mod:`lode.tui.reconcile` — this screen owns only the diff/keys UI, same
+:mod:`lode.tui.services.reconcile` — this screen owns only the diff/keys UI, same
 division of labor as :class:`~lode.tui.screens.capture.CaptureScreen` /
-:mod:`lode.tui.capture`.
+:mod:`lode.tui.services.capture`.
 
 A caller pushes an instance directly — ``self.app.push_screen(ReconcileScreen(conflict))``
 — since the screen needs the conflict's data; it is still registered by name
@@ -38,8 +38,8 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, Static, TextArea
 
-from lode.tui.lode_footer import LodeFooter
-from lode.tui.reconcile import Conflict, discard, reapply
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.versions import SaveResult
 
 #: The diff view's widget id — read back in tests.

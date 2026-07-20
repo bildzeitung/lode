@@ -25,7 +25,7 @@ this widget with ``exclude_note_id`` set to the note being edited — its own
 freshly-typed draft would otherwise trivially match itself, since editing
 does not change a note's id. :class:`~lode.tui.screens.capture.CaptureScreen`
 passes ``None`` (a brand-new note has no id yet to exclude). The exclusion
-itself is enforced by :func:`lode.tui.related.find_related_notes`'s own
+itself is enforced by :func:`lode.tui.services.related.find_related_notes`'s own
 ``exclude_note_id`` parameter, not filtered here — this widget stays a thin
 wiring layer over that pure function, same as capture's original wiring was.
 
@@ -55,7 +55,7 @@ screen-level binding that calls this panel's inherited ``focus()`` to move
 focus onto it deliberately; nothing here changes what happens while the body
 still holds focus (the passive debounce/render path above is untouched).
 Highlighted context is the exact matched passage span — ``RelatedNote.
-char_range`` (:mod:`lode.tui.related`) offsets into the exact ``version_id``
+char_range`` (:mod:`lode.tui.services.related`) offsets into the exact ``version_id``
 the retrieval pipeline matched, looked up via :func:`lode.notes_read.
 version_body` (not the note's possibly-since-edited live head) — not the
 whole note passively dumped; see
@@ -83,7 +83,7 @@ if TYPE_CHECKING:
     # module's own import stays free of the embedder (fastembed) until a
     # passive-surfacing pass actually runs.
     from lode.embedding import Embedder
-    from lode.tui.related import RelatedNote
+    from lode.tui.services.related import RelatedNote
 
 log = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ class RelatedNotesPanel(Static):
         exit path of every screen that composes this widget (capture *and*
         :class:`~lode.tui.screens.edit.EditScreen`) -- catches all of them
         uniformly. Purely a timer-lifecycle efficiency cleanup: a post-
-        teardown firing was already harmless (:func:`lode.tui.related.
+        teardown firing was already harmless (:func:`lode.tui.services.related.
         find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
         result was always discarded here (nothing left mounted to render
         into) -- this just stops the wasted embed + FTS5 + LanceDB pass from
@@ -270,7 +270,7 @@ class RelatedNotesPanel(Static):
     async def _search_related(self, body: str) -> None:
         """Run the retrieval/graph pipeline off the UI thread, then render it.
 
-        ``find_related_notes`` (:mod:`lode.tui.related`) does real DB + local-
+        ``find_related_notes`` (:mod:`lode.tui.services.related`) does real DB + local-
         model work (FTS5, LanceDB, the ONNX embedder); ``asyncio.to_thread``
         keeps it off the event loop so typing and each screen's own save/cancel
         bindings are never blocked on it. ``exclusive=True`` (same worker group
@@ -286,7 +286,7 @@ class RelatedNotesPanel(Static):
         **lode-aoc:** passes ``self.exclude_note_id`` through so a screen
         editing an existing note never sees that note match its own draft.
         """
-        from lode.tui.related import find_related_notes
+        from lode.tui.services.related import find_related_notes
 
         self._related_pass_seq += 1
         seq = self._related_pass_seq

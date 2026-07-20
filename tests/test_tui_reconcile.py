@@ -1,4 +1,4 @@
-"""Tests for lode.tui.reconcile — the TUI's CAS-conflict draft store (lode-mkc.4).
+"""Tests for lode.tui.services.reconcile — the TUI's CAS-conflict draft store (lode-mkc.4).
 
 Pins the ticket's acceptance criterion at the module level: a CAS-rejected
 save's buffer is preserved as a draft, re-apply re-parents it onto the new
@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from lode.storage import init_db
-from lode.tui.reconcile import (
+from lode.tui.services.reconcile import (
     Conflict,
     conflict_from_error,
     discard,

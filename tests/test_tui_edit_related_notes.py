@@ -6,7 +6,7 @@ it for :class:`~lode.tui.screens.capture.CaptureScreen`: while editing an
 existing note, a related past note surfaces passively via the real debounce
 timer + Textual worker -- and the note being edited never appears in its own
 related list (the edit-specific wrinkle
-:class:`~lode.tui.related_notes_panel.RelatedNotesPanel`'s ``exclude_note_id``
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`'s ``exclude_note_id``
 exists for).
 """
 
@@ -20,7 +20,7 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.edit import EDIT_BODY_ID, EDIT_RELATED_ID, EditScreen
 
 

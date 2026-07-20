@@ -1,12 +1,12 @@
 """The related-note glance-and-dismiss modal (lode-olmi.9, extracted lode-s5kp.3).
 
-Pushed by :meth:`~lode.tui.related_notes_panel.RelatedNotesPanel.action_open_selected`
-for the currently selected :class:`~lode.tui.related.RelatedNote` — Enter, while
+Pushed by :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.action_open_selected`
+for the currently selected :class:`~lode.tui.services.related.RelatedNote` — Enter, while
 the panel holds focus, opens this screen over the highlighted matched passage.
 Lives in its own module here under :mod:`lode.tui.screens`, per the
 one-Screen/Widget-per-module fiat (``docs/conventions.md``); previously
-co-located inside :mod:`lode.tui.related_notes_panel` itself, alongside
-:class:`~lode.tui.related_notes_panel.RelatedNotesPanel`. See
+co-located inside :mod:`lode.tui.widgets.related_notes_panel` itself, alongside
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel`. See
 :class:`RelatedNoteModalScreen`'s own docstring for why the split needed no
 import-cycle workaround.
 """
@@ -26,7 +26,7 @@ from lode.notes_read import version_body
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-    from lode.tui.related import RelatedNote
+    from lode.tui.services.related import RelatedNote
 
 #: Dialog id for :class:`RelatedNoteModalScreen`'s scrollable body (lode.tcss).
 RELATED_MODAL_DIALOG_ID = "related-note-modal-dialog"
@@ -37,16 +37,16 @@ RELATED_MODAL_BODY_ID = "related-note-modal-body"
 class RelatedNoteModalScreen(ModalScreen[None]):
     """A glance-and-dismiss popup showing one related note's matched context.
 
-    Pushed by :meth:`~lode.tui.related_notes_panel.RelatedNotesPanel.
+    Pushed by :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.
     action_open_selected` (lode-olmi.9) for the currently selected
-    :class:`~lode.tui.related.RelatedNote`. Lives in its own module here
+    :class:`~lode.tui.services.related.RelatedNote`. Lives in its own module here
     under :mod:`lode.tui.screens` (lode-s5kp.3), per the
     one-Screen/Widget-per-module fiat (``docs/conventions.md``) — previously
-    co-located inside :mod:`lode.tui.related_notes_panel` alongside
-    :class:`~lode.tui.related_notes_panel.RelatedNotesPanel` itself. The
+    co-located inside :mod:`lode.tui.widgets.related_notes_panel` alongside
+    :class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` itself. The
     import stays one-directional even split across modules: the panel
     imports this screen to push it, and this screen never imports the panel
-    back (it only takes a plain :class:`~lode.tui.related.RelatedNote` value),
+    back (it only takes a plain :class:`~lode.tui.services.related.RelatedNote` value),
     so there was never a cycle to avoid by co-locating the two — same
     "self-contained, any screen can compose it" stance the panel's own module
     docstring takes for the panel itself.

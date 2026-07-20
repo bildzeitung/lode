@@ -33,9 +33,9 @@ import pytest
 
 from lode.config import Settings
 from lode.storage import init_db
-from lode.tui import capture as capture_mod
+from lode.tui.services import capture as capture_mod
 from lode.tui.app import LodeApp
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, RELATED_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.versions import save
@@ -366,7 +366,7 @@ def _slow_find_related_notes(
         return []
     _PASS_STARTED.set()
     time.sleep(0.3)
-    from lode.tui.related import RelatedNote
+    from lode.tui.services.related import RelatedNote
 
     return [RelatedNote(note_id="stale-note", snippet="stale", age="just now")]
 
@@ -405,7 +405,9 @@ def test_ctrl_s_cancels_an_in_flight_related_notes_worker_before_reset(
     db_path = tmp_path / "lode.db"
     _PASS_STARTED.clear()
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
-    monkeypatch.setattr("lode.tui.related.find_related_notes", _slow_find_related_notes)
+    monkeypatch.setattr(
+        "lode.tui.services.related.find_related_notes", _slow_find_related_notes
+    )
     settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=1)
     app = LodeApp(db_path=db_path, settings=settings)
 
@@ -448,7 +450,9 @@ def test_clearing_the_buffer_cancels_an_in_flight_related_notes_worker(
     db_path = tmp_path / "lode.db"
     _PASS_STARTED.clear()
     monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _CountingStubEmbedder)
-    monkeypatch.setattr("lode.tui.related.find_related_notes", _slow_find_related_notes)
+    monkeypatch.setattr(
+        "lode.tui.services.related.find_related_notes", _slow_find_related_notes
+    )
     settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=1)
     app = LodeApp(db_path=db_path, settings=settings)
 

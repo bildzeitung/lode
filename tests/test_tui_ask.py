@@ -1,4 +1,4 @@
-"""Tests for lode.tui.ask -- the TUI ask screen's pipeline wiring (lode-mkc.2).
+"""Tests for lode.tui.services.ask -- the TUI ask screen's pipeline wiring (lode-mkc.2).
 
 Pins the ticket's acceptance criterion directly at the logic layer (no Textual
 app needed, mirroring ``tests/test_tui_capture.py``'s split): the rendered
@@ -20,7 +20,7 @@ from lode.cited_answer import CitedAnswer
 from lode.config import Settings
 from lode.egress import WithheldCitation
 from lode.storage import init_db
-from lode.tui.ask import (
+from lode.tui.services.ask import (
     ABSTAIN_LINE,
     AskResult,
     _resolve_as_of,

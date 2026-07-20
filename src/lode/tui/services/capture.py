@@ -21,7 +21,7 @@ left ``pending`` for the async ``lode work`` drain to pick up later
 (``docs/design.md`` §1's "async, fast, local" / "async, slow" tiers) — capture
 itself only ever waits on the synchronous version-write + FTS5 tier.
 
-**CAS-reject handling lives in :mod:`lode.tui.reconcile` (lode-mkc.4).** A
+**CAS-reject handling lives in :mod:`lode.tui.services.reconcile` (lode-mkc.4).** A
 capture-path reject is practically unreachable in normal use — each capture
 mints a fresh ``uuid4`` note id, so there is nothing for the compare-and-swap
 to collide with — but it is handled rather than assumed away, exactly like
@@ -39,12 +39,12 @@ from lode.config import Settings
 from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
-from lode.tui.reconcile import Conflict, conflict_from_error
+from lode.tui.services.reconcile import Conflict, conflict_from_error
 from lode.versions import HeadConflictError, SaveResult
 
 #: Alias kept for readability at capture's call sites and for existing
 #: callers/tests: a capture-path CAS reject is a
-#: :class:`lode.tui.reconcile.Conflict` like any other TUI save path's.
+#: :class:`lode.tui.services.reconcile.Conflict` like any other TUI save path's.
 CaptureConflict = Conflict
 
 
@@ -67,8 +67,8 @@ def save_capture(
     :meth:`~lode.repository.Repository.save` behind the same capture-path
     cache composite ``lode add`` uses (:class:`~lode.lexical.LexicalCacheBackend`
     only — embedding stays async). A CAS reject is handed to
-    :func:`lode.tui.reconcile.conflict_from_error`, which preserves the
-    buffer as a draft and returns the :class:`~lode.tui.reconcile.Conflict`
+    :func:`lode.tui.services.reconcile.conflict_from_error`, which preserves the
+    buffer as a draft and returns the :class:`~lode.tui.services.reconcile.Conflict`
     the reconcile screen (lode-mkc.4) diffs and resolves.
     """
     if not body.strip():

@@ -8,7 +8,7 @@ there is no separate read-only detour first. Escape returns to
 :class:`~lode.tui.screens.browse.BrowseScreen`.
 
 Saving reparents the buffer onto the loaded head via the CAS path
-(:func:`lode.tui.edit.save_edit`) -- a new *version* on this note's chain,
+(:func:`lode.tui.services.edit.save_edit`) -- a new *version* on this note's chain,
 never a new note. Escape returns to the browse list, reusing capture's
 Save/Discard/Cancel confirm
 (:class:`~lode.tui.screens.discard_confirm.DiscardConfirmScreen`, lode-0wj.1) --
@@ -30,7 +30,7 @@ rather than Escape's "back to browse" one. The two can't share a method (see
 exactly.
 
 **Passive related-notes panel (lode-aoc).** Composes the same
-:class:`~lode.tui.related_notes_panel.RelatedNotesPanel` widget
+:class:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel` widget
 :class:`~lode.tui.screens.capture.CaptureScreen` uses, for parity -- "you
 wrote about this before" while editing, not just while capturing a
 brand-new note. Constructed with ``exclude_note_id=self.note_id`` so the
@@ -126,9 +126,9 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
-from lode.tui.edit import EditConflict, EmptyEditError, load_head, save_edit
-from lode.tui.lode_footer import LodeFooter
-from lode.tui.related_notes_panel import RelatedNotesPanel
+from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
@@ -213,7 +213,7 @@ class EditScreen(Screen[None]):
         """Ctrl+F: move focus onto the related-notes panel (lode-olmi.9).
 
         Its own Up/Down/Enter bindings only fire while it holds focus (see
-        :mod:`lode.tui.related_notes_panel`'s module docstring) — the body
+        :mod:`lode.tui.widgets.related_notes_panel`'s module docstring) — the body
         ``TextArea`` consumes those keys itself while typing, so this is the
         only way to reach them.
         """

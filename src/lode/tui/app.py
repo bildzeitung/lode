@@ -11,7 +11,7 @@ colliding here.
 
 ``ReconcileScreen`` (lode-mkc.4) is registered here like every other screen,
 but — unlike ``capture``'s no-arg push — it needs a
-:class:`~lode.tui.reconcile.Conflict` to show, so callers push a constructed
+:class:`~lode.tui.services.reconcile.Conflict` to show, so callers push a constructed
 instance (``push_screen(ReconcileScreen(conflict))``) rather than the bare
 name; ``SCREENS`` still carries the class for discoverability and so
 ``app.SCREENS["reconcile"]`` resolves the same way ``"capture"`` does.
