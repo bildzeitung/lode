@@ -50,6 +50,14 @@ runtime stack is heavy (lancedb, fastembed, textual, ...) and is installed
 once via ``-e .[dev]``, so re-provisioning it per session would be slow with
 no benefit. Activate the venv first, then run nox.
 
+That reuse has one footgun, and it is guarded rather than designed away
+(lode-jh80): because the install is editable, an active venv's ``lode``
+resolves to the ``src`` of whichever checkout it was *built* in, so activating
+the main checkout's venv while sitting in a worktree silently exercises the
+wrong source tree. ``tests/conftest.py``'s ``pytest_configure`` guard 0 fails
+the run loudly in that case. It lives there, not here, so it covers a bare
+``pytest`` too -- every invocation, not just the sessions below.
+
 **Parallelism (lode-b4w.6).** Both ``tests`` and ``unit`` run under
 ``pytest-xdist``. Measured on an 8-core dev machine, offline
 (``ANTHROPIC_API_KEY`` unset — see the ambient-key determinism note below and

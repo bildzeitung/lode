@@ -261,6 +261,22 @@ stopped (a build- or review-time escalation) and why.
 > resolves `lode` to the **main checkout's** `src`, so a new module that exists only in the worktree
 > is invisible to it and `nox -s tests` fails with `ModuleNotFoundError`. **Editing an existing
 > module needs no fresh venv** — that file already resolves under the main-checkout package.
+>
+> **The same wrong-venv mistake has a quieter failure mode too (lode-jh80).** Editing an *existing*
+> module while the main checkout's venv is active doesn't raise `ModuleNotFoundError` — the import
+> resolves fine, just to the **wrong checkout's** `src`. `nox -s tests`/`nox -s unit` then collect
+> this worktree's `tests/` but exercise the main checkout's source: a false FAIL when the branch's
+> fix isn't exercised, or a false PASS when the branch's regression is masked by the other
+> checkout's already-correct code — either way, nothing warns and the run just reports a result for
+> the wrong tree. `tests/conftest.py`'s `pytest_configure` guard 0 now catches this mechanically: it
+> resolves `lode.__file__` and, if it isn't under the checkout that owns the tests being collected,
+> fails the run loudly with a `UsageError` naming the wrong path and the fix, before a single test
+> runs. It lives in `conftest.py` rather than as a `nox` preflight so it covers **every** pytest
+> invocation — `nox -s tests`/`unit`/`eval` and a bare `pytest -k foo` alike — with nothing to
+> remember to wire up per session. The underlying rule doesn't change — build the
+> worktree's own venv (`./scripts/python-init.sh` from inside it) rather than reusing the main
+> checkout's — the preflight is a backstop for the times that rule gets forgotten, not a
+> replacement for following it.
 
 ```mermaid
 flowchart TD

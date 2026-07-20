@@ -95,11 +95,96 @@ import socket
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from textual.pilot import Pilot
 
+import lode
 from lode.config import model_cache_dir
+
+#: Root of the checkout that owns *this* conftest — the anchor guard 0 compares
+#: against. Deliberately derived from ``__file__`` rather than ``Path.cwd()``:
+#: the invariant being asserted is "the tests being collected and the ``lode``
+#: being imported come from the same checkout", and ``__file__`` states that
+#: directly. ``cwd`` only coincides with it when pytest happens to be invoked
+#: from the repo root, so anchoring on it would false-positive on a plain
+#: ``pytest tests/foo.py`` run from a subdirectory.
+_CHECKOUT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | None:
+    """Guard 0: is the imported ``lode`` from a *different* checkout than these tests?
+
+    Returns the operator-facing message when it is, or ``None`` when all is
+    well. Split out from :func:`pytest_configure` as a pure function purely so
+    it is directly testable — the hook itself can only be exercised by running
+    pytest under pytest.
+
+    The hazard (lode-jh80, discovered reviewing lode-7abi): ``noxfile.py`` sets
+    ``default_venv_backend = "none"``, so gates run in whatever venv is already
+    active rather than provisioning one — deliberate, for speed. But
+    ``requirements.txt`` is a single editable install (``-e .[dev]``), so a
+    venv's ``lode`` resolves to the ``src`` of *whichever checkout it was built
+    in*. Activate the main checkout's venv while sitting in a worktree and
+    pytest collects **this** checkout's ``tests/`` while importing **that**
+    one's ``src``. Nothing warns, and the run reports a result for the wrong
+    tree in either direction: a false FAIL when this branch's fix is never
+    exercised, or a false PASS when this branch's regression is masked by the
+    other checkout's already-correct code.
+
+    The comparison is against ``<checkout_root>/src``, not ``checkout_root``
+    itself, and that precision is load-bearing in both directions. Worktrees
+    live *inside* the main checkout (``.claude/worktrees/`` — see CLAUDE.md),
+    so a plain "is it under the checkout root?" containment test waves through
+    the mirror-image mistake: sitting in the main checkout with a *worktree's*
+    venv active imports ``/repo/.claude/worktrees/x/src/lode`` while collecting
+    ``/repo/tests`` — still under ``/repo``, still the wrong tree, equally
+    silent. Anchoring on ``src`` states the real invariant ("the ``lode`` being
+    imported is the one whose source this checkout owns") as one rule instead
+    of two special cases, and it also rejects a stale non-editable copy
+    installed into a ``site-packages`` inside this same checkout. The repo only
+    ever installs editable (``requirements.txt`` is a single ``-e .[dev]``), so
+    the ``src`` layout is the only shape that legitimately occurs.
+    """
+    expected_src = checkout_root / "src"
+    resolved = Path(lode_file).resolve()
+    if expected_src in resolved.parents:
+        return None
+    return (
+        "the active venv's `import lode` resolves to\n"
+        f"    {resolved}\n"
+        f"which is not under the source tree of the checkout that owns these "
+        f"tests ({expected_src}).\n"
+        "pytest would collect this checkout's tests/ but exercise the other "
+        "checkout's src -- a false FAIL if this branch's fix is never run, or "
+        "a false PASS if its regression is masked by the other checkout's "
+        "already-correct code (lode-jh80).\n"
+        "Fix: build and activate THIS checkout's own venv --\n"
+        "    ./scripts/python-init.sh && . ./venv/bin/activate"
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Fail the run outright if ``lode`` resolves outside this checkout (guard 0).
+
+    Lives here rather than as a ``nox`` preflight so it covers **every** pytest
+    invocation — ``nox -s tests``/``unit``/``eval`` and a bare ``pytest -k foo``
+    alike — with nothing to remember to wire up per session. A per-session
+    opt-in reproduces the very bug class it guards: a silent omission nothing
+    catches (the first cut of lode-jh80 wired two of the three source-exercising
+    sessions and missed ``eval``).
+
+    Skipped in ``pytest-xdist`` workers (``workerinput``): the controller has
+    already made this check, and letting 8 workers each raise the same
+    ``UsageError`` would bury one clear message under eight copies.
+    """
+    if hasattr(config, "workerinput"):
+        return
+    message = _wrong_source_tree_message(lode.__file__, _CHECKOUT_ROOT)
+    if message is not None:
+        raise pytest.UsageError(message)
+
 
 #: Socket families guard 2 polices. Anything else (``AF_UNIX``, ``AF_NETLINK``,
 #: …) cannot reach a remote host at all, so blocking it would be a pure false
