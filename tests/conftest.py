@@ -91,6 +91,7 @@ says what it means.
 
 import asyncio
 import ipaddress
+import logging
 import socket
 import sys
 import time
@@ -254,6 +255,53 @@ def _isolate_lode_home(
     home = tmp_path_factory.mktemp("lode-home")
     (home / "models").symlink_to(durable_models, target_is_directory=True)
     monkeypatch.setenv("LODE_HOME", str(home))
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_logger_state():
+    """Snapshot and restore the root logger's level + handler set (lode-kmes).
+
+    ``lode.logconfig.configure_logging`` sets the root logger's level directly
+    (``root.setLevel(resolved)``) and never restores it — a global,
+    process-wide mutation with no matching teardown. Under ``pytest-xdist``, a
+    worker process runs many tests in sequence, so this is not scoped to one
+    test: ``tests/test_cli.py``'s ``--debug`` flag tests (e.g.
+    ``test_debug_flag_sets_debug_log_level``) resolve an explicit ``DEBUG``
+    level, which — with nothing restoring it — leaves the ENTIRE root logger
+    at ``DEBUG`` for every later test that worker process happens to run.
+
+    That is the confirmed root cause of an intermittent whole-suite hang at
+    ~98% completion under xdist (OBSERVED TWICE in one ``/land`` pass, see the
+    ticket): a later test in the same worker that mounts
+    :class:`~lode.tui.screens.capture.CaptureScreen` unknowingly enables its
+    DEBUG-gated, never-returning latency-probe worker
+    (:func:`lode.tui.latency_probe.probe_event_loop_lag` — its own docstring:
+    "Run forever ... it never exits on its own", stopped only by Textual's
+    worker cancellation on a clean screen unmount). If that test's teardown
+    doesn't get a clean unmount, the worker keeps that test's asyncio event
+    loop alive indefinitely and the whole session never finishes — exactly the
+    observed symptom (a live, DEBUG-logging Textual event loop with zero CPU
+    progress on the pytest master).
+
+    Restoring the level — and closing/removing any handler the test attached
+    that wasn't there before it (``configure_logging`` also attaches a file
+    handler when given a ``log_dir``, e.g. via the CLI group callback under
+    ``$LODE_HOME/logs``) — after every test closes the leak at its source,
+    independent of which specific test happens to trigger it. This is
+    deliberately the general fix (restore the whole root-logger config any
+    ``configure_logging`` call can touch) rather than a level-only patch, per
+    the ticket's acceptance criterion to check for other global state leaking
+    the same restore-nothing way.
+    """
+    root = logging.getLogger()
+    level_before = root.level
+    handlers_before = list(root.handlers)
+    yield
+    root.setLevel(level_before)
+    for handler in list(root.handlers):
+        if handler not in handlers_before:
+            root.removeHandler(handler)
+            handler.close()
 
 
 @pytest.fixture
