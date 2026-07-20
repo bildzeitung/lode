@@ -60,15 +60,20 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> CODE_MAX_CONCURRENT_AGENTS="$(rtk scripts/code-concurrency-cap.sh)" || CODE_MAX_CONCURRENT_AGENTS=4
+> REPO_ROOT="$(rtk git rev-parse --show-toplevel)"
+> CODE_MAX_CONCURRENT_AGENTS="$(rtk "$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
 > ```
 >
-> The `|| …=4` is not decoration. The inline block this replaced could not fail — it had no file to
-> find — whereas a relative-path call resolves against the session's cwd, so from the wrong directory
-> the substitution yields the **empty string** and an empty cap reads as *no* cap. 4 is the same
-> conservative fallback the script itself uses when it cannot read `/proc/meminfo`. **Never proceed on
-> an empty or non-numeric cap**: if that fallback fires, say so and fix the cwd — silently guessing a
-> number here is the over-dispatch that crashed this host twice.
+> The call is anchored to the repo root rather than resolved against the session's cwd, so *finding*
+> the script no longer depends on the caller's directory — matching the script's own anchoring for
+> *reading* `noxfile.py` (lode-54mo). The `|| …=4` fallback stays regardless. Its mechanism is
+> **exit-status propagation, not emptiness**: a `VAR="$(cmd)"` assignment inherits its command
+> substitution's exit status, so a missing or unexecutable script trips the `||` whatever stdout
+> held. An empty-but-exit-0 result is the one case it does *not* catch. A failed `REPO_ROOT` on the
+> preceding line is unguarded in itself and is caught only *indirectly* — the empty prefix yields an
+> absent path, so the substitution still exits non-zero. 4 is the same conservative fallback the
+> script itself uses when it cannot read `/proc/meminfo`. **Never proceed on an empty or non-numeric
+> cap** — say so before continuing.
 >
 > - **`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no
 >   derivation; a static per-machine number the user sets beats a heuristic that guesses wrong. Set it
