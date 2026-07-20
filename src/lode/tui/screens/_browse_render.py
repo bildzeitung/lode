@@ -50,7 +50,7 @@ _NONE_TEXT = "(none)"
 _SUMMARY_ROW_HEIGHT = 1
 
 
-def _wrap_summary_full(summary: str, width: int) -> tuple[str, int]:
+def _wrap_summary_full(summary: str, width: int) -> tuple[Text, int]:
     """Wrap *summary* to *width* with no line cap -- the full untruncated text.
 
     Companion to :func:`_clip_summary_to_row_height`, used for the one
@@ -58,12 +58,19 @@ def _wrap_summary_full(summary: str, width: int) -> tuple[str, int]:
     1-line-capped rendering every other row gets. Returns the wrapped text
     and its line count together since the caller needs both in the same
     ``add_row`` call: the cell content and the row's ``height=``.
+
+    Returns a :class:`~rich.text.Text`, not a ``str`` (lode-ix4i) -- a note
+    summary is arbitrary user text, and a ``str`` cell in a ``DataTable`` is
+    rendered through Rich console *markup*, which silently eats a bracketed
+    substring like ``[draft]`` the same way ``str`` cells did in
+    :class:`~lode.tui.screens.tags.TagsScreen` before lode-7abi. ``Text`` is
+    never markup-parsed.
     """
     lines = textwrap.wrap(summary, width=width) or [""]
-    return "\n".join(lines), len(lines)
+    return Text("\n".join(lines)), len(lines)
 
 
-def _clip_summary_to_row_height(summary: str, width: int) -> str:
+def _clip_summary_to_row_height(summary: str, width: int) -> Text:
     """Wrap *summary* to *width* and cap it at :data:`_SUMMARY_ROW_HEIGHT` lines.
 
     A ``DataTable`` row given a fixed ``height`` doesn't ellipsize overflow on
@@ -72,16 +79,19 @@ def _clip_summary_to_row_height(summary: str, width: int) -> str:
     text is pre-wrapped to *width* and, if that produces more than
     :data:`_SUMMARY_ROW_HEIGHT` lines, the last visible line is truncated and
     given a trailing ellipsis so the cut is visible rather than silent.
+
+    Returns a :class:`~rich.text.Text`, not a ``str`` -- see
+    :func:`_wrap_summary_full`'s docstring for why.
     """
     if width <= 0:
-        return summary
+        return Text(summary)
     lines = textwrap.wrap(summary, width=width) or [""]
     if len(lines) <= _SUMMARY_ROW_HEIGHT:
-        return "\n".join(lines)
+        return Text("\n".join(lines))
     kept = lines[:_SUMMARY_ROW_HEIGHT]
     last = kept[-1][: max(width - 1, 0)].rstrip()
     kept[-1] = f"{last}\N{HORIZONTAL ELLIPSIS}"
-    return "\n".join(kept)
+    return Text("\n".join(kept))
 
 
 def _item_text(item: EnrichmentItem) -> Text:

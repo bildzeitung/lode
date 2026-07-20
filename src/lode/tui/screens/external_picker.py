@@ -9,6 +9,7 @@ addressing rule shared with ``lode dump-html`` (lode-olmi.7).
 
 from __future__ import annotations
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -60,14 +61,26 @@ class ExternalPickerScreen(Screen[None]):
         yield LodeFooter()
 
     def on_mount(self) -> None:
+        """Populate the picker table.
+
+        ``source_type``/``fetched_at``/``state`` are wrapped in
+        :class:`~rich.text.Text` before they reach ``add_row`` (lode-ix4i) --
+        a bare ``str`` cell is rendered through Rich console *markup*, which
+        would silently eat a bracketed value. Low-severity today (these are
+        enum-ish fields, unlikely to contain ``[``), but the sibling renderer
+        :func:`~lode.tui.screens._browse_render._external_text` already
+        returns ``Text`` for the same data (and writes a literal
+        ``[{state}]``), so this duplicates that data through the undefended
+        path otherwise.
+        """
         table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
         table.add_columns("Source", "Snapshot", "Fetched", "State")
         for external in self._externals:
             table.add_row(
-                external.source_type,
+                Text(external.source_type),
                 short_version_id(external.snapshot_id),
-                external.fetched_at,
-                external.state,
+                Text(external.fetched_at),
+                Text(external.state),
                 key=external.snapshot_id,
             )
         table.focus()

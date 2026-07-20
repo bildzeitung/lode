@@ -272,7 +272,16 @@ class TagsScreen(Screen[None]):
             table.cursor_coordinate = Coordinate(idx // columns, idx % columns)
 
     def _reload_notes(self) -> None:
-        """Rebuild the notes table against the current tag selection (AND/intersection)."""
+        """Rebuild the notes table against the current tag selection (AND/intersection).
+
+        ``row.summary`` is wrapped in :class:`~rich.text.Text` before it
+        reaches ``add_row`` (lode-ix4i) -- a note summary is arbitrary user
+        text, and a bare ``str`` cell is rendered through Rich console
+        *markup*, which silently eats a bracketed substring the same way it
+        ate this screen's own ``[x]``/``[ ]`` checkbox cells before lode-7abi
+        (see :meth:`_tag_cell_text`'s docstring, 50 lines above). ``Text`` is
+        never markup-parsed.
+        """
         table = self.query_one(f"#{NOTES_TABLE_ID}", DataTable)
         table.clear(columns=True)
         table.add_columns("Id", "Date", "Version", "Summary")
@@ -281,7 +290,7 @@ class TagsScreen(Screen[None]):
                 short_note_id(row.note_id),
                 format_adaptive_date(row.created),
                 f"v{row.version}",
-                row.summary,
+                Text(row.summary),
                 key=row.note_id,
             )
 
