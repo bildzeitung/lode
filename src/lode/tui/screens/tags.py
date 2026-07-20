@@ -82,6 +82,7 @@ from __future__ import annotations
 
 import math
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -211,9 +212,18 @@ class TagsScreen(Screen[None]):
         idx = row * self._tag_columns + col
         return self._tags[idx] if 0 <= idx < len(self._tags) else None
 
-    def _tag_cell_text(self, tag: str) -> str:
+    def _tag_cell_text(self, tag: str) -> Text:
+        """The ``"[x] tag"``/``"[ ] tag"`` cell for *tag*, as literal text.
+
+        Returns a :class:`~rich.text.Text`, not a ``str``, on purpose: a
+        ``str`` cell is rendered through Rich's console *markup*, which eats
+        ``[x]`` as a (bogus) style tag and draws a bare ``" tag"``. ``[ ]``
+        survives only by accident -- the space makes it an invalid tag, so it
+        falls through as literal. ``Text`` is never markup-parsed, so both
+        checkbox states render as written.
+        """
         prefix = "[x] " if tag in self._selected else "[ ] "
-        return prefix + tag
+        return Text(prefix + tag)
 
     def _reload_tags(self) -> None:
         """Rebuild the tag grid, preserving selection and (best-effort) cursor.

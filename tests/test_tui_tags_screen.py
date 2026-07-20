@@ -22,9 +22,11 @@ columns.
 """
 
 import asyncio
+import io
 import json
 from pathlib import Path
 
+from rich.console import Console
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable
 
@@ -460,3 +462,37 @@ def test_tag_grid_reflows_and_selection_survives_a_resize(tmp_path: Path) -> Non
     # And the grid itself visibly reflects the still-selected checkboxes at
     # their new coordinates, not a reset-to-unselected redraw.
     assert checkboxes[:3] == ["[x] aaa", "[ ] bbb", "[x] ccc"]
+
+
+def test_selected_checkbox_renders_literally_not_as_rich_markup(tmp_path: Path) -> None:
+    """A selected tag draws ``[x] tag`` on screen, not a markup-eaten ``  tag``.
+
+    The regression this guards (lode-7abi): cells were plain ``str``, which
+    Textual renders through Rich *console markup* -- ``[x]`` was consumed as a
+    style tag and the checkbox vanished, while ``[ ]`` survived only because
+    the space makes it an invalid tag. The other tests here compare
+    ``get_cell_at`` against ``"[x] ..."`` and pass either way: that returns the
+    *stored* value, never the render. This one goes through a Rich console, so
+    it fails on a markup-parsed cell.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "about rrsp").version_id
+    finally:
+        conn.close()
+    _write_tag(db_path, "note-a", head, "rrsp")
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> object:
+        async with app.run_test(size=_NARROW) as pilot:
+            await pilot.press("ctrl+t")
+            await pilot.press("space")  # select the only tag
+            tag_list = app.screen.query_one(f"#{TAG_LIST_ID}", DataTable)
+            return tag_list.get_cell_at(Coordinate(0, 0))
+
+    cell = asyncio.run(_drive())
+
+    buffer = io.StringIO()
+    Console(file=buffer, width=40, legacy_windows=False).print(cell)
+    assert buffer.getvalue().strip() == "[x] rrsp"
