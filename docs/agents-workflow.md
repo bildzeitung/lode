@@ -831,10 +831,11 @@ guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table i
 `tests/test_bd_deps_guard.py` — including mutation tests that assert reverting the inversion turns the
 new denies (`gh codespace create`, `gh repo deploy-key add`, …) red, not merely that the suite is green.
 
-**Both this guard and the `blocks:` guard shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
-`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, both guards used to
+**All three `PreToolUse(Bash)` guards — this one, the `blocks:` guard, and the fabricated-SHA guard
+(`lode-fpmi`) — shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
+`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, the guards used to
 silently fall through — verified live during this guard's own land review, `gh issue create` was
-**not** denied under `PATH=/nonexistent`. Both hooks now deny outright when `jq` is unreachable,
+**not** denied under `PATH=/nonexistent`. All three hooks now deny outright when `jq` is unreachable,
 before attempting to parse `tool_input.command` at all; `docs/onboarding.md` documents `jq` as a
 required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
 [`docs/decisions.md`](decisions.md).
@@ -915,6 +916,71 @@ Directives), the builder ([`.claude/agents/coding.md`](../.claude/agents/coding.
 Anti-patterns), and the reviewer
 ([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
 Anti-patterns) — since any of the three can reach a `gh` call mid-task.
+
+### Guard against fabricated SHAs (lode-fpmi)
+
+**An agent once wrote a 40-hex SHA it had invented into bd metadata.** It held the short hash
+`46ca460` in context, `land_head` wanted the full 40-char form, and it pattern-completed the remaining
+33 characters instead of deriving them. `land_head`/`review_head` is exactly what `/land` and the
+`code-reviewer` read to check a branch out and detect drift, so a fabricated value sends them chasing
+an object that does not exist. It was caught before any Dolt push carried it onward.
+
+**Why this needs a mechanism rather than an instruction.** The invented tail is exactly as fluent as a
+real one, so the mistake is *not self-detectable by re-reading what was typed* — any mitigation that
+relies on the agent noticing is unreliable precisely when it is needed. This is the same lesson
+`lode-jh80` landed one layer up. So the fix ships in two layers:
+
+- **The fiat** — [`docs/conventions.md`](conventions.md), "Derive identifiers, never retype them."
+  `@import`ed by `CLAUDE.md`, so it binds the main session and every non-fork subagent with one edit.
+  It covers *every* long opaque identifier: git SHAs, bd issue ids, worktree hashes.
+- **The mechanism** — a third `PreToolUse(Bash)` guard in `.claude/settings.json`, whose body is
+  [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh), pinned by
+  `tests/test_sha_fabrication_guard.py`. `git cat-file -e <sha>` is the oracle: a fabricated SHA is by
+  construction essentially never a real object, so this is a mechanical catch that relies on no agent
+  judgment at all.
+
+**The two layers are deliberately different widths, and that asymmetry is the design.** The fiat
+generalizes to all opaque identifiers; the guard narrows to 40-hex git SHAs. `cat-file -e` is a cheap
+existence oracle that exists *only* for git objects — there is no equivalent for a bd id or a worktree
+hash, so widening the guard would mean heuristically guessing what "looks like" an identifier, which
+is strictly worse than the fiat already covering them. Broad instruction, narrow mechanism where a
+mechanism actually exists.
+
+**`PreToolUse(Bash)` is the right layer** because `Bash` is the sole channel: this repo configures no
+MCP server, no Python code shells out to `bd`, and every `land_head`/`review_head` write site in
+`coding.md` and `code-reviewer.md` is a `bd update --set-metadata` issued as Bash.
+
+Scope narrowings, each deliberate:
+
+- **Only `bd`/`git` command segments are scanned** — a 40-hex string inside an unrelated command
+  (`grep`, `cat`, `curl`, a lockfile digest) is never even looked at. Keeps the guard cheap and
+  removes the largest false-positive class.
+- **Only lowercase `[0-9a-f]{40}`** — real `git rev-parse`/`log --format=%H` output is always
+  lowercase, and a 64-hex SHA-256 never matches (the `\b` word boundaries exclude a 40-char run inside
+  a longer one).
+- **Skipped entirely outside a git work tree** — `cat-file` has nothing to check against.
+- **A fork-free `[[ =~ ]]` early-out runs first**, so a command with no 40-hex run anywhere costs one
+  process instead of eight (~1.7 ms vs ~14.7 ms measured). This guard runs on *every* Bash call
+  forever, so that path is the one that matters. It lives in the script, not the settings.json
+  wrapper: config is where this repo has already shipped silent undetected bugs (`lode-mh9g`,
+  `lode-54mo`), and a test pins the wrapper as logic-free delegation.
+
+**Accepted over-match** (same tiebreak as the `blocks:`/`gh` guards per `lode-oii9` — a guard that
+cannot evaluate precisely denies rather than letting a real fabrication through): a 40-lowercase-hex
+run in *free-text prose* inside a `bd --title/--description/--notes` value on a line that parses as a
+bd/git invocation is scanned too, because this is a heuristic guard, not a shell parser. Likewise
+`git fetch origin <sha>` for a commit not yet local. Any string that *is* a real object passes
+regardless of where it appears, so this only bites a fabricated-looking string that is also not an
+object and also not meant as an identifier. It is **pinned by a test**, not tolerated silently — if
+someone narrows the scope, that test goes red at the moment the tradeoff is made.
+
+**Known asymmetry, deliberate:** the wrapper fails *closed* when `jq` is missing (matching the other
+two guards, `lode-oii9`) but fails *open* if the script itself is unresolvable or non-executable
+(`[ -n "$ROOT" ] && [ -x "$SCRIPT" ] && …`). Denying there would brick every Bash call in the repo on
+a machine where `CLAUDE_PROJECT_DIR` is unset outside a work tree — a far worse failure than the guard
+being off, given the fiat is the first line of defence and this guard is a backstop. `jq` is a
+documented prerequisite a human can install; a mis-resolved script path is not something an agent
+could act on. Pinned by a test so the choice stays visible.
 
 ### Invariants the coding loop never breaks
 
