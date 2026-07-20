@@ -400,15 +400,24 @@ value there is the **working tree**: `checkout -B` carries *untracked* leftovers
 worktree straight through, and those would otherwise pollute the clean-tree assertions and the `nox`
 run those cycles gate on.
 
-`/land`'s own landing loop and `land-review` are out of scope for this fix. The reason is not merely
-that the two reproductions were a `coding` builder and a `code-reviewer`: `land-review` **never checks
-anything out** — it fetches and diffs entirely by ref (`origin/trunk`, `origin/land/<id>`), so a
-contaminated working tree cannot reach its verdict. Its correctness exposure is nil. That is not the
-same as *no* exposure: `land/SKILL.md` §2c argues `land-review`'s scratch worktree needs no cleanup
-because "its worktree's HEAD never diverges from the `trunk` HEAD it was branched from" and so
-"qualifies by construction" for the backstop reclaim sweep — an assumption this incident falsifies, so
-a recycled `land-review` worktree would fail the sweep's ancestor predicate and leak. That is a real
-but separate defect; it is tracked on its own ticket rather than widened into this one.
+`/land`'s own landing loop was initially scoped **out** of this fix, on the reasoning that
+`land-review` **never checks anything out** — it fetches and diffs entirely by ref (`origin/trunk`,
+`origin/land/<id>`), so a contaminated working tree cannot reach its verdict, and its correctness
+exposure is nil. That reasoning holds and is unchanged: **`land-review`'s correctness exposure to
+recycling remains nil**, exactly because it never reads anything from the worktree's checked-out
+state. But nil correctness exposure is not the same as *no* exposure at all. `land/SKILL.md` §2c used
+to argue `land-review`'s scratch worktree needs no cleanup because "its worktree's HEAD never diverges
+from the `trunk` HEAD it was branched from" and so "qualifies by construction" for the backstop
+reclaim sweep — an assumption this incident falsifies (a *recycled* worktree's `HEAD` starts life
+already diverged, before `land-review` ever runs), so a recycled `land-review` worktree fails the
+sweep's ancestor predicate and leaks, pass after pass. That was tracked as a real but separate
+worktree-leak defect on its own ticket, **lode-qv5t**, rather than widened into this one — and it is
+now closed the same way: `land-review.md`'s own frontmatter role carries the identical guard described
+above (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
+rescue the rewound ref and reset onto local `trunk` HEAD). The two halves stay distinct on purpose —
+the guard exists here for the **worktree-leak** reason, never because `land-review`'s judgment was
+ever at risk. Full account: [land-review.md](../.claude/agents/land-review.md) and
+[Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
 ### Concurrency cap (lode-2cf)
 
@@ -1343,12 +1352,25 @@ for this dispatch. Note it took the probe, not a `/land` pass: every real pass d
 This costs nothing in capability: `land-review` only ever needs to `git fetch` the branch(es) under
 review and diff them by ref (it never checks anything out — see
 [`land-review.md`](../.claude/agents/land-review.md)), so isolation changes *where* that
-happens, not *what* it does. And it needs no dedicated cleanup: `land-review` never commits (no
-merge, no push, no `bd` write — its own "What I don't do"), so its scratch worktree's HEAD never
-diverges from the `trunk` HEAD it was branched from. The existing worktree-GC backstop (lode-h1vn /
-lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)) already reclaims any unlocked,
-clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this scratch
-worktree qualifies by construction, with no new mechanism.
+happens, not *what* it does. Since `land-review` never commits (no merge, no push, no `bd` write —
+its own "What I don't do"), its scratch worktree's HEAD never diverges *further* once `land-review`
+starts running. That is not, on its own, "no dedicated cleanup needed" — it says nothing about where
+the worktree's HEAD *started*, and lode-nt98 established the harness's `isolation: "worktree"`
+hand-off does not reliably start a dispatched agent at `trunk` HEAD (it has handed out a **recycled**
+worktree still on a previous ticket's build branch, to a builder and to a `code-reviewer` alike).
+`land-review` gets the identical dispatch mechanism, so a recycled worktree handed to it starts
+already diverged from `trunk`, fails the worktree-GC backstop's ancestor predicate (lode-h1vn /
+lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)), and leaks past every pass —
+`land-review`'s own inaction doesn't prevent that, since the divergence predates its first action.
+This was a real gap (**lode-qv5t**), closed the same way lode-nt98 closed it for the builder and the
+reviewer: `land-review.md`'s frontmatter role now carries the identical recycled-worktree guard
+(`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; a failure rescues
+the rewound ref and resets onto local `trunk` HEAD — see
+[Recycled-worktree guard](#recycled-worktree-guard-lode-nt98), above). Once that guard has run, the
+worktree's HEAD **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims it
+under its unmodified predicate — no change to Section 4 itself was needed. This is purely a
+worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree was, and remains,
+nil, since it never reads anything from the checked-out state regardless of what that state is.
 
 **One precision on "the same pass," because the fix's no-new-GC claim rests on it.** Section 4 is
 reached even when the accepted set is empty — no early exit sits between the 2c dispatch and the

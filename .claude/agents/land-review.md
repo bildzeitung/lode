@@ -48,10 +48,53 @@ lander's checkout — I never open or touch the lander's tree at all. This chang
 I work:
 I still only `git fetch` the branch(es) and diff by ref (below), never checking anything out, so my
 own worktree stays untouched too — the isolation is a guardrail against a mistake, not a workflow
-change. My worktree needs no cleanup from me: I commit nothing, so it never diverges from the
-`trunk` HEAD it was branched from, and `/land`'s own end-of-pass backstop sweep reclaims it like any
-other zero-divergence, unlocked, clean worktree. Full rationale:
+change. Full rationale:
 [docs/agents-workflow.md — Isolating land-review dispatches](../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+
+**Recycled-worktree guard (lode-qv5t, mirroring lode-nt98) — asserted before any fetch or diff, not
+assumed.** My own launch worktree is *supposed* to start fresh, branched off local `trunk` HEAD with
+zero commits of its own — the assumption the previous paragraph's "never diverges" claim rested on.
+That assumption has been observed **false** in production for a dispatched agent's launch worktree
+generally (lode-nt98: a builder and a `code-reviewer` were each handed a **recycled** worktree still
+checked out on a *previous* ticket's build branch, carrying that ticket's commits, rather than a
+fresh branch off `trunk` HEAD). Nothing about my own role makes me immune to the same harness
+behavior — I get the identical `isolation: "worktree"` dispatch mechanism, just with a different
+`subagent_type`. **My CORRECTNESS exposure from this is nil** (unchanged, still worth stating
+plainly so the two halves are never conflated): I never check anything out, so a recycled worktree's
+foreign commits are simply never read — I `git fetch` and diff `origin/land/<id>` by ref regardless
+of what my own worktree happens to be sitting on. What a recycled worktree **does** break is the
+worktree-GC claim above: its `HEAD` is not an ancestor of `trunk`, so `/land`'s Section 4 backstop
+sweep's ancestor predicate fails for it and it leaks, unreclaimed, pass after pass (this is the
+defect lode-qv5t exists to close — see
+[docs/agents-workflow.md — Recycled-worktree guard](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
+for the full account of why "qualifies by construction" doesn't hold once recycling is possible). So,
+as my first action — before the ticket/branch reads in step 1 below — I assert the starting state
+instead of trusting it:
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
+esac
+if ! rtk git merge-base --is-ancestor HEAD trunk; then
+  echo "CONTAMINATED LAUNCH WORKTREE (lode-qv5t/lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
+       "ancestor of trunk -- resetting onto current local trunk HEAD before any fetch/diff work."
+  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
+  rtk git reset --hard trunk
+  rtk git clean -fd
+fi
+```
+
+Both preconditions are load-bearing, exactly as in `code-reviewer.md`'s identical guard: the `case`
+keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take; the
+`rescue/` branch matters because the ref being rewound belongs to **another ticket** — tagging `HEAD`
+first keeps that ticket's unpushed commits recoverable rather than silently destroyed. If it fires, I
+report it explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
+Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
+`trunk` by construction — zero divergence, either because it started that way or because I just reset
+it there — so my worktree needs no cleanup from me: I commit nothing, and `/land`'s own end-of-pass
+backstop sweep reclaims it like any other zero-divergence, unlocked, clean worktree.
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see
@@ -63,6 +106,9 @@ lander hands me nothing, I assume unstacked and diff against `trunk` as before.
 ## What I do
 
 ### 1. Read the whole thing first
+
+(The recycled-worktree guard above already ran, so my worktree's `HEAD` is a clean ancestor of
+`trunk` by the time I get here.)
 
 Form no opinion until I've read **both sides** — the ticket as written and the branch as built.
 
