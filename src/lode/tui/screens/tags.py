@@ -272,7 +272,13 @@ class TagsScreen(Screen[None]):
             table.cursor_coordinate = Coordinate(idx // columns, idx % columns)
 
     def _reload_notes(self) -> None:
-        """Rebuild the notes table against the current tag selection (AND/intersection)."""
+        """Rebuild the notes table against the current tag selection (AND/intersection).
+
+        ``row.summary`` is arbitrary user text, so it is wrapped in
+        :class:`~rich.text.Text` before it reaches ``add_row`` (lode-ix4i) --
+        see :meth:`_tag_cell_text`'s docstring for why a bare ``str`` cell is
+        unsafe.
+        """
         table = self.query_one(f"#{NOTES_TABLE_ID}", DataTable)
         table.clear(columns=True)
         table.add_columns("Id", "Date", "Version", "Summary")
@@ -281,7 +287,7 @@ class TagsScreen(Screen[None]):
                 short_note_id(row.note_id),
                 format_adaptive_date(row.created),
                 f"v{row.version}",
-                row.summary,
+                Text(row.summary),
                 key=row.note_id,
             )
 

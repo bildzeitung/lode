@@ -51,6 +51,5 @@ jobs:
         # assertion here, so CI and the local gate cannot drift — the earlier
         # hand-copy already did. See that session's docstring for why a clean
         # `python -m build` exit doesn't prove package-data shipped.
-        # Scope: this covers push/PR only. release.yml still builds the
-        # PUBLISHED wheel without this check — see lode-zuqp.
+        # release.yml calls the same session for the published wheel (lode-zuqp).
         run: nox -s build

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from textual.binding import Binding
-from textual.widgets import Footer, Input, TextArea
+from textual.widgets import Footer, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
 from lode.answer import Claim, Support
@@ -130,6 +130,61 @@ def test_asking_a_question_renders_the_cited_claim_with_provenance(
     assert "as of 2026-06-18T00:00:00.000Z" in rendered
     assert '"use OAuth"' in rendered
     assert "[withheld] v9" in rendered
+
+
+def test_citation_and_withheld_brackets_survive_the_actual_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The citation/withheld lines' literal ``[...]`` groups survive the RENDER
+    (lode-ix4i), not just the widget's stored ``.content``.
+
+    ``Static.content`` (asserted against above) is the original string passed
+    to ``update()`` -- it is never markup-parsed, so a test against it cannot
+    see this bug, the same structural blind spot ``DataTable.get_cell_at``
+    has (``test_tui_tags_screen.py``'s own docstring on this, lode-7abi).
+    ``Static.visual`` is what the compositor actually draws: it is computed by
+    ``textual.visual.visualize(widget, content, markup=widget._render_markup)``,
+    which for a plain ``str`` is ``Content.from_markup(...)`` (eats ``[...]``
+    as Textual markup) when ``markup=True`` (the ``Static`` default) or a
+    literal ``Content(...)`` when ``markup=False`` -- the fix this screen now
+    sets. Reading ``.visual.plain`` exercises that exact real path.
+    """
+    db_path = tmp_path / "lode.db"
+    app = LodeApp(db_path=db_path)
+
+    canned = AskResult(
+        answer=CitedAnswer(
+            claims=(
+                Claim(
+                    text="We chose OAuth for service auth.",
+                    support=[Support(version_id="v1", quoted_span="use OAuth")],
+                ),
+            ),
+            withheld_citations=(WithheldCitation(target_id="v9"),),
+        ),
+        as_of={"v1": "2026-06-18T00:00:00.000Z"},
+    )
+    monkeypatch.setattr(
+        "lode.tui.screens.ask.run_ask",
+        lambda db_path, question, **kwargs: canned,
+    )
+
+    async def _drive() -> str:
+        async with app.run_test() as pilot:
+            app.push_screen("ask")
+            await pilot.pause()
+            question_input = app.screen.query_one(f"#{QUESTION_ID}")
+            question_input.value = "what did we decide about auth?"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            results = app.screen.query_one(f"#{RESULTS_ID}", Static)
+            return results.visual.plain
+
+    rendered = asyncio.run(_drive())
+
+    assert "[version v1, as of 2026-06-18T00:00:00.000Z]" in rendered
+    assert "[withheld] v9:" in rendered
 
 
 def test_asking_an_ungrounded_question_renders_the_abstention_line(

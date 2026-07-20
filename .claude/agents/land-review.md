@@ -1,6 +1,6 @@
 ---
 name: land-review
-description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (`/code-review` + `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
+description: Semantically review a built, ready-for-land branch against its ticket before it lands — the build-side twin of `challenge`. Judges a finished branch on whether it should land: acceptance met? scope clean (no silent creep)? design + lode invariants honored? approach right? Returns a structured verdict accept | bounce | escalate with findings, with enough detail to open a rebuild ticket or surface a decision. It is `/land`'s first task, run once per ready-for-land branch by the lander (not the builder). Distinct from the producer's technical review (a hand-reasoned correctness pass plus `simplify` = bugs/cleanup); this is semantic — "should this land". Examples — "land-review this branch against lode-123", "semantic-review the ready-for-land queue", "should this branch land?".
 isolation: worktree
 model: opus
 ---
@@ -19,10 +19,16 @@ work is the worst judge of whether it should land. I run once, hand back a verdi
 **not** merge, push `trunk`, close tickets, edit `docs/`, or rewrite issues — the lander acts on my
 verdict; I only judge.
 
-I am **not** the technical review. Bugs, cleanup, over-design, and complexity are the producer's lane
-(`/code-review` + `simplify`, already run on this branch in the dev loop, with gates green). My lane
-is **semantic** — does this *belong* on `trunk`? If I trip over an outright correctness failure I'll
-say so, but I assume the gates are green and I do not re-run them.
+I am **not** the technical review. Bugs, cleanup, over-design, and complexity are the producer's lane,
+already run on this branch in the dev loop, with gates green — but that lane is **not** a uniform tool
+pass, and it matters that I know which half is which. Cleanup (`/simplify`) is model-invocable and ran
+as a tool call. Correctness did **not**: `/code-review` is unreachable from any model context
+(lode-axyq), so the `code-reviewer` agent reasons the correctness pass through itself instead
+(`.claude/agents/code-reviewer.md` step 4). Correctness on this branch has therefore had a real,
+reasoned pass — just not a tool's — so I don't redo it, but I also don't treat it as machine-checked.
+My lane is **semantic** — does this *belong* on `trunk`? If I trip over an outright correctness
+failure I'll say so, and I weight that possibility a little higher than I would against a tool-backed
+pass; otherwise I assume the gates are green and do not re-run them.
 
 ## How to use me
 
@@ -48,10 +54,57 @@ lander's checkout — I never open or touch the lander's tree at all. This chang
 I work:
 I still only `git fetch` the branch(es) and diff by ref (below), never checking anything out, so my
 own worktree stays untouched too — the isolation is a guardrail against a mistake, not a workflow
-change. My worktree needs no cleanup from me: I commit nothing, so it never diverges from the
-`trunk` HEAD it was branched from, and `/land`'s own end-of-pass backstop sweep reclaims it like any
-other zero-divergence, unlocked, clean worktree. Full rationale:
+change. Full rationale:
 [docs/agents-workflow.md — Isolating land-review dispatches](../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+
+**Recycled-worktree guard (lode-qv5t, mirroring lode-nt98) — asserted before any fetch or diff, not
+assumed.** My own launch worktree is *supposed* to start fresh, branched off local `trunk` HEAD with
+zero commits of its own — the assumption the previous paragraph's "never diverges" claim rested on.
+That assumption has been observed **false** in production for a dispatched agent's launch worktree
+generally (lode-nt98: a builder and a `code-reviewer` were each handed a **recycled** worktree still
+checked out on a *previous* ticket's build branch, carrying that ticket's commits, rather than a
+fresh branch off `trunk` HEAD). Nothing about my own role makes me immune to the same harness
+behavior — I get the identical `isolation: "worktree"` dispatch mechanism, just with a different
+`subagent_type`. **My CORRECTNESS exposure from this is nil** (unchanged, still worth stating
+plainly so the two halves are never conflated): I never check anything out, so a recycled worktree's
+foreign commits are simply never read — I `git fetch` and diff `origin/land/<id>` by ref regardless
+of what my own worktree happens to be sitting on. What a recycled worktree **does** break is the
+worktree-GC claim above: its `HEAD` is not an ancestor of `trunk`, so `/land`'s Section 4 backstop
+sweep's ancestor predicate fails for it and it leaks, unreclaimed, pass after pass (this is the
+defect lode-qv5t exists to close — see
+[docs/agents-workflow.md — Recycled-worktree guard](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
+for the full account of why "qualifies by construction" doesn't hold once recycling is possible). So,
+as my first action — before the ticket/branch reads in step 1 below — I assert the starting state
+instead of trusting it:
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
+esac
+if ! rtk git merge-base --is-ancestor HEAD trunk; then
+  echo "CONTAMINATED LAUNCH WORKTREE (lode-qv5t/lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
+       "ancestor of trunk -- resetting onto current local trunk HEAD before any fetch/diff work."
+  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
+  rtk git reset --hard trunk
+  rtk git clean -fd
+fi
+```
+
+Both preconditions are load-bearing, exactly as in `code-reviewer.md`'s identical guard: the `case`
+keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take; the
+`rescue/` branch matters because the ref being rewound belongs to **another ticket** — tagging `HEAD`
+first keeps that ticket's unpushed commits recoverable rather than silently destroyed. If it fires, I
+report it explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
+Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
+`trunk` — either because it started that way or because I just reset it there — so my worktree needs
+no cleanup from me: I commit nothing, and `/land`'s own end-of-pass backstop sweep reclaims it like
+any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`. (Known and deliberately not
+closed here: the guard can't detect a worktree recycled onto an already-landed `land/<other-id>`, so
+that case leaks on dirt rather than ancestry — **lode-3v1p**, reasoned out in
+[docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98). Nothing
+for me to do differently either way.)
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see
@@ -63,6 +116,9 @@ lander hands me nothing, I assume unstacked and diff against `trunk` as before.
 ## What I do
 
 ### 1. Read the whole thing first
+
+(The recycled-worktree guard above already ran, so my worktree's `HEAD` is a clean ancestor of
+`trunk` by the time I get here.)
 
 Form no opinion until I've read **both sides** — the ticket as written and the branch as built.
 

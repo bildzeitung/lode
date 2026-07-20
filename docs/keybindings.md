@@ -131,10 +131,10 @@ binds its own `up`/`down`/`enter` for stepping through related notes, but those 
 panel itself holds focus (moved there via the Screen-level `ctrl+f` → `focus_related`), not while
 the note body `TextArea` still has focus.
 
-Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewScreen`,
+Screens whose `TextArea` is `read_only=True` — `VersionViewScreen`, `SnapshotViewerScreen`,
 `ReconcileScreen`'s diff view — are unaffected; `read_only` still lets bare-letter Screen bindings
-through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-body screen — or
-`BrowseScreen`'s `i`/`d`, none of which touch an editable body).
+through normally (see `SnapshotViewerScreen`'s bare `t` for toggling raw HTML — a read-only-body
+screen — or `BrowseScreen`'s `i`/`d`, none of which touch an editable body).
 
 **A trap on the action side, not the key side — pop the screen with `app.pop_screen`, never bare
 `pop_screen`.** A Screen-level `Binding("escape", "app.pop_screen", "Back")` must name the pop action
@@ -165,8 +165,9 @@ tree by `lode-pijc`.
 
 No App-level function keys remain — see the "No function keys" policy above. `ctrl+l` is now
 claimed (above); `ctrl+n` is now claimed too, at the **Screen** level — `EditScreen`,
-`VersionViewScreen`, and `SnapshotViewerScreen`'s shared open-link-under-cursor binding
-(`lode-ev5j.3`, below). **`ctrl+j` is the one formally-safe letter left** for the next ticket that
+`VersionViewScreen`, `SnapshotViewerScreen` (`lode-ev5j.3`), and `CaptureScreen` (`lode-5ill`,
+below) all share the same open-link-under-cursor binding. **`ctrl+j` is the one formally-safe
+letter left** for the next ticket that
 needs a new App-level (or Screen-level) key — it still carries the terminal-level caveat flagged in
 the "No function keys" section (the raw LF byte some terminals treat as Enter-adjacent), so confirm
 the full trap checklist before landing it, and **check every screen's own `BINDINGS` for the same
@@ -177,8 +178,6 @@ alphabet changed).
 
 | Screen | File | Key | Action | Body TextArea |
 |---|---|---|---|---|
-| `NoteViewScreen` | `screens/browse.py` | `escape` | Back | read-only |
-| | | `h` | Show history | |
 | `VersionHistoryScreen` | `screens/version_history.py` | `escape` | Back | — |
 | `VersionViewScreen` | `screens/version_view.py` | `escape` | Back | read-only |
 | | | `ctrl+n` | Open link under cursor | |
@@ -213,6 +212,7 @@ alphabet changed).
 | `CaptureScreen` (default screen) | `screens/capture.py` | `ctrl+s` | Save & new | **editable** |
 | | | `escape` | Discard & quit | |
 | | | `ctrl+f` | Focus related-notes panel | |
+| | | `ctrl+n` | Open link under cursor | |
 | `AskScreen` | `screens/ask.py` | `escape` | Back | — |
 | `ConfigScreen` | `screens/config.py` | `escape` | Back | — |
 | `ReconcileScreen` | `screens/reconcile.py` | `r` | Re-apply | read-only diff |
@@ -241,6 +241,14 @@ prefix on two screens that didn't strictly need it. One key, three screens, no e
 no footer at all before, so its two pre-existing bindings (`escape`/`t`) were technically
 undiscoverable too; `lode-ev5j.3`'s own "shown in the footer" acceptance criterion closed that gap
 rather than leaving the new binding as a third invisible one.
+
+**`lode-5ill` extended the same `Ctrl+N` to a fourth screen, `CaptureScreen`, once `lode-ngk2` made
+it a colouring screen too.** The "one key, no exceptions" reasoning above applies unchanged:
+`CaptureScreen`'s body is editable (same trap `EditScreen` avoids), `ctrl+n` was already confirmed
+free there (`lode-bsmc`), and link extraction never depended on the colouring at all — it's a
+regex scan of the cursor's line (`_link_open.py`), independent of whichever screens happen to be
+coloured. Bound identically: `Binding("ctrl+n", "open_link", "Link")` delegating to the same
+`open_link_under_cursor` helper.
 
 ## Resolved collisions (history, for context)
 

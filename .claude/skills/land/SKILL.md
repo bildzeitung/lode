@@ -28,8 +28,9 @@ one that runs cheaper on Sonnet; the `code-reviewer` and I stay on Opus).
 
 My **first task per branch is a semantic review I do not perform myself** — I dispatch the
 [`land-review`](../../agents/land-review.md) agent (the build-side twin of `challenge`). The independence is
-the point: the producer already ran the *technical* review (`/code-review` + `simplify` = bugs &
-cleanup) on its own branch with gates green; I add the *semantic* gate — *should this land?* — from
+the point: the producer already ran the *technical* review (its own reasoned correctness pass —
+`/code-review` is unreachable from any model context, lode-axyq — plus the tool-backed `/simplify` =
+bugs & cleanup) on its own branch with gates green; I add the *semantic* gate — *should this land?* — from
 the outside. I do **not** re-run the technical review and I assume the branch is green until my
 re-gate says otherwise.
 
@@ -308,12 +309,37 @@ definitions carry no `isolation:` frontmatter key, so for them the call-site opt
 load-bearing. From there it `git fetch`es `origin/land/<id>` (and `origin/land/<base-id>` if
 stacked) and diffs entirely by ref — it never needs to check anything
 out — so under isolation any tree mutation it performs (accidental or not) lands in that disposable
-worktree, never in the one Section 3 is about to merge into. **No special cleanup is needed for that
-scratch worktree**: `land-review` never commits (its own "What I don't do" — no merge, no push, no
-`bd` writes), so its worktree's HEAD never diverges from the `trunk` HEAD it was branched from, and
-the existing backstop sweep in [Section 4](#4-land-the-survivors) already reclaims any unlocked,
-clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this one qualifies
-by construction, with no dedicated code. Normally that is the end of this very pass: Section 4 is
+worktree, never in the one Section 3 is about to merge into.
+
+**That launch worktree is not reliably reclaimed "by construction" — it needed dedicated code, and
+now has it (lode-qv5t).** `land-review` never commits (its own "What I don't do" — no merge, no push,
+no `bd` writes), and the existing backstop sweep in [Section 4](#4-land-the-survivors) reclaims any
+unlocked, clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — but "never
+commits" only proves the worktree's HEAD never *diverges further* once `land-review` starts; it says
+nothing about where that HEAD was when the agent was dispatched. lode-nt98 established the harness's
+`isolation: "worktree"` hand-off does not reliably start a dispatched agent at `trunk` HEAD — it has
+handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a *previous*
+ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled worktree
+handed to it starts with `HEAD` already **not** an ancestor of `trunk`, fails the sweep's ancestor
+predicate, and leaks past every pass indefinitely — `land-review` never touching it doesn't fix that,
+since the contamination predates its own first action. Its **correctness** is untouched either way (it
+only ever fetches and diffs by ref, so a recycled worktree's foreign commits are simply never read —
+that half of lode-nt98's exposure was, and remains, nil for this agent); this is purely a worktree-leak
+defect, distinct from and not to be conflated with the correctness question. The fix:
+`land-review.md`'s own frontmatter role now carries the same recycled-worktree guard `coding.md` and
+`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff
+work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — see
+[`land-review.md`](../../agents/land-review.md) and
+[docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
+Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
+way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
+about Section 4 itself needed to change. That survives the guard's own detection blind spot
+(tracked as lode-3v1p) intact, since what the guard fails to notice already satisfies that predicate. It does
+**not** cover the sweep's *other* arm: in the blind-spot case the remediation's `git clean -fd` never
+runs, so untracked leftovers survive and the [lode-9hgu dirty-tree guard](#4-land-the-survivors)
+below keeps the worktree anyway — open residual **lode-3v1p**, not closed here.
+
+Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that
 account — the merge loop simply iterates zero times), so the sweep is not conditional on anything
 having landed. The exception is a pass that **aborts** after 2c has already spun up scratch

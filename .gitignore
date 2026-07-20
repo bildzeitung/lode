@@ -13,6 +13,11 @@ venv/
 .ruff_cache/
 .nox/
 build/
+# `nox -s build -- dist` (docs/release.md, lode-zuqp) writes here. MUST stay
+# ignored: scripts/release.sh aborts on any `git status --porcelain` output,
+# so an untracked dist/ from a local build would block the next release
+# kickoff with a "commit or stash" message that `git stash` can't even fix.
+dist/
 
 # setuptools-scm build-generated version file (docs/release.md) — never committed
 src/lode/_version.py

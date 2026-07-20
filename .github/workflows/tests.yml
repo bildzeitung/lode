@@ -1,0 +1,108 @@
+name: tests
+
+# Push/PR-triggered test-suite gate -- the FULL `nox -s tests` suite (no
+# marker filter, includes @pytest.mark.slow), on Python 3.14. This is the
+# check the "tests passing" badge is backed by (lode-qxdn.2/.5) -- running the
+# full suite rather than the fast `nox -s unit` subset was a deliberate call
+# (see lode-qxdn.2's design notes): the slow tier is download-gated, not
+# compute-slow, and excluding it would drop the only coverage of the
+# un-mocked FastEmbedCrossEncoder reranker. Workflow filename is FROZEN:
+# lode-qxdn.5's badge URL will hard-code workflows/tests.yml/badge.svg.
+#
+# push trigger convention (lode-bmvy, mirrored from build.yml) -- narrowed to
+# trunk + land/** so this workflow (heavier than build.yml: a full `-e
+# .[dev]` install plus reranker/embedder weights) doesn't also fire on a v*
+# tag push or other non-push refs. No tags-ignore needed -- defining only
+# `branches` already excludes tag pushes; see
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+on:
+  push:
+    branches: [trunk, "land/**"]
+  pull_request:
+
+env:
+  # Point LODE_HOME at a workspace-local path (rather than leaving it at the
+  # default ~/.lode) so the model-weights cache below lives at a path that
+  # does not depend on the runner's HOME (config.py's lode_home() /
+  # model_cache_dir()).
+  LODE_HOME: ${{ github.workspace }}/.lode-ci-home
+  # noxfile.py's _xdist_workers() defaults to 8 -- sized for the 8-core dev
+  # numbers in the noxfile's own docstring. GitHub's free ubuntu-latest
+  # runners are 2-core/7GB; 8 workers each loading a ~1.1GB ONNX reranker
+  # would risk OOM. Pin to 2 here.
+  #
+  # Known cost of that pin, per noxfile.py's own docstring: a narrow -n muzzles
+  # the CPU-starvation flakes the 8-wide default exists to keep visible
+  # (lode-t1y/lode-9vns/lode-64jn) -- those are defects that go UNOBSERVED at
+  # -n 2, not defects that went away. Do not read a green badge here as
+  # evidence those races are fixed; the developer/landing gate at -n 8 is what
+  # exercises them.
+  LODE_TEST_WORKERS: "2"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -e '.[dev]'
+
+      - name: Resolve model cache key
+        # Derive the cache key from the PINNED model ids rather than a
+        # lockfile or a bare constant -- changing any of them must invalidate
+        # the cache, or CI would silently keep serving stale weights for a pin
+        # it is no longer testing. Read them off `Settings` itself rather than
+        # regex-scraping config.py's source: the key then tracks config.py's
+        # API instead of its formatting, so hoisting a default to a module
+        # constant (or any other refactor that changes no behaviour) can't red
+        # this workflow. Bare `Settings()` is a plain pydantic model (not
+        # BaseSettings), so it yields the pinned defaults and never layers in
+        # env vars or a $LODE_HOME/config.toml -- exactly the pins under test.
+        # All three fastembed loaders are listed (embedder, reranker,
+        # NLI/entailment cross-encoder): entailment_model happens to share
+        # rerank_model's id today, but naming it here means the key stays
+        # correct on its own terms if that ever diverges, rather than resting
+        # on an invariant asserted in another file.
+        # NB this step must stay AFTER the install (it imports lode) and
+        # BEFORE the cache restore below.
+        id: model_cache
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          from lode.config import Settings
+
+          s = Settings()
+          ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
+          print("key=models-" + ids.replace("/", "_"))
+          EOF
+
+      - name: Cache model weights
+        # $LODE_HOME/models (config.py's model_cache_dir()) -- ~1.6GB of ONNX
+        # weights (BAAI/bge-reranker-base + nomic-ai/nomic-embed-text-v1.5).
+        # On a cache hit the slow leg runs fully offline; on a miss it
+        # downloads once. This is the mitigation for a model-host outage
+        # turning a good commit red on a public badge, not an optimization
+        # (lode-qxdn.2 design notes) -- do not drop it.
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LODE_HOME }}/models
+          key: ${{ steps.model_cache.outputs.key }}
+
+      - name: Run tests (nox -s tests)
+        # noxfile.py sets default_venv_backend = "none" and the `tests`
+        # session does no session.install() of its own -- it just runs
+        # `pytest -n <workers>` against whatever's already on PATH, so the
+        # dependency install above must happen first or this dies importing
+        # `lode`. No ANTHROPIC_API_KEY is set: the live eval
+        # (tests/test_eval_live.py) self-excludes unless LODE_RUN_LIVE_EVAL=1,
+        # which only `nox -s eval` sets, so this leg stays offline and
+        # keyless by design.
+        run: nox -s tests

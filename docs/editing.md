@@ -113,14 +113,18 @@ from the "provably inert" framing above.
 ## Keyboard "open link under cursor" (`Ctrl+N`)
 
 `Ctrl+N` opens the URL under the cursor in the system browser — the replacement for
-mouse-clickable links — on `EditScreen`, `VersionViewScreen`, and `SnapshotViewerScreen` (the
-same key on all three; see [keybindings.md](keybindings.md) for the full binding table and the
-letter-space accounting behind picking `Ctrl+N`). **`CaptureScreen` is not bound**, even though it
-now colours markdown too (`lode-ngk2`). This is an **unclosed gap, not a decision**: `lode-ev5j.3`
-inherited the same three screens `lode-ev5j.2` originally targeted, and that scope was never
-revisited when `lode-ngk2` added a fourth colouring screen. `ctrl+n` is free on `CaptureScreen`
-(retired by `lode-bsmc`), so there is no key conflict standing in the way — tracked as
-`lode-vx60`, which will either bind it or record an explicit reason capture is excluded.
+mouse-clickable links — on all **four** colouring screens: `EditScreen`, `VersionViewScreen`,
+`SnapshotViewerScreen` (bound together by `lode-ev5j.3`), and `CaptureScreen` (bound separately by
+`lode-5ill`, once `lode-ngk2` had made it the fourth colouring screen). The same key on all four;
+see [keybindings.md](keybindings.md) for the full binding table and the letter-space accounting
+behind picking `Ctrl+N`.
+
+**This was a closed gap, not a permanent decision to exclude capture.** `lode-ev5j.3` inherited the
+same three screens `lode-ev5j.2` originally targeted, and that scope was not revisited when
+`lode-ngk2` added a fourth colouring screen — leaving `CaptureScreen` able to *show* a coloured
+link with no way to *open* one. `ctrl+n` was free on `CaptureScreen` (retired by `lode-bsmc`), so
+there was no key conflict standing in the way, and link extraction never depended on the colouring
+(see below) — `lode-5ill` closed the gap by binding it identically to the other three screens.
 
 Extraction (`src/lode/tui/screens/_link_open.py:extract_link_at_cursor`) cannot read a link node
 from the parse tree — the `lode-ev5j.1` spike confirmed inline links aren't reachable there (see

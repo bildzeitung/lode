@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (/code-review + /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (a hand-reasoned correctness pass plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -12,8 +12,9 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
    The builder does **not** review its own work.
 2. **Technical review — `code-reviewer` subagent (Opus):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
-   runs **`/code-review --fix` + `/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket
-   to **`ready-for-land`** (or escalates).
+   runs its own reasoned **correctness pass** against the diff (`/code-review` is unreachable from any
+   model context, lode-axyq) plus the genuinely tool-backed **`/simplify`**, re-gates, re-pushes
+   `land/<id>`, and swaps the ticket to **`ready-for-land`** (or escalates).
 
 Splitting build (cheap) from review (Opus) means the technical review is done by an agent that didn't
 write the code — and the lander's later semantic review is too, so *neither* review of a branch is its
@@ -234,8 +235,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    lode-t83's Gap 1), don't guess a head SHA — leave the label alone and surface it in the final
    report as needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
    exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, **`isolation: "worktree"`**, same
-   prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree,
-   `/code-review --fix` + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
+   prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree, own
+   correctness pass + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
    Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this
    invocation's own Phase 1 builds, **subject to the same concurrency cap** — a stranded re-entry
    never shares a ticket with a fresh build or rebase pickup, so none of these collide, but all of
@@ -428,8 +429,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
    > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
    > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
-   > own launch worktree, run `/code-review high --fix trunk...HEAD` + `/simplify`, re-gate, commit,
-   > `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,
+   > own launch worktree, run your own reasoned correctness pass against `trunk...HEAD` (`/code-review`
+   > is unreachable from any model context, lode-axyq — see code-reviewer.md step 4) + `/simplify`,
+   > re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the ticket to `ready-for-land`. Do **not** merge,
    > close, or push trunk. Escalate (revert to green, swap to `land-escalated`, don't mark ready) only
    > on a clarifying decision or "making it worse."
 

@@ -29,7 +29,9 @@ Work moves through three passes, with the human as the hinge:
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
    → stop. Then a `code-reviewer` (Opus) fetches that pushed branch and checks it out into its **own**
-   launch worktree, runs the technical review (`/code-review` + `/simplify`), re-gates, re-pushes, and
+   launch worktree, runs the technical review — a correctness pass it reasons through by hand plus
+   `/simplify` (`/code-review` itself is a bundled skill that is user-gated and unreachable from any
+   model context, lode-axyq; see `.claude/agents/code-reviewer.md` step 4) — re-gates, re-pushes, and
    swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
    **`/code` claims each resolved ticket itself, before dispatch (lode-xr8v)** — for every path where
@@ -249,7 +251,8 @@ does **not** review its own work.
 Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
 branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
 worktree, never `EnterWorktree`, and never the builder's worktree at all — runs the **technical
-review** (`/code-review --fix` + `/simplify`, re-gate, keep the last green commit), re-pushes
+review** (its own reasoned correctness pass — `/code-review` is unreachable from any model context,
+lode-axyq — plus the genuinely tool-backed `/simplify`; re-gate, keep the last green commit), re-pushes
 `land/<id>`, and swaps the ticket to **`ready-for-land`**. Neither agent merges, closes, or writes
 `trunk` — landing is [`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't
 shown to the user, so `/code` relays what came back across **both** phases — which issue, that the
@@ -312,7 +315,7 @@ flowchart TD
     PUSH --> CLEAN2{"git status --short<br>empty?"}
     CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review --fix + simplify · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -375,10 +378,15 @@ evidence of a harness bug, not a routine hiccup to swallow silently. Two precond
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
 understood:
 
-- **It only ever runs in an isolated launch worktree.** Each site checks its `git rev-parse
-  --show-toplevel` is under `.claude/worktrees/` and stops otherwise. Without that, an agent whose
-  `isolation: "worktree"` dispatch silently failed would run `reset --hard`/`clean -fd` in the user's
-  **main checkout** — turning a contamination guard into the more damaging bug.
+- **It only runs in an isolated launch worktree — mechanically at two of the three sites.**
+  `coding.md`'s rebase-pickup step 2 and `code-reviewer.md`'s step 2 each wrap the remediation in an
+  explicit `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`,
+  in the same block as the destructive command. `coding.md`'s fresh-build site (step 3) carries no
+  such `case`; it leans on the prose `pwd` safety check a dozen lines above it, so there the
+  precondition is compliance-dependent rather than enforced. The intent is the same either way — an
+  agent whose `isolation: "worktree"` dispatch silently failed must stop before `reset --hard`/`clean
+  -fd` can reach the user's **main checkout**, which is what would turn a contamination guard into the
+  more damaging bug — but closing that third site's gap is its own ticket, `lode-fptp`.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
   reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
@@ -400,15 +408,28 @@ value there is the **working tree**: `checkout -B` carries *untracked* leftovers
 worktree straight through, and those would otherwise pollute the clean-tree assertions and the `nox`
 run those cycles gate on.
 
-`/land`'s own landing loop and `land-review` are out of scope for this fix. The reason is not merely
-that the two reproductions were a `coding` builder and a `code-reviewer`: `land-review` **never checks
-anything out** — it fetches and diffs entirely by ref (`origin/trunk`, `origin/land/<id>`), so a
-contaminated working tree cannot reach its verdict. Its correctness exposure is nil. That is not the
-same as *no* exposure: `land/SKILL.md` §2c argues `land-review`'s scratch worktree needs no cleanup
-because "its worktree's HEAD never diverges from the `trunk` HEAD it was branched from" and so
-"qualifies by construction" for the backstop reclaim sweep — an assumption this incident falsifies, so
-a recycled `land-review` worktree would fail the sweep's ancestor predicate and leak. That is a real
-but separate defect; it is tracked on its own ticket rather than widened into this one.
+`/land`'s own landing loop was initially scoped **out** of this fix, on the reasoning that
+`land-review` **never checks anything out** — it fetches and diffs entirely by ref (`origin/trunk`,
+`origin/land/<id>`), so a contaminated working tree cannot reach its verdict, and its correctness
+exposure is nil. That reasoning holds and is unchanged: **`land-review`'s correctness exposure to
+recycling remains nil**, exactly because it never reads anything from the worktree's checked-out
+state. But nil correctness exposure is not the same as *no* exposure at all. `land/SKILL.md` §2c used
+to argue `land-review`'s scratch worktree needs no cleanup because "its worktree's HEAD never diverges
+from the `trunk` HEAD it was branched from" and so "qualifies by construction" for the backstop
+reclaim sweep — an assumption this incident falsifies (a *recycled* worktree's `HEAD` starts life
+already diverged, before `land-review` ever runs), so a recycled `land-review` worktree fails the
+sweep's ancestor predicate and leaks, pass after pass. That was tracked as a real but separate
+worktree-leak defect on its own ticket, **lode-qv5t**, rather than widened into this one — and it is
+now closed the same way: `land-review.md`'s own frontmatter role carries the identical guard described
+above (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
+rescue the rewound ref and reset onto local `trunk` HEAD). The two halves stay distinct on purpose —
+the guard exists here for the **worktree-leak** reason, never because `land-review`'s judgment was
+ever at risk. That closes the **ancestry** axis only: the guard cannot detect a worktree recycled onto
+a `land/<other-id>` that has since landed (tracked as lode-3v1p), so there its `git clean -fd` never runs and the
+surviving untracked leftovers make the sweep keep the worktree anyway — open residual **lode-3v1p**.
+Full account, including why the blind spot is harmless on the ancestry axis but not the dirt one:
+[land-review.md](../.claude/agents/land-review.md) and
+[Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
 ### Concurrency cap (lode-2cf)
 
@@ -828,10 +849,11 @@ guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table i
 `tests/test_bd_deps_guard.py` — including mutation tests that assert reverting the inversion turns the
 new denies (`gh codespace create`, `gh repo deploy-key add`, …) red, not merely that the suite is green.
 
-**Both this guard and the `blocks:` guard shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
-`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, both guards used to
+**All three `PreToolUse(Bash)` guards — this one, the `blocks:` guard, and the fabricated-SHA guard
+(`lode-fpmi`) — shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
+`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, the guards used to
 silently fall through — verified live during this guard's own land review, `gh issue create` was
-**not** denied under `PATH=/nonexistent`. Both hooks now deny outright when `jq` is unreachable,
+**not** denied under `PATH=/nonexistent`. All three hooks now deny outright when `jq` is unreachable,
 before attempting to parse `tool_input.command` at all; `docs/onboarding.md` documents `jq` as a
 required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
 [`docs/decisions.md`](decisions.md).
@@ -912,6 +934,71 @@ Directives), the builder ([`.claude/agents/coding.md`](../.claude/agents/coding.
 Anti-patterns), and the reviewer
 ([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
 Anti-patterns) — since any of the three can reach a `gh` call mid-task.
+
+### Guard against fabricated SHAs (lode-fpmi)
+
+**An agent once wrote a 40-hex SHA it had invented into bd metadata.** It held the short hash
+`46ca460` in context, `land_head` wanted the full 40-char form, and it pattern-completed the remaining
+33 characters instead of deriving them. `land_head`/`review_head` is exactly what `/land` and the
+`code-reviewer` read to check a branch out and detect drift, so a fabricated value sends them chasing
+an object that does not exist. It was caught before any Dolt push carried it onward.
+
+**Why this needs a mechanism rather than an instruction.** The invented tail is exactly as fluent as a
+real one, so the mistake is *not self-detectable by re-reading what was typed* — any mitigation that
+relies on the agent noticing is unreliable precisely when it is needed. This is the same lesson
+`lode-jh80` landed one layer up. So the fix ships in two layers:
+
+- **The fiat** — [`docs/conventions.md`](conventions.md), "Derive identifiers, never retype them."
+  `@import`ed by `CLAUDE.md`, so it binds the main session and every non-fork subagent with one edit.
+  It covers *every* long opaque identifier: git SHAs, bd issue ids, worktree hashes.
+- **The mechanism** — a third `PreToolUse(Bash)` guard in `.claude/settings.json`, whose body is
+  [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh), pinned by
+  `tests/test_sha_fabrication_guard.py`. `git cat-file -e <sha>` is the oracle: a fabricated SHA is by
+  construction essentially never a real object, so this is a mechanical catch that relies on no agent
+  judgment at all.
+
+**The two layers are deliberately different widths, and that asymmetry is the design.** The fiat
+generalizes to all opaque identifiers; the guard narrows to 40-hex git SHAs. `cat-file -e` is a cheap
+existence oracle that exists *only* for git objects — there is no equivalent for a bd id or a worktree
+hash, so widening the guard would mean heuristically guessing what "looks like" an identifier, which
+is strictly worse than the fiat already covering them. Broad instruction, narrow mechanism where a
+mechanism actually exists.
+
+**`PreToolUse(Bash)` is the right layer** because `Bash` is the sole channel: this repo configures no
+MCP server, no Python code shells out to `bd`, and every `land_head`/`review_head` write site in
+`coding.md` and `code-reviewer.md` is a `bd update --set-metadata` issued as Bash.
+
+Scope narrowings, each deliberate:
+
+- **Only `bd`/`git` command segments are scanned** — a 40-hex string inside an unrelated command
+  (`grep`, `cat`, `curl`, a lockfile digest) is never even looked at. Keeps the guard cheap and
+  removes the largest false-positive class.
+- **Only lowercase `[0-9a-f]{40}`** — real `git rev-parse`/`log --format=%H` output is always
+  lowercase, and a 64-hex SHA-256 never matches (the `\b` word boundaries exclude a 40-char run inside
+  a longer one).
+- **Skipped entirely outside a git work tree** — `cat-file` has nothing to check against.
+- **A fork-free `[[ =~ ]]` early-out runs first**, so a command with no 40-hex run anywhere costs one
+  process instead of eight (~1.7 ms vs ~14.7 ms measured). This guard runs on *every* Bash call
+  forever, so that path is the one that matters. It lives in the script, not the settings.json
+  wrapper: config is where this repo has already shipped silent undetected bugs (`lode-mh9g`,
+  `lode-54mo`), and a test pins the wrapper as logic-free delegation.
+
+**Accepted over-match** (same tiebreak as the `blocks:`/`gh` guards per `lode-oii9` — a guard that
+cannot evaluate precisely denies rather than letting a real fabrication through): a 40-lowercase-hex
+run in *free-text prose* inside a `bd --title/--description/--notes` value on a line that parses as a
+bd/git invocation is scanned too, because this is a heuristic guard, not a shell parser. Likewise
+`git fetch origin <sha>` for a commit not yet local. Any string that *is* a real object passes
+regardless of where it appears, so this only bites a fabricated-looking string that is also not an
+object and also not meant as an identifier. It is **pinned by a test**, not tolerated silently — if
+someone narrows the scope, that test goes red at the moment the tradeoff is made.
+
+**Known asymmetry, deliberate:** the wrapper fails *closed* when `jq` is missing (matching the other
+two guards, `lode-oii9`) but fails *open* if the script itself is unresolvable or non-executable
+(`[ -n "$ROOT" ] && [ -x "$SCRIPT" ] && …`). Denying there would brick every Bash call in the repo on
+a machine where `CLAUDE_PROJECT_DIR` is unset outside a work tree — a far worse failure than the guard
+being off, given the fiat is the first line of defence and this guard is a backstop. `jq` is a
+documented prerequisite a human can install; a mis-resolved script path is not something an agent
+could act on. Pinned by a test so the choice stays visible.
 
 ### Invariants the coding loop never breaks
 
@@ -1149,7 +1236,10 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    inside its worktree"), and a launch worktree still at `trunk` HEAD has an empty diff against the
    builder's real branch, so driving the builder's worktree in place both fought a guard *and*
    produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
-2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
+2. **Runs the technical review** — its own reasoned pass against the diff for bugs (`/code-review` is
+   unreachable from any model context, lode-axyq; `.claude/agents/code-reviewer.md` step 4 has the
+   mechanism and what the pass covers, `docs/decisions.md` the version pin) and the tool-backed
+   `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
 3. **Re-pushes `land/<id>`** and **swaps the ticket to `ready-for-land`** (refreshed head SHA +
@@ -1173,7 +1263,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(review_head SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
@@ -1343,12 +1433,46 @@ for this dispatch. Note it took the probe, not a `/land` pass: every real pass d
 This costs nothing in capability: `land-review` only ever needs to `git fetch` the branch(es) under
 review and diff them by ref (it never checks anything out — see
 [`land-review.md`](../.claude/agents/land-review.md)), so isolation changes *where* that
-happens, not *what* it does. And it needs no dedicated cleanup: `land-review` never commits (no
-merge, no push, no `bd` write — its own "What I don't do"), so its scratch worktree's HEAD never
-diverges from the `trunk` HEAD it was branched from. The existing worktree-GC backstop (lode-h1vn /
-lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)) already reclaims any unlocked,
-clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this scratch
-worktree qualifies by construction, with no new mechanism.
+happens, not *what* it does. Since `land-review` never commits (no merge, no push, no `bd` write —
+its own "What I don't do"), its scratch worktree's HEAD never diverges *further* once `land-review`
+starts running. That is not, on its own, "no dedicated cleanup needed" — it says nothing about where
+the worktree's HEAD *started*, and lode-nt98 established the harness's `isolation: "worktree"`
+hand-off does not reliably start a dispatched agent at `trunk` HEAD (it has handed out a **recycled**
+worktree still on a previous ticket's build branch, to a builder and to a `code-reviewer` alike).
+`land-review` gets the identical dispatch mechanism, so a recycled worktree handed to it starts
+already diverged from `trunk`, fails the worktree-GC backstop's ancestor predicate (lode-h1vn /
+lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)), and leaks past every pass —
+`land-review`'s own inaction doesn't prevent that, since the divergence predates its first action.
+This was a real gap (**lode-qv5t**), closed the same way lode-nt98 closed it for the builder and the
+reviewer: `land-review.md`'s frontmatter role now carries the identical recycled-worktree guard
+(`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; a failure rescues
+the rewound ref and resets onto local `trunk` HEAD — see
+[Recycled-worktree guard](#recycled-worktree-guard-lode-nt98), above). Once that guard has run, the
+worktree's HEAD **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims it
+under its unmodified predicate — no change to Section 4 itself was needed. Note this argument does
+**not** inherit the guard's known detection blind spot (tracked as lode-3v1p: `merge-base
+--is-ancestor HEAD trunk` cannot recognize a recycled worktree whose HEAD *is already* an ancestor of
+`trunk`, e.g. one recycled onto a `land/<other-id>` that has since landed — observed live during
+lode-nt98's and lode-qv5t's own reviews). It doesn't, because the
+guard's predicate **is** the sweep's trunk-arm predicate: any recycling the guard fails to detect is,
+by that very fact, already satisfying the reclaim condition. The blind spot is a *correctness* blind
+spot (foreign content goes unnoticed), and `land-review`'s correctness exposure is nil regardless —
+so on the leak axis the two cancel.
+
+**Residual, on the other axis: dirt, not ancestry.** The sweep's actual reclaim condition is
+`unlocked` **and** ancestry **and** a clean tree (the lode-9hgu dirty-tree guard, which *keeps* a
+dirty worktree). The guard closes the ancestry half unconditionally, per above — but in the
+undetected case it never fires, so its `git clean -fd` never runs either, and a recycled worktree's
+untracked leftovers survive. `land-review` neither commits nor cleans, so that dirt is still there at
+exit and the dirty-tree guard keeps the worktree: it still leaks, for a different reason. This is the
+same residual `code-reviewer.md`'s guard already documents ("the predicate reads the commit graph
+only") and is **not** closed here — closing it means either widening the guard's remediation to run
+unconditionally or making the sweep judge dirt-from-recycling separately, both larger changes than
+this ticket. Tracked as **lode-3v1p**, not silently absorbed.
+
+This is purely a worktree-leak fix: `land-review`'s **correctness** exposure to a recycled worktree
+was, and remains, nil, since it never reads anything from the checked-out state regardless of what
+that state is.
 
 **One precision on "the same pass," because the fix's no-new-GC claim rests on it.** Section 4 is
 reached even when the accepted set is empty — no early exit sits between the 2c dispatch and the
