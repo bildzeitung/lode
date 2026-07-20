@@ -1647,8 +1647,10 @@ are catalogued in [configuration.md](configuration.md).
   was the **first** use of agent-definition `isolation` frontmatter anywhere in the repo, so dropping the
   known-working call-site mechanism before one full `/land` pass had confirmed frontmatter isolation
   alone actually launches the reviewer isolated would have risked silently reintroducing lode-g387's bug
-  under a corrected-looking dispatch. A follow-up ticket (lode-p2vi) drops the call-site parameter once
-  that pass is confirmed.
+  under a corrected-looking dispatch. A follow-up ticket (lode-p2vi) carried the confirmation and the
+  drop — though *not* by the "one full `/land` pass" this plan originally anticipated: every real pass
+  dispatched `land-review` **with** the call-site option, which can prove nothing either way about the
+  frontmatter. It took a dedicated probe with the option deliberately absent.
 
   **Confirmed and dropped (lode-p2vi, 2026-07-20).** Two dedicated probe dispatches — both with no
   call-site `isolation` argument, differing only in `subagent_type` — isolated the variable cleanly:

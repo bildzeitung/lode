@@ -1224,18 +1224,19 @@ writes are (lode-o29m); the human's answer was neither of that ticket's two orig
 third: give `land-review` its own dedicated agent definition (`.claude/agents/land-review.md`, moved
 out of `.claude/skills/land-review/`) carrying `isolation: worktree` (and `model: opus`) in its own
 frontmatter, so the requirement travels with the *role* rather than staying prose at the call site.
-`/land`'s dispatch now names `subagent_type: "land-review"` instead of the generic `"claude"`. Until
-lode-p2vi (below) confirmed frontmatter isolation alone was sufficient, it also passed the explicit
-`isolation: "worktree"` option too — belt-and-braces. Full reasoning:
-[docs/decisions.md](decisions.md) (search "lode-c6ir").
+`/land`'s dispatch now names `subagent_type: "land-review"` instead of the generic `"claude"`, and
+passes no `isolation` option at all. Full reasoning: [docs/decisions.md](decisions.md) (search
+"lode-c6ir").
 
-**Confirmed by lode-p2vi (2026-07-20), call-site param dropped:** two probe dispatches, differing
-only in `subagent_type` and both carrying no call-site `isolation` argument, isolated the variable
-cleanly. `subagent_type: "land-review"` landed in its own `.claude/worktrees/agent-<hash>`, branched
-from local `trunk` HEAD; the control (`subagent_type: "claude"`) ran in the main checkout on `trunk`
-— ruling out "the harness isolates every agent by default" as a confound. Frontmatter isolation is
-therefore the sole enforcement point; `/land`'s §2c dispatch no longer passes the call-site
-`isolation: "worktree"` option.
+**Confirmed by lode-p2vi (2026-07-20), call-site param dropped.** The dispatch initially kept passing
+an explicit `isolation: "worktree"` belt-and-braces, since frontmatter `isolation` was then unused
+repo-wide. A dedicated probe retired it: two dispatches differing only in `subagent_type`, both with
+no call-site `isolation` argument, isolated the variable cleanly — `subagent_type: "land-review"`
+landed in its own `.claude/worktrees/agent-<hash>` branched from local `trunk` HEAD, while the control
+(`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
+every agent by default" as a confound. Frontmatter isolation is therefore the sole enforcement point
+for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
+*with* the option, which is unfalsifiable evidence for the frontmatter.
 
 This costs nothing in capability: `land-review` only ever needs to `git fetch` the branch(es) under
 review and diff them by ref (it never checks anything out — see
