@@ -131,10 +131,10 @@ binds its own `up`/`down`/`enter` for stepping through related notes, but those 
 panel itself holds focus (moved there via the Screen-level `ctrl+f` → `focus_related`), not while
 the note body `TextArea` still has focus.
 
-Screens whose `TextArea` is `read_only=True` — `NoteViewScreen`, `VersionViewScreen`,
+Screens whose `TextArea` is `read_only=True` — `VersionViewScreen`, `SnapshotViewerScreen`,
 `ReconcileScreen`'s diff view — are unaffected; `read_only` still lets bare-letter Screen bindings
-through normally (see `NoteViewScreen`'s bare `h` for history — a read-only-body screen — or
-`BrowseScreen`'s `i`/`d`, none of which touch an editable body).
+through normally (see `SnapshotViewerScreen`'s bare `t` for toggling raw HTML — a read-only-body
+screen — or `BrowseScreen`'s `i`/`d`, none of which touch an editable body).
 
 **A trap on the action side, not the key side — pop the screen with `app.pop_screen`, never bare
 `pop_screen`.** A Screen-level `Binding("escape", "app.pop_screen", "Back")` must name the pop action
@@ -178,8 +178,6 @@ alphabet changed).
 
 | Screen | File | Key | Action | Body TextArea |
 |---|---|---|---|---|
-| `NoteViewScreen` | `screens/browse.py` | `escape` | Back | read-only |
-| | | `h` | Show history | |
 | `VersionHistoryScreen` | `screens/version_history.py` | `escape` | Back | — |
 | `VersionViewScreen` | `screens/version_view.py` | `escape` | Back | read-only |
 | | | `ctrl+n` | Open link under cursor | |
