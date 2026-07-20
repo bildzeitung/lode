@@ -97,6 +97,17 @@ confirm dialog's own "Save" answer, decoupled onto its own exit path
 (:meth:`_save_and_exit`) rather than reusing :meth:`action_save`, precisely
 because that method no longer exits. ``ctrl+n`` is freed --
 ``docs/keybindings.md``'s letter-space accounting.
+
+**Ctrl+N reclaimed for open-link (lode-5ill).** ``lode-ngk2`` gave this screen's body live
+markdown colouring, matching the other three note-body ``TextArea``\\ s (``docs/editing.md``), but
+the Ctrl+N open-link binding those three screens share (``lode-ev5j.3``) was never revisited to
+match -- leaving this screen able to *show* a coloured link with no way to *open* one. Freed by
+``lode-bsmc`` above and still unclaimed at the screen level, ``ctrl+n`` closes that gap here the
+same way: :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the actual
+extraction/browser-safety work, unchanged and shared with the other three screens. Link extraction
+itself never depended on the colouring (:mod:`lode.tui.screens._link_open`'s module docstring) --
+it regex-scans the cursor's line -- so this binding was always safe to add independent of when the
+colouring landed.
 """
 
 from __future__ import annotations
@@ -115,6 +126,7 @@ from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_c
 from lode.tui.latency_probe import probe_event_loop_lag
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
@@ -149,7 +161,10 @@ class CaptureScreen(Screen[None]):
     stays passive by default while the body holds focus, but is itself
     interactive (lode-olmi.9) — Ctrl+F moves focus onto it to step through
     results and open one's highlighted context; see
-    :mod:`lode.tui.widgets.related_notes_panel`'s module docstring.
+    :mod:`lode.tui.widgets.related_notes_panel`'s module docstring. Ctrl+N
+    opens the URL under the cursor (lode-5ill), matching the same binding on
+    :class:`~lode.tui.screens.edit.EditScreen` and the two read-only version
+    viewers; see :meth:`action_open_link`.
     """
 
     # Descriptions kept short (lode-3rvw), unchanged by the LodeFooter
@@ -167,11 +182,14 @@ class CaptureScreen(Screen[None]):
     # -- Escape keeps the short "Discard" because it still names its
     # destructive half honestly, and this screen's labels are otherwise
     # unchanged by lode-uczx's 100-column bound (docs/tui.md): they already
-    # fit comfortably within it.
+    # fit comfortably within it. Adding "Link" (lode-5ill) still fits: the
+    # footer's real consumed width test (test_tui_app.py) measured it well
+    # under the 100-column bound with all 9 entries (4 screen + 5 app) shown.
     BINDINGS = [
         Binding("ctrl+s", "save", "Save & new"),
         Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),
+        Binding("ctrl+n", "open_link", "Link"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -304,6 +322,22 @@ class CaptureScreen(Screen[None]):
         only way to reach them.
         """
         self.query_one(RelatedNotesPanel).focus()
+
+    def action_open_link(self) -> None:
+        """Ctrl+N: open the URL under the cursor, or explain there isn't one (lode-5ill).
+
+        Not bare ``o``/``l`` -- this screen's body ``TextArea`` is editable and
+        consumes every printable keypress before a Screen-level binding ever
+        fires (``docs/keybindings.md``'s hard rule). ``Ctrl+N`` matches the
+        identical binding on :class:`~lode.tui.screens.edit.EditScreen`,
+        :class:`~lode.tui.screens.version_view.VersionViewScreen`, and
+        :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen` --
+        one key, every screen that can show a link.
+        :func:`~lode.tui.screens._link_open.open_link_under_cursor` does the
+        actual extraction + browser-safety work, shared with all three.
+        """
+        text_area = self.query_one(f"#{BODY_ID}", TextArea)
+        open_link_under_cursor(self, text_area)
 
     def confirm_quit(self) -> None:
         """Exit immediately if the buffer is empty, else confirm first.

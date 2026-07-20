@@ -300,6 +300,11 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 # footer, including this one -- consumed moved from 77 to 84 (+7, matching
 # the measurement app.py's own "Cfg" rationale comment records).
 #
+# lode-5ill: a 4th screen-level entry, "Link" (Ctrl+N open-link-under-cursor,
+# reclaiming the same letter lode-bsmc freed for a different action -- see
+# docs/keybindings.md), MEASURED consumed at 84/100 -- comfortably under the
+# bound with no label shortening needed.
+#
 # TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
 # sufficient, so this test does not rely on it alone. Textual separates the
 # FooterKeys with 1-column gutters, and when the bar overflows only SLIGHTLY
@@ -339,14 +344,18 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 3 screen-level + 5 App-level bindings stay visible (none hidden via
+    # All 4 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- only their description text was shortened, and ctrl+s
     # keeps its full "Save & new" (lode-bsmc: folded onto ctrl+s from the now-
-    # retired ctrl+n) so it cannot read as a discard-and-restart.
+    # retired ctrl+n) so it cannot read as a discard-and-restart. "Link"
+    # (lode-5ill: Ctrl+N open-link, reclaiming the same freed letter for a
+    # different action) MEASURED at 84/100 total -- comfortably under the
+    # bound, no label shortening needed.
     assert descriptions == [
         "Save & new",
         "Discard",
         "Related",
+        "Link",
         "Quit",
         "Cfg",
         "Browse",
