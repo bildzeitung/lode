@@ -484,6 +484,17 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   run on the *built* branch, so always dispatch the reviewer *after* its builder returns
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
   ticket that escalated at build time.
+- **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
+  checked out on a previous ticket's build branch, rather than a fresh one off `trunk` HEAD** —
+  confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
+  builder pushed a foreign, unreviewed ticket's commit riding along on `land/lode-eshl`). This is a
+  harness dispatch behavior this skill has no lever over, so the fix isn't here: both `coding.md` and
+  `code-reviewer.md` now assert `git merge-base --is-ancestor HEAD trunk` as the first thing they do
+  in-worktree and self-repair (`git reset --hard trunk`) on a mismatch, reporting it explicitly rather
+  than silently building on contamination. Full account:
+  [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
+  (lode-nt98). Nothing for this skill's own dispatch logic to do differently — the dispatched agents
+  cover it themselves.
 - **Step 0's rebase pickup is a third mode, not a phase.** It reuses the `coding` subagent (its
   "Rebase pickup" cycle, distinct from its normal build cycle) but skips Phase 2 entirely — a
   `needs-rebase` ticket already passed technical review before `/land` kicked it back, so it goes

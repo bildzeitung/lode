@@ -177,6 +177,37 @@ rtk git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktre
 I was launched without an isolated worktree — I **stop and report that** rather than edit on `trunk`.
 The main checkout is never mine to touch — not for editing, not for landing.
 
+**Recycled-worktree guard (lode-nt98) — assert I actually started at `trunk` HEAD, don't just trust
+the branch name.** The harness's `isolation: "worktree"` hand-off has been observed handing a
+dispatched builder a **recycled** launch worktree still checked out on a *previous* ticket's build
+branch (`worktree-agent-<other-hash>`, carrying that ticket's commits) instead of a fresh branch off
+`trunk` HEAD — confirmed in production (lode-eshl's technical review): the eshl builder merged
+`trunk` on top of `lode-7abi`'s pre-review commit and pushed `land/lode-eshl` carrying a foreign,
+unreviewed ticket's changes. A branch-name check alone can't catch this (the recycled branch still
+*looks* like a normal `worktree-agent-…` name), so before touching a single file I assert the actual
+commit graph instead of trusting the name:
+
+```bash
+if ! rtk git merge-base --is-ancestor HEAD trunk; then
+  echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
+       "ancestor of trunk -- this worktree carries commit(s) foreign to trunk (recycled from a" \
+       "previous ticket's build rather than freshly branched off trunk HEAD). Resetting onto" \
+       "current local trunk HEAD before doing any work."
+  rtk git reset --hard trunk
+  rtk git clean -fd
+fi
+```
+
+`HEAD` being an ancestor of `trunk` is exactly what "freshly branched off `trunk` HEAD, zero commits
+of my own yet" means — a worktree that is merely *behind* current `trunk` (because `trunk` advanced
+after this worktree was created, a normal race in a fan-out) still passes this check trivially; only
+a worktree carrying commits `trunk` doesn't have — someone else's unreviewed work — fails it. On a
+failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
+bug, not a routine hiccup) rather than silently building on top of contamination. This check runs
+**only** in this fresh-build cycle — the Rebase pickup cycle below runs the identical assertion in
+its own step 2, worded for that cycle's different follow-up (it doesn't build fresh, it checks out an
+existing `land/<id>` on purpose right after).
+
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
 identity, which is exactly what `/land`'s end-of-pass backstop sweep treats as safe to reclaim
@@ -466,6 +497,30 @@ never kicked back), I stop and report — nothing to pick up.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree — never `EnterWorktree`, never the old build worktree
 
+**Recycled-worktree guard (lode-nt98) — first thing, before the fetch below.** The same harness
+`isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
+handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
+branch, carrying that ticket's commits, instead of a fresh branch off `trunk` HEAD — confirmed in
+production for both a fresh-build producer and a `code-reviewer` (lode-eshl's technical review; full
+account in [`docs/agents-workflow.md`](../../docs/agents-workflow.md)). The `git checkout -B …
+FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless — but if the recycled worktree
+carries uncommitted contamination that checkout would refuse to clobber, that failure is confusing
+rather than diagnostic. So, before the fetch, I assert this launch worktree actually started clean:
+
+```bash
+if ! rtk git merge-base --is-ancestor HEAD trunk; then
+  echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
+       "ancestor of trunk -- resetting onto current local trunk HEAD before my own fetch+checkout."
+  rtk git reset --hard trunk
+  rtk git clean -fd
+fi
+```
+
+This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
+this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout
+happens. If it fires, I report it explicitly in my final hand-off as live evidence of the harness bug,
+not a routine hiccup.
+
 The original build worktree (a leftover of an earlier `git -C` architecture, `docs/decisions.md`) is
 not something I need or open — no metadata points at it any more since lode-2m89 retired
 `review_worktree`/`review_branch`. I bring the branch to *my own* launch worktree instead, exactly like
@@ -687,6 +742,10 @@ own guidance); the cycle above already applies them, but the *why*:
   my own past-tense account destroys the only record of what was actually asked for, silently
   (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
+- **Skipping the recycled-worktree guard, or treating my launch worktree's branch name as proof it's
+  clean.** A `worktree-agent-…`-named branch can still carry a previous ticket's unreviewed commits
+  (lode-nt98) — assert `git merge-base --is-ancestor HEAD trunk` before touching a file (fresh build)
+  or before my own fetch+checkout (rebase pickup), not just the branch name or `pwd`.
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a follow-up issue.
@@ -725,6 +784,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
+| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git reset --hard trunk && git clean -fd`, reported explicitly (lode-nt98) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
