@@ -35,10 +35,12 @@ is env mapping + resolved browser-controller type (+ platform) -> should-open
 + status message, equally pure -- the live ``webbrowser.get()`` call that
 resolves the controller is made by :func:`open_link_under_cursor`, not here.
 :func:`open_link_under_cursor` is the only piece that touches a live
-``Screen``/``TextArea`` or a real browser -- it wires the two pure functions
-together, calls ``webbrowser.get``/``webbrowser.open``/``screen.notify``, and
-(lode-ev5j.3's browser-safety review) runs entirely on a worker THREAD via
-``@work(thread=True)`` -- see its own docstring for why.
+``Screen``/``TextArea``: it reads the cursor's line ON the event loop (cheap,
+and racing the user's own typing off-thread would be a bug -- see its
+docstring) and hands the resulting URL to :func:`_open_url`, which is the
+only piece that touches a real browser and (lode-ev5j.3's browser-safety
+review) runs entirely on a worker THREAD via ``@work(thread=True)``, since
+every blocking path lives there.
 
 **Browser-safety guard: exact controller type, not a ``$BROWSER`` name list
 (lode-ev5j.3's browser-safety review, superseding this ticket's original
@@ -189,16 +191,39 @@ def resolve_link_open(
     return True, f"opened in browser -- link: {url}"
 
 
-@work(thread=True)
 def open_link_under_cursor(screen: Screen[object], text_area: TextArea) -> None:
     """Ctrl+N: open the link under *text_area*'s cursor, or explain there isn't one.
 
-    Shared glue between the two pure functions above and a live screen:
-    reads the cursor's own line out of *text_area*, extracts a URL (if any),
-    resolves the live browser controller and whether it's safe to open
-    against the real process environment, and notifies -- opening the
-    browser first when it's safe, so a conflicting title inherited from a
-    previous state can't race the visible status message.
+    Shared glue between the two pure functions above and a live screen, and
+    the only piece the three ``action_open_link`` handlers call.
+
+    **Runs on the Textual event loop, and reads the widget there on purpose.**
+    Everything this function itself does is cheap and non-blocking -- one
+    ``cursor_location`` read, one ``get_line``, one regex scan -- so none of
+    it needs a thread; what *does* block is handed to :func:`_open_url`
+    below. Doing the read here rather than on the worker thread is a
+    correctness requirement, not a preference: a thread worker starts
+    asynchronously, so the event loop is free to process further keystrokes
+    before its body runs. Reading an editable ``TextArea``'s cursor and
+    document from that thread therefore races the user's own typing -- it can
+    extract a URL from a line the cursor has since left, and ``get_line(row)``
+    can raise ``IndexError`` outright if the lines under it were deleted in
+    the interim, which (workers default to ``exit_on_error=True``) takes the
+    whole app down. Textual's own rule is the same one: a thread worker
+    touches widgets only through ``call_from_thread``.
+    """
+    row, column = text_area.cursor_location
+    line = text_area.document.get_line(row)
+    url = extract_link_at_cursor(line, column)
+    if url is None:
+        screen.notify("no link under the cursor", severity="warning")
+        return
+    _open_url(screen, url)
+
+
+@work(thread=True)
+def _open_url(screen: Screen[object], url: str) -> None:
+    """Resolve the browser controller for *url* and open it if safe, off-loop.
 
     Runs entirely on a worker THREAD (lode-ev5j.3's browser-safety review) --
     three verified stdlib paths block for real: resolving the controller via
@@ -206,19 +231,21 @@ def open_link_under_cursor(screen: Screen[object], text_area: TextArea) -> None:
     with no timeout on its first call; ``UnixBrowser._invoke`` hard-freezes
     for up to 5s launching a cold browser; ``GenericBrowser.open`` blocks for
     the browser's entire foreground lifetime. None of that may run on the
-    Textual event loop, so the whole thing moves off it, mirroring
+    Textual event loop, so all three move off it, mirroring
     :meth:`~lode.tui.screens.ask.AskScreen._ask`'s own ``@work(thread=True)``
-    pattern -- every ``notify`` accordingly goes through
-    ``screen.app.call_from_thread``, never called directly from this thread.
+    pattern.
+
+    This function touches no widget state -- *url* is captured on the event
+    loop by :func:`open_link_under_cursor` and passed in by value -- so the
+    only UI interaction left is the closing ``notify``, which accordingly
+    goes through ``screen.app.call_from_thread``, never called directly from
+    this thread. The browser is opened *before* notifying so a conflicting
+    title inherited from a previous state can't race the visible status
+    message.
+
+    The decorator needs ``screen`` first: ``@work`` reads ``args[0]`` as the
+    ``DOMNode`` that owns the resulting worker.
     """
-    row, column = text_area.cursor_location
-    line = text_area.document.get_line(row)
-    url = extract_link_at_cursor(line, column)
-    if url is None:
-        screen.app.call_from_thread(
-            screen.notify, "no link under the cursor", severity="warning"
-        )
-        return
     try:
         controller_type: type[webbrowser.BaseBrowser] | None = type(webbrowser.get())
     except webbrowser.Error:

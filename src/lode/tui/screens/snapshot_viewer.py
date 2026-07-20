@@ -17,9 +17,9 @@ from textual.screen import ModalScreen
 from textual.widgets import TextArea
 
 from lode.notes_read import SnapshotRow, read_snapshot
+from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.screens._link_open import open_link_under_cursor
 
 #: The content-viewer modal's body ``TextArea`` widget id (lode-0sjj) -- read
 #: back in tests.

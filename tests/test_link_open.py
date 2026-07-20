@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import webbrowser
 
+import pytest
+
+from lode.tui.screens import _link_open
 from lode.tui.screens._link_open import extract_link_at_cursor, resolve_link_open
 
 
@@ -281,3 +284,82 @@ def test_macos_still_refuses_a_generic_browser_controller() -> None:
         is_macos=True,
     )
     assert should_open is False
+
+
+# ---------------------------------------------------------------------------
+# open_link_under_cursor -- the widget read happens on the CALLING thread
+# ---------------------------------------------------------------------------
+
+
+class _FakeDocument:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def get_line(self, row: int) -> str:
+        return self._lines[row]
+
+
+class _FakeTextArea:
+    def __init__(self, lines: list[str], cursor: tuple[int, int]) -> None:
+        self.document = _FakeDocument(lines)
+        self.cursor_location = cursor
+
+
+class _FakeScreen:
+    """A screen that is deliberately NOT a Textual ``DOMNode``.
+
+    That is the whole point of the two tests below: `@work` asserts its first
+    argument is a `DOMNode` and immediately hands the call to `run_worker`, so
+    a plain object like this can only get through `open_link_under_cursor` if
+    that function does its widget read and its no-link notify *synchronously*,
+    on the calling thread, rather than deferring them onto a worker.
+    """
+
+    def __init__(self) -> None:
+        self.notified: list[tuple[str, str | None]] = []
+
+    def notify(self, message: str, severity: str | None = None) -> None:
+        self.notified.append((message, severity))
+
+
+def test_open_link_under_cursor_extracts_the_url_synchronously(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cursor/document read must NOT be deferred onto the worker thread.
+
+    A thread worker starts asynchronously, so reading a live (editable)
+    `TextArea` from inside it races the user's own typing -- it can extract a
+    URL from a line the cursor has since left, and `get_line(row)` can raise
+    `IndexError` outright on a since-shortened document, which (workers
+    default to `exit_on_error=True`) takes the whole app down. Only the
+    blocking browser work belongs on the thread.
+    """
+    captured: list[str] = []
+    monkeypatch.setattr(
+        _link_open, "_open_url", lambda screen, url: captured.append(url)
+    )
+    screen = _FakeScreen()
+    text_area = _FakeTextArea(
+        ["see [my link](https://example.com/path) please"], (0, 8)
+    )
+
+    _link_open.open_link_under_cursor(screen, text_area)  # type: ignore[arg-type]
+
+    assert captured == ["https://example.com/path"]
+    assert screen.notified == []
+
+
+def test_open_link_under_cursor_notifies_synchronously_when_there_is_no_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(
+        _link_open, "_open_url", lambda screen, url: captured.append(url)
+    )
+    screen = _FakeScreen()
+    text_area = _FakeTextArea(["no links on this line at all"], (0, 3))
+
+    _link_open.open_link_under_cursor(screen, text_area)  # type: ignore[arg-type]
+
+    assert captured == []  # no browser work dispatched at all
+    assert screen.notified == [("no link under the cursor", "warning")]
