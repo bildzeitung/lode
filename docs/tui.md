@@ -79,7 +79,7 @@ sensitive layout), 100 columns is the bound to design against, not 80.**
 **One shared footer widget, not a call site per screen each managing its own flags.** Every
 footer-bearing screen composes `lode.tui.widgets.lode_footer.LodeFooter` — a ~4-line `Footer` subclass
 that bakes in `compact=True, show_command_palette=False` — instead of calling Textual's stock
-`Footer()` directly. Before `lode-uczx`, only two of the ten screens that existed at the time
+`Footer()` directly. Before `lode-uczx`, only two of the ten **footer-bearing** screens
 (`BrowseScreen`, `CaptureScreen`) passed those two flags explicitly, because each had independently
 hit an overflow bug and fixed it locally; the other eight stayed bare. That is drift-by-default: a
 new screen that forgets the flags regresses silently, which is exactly how `CaptureScreen` — the
@@ -87,10 +87,13 @@ app's own default/landing screen — clipped past `BrowseScreen`'s fix undetecte
 `LodeFooter` is the one seam for any future footer-wide style change; a screen never repeats the
 flags itself.
 
-The app has grown since: **15** screen modules live under `src/lode/tui/screens/` today (excluding
-`__init__` and underscore-prefixed leaf modules), up from the ten `lode-uczx` converted. Not every
-one of them carries a footer, though — see the modal-footer rule just below for which do and which
-stay bare by design.
+**That "ten" counts footers, not screens** — `lode-uczx` converted ten `yield Footer()` call sites
+that lived in only six modules at the time (`browse.py` alone held five). The module tree has grown
+a lot since: **15** screen modules live under `src/lode/tui/screens/` today (excluding `__init__`
+and underscore-prefixed leaf modules). Almost all of that growth is the one-Screen-per-module split
+(`docs/conventions.md`) unpacking `browse.py` and `capture.py`, not new screens — the screen count
+itself went 14 → 15. The footer-bearing count is still ten; the other five are modals that stay
+bare by design, per the rule just below.
 
 **Modals are footerless unless they carry standing actions (`lode-ev5j.3`).** A modal that is a
 transient glance-and-dismiss popup — a confirm dialog or an inline picker/detail view
