@@ -36,11 +36,13 @@ off `__version__`, which now resolves dynamically instead of a hardcoded string.
    green — check-only; it never runs `nox -t fix`, which mutates the tree and would violate the
    clean-tree guard at tag time), computes/confirms the next `vX.Y.Z`, creates the annotated tag on
    the release commit — with the confirmed release notes as the tag body, when a notes file is
-   passed as its second argument — and pushes the tag.
+   passed as its second argument — and pushes the tag. It also runs `nox -s build` (below) as a
+   local sanity check before spending a push — the same packaging assertion the tag-triggered CI
+   build re-runs a moment later regardless, so this is fail-fast, not the only gate.
 2. **CI builds on tag push** — `.github/workflows/release.yml` (lode-0ru.3) triggers on `v*` tag
-   push, does a clean-room `python -m build` (wheel + sdist; the `Version` metadata comes straight
-   from `git describe` against the pushed tag), and publishes a GitHub release with both artifacts
-   attached and the tag body as the release notes.
+   push and runs `nox -s build -- dist` (wheel + sdist into `./dist`; the `Version` metadata comes
+   straight from `git describe` against the pushed tag), then publishes a GitHub release with both
+   artifacts attached and the tag body as the release notes.
 3. **Result** — `lode version` on an install of the released artifact reports the exact `X.Y.Z`
    tag, not `0.0.0`.
 
@@ -105,6 +107,30 @@ on:
 
   Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
   safe to leave in place; there is no badge-hygiene reason to drop it.
+
+## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
+
+`noxfile.py`'s `build` session is the ONE place that builds a wheel/sdist and asserts the
+package-data (`lode/schema.sql`, `lode/tui/lode.tcss`) made it in — the lode-1i8.4 footgun a clean
+`python -m build` exit doesn't catch on its own. Both CI workflows call it rather than each keeping
+a hand-copy (a hand-copy already drifted once — lode-j6mj's review caught build.yml's copy checking
+only the wheel, not the sdist):
+
+- **`build.yml`** (push/PR) calls `nox -s build` with no posarg — builds into a scratch
+  `TemporaryDirectory` and discards the artifacts; only the assertion matters there.
+- **`release.yml`** (the `vX.Y.Z` tag push that ships the published wheel) calls
+  `nox -s build -- dist` — the session takes an optional output-directory posarg, and passing one
+  keeps the built wheel/sdist in `./dist` so the `gh release create ... dist/*` step can upload
+  them. Before this, release.yml ran its own untouched `python -m build` with no assertion at all,
+  so a wheel silently missing package-data could still ship to users even though the same failure
+  was already being caught on every push/PR build.
+
+**Decision: `scripts/release.sh`'s pre-tag gate also runs `nox -s build`** (no posarg — a local
+sanity check, not an artifact producer), right after `nox -s tests`. It's cheap (~4s, per lode-j6mj)
+and fails the kickoff before a tag is even pushed, rather than waiting for the tag-triggered CI run
+to catch the same problem a few seconds later. This is fail-fast redundancy, not the only gate —
+release.yml's own `nox -s build -- dist` call is what actually gates the published artifact, since
+the kickoff machine's tree and the clean-room CI checkout aren't guaranteed identical.
 
 ## Release notes
 

@@ -26,11 +26,22 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install build front-end
-        run: pip install build
+      - name: Install build tooling
+        # `build` is NOT redundant alongside nox: noxfile.py sets
+        # default_venv_backend = "none", so the session shells out to
+        # `python -m build` in this ambient interpreter and never installs it.
+        run: pip install build nox
 
-      - name: Build wheel + sdist
-        run: python -m build
+      # Step name mentions the assertion on purpose: it runs inside the same
+      # session, so a red run here is just as likely to be missing
+      # package-data as a failed build. `-- dist` keeps the artifacts on
+      # disk for the release step below — the default (no posarg) discards
+      # them into a scratch dir. Calls noxfile.py's `build` session rather
+      # than re-copying its assertion here (lode-zuqp) — this is the same
+      # published wheel a user installs, so it gets the same check
+      # build.yml's push/PR runs already had.
+      - name: Build wheel + sdist, assert package-data
+        run: nox -s build -- dist
 
       - name: Create GitHub release
         env:
