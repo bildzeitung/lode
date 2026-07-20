@@ -1,9 +1,11 @@
 # lode — markdown editing surface
 
-How the note body became a keyboard-first markdown authoring surface (`lode-ev5j`), and the
-settled decisions behind it. See [keybindings.md](keybindings.md) for the exact key and screen
-list of the open-link binding this doc describes, and [tui.md](tui.md) for layout/footer
-conventions. Companion doc, reachable from [design.md](design.md#map-of-the-docs).
+How the note body became a keyboard-first markdown authoring surface (`lode-ev5j`): the decisions
+behind it, the browser-safety guard on the open-link binding, and what was deliberately left
+unbuilt — including the inline lint squiggles still carrying open questions of their own. See
+[keybindings.md](keybindings.md) for the exact key and screen list of the open-link binding this
+doc describes, and [tui.md](tui.md) for layout/footer conventions. Companion doc, reachable from
+[design.md](design.md#map-of-the-docs).
 
 ## No preview pane
 
@@ -32,9 +34,9 @@ it was added by the technical review as `lode-ngk2` once the gap was spotted (co
 edit but not on capture, the primary authoring surface, was an inconsistency a user would hit
 immediately).
 
-**Colour depth is block-level only, not inline** — this is a scope decision, not a bug, so record
-it plainly: **emphasis, strong, inline code spans, and inline links (`[text](url)`) are NOT
-coloured.** What *is* coloured: headings and heading markers, fenced/indented code and fence
+**Colour depth is block-level only, not inline** — a scope decision, not a bug: **emphasis,
+strong, inline code spans, and inline links (`[text](url)`) are NOT coloured.** What *is*
+coloured: headings and heading markers, fenced/indented code and fence
 delimiters, list markers, block-quote markers, thematic breaks, backslash escapes, and
 *reference-style* link definitions (`[label]: url` — not inline `[text](url)`).
 
@@ -99,25 +101,26 @@ as stated.** Injecting a highlight mapped to `Style(link=url)` (via a custom `Te
 a live `TextArea`'s private `_highlights`, then inspecting the actual bytes
 `Compositor.render_segments` writes to the terminal, showed a correct OSC-8 span
 (`\x1b]8;id=...;<url>\x1b\\`) — Textual's `Strip`/compositor pipeline *does* check `style._link`
-and wraps it in OSC-8 on write. So `Style(link=...)` is not inert at the escape-sequence level.
+and wraps it in OSC-8 on write.
 
-This does **not** reopen the concession — reason (b) is the one that was falsified, and reason (a)
-alone still rules out clickable links in a `TextArea`. The keyboard binding also stands on its own
-merits regardless: it works in every terminal, with no assumption about OSC-8 support. Recorded
-here because it directly contradicts a technical claim stated in the epic's original research —
-if mouse-clickable links are ever reconsidered, start from a real-terminal OSC-8/click-handling
-test (the spike ran with no PTY, so actual click-through behaviour, and any interference from the
-app's own SGR mouse-tracking mode, remains untested), not from the "provably inert" framing above.
+This does **not** reopen the concession: (b) is what was falsified, and (a) alone still rules out
+clickable links in a `TextArea`. The keyboard binding also works in every terminal, with no
+assumption about OSC-8 support. **If mouse-clickable links are ever reconsidered, start from a
+real-terminal OSC-8/click-handling test** — the spike ran with no PTY, so actual click-through
+behaviour, and any interference from the app's own SGR mouse-tracking mode, remain untested — not
+from the "provably inert" framing above.
 
 ## Keyboard "open link under cursor" (`Ctrl+N`)
 
 `Ctrl+N` opens the URL under the cursor in the system browser — the replacement for
 mouse-clickable links — on `EditScreen`, `VersionViewScreen`, and `SnapshotViewerScreen` (the
 same key on all three; see [keybindings.md](keybindings.md) for the full binding table and the
-letter-space accounting behind picking `Ctrl+N`). **`CaptureScreen` is not in this binding's
-scope**, even though it now colours markdown too (`lode-ngk2`) — the open-link ticket
-(`lode-ev5j.3`) scoped itself to the same three screens `lode-ev5j.2` originally targeted, and
-that scope was not revisited when `lode-ngk2` added a fourth colouring screen.
+letter-space accounting behind picking `Ctrl+N`). **`CaptureScreen` is not bound**, even though it
+now colours markdown too (`lode-ngk2`). This is an **unclosed gap, not a decision**: `lode-ev5j.3`
+inherited the same three screens `lode-ev5j.2` originally targeted, and that scope was never
+revisited when `lode-ngk2` added a fourth colouring screen. `ctrl+n` is free on `CaptureScreen`
+(retired by `lode-bsmc`), so there is no key conflict standing in the way — tracked as
+`lode-vx60`, which will either bind it or record an explicit reason capture is excluded.
 
 Extraction (`src/lode/tui/screens/_link_open.py:extract_link_at_cursor`) cannot read a link node
 from the parse tree — the `lode-ev5j.1` spike confirmed inline links aren't reachable there (see
@@ -143,9 +146,8 @@ would race the user's own typing.
 
 Inline lint squiggles (coloured underlines on markdown-lint-flagged ranges, updated as you type)
 were **deferred out of this epic entirely**, split into their own follow-on epic, `lode-o7pf`
-(blocked on this epic's colouring landing). This was not a scope cut for its own sake — it
-removed *all* private-Textual-API use from `lode-ev5j`'s critical path, plus an undecided linter
-and an unresolved range-granularity question:
+(blocked on this epic's colouring landing). This was not a scope cut for its own sake — it removed
+*all* private-Textual-API use from `lode-ev5j`'s critical path:
 
 - The only styling channel for a lint squiggle is Textual's **private, unsupported**
   `_highlights` dict (`_highlights[line].append((start_col, end_col, highlight_name))`) — Textual's

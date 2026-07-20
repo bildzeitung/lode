@@ -25,7 +25,7 @@ mechanics live in focused companion docs:
 | [decisions.md](decisions.md) | Open decisions, deferred but not forgotten |
 | [keybindings.md](keybindings.md) | The TUI's central keymap: which keys are taken, App- vs Screen-level altitude, the editable-TextArea non-printable-key rule |
 | [tui.md](tui.md) | TUI layout conventions -- what every screen's middle panel needs so it never renders past the docked Footer |
-| [editing.md](editing.md) | The markdown editing surface: block-only live syntax colouring + hard dep/fallback, the keyboard open-link binding, and why a preview pane, clickable links, and inline lint squiggles are each not built |
+| [editing.md](editing.md) | The markdown editing surface: block-only live colouring, the keyboard open-link binding, and why a preview pane and clickable links are not built |
 | [conventions.md](conventions.md) | Prescriptive coding-style *fiats* (unilateral maintainer preferences, no independent rationale) -- `@import`ed by CLAUDE.md so they reach the main session and every subagent |
 | [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`challenge`) and the coding loop (`/code` → `coding`) |
 
