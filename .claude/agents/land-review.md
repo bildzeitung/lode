@@ -252,3 +252,7 @@ manufacture objections.
   the finding, I name it in the verdict; recording it is the lander's or human's explicit next step.
 - I do **not** re-run the gates or redo the technical review. I assume the producer left the branch
   green; my judgment is "should it land," not "is it green."
+- **No FOREGROUND-only / real-exit-status rule applies to me** (decided, lode-b8sr) — that rule
+  exists to keep a gate's own killed/hung/piped-through status from being misread as green, and I run
+  no gate at all. `.claude/skills/land/SKILL.md`'s Section 3 re-gate carries it instead, since that
+  re-gate is the one this agent's verdict feeds into.

@@ -383,6 +383,35 @@ Collect verdicts for the whole queue before merging — I want the full accepted
 Two branches each green *in isolation* can break when **combined** (a clean git merge with broken
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**.
 
+**Every re-gate in this section — the combined re-gate below and the isolation-replay loop's own
+`nox -s tests` — runs in the FOREGROUND, in the same turn, and its result is read from its own real
+exit status, never from a downstream command's.** No `run_in_background`, no `Monitor`, no ending a
+turn on a pending gate — the same lode-95o rule the producer agents already carry
+(`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`); `nox -s tests` fits well under
+`Bash`'s 600000ms timeout cap. And never pipe a gate through `tail`/`head`/`grep` and read the
+*pipeline's* exit status as the gate's own: a shell pipeline's exit status is its **last** element's,
+not the gate's, so a killed or hung gate can surface as "completed, exit 0" while its own output ends
+mid-run. **OBSERVED (lode-b8sr):** `rtk nox -s tests 2>&1 | tail -30` exceeded the Bash timeout, was
+moved to the background, hung, and was killed with `SIGTERM` — the harness reported the run as
+"completed (exit code 0)" because that 0 was `tail`'s exit status, even though the captured output
+itself ended in `nox > Session tests failed`. If a gate's output must be trimmed, capture its real
+status explicitly first — `set -o pipefail`, `${PIPESTATUS[0]}`, or `cmd > file; status=$?; tail -30
+file` — and gate on that captured status, never on whatever ran last in the pipe.
+
+**This is specifically the lander's problem, more than it is anyone else's.** A producer or reviewer
+that misreads its own gate hands a bad branch on to the *next* gate in the chain — the code-reviewer,
+then `land-review`, then this re-gate — so there's still a chance downstream to catch it. I am the
+**last** gate: nothing re-checks what I certify here. A misread green at this step pushes unverified
+content straight onto `trunk`, which is the one thing `/land` exists to prevent.
+
+**Consistent with lode-9i2p's rule elsewhere in this file (the `validate-mermaid.sh` exit-2
+distinction): a gate that was killed or never completed is neither green nor a content red.** It must
+not land anything (the false-"green" case above) and it must not bounce anything either — nothing
+here failed on its *content*, the run simply never finished. Treat it like the same kind of machine
+fault: stop, re-run the gate cleanly with its real exit status captured, and only then decide
+green/red. (`land-review.md` carries no equivalent rule — it explicitly does not re-run gates at all,
+so there is no gate there to misread; see the note at the top of that file.)
+
 ### 3a. Order the accepted set — base before dependent; hold an orphaned dependent
 
 An unordered merge set is unsafe for a stacked branch: merging a dependent *before* its base drags
