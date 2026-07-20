@@ -37,16 +37,20 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install build front-end
+      - name: Install build tooling
+        # `build` is NOT redundant alongside nox: noxfile.py sets
+        # default_venv_backend = "none", so the session shells out to
+        # `python -m build` in this ambient interpreter and never installs it.
         run: pip install build nox
 
-      - name: Build wheel + sdist
-        # noxfile.py's `build` session is the single source of truth for
-        # this check: it builds a wheel + sdist and inspects the wheel's
-        # file list directly rather than trusting a clean `python -m build`
-        # exit, since that alone doesn't prove package-data made it in (the
-        # lode-1i8.4 footgun: the TUI's .tcss almost shipped without it).
-        # Reusing the nox session instead of hand-copying its assertion here
-        # keeps the two checks from drifting apart — the earlier inline copy
-        # already did once, shipping without the sdist half of this assertion.
+      # Step name mentions the assertion on purpose: it runs inside the same
+      # session, so a red run here is just as likely to be missing package-data
+      # as a failed build, and the CI UI shows only this name.
+      - name: Build wheel + sdist, assert package-data
+        # Calls noxfile.py's `build` session rather than re-copying its
+        # assertion here, so CI and the local gate cannot drift — the earlier
+        # hand-copy already did. See that session's docstring for why a clean
+        # `python -m build` exit doesn't prove package-data shipped.
+        # Scope: this covers push/PR only. release.yml still builds the
+        # PUBLISHED wheel without this check — see lode-zuqp.
         run: nox -s build
