@@ -84,7 +84,7 @@ def test_no_screen_imports_bare_datatable_or_static():
         "from textual.widgets -- use lode.tui.widgets.lode_data_table."
         "LodeDataTable / lode.tui.widgets.lode_static.LodeStatic instead, so "
         "a bare str cell/content can never reach Rich's markup parser "
-        f"unguarded (lode-3dz2). Violations:\n" + "\n".join(violations)
+        "unguarded (lode-3dz2). Violations:\n" + "\n".join(violations)
     )
 
 

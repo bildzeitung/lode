@@ -312,9 +312,7 @@ def test_ctrl_o_knob_table_shows_runtime_and_tune_knobs_only(
     # str(...) each cell -- see test_cli_and_tui_render_same_knob_data's
     # comment: LodeDataTable (lode-3dz2) stores every bare-str cell as a
     # rich.text.Text, so get_row_at returns Text, not str.
-    rows = [
-        tuple(str(v) for v in table.get_row_at(i)) for i in range(table.row_count)
-    ]
+    rows = [tuple(str(v) for v in table.get_row_at(i)) for i in range(table.row_count)]
     names = {name for name, _, _ in rows}
     kinds = {kind for _, _, kind in rows}
 
