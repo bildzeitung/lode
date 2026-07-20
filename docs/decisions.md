@@ -1548,3 +1548,47 @@ are catalogued in [configuration.md](configuration.md).
     lines). Splitting them into two tickets would be two overlapping import-rewrite passes over
     the same 38–54 files, landing in either order — a guaranteed conflict on the shared files.
     Bundling them into one move avoids that by construction.
+- **`land-review` dispatches now MUST run `isolation: "worktree"` — enforce at dispatch, don't patch
+  the merge classifier (lode-g387, 2026-07-19).** `/land` runs on `trunk`, in the **main checkout** —
+  the same tree its Section 3 batch-merges the accepted set into. `land-review` (its semantic gate,
+  first task per branch) used to be dispatched into that same tree with no isolation option at all
+  (Agent tool, `subagent_type: "claude"`, nothing else) — so the reviewer ran wherever the lander
+  happened to be running: the main checkout, on `trunk`.
+
+  **Observed twice, not once** — a 2026-07-19 pass reproduced an earlier, deliberately-unticketed
+  occurrence symptom-by-symptom, which is what promoted it from "plausible one-off" to "systematic."
+  Three non-isolated `land-review` dispatches all ran in the main checkout; one left a full branch
+  diff (`lode-2zj0`'s: a new module plus several modified screens) staged there. The next branch's
+  `git merge --no-ff` then aborted with "Your local changes to the following files would be
+  overwritten by merge," with `git ls-files -u` **empty** — so the failure matched neither
+  `merge_one`'s jsonl-restore retry path (only restores `.beads/issues.jsonl`, not arbitrary
+  reviewer-left files) nor its real-conflict path (needs a genuinely unmerged index). It silently
+  read as an unretried conflict rather than what it was: a lander tree dirtied by something other
+  than the branch actually being merged. A human had to confirm the staged content was safe on
+  `origin/land/lode-2zj0` and hand-reset the tree; no work was lost, but the recovery needed human
+  judgment `/land` should never require mid-pass.
+
+  **Decision: fix the isolation gap at dispatch, not the symptom in `merge_one`.** The ticket's own
+  reasoning is the deciding factor — the repeat across two independent occurrences is evidence the
+  cause is *systematic* (a dispatch-time gap), not incidental to one branch's contents, and a
+  defensive patch to `merge_one` that recognized "dirtied by something other than the passive
+  export" as its own failure class would only make the *symptom* legible; it would not stop a
+  reviewer from dirtying the tree in the first place, and the tree it dirties is the one about to be
+  merged into. `land-review` is now dispatched exactly like the producer-side agents already are
+  (`code/SKILL.md`'s `coding`/`code-reviewer` dispatches, precedent already established): Agent tool,
+  `subagent_type: "claude"`, **`isolation: "worktree"` mandatory** — launched already cwd'd inside its
+  own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, entirely separate from the
+  lander's checkout. `merge_one` itself is untouched by this ticket.
+
+  **Costs nothing in capability, needs no new cleanup mechanism.** `land-review` only ever `git
+  fetch`es the branch(es) under review and diffs them by ref (never checks anything out —
+  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where*
+  that happens, never *what* it does. And because `land-review` never commits (no merge, no push, no
+  `bd` write — its own "What I don't do"), its scratch worktree's HEAD never diverges from the
+  `trunk` HEAD it was branched from — the existing worktree-GC backstop (lode-h1vn / lode-amif,
+  above) already reclaims any unlocked, clean worktree under `.claude/worktrees/` whose HEAD is an
+  ancestor of `trunk`, so this scratch worktree is reclaimed by the very same pass's own GC step,
+  with no dedicated code. Documented in
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
+  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md#how-to-use-me), and
+  [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).

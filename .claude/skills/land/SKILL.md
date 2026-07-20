@@ -286,10 +286,32 @@ branch leaves this pass's merge set and the producer rebases it (this is where t
 
 ### 2c. Run the semantic gate
 
-Dispatch the [`land-review`](../land-review/SKILL.md) skill with the ticket ID and its `land/<id>`
-branch. **If [1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s
-direct-edge map found this ticket stacked on exactly one live base**, also pass that base
-(`land/<base-id>`) — land-review diffs against it instead of `trunk` (its own
+**Dispatch `land-review` via the Agent tool with `subagent_type: "claude"` AND `isolation:
+"worktree"` — the isolation is mandatory, not optional (lode-g387).** I run on **trunk, in the main
+checkout** (see above) — the same working tree Section 3 merges into. A `land-review` dispatch with
+no isolation option runs *in that same tree*, and nothing stops a generic subagent, mid-inspection,
+from leaving files staged or modified there (OBSERVED, 2026-07-19: three `land-review` agents
+dispatched with no isolation all ran in the main checkout; one left `lode-2zj0`'s full diff staged,
+and the next branch's `git merge --no-ff` aborted with "would be overwritten by merge" — with `git
+ls-files -u` empty, so it hit neither `merge_one`'s jsonl-restore retry path nor its real-conflict
+path, and the failure silently read as an unretried conflict rather than what it was). `isolation:
+"worktree"` launches the reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`,
+branched from local `trunk` HEAD — the same mechanism `code/SKILL.md` already mandates for the
+`coding` and `code-reviewer` dispatches. From there it `git fetch`es `origin/land/<id>` (and
+`origin/land/<base-id>` if stacked) and diffs entirely by ref — it never needs to check anything
+out — so under isolation any tree mutation it performs (accidental or not) lands in that disposable
+worktree, never in the one Section 3 is about to merge into. **No special cleanup is needed for that
+scratch worktree**: `land-review` never commits (its own "What I don't do" — no merge, no push, no
+`bd` writes), so its worktree's HEAD never diverges from the `trunk` HEAD it was branched from, and
+the existing backstop sweep in [Section 4](#4-land-the-survivors) already reclaims any unlocked,
+clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this one qualifies
+by construction, at the end of this very pass, with no dedicated code. Full rationale:
+[docs/agents-workflow.md — Isolating land-review dispatches](../../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+
+Pass the ticket ID and its `land/<id>` branch. **If
+[1a](#1a-compute-the-stacked-branch-graph--once-per-pass-from-git-never-from-bd)'s direct-edge map
+found this ticket stacked on exactly one live base**, also pass that base (`land/<base-id>`) —
+land-review diffs against it instead of `trunk` (its own
 [docs/agents-workflow.md#stacked-land-branches-lode-02v](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)-linked
 handling). If it found *no* live base, or (the rare nested/multi-base case) more than one direct
 base, hand land-review nothing extra and let it default to a `trunk` diff — but in the multi-base

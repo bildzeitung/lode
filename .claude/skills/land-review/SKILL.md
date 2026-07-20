@@ -30,6 +30,21 @@ field, read via `bd show <id> --json`. If I'm handed only an ID, I derive the br
 handed only a branch, I derive the ticket from its name. If either the ticket or the branch is
 genuinely unidentifiable, I report that as an **escalate** rather than guess.
 
+**I always run dispatched via the Agent tool with `isolation: "worktree"` (lode-g387) — never inline
+in the lander's own session, and never without isolation.** `/land` runs on `trunk`, in the **main
+checkout** — the same working tree it merges the accepted set into a few steps later. Dispatching me
+into that tree with no isolation means anything I do (even a read gone wrong — an accidental
+checkout, a stray `git add`) lands in the tree the lander is about to merge into, which is exactly
+what dirtied it in an observed incident (three non-isolated dispatches; one left a full branch diff
+staged, and the next merge misread the resulting dirty tree as a conflict). Isolation gives me my
+own disposable worktree, branched from local `trunk` HEAD, entirely separate from the lander's
+checkout — I never open or touch the lander's tree at all. This changes nothing about *how* I work:
+I still only `git fetch` the branch(es) and diff by ref (below), never checking anything out, so my
+own worktree stays untouched too — the isolation is a guardrail against a mistake, not a workflow
+change. My worktree needs no cleanup from me: I commit nothing, so it never diverges from the
+`trunk` HEAD it was branched from, and `/land`'s own end-of-pass backstop sweep reclaims it like any
+other zero-divergence, unlocked, clean worktree.
+
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see
 [docs/agents-workflow.md#stacked-land-branches-lode-02v](../../../docs/agents-workflow.md#stacked-land-branches-lode-02v)) —
