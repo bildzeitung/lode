@@ -48,6 +48,51 @@ A `/release` Claude skill (lode-0ru.4) wraps step 1: it computes the next semver
 commit history since the last tag, compiles the release notes from the resolved ticket record
 (below), and drives the kickoff.
 
+## CI workflow trigger scope (push and pull_request)
+
+Sibling to the tag-triggered flow above: `.github/workflows/build.yml` (lode-qxdn.1) and every
+push/PR-triggered CI workflow that follows it — the test suite leg (lode-qxdn.2), coverage
+(lode-qxdn.3) — narrow their `push:` trigger to:
+
+```yaml
+on:
+  push:
+    branches: [trunk, "land/**"]
+  pull_request:
+```
+
+- **`land/**` is deliberate, not incidental.** This repo never opens PRs — producers push
+  `land/<id>` directly (CLAUDE.md #8 bars Claude from filing PRs under the maintainer's identity) —
+  so `pull_request:` is very nearly dead code here, and the push trigger on `land/**` is the *only*
+  pre-trunk CI signal a human gets. Dropping it would make these checks purely post-hoc (trunk-only).
+- **No `tags-ignore` line.** Defining only `branches:` on a `push` trigger already excludes tag
+  pushes — GitHub scopes the event to the ref types the filter names, so a `v*` tag push does not
+  trigger the workflow at all. A `tags-ignore` entry on top would be inert clutter (confirmed by the
+  first real `v*` tag push after lode-qxdn.1 landed: it produced no `build` run).
+- **This matters far more for the heavier siblings than for `build.yml` itself.** Cost is $0 (public
+  repo, free Actions minutes) — this is noise/latency, not spend — and `build.yml`'s own job is cheap
+  (`pip install build` + `python -m build`). But `nox -s tests` (lode-qxdn.2) and coverage
+  (lode-qxdn.3) are heavy: a full `-e .[dev]` install (lancedb/fastembed/textual) plus a
+  FastEmbedCrossEncoder model download, minutes per run. An unfiltered `push:` there would burn real
+  wall-clock on every producer push — coding handoff, code-reviewer re-push, every rebase pickup —
+  measured at ~2-3 pushes per landed ticket. Both MUST reuse this same narrowed trigger rather than
+  reintroducing an unfiltered one.
+- **Nothing in the landing loop reads these check results.** `/land` gates on its own merge
+  precheck, `land-review`, and a local `nox` re-gate; it never queries GitHub Actions. These
+  workflows are advisory-to-a-human only, which is the other reason to fire them only where a human
+  is likely to look (trunk, or a `land/<id>` branch mid-review) rather than on every internal ref.
+- **Dolt sync traffic (`bd dolt push`) never triggers these workflows at all**, so no exclusion is
+  needed for it. `refs/dolt/data` is neither `refs/heads/*` nor `refs/tags/*`, and GitHub's `push`
+  event only fires for those two ref namespaces (confirmed: several `bd dolt push`es after
+  lode-qxdn.1 landed produced zero runs).
+- **Badge behavior (lode-qxdn.4), confirmed against GitHub's own docs:** a workflow status badge
+  (`.../workflows/<file>/badge.svg`) tracks the most recent run on the **default branch** by
+  default, falling back to the most recent run overall only if the workflow has *never* run on the
+  default branch. Once a workflow has landed and produced at least one run on `trunk`, a red
+  `land/<id>` build can never redden the README badge — the badge only reflects `trunk`'s own runs.
+  That makes keeping `land/**` in the trigger safe to leave in place; there is no badge-hygiene
+  reason to drop it.
+
 ## Release notes
 
 Release notes are **compiled from the ticket record, not composed as prose** (lode-0l1). At
