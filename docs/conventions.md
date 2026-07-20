@@ -9,9 +9,9 @@ design doc, not here.
 
 This file is `@import`ed by [`CLAUDE.md`](../CLAUDE.md), so its contents are mechanically inlined
 into the main session **and** every non-fork subagent — the `coding` producer, the `code-reviewer`,
-and the `land` session that runs `land-review`. One source; the write-side and the review-side read
-the same bytes, so a fiat here cannot drift between who writes the code and who gates it. Keep it
-tight — one short section per rule.
+the `land-review` agent, and the `land` session that dispatches it. One source; the write-side and
+the review-side read the same bytes, so a fiat here cannot drift between who writes the code and who
+gates it. Keep it tight — one short section per rule.
 
 ## Textual: one Screen or custom Widget per module
 

@@ -4,8 +4,17 @@ name: build
 # (pyproject/setuptools-scm/package-data) before a release cuts, rather than
 # only on a vX.Y.Z tag like release.yml. Workflow name is FROZEN: lode-qxdn.4's
 # badge URL hard-codes workflows/build.yml/badge.svg.
+#
+# push trigger convention (lode-bmvy) — mirror this in any sibling push-
+# triggered CI workflow (lode-qxdn.2, lode-qxdn.3): narrowed to trunk +
+# land/** so it doesn't also fire on a v* tag push (double-building against
+# release.yml) or on Dolt sync traffic (refs/dolt/data never matches a push
+# event anyway). No tags-ignore needed — defining only `branches` already
+# excludes tag pushes; see
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
 on:
   push:
+    branches: [trunk, "land/**"]
   pull_request:
 
 jobs:

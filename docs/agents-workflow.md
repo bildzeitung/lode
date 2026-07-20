@@ -1217,9 +1217,21 @@ are (`code/SKILL.md`'s `coding` and `code-reviewer` dispatches): via the Agent t
 already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, and
 does all of its `git fetch`/`git diff` work there — never in the lander's checkout.
 
+**Superseded by lode-c6ir (2026-07-20):** the paragraph above describes the original fix — isolation
+enforced only as a call-site dispatch option, on the generic `subagent_type: "claude"`. lode-kt6g then
+asked whether that class of dispatch-time invariant should be mechanically enforced the way `gh`
+writes are (lode-o29m); the human's answer was neither of that ticket's two original options, but a
+third: give `land-review` its own dedicated agent definition (`.claude/agents/land-review.md`, moved
+out of `.claude/skills/land-review/`) carrying `isolation: worktree` (and `model: opus`) in its own
+frontmatter, so the requirement travels with the *role* rather than staying prose at the call site.
+`/land`'s dispatch now names `subagent_type: "land-review"` instead of the generic `"claude"`, and
+still passes the explicit `isolation: "worktree"` option too — belt-and-braces, until one confirmed
+pass proves frontmatter isolation alone is sufficient and a follow-up ticket drops the call-site
+param. Full reasoning: [docs/decisions.md](decisions.md) (search "lode-c6ir").
+
 This costs nothing in capability: `land-review` only ever needs to `git fetch` the branch(es) under
 review and diff them by ref (it never checks anything out — see
-[`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where* that
+[`land-review.md`](../.claude/agents/land-review.md)), so isolation changes *where* that
 happens, not *what* it does. And it needs no dedicated cleanup: `land-review` never commits (no
 merge, no push, no `bd` write — its own "What I don't do"), so its scratch worktree's HEAD never
 diverges from the `trunk` HEAD it was branched from. The existing worktree-GC backstop (lode-h1vn /

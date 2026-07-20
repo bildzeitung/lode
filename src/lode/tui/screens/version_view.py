@@ -19,6 +19,7 @@ from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
 from lode.notes_read import version_body
+from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens._link_open import open_link_under_cursor
 
@@ -48,7 +49,7 @@ class VersionViewScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield TextArea("", read_only=True, id=VERSION_BODY_ID)
+        yield _markdown_text_area(read_only=True, id=VERSION_BODY_ID)
         yield LodeFooter()
 
     def on_mount(self) -> None:
