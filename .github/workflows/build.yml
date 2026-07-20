@@ -40,8 +40,9 @@ jobs:
           from pathlib import Path
 
           wheels = list(Path("dist").glob("*.whl"))
-          if not wheels:
-              sys.exit("no wheel found in dist/")
+          sdists = list(Path("dist").glob("*.tar.gz"))
+          if not wheels or not sdists:
+              sys.exit("python -m build did not produce both a wheel and an sdist")
 
           with zipfile.ZipFile(wheels[0]) as zf:
               names = zf.namelist()
