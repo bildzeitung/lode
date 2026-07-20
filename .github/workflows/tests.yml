@@ -30,6 +30,13 @@ env:
   # numbers in the noxfile's own docstring. GitHub's free ubuntu-latest
   # runners are 2-core/7GB; 8 workers each loading a ~1.1GB ONNX reranker
   # would risk OOM. Pin to 2 here.
+  #
+  # Known cost of that pin, per noxfile.py's own docstring: a narrow -n muzzles
+  # the CPU-starvation flakes the 8-wide default exists to keep visible
+  # (lode-t1y/lode-9vns/lode-64jn) -- those are defects that go UNOBSERVED at
+  # -n 2, not defects that went away. Do not read a green badge here as
+  # evidence those races are fixed; the developer/landing gate at -n 8 is what
+  # exercises them.
   LODE_TEST_WORKERS: "2"
 
 jobs:
@@ -46,34 +53,35 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Install dependencies
+        run: pip install -e '.[dev]'
+
       - name: Resolve model cache key
-        # Derive the cache key from the PINNED model ids in config.py rather
-        # than a lockfile or a bare constant -- changing rerank_model or
-        # embedding_model must invalidate the cache, or CI would silently
-        # keep serving stale weights for a pin it is no longer testing.
-        # entailment_model reuses rerank_model's value (config.py), so the
-        # two ids resolved below cover every fastembed loader (embedder,
-        # reranker, NLI/entailment cross-encoder).
+        # Derive the cache key from the PINNED model ids rather than a
+        # lockfile or a bare constant -- changing any of them must invalidate
+        # the cache, or CI would silently keep serving stale weights for a pin
+        # it is no longer testing. Read them off `Settings` itself rather than
+        # regex-scraping config.py's source: the key then tracks config.py's
+        # API instead of its formatting, so hoisting a default to a module
+        # constant (or any other refactor that changes no behaviour) can't red
+        # this workflow. Bare `Settings()` is a plain pydantic model (not
+        # BaseSettings), so it yields the pinned defaults and never layers in
+        # env vars or a $LODE_HOME/config.toml -- exactly the pins under test.
+        # All three fastembed loaders are listed (embedder, reranker,
+        # NLI/entailment cross-encoder): entailment_model happens to share
+        # rerank_model's id today, but naming it here means the key stays
+        # correct on its own terms if that ever diverges, rather than resting
+        # on an invariant asserted in another file.
+        # NB this step must stay AFTER the install (it imports lode) and
+        # BEFORE the cache restore below.
         id: model_cache
         run: |
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import re
-          from pathlib import Path
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          from lode.config import Settings
 
-          text = Path("src/lode/config.py").read_text()
-
-
-          def pinned(name: str) -> str:
-              m = re.search(rf'{name}: str = _knob\(\s*"([^"]+)"', text)
-              if not m:
-                  raise SystemExit(f"could not find a pinned value for {name} in config.py")
-              return m.group(1)
-
-
-          rerank = pinned("rerank_model")
-          embedding = pinned("embedding_model")
-          key = f"models-{rerank}-{embedding}".replace("/", "_")
-          print(f"key={key}")
+          s = Settings()
+          ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
+          print("key=models-" + ids.replace("/", "_"))
           EOF
 
       - name: Cache model weights
@@ -87,9 +95,6 @@ jobs:
         with:
           path: ${{ env.LODE_HOME }}/models
           key: ${{ steps.model_cache.outputs.key }}
-
-      - name: Install dependencies
-        run: pip install -e .[dev]
 
       - name: Run tests (nox -s tests)
         # noxfile.py sets default_venv_backend = "none" and the `tests`
