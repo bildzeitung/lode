@@ -18,10 +18,11 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import DataTable, Header
+from textual.widgets import Header
 
 from lode.notes_read import list_versions
 from lode.tui.dates import format_adaptive_date
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens.version_view import VersionViewScreen
 
@@ -59,11 +60,11 @@ class VersionHistoryScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id=HISTORY_TABLE_ID, cursor_type="row")
+        yield LodeDataTable(id=HISTORY_TABLE_ID, cursor_type="row")
         yield LodeFooter()
 
     def on_mount(self) -> None:
-        table = self.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+        table = self.query_one(f"#{HISTORY_TABLE_ID}", LodeDataTable)
         table.add_columns("Date", "Version", "Op")
         for row in list_versions(self.app.db_path, self.note_id):
             table.add_row(
@@ -74,7 +75,7 @@ class VersionHistoryScreen(Screen[None]):
             )
         table.focus()
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: LodeDataTable.RowSelected) -> None:
         version_id = event.row_key.value
         if version_id is not None:
             self.app.push_screen(VersionViewScreen(self.note_id, version_id))

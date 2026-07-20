@@ -19,9 +19,9 @@ from rich.text import Text
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Static
 
 from lode.notes_read import version_body
+from lode.tui.widgets.lode_static import LodeStatic
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -77,13 +77,13 @@ class RelatedNoteModalScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
-            Static("", id=RELATED_MODAL_BODY_ID, markup=False),
+            LodeStatic("", id=RELATED_MODAL_BODY_ID),
             id=RELATED_MODAL_DIALOG_ID,
         )
 
     def on_mount(self) -> None:
         body = version_body(self.app.db_path, self._note.note_id, self._note.version_id)
-        self.query_one(f"#{RELATED_MODAL_BODY_ID}", Static).update(
+        self.query_one(f"#{RELATED_MODAL_BODY_ID}", LodeStatic).update(
             self._highlighted_body(body or "")
         )
 

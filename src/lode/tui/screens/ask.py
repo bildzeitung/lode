@@ -16,10 +16,11 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Header, Input, Static
+from textual.widgets import Header, Input
 
 from lode.tui.services.ask import render_ask_result, run_ask
 from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.lode_static import LodeStatic
 
 #: The question input's widget id -- read back in tests.
 QUESTION_ID = "ask-question"
@@ -50,12 +51,13 @@ class AskScreen(Screen[None]):
         yield Vertical(
             Input(id=QUESTION_ID, placeholder=_PLACEHOLDER),
             VerticalScroll(
-                # markup=False (lode-ix4i, same reasoning as
-                # related_note_modal.py's body Static): render_ask_result emits
-                # literal bracket groups ("[version <id>, as of <ts>]",
-                # "[withheld] ...") around verbatim user text, and a markup=True
-                # Static -- the default -- would silently eat them.
-                Static(_PLACEHOLDER, id=RESULTS_ID, markup=False),
+                # LodeStatic defaults markup=False (lode-3dz2, was a per-site
+                # markup=False kwarg here -- lode-ix4i): render_ask_result
+                # emits literal bracket groups ("[version <id>, as of <ts>]",
+                # "[withheld] ...") around verbatim user text, and a
+                # markup=True Static -- the stock default -- would silently
+                # eat them.
+                LodeStatic(_PLACEHOLDER, id=RESULTS_ID),
                 id="ask-results-pane",
             ),
         )
@@ -81,7 +83,7 @@ class AskScreen(Screen[None]):
         """
         from lode.auth import AuthError
 
-        results = self.query_one(f"#{RESULTS_ID}", Static)
+        results = self.query_one(f"#{RESULTS_ID}", LodeStatic)
         self.app.call_from_thread(results.update, _THINKING)
         app = self.app
         try:

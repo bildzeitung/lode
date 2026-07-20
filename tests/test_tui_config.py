@@ -20,10 +20,12 @@ still is.)
 """
 
 import asyncio
+import io
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from textual.widgets import DataTable, Footer, Header, Static
 from typer.testing import CliRunner
 
@@ -31,6 +33,7 @@ from lode.cli import app as cli_app
 from lode.config import (
     Kind,
     Settings,
+    _SECRET_SEED_PATTERNS,
     config_path,
     config_rows,
     default_db_path,
@@ -226,14 +229,69 @@ def test_cli_and_tui_render_same_knob_data(
 
     app = LodeApp(db_path=default_db_path())
 
-    async def _drive() -> list[tuple[object, ...]]:
+    async def _drive() -> list[tuple[str, ...]]:
         async with app.run_test() as pilot:
             await pilot.press("ctrl+o")
             table = app.screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
-            return [tuple(table.get_row_at(i)) for i in range(table.row_count)]
+            # str(...) each cell: LodeDataTable (lode-3dz2) coerces every
+            # bare-str cell to a rich.text.Text at add_row time so it can
+            # never reach Rich's markup parser unguarded -- get_row_at
+            # returns that stored Text, not the original str, so a bare
+            # equality against `expected` (plain str tuples from the shared
+            # knob_rows() builder) would fail on type alone.
+            return [
+                tuple(str(v) for v in table.get_row_at(i))
+                for i in range(table.row_count)
+            ]
 
     tui_rows = asyncio.run(_drive())
     assert tui_rows == expected
+
+
+def test_config_knob_table_renders_secret_patterns_literally_not_as_rich_markup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VERIFIED LIVE INSTANCE #5 (lode-3dz2), now fixed at the seam.
+
+    Two of the eight stock ``_SECRET_SEED_PATTERNS`` (``gh[pousr]_...``,
+    ``xox[baprs]-...``, among others) are regexes whose ``[...]`` character
+    classes parsed as Rich console markup before this ticket -- reproduced
+    against a real ``rich.Console`` in the ticket description, corrupt on
+    DEFAULT settings, no user input required. ``config.py``'s knob table was
+    the one ``DataTable`` construction site lode-ix4i's per-site pass never
+    reached (it was fixing ``ask``/``browse``/``tags``/``external_picker``).
+
+    This asserts on the RENDER, through a real ``rich.Console`` -- the same
+    "get_row_at/.content returns the stored value, not the render" distinction
+    every sibling regression test in this ticket's lineage makes (lode-7abi,
+    lode-ix4i). Exercised via the ``redact_before_egress_patterns`` knob (the
+    ``Value`` column comma-joins all eight patterns onto one row --
+    :func:`lode.config.knob_rows`), so a single row's render proves all eight
+    at once.
+    """
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "home"))
+    app = LodeApp(db_path=tmp_path / "home" / "lode.db")
+
+    async def _drive() -> object:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+o")
+            table = app.screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
+            for i in range(table.row_count):
+                name_cell, value_cell, _kind_cell = table.get_row_at(i)
+                if str(name_cell) == "redact_before_egress_patterns":
+                    return value_cell
+            raise AssertionError("redact_before_egress_patterns row not found")
+
+    cell = asyncio.run(_drive())
+
+    buffer = io.StringIO()
+    Console(file=buffer, width=1000, legacy_windows=False).print(cell)
+    rendered = buffer.getvalue().strip()
+    for pattern in _SECRET_SEED_PATTERNS:
+        assert pattern in rendered, (
+            f"{pattern!r} did not survive the render literally -- "
+            f"markup-eaten in {rendered!r}"
+        )
 
 
 def test_ctrl_o_knob_table_shows_runtime_and_tune_knobs_only(
@@ -251,7 +309,12 @@ def test_ctrl_o_knob_table_shows_runtime_and_tune_knobs_only(
             return app.screen.query_one(f"#{KNOB_TABLE_ID}", DataTable)
 
     table = asyncio.run(_drive())
-    rows = [tuple(table.get_row_at(i)) for i in range(table.row_count)]
+    # str(...) each cell -- see test_cli_and_tui_render_same_knob_data's
+    # comment: LodeDataTable (lode-3dz2) stores every bare-str cell as a
+    # rich.text.Text, so get_row_at returns Text, not str.
+    rows = [
+        tuple(str(v) for v in table.get_row_at(i)) for i in range(table.row_count)
+    ]
     names = {name for name, _, _ in rows}
     kinds = {kind for _, _, kind in rows}
 
