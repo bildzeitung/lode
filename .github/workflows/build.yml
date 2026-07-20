@@ -37,36 +37,20 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install build front-end
-        run: pip install build
+      - name: Install build tooling
+        # `build` is NOT redundant alongside nox: noxfile.py sets
+        # default_venv_backend = "none", so the session shells out to
+        # `python -m build` in this ambient interpreter and never installs it.
+        run: pip install build nox
 
-      - name: Build wheel + sdist
-        run: python -m build --outdir dist
-
-      - name: Assert package-data shipped in the wheel
-        # A clean `python -m build` exit doesn't prove package-data made it
-        # in — that's the lode-1i8.4 footgun (the TUI's .tcss almost shipped
-        # without it). Inspect the wheel's file list directly, mirroring the
-        # assertion in noxfile.py's `build` session.
-        run: |
-          python - <<'EOF'
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          wheels = list(Path("dist").glob("*.whl"))
-          sdists = list(Path("dist").glob("*.tar.gz"))
-          if not wheels or not sdists:
-              sys.exit("python -m build did not produce both a wheel and an sdist")
-
-          with zipfile.ZipFile(wheels[0]) as zf:
-              names = zf.namelist()
-
-          missing = [
-              expected
-              for expected in ("lode/schema.sql", "lode/tui/lode.tcss")
-              if expected not in names
-          ]
-          if missing:
-              sys.exit(f"wheel is missing expected package-data: {missing}")
-          EOF
+      # Step name mentions the assertion on purpose: it runs inside the same
+      # session, so a red run here is just as likely to be missing package-data
+      # as a failed build, and the CI UI shows only this name.
+      - name: Build wheel + sdist, assert package-data
+        # Calls noxfile.py's `build` session rather than re-copying its
+        # assertion here, so CI and the local gate cannot drift — the earlier
+        # hand-copy already did. See that session's docstring for why a clean
+        # `python -m build` exit doesn't prove package-data shipped.
+        # Scope: this covers push/PR only. release.yml still builds the
+        # PUBLISHED wheel without this check — see lode-zuqp.
+        run: nox -s build
