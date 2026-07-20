@@ -115,6 +115,7 @@ from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_c
 from lode.tui.latency_probe import probe_event_loop_lag
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
+from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 
@@ -176,7 +177,7 @@ class CaptureScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            TextArea(id=BODY_ID, placeholder="What did you learn today?"),
+            _markdown_text_area(id=BODY_ID),
             # exclude_note_id=None: a brand-new capture has no note id yet to
             # exclude -- see lode.tui.widgets.related_notes_panel's module docstring.
             RelatedNotesPanel(id=RELATED_ID),
@@ -184,7 +185,13 @@ class CaptureScreen(Screen[None]):
         yield LodeFooter()
 
     def on_mount(self) -> None:
-        self.query_one(f"#{BODY_ID}", TextArea).focus()
+        text_area = self.query_one(f"#{BODY_ID}", TextArea)
+        # placeholder is a post-construction attribute (not one
+        # _markdown_text_area's shared signature takes -- only this screen
+        # needs it) rather than a constructor kwarg, so the call above stays
+        # identical to edit.py's (lode-ngk2).
+        text_area.placeholder = "What did you learn today?"
+        text_area.focus()
         # lode-0wj.2: the event-loop-lag heartbeat only ever runs while DEBUG
         # logging is on -- gating the *start* (not just the log calls inside it)
         # means the default INFO level spawns no extra worker at all.

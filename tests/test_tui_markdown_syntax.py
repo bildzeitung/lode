@@ -1,8 +1,8 @@
-"""Live markdown syntax colouring in the three note-body TextAreas (lode-ev5j.2).
+"""Live markdown syntax colouring in the four note-body TextAreas (lode-ev5j.2, lode-ngk2).
 
 Covers the shared helper :func:`lode.tui.screens._markdown_area.markdown_text_area`:
 graceful degradation when the tree-sitter markdown grammar is unavailable, that
-each of the three named screens' body ``TextArea`` actually constructs with
+each of the four named screens' body ``TextArea`` actually constructs with
 ``language="markdown"`` (and that :class:`~lode.tui.screens.reconcile.
 ReconcileScreen`'s diff view, deliberately excluded, does not), and that the
 built-in highlighter's private ``_highlights`` channel holds the expected
@@ -27,6 +27,7 @@ from textual.widgets.text_area import LanguageDoesNotExist
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens._markdown_area import _markdown_text_area
+from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
 from lode.tui.screens.snapshot_viewer import (
@@ -152,9 +153,24 @@ def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> Non
 
 
 # ---------------------------------------------------------------------------
-# All three named screens construct their body TextArea with language="markdown";
+# All four named screens construct their body TextArea with language="markdown";
 # reconcile.py (a diff view, not markdown) stays untouched.
 # ---------------------------------------------------------------------------
+
+
+def test_capture_screen_body_is_markdown_language(tmp_path: Path) -> None:
+    """CaptureScreen (lode-ngk2) -- the screen where a user actually types."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> str | None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, CaptureScreen)
+            return app.screen.query_one(f"#{BODY_ID}", TextArea).language
+
+    assert asyncio.run(_drive()) == "markdown"
 
 
 def test_edit_screen_body_is_markdown_language(tmp_path: Path) -> None:

@@ -1,22 +1,16 @@
 """Construct a note-body ``TextArea`` with live markdown syntax colouring (lode-ev5j.2).
 
-Shared by the three screens that show a note body as markdown --
-:class:`~lode.tui.screens.edit.EditScreen` (``EDIT_BODY_ID``, editable),
-:class:`~lode.tui.screens.version_view.VersionViewScreen` (``VERSION_BODY_ID``,
-read-only), and :class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`
+Shared by the four screens that show a note body as markdown --
+:class:`~lode.tui.screens.capture.CaptureScreen` (``BODY_ID``, editable,
+lode-ngk2), :class:`~lode.tui.screens.edit.EditScreen` (``EDIT_BODY_ID``,
+editable), :class:`~lode.tui.screens.version_view.VersionViewScreen`
+(``VERSION_BODY_ID``, read-only), and
+:class:`~lode.tui.screens.snapshot_viewer.SnapshotViewerScreen`
 (``SNAPSHOT_VIEWER_BODY_ID``, read-only) -- so the graceful-degradation
-try/except lives in exactly one place rather than three copies (the ticket's
+try/except lives in exactly one place rather than four copies (the ticket's
 own instruction). :class:`~lode.tui.screens.reconcile.ReconcileScreen` is
 deliberately **not** a caller: it renders a diff, not markdown, and colouring
 would fight the diff structure.
-
-:class:`~lode.tui.screens.capture.CaptureScreen`'s body ``TextArea``
-(``BODY_ID``) is **not** a caller either, but for a different reason: it is
-simply outside lode-ev5j.2's settled three-screen scope, which named an
-exclusion only for ``ReconcileScreen``. That leaves the one screen where a
-user actually *types* markdown uncoloured while the editor colours it -- a
-visible inconsistency tracked as **lode-ngk2**, not a reasoned design
-exclusion like the diff view above.
 
 **Colour depth is block-only**, per the lode-ev5j.1 spike: ``language="markdown"``
 loads only Textual's bundled block grammar (headings, heading markers,
@@ -68,11 +62,12 @@ def _markdown_text_area(
     """A note-body ``TextArea`` with markdown colouring, or plain text if unavailable.
 
     Args:
-        text: Initial buffer content (defaults to empty -- all three callers
+        text: Initial buffer content (defaults to empty -- all four callers
             load the real body later, in ``on_mount``).
         id: The widget id the caller's tests key off of.
-        read_only: ``False`` for :class:`~lode.tui.screens.edit.EditScreen`'s
-            editable body; ``True`` for the two read-only viewers.
+        read_only: ``False`` for :class:`~lode.tui.screens.capture.CaptureScreen`'s
+            and :class:`~lode.tui.screens.edit.EditScreen`'s editable bodies;
+            ``True`` for the two read-only viewers.
     """
     try:
         return TextArea(text, language="markdown", read_only=read_only, id=id)
