@@ -1180,6 +1180,56 @@ carries the hand-off and something else consumes the label —
    way it looks for `needs-rebase`, and dispatches a `code-reviewer` at each — mirroring the
    `needs-rebase` sweep exactly, just one gate earlier in the pipeline.
 
+### Isolating `land-review` dispatches (lode-g387)
+
+`/land` runs on **trunk, in the main checkout** — the same working tree its Section 3 batch-merges
+the accepted set into a few steps later. `land-review` (the semantic gate, above) used to be
+dispatched into that same tree with **no isolation**: the Agent tool call carried `subagent_type:
+"claude"` but no `isolation` option, so the reviewer ran wherever the lander happened to be running
+— the main checkout.
+
+**Observed twice** (2026-07-19 pass reproduced an earlier, undocumented occurrence symptom-by-
+symptom): three non-isolated `land-review` dispatches all ran in the main checkout; one left a full
+branch diff (`lode-2zj0`'s) staged there. The next branch's `git merge --no-ff` then aborted with
+"Your local changes to the following files would be overwritten by merge" — with `git ls-files -u`
+**empty**, so the failure matched neither `merge_one`'s jsonl-restore retry path (that only restores
+`.beads/issues.jsonl`, not arbitrary reviewer-left files) nor its real-conflict path (which requires
+a genuinely unmerged index). It silently read as an unretried conflict rather than what it actually
+was: a lander tree dirtied by something other than the branch being merged. Recovery required a
+human to confirm the staged content was safe on `origin/land/lode-2zj0` and hand-reset the tree.
+
+**Fix: enforce isolation at dispatch, not a defensive patch to the merge classifier.** The ticket's
+own analysis is why: the symptom repeating across two independent occurrences is evidence the cause
+is *systematic* — a dispatch-time isolation gap — not incidental to one branch's contents. Patching
+`merge_one` to recognize "dirtied by something other than the passive export" as its own failure
+mode would only make the *symptom* legible; it would not stop a reviewer from dirtying the tree in
+the first place. So `land-review` is now dispatched exactly like the producer-side agents already
+are (`code/SKILL.md`'s `coding` and `code-reviewer` dispatches): via the Agent tool with
+`subagent_type: "claude"` **and `isolation: "worktree"`**, mandatory. The reviewer is launched
+already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, and
+does all of its `git fetch`/`git diff` work there — never in the lander's checkout.
+
+This costs nothing in capability: `land-review` only ever needs to `git fetch` the branch(es) under
+review and diff them by ref (it never checks anything out — see
+[`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where* that
+happens, not *what* it does. And it needs no dedicated cleanup: `land-review` never commits (no
+merge, no push, no `bd` write — its own "What I don't do"), so its scratch worktree's HEAD never
+diverges from the `trunk` HEAD it was branched from. The existing worktree-GC backstop (lode-h1vn /
+lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)) already reclaims any unlocked,
+clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — this scratch
+worktree qualifies by construction, with no new mechanism.
+
+**One precision on "the same pass," because the fix's no-new-GC claim rests on it.** Section 4 is
+reached even when the accepted set is empty — no early exit sits between the 2c dispatch and the
+sweep on that account, and the merge loop just iterates zero times — so a pass that lands nothing
+still reclaims its scratch worktrees. What does *not* hold is the unconditional reading: a pass that
+**aborts** after 2c has already spun up scratch worktrees (the 2b precheck machine-fault stop, the
+`validate-mermaid.sh` exit-2 stop, or the bounce path's `blocks-dependents.sh` `exit 1`) never
+reaches Section 4, and leaks them past the pass. That leak is bounded and self-healing rather than a
+hazard — the leaked worktrees are clean, unlocked, and ancestors of `trunk`, so the next pass that
+does reach Section 4 reclaims them under the same predicate — but the justification is "the backstop
+reclaims it, next pass at the latest," not "always this pass."
+
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
 The `/code` step-0 pickup **merges** `origin/trunk` into the kicked-back branch instead of rebasing

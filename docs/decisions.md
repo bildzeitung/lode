@@ -1548,3 +1548,44 @@ are catalogued in [configuration.md](configuration.md).
     lines). Splitting them into two tickets would be two overlapping import-rewrite passes over
     the same 38–54 files, landing in either order — a guaranteed conflict on the shared files.
     Bundling them into one move avoids that by construction.
+- **`land-review` dispatches now MUST run `isolation: "worktree"` — enforce at dispatch, don't patch
+  the merge classifier (lode-g387, 2026-07-19).** `/land` runs on `trunk`, in the **main checkout** —
+  the same tree its Section 3 batch-merges the accepted set into. `land-review` (its semantic gate,
+  first task per branch) used to be dispatched into that same tree with no isolation option at all
+  (Agent tool, `subagent_type: "claude"`, nothing else) — so the reviewer ran wherever the lander
+  happened to be running: the main checkout, on `trunk`.
+
+  **Observed twice, not once** — a 2026-07-19 pass reproduced an earlier, deliberately-unticketed
+  occurrence symptom-by-symptom, which is what promoted it from "plausible one-off" to "systematic."
+  The incident and its forensics (why the dirtied tree read as an unretried conflict rather than as
+  what it was) are recorded once, in
+  [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387);
+  what belongs here is the choice it forced.
+
+  **Decision: fix the isolation gap at dispatch, not the symptom in `merge_one`.** The ticket's own
+  reasoning is the deciding factor — the repeat across two independent occurrences is evidence the
+  cause is *systematic* (a dispatch-time gap), not incidental to one branch's contents, and a
+  defensive patch to `merge_one` that recognized "dirtied by something other than the passive
+  export" as its own failure class would only make the *symptom* legible; it would not stop a
+  reviewer from dirtying the tree in the first place, and the tree it dirties is the one about to be
+  merged into. `land-review` is now dispatched exactly like the producer-side agents already are
+  (`code/SKILL.md`'s `coding`/`code-reviewer` dispatches, precedent already established): Agent tool,
+  `subagent_type: "claude"`, **`isolation: "worktree"` mandatory** — launched already cwd'd inside its
+  own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, entirely separate from the
+  lander's checkout. `merge_one` itself is untouched by this ticket.
+
+  **Costs nothing in capability, needs no new cleanup mechanism.** `land-review` only ever `git
+  fetch`es the branch(es) under review and diffs them by ref (never checks anything out —
+  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md)), so isolation changes *where*
+  that happens, never *what* it does. And because `land-review` never commits, its scratch worktree's
+  HEAD never diverges from the `trunk` HEAD it was branched from, so the existing worktree-GC
+  backstop (lode-h1vn / lode-amif, above) reclaims it under its existing predicate with no dedicated
+  code — that pass's own GC step normally, and the next pass that reaches it if this one aborts
+  early (see the agents-workflow.md section above for the exact bound). **Enforcement is
+  instruction-only, deliberately:** there is no `PreToolUse` guard on agent dispatch, matching how
+  the identical `isolation: "worktree"` requirement for `coding`/`code-reviewer` has always been
+  specified in `code/SKILL.md`. Whether that class of rule should be mechanically enforced the way
+  `gh` writes are (lode-o29m) is deferred to lode-kt6g, not settled here. Documented in
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate),
+  [`land-review/SKILL.md`](../.claude/skills/land-review/SKILL.md#how-to-use-me), and
+  [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
