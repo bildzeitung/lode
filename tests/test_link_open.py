@@ -10,7 +10,25 @@ wiring (the Ctrl+N binding on ``EditScreen``/``VersionViewScreen``/
 
 from __future__ import annotations
 
+import webbrowser
+
 from lode.tui.screens._link_open import extract_link_at_cursor, resolve_link_open
+
+
+#: A stand-in for a real GUI-browser controller (Firefox/Chrome/etc.) -- any
+#: type that is not `webbrowser.GenericBrowser` counts as "safe" per
+#: `resolve_link_open`'s contract, so a bare unrelated class is enough.
+class _FakeGuiBrowser:
+    pass
+
+
+#: `webbrowser.BackgroundBrowser` SUBCLASSES `GenericBrowser` in the real
+#: stdlib and is safe (it does not share the tty) -- this fake mirrors that
+#: relationship without depending on stdlib platform specifics, to pin that
+#: `resolve_link_open` checks the EXACT type, never `isinstance`.
+class _FakeBackgroundBrowser(webbrowser.GenericBrowser):
+    pass
+
 
 # ---------------------------------------------------------------------------
 # extract_link_at_cursor -- inline links
@@ -183,74 +201,83 @@ def test_cursor_between_two_links_on_one_line_matches_neither() -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_link_open -- the $BROWSER / display safety predicate
+# resolve_link_open -- the controller-type / display safety predicate
+# (lode-ev5j.3's browser-safety review superseded the original $BROWSER
+# denylist wording with an exact-controller-type check; see the module
+# docstring and this ticket's notes for why a name list can't catch every
+# terminal browser.)
 # ---------------------------------------------------------------------------
 
 
 def test_normal_env_with_display_opens() -> None:
-    should_open, message = resolve_link_open("https://example.com", {"DISPLAY": ":0"})
+    should_open, message = resolve_link_open(
+        "https://example.com", {"DISPLAY": ":0"}, controller_type=_FakeGuiBrowser
+    )
     assert should_open is True
     assert "https://example.com" in message
 
 
-def test_browser_w3m_refuses_even_with_a_display() -> None:
+def test_generic_browser_controller_refuses_even_with_a_display() -> None:
     should_open, message = resolve_link_open(
-        "https://example.com", {"DISPLAY": ":0", "BROWSER": "w3m"}
+        "https://example.com",
+        {"DISPLAY": ":0"},
+        controller_type=webbrowser.GenericBrowser,
     )
     assert should_open is False
     assert "https://example.com" in message
 
 
-def test_browser_terminal_denylist_covers_lynx_links_elinks() -> None:
-    for terminal_browser in ("lynx", "links", "elinks"):
-        should_open, message = resolve_link_open(
-            "https://example.com",
-            {"DISPLAY": ":0", "BROWSER": terminal_browser},
-        )
-        assert should_open is False, terminal_browser
-        assert "https://example.com" in message
-
-
-def test_browser_terminal_denylist_matches_a_full_path() -> None:
-    should_open, _ = resolve_link_open(
-        "https://example.com", {"DISPLAY": ":0", "BROWSER": "/usr/bin/w3m"}
-    )
-    assert should_open is False
-
-
-def test_browser_colon_separated_list_checks_every_entry() -> None:
+def test_generic_browser_subclass_is_treated_as_safe_not_via_isinstance() -> None:
+    # BackgroundBrowser subclasses GenericBrowser in the real stdlib and does
+    # NOT share the tty -- the check must be an exact type comparison, never
+    # isinstance, or this would wrongly refuse a safe controller.
     should_open, _ = resolve_link_open(
         "https://example.com",
-        {"DISPLAY": ":0", "BROWSER": "firefox:w3m"},
+        {"DISPLAY": ":0"},
+        controller_type=_FakeBackgroundBrowser,
+    )
+    assert should_open is True
+
+
+def test_controller_type_none_refuses() -> None:
+    # None means webbrowser.get() raised webbrowser.Error -- no controller
+    # could be resolved at all, so there is nothing safe to open.
+    should_open, message = resolve_link_open(
+        "https://example.com", {"DISPLAY": ":0"}, controller_type=None
     )
     assert should_open is False
+    assert "https://example.com" in message
 
 
 def test_no_display_and_no_ssh_x11_refuses() -> None:
-    should_open, message = resolve_link_open("https://example.com", {})
+    should_open, message = resolve_link_open(
+        "https://example.com", {}, controller_type=_FakeGuiBrowser
+    )
     assert should_open is False
     assert "https://example.com" in message
 
 
 def test_wayland_display_counts_as_a_display() -> None:
     should_open, _ = resolve_link_open(
-        "https://example.com", {"WAYLAND_DISPLAY": "wayland-0"}
+        "https://example.com",
+        {"WAYLAND_DISPLAY": "wayland-0"},
+        controller_type=_FakeGuiBrowser,
     )
     assert should_open is True
 
 
 def test_macos_never_needs_display() -> None:
-    should_open, _ = resolve_link_open("https://example.com", {}, is_macos=True)
+    should_open, _ = resolve_link_open(
+        "https://example.com", {}, controller_type=_FakeGuiBrowser, is_macos=True
+    )
     assert should_open is True
 
 
-def test_macos_still_refuses_a_terminal_browser() -> None:
+def test_macos_still_refuses_a_generic_browser_controller() -> None:
     should_open, _ = resolve_link_open(
-        "https://example.com", {"BROWSER": "lynx"}, is_macos=True
+        "https://example.com",
+        {},
+        controller_type=webbrowser.GenericBrowser,
+        is_macos=True,
     )
     assert should_open is False
-
-
-def test_unset_browser_with_display_opens() -> None:
-    should_open, _ = resolve_link_open("https://example.com", {"DISPLAY": ":1"})
-    assert should_open is True

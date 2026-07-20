@@ -31,10 +31,35 @@ logic lives in exactly one place rather than being reimplemented per screen.
 **Two pieces, each a pure function, on purpose (see this ticket's own
 Testing note).** :func:`extract_link_at_cursor` is line text + cursor column
 -> URL-or-``None``, no Textual/IO dependency at all. :func:`resolve_link_open`
-is env mapping (+ platform) -> should-open + status message, equally pure.
+is env mapping + resolved browser-controller type (+ platform) -> should-open
++ status message, equally pure -- the live ``webbrowser.get()`` call that
+resolves the controller is made by :func:`open_link_under_cursor`, not here.
 :func:`open_link_under_cursor` is the only piece that touches a live
-``Screen``/``TextArea`` -- it just wires the two pure functions together and
-calls ``webbrowser.open``/``screen.notify``.
+``Screen``/``TextArea`` or a real browser -- it wires the two pure functions
+together, calls ``webbrowser.get``/``webbrowser.open``/``screen.notify``, and
+(lode-ev5j.3's browser-safety review) runs entirely on a worker THREAD via
+``@work(thread=True)`` -- see its own docstring for why.
+
+**Browser-safety guard: exact controller type, not a ``$BROWSER`` name list
+(lode-ev5j.3's browser-safety review, superseding this ticket's original
+denylist wording).** A name list can only refuse browsers it happens to
+enumerate; it can't see a name it doesn't know. Verified against the CPython
+stdlib: ``webbrowser.register_standard_browsers()`` registers console
+browsers (``www-browser``, ``links``, ``lynx``, ``w3m``) as
+``GenericBrowser`` whenever ``$TERM`` is set, INDEPENDENT of ``$DISPLAY`` and
+with ``$BROWSER`` never involved -- so a slim container/devcontainer with
+only text browsers on ``PATH`` resolves ``GenericBrowser('www-browser')``
+even with ``$DISPLAY`` set and no denylist match. ``GenericBrowser.open()``
+does ``subprocess.Popen(...)`` then ``p.wait()`` -- foreground, sharing the
+current tty, exactly the corruption this guard exists to prevent. The fix:
+refuse whenever the controller that would actually run is EXACTLY
+``webbrowser.GenericBrowser`` -- ``type(webbrowser.get()) is
+webbrowser.GenericBrowser``, never ``isinstance`` (``BackgroundBrowser``
+subclasses ``GenericBrowser`` and is safe -- it does not share the tty). This
+subsumes all four originally-denylisted names by construction, and closes
+the reachable gap a name list structurally cannot: an unrecognized
+``$BROWSER`` value (a wrapper script, ``browsh``, ``carbonyl``, ...) also
+resolves to ``GenericBrowser`` and is caught the same way.
 """
 
 from __future__ import annotations
@@ -46,17 +71,13 @@ import webbrowser
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from textual import work
+
 from lode.drawdown import iter_url_spans
 
 if TYPE_CHECKING:
     from textual.screen import Screen
     from textual.widgets import TextArea
-
-#: Terminal browsers that must never be launched from inside a running TUI --
-#: doing so replaces the CURRENT tty's contents with the terminal browser,
-#: corrupting the TUI underneath it rather than opening a separate window
-#: (this ticket's own design note).
-_TERMINAL_BROWSER_DENYLIST = frozenset({"w3m", "lynx", "links", "elinks"})
 
 #: `[text](url)` -- the whole construct (brackets, text, parens, url) is the
 #: match span, so a cursor anywhere in the visible link -- not just over the
@@ -119,13 +140,6 @@ def extract_link_at_cursor(line: str, column: int) -> str | None:
     return None
 
 
-def _is_terminal_browser(command: str) -> bool:
-    """True if *command* (one `:`-separated `$BROWSER` entry) names a terminal browser."""
-    first_token = command.strip().split()[0] if command.strip() else ""
-    name = os.path.basename(first_token).lower()
-    return name in _TERMINAL_BROWSER_DENYLIST
-
-
 def _has_display(env: Mapping[str, str], *, is_macos: bool) -> bool:
     """True if a GUI display is plausibly reachable from *env*.
 
@@ -141,7 +155,11 @@ def _has_display(env: Mapping[str, str], *, is_macos: bool) -> bool:
 
 
 def resolve_link_open(
-    url: str, env: Mapping[str, str], *, is_macos: bool = False
+    url: str,
+    env: Mapping[str, str],
+    *,
+    controller_type: type[webbrowser.BaseBrowser] | None,
+    is_macos: bool = False,
 ) -> tuple[bool, str]:
     """Decide whether *url* is safe to hand to ``webbrowser.open`` under *env*.
 
@@ -149,44 +167,68 @@ def resolve_link_open(
     carries *url*, whichever branch fires -- opened or refused -- so it is
     always manually copyable off the status line (this ticket's "never
     silently no-op" acceptance criterion). Pure function: no ``webbrowser``
-    call, no live environment read -- *env* is passed in, so this is
-    testable against a fake mapping.
+    call, no live environment read -- *env* and *controller_type* (the type
+    of whatever ``webbrowser.get()`` resolved to, or ``None`` if resolving it
+    raised ``webbrowser.Error``) are passed in, so this is testable against a
+    fake mapping and a fake type, never a live browser lookup.
 
-    Checked in order: a `$BROWSER` naming a terminal browser refuses
-    regardless of display (opening it would corrupt the running TUI, exactly
-    as unsafe over SSH-with-X11-forwarding as it is on a bare local
-    terminal); otherwise, no reachable display refuses too (over SSH without
-    forwarding, or headless); otherwise it's safe to open.
+    Checked in order: a controller that resolves to EXACTLY
+    ``webbrowser.GenericBrowser`` (or that failed to resolve at all) refuses
+    regardless of display -- opening it would corrupt the running TUI, exactly
+    as unsafe over SSH-with-X11-forwarding as it is on a bare local terminal
+    (see the module docstring for why this must be an exact type check, not
+    ``isinstance``); otherwise, no reachable display refuses too (over SSH
+    without forwarding, or headless -- a GUI browser installed but nothing to
+    show it on still resolves a safe controller, so this check stays
+    independent of the one above); otherwise it's safe to open.
     """
-    browser_cmd = env.get("BROWSER", "")
-    if browser_cmd and any(
-        _is_terminal_browser(part) for part in browser_cmd.split(":") if part
-    ):
-        return False, f"$BROWSER is a terminal browser -- link: {url}"
+    if controller_type is None or controller_type is webbrowser.GenericBrowser:
+        return False, f"browser would open in this terminal -- link: {url}"
     if not _has_display(env, is_macos=is_macos):
         return False, f"no display available -- link: {url}"
     return True, f"opened in browser -- link: {url}"
 
 
+@work(thread=True)
 def open_link_under_cursor(screen: Screen[object], text_area: TextArea) -> None:
     """Ctrl+N: open the link under *text_area*'s cursor, or explain there isn't one.
 
     Shared glue between the two pure functions above and a live screen:
     reads the cursor's own line out of *text_area*, extracts a URL (if any),
-    resolves whether it's safe to open against the real process environment,
-    and notifies -- opening the browser first when it's safe, so a
-    conflicting title inherited from a previous state can't race the visible
-    status message.
+    resolves the live browser controller and whether it's safe to open
+    against the real process environment, and notifies -- opening the
+    browser first when it's safe, so a conflicting title inherited from a
+    previous state can't race the visible status message.
+
+    Runs entirely on a worker THREAD (lode-ev5j.3's browser-safety review) --
+    three verified stdlib paths block for real: resolving the controller via
+    ``webbrowser.get()`` runs ``subprocess.check_output(['xdg-settings', ...])``
+    with no timeout on its first call; ``UnixBrowser._invoke`` hard-freezes
+    for up to 5s launching a cold browser; ``GenericBrowser.open`` blocks for
+    the browser's entire foreground lifetime. None of that may run on the
+    Textual event loop, so the whole thing moves off it, mirroring
+    :meth:`~lode.tui.screens.ask.AskScreen._ask`'s own ``@work(thread=True)``
+    pattern -- every ``notify`` accordingly goes through
+    ``screen.app.call_from_thread``, never called directly from this thread.
     """
     row, column = text_area.cursor_location
     line = text_area.document.get_line(row)
     url = extract_link_at_cursor(line, column)
     if url is None:
-        screen.notify("no link under the cursor", severity="warning")
+        screen.app.call_from_thread(
+            screen.notify, "no link under the cursor", severity="warning"
+        )
         return
+    try:
+        controller_type: type[webbrowser.BaseBrowser] | None = type(webbrowser.get())
+    except webbrowser.Error:
+        controller_type = None
     should_open, message = resolve_link_open(
-        url, os.environ, is_macos=sys.platform == "darwin"
+        url,
+        os.environ,
+        controller_type=controller_type,
+        is_macos=sys.platform == "darwin",
     )
     if should_open:
         webbrowser.open(url)
-    screen.notify(message)
+    screen.app.call_from_thread(screen.notify, message)

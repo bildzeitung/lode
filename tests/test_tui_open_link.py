@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import webbrowser
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,17 @@ from lode.tui.screens.snapshot_viewer import (
 )
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
 from lode.versions import save
+
+
+class _FakeGuiBrowser:
+    """A stand-in safe (non-`GenericBrowser`) controller (lode-ev5j.3).
+
+    ``open_link_under_cursor`` now resolves the live ``webbrowser.get()``
+    itself (the browser-safety review's controller-type guard), so these
+    screen-level tests must control what that resolves to directly, rather
+    than relying on whatever browsers happen to be registered on the machine
+    actually running the suite.
+    """
 
 
 def _insert_snapshot(
@@ -74,6 +86,10 @@ def test_edit_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: _FakeGuiBrowser(),
+    )
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -87,6 +103,7 @@ def test_edit_screen_ctrl_n_on_a_link_opens_it(
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.move_cursor((0, 8))  # inside "my link"
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
     asyncio.run(_drive())
@@ -95,11 +112,14 @@ def test_edit_screen_ctrl_n_on_a_link_opens_it(
     assert any("https://example.com/path" in message for message in messages)
 
 
-def test_edit_screen_ctrl_n_with_terminal_browser_does_not_open_but_notifies(
+def test_edit_screen_ctrl_n_with_generic_browser_controller_does_not_open_but_notifies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The guard is an exact controller-TYPE check now (lode-ev5j.3's
+    # browser-safety review superseded the original `$BROWSER` name list) --
+    # what makes a controller unsafe is resolving to `webbrowser.GenericBrowser`
+    # itself, independent of what (if anything) `$BROWSER` names.
     monkeypatch.setenv("DISPLAY", ":0")
-    monkeypatch.setenv("BROWSER", "w3m")
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -113,6 +133,10 @@ def test_edit_screen_ctrl_n_with_terminal_browser_does_not_open_but_notifies(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: webbrowser.GenericBrowser("w3m"),
+    )
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -125,6 +149,7 @@ def test_edit_screen_ctrl_n_with_terminal_browser_does_not_open_but_notifies(
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.move_cursor((0, 8))
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
     asyncio.run(_drive())
@@ -138,7 +163,6 @@ def test_edit_screen_ctrl_n_headless_notifies_without_opening(
 ) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    monkeypatch.delenv("BROWSER", raising=False)
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -152,6 +176,12 @@ def test_edit_screen_ctrl_n_headless_notifies_without_opening(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    # A perfectly safe, GUI-capable controller -- proves the refusal below is
+    # driven by the missing display, not by the controller type.
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: _FakeGuiBrowser(),
+    )
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -164,6 +194,7 @@ def test_edit_screen_ctrl_n_headless_notifies_without_opening(
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.move_cursor((0, 8))
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
     asyncio.run(_drive())
@@ -201,6 +232,7 @@ def test_edit_screen_ctrl_n_with_no_link_under_cursor_notifies_clearly(
             text_area = app.screen.query_one(f"#{EDIT_BODY_ID}")
             text_area.move_cursor((0, 3))
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
             return isinstance(app.screen, EditScreen)
 
@@ -237,6 +269,10 @@ def test_version_view_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: _FakeGuiBrowser(),
+    )
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -249,6 +285,7 @@ def test_version_view_screen_ctrl_n_on_a_link_opens_it(
             text_area = app.screen.query_one(f"#{VERSION_BODY_ID}")
             text_area.move_cursor((0, 8))
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
     asyncio.run(_drive())
@@ -285,6 +322,10 @@ def test_snapshot_viewer_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    monkeypatch.setattr(
+        "lode.tui.screens._link_open.webbrowser.get",
+        lambda *a, **kw: _FakeGuiBrowser(),
+    )
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -297,6 +338,7 @@ def test_snapshot_viewer_screen_ctrl_n_on_a_link_opens_it(
             text_area = app.screen.query_one(f"#{SNAPSHOT_VIEWER_BODY_ID}")
             text_area.move_cursor((0, 8))
             await pilot.press("ctrl+n")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
     asyncio.run(_drive())
