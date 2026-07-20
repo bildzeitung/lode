@@ -390,6 +390,22 @@ are catalogued in [configuration.md](configuration.md).
   marketplace command ever shadows the built-in in some environment, this review step would silently
   no-op again in a new way (the same failure shape as the `git -C` false-green above).
 
+  **Update (lode-axyq, 2026-07-20) — (4) above is superseded and now known to be misleading as
+  written.** A later, more rigorous test (a direct keystroke test by the maintainer, plus confirmation
+  that `/code-review` never appears in the skill listing handed to any subagent or the main session)
+  established that `/code-review` is **USER-GATED**: a human keystroke can invoke it anywhere, but *no
+  model context — main session or subagent — can invoke it at all*, regardless of cwd or which
+  `/code-review` would resolve if it could run. This directly contradicts (4)'s claim that the call
+  "wrote a fix directly to the reviewer's own working tree" while running autonomously inside a
+  subagent. The two records cannot both be literally true; the most plausible reconciliation is that
+  the 2026-07-09 test involved a human typing the command into that subagent's session (still "inside
+  a subagent" in the sense of *which worktree* it operated in, but not the model invoking it on its
+  own), which the 2026-07-09 note did not distinguish. Left as a discrepancy rather than silently
+  corrected, since this record was not re-verified first-hand for this entry — but the design decision
+  going forward does not depend on resolving it: `code-reviewer.md` no longer attempts `/code-review`
+  under any circumstance, autonomous or not, and instead runs its own reasoned correctness pass (see
+  `.claude/agents/code-reviewer.md` step 4 and `docs/agents-workflow.md`'s landing-loop section).
+
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**

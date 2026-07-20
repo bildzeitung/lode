@@ -29,7 +29,9 @@ Work moves through three passes, with the human as the hinge:
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
    → stop. Then a `code-reviewer` (Opus) fetches that pushed branch and checks it out into its **own**
-   launch worktree, runs the technical review (`/code-review` + `/simplify`), re-gates, re-pushes, and
+   launch worktree, runs the technical review — a correctness pass it reasons through by hand plus
+   `/simplify` (`/code-review` itself is a bundled skill that is user-gated and unreachable from any
+   model context, lode-axyq; see `.claude/agents/code-reviewer.md` step 4) — re-gates, re-pushes, and
    swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
    **`/code` claims each resolved ticket itself, before dispatch (lode-xr8v)** — for every path where
@@ -249,7 +251,8 @@ does **not** review its own work.
 Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
 branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
 worktree, never `EnterWorktree`, and never the builder's worktree at all — runs the **technical
-review** (`/code-review --fix` + `/simplify`, re-gate, keep the last green commit), re-pushes
+review** (its own reasoned correctness pass — `/code-review` is unreachable from any model context,
+lode-axyq — plus the genuinely tool-backed `/simplify`; re-gate, keep the last green commit), re-pushes
 `land/<id>`, and swaps the ticket to **`ready-for-land`**. Neither agent merges, closes, or writes
 `trunk` — landing is [`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't
 shown to the user, so `/code` relays what came back across **both** phases — which issue, that the
@@ -293,7 +296,7 @@ flowchart TD
     PUSH --> CLEAN2{"git status --short<br>empty?"}
     CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review --fix + simplify · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -1047,7 +1050,10 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    inside its worktree"), and a launch worktree still at `trunk` HEAD has an empty diff against the
    builder's real branch, so driving the builder's worktree in place both fought a guard *and*
    produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
-2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
+2. **Runs the technical review** — its own reasoned pass against the diff for bugs (`/code-review` is
+   a bundled Claude Code skill that is user-gated and unreachable from any model context, confirmed by
+   keystroke test, lode-axyq — see `.claude/agents/code-reviewer.md` step 4 for the full mechanism and
+   what the correctness pass covers) and the genuinely tool-backed `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
 3. **Re-pushes `land/<id>`** and **swaps the ticket to `ready-for-land`** (refreshed head SHA +
@@ -1071,7 +1077,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(review_head SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]
