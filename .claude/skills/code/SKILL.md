@@ -53,41 +53,14 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `nox -s tests` with pytest-xdist — back then `-n auto`, **one worker per CPU core** (noxfile.py) —
 > each holding a cached ONNX reranker, and 7 × 8 workers exhausted this 15GiB/8-core WSL2 machine's
 > memory. Staggering to ~4 concurrent agents ran the identical workload with zero further crashes.
-> **Before step 0**, compute the cap once and hold it for the rest of the invocation:
+> **Before step 0**, compute the cap once and hold it for the rest of the invocation. The derivation
+> itself lives in `scripts/code-concurrency-cap.sh` (lode-54mo) — extracted out of this file so it is
+> testable (`tests/test_code_concurrency_cap.py`); ungated inline shell embedded in a SKILL.md is
+> exactly where this repo already shipped a silent, undetected-for-months bug once before (lode-mh9g's
+> `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> CODE_MAX_CONCURRENT_AGENTS="${LODE_CODE_MAX_CONCURRENT_AGENTS:-$(
->   mem_kib=$(awk '/^MemAvailable:/{print $2; exit}' /proc/meminfo 2>/dev/null)
->   [ -z "$mem_kib" ] && mem_kib=$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)
->   nproc_n=$(nproc 2>/dev/null || echo 4)
->   workers_n="${LODE_TEST_WORKERS:-8}"    # same effective width noxfile.py's gate uses (lode-bv6y)
->   # Anything that is not a positive integer — `auto`, xdist's `logical`, a typo,
->   # an exported-empty var — means "we cannot know the width here", and the widest
->   # the gate can get is one worker per core. Assume that. Bash arithmetic silently
->   # evaluates a non-numeric string to 0, which would collapse the per-agent budget
->   # to the 2GiB floor and OVER-dispatch (cap 12 on a 24-core box) — a bad value
->   # must err tight, never optimistic; over-dispatch is what crashed this host.
->   case "$workers_n" in ''|*[!0-9]*|0) workers_n=$nproc_n ;; esac
->   if [ -n "$mem_kib" ]; then
->     # Per-agent gate budget = 2GiB fixed + 0.125GiB/xdist-worker: the gate's
->     # footprint scales with the WORKER COUNT the gate actually spawns
->     # (LODE_TEST_WORKERS, default 8 — lode-bv6y), not with this machine's
->     # core count.
->     # Measured, not extrapolated; 3GiB/agent @ 8 workers, 5GiB @ 24 workers.
->     # docs/agents-workflow.md#concurrency-cap-lode-2cf holds the measurements,
->     # the modelling assumption, and how to re-measure when the suite grows.
->     per_agent_kib=$(( 2 * 1024 * 1024 + workers_n * 1024 * 1024 / 8 ))
->     by_mem=$(( mem_kib / per_agent_kib ))
->   else
->     by_mem=4                            # /proc/meminfo unavailable (non-Linux) — conservative fallback
->   fi
->   by_cpu=$(( nproc_n / 2 ))
->   [ "$by_cpu" -lt 1 ] && by_cpu=1
->   cap=$by_mem
->   [ "$cap" -gt "$by_cpu" ] && cap=$by_cpu
->   [ "$cap" -lt 1 ] && cap=1
->   echo "$cap"
-> )}"
+> CODE_MAX_CONCURRENT_AGENTS="$(scripts/code-concurrency-cap.sh)"
 > ```
 >
 > - **`LODE_CODE_MAX_CONCURRENT_AGENTS`** (env var) wins outright when set — no clamping, no
@@ -111,7 +84,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 >   to move together. All of these numbers are backed by a real measurement of the gate's peak memory,
 >   recorded in [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#concurrency-cap-lode-2cf) —
 >   the cap is a throughput heuristic, **not** a worst-case memory bound; don't "tighten" it into one
->   without reading that section.
+>   without reading that section. This paragraph is explanation and may lag; `scripts/code-concurrency-cap.sh`
+>   is the executable source of truth and wins on any disagreement.
 > - **The cap is one shared budget across every dispatch source in this invocation** — step 0's
 >   rebase pickups, step 1's stranded-review pickups, Phase 1 builders, and Phase 2 reviewers all draw
 >   from the same count; builders and reviewers are not separate pools. Track how many dispatched
