@@ -354,6 +354,14 @@ cap            = max(1, min(by_mem, by_cpu))
 Read `MemAvailable` from `/proc/meminfo` (falling back to `MemTotal` if absent), divide by
 `per_agent_gib`, take the lower of that and `nproc/2`, floor at 1.
 
+**This pseudo-code block is explanation, not the implementation (lode-54mo).** The actual derivation
+lives in [`scripts/code-concurrency-cap.sh`](../scripts/code-concurrency-cap.sh), called by
+`.claude/skills/code/SKILL.md` — extracted so it is testable
+([`tests/test_code_concurrency_cap.py`](../tests/test_code_concurrency_cap.py)) rather than living as
+ungated inline shell embedded in a SKILL.md prompt, exactly where this repo already shipped a silent,
+undetected-for-months bug once before (lode-mh9g's `merge-tree` snippet). This block may lag a script
+change; the script wins on any disagreement between the two.
+
 **This term tracks `workers` (the `pytest -n` count the gate actually spawns), not `nproc`
 (lode-bv6y).** When this section was first written (lode-lwx6), the gate always ran `-n auto`, so
 `workers == nproc` and writing `nproc` directly into the formula was equivalent — the two were the same
