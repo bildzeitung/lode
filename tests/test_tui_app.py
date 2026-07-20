@@ -298,7 +298,18 @@ def test_related_panel_renders_snippet_with_markup_like_brackets(
 #
 # lode-11io: the App-level "Ask" binding (ctrl+l) renders in every screen's
 # footer, including this one -- consumed moved from 77 to 84 (+7, matching
-# the measurement app.py's own "Cfg" rationale comment records).
+# the measurement app.py's own "Cfg" rationale comment records). NOTE those
+# two figures are HISTORICAL and no longer reproduce: re-measured during the
+# lode-5ill review, the 8-entry footer immediately before lode-5ill consumed
+# 76, not 84. Something shortened a label between lode-11io and now; the
+# cause was not chased down, so treat 77/84 as period record, not as a
+# baseline to compute against. Re-measure rather than subtract.
+#
+# lode-5ill: a 4th screen-level entry, "Link" (Ctrl+N open-link-under-cursor,
+# reclaiming the same letter lode-bsmc freed for a different action -- see
+# docs/keybindings.md). MEASURED at 84/100 (76 + 7 for the "Link" key + 1
+# gutter) -- comfortably under the bound, no label shortening needed.
+# Re-verified independently during the lode-5ill technical review.
 #
 # TRAP (lode-3rvw review): show_horizontal_scrollbar is necessary but NOT
 # sufficient, so this test does not rely on it alone. Textual separates the
@@ -339,14 +350,17 @@ def test_capture_footer_fits_100_columns_with_every_binding_visible(
     assert has_hscroll is False  # the bar fits -- nothing dropped/compressed
     # ...and it fits WITHOUT Textual collapsing the gutters to get there.
     assert consumed <= 100, f"footer really consumes {consumed}/100 columns"
-    # All 3 screen-level + 5 App-level bindings stay visible (none hidden via
+    # All 4 screen-level + 5 App-level bindings stay visible (none hidden via
     # show=False) -- only their description text was shortened, and ctrl+s
     # keeps its full "Save & new" (lode-bsmc: folded onto ctrl+s from the now-
-    # retired ctrl+n) so it cannot read as a discard-and-restart.
+    # retired ctrl+n) so it cannot read as a discard-and-restart. "Link" is
+    # lode-5ill's Ctrl+N open-link, reclaiming that same freed letter for a
+    # different action -- widths measured in the block comment above.
     assert descriptions == [
         "Save & new",
         "Discard",
         "Related",
+        "Link",
         "Quit",
         "Cfg",
         "Browse",
