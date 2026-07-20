@@ -31,10 +31,9 @@ Every Python CLI in this repo is built with **Typer**. Never `argparse`.
 
 A long opaque identifier — a full git SHA, a bd issue id, a `.claude/worktrees/` hash — is never
 hand-typed from a shorter prefix or from memory. Always derive it mechanically: `$(git rev-parse
-<ref>)` for a commit SHA, `bd show <id>` output for a bd id, the actual worktree path on disk for a
-hash. Holding a short form (a 7-char abbreviation, a fragment recalled from earlier context) and
-typing out the rest by hand is exactly the gap where an LLM confabulates a plausible-looking but
-fabricated tail — the invented characters are as fluent as the real ones, so the mistake is not
-self-detectable by re-reading what was typed (lode-fpmi). A `git cat-file -e`-backed PreToolUse hook
-denies an unrecognized 40-hex string in a `bd`/`git` command as a backstop, but the fiat is the
-first line of defense: never retype what can be derived.
+<ref>)` for a commit SHA, `bd show <id>` for a bd id, the actual path on disk for a worktree hash.
+
+A `PreToolUse(Bash)` hook backstops this for 40-hex git SHAs only; the fiat covers every opaque
+identifier. Why this needs a mechanism rather than an instruction, and what the hook does and does
+not catch:
+[`docs/agents-workflow.md`](agents-workflow.md#guard-against-fabricated-shas-lode-fpmi) (lode-fpmi).

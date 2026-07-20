@@ -1,104 +1,65 @@
 #!/usr/bin/env bash
 #
-# PreToolUse(Bash) guard body for lode-fpmi: deny a Bash call that contains a
-# 40-hex string which LOOKS like a git object id (a full SHA-1) but does not
-# actually exist as a git object in this repository -- the fingerprint of a
-# FABRICATED/retyped SHA rather than a real one copied or derived from git.
-#
-# Root cause (lode-fpmi): an agent held a short 7-char prefix in context,
-# needed the full 40-char form for a bd --metadata write (land_head /
-# review_head, which /land and /code both read to check out and detect
-# drift), and pattern-completed the remaining 33 characters rather than
-# deriving it via `git rev-parse <ref>`. The invented tail is exactly as
-# fluent as a real one, so this is not self-detectable by re-reading what
-# was typed -- it needs a mechanical check. `git cat-file -e <sha>` is that
-# check: a fabricated SHA is, by construction, essentially always a
-# nonexistent object.
-#
-# Extracted to its own script (rather than embedded inline in
-# .claude/settings.json, unlike the lode-ij24/lode-o29m guards) specifically
-# so it can be driven by tests/test_sha_fabrication_guard.py the way
-# scripts/code-concurrency-cap.sh is driven by
-# tests/test_code_concurrency_cap.py -- per this ticket's own acceptance
-# criteria: "Ungated inline shell embedded in config is exactly where this
-# repo already shipped a silent undetected-for-months bug" (lode-mh9g,
-# lode-54mo).
+# PreToolUse(Bash) guard body (lode-fpmi): deny a Bash call carrying a 40-hex
+# string that LOOKS like a git object id but is not one -- the fingerprint of a
+# FABRICATED SHA, i.e. an agent pattern-completing a short prefix it held in
+# context rather than deriving the value via `git rev-parse`. The invented tail
+# is exactly as fluent as a real one, so this is not self-detectable by
+# re-reading what was typed; `git cat-file -e` is the mechanical oracle, since a
+# fabricated SHA is essentially never a real object.
 #
 # Usage: scripts/sha-fabrication-guard.sh '<bash command string>'
 #
-# On stdout: nothing (fall through / allow) OR a single-line PreToolUse
-# hookSpecificOutput JSON object with permissionDecision "deny" -- same
-# contract as the lode-ij24/lode-o29m guards, so the settings.json wrapper
-# can just print whatever this script prints. Always exits 0: a PreToolUse
-# hook exiting non-zero is itself a defect (see tests/test_bd_deps_guard.py).
+# Prints nothing (allow) or one PreToolUse hookSpecificOutput JSON object with
+# permissionDecision "deny" -- same contract as the lode-ij24/lode-o29m guards.
+# ALWAYS exits 0: a PreToolUse hook exiting non-zero is itself a defect.
 #
-# Scope (deliberately narrow, per this ticket's design constraints):
-#   - Skipped entirely when not inside a git work tree -- git cat-file has
-#     nothing to check against.
-#   - Only scans command SEGMENTS (split on ; & | ( ) { } and backtick, same
-#     technique as the lode-o29m gh-write guard) that are themselves a bd or
-#     git invocation (optionally through `rtk`, leading env assignments, or
-#     a handful of common wrapper commands) -- "do not scan every Bash call
-#     for hex" (this ticket's own constraint). A 40-hex string inside an
-#     unrelated command (grep, cat, echo, curl, ...) is never even looked
-#     at.
-#   - Only lowercase [0-9a-f]{40} tokens count -- real `git rev-parse` /
-#     `git log --format=%H` output is always lowercase; this also
-#     sidesteps an all-caps 40-char token that was never meant as a SHA in
-#     the first place.
-#   - Backslash-newline line continuations are collapsed to a space before
-#     scanning, so a real, multi-line `bd update <id> \` +
-#     `  --set-metadata land_head=<sha>` call is still recognised as ONE
-#     bd-invocation segment (same fix as lode-m6px's sed-based collapse in
-#     the lode-ij24 guard; ported here since a metadata write is routinely
-#     multi-line, per this repo's own coding.md examples).
-#
-# Known, accepted over-match (same tradeoff this repo already made for the
-# lode-ij24/lode-o29m guards, per lode-oii9's tiebreak: when a regex-based
-# guard cannot evaluate precisely, it denies rather than silently letting a
-# real fabrication through): a genuine-looking 40-lowercase-hex-character
-# run embedded in prose inside a bd --title/--description/--notes value on
-# a line this script judges to be a bd/git invocation is scanned too, since
-# this is a heuristic guard, not a shell parser. Any git object that
-# genuinely exists still passes cat-file -e and is allowed regardless of
-# where in the segment it appears, so this only matters for a
-# fabricated-looking string that is ALSO not a real object AND also isn't
-# meant as an identifier at all -- vanishingly unlikely in real usage, and
-# the guard's own deny message names the offending token and tells you how
-# to route around it.
+# Extracted from .claude/settings.json so it can be driven by tests
+# (tests/test_sha_fabrication_guard.py), following scripts/bd-dolt-push-guard.sh
+# and scripts/code-concurrency-cap.sh. Each scope narrowing below, and the one
+# deliberately accepted over-match, is documented in docs/agents-workflow.md
+# ("Guard against fabricated SHAs (lode-fpmi)") and pinned by the tests.
 
 set -euo pipefail
 
 CMD="${1:-}"
 [ -n "$CMD" ] || exit 0
 
+# Cheap fork-free early-out for the overwhelmingly common case: no 40-hex run
+# anywhere in the command, so nothing below can possibly deny. This runs on
+# EVERY Bash tool call, so it is placed first, ahead of the git/sed/tr/grep/sort
+# work it short-circuits. A bash builtin regex, deliberately kept here in the
+# tested script rather than inline in .claude/settings.json -- config is where
+# this repo has already shipped silent undetected bugs (lode-mh9g, lode-54mo),
+# and tests/test_sha_fabrication_guard.py pins the wrapper as logic-free.
+# Strict superset of what the scan below can match: the continuation collapse
+# only ever replaces a backslash-newline with a space, so it can break a hex run
+# apart but never create one.
+[[ "$CMD" =~ [0-9a-f]{40} ]] || exit 0
+
+# Not in a git work tree -> cat-file has nothing to check against.
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
+# Collapse backslash-newline continuations so a real multi-line `bd update ... \`
+# metadata write is still seen as ONE bd invocation segment (lode-m6px).
 CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 
+# Split into command segments on shell control operators (same technique as the
+# lode-o29m gh-write guard), keep only segments that are a bd/git invocation,
+# and extract lowercase 40-hex tokens from those. Real `git rev-parse` output is
+# always lowercase, so an uppercase token was never meant as a SHA.
 INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((rtk|sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
-# Split on shell control operators -- each resulting line is one command
-# segment, same technique as the lode-o29m gh-write guard.
-SEGMENTS=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n')
+TOKENS=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n' \
+  | grep -E "$INVOKE_RE" \
+  | grep -oE '\b[0-9a-f]{40}\b' \
+  | sort -u || true)
+[ -n "$TOKENS" ] || exit 0
 
-ALL_TOKENS=$(printf '%s\n' "$SEGMENTS" | while IFS= read -r seg; do
-  printf '%s' "$seg" | grep -qE "$INVOKE_RE" || continue
-  printf '%s' "$seg" | grep -oE '\b[0-9a-f]{40}\b' || true
-done | sort -u)
-
-[ -n "$ALL_TOKENS" ] || exit 0
-
-FOUND=""
-while IFS= read -r tok; do
-  [ -n "$tok" ] || continue
-  git cat-file -e "$tok" 2>/dev/null || FOUND="$FOUND $tok"
-done <<<"$ALL_TOKENS"
-
-FOUND=$(printf '%s' "$FOUND" | sed -e 's/^ *//' -e 's/ *$//')
-[ -n "$FOUND" ] || exit 0
-
-SHA_LIST=$(printf '%s' "$FOUND" | tr ' ' ',')
+SHA_LIST=$(while IFS= read -r tok; do
+  git cat-file -e "$tok" 2>/dev/null || printf '%s\n' "$tok"
+done <<<"$TOKENS" | paste -sd, -)
+[ -n "$SHA_LIST" ] || exit 0
 
 jq -n --arg shas "$SHA_LIST" '
   {hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",

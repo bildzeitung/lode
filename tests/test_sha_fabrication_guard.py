@@ -44,6 +44,7 @@ own; they run straight against this checkout.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -232,6 +233,36 @@ def test_empty_command_is_a_noop() -> None:
     assert _script_decision("") is None
 
 
+def test_longer_hex_digests_are_not_treated_as_shas() -> None:
+    """A 64-hex SHA-256 (lockfile digest, content hash) must not be denied just because it
+    contains 40-hex runs -- the `\\b` word boundaries mean only a STANDALONE 40-hex token counts.
+    This is the largest realistic false-positive class, and a false deny here blocks real work."""
+    sha256 = "a" * 64
+    assert (
+        _script_decision(f"rtk bd update lode-1 --set-metadata digest={sha256}") is None
+    )
+    assert _script_decision(f"git log --grep={sha256}") is None
+
+
+def test_no_hex_early_out_does_not_change_any_decision() -> None:
+    """The fork-free `[[ =~ ]]` early-out is a pure performance gate: it must be a strict superset
+    of what the scan can match, so it may never turn a deny into an allow. The continuation
+    collapse only ever replaces a backslash-newline with a space, so it can break a hex run apart
+    but never create one -- meaning a command with no 40-hex run before collapsing can never grow
+    one after. Pinned here because a bug in the early-out fails OPEN and silently."""
+    # Backslash-newline sitting inside what would otherwise be a 40-hex run: no standalone 40-hex
+    # token exists either before or after the collapse, so this must fall through both ways.
+    split_hex = f"rtk bd update lode-1 --set-metadata h={'a' * 20}\\\n{'b' * 20}"
+    assert _script_decision(split_hex) is None
+    # ...while the ordinary continuation shape, whose SHA survives the collapse intact, denies.
+    assert (
+        _script_decision(
+            f"rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}"
+        )
+        == "deny"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Hook-level tests: drive the actual .claude/settings.json wrapper through /bin/sh (dash).
 # ---------------------------------------------------------------------------
@@ -333,6 +364,41 @@ def test_hook_delegates_to_the_extracted_script() -> None:
     # No inline `git cat-file` or `[0-9a-f]{40}` scanning duplicated in the wrapper itself.
     assert "cat-file" not in hook
     assert "0-9a-f" not in hook
+
+
+def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
+    """DELIBERATE asymmetry, pinned so it stays visible: the wrapper fails CLOSED when jq is
+    missing (lode-oii9, matching the other two guards) but fails OPEN when the guard script itself
+    cannot be resolved or is not executable.
+
+    Denying there would brick EVERY Bash call in the repo on a machine where CLAUDE_PROJECT_DIR is
+    unset outside a work tree -- a far worse failure than the guard being off, given docs/
+    conventions.md's fiat is the first line of defence and this hook is only a backstop. jq is a
+    documented prerequisite a human can install; a mis-resolved script path is not something an
+    agent could act on. If this test ever goes red, the tradeoff was changed -- re-read
+    docs/agents-workflow.md before accepting it.
+    """
+    payload = json.dumps(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
+            },
+        }
+    )
+    proc = subprocess.run(
+        [SH, "-c", _hook_command()],
+        input=payload,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": "/nonexistent-root"},
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    assert proc.stdout.strip() == "", (
+        "guard denied when its script was unresolvable -- that bricks every Bash call in the repo"
+    )
 
 
 def test_settings_json_still_carries_the_bd_deps_and_gh_write_guards() -> None:
