@@ -1,0 +1,354 @@
+"""Tests for scripts/sha-fabrication-guard.sh and its committed PreToolUse(Bash) wrapper
+(lode-fpmi).
+
+An agent (the main /code orchestrating session) once wrote a FABRICATED 40-hex git SHA into bd
+metadata: it held the 7-char short hash `46ca460` in context, the `land_head` field wanted the
+full 40-char form, and it pattern-completed the remaining 33 characters rather than deriving
+the real value via `git rev-parse`. `land_head`/`review_head` is what /land and the
+code-reviewer read to check out a branch and detect drift -- a fabricated SHA sends them
+chasing a nonexistent object. The invented tail is exactly as fluent as a real one, so this is
+not self-detectable by re-reading what was typed; it needs a mechanical check.
+
+`git cat-file -e <sha>` is that check: a fabricated SHA is, by construction, essentially always
+a nonexistent git object. `.claude/settings.json` carries a third PreToolUse(Bash) guard
+alongside the existing lode-ij24 (bd `--deps blocks:` inversion) and lode-o29m (external-tracker
+write) guards, following the same jq-missing-denies-everything preamble (lode-oii9) so the
+guard cannot silently fall through unchecked when a hard prerequisite is absent.
+
+UNLIKE those two guards, this one's actual scanning logic is NOT embedded inline in
+settings.json -- it lives in scripts/sha-fabrication-guard.sh, extracted specifically so it can
+be driven directly by subprocess the way scripts/code-concurrency-cap.sh is driven by
+tests/test_code_concurrency_cap.py (lode-54mo's own pattern). This ticket's own acceptance
+criteria: "Ungated inline shell embedded in config is exactly where this repo already shipped a
+silent undetected-for-months bug" (lode-mh9g, lode-54mo) -- "the guard logic lives in a tested
+script, not untested inline shell."
+
+Two layers of coverage, both load-bearing:
+  - SCRIPT-LEVEL tests below drive `scripts/sha-fabrication-guard.sh` directly (as a subprocess,
+    never a reimplementation, per the lode-verb sabotage-provable bar) -- these exercise the
+    scanning/scoping/cat-file logic in isolation, fast and precise.
+  - HOOK-LEVEL tests drive the actual one-liner extracted from the committed
+    `.claude/settings.json`, through `/bin/sh -c` (dash on Linux, NOT bash -- lode-9gm2: that is
+    the actual interpreter the Claude Code harness uses to run PreToolUse hooks, and a bash-only
+    construct that dash rejects can brick the Bash tool for the rest of a session; a test driven
+    through bash cannot see that class of bug). These prove the wrapper actually delegates to
+    the script and that the jq-missing preamble still fails closed, matching
+    tests/test_bd_deps_guard.py's and tests/test_gh_write_guard.py's own approach.
+
+Both layers use a REAL, existing commit SHA from this repo's own history (`git rev-parse HEAD`)
+for the "real SHA is allowed" cases, and a fixed, extremely-unlikely-to-exist 40-lowercase-hex
+string for the "fabricated SHA is denied" cases -- so these tests need no fixture repo of their
+own; they run straight against this checkout.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "sha-fabrication-guard.sh"
+SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+SH = shutil.which("sh") or "/bin/sh"
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("jq") is None, reason="the guard shells out to jq"
+)
+
+# A 40-lowercase-hex string that is not a real object in this repository. Git SHA-1s are
+# effectively unguessable, so any fixed literal like this is safe to pin as "never a real
+# object" without needing to probe the live repo first.
+FABRICATED_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+
+def _real_sha() -> str:
+    """A real, existing 40-hex commit SHA from this repo's own history (HEAD)."""
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    sha = out.stdout.strip()
+    assert len(sha) == 40 and all(c in "0123456789abcdef" for c in sha), sha
+    return sha
+
+
+REAL_SHA = _real_sha()
+
+
+# ---------------------------------------------------------------------------
+# Script-level tests: drive scripts/sha-fabrication-guard.sh directly.
+# ---------------------------------------------------------------------------
+
+
+def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
+    """Run the script against `command`; return its hookSpecificOutput, or None if allowed."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def _script_decision(command: str, *, cwd: Path = REPO_ROOT) -> str | None:
+    out = _script_output(command, cwd=cwd)
+    return None if out is None else out["permissionDecision"]
+
+
+# Commands carrying the FABRICATED sha in a bd/git invocation -- every one MUST be denied.
+DENIED = [
+    f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",
+    f"bd update lode-1 --set-metadata review_head={FABRICATED_SHA}",
+    f'rtk bd update lode-1 --set-metadata land_head="{FABRICATED_SHA}"',
+    f"git show {FABRICATED_SHA}",
+    f"git checkout {FABRICATED_SHA}",
+    f"rtk git merge {FABRICATED_SHA}",
+    f"git cat-file -p {FABRICATED_SHA}",
+    f"bd -C /wt update lode-1 --set-metadata land_head={FABRICATED_SHA}",  # bd's global -C
+    f"cd /r && rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",  # not first cmd
+    f"cd /r; git show {FABRICATED_SHA}",
+    # lode-m6px-style backslash continuation: the NORMAL shape for a real multi-line bd call.
+    f"rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}",
+    f"NEW=$(rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA} --json)",
+]
+
+# Commands that must NOT be denied. Three families:
+#   1. a REAL sha in a bd/git command -- the whole point of cat-file -e is to let this through.
+#   2. the fabricated-looking sha appears, but not in a bd/git invocation at all -- out of scope.
+#   3. no bd/git command, or no 40-hex token, or not a git repo.
+ALLOWED = [
+    f"rtk bd update lode-1 --set-metadata land_head={REAL_SHA}",
+    f"bd update lode-1 --set-metadata review_head={REAL_SHA}",
+    f"git show {REAL_SHA}",
+    f"git checkout {REAL_SHA}",
+    f"rtk git rev-parse {REAL_SHA}",
+    # fabricated-looking sha, but not inside a bd/git segment -- never even scanned.
+    f"echo 'the sha is {FABRICATED_SHA}'",
+    f"cat some-file.txt  # mentions {FABRICATED_SHA}",
+    f"grep {FABRICATED_SHA} some-file.txt",
+    f"curl https://example.com/{FABRICATED_SHA}",
+    # ordinary bd/git usage with no 40-hex token anywhere.
+    'bd create -t task "x"',
+    "git status",
+    "git log --oneline -5",
+    "rtk bd show lode-1",
+    "",
+]
+
+
+@pytest.mark.parametrize("command", DENIED)
+def test_fabricated_sha_in_bd_or_git_command_is_denied(command: str) -> None:
+    assert _script_decision(command) == "deny", f"expected deny: {command}"
+
+
+@pytest.mark.parametrize("command", ALLOWED)
+def test_everything_else_falls_through_silently(command: str) -> None:
+    assert _script_decision(command) is None, f"expected fall-through: {command}"
+
+
+def test_deny_reason_names_the_sha_and_says_derive_dont_retype() -> None:
+    out = _script_output(
+        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
+    )
+    assert out is not None and out["permissionDecision"] == "deny"
+    reason = out["permissionDecisionReason"]
+    assert FABRICATED_SHA in reason
+    assert "git rev-parse" in reason
+    assert "lode-fpmi" in reason
+
+
+def test_script_never_emits_an_allow_decision() -> None:
+    """Mirrors test_bd_deps_guard.py's static guard: no `"allow"` anywhere in the script."""
+    assert '"allow"' not in SCRIPT.read_text()
+
+
+def test_script_always_exits_zero_even_when_denying() -> None:
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), f"git show {FABRICATED_SHA}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0
+
+
+def test_falls_through_when_not_inside_a_git_repository(tmp_path: Path) -> None:
+    """Skip when not in a git repo (this ticket's own scope constraint) -- git cat-file has
+    nothing to check against, and a non-repo directory is never a plausible target for a real
+    `bd`/`git land_head` write anyway."""
+    assert (
+        _script_decision(
+            f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}", cwd=tmp_path
+        )
+        is None
+    )
+
+
+def test_known_accepted_over_match_prose_with_fabricated_looking_hex() -> None:
+    """Accepted over-match (same tradeoff as lode-ij24/lode-o29m, per lode-oii9's tiebreak): a
+    fabricated-looking 40-hex run embedded in FREE-TEXT prose on a bd/git line is still scanned
+    and denied, since this is a heuristic guard, not a shell parser. Pinned, not tolerated
+    silently -- if someone narrows the scope to exempt --design/--notes free text, this test
+    goes red at the moment that tradeoff is made, rather than the narrowing shipping unnoticed.
+    """
+    command = (
+        f'bd create --title="x" --design="see commit {FABRICATED_SHA} for context"'
+    )
+    assert _script_decision(command) == "deny"
+
+
+def test_multiple_fabricated_shas_are_all_named() -> None:
+    other = "cafebabecafebabecafebabecafebabecafebabe"
+    out = _script_output(
+        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA},review_head={other}"
+    )
+    assert out is not None and out["permissionDecision"] == "deny"
+    assert FABRICATED_SHA in out["permissionDecisionReason"]
+    assert other in out["permissionDecisionReason"]
+
+
+def test_uppercase_hex_is_not_treated_as_a_sha() -> None:
+    """Real git output (rev-parse, log --format=%H) is always lowercase; an uppercase 40-char
+    hex-looking token was never meant as a SHA in the first place."""
+    upper = FABRICATED_SHA.upper()
+    assert _script_decision(f"git show {upper}") is None
+
+
+def test_empty_command_is_a_noop() -> None:
+    assert _script_decision("") is None
+
+
+# ---------------------------------------------------------------------------
+# Hook-level tests: drive the actual .claude/settings.json wrapper through /bin/sh (dash).
+# ---------------------------------------------------------------------------
+
+
+def _hook_command() -> str:
+    """The guard's shell one-liner, read from the committed settings.json."""
+    settings = json.loads(SETTINGS.read_text())
+    pre_tool_use = settings["hooks"]["PreToolUse"]
+    matching = [
+        h["command"]
+        for entry in pre_tool_use
+        if entry.get("matcher") == "Bash"
+        for h in entry["hooks"]
+        if "sha-fabrication-guard.sh" in h.get("command", "")
+    ]
+    assert len(matching) == 1, (
+        f"expected exactly one sha-fabrication-guard hook, got {matching}"
+    )
+    return matching[0]
+
+
+def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+    """Run the committed hook one-liner against `command` via `/bin/sh -c` (dash on Linux --
+    lode-9gm2). `path`, when given, overrides PATH for the subprocess only, to simulate a
+    jq-less machine (lode-oii9) without touching the real PATH of the test process. `CWD` is
+    this repo, and `CLAUDE_PROJECT_DIR` is deliberately left unset so the hook's own
+    `git rev-parse --show-toplevel` fallback is what's under test.
+    """
+    payload = json.dumps(
+        {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
+    )
+    env = None if path is None else {"PATH": path}
+    proc = subprocess.run(
+        [SH, "-c", _hook_command()],
+        input=payload,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def test_hook_denies_fabricated_sha_end_to_end_under_dash() -> None:
+    out = _hook_output(
+        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
+    )
+    assert out is not None and out["permissionDecision"] == "deny"
+    assert FABRICATED_SHA in out["permissionDecisionReason"]
+
+
+def test_hook_allows_real_sha_end_to_end_under_dash() -> None:
+    assert (
+        _hook_output(f"rtk bd update lode-1 --set-metadata land_head={REAL_SHA}")
+        is None
+    )
+
+
+def test_hook_allows_unrelated_commands_end_to_end_under_dash() -> None:
+    assert _hook_output("ls -la") is None
+    assert _hook_output('git commit -m "ordinary commit"') is None
+
+
+# lode-oii9: jq is a documented hard prerequisite (docs/onboarding.md), and this guard must FAIL
+# CLOSED rather than silently fall through when it is missing.
+def test_hook_fails_closed_when_jq_is_missing() -> None:
+    decision = _hook_output("ls -la", path="/nonexistent")
+    assert decision is not None and decision["permissionDecision"] == "deny", (
+        "guard fell through silently with jq missing instead of failing closed (lode-oii9)"
+    )
+
+
+def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
+    out = _hook_output("ls -la", path="/nonexistent")
+    assert out is not None
+    reason = out["permissionDecisionReason"]
+    assert "jq" in reason
+    assert "docs/onboarding.md" in reason
+    assert "Install jq" in reason
+    assert "OUTSIDE Claude Code" in reason
+    assert "surface this to the human" in reason
+
+
+def test_hook_never_emits_an_allow_decision() -> None:
+    assert '"allow"' not in _hook_command()
+
+
+def test_hook_delegates_to_the_extracted_script() -> None:
+    """The wrapper must not re-embed the scanning logic inline -- it delegates to the script,
+    per this ticket's own acceptance criterion ("the guard logic lives in a tested script, not
+    untested inline shell")."""
+    hook = _hook_command()
+    assert "scripts/sha-fabrication-guard.sh" in hook
+    # No inline `git cat-file` or `[0-9a-f]{40}` scanning duplicated in the wrapper itself.
+    assert "cat-file" not in hook
+    assert "0-9a-f" not in hook
+
+
+def test_settings_json_still_carries_the_bd_deps_and_gh_write_guards() -> None:
+    """No regression to the existing lode-ij24 / lode-o29m guards from adding this third one."""
+    settings = json.loads(SETTINGS.read_text())
+    bash_hooks = [
+        h["command"]
+        for entry in settings["hooks"]["PreToolUse"]
+        if entry.get("matcher") == "Bash"
+        for h in entry["hooks"]
+    ]
+    assert any("blocks:" in c for c in bash_hooks), "lode-ij24 bd-deps guard missing"
+    assert any("external-tracker" in c or "PENDING A HUMAN" in c for c in bash_hooks), (
+        "lode-o29m gh-write guard missing"
+    )
+    assert any("sha-fabrication-guard.sh" in c for c in bash_hooks), (
+        "lode-fpmi sha-fabrication guard missing"
+    )
+    assert len(bash_hooks) == 3
