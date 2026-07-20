@@ -67,8 +67,12 @@ on:
   pre-trunk CI signal a human gets. Dropping it would make these checks purely post-hoc (trunk-only).
 - **No `tags-ignore` line.** Defining only `branches:` on a `push` trigger already excludes tag
   pushes — GitHub scopes the event to the ref types the filter names, so a `v*` tag push does not
-  trigger the workflow at all. A `tags-ignore` entry on top would be inert clutter (confirmed by the
-  first real `v*` tag push after lode-qxdn.1 landed: it produced no `build` run).
+  trigger the workflow at all. A `tags-ignore` entry on top would be inert clutter. **This rests on
+  GitHub's documented ref-type scoping, NOT on an observation** — `build.yml` landed (083326a,
+  2026-07-19) *after* the most recent tag (`v1.0.0`, 2026-07-18), so no `v*` tag has been pushed
+  while this workflow has existed and the behavior has never actually been exercised here. Confirm
+  it at the next real `v*` tag push (expect: a `release` run and no `build` run); until then treat
+  the tag-exclusion as documented-but-unobserved.
 - **This matters far more for the heavier siblings than for `build.yml` itself.** Cost is $0 (public
   repo, free Actions minutes) — this is noise/latency, not spend — and `build.yml`'s own job is cheap
   (`pip install build` + `python -m build`). But `nox -s tests` (lode-qxdn.2) and coverage
