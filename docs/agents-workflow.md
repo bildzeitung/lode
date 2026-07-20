@@ -29,7 +29,9 @@ Work moves through three passes, with the human as the hinge:
    **builder** (Sonnet) carries it through an orderly cycle in an isolated worktree: claim → build →
    green gates → push a `land/<id>` branch → mark **`ready-for-code-review`** → **keep the worktree**
    → stop. Then a `code-reviewer` (Opus) fetches that pushed branch and checks it out into its **own**
-   launch worktree, runs the technical review (`/code-review` + `/simplify`), re-gates, re-pushes, and
+   launch worktree, runs the technical review — a correctness pass it reasons through by hand plus
+   `/simplify` (`/code-review` itself is a bundled skill that is user-gated and unreachable from any
+   model context, lode-axyq; see `.claude/agents/code-reviewer.md` step 4) — re-gates, re-pushes, and
    swaps the ticket to **`ready-for-land`**.
    The builder never reviews its own work; neither agent merges, closes, or writes `trunk`.
    **`/code` claims each resolved ticket itself, before dispatch (lode-xr8v)** — for every path where
@@ -249,7 +251,8 @@ does **not** review its own work.
 Then `/code` dispatches a **`code-reviewer`** (Opus) for that ticket. It fetches the pushed `land/<id>`
 branch and checks it out **into its own launch worktree** — never `git -C` into the builder's
 worktree, never `EnterWorktree`, and never the builder's worktree at all — runs the **technical
-review** (`/code-review --fix` + `/simplify`, re-gate, keep the last green commit), re-pushes
+review** (its own reasoned correctness pass — `/code-review` is unreachable from any model context,
+lode-axyq — plus the genuinely tool-backed `/simplify`; re-gate, keep the last green commit), re-pushes
 `land/<id>`, and swaps the ticket to **`ready-for-land`**. Neither agent merges, closes, or writes
 `trunk` — landing is [`/land`](#the-landing-loop--build-review-land)'s job. Final agent messages aren't
 shown to the user, so `/code` relays what came back across **both** phases — which issue, that the
@@ -312,7 +315,7 @@ flowchart TD
     PUSH --> CLEAN2{"git status --short<br>empty?"}
     CLEAN2 -->|"no — edits after push,<br>never gated"| COMMIT
     CLEAN2 -->|"yes"| HANDOFF["Builder: mark ready-for-code-review<br>(worktree path · head SHA) ·<br>KEEP worktree · bd dolt push · STOP"]
-    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review --fix + simplify · re-gate"]
+    HANDOFF --> REV["Phase 2 — code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> MARKL["Swap to ready-for-land<br>(head SHA · summary) ·<br>re-push land/&lt;id&gt; · bd dolt push · STOP"]
     MARKL --> DONE["/land lands it (separate loop) ·<br>/code relays both phases"]
 
@@ -375,10 +378,15 @@ evidence of a harness bug, not a routine hiccup to swallow silently. Two precond
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
 understood:
 
-- **It only ever runs in an isolated launch worktree.** Each site checks its `git rev-parse
-  --show-toplevel` is under `.claude/worktrees/` and stops otherwise. Without that, an agent whose
-  `isolation: "worktree"` dispatch silently failed would run `reset --hard`/`clean -fd` in the user's
-  **main checkout** — turning a contamination guard into the more damaging bug.
+- **It only runs in an isolated launch worktree — mechanically at two of the three sites.**
+  `coding.md`'s rebase-pickup step 2 and `code-reviewer.md`'s step 2 each wrap the remediation in an
+  explicit `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`,
+  in the same block as the destructive command. `coding.md`'s fresh-build site (step 3) carries no
+  such `case`; it leans on the prose `pwd` safety check a dozen lines above it, so there the
+  precondition is compliance-dependent rather than enforced. The intent is the same either way — an
+  agent whose `isolation: "worktree"` dispatch silently failed must stop before `reset --hard`/`clean
+  -fd` can reach the user's **main checkout**, which is what would turn a contamination guard into the
+  more damaging bug — but closing that third site's gap is its own ticket, `lode-fptp`.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
   reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
@@ -841,10 +849,11 @@ guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table i
 `tests/test_bd_deps_guard.py` — including mutation tests that assert reverting the inversion turns the
 new denies (`gh codespace create`, `gh repo deploy-key add`, …) red, not merely that the suite is green.
 
-**Both this guard and the `blocks:` guard shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
-`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, both guards used to
+**All three `PreToolUse(Bash)` guards — this one, the `blocks:` guard, and the fabricated-SHA guard
+(`lode-fpmi`) — shell out to `jq`, and `jq` FAILS CLOSED (lode-oii9).**
+`jq` was an undocumented hard prerequisite until `lode-oii9`: with it absent, the guards used to
 silently fall through — verified live during this guard's own land review, `gh issue create` was
-**not** denied under `PATH=/nonexistent`. Both hooks now deny outright when `jq` is unreachable,
+**not** denied under `PATH=/nonexistent`. All three hooks now deny outright when `jq` is unreachable,
 before attempting to parse `tool_input.command` at all; `docs/onboarding.md` documents `jq` as a
 required prerequisite, and the full fail-closed-vs-fail-open reasoning is recorded in
 [`docs/decisions.md`](decisions.md).
@@ -925,6 +934,71 @@ Directives), the builder ([`.claude/agents/coding.md`](../.claude/agents/coding.
 Anti-patterns), and the reviewer
 ([`.claude/agents/code-reviewer.md`](../.claude/agents/code-reviewer.md) — Non-negotiables +
 Anti-patterns) — since any of the three can reach a `gh` call mid-task.
+
+### Guard against fabricated SHAs (lode-fpmi)
+
+**An agent once wrote a 40-hex SHA it had invented into bd metadata.** It held the short hash
+`46ca460` in context, `land_head` wanted the full 40-char form, and it pattern-completed the remaining
+33 characters instead of deriving them. `land_head`/`review_head` is exactly what `/land` and the
+`code-reviewer` read to check a branch out and detect drift, so a fabricated value sends them chasing
+an object that does not exist. It was caught before any Dolt push carried it onward.
+
+**Why this needs a mechanism rather than an instruction.** The invented tail is exactly as fluent as a
+real one, so the mistake is *not self-detectable by re-reading what was typed* — any mitigation that
+relies on the agent noticing is unreliable precisely when it is needed. This is the same lesson
+`lode-jh80` landed one layer up. So the fix ships in two layers:
+
+- **The fiat** — [`docs/conventions.md`](conventions.md), "Derive identifiers, never retype them."
+  `@import`ed by `CLAUDE.md`, so it binds the main session and every non-fork subagent with one edit.
+  It covers *every* long opaque identifier: git SHAs, bd issue ids, worktree hashes.
+- **The mechanism** — a third `PreToolUse(Bash)` guard in `.claude/settings.json`, whose body is
+  [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh), pinned by
+  `tests/test_sha_fabrication_guard.py`. `git cat-file -e <sha>` is the oracle: a fabricated SHA is by
+  construction essentially never a real object, so this is a mechanical catch that relies on no agent
+  judgment at all.
+
+**The two layers are deliberately different widths, and that asymmetry is the design.** The fiat
+generalizes to all opaque identifiers; the guard narrows to 40-hex git SHAs. `cat-file -e` is a cheap
+existence oracle that exists *only* for git objects — there is no equivalent for a bd id or a worktree
+hash, so widening the guard would mean heuristically guessing what "looks like" an identifier, which
+is strictly worse than the fiat already covering them. Broad instruction, narrow mechanism where a
+mechanism actually exists.
+
+**`PreToolUse(Bash)` is the right layer** because `Bash` is the sole channel: this repo configures no
+MCP server, no Python code shells out to `bd`, and every `land_head`/`review_head` write site in
+`coding.md` and `code-reviewer.md` is a `bd update --set-metadata` issued as Bash.
+
+Scope narrowings, each deliberate:
+
+- **Only `bd`/`git` command segments are scanned** — a 40-hex string inside an unrelated command
+  (`grep`, `cat`, `curl`, a lockfile digest) is never even looked at. Keeps the guard cheap and
+  removes the largest false-positive class.
+- **Only lowercase `[0-9a-f]{40}`** — real `git rev-parse`/`log --format=%H` output is always
+  lowercase, and a 64-hex SHA-256 never matches (the `\b` word boundaries exclude a 40-char run inside
+  a longer one).
+- **Skipped entirely outside a git work tree** — `cat-file` has nothing to check against.
+- **A fork-free `[[ =~ ]]` early-out runs first**, so a command with no 40-hex run anywhere costs one
+  process instead of eight (~1.7 ms vs ~14.7 ms measured). This guard runs on *every* Bash call
+  forever, so that path is the one that matters. It lives in the script, not the settings.json
+  wrapper: config is where this repo has already shipped silent undetected bugs (`lode-mh9g`,
+  `lode-54mo`), and a test pins the wrapper as logic-free delegation.
+
+**Accepted over-match** (same tiebreak as the `blocks:`/`gh` guards per `lode-oii9` — a guard that
+cannot evaluate precisely denies rather than letting a real fabrication through): a 40-lowercase-hex
+run in *free-text prose* inside a `bd --title/--description/--notes` value on a line that parses as a
+bd/git invocation is scanned too, because this is a heuristic guard, not a shell parser. Likewise
+`git fetch origin <sha>` for a commit not yet local. Any string that *is* a real object passes
+regardless of where it appears, so this only bites a fabricated-looking string that is also not an
+object and also not meant as an identifier. It is **pinned by a test**, not tolerated silently — if
+someone narrows the scope, that test goes red at the moment the tradeoff is made.
+
+**Known asymmetry, deliberate:** the wrapper fails *closed* when `jq` is missing (matching the other
+two guards, `lode-oii9`) but fails *open* if the script itself is unresolvable or non-executable
+(`[ -n "$ROOT" ] && [ -x "$SCRIPT" ] && …`). Denying there would brick every Bash call in the repo on
+a machine where `CLAUDE_PROJECT_DIR` is unset outside a work tree — a far worse failure than the guard
+being off, given the fiat is the first line of defence and this guard is a backstop. `jq` is a
+documented prerequisite a human can install; a mis-resolved script path is not something an agent
+could act on. Pinned by a test so the choice stays visible.
 
 ### Invariants the coding loop never breaks
 
@@ -1162,7 +1236,10 @@ done by its author** (the lander's semantic review is the other). The reviewer:
    inside its worktree"), and a launch worktree still at `trunk` HEAD has an empty diff against the
    builder's real branch, so driving the builder's worktree in place both fought a guard *and*
    produced an empty-diff review (lode-k5e). Checking the pushed branch out locally sidesteps both.
-2. **Runs the technical review** — `/code-review --fix` (bugs) and `/simplify` (over-design /
+2. **Runs the technical review** — its own reasoned pass against the diff for bugs (`/code-review` is
+   unreachable from any model context, lode-axyq; `.claude/agents/code-reviewer.md` step 4 has the
+   mechanism and what the pass covers, `docs/decisions.md` the version pin) and the tool-backed
+   `/simplify` (over-design /
    complexity) — then **re-gates**, keeping the last **green** commit; if a refinement breaks the gates
    unrecoverably or trades simplicity for complexity, it **reverts to green**.
 3. **Re-pushes `land/<id>`** and **swaps the ticket to `ready-for-land`** (refreshed head SHA +
@@ -1186,7 +1263,7 @@ flowchart TD
     BUILD --> BESC{"build-time<br>clarifying decision?"}
     BESC -->|"yes"| BHOLD["Revert to green · push ·<br>record review_head ·<br>land-escalated · surface async"]
     BESC -->|"no"| PUSH["git push -u origin land/&lt;id&gt; ·<br>mark ready-for-code-review<br>(review_head SHA) · KEEP worktree"]
-    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>/code-review + simplify --fix · re-gate"]
+    PUSH --> REV["code-reviewer (Opus):<br>fetch + checkout land/&lt;id&gt; into OWN worktree ·<br>own correctness pass + simplify --fix · re-gate"]
     REV --> RESC{"clarifying decision?<br>or making it worse?"}
     RESC -->|"yes"| RHOLD["Revert to green · re-push ·<br>land-escalated · surface async"]
     RESC -->|"no"| MARK["Swap to ready-for-land<br>(SHA · summary) · re-push land/&lt;id&gt; · STOP"]

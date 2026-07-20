@@ -8,11 +8,13 @@ and the "edit -> list -> capture" Escape chain.
 """
 
 import asyncio
+import io
 import json
 import sqlite3
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from rich.text import Text
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
@@ -80,8 +82,8 @@ def test_ctrl_b_reaches_the_browse_screen_with_notes_newest_first(
     rows = asyncio.run(_drive())
 
     assert len(rows) == 2
-    assert rows[0][3] == "second captured note"  # newest-first
-    assert rows[1][3] == "first captured note"
+    assert str(rows[0][3]) == "second captured note"  # newest-first
+    assert str(rows[1][3]) == "first captured note"
     assert rows[0][2] == "v1"
 
 
@@ -541,7 +543,7 @@ def test_long_summary_is_capped_at_one_line_not_wrapped_unbounded(
                 table.rows[row_key].height,
                 table.virtual_size.width,
                 table.size.width,
-                table.get_row_at(0)[3],
+                str(table.get_row_at(0)[3]),
             )
 
     row_height, virtual_width, widget_width, summary_cell = asyncio.run(_drive())
@@ -570,12 +572,47 @@ def test_short_summary_is_unaffected_by_the_one_line_cap(tmp_path: Path) -> None
             await pilot.pause()
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row_key = next(iter(table.rows))
-            return table.rows[row_key].height, table.get_row_at(0)[3]
+            return table.rows[row_key].height, str(table.get_row_at(0)[3])
 
     row_height, summary_cell = asyncio.run(_drive())
 
     assert row_height == 1  # rows are always the fixed cap height
     assert summary_cell == short_summary  # left untouched, no ellipsis
+
+
+def test_summary_with_brackets_renders_literally_not_as_rich_markup(
+    tmp_path: Path,
+) -> None:
+    """A note summary containing ``[...]`` renders literally (lode-ix4i).
+
+    Regression test for the same hazard :class:`~lode.tui.screens.tags.
+    TagsScreen`'s checkbox cells had before lode-7abi: the Summary column was
+    a bare ``str`` cell, which a ``DataTable`` renders through Rich console
+    *markup*, silently eating a bracketed substring like ``[draft]``. Prints
+    the actual cell object (now a :class:`~rich.text.Text`, never
+    markup-parsed) through a real ``rich.Console`` -- ``get_row_at`` alone
+    returns the *stored* cell, which can't see this bug either way.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "reviewed [draft] spec")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> object:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.pause()
+            table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
+            return table.get_row_at(0)[3]
+
+    cell = asyncio.run(_drive())
+
+    console = Console(file=io.StringIO(), width=60, legacy_windows=False)
+    console.print(cell)
+    assert console.file.getvalue().strip() == "reviewed [draft] spec"
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +645,7 @@ def test_x_expands_the_highlighted_row_to_its_full_summary(tmp_path: Path) -> No
             await pilot.pause()
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row_key = next(iter(table.rows))
-            return table.rows[row_key].height, table.get_row_at(0)[3]
+            return table.rows[row_key].height, str(table.get_row_at(0)[3])
 
     row_height, summary_cell = asyncio.run(_drive())
 
@@ -637,7 +674,7 @@ def test_x_twice_collapses_back_to_the_one_line_cap(tmp_path: Path) -> None:
             await pilot.pause()
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row_key = next(iter(table.rows))
-            return table.rows[row_key].height, table.get_row_at(0)[3]
+            return table.rows[row_key].height, str(table.get_row_at(0)[3])
 
     row_height, summary_cell = asyncio.run(_drive())
 
@@ -670,8 +707,8 @@ def test_x_only_affects_the_highlighted_row(tmp_path: Path) -> None:
             return (
                 table.rows[row_keys[0]].height,
                 table.rows[row_keys[1]].height,
-                table.get_row_at(0)[3],
-                table.get_row_at(1)[3],
+                str(table.get_row_at(0)[3]),
+                str(table.get_row_at(1)[3]),
             )
 
     expanded_height, other_height, expanded_cell, other_cell = asyncio.run(_drive())
@@ -2264,11 +2301,76 @@ def test_v_with_many_externals_opens_the_picker_first(tmp_path: Path) -> None:
     rows, body_text = asyncio.run(_drive())
 
     assert len(rows) == 2
-    assert rows[0][0] == "web"
+    assert str(rows[0][0]) == "web"
     assert short_version_id("snap-view-a") in str(rows[0][1])
     assert short_version_id("snap-view-b") in str(rows[1][1])
     # Selected the second (b.example.com) row -- its body, not a's.
     assert body_text == "body b"
+
+
+def test_external_picker_source_type_with_brackets_renders_literally(
+    tmp_path: Path,
+) -> None:
+    """A ``source_type`` containing ``[...]`` renders literally (lode-ix4i).
+
+    Low-severity in practice (``source_type`` is enum-ish today), but this
+    picker duplicates the same data the sibling
+    :func:`~lode.tui.screens._browse_render._external_text` renderer already
+    protects with ``Text`` -- exercised here through a real Rich console, not
+    ``get_row_at`` alone (stored value, not the render).
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        head = save(conn, "note-a", "see https://a.example.com/").version_id
+        _insert_external(
+            conn,
+            external_id="https://a.example.com/",
+            source_type="[web]",
+            snapshot_id="snap-brk-a",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://a.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+        _insert_external(
+            conn,
+            external_id="https://b.example.com/",
+            source_type="web",
+            snapshot_id="snap-brk-b",
+        )
+        _insert_edge(
+            conn,
+            from_id="note-a",
+            to_id="https://b.example.com/",
+            source_version=head,
+            source="user",
+            reason="pasted URL",
+            confidence=1.0,
+        )
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    async def _drive() -> object:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("v")
+            await pilot.pause()
+            assert isinstance(app.screen, ExternalPickerScreen)
+            table = app.screen.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
+            return table.get_row_at(0)[0]
+
+    cell = asyncio.run(_drive())
+
+    console = Console(file=io.StringIO(), width=40, legacy_windows=False)
+    console.print(cell)
+    assert console.file.getvalue().strip() == "[web]"
 
 
 def test_external_picker_table_scrolls_within_its_own_pane_not_the_whole_screen(

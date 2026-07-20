@@ -291,7 +291,7 @@ def test_browse_list_reflects_the_new_version_after_returning_from_edit(
             assert isinstance(app.screen, BrowseScreen)
             table = app.screen.query_one(f"#{TABLE_ID}", DataTable)
             row = table.get_row_at(0)
-            return row[2], row[3]
+            return row[2], str(row[3])
 
     version, summary = asyncio.run(_drive())
 
