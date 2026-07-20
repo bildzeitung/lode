@@ -113,6 +113,51 @@ nox.options.default_venv_backend = "none"
 nox.options.sessions = ["fix", "tests", "shellcheck"]
 
 
+_SOURCE_TREE_CHECK = """\
+import pathlib
+import sys
+
+import lode
+
+resolved = pathlib.Path(lode.__file__).resolve()
+cwd = pathlib.Path.cwd().resolve()
+if cwd not in resolved.parents:
+    sys.exit(
+        "nox: the active venv's `import lode` resolves to\\n"
+        f"    {resolved}\\n"
+        f"which is not under this checkout ({cwd}).\\n"
+        "The active venv was built (./scripts/python-init.sh) against a "
+        "different checkout -- most likely the main repo's ./venv while cwd "
+        "is a worktree (lode-jh80). Both silent directions are bad: a fix on "
+        "this branch can false-FAIL against the other checkout's unfixed "
+        "source, or a regression here can false-PASS against its "
+        "already-correct source.\\n"
+        "Fix: build and activate THIS checkout's own venv --\\n"
+        "    ./scripts/python-init.sh && . ./venv/bin/activate"
+    )
+"""
+
+
+def _assert_correct_source_tree(session: nox.Session) -> None:
+    """Fail loudly if the active venv doesn't resolve ``lode`` under this checkout.
+
+    ``default_venv_backend = "none"`` (above) runs sessions in whatever venv is
+    already active rather than provisioning one -- deliberate, for speed (see
+    the module docstring) -- but that means a stale or wrong venv silently
+    exercises *that venv's* source tree, not necessarily this one. Concretely:
+    activate the main checkout's venv while cwd is a worktree, and pytest here
+    still collects this checkout's ``tests/`` but imports the **main
+    checkout's** ``src`` -- nothing warns, and the run just reports a result
+    for the wrong tree. Both directions are dangerous (a false FAIL when this
+    branch's fix is never exercised, a false PASS when this branch's
+    regression is masked by the other checkout's already-correct code) --
+    lode-jh80, discovered reviewing lode-7abi. Run before pytest in any
+    session that exercises source, so the failure is loud and names the
+    resolved (wrong) path rather than silently testing it.
+    """
+    session.run("python", "-c", _SOURCE_TREE_CHECK, silent=False)
+
+
 def _xdist_workers() -> str:
     """Effective pytest-xdist worker count for ``-n`` (``LODE_TEST_WORKERS``, lode-bv6y).
 
@@ -152,7 +197,11 @@ def tests(session: nox.Session) -> None:
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
     ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
     no test skipped, just distributed across workers.
+
+    Preflighted by ``_assert_correct_source_tree`` (lode-jh80): the active
+    venv reuse below is fast but silent if it's the wrong checkout's venv.
     """
+    _assert_correct_source_tree(session)
     session.run("pytest", "-n", _xdist_workers())
 
 
@@ -193,7 +242,11 @@ def unit(session: nox.Session) -> None:
 
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
     ``8``, lode-bv6y — see the module docstring).
+
+    Preflighted by ``_assert_correct_source_tree`` (lode-jh80) -- same hazard
+    as ``tests``, see that session's note.
     """
+    _assert_correct_source_tree(session)
     session.run("pytest", "-m", "not slow", "-n", _xdist_workers())
 
 
