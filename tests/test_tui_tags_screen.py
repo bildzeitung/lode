@@ -493,6 +493,6 @@ def test_selected_checkbox_renders_literally_not_as_rich_markup(tmp_path: Path) 
 
     cell = asyncio.run(_drive())
 
-    console = Console(file=io.StringIO(), width=40, legacy_windows=False)
-    console.print(cell)
-    assert console.file.getvalue().strip() == "[x] rrsp"
+    buffer = io.StringIO()
+    Console(file=buffer, width=40, legacy_windows=False).print(cell)
+    assert buffer.getvalue().strip() == "[x] rrsp"
