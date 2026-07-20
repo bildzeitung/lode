@@ -1714,3 +1714,40 @@ are catalogued in [configuration.md](configuration.md).
   up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+- **The "qualifies by construction" / "no dedicated cleanup" claim above is falsified by lode-nt98,
+  and lode-qv5t (2026-07-20) closes the gap it left open.** Everything above this entry reasoned about
+  `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated
+  dispatch could dirty the lander's tree) but rested the *worktree-GC* claim ("HEAD never diverges …
+  qualifies by construction") on an assumption lode-nt98 falsified after this entry was written: the
+  harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `trunk`
+  HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
+  *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
+  worktree handed to it starts with `HEAD` already diverged from `trunk`, before `land-review` ever
+  runs — "never commits" only proves no *further* divergence, not a clean start. The existing
+  worktree-GC backstop's ancestor predicate (lode-h1vn / lode-amif) therefore fails for it, and it
+  leaks past every pass, indefinitely — the same symptom class lode-nt98 fixed for the builder and the
+  reviewer, but lode-nt98 explicitly scoped `land-review` **out** (its correctness exposure is nil, so
+  it read as no exposure at all — that conflation is exactly what lode-qv5t was filed to unpick).
+  **Fix, mirroring lode-nt98 exactly:** `land-review.md`'s frontmatter role now carries the identical
+  guard (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
+  tag a `rescue/recycled-<sha>` branch — the rewound ref belongs to another ticket — then `git reset
+  --hard trunk && git clean -fd`, only ever inside `.claude/worktrees/`). Once that guard has run, the
+  worktree's `HEAD` **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims
+  it under its unmodified predicate — Section 4 itself needed no change, and neither did the
+  worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
+  lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
+  The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
+  is already an ancestor of `trunk` — lode-ix4i, observed live). On the ancestry axis that is
+  self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
+  **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
+  worktree's untracked leftovers survive, and the lode-9hgu dirty-tree guard keeps the worktree, so it
+  leaks for a different reason. Left open as **lode-3v1p** rather than absorbed here, because the fix
+  is a genuine choice (clean unconditionally / have the sweep judge recycling-dirt / assert clean after
+  the guard) and picking one belongs on its own ticket. **The two halves stay distinct, deliberately:**
+  `land-review`'s correctness exposure to a recycled worktree was, and remains, nil — it never reads
+  anything from the checked-out state, recycled or not, because it only ever fetches and diffs by ref.
+  This is purely a worktree-leak fix. Documented in
+  [`land-review.md`](../.claude/agents/land-review.md),
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
+  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98)
+  / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
