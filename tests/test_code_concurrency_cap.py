@@ -50,7 +50,9 @@ _SCRUBBED = {
 
 def _meminfo(tmp_path: Path, available_kib: int, total_kib: int = 99_999_999) -> Path:
     path = tmp_path / "meminfo"
-    path.write_text(f"MemTotal:       {total_kib} kB\nMemAvailable:   {available_kib} kB\n")
+    path.write_text(
+        f"MemTotal:       {total_kib} kB\nMemAvailable:   {available_kib} kB\n"
+    )
     return path
 
 
@@ -128,8 +130,12 @@ def test_non_numeric_widths_are_nproc_scaled_never_the_floor(tmp_path: Path) -> 
     value."""
     for bad_width in ("auto", "logical", "not-a-number", "0", ""):
         cap = _cap(tmp_path, available_kib=30_408_704, nproc=24, workers=bad_width)
-        assert cap == "5", f"LODE_TEST_WORKERS={bad_width!r} -> {cap}, want nproc-scaled 5"
-        assert cap != "12", f"LODE_TEST_WORKERS={bad_width!r} collapsed to the 2GiB floor bug"
+        assert cap == "5", (
+            f"LODE_TEST_WORKERS={bad_width!r} -> {cap}, want nproc-scaled 5"
+        )
+        assert cap != "12", (
+            f"LODE_TEST_WORKERS={bad_width!r} collapsed to the 2GiB floor bug"
+        )
 
 
 def test_tiny_box_floors_at_1(tmp_path: Path) -> None:
@@ -197,7 +203,9 @@ def test_workers_default_extraction_matches_noxfile(tmp_path: Path) -> None:
     explicit_result = _run({**common, "LODE_TEST_WORKERS": nox_default})
 
     assert unset_result.returncode == 0, unset_result.stdout + unset_result.stderr
-    assert explicit_result.returncode == 0, explicit_result.stdout + explicit_result.stderr
+    assert explicit_result.returncode == 0, (
+        explicit_result.stdout + explicit_result.stderr
+    )
     assert unset_result.stdout == explicit_result.stdout
     # Pins today's documented value (docs/agents-workflow.md's table): with
     # noxfile.py's current default of 8 workers, this box's cap is 9.
