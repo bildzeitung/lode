@@ -1651,9 +1651,11 @@ are catalogued in [configuration.md](configuration.md).
   confirmed.
 
   **Deliberately scoped to `land-review` alone — no consistency requirement across `coding` /
-  `code-reviewer`.** Those two have carried the identical instruction-only requirement since they were
-  written (`code/SKILL.md`) and have not produced this failure; converting them to dedicated agent
-  frontmatter too is not ruled out, but nothing about this decision obligates it, and doing so
+  `code-reviewer`.** Those two are *already* dedicated agent definitions (`.claude/agents/coding.md`,
+  `.claude/agents/code-reviewer.md`, each pinning `model:`) — what they lack is the `isolation:`
+  frontmatter key, so they have carried the identical instruction-only isolation requirement since they
+  were written (`code/SKILL.md`) and have not produced this failure. Adding `isolation: worktree` to
+  their frontmatter too is not ruled out, but nothing about this decision obligates it, and doing so
   speculatively would be scope this ticket never asked for. Revisit only if a comparable incident shows
   up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
