@@ -102,7 +102,7 @@ Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** a
 no cleanup from me: I commit nothing, and `/land`'s own end-of-pass backstop sweep reclaims it like
 any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`. (Known and deliberately not
 closed here: the guard can't detect a worktree recycled onto an already-landed `land/<other-id>`, so
-that case leaks on dirt rather than ancestry — lode-ix4i / **lode-3v1p**, reasoned out in
+that case leaks on dirt rather than ancestry — **lode-3v1p**, reasoned out in
 [docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98). Nothing
 for me to do differently either way.)
 
