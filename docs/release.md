@@ -89,13 +89,22 @@ on:
   needed for it. `refs/dolt/data` is neither `refs/heads/*` nor `refs/tags/*`, and GitHub's `push`
   event only fires for those two ref namespaces (confirmed: several `bd dolt push`es after
   lode-qxdn.1 landed produced zero runs).
-- **Badge behavior (lode-qxdn.4), confirmed against GitHub's own docs:** a workflow status badge
-  (`.../workflows/<file>/badge.svg`) tracks the most recent run on the **default branch** by
-  default, falling back to the most recent run overall only if the workflow has *never* run on the
-  default branch. Once a workflow has landed and produced at least one run on `trunk`, a red
-  `land/<id>` build can never redden the README badge — the badge only reflects `trunk`'s own runs.
-  That makes keeping `land/**` in the trigger safe to leave in place; there is no badge-hygiene
-  reason to drop it.
+- **Badge behavior (lode-qxdn.4) — pin the branch explicitly.** A red `land/<id>` build must never
+  redden the README while `trunk` is green. Two mechanisms avoid that, and this repo deliberately
+  uses the second:
+  - GitHub's native badge (`.../workflows/<file>/badge.svg`) tracks the most recent run on the
+    **default branch** by default (confirmed against GitHub's own docs), but falls back to the most
+    recent run overall if the workflow has *never* run on the default branch — so its safety is
+    conditional on a prior `trunk` run existing.
+  - **The convention here:** the shields.io endpoint with an explicit branch pin —
+    `https://img.shields.io/github/actions/workflow/status/<owner>/<repo>/<file>.yml?branch=trunk`.
+    Naming the branch in the URL makes the guarantee unconditional rather than dependent on a
+    fallback rule. This is what the README's build badge uses; **lode-qxdn.5 (tests) and
+    lode-qxdn.6 (coverage) must use the same `?branch=trunk` form** rather than the bare
+    `badge.svg`, so all three badges report on `trunk` by the same explicit mechanism.
+
+  Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
+  safe to leave in place; there is no badge-hygiene reason to drop it.
 
 ## Release notes
 
