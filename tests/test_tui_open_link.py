@@ -23,7 +23,10 @@ import pytest
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.edit import EDIT_BODY_ID, EditScreen
-from lode.tui.screens.snapshot_viewer import SNAPSHOT_VIEWER_BODY_ID, SnapshotViewerScreen
+from lode.tui.screens.snapshot_viewer import (
+    SNAPSHOT_VIEWER_BODY_ID,
+    SnapshotViewerScreen,
+)
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
 from lode.versions import save
 

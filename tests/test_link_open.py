@@ -126,9 +126,7 @@ def test_cursor_between_two_links_on_one_line_matches_neither() -> None:
 
 
 def test_normal_env_with_display_opens() -> None:
-    should_open, message = resolve_link_open(
-        "https://example.com", {"DISPLAY": ":0"}
-    )
+    should_open, message = resolve_link_open("https://example.com", {"DISPLAY": ":0"})
     assert should_open is True
     assert "https://example.com" in message
 
@@ -180,9 +178,7 @@ def test_wayland_display_counts_as_a_display() -> None:
 
 
 def test_macos_never_needs_display() -> None:
-    should_open, _ = resolve_link_open(
-        "https://example.com", {}, is_macos=True
-    )
+    should_open, _ = resolve_link_open("https://example.com", {}, is_macos=True)
     assert should_open is True
 
 
