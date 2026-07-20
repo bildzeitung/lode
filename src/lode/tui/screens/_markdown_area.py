@@ -47,7 +47,8 @@ directly from ``Exception`` and is **not** a ``ValueError``, so a genuine
 programming error still surfaces rather than being swallowed.
 
 Either way, fall back to a plain, uncoloured ``TextArea`` with everything else
-(text, read-only, id) unchanged, so editing and scrolling keep working.
+(text, read-only, id, placeholder) unchanged, so editing and scrolling keep
+working.
 """
 
 from __future__ import annotations
@@ -57,22 +58,32 @@ from textual.widgets.text_area import LanguageDoesNotExist
 
 
 def _markdown_text_area(
-    text: str = "", *, id: str, read_only: bool = False
+    text: str = "", *, id: str, read_only: bool = False, placeholder: str = ""
 ) -> TextArea:
     """A note-body ``TextArea`` with markdown colouring, or plain text if unavailable.
 
     Args:
-        text: Initial buffer content (defaults to empty -- all four callers
-            load the real body later, in ``on_mount``).
+        text: Initial buffer content (defaults to empty -- the editor and the
+            two viewers load the real body later, in ``on_mount``, and
+            ``CaptureScreen`` starts empty by design).
         id: The widget id the caller's tests key off of.
-        read_only: ``False`` for :class:`~lode.tui.screens.capture.CaptureScreen`'s
-            and :class:`~lode.tui.screens.edit.EditScreen`'s editable bodies;
-            ``True`` for the two read-only viewers.
+        read_only: ``False`` for an editable body, ``True`` for a read-only
+            viewer.
+        placeholder: Prompt shown while the buffer is empty (Textual renders it
+            only then). Plumbed through rather than left to the caller so a
+            body stays fully declared at its ``compose`` site, the way every
+            other placeholder in this TUI is.
     """
     try:
-        return TextArea(text, language="markdown", read_only=read_only, id=id)
+        return TextArea(
+            text,
+            language="markdown",
+            read_only=read_only,
+            id=id,
+            placeholder=placeholder,
+        )
     except LanguageDoesNotExist, ValueError:
         # Both arms mean "no usable markdown grammar in this environment" --
         # see this module's docstring for why ValueError is required here and
         # why it is narrow enough not to mask a real bug.
-        return TextArea(text, read_only=read_only, id=id)
+        return TextArea(text, read_only=read_only, id=id, placeholder=placeholder)

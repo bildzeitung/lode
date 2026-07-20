@@ -159,18 +159,24 @@ def test_markdown_text_area_uses_markdown_language_when_grammar_present() -> Non
 
 
 def test_capture_screen_body_is_markdown_language(tmp_path: Path) -> None:
-    """CaptureScreen (lode-ngk2) -- the screen where a user actually types."""
+    """CaptureScreen (lode-ngk2) -- the screen where a user actually types.
+
+    Also pins the placeholder: routing this body through the shared helper is
+    what put it there, so a later signature change that quietly dropped it
+    would otherwise land uncaught.
+    """
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
     app = LodeApp(db_path=db_path)
 
-    async def _drive() -> str | None:
+    async def _drive() -> tuple[str | None, str]:
         async with app.run_test() as pilot:
             await pilot.pause()
             assert isinstance(app.screen, CaptureScreen)
-            return app.screen.query_one(f"#{BODY_ID}", TextArea).language
+            body = app.screen.query_one(f"#{BODY_ID}", TextArea)
+            return body.language, str(body.placeholder)
 
-    assert asyncio.run(_drive()) == "markdown"
+    assert asyncio.run(_drive()) == ("markdown", "What did you learn today?")
 
 
 def test_edit_screen_body_is_markdown_language(tmp_path: Path) -> None:
