@@ -346,15 +346,65 @@ would have silently gained its unreviewed code the moment `land/lode-eshl` lande
 launch worktree also started life checked out on `land/lode-7abi` rather than clean off `trunk` HEAD.
 
 What ships here is a **defensive assertion** — a mitigation that makes each agent safe against the
-symptom. It is deliberately *not* a root-cause fix, and the root cause is **not** established. One
-committed configuration surface governs exactly this and has not been ruled out: `.claude/settings.json`
-carries an undocumented `"worktree": { "baseRef": "head" }` (added in the drive-by chore commit
-`2d8c9da`, described in no doc). `baseRef: "head"` means a dispatched worktree branches from whatever
-`HEAD` currently is — which is **not** the same guarantee as "branched from local `trunk` HEAD", the
-phrasing this file and the agent definitions assert in several places. Whether that setting causes,
-contributes to, or is merely orthogonal to the recycling is untested; changing it affects every
-dispatched agent in the repo, so it is a human's call, tracked separately. Until then, do not read the
-guard below as evidence that the harness offers no lever — it means nobody has pulled one yet.
+symptom. It is deliberately *not* a root-cause fix. `.claude/settings.json` carries
+`"worktree": { "baseRef": "head" }` (added in the drive-by chore commit `2d8c9da`, described in no
+doc until now). Do not read the guard below as evidence that the harness offers no lever — it means
+nobody had pulled one yet at the time `lode-nt98` shipped.
+
+#### `baseRef` investigation (lode-r7ow)
+
+`lode-nt98`'s review left `baseRef: "head"` **un-ruled-out** as a contributing cause and filed this
+ticket to determine what values the harness actually accepts and whether a trunk-pinned value is
+possible. Per Anthropic's own docs (code.claude.com/docs/en/worktrees, "Choose the base branch" /
+"Reuse a worktree name") as of this writing:
+
+- **`worktree.baseRef` accepts exactly two values, `"fresh"` (the default) or `"head"` — nothing
+  else.** "You can't set `worktree.baseRef` to a branch name." A literal trunk-pinned value (e.g.
+  `"trunk"`) is **not a supported option**; the closest the harness offers is `"fresh"`, which
+  branches from `origin/<default-branch>` (`origin/trunk` here), not the local branch by that name.
+- **`"head"` means the *current* worktree's `HEAD`, not the main checkout's.** Verbatim: "Inside a
+  worktree, `\"head\"` resolves to that worktree's `HEAD`, not the main checkout's." So even a
+  correctly-created dispatch worktree's `baseRef: "head"` is only ever a guarantee relative to
+  wherever the dispatch happened to start — it was never the absolute "local `trunk` HEAD" guarantee
+  this file and the agent definitions assert.
+- **The reuse behavior is the direct, documented match for the observed symptom.** Under
+  `baseRef: "head"`, the docs state plainly: "any reuse when `worktree.baseRef` is `\"head\"`"
+  reopens the worktree "at the old tip" — i.e. a recycled worktree keeps whatever branch and commits
+  it already had, unconditionally, no safety check. Under the *default* `"fresh"`, a reused worktree
+  instead **resets to the default branch** whenever it has no uncommitted/untracked changes, is still
+  on the branch Claude Code created for it, and has no commits of its own (or its PR was merged and
+  its remote branch deleted) — exactly the case a stale, previously-built ticket's worktree would hit
+  once that ticket lands and its `land/<id>` ref is deleted. `lode-eshl`'s builder was handed a
+  worktree still on `lode-7abi`'s **unmerged, unreviewed** build branch — under `"fresh"` semantics
+  that worktree would have failed the "no commits of its own" reset condition too (the branch wasn't
+  merged yet), so `"fresh"` would not have been a silver bullet for that exact reproduction — but it
+  would close the *general* class once a prior ticket's branch has landed and its ref is gone, which
+  `"head"` never does regardless.
+- Corroborating signal from the wider Claude Code issue tracker: `isolation: "worktree"` Agent-tool
+  dispatches creating a worktree from the wrong base (default branch instead of the dispatching
+  session's `HEAD`, or vice versa) is a recognized, reported class of bug independent of this repo
+  (e.g. `anthropics/claude-code#57768`), not a one-off local anomaly.
+
+**Finding: `baseRef: "head"` is not ruled out — the opposite. Its documented reuse semantics is a
+precise, mechanism-level match for the recycling this guard defends against, not just a correlation.**
+It cannot be the *sole* cause (a genuinely fresh worktree, never reused, still branches from *some*
+`HEAD` — the recycling requires the harness to have reused a worktree directory/name in the first
+place, which is a separate harness behavior this investigation did not otherwise probe), but switching
+to the default `"fresh"` would close the specific "recycled worktree keeps its old tip forever"
+mechanism the docs describe, for every case where the prior occupant's branch has already landed.
+
+**Trade-off the original commit (`2d8c9da`) was solving for, still real under `"fresh"`:** a
+`"fresh"` worktree branches from `origin/<default-branch>`, which can lag the *local* `trunk` HEAD —
+the exact staleness `2d8c9da`'s commit message and CLAUDE.md's worktree policy warn about. In this
+repo's workflow that lag should usually be small: `/land` pushes `trunk` to origin immediately after
+every merge (`land/SKILL.md` §4), so local and `origin/trunk` are expected to stay closely in sync
+outside of a push that's actively in flight — but "usually small" is not "zero," and this repo has
+never measured it.
+
+**Decision: this ticket's own scope says changing `baseRef` for every dispatched agent in the repo is
+a human's call, not an agent's — that has not changed just because the investigation now favors
+`"fresh"`.** The finding above and this write-up are the input to that decision; the setting itself is
+left untouched here. See the bd ticket (`lode-r7ow`) for the pending human decision.
 
 Given that, the assertion is defence in depth rather than the answer. Both `coding.md` and
 `code-reviewer.md` now assert, as the first thing they do after confirming they're in a worktree at
@@ -1010,7 +1060,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
-| Recycled-worktree guard | builder and reviewer both assert `git merge-base --is-ancestor HEAD trunk` as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s undocumented `worktree.baseRef: "head"` is un-ruled-out — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98) |
+| Recycled-worktree guard | builder and reviewer both assert `git merge-base --is-ancestor HEAD trunk` as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef: "head"` is now documented and investigated (lode-r7ow) — its reuse semantics is a documented, mechanism-level match for the recycling; switching to the default `"fresh"` is recommended but is a pending **human** decision (repo-wide blast radius) — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
