@@ -1520,6 +1520,18 @@ are catalogued in [configuration.md](configuration.md).
     collisions: `tui/{ask,capture,edit,reconcile}.py` vs. `tui/screens/{ask,capture,edit,reconcile}.py`
     (disambiguated only by import path today; the `edit` pair is the newest — `screens/edit.py`
     arrived with the `lode-s5kp` browse.py split this reorg follows).
+  - **Grouping by kind, not a dependency hierarchy (`/challenge` finding on this ticket, resolved
+    by `lode-zlmz.4`).** "`app/screens/widgets/services`" reads like a layered stack, but it isn't
+    one, and the decision should say so explicitly rather than let a reader infer a layering that
+    doesn't exist. The split above sorts modules into four directories by **what kind of thing each
+    module is** (the app shell; a full-screen UI; a reusable UI component; a non-UI service
+    function) — it says nothing about which directories may import which. As landed, the
+    `widgets/`↔`screens/` edge is **bidirectional**: `widgets/related_notes_panel.py` imports
+    `screens.related_note_modal` (widget → screen), while `screens/{ask,capture,edit,reconcile}.py`
+    import `widgets.lode_footer` (screen → widget). The move relocated existing imports byte-for-byte
+    (per the move discipline below) and introduced no new cycle — this bidirectionality predates the
+    reorg — but grouping-by-kind is exactly why it's unproblematic: nothing about this layout claims
+    or requires widgets to sit "below" screens.
   - **Move discipline (with the challenge carve-out).** Move children relocate class/function
     bodies **byte-identical, except the module/symbol's own import lines and Sphinx**
     **`:mod:`/`:func:`/`:class:` xref path strings** — this is how `lode-s5kp` actually operated.
