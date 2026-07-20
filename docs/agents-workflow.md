@@ -375,14 +375,15 @@ evidence of a harness bug, not a routine hiccup to swallow silently. Two precond
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
 understood:
 
-- **It only ever runs in an isolated launch worktree.** Two of the three sites — `coding.md`'s
-  rebase-pickup step and `code-reviewer.md`'s step — carry an explicit `case "$TOP" in
-  */.claude/worktrees/*) ;; ... esac` guard ahead of the remediation, checking `git rev-parse
-  --show-toplevel` and stopping otherwise. `coding.md`'s fresh-build site relies instead on the prose
-  `pwd` safety check immediately above it in that document, not a repeated `case` guard — a documented
-  asymmetry, not an inconsistency: either way, an agent whose `isolation: "worktree"` dispatch silently
-  failed is stopped before `reset --hard`/`clean -fd` could run in the user's **main checkout**, which
-  is what would turn a contamination guard into the more damaging bug.
+- **It only runs in an isolated launch worktree — mechanically at two of the three sites.**
+  `coding.md`'s rebase-pickup step 2 and `code-reviewer.md`'s step 2 each wrap the remediation in an
+  explicit `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`,
+  in the same block as the destructive command. `coding.md`'s fresh-build site (step 3) carries no
+  such `case`; it leans on the prose `pwd` safety check a dozen lines above it, so there the
+  precondition is compliance-dependent rather than enforced. The intent is the same either way — an
+  agent whose `isolation: "worktree"` dispatch silently failed must stop before `reset --hard`/`clean
+  -fd` can reach the user's **main checkout**, which is what would turn a contamination guard into the
+  more damaging bug — but closing that third site's gap is its own ticket, `lode-fptp`.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
   reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
