@@ -1,0 +1,57 @@
+name: build
+
+# Push/PR-triggered packaging check — catches a packaging regression
+# (pyproject/setuptools-scm/package-data) before a release cuts, rather than
+# only on a vX.Y.Z tag like release.yml. Workflow name is FROZEN: lode-qxdn.4's
+# badge URL hard-codes workflows/build.yml/badge.svg.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install build front-end
+        run: pip install build
+
+      - name: Build wheel + sdist
+        run: python -m build --outdir dist
+
+      - name: Assert package-data shipped in the wheel
+        # A clean `python -m build` exit doesn't prove package-data made it
+        # in — that's the lode-1i8.4 footgun (the TUI's .tcss almost shipped
+        # without it). Inspect the wheel's file list directly, mirroring the
+        # assertion in noxfile.py's `build` session.
+        run: |
+          python - <<'EOF'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          wheels = list(Path("dist").glob("*.whl"))
+          sdists = list(Path("dist").glob("*.tar.gz"))
+          if not wheels or not sdists:
+              sys.exit("python -m build did not produce both a wheel and an sdist")
+
+          with zipfile.ZipFile(wheels[0]) as zf:
+              names = zf.namelist()
+
+          missing = [
+              expected
+              for expected in ("lode/schema.sql", "lode/tui/lode.tcss")
+              if expected not in names
+          ]
+          if missing:
+              sys.exit(f"wheel is missing expected package-data: {missing}")
+          EOF
