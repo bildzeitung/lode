@@ -77,32 +77,15 @@ jobs:
         run: pip install -e '.[dev]'
 
       - name: Resolve model cache key
-        # Derive the cache key from the PINNED model ids rather than a
-        # lockfile or a bare constant -- changing any of them must invalidate
-        # the cache, or CI would silently keep serving stale weights for a pin
-        # it is no longer testing. Read them off `Settings` itself rather than
-        # regex-scraping config.py's source: the key then tracks config.py's
-        # API instead of its formatting, so hoisting a default to a module
-        # constant (or any other refactor that changes no behaviour) can't red
-        # this workflow. Bare `Settings()` is a plain pydantic model (not
-        # BaseSettings), so it yields the pinned defaults and never layers in
-        # env vars or a $LODE_HOME/config.toml -- exactly the pins under test.
-        # All three fastembed loaders are listed (embedder, reranker,
-        # NLI/entailment cross-encoder): entailment_model happens to share
-        # rerank_model's id today, but naming it here means the key stays
-        # correct on its own terms if that ever diverges, rather than resting
-        # on an invariant asserted in another file.
-        # NB this step must stay AFTER the install (it imports lode) and
-        # BEFORE the cache restore below.
+        # SINGLE implementation shared with coverage.yml -- see
+        # scripts/model-cache-key.py's own docstring for the full rationale
+        # (deriving the key from `Settings` rather than a lockfile/constant),
+        # matching the `build` nox session precedent for this class of
+        # duplication (noxfile.py) (lode-sx23).
+        # NB this step must stay AFTER the install (the script imports lode)
+        # and BEFORE the cache restore below.
         id: model_cache
-        run: |
-          python - <<'EOF' >> "$GITHUB_OUTPUT"
-          from lode.config import Settings
-
-          s = Settings()
-          ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
-          print("key=models-" + ids.replace("/", "_"))
-          EOF
+        run: python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Restore model weights cache
         # $LODE_HOME/models (config.py's model_cache_dir()) -- ~1.6GB of ONNX
