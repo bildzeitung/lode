@@ -48,6 +48,10 @@ dependencies = [
 dev = [
     "pytest",        # tests (run via nox)
     "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
+    "pytest-timeout", # per-test timeout regression net (lode-kmes) -- turns a
+                      # wedged test into a named failure instead of an
+                      # indefinite stall on the landing gate; see the
+                      # `[tool.pytest.ini_options]` `timeout` setting below.
     "nox",           # task runner (`nox -t fix` before merging)
     "ruff",          # lint / format
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
@@ -65,6 +69,17 @@ testpaths = ["tests"]
 # filters on this marker; `nox -s tests` (bare pytest, no -m filter) ignores
 # the marker entirely and always runs everything — the landing gate.
 addopts = "--strict-markers"
+# Global per-test timeout (lode-kmes) -- the regression net for the
+# intermittent whole-suite hang this ticket root-caused (a leaked root-logger
+# DEBUG level enabling a never-returning latency-probe worker, see
+# tests/conftest.py's `_restore_root_logger_state`). 120s comfortably clears
+# every real test's cost -- the slowest offline tests pay a one-time
+# FastEmbedCrossEncoder model-load of a few seconds each -- while still
+# turning a future wedged test into a named failure long before it could
+# stall a `/land` pass for 20+ minutes. `tests/test_eval_live.py`'s live eval
+# leg (~273s, only runs opted-in via `nox -s eval`) overrides this with its
+# own `@pytest.mark.timeout(...)`.
+timeout = 120
 markers = [
     "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",
     "network: this test deliberately reaches real, un-mocked Anthropic SDK / network machinery (lode-85q) — the explicit, greppable escape hatch from tests/conftest.py's autouse network+LLM-client guard. Every other test fails loudly, not silently, if it ever falls through to a real network call or a real anthropic.Anthropic() construction.",

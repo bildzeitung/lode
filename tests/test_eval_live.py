@@ -65,6 +65,9 @@ ABSTENTION_FLOOR = 0.95
 
 @pytest.mark.slow
 @pytest.mark.network
+@pytest.mark.timeout(600)  # overrides the 120s global default (lode-kmes) --
+# this leg is a genuinely long, credentialed live run (~273s observed), not a
+# hang; 600s clears that with margin while still bounding a real wedge.
 def test_eval_golden_set_live() -> None:
     """Score the golden Q&A set end-to-end with real seams.
 
