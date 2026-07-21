@@ -148,8 +148,7 @@ explicit opt-in to retry that specific target now instead of waiting on a schedu
 **Idempotent.** Re-running `lode backfill jira` after a link already migrated is a no-op for
 that link — reclassification runs from the edge's *original* pasted URL every time, so an edge
 already repointed onto its JIRA identity is simply revisited and its current head snapshot
-re-checked, not re-migrated from scratch. Safe to run repeatedly, and safe to run even when
-nothing needs it.
+re-checked, not re-migrated from scratch. Safe to run even when nothing needs it.
 
 Full design: [`externals.md`](../externals.md#backfill-per-connector-re-draw-down-lode-gpzn9).
 
