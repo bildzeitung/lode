@@ -20,6 +20,16 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
+# Producers push land/<id> ~2-3x per ticket (builder, code-reviewer, sometimes a
+# rebase), and each push fires a fresh, heavy run. Nothing in the landing loop
+# reads these check results -- /land re-gates locally and never consults
+# GitHub Actions (docs/release.md) -- so a superseded run on an older commit
+# of the same ref has zero consumers; cancelling it cannot lose information
+# (lode-2ouz).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Point LODE_HOME at a workspace-local path (rather than leaving it at the
   # default ~/.lode) so the model-weights cache below lives at a path that
@@ -42,6 +52,10 @@ env:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # Well below GitHub's 360-minute default -- a hung model download (the
+    # exact failure the weights cache exists to mitigate) would otherwise burn
+    # six hours producing nothing. ~3x an observed green run (lode-2ouz).
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -52,6 +66,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
+          cache: pip
+          # NOT the default requirements.txt key -- that file is a single
+          # permanent `-e .[dev]` line that never changes, so that key would
+          # never invalidate. pyproject.toml is the real dependency source of
+          # truth (lode-2ouz).
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
         run: pip install -e '.[dev]'
@@ -84,14 +104,31 @@ jobs:
           print("key=models-" + ids.replace("/", "_"))
           EOF
 
-      - name: Cache model weights
+      - name: Restore model weights cache
         # $LODE_HOME/models (config.py's model_cache_dir()) -- ~1.6GB of ONNX
         # weights (BAAI/bge-reranker-base + nomic-ai/nomic-embed-text-v1.5).
         # On a cache hit the slow leg runs fully offline; on a miss it
         # downloads once. This is the mitigation for a model-host outage
         # turning a good commit red on a public badge, not an optimization
         # (lode-qxdn.2 design notes) -- do not drop it.
-        uses: actions/cache@v4
+        #
+        # Split into restore + save (below) rather than the single
+        # actions/cache@v4 step: GitHub only runs a step's post action (which
+        # is where actions/cache@v4 saves) if the job reaches that point in
+        # its normal reverse-order unwind -- if `nox -s tests` fails, the job
+        # is marked failed and post steps of already-run actions are skipped,
+        # so a single actions/cache@v4 step would silently skip saving on
+        # every red run. That is exactly backwards: the run most likely to be
+        # red (a fresh model pin, a flake) is also the one most likely to be
+        # cold, so every retry would re-download 1.6GB until one run goes
+        # fully green -- undercutting the cache's whole purpose as an outage
+        # mitigation. VERIFIED (lode-2ouz; GitHub Actions docs + community
+        # discussion #165508): "GitHub runs post steps only if the job
+        # completes [successfully]. If a job fails, post steps of all actions
+        # in that job are skipped." An explicit save step with `if: always()`
+        # is the documented workaround.
+        id: restore_model_cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.LODE_HOME }}/models
           key: ${{ steps.model_cache.outputs.key }}
@@ -106,3 +143,26 @@ jobs:
         # which only `nox -s eval` sets, so this leg stays offline and
         # keyless by design.
         run: nox -s tests
+
+      - name: Save model weights cache
+        # Runs on a FAILED `nox -s tests` (the point of the split -- see the
+        # restore step above) but NOT on a cancelled run. cancelled() matters
+        # here specifically because of this workflow's own `concurrency:
+        # cancel-in-progress` (a second push to the same land/<id> cancels the
+        # in-flight run): a cancellation can fire mid-download, and actions/cache
+        # keys are IMMUTABLE -- once a partial $LODE_HOME/models is saved under
+        # this content-key it can never be overwritten by a later complete run,
+        # so the cache is pinned incomplete until it evicts (~7d) and silently
+        # stops being the offline-outage mitigation it exists to be. A genuine
+        # test failure is safe to save from: the reranker/embedder load at
+        # session setup, well before any test body runs, so on a red run the
+        # weights are already complete. `!cancelled()` keeps the save-on-failure
+        # behaviour while refusing to persist a torn-off partial. Skip too on an
+        # exact restore hit (cache-hit == 'true'): the key already holds this
+        # content, so re-saving is wasted work and (per action version) a
+        # same-key save error.
+        if: ${{ !cancelled() && steps.restore_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.LODE_HOME }}/models
+          key: ${{ steps.restore_model_cache.outputs.cache-primary-key }}
