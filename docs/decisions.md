@@ -1765,6 +1765,60 @@ are catalogued in [configuration.md](configuration.md).
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98)
   / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+- **lode-3v1p (2026-07-20) closes the dirt-axis residual left open above: `git clean -fd` now runs
+  unconditionally at all three recycled-worktree guard sites, not just inside the failed-ancestor-check
+  branch.** The gap: `merge-base --is-ancestor HEAD trunk` cannot recognize a worktree recycled onto a
+  `land/<other-id>` that has *since landed* — its `HEAD` is, by then, genuinely an ancestor of `trunk`,
+  so the check passes exactly as it would for a freshly branched worktree, and the remediation
+  (`git branch rescue/… && git reset --hard trunk && git clean -fd`) never runs. That's harmless on the
+  **ancestry** axis (what the guard misses already satisfies `/land`'s reclaim predicate — the two
+  cancel), but not on the **dirt** axis: the recycled worktree's untracked leftovers (from whatever the
+  prior ticket's build/review left behind, uncommitted) survive, and the lode-9hgu dirty-tree guard in
+  `/land`'s Section 4 backstop sweep *keeps* any worktree that isn't clean, regardless of ancestry or
+  lock state — so the worktree leaks anyway, and (for `coding.md`/`code-reviewer.md` specifically) the
+  same leftovers can pollute the `git status --short` clean-tree assertions and the `nox` run those
+  roles gate on.
+
+  **Three options were on the table; picked the first as the simplest thing that actually closes the
+  gap:**
+  1. **Run the existing remediation's cleanup arm unconditionally** — move `git clean -fd` out of the
+     `if ! merge-base --is-ancestor …` block so it runs every time the guard is reached, pass or fail,
+     still gated by the same `.claude/worktrees/`-only `case` that already wraps the destructive branch.
+     **Chosen.** It is a one-line move at each of the four call sites (`coding.md`'s fresh-build and
+     rebase-pickup instances, `code-reviewer.md`, `land-review.md`), touches nothing outside the guard
+     itself, and needs no new precondition: `git clean -fd` (no `-x`) never removes `.gitignore`d build
+     state (`venv/`, `.nox/`, `__pycache__/`), so on a genuinely fresh worktree — the overwhelming
+     common case — it is a pure no-op; on an undetected recycle it removes exactly the leftover dirt.
+     It also keeps the two concerns cleanly separated: the ancestor check stays a narrow, commit-graph-
+     only predicate (never widened into a general clean-tree assertion, which would blur what it's
+     actually testing), and cleanup becomes an unconditional, independent step run right after it.
+  2. **Have `/land`'s Section 4 backstop sweep judge "recycling dirt" separately from ordinary dirt.**
+     Rejected: the sweep has no way to distinguish, from outside, dirt left by a recycled prior
+     occupant from dirt that is a live agent's genuine uncommitted work it must never destroy — that
+     distinction is exactly why the lode-9hgu dirty-tree guard exists as a blanket "never reclaim a
+     dirty worktree" rule in the first place (full account: the lode-9hgu entry, `land/SKILL.md`
+     Section 4). Teaching the shared, heavily-audited sweep script a special case for "dirt I should
+     actually be willing to nuke" reopens exactly the risk lode-9hgu closed, in the one place (a
+     landing-critical, cross-ticket shared script) where a mistake is most expensive — versus a
+     one-line, per-site fix that costs nothing shared.
+  3. **Have each role assert a clean tree after the guard and escalate/report rather than silently
+     clean.** Rejected as unnecessary caution: the worktree being asserted against, at this point in
+     each cycle, is understood by construction to be either a genuinely fresh checkout or scratch left
+     behind by a *previous*, already-superseded dispatch (the guard runs as the very first action, before
+     any of this cycle's own real work begins) — there is no live human or in-flight agent whose work
+     could be sitting in that dirt (the `case` precondition already rules out the one class of worktree
+     where that could be true, the user's main checkout). The existing failed-ancestor-check branch
+     already cleans silently rather than escalating; there is no reason for dirt discovered via the
+     ancestor-check-*passed* path to be treated more cautiously than dirt discovered via the
+     ancestor-check-*failed* path, since both are the identical class of pre-cycle scratch.
+
+  **The two axes (ancestry, dirt) stay documented as distinct even though one fix now closes both** —
+  `land-review`'s correctness exposure to a recycled worktree remains nil regardless (it never checks
+  anything out), and this closes a worktree-**leak**, never a correctness, gap. Documented at all four
+  guard sites — [`coding.md`](../.claude/agents/coding.md),
+  [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
+  [`land-review.md`](../.claude/agents/land-review.md) — and in
+  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
 
 - **Markdown editing — open items parked in [editing.md](editing.md).** `docs/editing.md`
   (`lode-ev5j`) records the shipped markdown-editing surface but leaves the following unresolved,
