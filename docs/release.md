@@ -101,9 +101,20 @@ on:
   - **The convention here:** the shields.io endpoint with an explicit branch pin —
     `https://img.shields.io/github/actions/workflow/status/<owner>/<repo>/<file>.yml?branch=trunk`.
     Naming the branch in the URL makes the guarantee unconditional rather than dependent on a
-    fallback rule. This is what the README's build badge uses; **lode-qxdn.5 (tests) and
-    lode-qxdn.6 (coverage) must use the same `?branch=trunk` form** rather than the bare
-    `badge.svg`, so all three badges report on `trunk` by the same explicit mechanism.
+    fallback rule. This is what the README's build badge uses; **lode-qxdn.5 (tests) must use the
+    same `?branch=trunk` form** rather than the bare `badge.svg`, so both GH-Actions-backed badges
+    report on `trunk` by the same explicit mechanism.
+  - **lode-qxdn.6 (coverage) is the one exception, by necessity, not oversight.** This bullet
+    originally said .6 must use the same `?branch=trunk` GH-Actions workflow-status form too — but
+    that form only ever shows the `coverage.yml` job's pass/fail, never a percentage, which
+    contradicts .6's own acceptance criterion that the badge show the actual measured coverage
+    percentage. (This note predated lode-qxdn.3's later decision to publish coverage to Codecov
+    specifically so a percentage-bearing badge would exist — corrected once that tension surfaced
+    during .6's build.) The coverage badge instead reads directly from Codecov via shields.io's
+    Codecov integration, still pinned explicitly to `trunk` (via Codecov's own branch path segment
+    rather than a `?branch=` query param — a different mechanism, same non-staleness principle):
+    `https://img.shields.io/codecov/c/github/<owner>/<repo>/trunk`, linking to
+    `https://codecov.io/gh/<owner>/<repo>`.
 
   Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
   safe to leave in place; there is no badge-hygiene reason to drop it.
