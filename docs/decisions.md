@@ -507,6 +507,45 @@ are catalogued in [configuration.md](configuration.md).
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
 
+  **Update (lode-p5gf) — FIND-recall reliability: K-round union + semantic dedup, mitigation shipped,
+  validation still pending.** lode-905v's own retrospective already showed FIND recall is stochastic
+  run-to-run — the tombstone bug above was found by 0 of 6 finders in one run and 4 of 6 in another,
+  identical code and prompts — filed separately as lode-p5gf per maintainer decision to land lode-905v
+  and treat reliability separately. Chosen mitigation, implemented in
+  `.claude/workflows/correctness-review.js`: run each dimension's FIND prompt `FIND_ROUNDS` times (2,
+  a starting default) independently and union the results via a shared near-duplicate merge, rather
+  than loop-until-dry (rejected: no natural cost ceiling for a dimension that stays flaky every round,
+  where a fixed K has a hard, predictable bound) or more finders/a completeness-critic pass (rejected:
+  adds a whole extra reviewing role rather than reusing the redundancy the stochasticity itself calls
+  for). **Cost tradeoff, explicit since this runs inside every `/code` pass:** Find calls multiply by
+  `FIND_ROUNDS` (12 finder calls instead of 6, at the K=2 default); Verify calls do **not** multiply by
+  `FIND_ROUNDS` — a dimension's own cross-round duplicates are merged *before* Verify runs, so a bug
+  found in every round of the same dimension still costs exactly one Verify call.
+
+  **Semantic dedup, not just line-proximity.** The original REPORT-stage dedup collapsed survivors only
+  on an *exact* file:line match — deliberately, since a raw proximity window risked collapsing two
+  genuinely distinct bugs. That left the residual gap this ticket names directly: the tombstone was
+  cited at `:319` by some finders and `:322` by others, the *same* bug, missed by exact-location dedup.
+  The fix (`mergeNearDuplicates` in the script) requires **both** a location match (same file, line
+  within a small window) **and** title-token-Jaccard similarity above a threshold before two findings
+  are treated as the same bug — closing the residual gap without reintroducing the risk the original
+  exact-match rule was guarding against. The same function also unions a single dimension's own
+  `FIND_ROUNDS`, so the K-round mitigation does not reopen the duplicate-findings problem lode-905v's
+  REPORT dedup was built to close.
+
+  **What is NOT yet true: `FIND_ROUNDS = 2` is a starting default, not a validated optimum, and the
+  distribution-level acceptance bar (run the gpzn.13 retrospective, `77960d8...22e4341`, N≥5 times and
+  report per-run recall) has NOT been executed.** That validation needs a `Workflow`-capable session —
+  the same constraint as lode-905v's own benchmark above: no `coding` producer or `code-reviewer`
+  dispatch reaches the `Workflow` tool, only the `/code` orchestrator's own main session does. A
+  producer building this ticket is not that session, so it cannot run or record that validation itself.
+  `specs/12-correctness-review-recall-validation.md` is the runbook (mirroring `specs/11`'s precedent
+  for lode-905v's own live-benchmark step) for a human or the maintainer's own interactive session to
+  run the retrospective N≥5 times against both the pre-mitigation and post-mitigation script and record
+  per-run recall on lode-p5gf. **Do not declare this ticket's reliability bar met until that has
+  actually been run and recorded there** — the code above is built and reviewable now, but "solved" is
+  a claim only the runbook's result can support.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
