@@ -189,6 +189,11 @@ unreviewed ticket's changes. A branch-name check alone can't catch this (the rec
 commit graph instead of trusting the name:
 
 ```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
+esac
 if ! rtk git merge-base --is-ancestor HEAD trunk; then
   echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
        "ancestor of trunk -- this worktree carries commit(s) foreign to trunk (recycled from a" \
@@ -199,6 +204,14 @@ if ! rtk git merge-base --is-ancestor HEAD trunk; then
   rtk git clean -fd
 fi
 ```
+
+**The `case` guard is the executable form of the pwd safety check above, placed in the same block as
+the destructive command it protects** — the same reasoning `code-reviewer.md` gives for its own copy
+of this guard: an English instruction upstream can be skipped or hand-waved under load; a `case` that
+`exit 1`s cannot. It also covers a broader precondition than the prose check above it (which only
+tests whether `pwd` is the repo root): a cwd that is neither the repo root nor a worktree — a
+subdirectory of the main checkout, say — passes that prose check as literally written but fails this
+`case`, so the destructive remediation below still never reaches the main checkout.
 
 **The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
 ref* — and in a recycled worktree that ref belongs to **another ticket** (the observed reproductions
@@ -214,9 +227,8 @@ after this worktree was created, a normal race in a fan-out) still passes this c
 a worktree carrying commits `trunk` doesn't have — someone else's unreviewed work — fails it. On a
 failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
 bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/`
-ref in that report. The Rebase pickup cycle below carries its own copy of this guard, with one
-addition: an explicit `.claude/worktrees/` check, which that cycle needs because it has no `pwd`
-safety check of its own above it and this one does.
+ref in that report. The Rebase pickup cycle below carries its own copy of this guard, including the
+same explicit `.claude/worktrees/` `case` check.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
