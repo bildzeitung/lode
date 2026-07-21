@@ -54,14 +54,26 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 
 ```bash
 ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --json \
-  | jq -r '.[] | "\(.id)\tland-escalated\t\(.title)"')
+  | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)"')
 
 HUMAN=$(rtk bd human list --status open --json \
-  | jq -r '.[] | "\(.id)\thuman\t\(.title)"')
+  | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
 ```
 
+**Why `(. // [])` and not a bare `.[]`:** an *empty* `bd` result serializes as literal `null`, not
+`[]` (seen most often on `bd human list` when no `human` ticket is open). A bare `jq '.[]'` on that
+`null` aborts with `Cannot iterate over null`, which the pipeline below would misread as a *failed
+query* — and a failed query suppresses the rewrite (§5's hard precondition), so a `human` item that
+was just resolved would **zombie in the digest** instead of dropping out promptly. `(. // [])`
+normalizes `null` → `[]` so an empty queue reads as empty. It does **not** mask the usual failure
+signature: a `bd` error prints a diagnostic (malformed JSON), on which `jq` still aborts, so that
+failure surfaces. (The one case neither the guard nor `jq` distinguishes — a `bd` failure that exits
+non-zero but writes *zero bytes* — was already indistinguishable from an empty queue before this
+guard; it is unchanged, not introduced, here.)
+
 If either `bd` call errors, note the failure and **skip the digest rewrite for this pass** rather
-than aborting — a failed query is not an empty queue. See
+than aborting — a failed query is not an empty queue (but a `null`-serialized *empty* result is not
+a failure — see above). See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 2. Collect epics ready for a human close-decision
@@ -88,7 +100,7 @@ while IFS=$'\t' read -r e TITLE; do
   CLOSABLE="${CLOSABLE}${ROW}
 "
 done < <(rtk bd list --type=epic --label epic-audited --status open --json \
-  | jq -r '.[] | [.id, .title] | @tsv')
+  | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 ```
 
 ## 3. Build the current queue (dedup on stable IDs)
@@ -107,7 +119,7 @@ from a second machine. The digest issue is found by a **reserved label**, not a 
 
 ```bash
 DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --json)
-N=$(echo "$DIGEST_ROWS" | jq 'length')
+N=$(echo "$DIGEST_ROWS" | jq '(. // []) | length')   # `(. // [])` for the same null-serializes-empty reason as §1
 ```
 
 - **`N == 0`** — bootstrap. Only create it if `$CURRENT` is non-empty (an empty queue with no prior
@@ -235,6 +247,10 @@ real items from the durable record a human relies on.
 
 - If any §1/§2 query errors (`bd` or `jq`), note the failure in the report, **skip the §6 rewrite and
   the §7 notification entirely**, and leave the prior digest exactly as it was. Stale, not truncated.
+  An *empty* result that serializes as literal `null` is **not** a failure — the `(. // [])` guard in
+  §1/§2 normalizes it to an empty list, so a queue that legitimately emptied still rewrites the digest
+  and drops the resolved item promptly (without it, the `jq` abort would look like a failed query and
+  wrongly suppress the rewrite).
 - The §6 rewrite is all-or-nothing: it either completes cleanly or is skipped (no partial
   `--body-file` write).
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
