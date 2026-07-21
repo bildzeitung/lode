@@ -55,20 +55,15 @@ jobs:
         run: pip install -e '.[dev]'
 
       - name: Resolve model cache key
-        # Identical approach to tests.yml -- derive the cache key from the
-        # PINNED model ids (via a Settings import, not a source regex-scrape)
-        # rather than a lockfile or bare constant, so a pin change invalidates
-        # the cache. Must stay AFTER the install (it imports lode) and
-        # BEFORE the cache restore below.
+        # SINGLE implementation shared with tests.yml -- see
+        # scripts/model-cache-key.py's own docstring for the full rationale
+        # (deriving the key from `Settings` rather than a lockfile/constant),
+        # matching the `build` nox session precedent for this class of
+        # duplication (noxfile.py) (lode-sx23).
+        # NB this step must stay AFTER the install (the script imports lode)
+        # and BEFORE the cache restore below.
         id: model_cache
-        run: |
-          python - <<'EOF' >> "$GITHUB_OUTPUT"
-          from lode.config import Settings
-
-          s = Settings()
-          ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
-          print("key=models-" + ids.replace("/", "_"))
-          EOF
+        run: python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"
 
       - name: Cache model weights
         # Same cache as tests.yml, keyed identically -- a warm cache here

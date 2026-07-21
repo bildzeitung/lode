@@ -1,0 +1,63 @@
+"""Tests for scripts/model-cache-key.py, the CI cache-key derivation (lode-sx23).
+
+Both ``.github/workflows/tests.yml`` and ``.github/workflows/coverage.yml``
+call this script (as ``python scripts/model-cache-key.py >> "$GITHUB_OUTPUT"``)
+instead of each keeping its own copy of the derivation -- this is the guard
+that the ONE implementation actually produces the expected ``key=...`` line
+against lode's real pinned ``Settings``, and stays byte-identical to what a
+second invocation produces (the whole point of extracting it: both workflows
+must derive the same key from the same source).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# scripts/ is a plain directory of standalone scripts, not an installed
+# package -- load the module straight from its file path, same pattern as
+# tests/test_check_links.py. The filename has hyphens, so it can't be
+# imported as `model-cache-key` -- give the loaded module a valid name.
+_spec = importlib.util.spec_from_file_location(
+    "model_cache_key", REPO_ROOT / "scripts" / "model-cache-key.py"
+)
+model_cache_key = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = model_cache_key
+_spec.loader.exec_module(model_cache_key)
+
+
+def test_cache_key_matches_pinned_settings() -> None:
+    from lode.config import Settings
+
+    s = Settings()
+    expected = "models-" + "-".join(
+        (s.embedding_model, s.rerank_model, s.entailment_model)
+    ).replace("/", "_")
+    assert model_cache_key.cache_key() == expected
+
+
+def test_cache_key_is_stable_across_calls() -> None:
+    # Both workflows invoke the script independently -- the derivation must
+    # be a pure function of the pinned Settings defaults, not something that
+    # could drift between two calls (e.g. via ordering or environment).
+    assert model_cache_key.cache_key() == model_cache_key.cache_key()
+
+
+def test_script_emits_github_output_line() -> None:
+    # End-to-end: running the script as the workflows do must print exactly
+    # one `key=...` line, ready for direct redirection into $GITHUB_OUTPUT.
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "model-cache-key.py")],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    )
+    lines = result.stdout.strip().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("key=models-")
+    assert lines[0] == f"key={model_cache_key.cache_key()}"
