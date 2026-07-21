@@ -228,8 +228,7 @@ a worktree carrying commits `trunk` doesn't have — someone else's unreviewed w
 failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
 bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/`
 ref in that report. The Rebase pickup cycle below carries its own copy of this guard, including the
-same explicit `.claude/worktrees/` `case` check — mechanical enforcement now, not redundant with the
-prose `pwd` safety check above, which stays as a first, human-readable line of defense.
+same explicit `.claude/worktrees/` `case` check.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
