@@ -1752,3 +1752,21 @@ are catalogued in [configuration.md](configuration.md).
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98)
   / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+
+- **Markdown editing — open items parked in [editing.md](editing.md).** `docs/editing.md`
+  (`lode-ev5j`) records the shipped markdown-editing surface but leaves the following unresolved,
+  pointered here so a decisions.md sweep surfaces them. Ownership differs per item — only the first
+  has a ticket:
+  1. **Lint linter choice** — hand-rolled rules vs. `pymarkdownlnt` vs. something else, plus the
+     range-granularity question it forces. **Owned by `lode-o7pf`**, which makes this call before
+     building anything. See
+     [editing.md — Inline lint squiggles, deferred](editing.md#inline-lint-squiggles--deferred-not-built-see-lode-o7pf).
+  2. **Whether a custom `.scm` injection query ever ships** to reach inline colouring (emphasis,
+     strong, inline code, inline links) — currently block-level only. **Unowned; leaning no** — it
+     means hand-building an injection subsystem against Textual's private highlight path, the same
+     fragility class this epic already refused. See
+     [editing.md — Live syntax colouring](editing.md#live-syntax-colouring--block-level-only-on-four-screens).
+  3. **Re-open condition for mouse-clickable links** — not a live question: the concession
+     *stands*, and only the grounds for revisiting it are open. Unowned. Any reconsideration must
+     start from a real-terminal OSC-8/click test rather than the original "provably inert" framing.
+     See [editing.md — Mouse-clickable links: conceded](editing.md#mouse-clickable-links-conceded-in-favour-of-a-keyboard-binding).
