@@ -145,13 +145,23 @@ jobs:
         run: nox -s tests
 
       - name: Save model weights cache
-        # Runs even when `nox -s tests` fails (if: always()) -- see the
-        # restore step above for why the paired actions/cache@v4 shorthand
-        # would silently skip this on a red run. Skip only on an exact
-        # restore hit (cache-hit == 'true'): the cache already holds this
-        # content under this key, so re-saving is both wasted work and,
-        # depending on the action version, a same-key save error.
-        if: always() && steps.restore_model_cache.outputs.cache-hit != 'true'
+        # Runs on a FAILED `nox -s tests` (the point of the split -- see the
+        # restore step above) but NOT on a cancelled run. cancelled() matters
+        # here specifically because of this workflow's own `concurrency:
+        # cancel-in-progress` (a second push to the same land/<id> cancels the
+        # in-flight run): a cancellation can fire mid-download, and actions/cache
+        # keys are IMMUTABLE -- once a partial $LODE_HOME/models is saved under
+        # this content-key it can never be overwritten by a later complete run,
+        # so the cache is pinned incomplete until it evicts (~7d) and silently
+        # stops being the offline-outage mitigation it exists to be. A genuine
+        # test failure is safe to save from: the reranker/embedder load at
+        # session setup, well before any test body runs, so on a red run the
+        # weights are already complete. `!cancelled()` keeps the save-on-failure
+        # behaviour while refusing to persist a torn-off partial. Skip too on an
+        # exact restore hit (cache-hit == 'true'): the key already holds this
+        # content, so re-saving is wasted work and (per action version) a
+        # same-key save error.
+        if: ${{ !cancelled() && steps.restore_model_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.LODE_HOME }}/models
