@@ -189,6 +189,11 @@ unreviewed ticket's changes. A branch-name check alone can't catch this (the rec
 commit graph instead of trusting the name:
 
 ```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+case "$TOP" in
+  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
+  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset/clean. STOP and report."; exit 1 ;;
+esac
 if ! rtk git merge-base --is-ancestor HEAD trunk; then
   echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
        "ancestor of trunk -- this worktree carries commit(s) foreign to trunk (recycled from a" \
@@ -197,7 +202,7 @@ if ! rtk git merge-base --is-ancestor HEAD trunk; then
   rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
   rtk git reset --hard trunk
 fi
-rtk git clean -fd   # unconditional (lode-3v1p) -- see below: dirt and ancestry are independent axes
+rtk git clean -fd   # unconditional (lode-3v1p) -- runs after the `case`, so still worktree-scoped
 ```
 
 **The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
@@ -214,9 +219,12 @@ after this worktree was created, a normal race in a fan-out) still passes this c
 a worktree carrying commits `trunk` doesn't have — someone else's unreviewed work — fails it. On a
 failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
 bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/`
-ref in that report. The Rebase pickup cycle below carries its own copy of this guard, with one
-addition: an explicit `.claude/worktrees/` check, which that cycle needs because it has no `pwd`
-safety check of its own above it and this one does.
+ref in that report. Both this guard and the Rebase pickup cycle's copy below wrap the destructive
+work in the same explicit `.claude/worktrees/` `case` check — necessary now that `git clean -fd`
+runs **unconditionally** (lode-3v1p), outside the failed-ancestor-check branch, since on the user's
+main checkout `HEAD` *is* `trunk` (an ancestor of itself), so the ancestor check no longer keeps the
+clean from running there. The rebase-pickup cycle relies on that `case` especially, having no prose
+`pwd` safety check of its own above it as this cycle does.
 
 **`git clean -fd` runs unconditionally, not just inside the failed-ancestor-check branch
 (lode-3v1p).** Ancestry and dirt are independent axes: a worktree recycled onto a `land/<other-id>`
