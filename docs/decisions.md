@@ -437,6 +437,16 @@ are catalogued in [configuration.md](configuration.md).
   step 1. Re-filed as **lode-cbc0** for the next check, per this entry's own instruction that a watch
   item with no owner goes stale as prose alone.
 
+  **Update (lode-cbc0, 2026-07-21) — re-checked; NOT restored, watch item re-affirmed again.**
+  Installed version is still **2.1.216** (`claude --version`) — no release has shipped since the
+  lode-ebhk check the day before — and the local changelog cache
+  (`~/.claude/cache/changelog.md`) confirms `## 2.1.216` is still the newest heading, with nothing
+  newer beneath it. The 2.1.216 entry's sole `/code-review`-touching line is unchanged: "Improved
+  `/code-review ultra` empty-diff message to name the exact base ref and suggest passing an explicit
+  base" — still cosmetic, still not a restoration of model invocation. Nothing in the changelog
+  reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md` step 4's
+  hand-reasoned correctness pass stands, unchanged.** Re-filed as **lode-01tv** for the next check.
+
   Either way, one thing stays rejected regardless of what upstream does: do **not** hand-roll a local
   copy of the bundled skill into a project-scope `.claude/skills/code-review/SKILL.md` to make it
   nominally invocable. That forks a prompt whose source we cannot see, drifts silently as the real
