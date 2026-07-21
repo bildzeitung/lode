@@ -406,10 +406,15 @@ a human's call, not an agent's — that has not changed just because the investi
 `"fresh"`.** The finding above and this write-up are the input to that decision; the setting itself is
 left untouched here. See the bd ticket (`lode-r7ow`) for the pending human decision.
 
-Given that, the assertion is defence in depth rather than the answer. Both `coding.md` and
-`code-reviewer.md` now assert, as the first thing they do after confirming they're in a worktree at
-all (never on `pwd` or the branch name alone — a recycled worktree's branch still looks like a normal
-`worktree-agent-…` name), that `HEAD` is an ancestor of local `trunk`:
+Given that, the assertion is defence in depth rather than the answer. `coding.md` (both cycles),
+`code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
+they're in a worktree at all (never on `pwd` or the branch name alone — a recycled worktree's branch
+still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of local `trunk`. This
+used to be a ~15-line inline bash block duplicated at all four call sites — already caught drifting
+from each other by the time a fourth copy landed — so it is now one script,
+`scripts/recycled-worktree-guard.sh` (lode-ivth), covered by `nox -s shellcheck` and
+`tests/test_recycled_worktree_guard.py`; each site invokes it with its own short context message
+rather than carrying its own copy of the logic. The core of what it checks:
 
 ```bash
 git merge-base --is-ancestor HEAD trunk
@@ -428,15 +433,16 @@ evidence of a harness bug, not a routine hiccup to swallow silently. Two precond
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
 understood:
 
-- **It only runs in an isolated launch worktree — mechanically, at all three sites.**
-  `coding.md`'s rebase-pickup step 2, `code-reviewer.md`'s step 2, and `coding.md`'s fresh-build site
-  (step 3) each wrap the remediation in an explicit `case "$TOP" in */.claude/worktrees/*) ;; ...
-  esac` on `git rev-parse --show-toplevel`, in the same block as the destructive command. The
-  fresh-build site additionally keeps the prose `pwd` safety check a dozen lines above it as a
-  first, human-readable line of defense, but the `case` is what actually stops an agent whose
-  `isolation: "worktree"` dispatch silently failed from letting `reset --hard`/`clean -fd` reach the
-  user's **main checkout** — which is what would turn a contamination guard into the more damaging
-  bug.
+- **It only runs in an isolated launch worktree — mechanically, at all four call sites.**
+  `coding.md`'s rebase-pickup step 2, `code-reviewer.md`'s step 2, `land-review.md`'s first action,
+  and `coding.md`'s fresh-build site (step 3) each invoke the same
+  `scripts/recycled-worktree-guard.sh`, which wraps its remediation in an explicit
+  `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`, in the same
+  block as the destructive command. The fresh-build site additionally keeps the prose `pwd` safety
+  check a dozen lines above it as a first, human-readable line of defense, but the `case` is what
+  actually stops an agent whose `isolation: "worktree"` dispatch silently failed from letting
+  `reset --hard`/`clean -fd` reach the user's **main checkout** — which is what would turn a
+  contamination guard into the more damaging bug.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
   reproductions sat on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had
@@ -1060,7 +1066,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
-| Recycled-worktree guard | builder and reviewer both assert `git merge-base --is-ancestor HEAD trunk` as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef: "head"` is now documented and investigated (lode-r7ow) — its reuse semantics is a documented, mechanism-level match for the recycling; switching to the default `"fresh"` is recommended but is a pending **human** decision (repo-wide blast radius) — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow) |
+| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef: "head"` is now documented and investigated (lode-r7ow) — its reuse semantics is a documented, mechanism-level match for the recycling; switching to the default `"fresh"` is recommended but is a pending **human** decision (repo-wide blast radius) — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |

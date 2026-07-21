@@ -75,28 +75,28 @@ defect lode-qv5t exists to close — see
 [docs/agents-workflow.md — Recycled-worktree guard](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
 for the full account of why "qualifies by construction" doesn't hold once recycling is possible). So,
 as my first action — before the ticket/branch reads in step 1 below — I assert the starting state
-instead of trusting it:
+instead of trusting it, via `scripts/recycled-worktree-guard.sh` (lode-ivth; this is the same defect
+lode-qv5t discovered here, ported to a shared, shellcheck'd and unit-tested script rather than a
+fourth inline copy):
 
 ```bash
 TOP=$(rtk git rev-parse --show-toplevel)
-case "$TOP" in
-  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
-  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
-esac
-if ! rtk git merge-base --is-ancestor HEAD trunk; then
-  echo "CONTAMINATED LAUNCH WORKTREE (lode-qv5t/lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
-       "ancestor of trunk -- resetting onto current local trunk HEAD before any fetch/diff work."
-  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
-  rtk git reset --hard trunk
-  rtk git clean -fd
-fi
+GUARD="$TOP/scripts/recycled-worktree-guard.sh"
+rtk "$GUARD" "before any fetch/diff work" || {
+  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
+    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
 ```
 
-Both preconditions are load-bearing, exactly as in `code-reviewer.md`'s identical guard: the `case`
-keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take; the
-`rescue/` branch matters because the ref being rewound belongs to **another ticket** — tagging `HEAD`
-first keeps that ticket's unpushed commits recoverable rather than silently destroyed. If it fires, I
-report it explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
+Both preconditions inside the script are load-bearing, exactly as in `code-reviewer.md`'s identical
+call: the `case` keeps `reset --hard`/`clean -fd` off the user's main checkout if isolation ever
+fails to take; the `rescue/` branch matters because the ref being rewound belongs to **another
+ticket** — tagging `HEAD` first keeps that ticket's unpushed commits recoverable rather than silently
+destroyed. The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely missing or
+non-executable script (bootstrap gap — report and stop) from the script running and legitimately
+exiting 1 (already reported by the script itself; this just propagates it). If it fires, I report it
+explicitly in my final verdict as live evidence of the harness bug, not a routine hiccup.
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
 `trunk` — either because it started that way or because I just reset it there — so my worktree needs
 no cleanup from me: I commit nothing, and `/land`'s own end-of-pass backstop sweep reclaims it like
