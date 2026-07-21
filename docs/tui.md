@@ -92,8 +92,9 @@ that lived in only six modules at the time (`browse.py` alone held five). The mo
 a lot since: **15** screen modules live under `src/lode/tui/screens/` today (excluding `__init__`
 and underscore-prefixed leaf modules). Almost all of that growth is the one-Screen-per-module split
 (`docs/conventions.md`) unpacking `browse.py` and `capture.py`, not new screens — the screen count
-itself went 14 → 15. The footer-bearing count is still ten; the other five are modals that stay
-bare by design, per the rule just below.
+itself went 14 → 15. The footer-bearing count is now **eleven** — `lode-ev5j.3` moved
+`SnapshotViewerScreen` from bare to footer-bearing (see the rule just below) — and the other **four**
+are modals that stay bare by design.
 
 **Modals are footerless unless they carry standing actions (`lode-ev5j.3`).** A modal that is a
 transient glance-and-dismiss popup — a confirm dialog or an inline picker/detail view
