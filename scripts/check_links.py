@@ -40,6 +40,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,13 +53,10 @@ SCAN_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
 _LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
-# Inline code spans -- stripped before link/heading scanning so a *literal*
-# markdown example inside backticks (docs/editing.md has several:
-# `` `[text](url)` ``) is never mistaken for a real link, and so inline code
-# inside a heading contributes its bare text to the slug, not its backticks.
+# Inline code spans -- stripped before link scanning so a *literal* markdown
+# example inside backticks (docs/editing.md has several: `` `[text](url)` ``)
+# is never mistaken for a real link.
 _INLINE_CODE_RE = re.compile(r"`[^`]*`")
-_BOLD_RE = re.compile(r"\*\*([^*]*)\*\*")
-_ITALIC_RE = re.compile(r"\*([^*]*)\*")
 _LINK_TEXT_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _ATX_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
@@ -121,27 +119,38 @@ def github_slug(heading_text: str) -> str:
     then convert each remaining space to a hyphen one-for-one -- consecutive
     hyphens from a multi-space run are never collapsed to one.
     """
-    text = _INLINE_CODE_RE.sub(lambda m: m.group(0).strip("`"), heading_text)
-    text = _LINK_TEXT_RE.sub(r"\1", text)
-    text = _BOLD_RE.sub(r"\1", text)
-    text = _ITALIC_RE.sub(r"\1", text)
-    text = text.lower()
-    text = re.sub(r"[^\w\- ]", "", text, flags=re.UNICODE)
+    # Unwrap link text (`[text](url)` -> `text`) so only the visible text
+    # feeds the slug -- the sole markdown construct needing a dedicated pass,
+    # because its `(url)` must be dropped while the text is kept. Every other
+    # formatting marker (backticks, `*` emphasis) is punctuation that the
+    # char-class deletion below strips in place, so no per-construct regex is
+    # needed for those.
+    text = _LINK_TEXT_RE.sub(r"\1", heading_text).lower()
+    text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
 
 
-def _headings(path: Path) -> list[str]:
-    """Every ATX heading's rendered text, in document order, skipping fenced
-    code blocks (a shell comment like ``# run tests`` inside a ```bash```
-    fence must never be read as a level-1 heading)."""
-    headings = []
+def _content_lines(text: str) -> Iterator[tuple[int, str]]:
+    """``(line_number, line)`` for every line OUTSIDE a fenced code block --
+    the single home of the fence rule, shared by the heading and link scanners
+    so they can never disagree about what counts as code (a shell comment like
+    ``# run tests`` inside a ```bash``` fence must never read as a heading, nor
+    a literal ``[text](url)`` example inside a fence as a real link)."""
     in_fence = False
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line_no, line in enumerate(text.splitlines(), start=1):
         if _FENCE_RE.match(line):
             in_fence = not in_fence
             continue
         if in_fence:
             continue
+        yield line_no, line
+
+
+def _headings(text: str) -> list[str]:
+    """Every ATX heading's rendered text, in document order (fenced code
+    blocks skipped by ``_content_lines``)."""
+    headings = []
+    for _, line in _content_lines(text):
         m = _ATX_HEADING_RE.match(line)
         if m:
             headings.append(m.group(1))
@@ -153,33 +162,25 @@ def _slugs_for_file(path: Path) -> set[str]:
     (including GitHub's disambiguating ``-1``, ``-2``, ... suffixes for
     repeated headings) plus every literal id from an explicit
     ``<a id="...">``/``<a name="...">`` anchor tag."""
+    text = path.read_text(encoding="utf-8", errors="replace")
     slugs: set[str] = set()
     seen_counts: dict[str, int] = {}
-    for heading in _headings(path):
+    for heading in _headings(text):
         base = github_slug(heading)
         count = seen_counts.get(base, 0)
         slug = base if count == 0 else f"{base}-{count}"
         seen_counts[base] = count + 1
         slugs.add(slug)
-    text = path.read_text(encoding="utf-8", errors="replace")
     slugs.update(_HTML_ANCHOR_RE.findall(text))
     return slugs
 
 
-def _links_in_file(path: Path) -> list[tuple[int, str]]:
-    """``(line_number, target)`` for every real inline link on a line, with
-    inline code spans stripped first so a literal markdown-syntax example
-    inside backticks is never matched as a real link."""
+def _links_in_file(text: str) -> list[tuple[int, str]]:
+    """``(line_number, target)`` for every real inline link outside a fenced
+    code block, with inline code spans stripped first so a literal
+    markdown-syntax example inside backticks is never matched as a real link."""
     links = []
-    in_fence = False
-    for line_no, line in enumerate(
-        path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
-    ):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
+    for line_no, line in _content_lines(text):
         scrubbed = _INLINE_CODE_RE.sub("", line)
         for m in _LINK_RE.finditer(scrubbed):
             raw_target = m.group(1).strip()
@@ -193,7 +194,8 @@ def check(root: Path) -> list[LinkError]:
     errors: list[LinkError] = []
     slug_cache: dict[Path, set[str]] = {}
     for source in _tracked_markdown_files(root):
-        for line_no, target in _links_in_file(source):
+        source_text = source.read_text(encoding="utf-8", errors="replace")
+        for line_no, target in _links_in_file(source_text):
             if not target or _is_external(target):
                 continue
             file_part, _, anchor = target.partition("#")
