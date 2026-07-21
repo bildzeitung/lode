@@ -100,11 +100,20 @@ explicitly in my final verdict as live evidence of the harness bug, not a routin
 Once this guard has run (whether or not it fired), my worktree's `HEAD` **is** an ancestor of
 `trunk` — either because it started that way or because I just reset it there — so my worktree needs
 no cleanup from me: I commit nothing, and `/land`'s own end-of-pass backstop sweep reclaims it like
-any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`. (Known and deliberately not
-closed here: the guard can't detect a worktree recycled onto an already-landed `land/<other-id>`, so
-that case leaks on dirt rather than ancestry — **lode-3v1p**, reasoned out in
-[docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98). Nothing
-for me to do differently either way.)
+any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`.
+
+**The dirt axis is now closed too (lode-3v1p), not just the ancestry axis.** The ancestor check alone
+can't detect a worktree recycled onto an already-landed `land/<other-id>` — its `HEAD` is already an
+ancestor of `trunk`, so the check passes trivially and the reset branch above never fires — yet it can
+still carry that other ticket's untracked leftovers. `git clean -fd` now runs **unconditionally**
+right after the check (still gated by the `case` above, never reaching outside
+`.claude/worktrees/`), so that dirt is cleaned either way instead of surviving to make `/land`'s
+Section 4 dirty-tree guard (lode-9hgu) keep my worktree. **The two axes stay conceptually distinct**
+even though one fix now closes both: my own **correctness** exposure to a recycled worktree remains
+nil regardless (I never check anything out — see above), and this guard has always been purely a
+worktree-**leak** fix, never a correctness one. Full reasoning:
+[docs/agents-workflow.md](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) and
+[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
 
 **When the branch is a stacked dependent** — it merged another still-unlanded `land/<base>` branch
 because its ticket needed that base's code (see

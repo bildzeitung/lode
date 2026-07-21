@@ -23,7 +23,8 @@
 # `rescue/recycled-<sha>` (the ref `reset --hard` is about to rewind belongs
 # to ANOTHER ticket -- if that ticket had committed but not pushed, this tag
 # is the only thing standing between its work and oblivion), then
-# `git reset --hard trunk && git clean -fd`.
+# `git reset --hard trunk`. `git clean -fd` then runs unconditionally right
+# after, pass or fail (lode-3v1p) -- see the DIRT-AXIS GAP note below.
 #
 # Usage: recycled-worktree-guard.sh <context-message>
 #   <context-message> is a short clause describing what happens next in the
@@ -47,12 +48,19 @@
 # Exit 2 -- usage error (wrong argument count). Caller bug, not a worktree
 #           problem.
 #
-# KNOWN GAP, not closed here (lode-3v1p): the ancestor check cannot detect a
+# DIRT-AXIS GAP, CLOSED (lode-3v1p): the ancestor check alone cannot detect a
 # worktree recycled onto a `land/<id>` branch that has since landed -- HEAD
-# is already an ancestor of trunk in that case, so this guard silently
-# no-ops and any untracked leftovers from the recycled worktree survive
-# (the dirt axis). Harmless on the ANCESTRY axis: what this guard misses in
-# that case already satisfies /land's own worktree-reclaim predicate.
+# is already an ancestor of trunk in that case, so the check above passes
+# trivially, exactly as it would for a genuinely fresh worktree. Harmless on
+# the ANCESTRY axis (what the guard misses in that case already satisfies
+# /land's own worktree-reclaim predicate), but not on the DIRT axis: any
+# untracked leftovers from the recycled worktree would otherwise survive,
+# since the remediation branch below is the only place `git clean -fd` used
+# to run. Closed by running `git clean -fd` unconditionally, right after the
+# ancestor check either way (see below) -- a no-op on a genuinely fresh
+# worktree (nothing untracked to remove, and it never touches `.gitignore`d
+# build state like `venv/`), and it clears exactly the leftover dirt on an
+# undetected recycle. Full reasoning: docs/decisions.md (search "lode-3v1p").
 #
 # BOOTSTRAP GAP, unavoidable, mitigate at the call site (lode-ivth): the
 # guard must run FIRST, in a possibly-contaminated worktree, so this very
@@ -89,5 +97,5 @@ if ! git merge-base --is-ancestor HEAD trunk; then
        "$context_message." >&2
   git branch "rescue/recycled-$head_sha" HEAD   # keep the evidence -- another ticket's ref
   git reset --hard trunk
-  git clean -fd
 fi
+git clean -fd   # unconditional (lode-3v1p) -- runs after the `case` either way, still worktree-scoped

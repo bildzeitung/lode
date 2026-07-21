@@ -333,11 +333,18 @@ work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — 
 [docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
 way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
-about Section 4 itself needed to change. That survives the guard's own detection blind spot
-(tracked as lode-3v1p) intact, since what the guard fails to notice already satisfies that predicate. It does
-**not** cover the sweep's *other* arm: in the blind-spot case the remediation's `git clean -fd` never
-runs, so untracked leftovers survive and the [lode-9hgu dirty-tree guard](#4-land-the-survivors)
-below keeps the worktree anyway — open residual **lode-3v1p**, not closed here.
+about Section 4 itself needed to change. That survives the guard's own detection blind spot (the
+check cannot recognize a worktree recycled onto a `land/<other-id>` that has *since landed*, since its
+`HEAD` is by then genuinely an ancestor of `trunk`) intact, since what the guard fails to notice
+already satisfies that predicate. **lode-3v1p** closed the sweep's *other* arm too: in the blind-spot
+case, the remediation's `git clean -fd` used to run only inside the failed-check branch, so it never
+fired there, and the recycled worktree's untracked leftovers survived to trip the
+[lode-9hgu dirty-tree guard](#4-land-the-survivors) below, leaking the worktree anyway. `git clean
+-fd` now runs **unconditionally**, right after the ancestor check, at all three guard sites
+(`coding.md`, `code-reviewer.md`, `land-review.md`) — still scoped to `.claude/worktrees/` only by the
+same `case` precondition. Nothing in Section 4 needed to change for this either; the fix lives
+entirely at the dispatch-time guard, same layer as the rest of this fix. Full reasoning:
+[docs/decisions.md](../../../docs/decisions.md) (search "lode-3v1p").
 
 Normally that is the end of this very pass: Section 4 is
 reached even when the accepted set is **empty** (nothing between 2c and 4 exits early on that

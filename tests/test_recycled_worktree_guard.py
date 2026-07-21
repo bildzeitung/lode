@@ -212,26 +212,32 @@ def test_outside_isolated_worktree_refuses_and_leaves_everything_untouched(
     assert branches.strip() == ""
 
 
-def test_known_gap_worktree_recycled_onto_an_already_landed_branch_leaks_dirt(
+def test_dirt_axis_gap_closed_worktree_recycled_onto_an_already_landed_branch_still_gets_cleaned(
     tmp_path: Path,
 ) -> None:
-    """Pins the documented lode-3v1p gap: a worktree recycled onto a
-    `land/<id>` branch that has SINCE LANDED has a HEAD that is already an
-    ancestor of trunk (trunk fast-forwarded past it), so the ancestor check
-    trivially passes and the guard no-ops -- any untracked leftover from that
-    prior build survives. Harmless on the ancestry axis (matches /land's own
-    reclaim predicate); this test exists so nobody "fixes" the ancestor
-    check in a way that silently starts wiping dirt it was never designed to
-    catch, without also updating the script's documented gap."""
+    """Pins the lode-3v1p fix: a worktree recycled onto a `land/<id>` branch
+    that has SINCE LANDED has a HEAD that is already an ancestor of trunk
+    (trunk fast-forwarded past it), so the ancestor check trivially passes
+    and the reset/rescue-branch remediation never runs -- exactly as it
+    would for a genuinely fresh worktree (harmless on the ancestry axis;
+    matches /land's own reclaim predicate). But `git clean -fd` now runs
+    unconditionally right after the check either way, so any untracked
+    leftover from that prior build is still swept -- this test exists so
+    nobody silently reintroduces the old dirt-axis gap by moving `clean -fd`
+    back inside the `if` block."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/landed", "worktree-agent-landed-ticket")
     # Simulate that ticket's branch having landed: fast-forward trunk to it.
     _git(repo, "checkout", "-q", "trunk")
     _git(repo, "merge", "-q", "--ff-only", "worktree-agent-landed-ticket")
-    (wt / "leftover.tmp").write_text("dirt surviving the ancestry check\n")
+    (wt / "leftover.tmp").write_text("dirt that must not survive the ancestry check\n")
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
     result = _run(wt)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stderr == ""  # no-op: nothing was reported, nothing reset
-    assert (wt / "leftover.tmp").exists()  # the documented gap: dirt survives
+    assert result.stderr == ""  # no CONTAMINATED report: no reset/rescue happened
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before  # not reset
+    branches = _git(repo, "branch", "--list", "rescue/*").stdout
+    assert branches.strip() == ""  # no rescue branch created
+    assert not (wt / "leftover.tmp").exists()  # dirt-axis gap closed (lode-3v1p)

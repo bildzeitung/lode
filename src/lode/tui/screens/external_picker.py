@@ -13,10 +13,11 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import DataTable, Header
+from textual.widgets import Header
 
 from lode.enrichment_view import ExternalView
 from lode.ids import short_version_id
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 
@@ -57,7 +58,7 @@ class ExternalPickerScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id=EXTERNAL_PICKER_TABLE_ID, cursor_type="row")
+        yield LodeDataTable(id=EXTERNAL_PICKER_TABLE_ID, cursor_type="row")
         yield LodeFooter()
 
     def on_mount(self) -> None:
@@ -72,7 +73,7 @@ class ExternalPickerScreen(Screen[None]):
         ``Text`` for this same data, so the picker would otherwise be the one
         undefended path to it.
         """
-        table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", DataTable)
+        table = self.query_one(f"#{EXTERNAL_PICKER_TABLE_ID}", LodeDataTable)
         table.add_columns("Source", "Snapshot", "Fetched", "State")
         for external in self._externals:
             table.add_row(
@@ -84,7 +85,7 @@ class ExternalPickerScreen(Screen[None]):
             )
         table.focus()
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: LodeDataTable.RowSelected) -> None:
         snapshot_id = event.row_key.value
         if snapshot_id is not None:
             self.app.push_screen(SnapshotViewerScreen(snapshot_id))
