@@ -35,12 +35,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-SETTINGS = Path(__file__).resolve().parents[1] / ".claude" / "settings.json"
-SH = shutil.which("sh") or "/bin/sh"
+from _hookharness import SH, pretooluse_hook, run_hook
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -49,54 +47,12 @@ pytestmark = pytest.mark.skipif(
 
 def _hook_command() -> str:
     """The guard's shell one-liner, read from the committed settings.json."""
-    settings = json.loads(SETTINGS.read_text())
-    pre_tool_use = settings["hooks"]["PreToolUse"]
-    matching = [
-        h["command"]
-        for entry in pre_tool_use
-        if entry.get("matcher") == "Bash"
-        for h in entry["hooks"]
-        if "blocks:" in h.get("command", "")
-    ]
-    assert len(matching) == 1, (
-        f"expected exactly one bd-deps guard hook, got {matching}"
-    )
-    return matching[0]
+    return pretooluse_hook("blocks:")
 
 
-def _hook_output(
-    command: str, *, path: str | None = None, hook_command: str | None = None
-) -> dict | None:
-    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
-
-    Driven through **`/bin/sh -c`** (dash on Linux), NOT `bash -c` (lode-9gm2): that is the actual
-    interpreter the Claude Code harness uses to run PreToolUse hooks, and dash rejects bash-only
-    syntax that bash silently accepts -- a test using bash cannot see that class of bug, which is
-    exactly how the guard shipped broken once already (lode-m6px).
-
-    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
-    machine (lode-oii9) without touching the real PATH of the process running this test. `sh`
-    itself is invoked by absolute/resolved path so a stripped PATH cannot make it unresolvable.
-
-    `hook_command`, when given, overrides the shell one-liner run -- used by the sabotage test to
-    exercise a deliberately-broken variant without touching the real settings.json.
-    """
-    payload = json.dumps(
-        {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
-    )
-    proc = subprocess.run(
-        [SH, "-c", hook_command if hook_command is not None else _hook_command()],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=None if path is None else {"PATH": path},
-    )
-    # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
-    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
-    if not proc.stdout.strip():
-        return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]
+def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through."""
+    return run_hook(_hook_command(), command, path=path)
 
 
 def _run(command: str, *, path: str | None = None) -> str | None:
