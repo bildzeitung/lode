@@ -158,18 +158,23 @@ Cloud-only, Basic auth (account email + API token); JIRA REST v3 and Confluence 
 | `confluence_enabled` | runtime | `false` | Feature flag for the Confluence Cloud API connector. |
 | `jira_base_url` | runtime | `""` (empty) | API base override, e.g. `https://acme.atlassian.net`. Empty means infer from the pasted link at detection time. A non-empty value must be a well-formed `http(s)` URL — a malformed one fails validation at `Settings()` construction. |
 | `confluence_base_url` | runtime | `""` (empty) | Same shape as `jira_base_url`, for Confluence. |
-| `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **Never logged, echoed, or shown by `lode config`** — excluded from the knob table by construction (`secret=True`), not just omitted by convention. |
-| `LODE_JIRA_EMAIL` env var / `jira_email` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud Basic-auth account email — same env-first, config.toml-fallback resolution as the token. |
+| `LODE_JIRA_TOKEN` env var / `jira_token` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud API token. Resolved **env-var PRIMARY**: `LODE_JIRA_TOKEN` is checked first, then the `jira_token` key in `config.toml` as fallback. No secret is required to live in `config.toml`. **The raw value is never logged, echoed, or shown by `lode config`** — `secret=True` (`src/lode/config.py::_knob`) shows only a presence indicator in the knob table, never the value (see below). |
+| `LODE_JIRA_EMAIL` env var / `jira_email` (config.toml fallback) | runtime | unset / `""` | JIRA Cloud Basic-auth account email — same env-first, config.toml-fallback resolution as the token, and the same `secret=True` presence-only treatment (lode-dx4r). |
 | `LODE_CONFLUENCE_TOKEN` env var / `confluence_token` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud API token — same resolution and secrecy guarantee as `jira_token`. |
-| `LODE_CONFLUENCE_EMAIL` env var / `confluence_email` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud Basic-auth account email — same resolution as `jira_email`. |
+| `LODE_CONFLUENCE_EMAIL` env var / `confluence_email` (config.toml fallback) | runtime | unset / `""` | Confluence Cloud Basic-auth account email — same resolution and secrecy guarantee as `jira_email`. |
 
 A missing token or email — from either source — resolves to a clean **"connector inactive"** state (`resolve_jira_credentials`/`resolve_confluence_credentials` return `None`), never an exception; the link falls through to the generic web fetcher. This is a deliberately different shape from the Anthropic credential chain (`src/lode/auth.py`, [decisions.md](decisions.md)): that chain never reads `config.toml` at all and raises `AuthError` on "nothing resolved" (there is no "connector inactive" fallback path for the LLM calls lode's own core loop depends on), whereas an Atlassian connector is opt-in per product and must degrade quietly when unconfigured.
 
 `lode verify --jira` / `lode verify --confluence` (`lode-04lz`) is a read-only preflight that confirms these knobs resolved the way you intended — which flag/credential/base-URL source is in effect, and whether the resolved credentials actually reach the tenant — without writing anything; see [externals.md](externals.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn) for the full manual smoke-test procedure it's the fast first step of. No new knob is introduced by it.
 
-### Atlassian secrets are excluded from `lode config` / the TUI knob table
+### Atlassian credentials show a presence indicator in `lode config` / the TUI knob table (lode-dx4r)
 
-`jira_token` and `confluence_token` never appear in `knob_rows()`'s output (`src/lode/config.py::_knob`'s `secret=True` flag), so neither `lode config` nor the TUI's Ctrl+O diagnostics screen ever renders one — this is enforced structurally, not by each renderer remembering to skip two field names. `jira_email` / `confluence_email` / the base-URL overrides are ordinary knobs and do appear in the table.
+All four credential fields — `jira_email`, `jira_token`, `confluence_email`, `confluence_token` — are `secret=True` (`src/lode/config.py::_knob`). A `secret=True` field is **not** excluded from `knob_rows()`'s output; it still gets a row, but the row's value is always one of two fixed placeholders, never the raw setting:
+
+- **`[REDACTED]`** — the credential resolves from *either* source, the env var or the `config.toml` fallback.
+- **`[unset]`** — neither source resolves.
+
+Presence is computed from the env var / the resolver's inputs, not read back off the raw `Settings` field value — the field value alone can't tell the difference between "resolved via `config.toml`" and "resolved via env var, so this field is empty" (env vars never flow into `Settings`). This is enforced structurally in `knob_rows()`, not by each renderer (`lode config` CLI, the TUI's Ctrl+O diagnostics screen) remembering to redact two field names — both call the one shared builder, so the fix lands once. Before lode-dx4r, `jira_token`/`confluence_token` were excluded from the table outright (no row at all, even when set), while `jira_email`/`confluence_email` were plain knobs that echoed a `config.toml` value verbatim — both gaps are closed by the presence-indicator contract above.
 
 ## Privacy & egress
 

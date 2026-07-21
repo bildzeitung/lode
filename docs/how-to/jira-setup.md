@@ -71,9 +71,13 @@ at load with a clear message.
 A connector is **active** only when its flag is on **and** credentials resolve. Either
 missing → inactive (the link quietly uses the web path instead).
 
-`lode config` shows `jira_enabled = true` in the knob table, but that's just the flag —
-it can't tell you whether credentials actually resolved or whether the tenant is
-reachable. `lode verify` (read-only, writes nothing) does both in one shot:
+`lode config` shows `jira_enabled = true` in the knob table, and — since `lode-dx4r` —
+also shows a **presence indicator** for all four credential keys (`jira_email`,
+`jira_token`, `confluence_email`, `confluence_token`): `[REDACTED]` if a value resolves
+from *either* the env var or `config.toml`, `[unset]` if neither does. That confirms
+lode found *something*, but not whether it's the *right* something, or whether the
+tenant is actually reachable. `lode verify` (read-only, writes nothing) checks both in
+one shot:
 
 ```bash
 lode verify --jira
@@ -120,7 +124,7 @@ link is the id-bearing page URL:
 |---|---|
 | JIRA link tombstones / looks like a login page | Connector **inactive** — flag off, or token/email not resolving from either source. Re-check `jira_enabled` and that the env vars are exported. |
 | `Settings()` fails on load with a base-URL error | `jira_base_url` / `confluence_base_url` is non-empty but malformed — must be a well-formed `http(s)` URL, or leave it empty to infer. |
-| `lode config` won't show my token | Working as designed — tokens are `secret=True` and never echoed. |
+| `lode config` won't show my token or email value | Working as designed — all four credential fields are `secret=True` and never echoed; the row shows `[REDACTED]` (resolved) or `[unset]` (not resolved) instead. |
 | Two URL forms of the same issue made two nodes | They shouldn't — a browser permalink and an API URL of the same issue parse to the same key and dedup onto one row. If they didn't, the link shape may not carry the issue key/page id; check the URL includes `/browse/{KEY}` (JIRA) or `/pages/{id}/` (Confluence). |
 
 **Confluence-specific gate:** the Confluence *dispatch leg* needs `lode-mfts` landed on

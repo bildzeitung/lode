@@ -78,10 +78,12 @@ The CLI catches all of these at its boundary and prints a one-line
 
 ## Notes
 
-- **Secrets are never echoed.** Knobs marked `secret=True` (the Atlassian API tokens) are
-  excluded from the `lode config` knob table by construction. `lode config` will *not*
-  confirm a token value back to you — that's deliberate, not a bug. See
-  [jira-setup.md](jira-setup.md).
+- **Secrets are never echoed.** Knobs marked `secret=True` (the four Atlassian credential
+  fields — email *and* token, for both JIRA and Confluence, lode-dx4r) never show their raw
+  value in the `lode config` knob table. Each still gets a row, but the value is always
+  `[REDACTED]` (resolved, from either the env var or `config.toml`) or `[unset]` — `lode
+  config` will *not* confirm a credential value back to you, only whether lode found one.
+  That's deliberate, not a bug. See [jira-setup.md](jira-setup.md).
 - **Relocating everything at once:** point `LODE_HOME` at a different directory and the
   DB, vector store, logs, lock, *and* `config.toml` all move with it — one root, one
   `cp -r` to back up.

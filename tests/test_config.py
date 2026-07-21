@@ -18,6 +18,8 @@ from lode.config import (
     CONFLUENCE_TOKEN_ENV,
     JIRA_EMAIL_ENV,
     JIRA_TOKEN_ENV,
+    REDACTED_PLACEHOLDER,
+    UNSET_PLACEHOLDER,
     AtlassianCredentials,
     Kind,
     Settings,
@@ -303,20 +305,14 @@ def test_knob_rows_includes_only_runtime_and_tune_kinds() -> None:
     rows = knob_rows(Settings())
     names = {name for name, _, _ in rows}
     kinds = knob_kinds()
-    # A field declared secret=True (jira_token / confluence_token, lode-gpzn.1)
-    # is excluded even though it carries a RUNTIME kind -- see the dedicated
-    # test_jira_token_and_confluence_token_excluded_from_knob_rows below for
-    # that behavior specifically.
-    secret_names = {
-        name
-        for name, field in Settings.model_fields.items()
-        if isinstance(field.json_schema_extra, dict)
-        and field.json_schema_extra.get("secret", False)
-    }
+    # A field declared secret=True (the four Atlassian credential fields,
+    # lode-gpzn.1 / lode-dx4r) still gets a ROW -- it renders a presence
+    # indicator rather than being excluded outright (see
+    # test_credential_fields_appear_in_knob_rows_as_presence_only below).
     expected_names = {
         name
         for name, kind in kinds.items()
-        if kind in (Kind.RUNTIME.value, Kind.TUNE.value) and name not in secret_names
+        if kind in (Kind.RUNTIME.value, Kind.TUNE.value)
     }
     assert names == expected_names
     assert all(kind != Kind.BUILD.value for _, _, kind in rows)
@@ -325,17 +321,22 @@ def test_knob_rows_includes_only_runtime_and_tune_kinds() -> None:
     assert "content_hash" not in names
 
 
+def _knob_values(settings: Settings) -> dict[str, str]:
+    """``{name: value}`` from :func:`knob_rows`, dropping the kind column."""
+    return {name: value for name, value, _ in knob_rows(settings)}
+
+
 def test_knob_rows_reads_current_resolved_value_not_bare_default() -> None:
     # The row shows load_settings()'s CURRENT value, not Settings()'s default --
     # the table exists to answer "what is it set to", including a config.toml
     # override.
     overridden = Settings(retrieval_top_k=42)
-    rows = dict((name, value) for name, value, _ in knob_rows(overridden))
+    rows = _knob_values(overridden)
     assert rows["retrieval_top_k"] == "42"
 
 
 def test_knob_rows_renders_list_valued_knobs_comma_joined() -> None:
-    rows = dict((name, value) for name, value, _ in knob_rows(Settings()))
+    rows = _knob_values(Settings())
     assert rows["url_tracking_param_blocklist"] == "utm_*, fbclid, gclid"
 
 
@@ -531,18 +532,122 @@ def test_confluence_active_false_when_flagged_on_but_no_credentials(
     assert confluence_active(Settings(confluence_enabled=True)) is False
 
 
-# --- token value is never logged or echoed anywhere --------------------------
+# --- credential value is never logged or echoed anywhere (lode-dx4r) --------
+# All four Atlassian credential fields (jira_email/jira_token/confluence_email/
+# confluence_token) are secret=True and, per lode-dx4r, show a PRESENCE
+# INDICATOR row in knob_rows() rather than being excluded outright: the
+# presence placeholder when the value resolves from any source (env var OR
+# config.toml), an "unset" marker when it doesn't -- never the raw value.
 
 
-def test_jira_token_and_confluence_token_excluded_from_knob_rows() -> None:
+ALL_CREDENTIAL_FIELDS = (
+    "jira_email",
+    "jira_token",
+    "confluence_email",
+    "confluence_token",
+)
+ALL_CREDENTIAL_ENV_VARS = (
+    JIRA_EMAIL_ENV,
+    JIRA_TOKEN_ENV,
+    CONFLUENCE_EMAIL_ENV,
+    CONFLUENCE_TOKEN_ENV,
+)
+
+
+def _clear_credential_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for env_var in ALL_CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def test_credential_fields_appear_in_knob_rows_as_presence_only() -> None:
     s = Settings(jira_token="super-secret", confluence_token="also-secret")
     names = {name for name, _, _ in knob_rows(s)}
-    assert "jira_token" not in names
-    assert "confluence_token" not in names
-    # The non-secret sibling fields are still surfaced.
-    assert "jira_enabled" in names
+    # No longer excluded -- a row appears for every credential field.
+    assert "jira_token" in names
+    assert "confluence_token" in names
     assert "jira_email" in names
+    assert "confluence_email" in names
+    # The non-secret sibling fields are still surfaced too.
+    assert "jira_enabled" in names
     assert "jira_base_url" in names
+
+
+def test_knob_rows_shows_unset_marker_when_neither_source_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_credential_env(monkeypatch)
+    rows = _knob_values(Settings())
+    for name in ALL_CREDENTIAL_FIELDS:
+        assert rows[name] == UNSET_PLACEHOLDER
+
+
+def test_knob_rows_shows_presence_placeholder_when_resolved_via_env_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Acceptance: export the env vars only (nothing in config.toml) -> every
+    # row shows the presence placeholder, not the value, not empty.
+    _clear_credential_env(monkeypatch)
+    monkeypatch.setenv(JIRA_TOKEN_ENV, "env-jira-token")
+    monkeypatch.setenv(JIRA_EMAIL_ENV, "env-jira@acme.com")
+    monkeypatch.setenv(CONFLUENCE_TOKEN_ENV, "env-confluence-token")
+    monkeypatch.setenv(CONFLUENCE_EMAIL_ENV, "env-confluence@acme.com")
+    rows = _knob_values(Settings())
+    for name in ALL_CREDENTIAL_FIELDS:
+        assert rows[name] == REDACTED_PLACEHOLDER
+    # Never the raw values.
+    assert "env-jira-token" not in rows.values()
+    assert "env-jira@acme.com" not in rows.values()
+    assert "env-confluence-token" not in rows.values()
+    assert "env-confluence@acme.com" not in rows.values()
+
+
+def test_knob_rows_shows_presence_placeholder_when_resolved_via_config_toml_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Acceptance: a value in config.toml only still shows the presence
+    # placeholder -- resolution is env-primary/config-fallback, so presence
+    # must reflect EITHER source.
+    _clear_credential_env(monkeypatch)
+    s = Settings(
+        jira_token="config-jira-token",
+        jira_email="config-jira@acme.com",
+        confluence_token="config-confluence-token",
+        confluence_email="config-confluence@acme.com",
+    )
+    rows = _knob_values(s)
+    for name in ALL_CREDENTIAL_FIELDS:
+        assert rows[name] == REDACTED_PLACEHOLDER
+
+
+def test_knob_rows_regression_guard_config_toml_email_never_leaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # THE BUG THIS TICKET FIXES: an email placed in config.toml used to be
+    # echoed verbatim by knob_rows() (jira_email/confluence_email were not
+    # secret=True). Now it must show the presence placeholder, never the
+    # address.
+    _clear_credential_env(monkeypatch)
+    s = Settings(
+        jira_email="real-jira-address@acme.com",
+        confluence_email="real-confluence-address@acme.com",
+    )
+    rows = _knob_values(s)
+    assert rows["jira_email"] == REDACTED_PLACEHOLDER
+    assert rows["confluence_email"] == REDACTED_PLACEHOLDER
+    assert "real-jira-address@acme.com" not in rows.values()
+    assert "real-confluence-address@acme.com" not in rows.values()
+
+
+def test_knob_rows_never_leaks_token_value_from_any_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(JIRA_TOKEN_ENV, "super-secret-env-token")
+    s = Settings(confluence_token="super-secret-config-token")
+    rows = _knob_values(s)
+    assert rows["jira_token"] == REDACTED_PLACEHOLDER
+    assert rows["confluence_token"] == REDACTED_PLACEHOLDER
+    assert "super-secret-env-token" not in rows.values()
+    assert "super-secret-config-token" not in rows.values()
 
 
 def test_atlassian_credentials_repr_redacts_token() -> None:
@@ -554,15 +659,27 @@ def test_atlassian_credentials_repr_redacts_token() -> None:
 
 
 def test_settings_repr_and_str_never_echo_secret_tokens() -> None:
-    # Acceptance: the token value is NEVER logged or echoed anywhere -- so an
-    # incautious repr()/str()/print()/logger.debug() of the Settings object
-    # itself must not surface it (secret=True => repr=False on the field).
-    s = Settings(jira_token="jira-super-secret", confluence_token="conf-super-secret")
+    # Acceptance: the credential values are NEVER logged or echoed anywhere --
+    # so an incautious repr()/str()/print()/logger.debug() of the Settings
+    # object itself must not surface them (secret=True => repr=False on the
+    # field). Covers all four credential fields, not just the tokens
+    # (lode-dx4r: jira_email/confluence_email are secret=True too now).
+    s = Settings(
+        jira_token="jira-super-secret",
+        confluence_token="conf-super-secret",
+        jira_email="jira-secret@acme.com",
+        confluence_email="conf-secret@acme.com",
+    )
     for rendered in (repr(s), str(s)):
         assert "jira-super-secret" not in rendered
         assert "conf-super-secret" not in rendered
-    # Non-secret siblings remain visible, and the values stay accessible/
-    # serializable -- only the human-facing repr is suppressed.
-    assert "jira_email" in repr(Settings(jira_email="me@acme.com"))
+        assert "jira-secret@acme.com" not in rendered
+        assert "conf-secret@acme.com" not in rendered
+    # A genuinely non-secret sibling remains visible in repr.
+    assert "jira_base_url" in repr(Settings(jira_base_url="https://acme.atlassian.net"))
+    # The values stay accessible/serializable -- only the human-facing repr
+    # is suppressed.
     assert s.jira_token == "jira-super-secret"
+    assert s.jira_email == "jira-secret@acme.com"
     assert s.model_dump()["confluence_token"] == "conf-super-secret"
+    assert s.model_dump()["confluence_email"] == "conf-secret@acme.com"

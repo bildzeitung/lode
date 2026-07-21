@@ -59,14 +59,17 @@ def _knob(
 ) -> object:
     """A typed field carrying its kind tag (read back via :func:`knob_kinds`).
 
-    ``secret=True`` marks a field whose value must never be echoed back to the
-    user (a credential, e.g. an Atlassian API token, lode-gpzn.1) --
-    :func:`knob_rows` excludes any field tagged this way from the ``lode
-    config`` / TUI knob table, regardless of its ``kind``, AND the field is
-    given ``repr=False`` so the raw value never leaks through the Pydantic
-    model's own ``repr()`` / ``str()`` either (an incautious
-    ``logger.debug(settings)`` or ``print(settings)`` would otherwise echo it
-    -- the acceptance is "never logged or echoed *anywhere*", lode-gpzn.1).
+    ``secret=True`` marks a field whose RAW VALUE must never be echoed back to
+    the user (a credential, e.g. an Atlassian API token or account email,
+    lode-gpzn.1 / lode-dx4r) -- :func:`knob_rows` renders any field tagged this
+    way as a presence indicator (``[REDACTED]`` if resolved from *any* source,
+    ``[unset]`` if not) instead of its value, regardless of its ``kind``. This
+    is a *show-presence*, not *exclude-the-row*, contract -- the row still
+    appears, just never carrying the value. The field is ALSO given
+    ``repr=False`` so the raw value never leaks through the Pydantic model's
+    own ``repr()`` / ``str()`` either (an incautious ``logger.debug(settings)``
+    or ``print(settings)`` would otherwise echo it -- the acceptance is "never
+    logged or echoed *anywhere*", lode-gpzn.1).
     """
     extra: dict[str, object] = {"kind": kind.value}
     if secret:
@@ -383,22 +386,29 @@ class Settings(BaseModel):
         Kind.RUNTIME,
         f"JIRA Cloud Basic-auth account email, config.toml FALLBACK only -- "
         f"the {JIRA_EMAIL_ENV} env var is checked first (lode-gpzn.1). Empty "
-        "means unresolved from this source.",
+        "means unresolved from this source. NEVER echoed verbatim -- shown "
+        "as a presence indicator in the lode config / TUI knob table "
+        "(secret=True, lode-dx4r).",
+        secret=True,
     )
     confluence_email: str = _knob(
         "",
         Kind.RUNTIME,
         f"Confluence Cloud Basic-auth account email, config.toml FALLBACK "
         f"only -- the {CONFLUENCE_EMAIL_ENV} env var is checked first "
-        "(lode-gpzn.1). Empty means unresolved from this source.",
+        "(lode-gpzn.1). Empty means unresolved from this source. NEVER "
+        "echoed verbatim -- shown as a presence indicator in the lode "
+        "config / TUI knob table (secret=True, lode-dx4r).",
+        secret=True,
     )
     jira_token: str = _knob(
         "",
         Kind.RUNTIME,
         f"JIRA Cloud API token, config.toml FALLBACK only -- the "
         f"{JIRA_TOKEN_ENV} env var is checked first (lode-gpzn.1). No secret "
-        "is required to live here. NEVER logged or echoed -- excluded from "
-        "the lode config / TUI knob table (secret=True).",
+        "is required to live here. NEVER logged or echoed -- shown as a "
+        "presence indicator in the lode config / TUI knob table "
+        "(secret=True).",
         secret=True,
     )
     confluence_token: str = _knob(
@@ -406,8 +416,9 @@ class Settings(BaseModel):
         Kind.RUNTIME,
         f"Confluence Cloud API token, config.toml FALLBACK only -- the "
         f"{CONFLUENCE_TOKEN_ENV} env var is checked first (lode-gpzn.1). No "
-        "secret is required to live here. NEVER logged or echoed -- excluded "
-        "from the lode config / TUI knob table (secret=True).",
+        "secret is required to live here. NEVER logged or echoed -- shown "
+        "as a presence indicator in the lode config / TUI knob table "
+        "(secret=True).",
         secret=True,
     )
 
@@ -862,6 +873,39 @@ def config_lines(db_path: Path) -> list[str]:
     return [f"{label:<{width}}  {value}" for label, value in formatted]
 
 
+#: Presence-indicator placeholders a ``secret=True`` knob row renders instead
+#: of its raw value (lode-dx4r) -- never the value itself, from any source.
+REDACTED_PLACEHOLDER = "[REDACTED]"
+UNSET_PLACEHOLDER = "[unset]"
+
+#: The env var that resolves each ``secret=True`` credential field, env-var
+#: PRIMARY over the field's own config.toml value (mirrors
+#: ``_resolve_atlassian_credentials``'s per-field formula). Used by
+#: :func:`knob_rows` to compute presence WITHOUT reading the raw value back
+#: out of ``settings`` for display -- only ever to test truthiness.
+_CREDENTIAL_ENV_VARS: dict[str, str] = {
+    "jira_email": JIRA_EMAIL_ENV,
+    "jira_token": JIRA_TOKEN_ENV,
+    "confluence_email": CONFLUENCE_EMAIL_ENV,
+    "confluence_token": CONFLUENCE_TOKEN_ENV,
+}
+
+
+def _credential_resolved(settings: Settings, name: str) -> bool:
+    """True iff the named ``secret=True`` credential field resolves from any source.
+
+    Env var first, then the ``config.toml``-fallback field on ``settings`` --
+    the same env-primary/config-fallback shape ``_resolve_atlassian_credentials``
+    uses per field, deliberately re-derived here (rather than calling the
+    resolver) so a *partial* resolution still reports presence per key: the
+    resolver only returns non-``None`` when BOTH email and token resolve
+    together, but this ticket's acceptance is per-field ("export the token
+    only" must still show a row for the token) -- see lode-dx4r.
+    """
+    env_var = _CREDENTIAL_ENV_VARS[name]
+    return bool(os.environ.get(env_var)) or bool(getattr(settings, name))
+
+
 def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
     """Return ``(name, current value, kind)`` for every runtime/tune knob.
 
@@ -888,21 +932,34 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
     ticket's design: "TUI renders it in a table widget ... CLI prints
     aligned rows. Both call the one shared builder."
 
-    A field declared ``secret=True`` (``jira_token`` / ``confluence_token``,
-    lode-gpzn.1) is excluded outright, regardless of kind -- the token value
-    must never be echoed anywhere, including this table.
+    A field declared ``secret=True`` (the four Atlassian credential fields --
+    ``jira_email`` / ``jira_token`` / ``confluence_email`` /
+    ``confluence_token``, lode-gpzn.1 / lode-dx4r) still gets a row, but its
+    value is NEVER the raw setting -- it's :data:`REDACTED_PLACEHOLDER` when
+    the credential resolves from *either* the env var or the ``config.toml``
+    fallback (:func:`_credential_resolved`), else :data:`UNSET_PLACEHOLDER`.
+    Presence is deliberately computed from the env var / resolver inputs, not
+    from ``settings``'s field value alone -- reading only the ``Settings``
+    value would show "unset" for an env-only credential (env vars never flow
+    into ``Settings``), silently reproducing the exact gap this ticket closes.
     """
     rows: list[tuple[str, str, str]] = []
     for name, kind in knob_kinds().items():
         if kind not in (Kind.RUNTIME.value, Kind.TUNE.value):
             continue
         field = Settings.model_fields[name]
-        if isinstance(field.json_schema_extra, dict) and field.json_schema_extra.get(
-            "secret", False
-        ):
-            continue
-        value = getattr(settings, name)
-        if isinstance(value, list):
-            value = ", ".join(str(item) for item in value)
+        is_secret = isinstance(
+            field.json_schema_extra, dict
+        ) and field.json_schema_extra.get("secret", False)
+        if is_secret:
+            value: object = (
+                REDACTED_PLACEHOLDER
+                if _credential_resolved(settings, name)
+                else UNSET_PLACEHOLDER
+            )
+        else:
+            value = getattr(settings, name)
+            if isinstance(value, list):
+                value = ", ".join(str(item) for item in value)
         rows.append((name, str(value), kind))
     return rows
