@@ -62,7 +62,7 @@ HUMAN=$(rtk bd human list --status open --json \
 
 If either `bd` call errors, note the failure and **skip the digest rewrite for this pass** rather
 than aborting — a failed query is not an empty queue. See
-[Failure handling](#failure-handling-a-substep-fails-the-loop-survives).
+[Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
 ## 2. Collect epics ready for a human close-decision
 

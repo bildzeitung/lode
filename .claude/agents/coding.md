@@ -205,6 +205,14 @@ fi
 rtk git clean -fd   # unconditional (lode-3v1p) -- runs after the `case`, so still worktree-scoped
 ```
 
+**The `case` guard is the executable form of the pwd safety check above, placed in the same block as
+the destructive command it protects** — the same reasoning `code-reviewer.md` gives for its own copy
+of this guard: an English instruction upstream can be skipped or hand-waved under load; a `case` that
+`exit 1`s cannot. It also covers a broader precondition than the prose check above it (which only
+tests whether `pwd` is the repo root): a cwd that is neither the repo root nor a worktree — a
+subdirectory of the main checkout, say — passes that prose check as literally written but fails this
+`case`, so the destructive remediation below still never reaches the main checkout.
+
 **The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
 ref* — and in a recycled worktree that ref belongs to **another ticket** (the observed reproductions
 were on `worktree-agent-<other-hash>` and on a `land/<other-id>`). If that ticket had committed but

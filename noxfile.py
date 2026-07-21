@@ -119,7 +119,7 @@ nox.options.default_venv_backend = "none"
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
-nox.options.sessions = ["fix", "tests", "shellcheck"]
+nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck"]
 
 
 def _xdist_workers() -> str:
@@ -186,6 +186,22 @@ def shellcheck(session: nox.Session) -> None:
     if not files:
         session.skip("no tracked shell scripts to check")
     session.run("shellcheck", "--severity=warning", *files)
+
+
+@nox.session
+def linkcheck(session: nox.Session) -> None:
+    """Verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg).
+
+    Complements ``scripts/validate-mermaid.sh`` (diagram *syntax*) with the other
+    half of doc rot: cross-document links and ``#anchor`` fragments. GitHub
+    derives an anchor slug from a heading's TEXT, so rewording a heading
+    silently breaks every inbound link with nothing failing to report it --
+    see ``scripts/check_links.py``'s module docstring for a concrete dead
+    anchor this gate found already sitting in trunk. Pure Python, no Docker
+    and no network, so -- unlike ``validate-mermaid.sh`` -- it belongs in the
+    default offline gate set alongside ``fix``/``tests``/``shellcheck``.
+    """
+    session.run("python", "scripts/check_links.py")
 
 
 @nox.session

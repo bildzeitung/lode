@@ -15,10 +15,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Static
 
 from lode.enrichment_view import enrichment_view
 from lode.tui.screens._browse_render import _edges_text, _items_line, _summary_text
+from lode.tui.widgets.lode_static import LodeStatic
 
 #: The enrichment inspector modal's dialog container id -- read back in tests.
 INSPECTOR_DIALOG_ID = "enrichment-inspector-dialog"
@@ -78,12 +78,12 @@ class EnrichmentModalScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(
-            Static("", id=INSPECTOR_STATE_ID),
-            Static("", id=INSPECTOR_SUMMARY_ID),
-            Static("", id=INSPECTOR_TAGS_ID),
-            Static("", id=INSPECTOR_ENTITIES_ID),
-            Static("", id=INSPECTOR_EDGES_ID),
-            Static("", id=INSPECTOR_EMBED_ID),
+            LodeStatic("", id=INSPECTOR_STATE_ID),
+            LodeStatic("", id=INSPECTOR_SUMMARY_ID),
+            LodeStatic("", id=INSPECTOR_TAGS_ID),
+            LodeStatic("", id=INSPECTOR_ENTITIES_ID),
+            LodeStatic("", id=INSPECTOR_EDGES_ID),
+            LodeStatic("", id=INSPECTOR_EMBED_ID),
             id=INSPECTOR_DIALOG_ID,
         )
 
@@ -96,22 +96,22 @@ class EnrichmentModalScreen(ModalScreen[None]):
             # EditScreen.on_mount takes for a missing head.
             raise LookupError(f"no live note {self.note_id!r} to inspect")
 
-        self.query_one(f"#{INSPECTOR_STATE_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_STATE_ID}", LodeStatic).update(
             f"Enrichment: {view.enrichment_state}"
         )
-        self.query_one(f"#{INSPECTOR_SUMMARY_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_SUMMARY_ID}", LodeStatic).update(
             Text("Summary: ") + _summary_text(view.summary)
         )
-        self.query_one(f"#{INSPECTOR_TAGS_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_TAGS_ID}", LodeStatic).update(
             Text("Tags: ") + _items_line(view.tags)
         )
-        self.query_one(f"#{INSPECTOR_ENTITIES_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_ENTITIES_ID}", LodeStatic).update(
             Text("Entities: ") + _items_line(view.entities)
         )
-        self.query_one(f"#{INSPECTOR_EDGES_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_EDGES_ID}", LodeStatic).update(
             Text("Edges:\n") + _edges_text(view.edges)
         )
-        self.query_one(f"#{INSPECTOR_EMBED_ID}", Static).update(
+        self.query_one(f"#{INSPECTOR_EMBED_ID}", LodeStatic).update(
             f"Embedded: {'yes' if view.embedded else 'no'} "
             f"({view.passage_count} passages)"
         )

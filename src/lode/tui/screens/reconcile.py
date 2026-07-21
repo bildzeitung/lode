@@ -36,9 +36,10 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
-from textual.widgets import Header, Static, TextArea
+from textual.widgets import Header, TextArea
 
 from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.lode_static import LodeStatic
 from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.versions import SaveResult
 
@@ -92,7 +93,7 @@ class ReconcileScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            Static(
+            LodeStatic(
                 "This note changed since you opened it. Re-apply (r) onto the "
                 "new head, or discard (d) your edit.",
                 id=MESSAGE_ID,

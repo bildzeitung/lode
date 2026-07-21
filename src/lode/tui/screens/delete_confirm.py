@@ -12,7 +12,8 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Static
+
+from lode.tui.widgets.lode_static import LodeStatic
 
 #: The delete-confirm dialog's message widget id -- read back in tests.
 DELETE_CONFIRM_MESSAGE_ID = "delete-confirm-message"
@@ -36,7 +37,7 @@ class DeleteConfirmScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Static(
+            LodeStatic(
                 "Delete this note? (Y)es / (N)o",
                 id=DELETE_CONFIRM_MESSAGE_ID,
             ),
