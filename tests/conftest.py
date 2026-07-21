@@ -287,11 +287,12 @@ def _restore_root_logger_state():
     that wasn't there before it (``configure_logging`` also attaches a file
     handler when given a ``log_dir``, e.g. via the CLI group callback under
     ``$LODE_HOME/logs``) — after every test closes the leak at its source,
-    independent of which specific test happens to trigger it. This is
-    deliberately the general fix (restore the whole root-logger config any
-    ``configure_logging`` call can touch) rather than a level-only patch, per
-    the ticket's acceptance criterion to check for other global state leaking
-    the same restore-nothing way.
+    independent of which specific test happens to trigger it. This deliberately
+    does more than restore the level — it also closes/removes any handler a
+    test attached (it does not re-add a handler a test *removed*, nor strip a
+    filter added to a pre-existing handler; neither leak is known to matter
+    here) — per the ticket's acceptance criterion to check for other global
+    state leaking the same restore-nothing way.
     """
     root = logging.getLogger()
     level_before = root.level
