@@ -114,11 +114,51 @@ plus `LODE_CONFLUENCE_TOKEN` / `LODE_CONFLUENCE_EMAIL` (or the `confluence_token
 link is the id-bearing page URL:
 `https://<site>.atlassian.net/wiki/spaces/<SPACE>/pages/<id>/<slug>`.
 
+## Recovering a link pasted before the connector was active
+
+A link pasted **while the connector was inactive** (flag off, or credentials not resolving in
+the shell that ran `lode add`) is stamped `source_type='web'` at paste time — and stays there.
+It keeps refreshing through the generic web leg forever, which for JIRA/Confluence hits the
+product's login wall and returns the SPA app shell, not ticket/page text (`lode dump-html`
+prints JS, no real content). Fixing the config afterwards only changes routing for **new**
+pastes — it does nothing for a link you already pasted.
+
+To repair an already-pasted link, re-run the connector's migration for its already-processed
+links under **current** (now-fixed) routing — the `lode backfill` command
+([`lode.backfill`](../../src/lode/backfill.py) framework,
+[`lode.jira_backfill`](../../src/lode/jira_backfill.py) for JIRA):
+
+```bash
+lode verify --jira                 # confirm the connector is actually active now
+lode backfill jira --dry-run       # preview: what would migrate, nothing written
+lode backfill jira                 # mint the JIRA identity, repoint the edge, enqueue a refresh
+lode work                          # drain the queue -- fetches the real snapshot via the REST API
+```
+
+Confluence is the same shape: `lode backfill confluence --dry-run` / `lode backfill confluence`.
+
+**When you need `--retry-tombstoned`.** A first backfill pass always mints a brand-new,
+never-tombstoned identity, so `--retry-tombstoned` is never needed the first time. It only
+matters on a **re-run**: if that fresh identity's own head snapshot then tombstoned (e.g. the
+token was still wrong, or expired mid-run — a 401), a plain re-run treats that as a permanent
+failure and skips it, same as the periodic refresh sweep would. Once you've actually fixed the
+cause (rotated the token, fixed the base URL), `lode backfill jira --retry-tombstoned` is the
+explicit opt-in to retry that specific target now instead of waiting on a schedule.
+
+**Idempotent.** Re-running `lode backfill jira` after a link already migrated is a no-op for
+that link — reclassification runs from the edge's *original* pasted URL every time, so an edge
+already repointed onto its JIRA identity is simply revisited and its current head snapshot
+re-checked, not re-migrated from scratch. Safe to run repeatedly, and safe to run even when
+nothing needs it.
+
+Full design: [`externals.md`](../externals.md#backfill-per-connector-re-draw-down-lode-gpzn9).
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
 | JIRA link tombstones / looks like a login page | Connector **inactive** — flag off, or token/email not resolving from either source. Re-check `jira_enabled` and that the env vars are exported. |
+| A JIRA/Confluence link I pasted earlier still shows the web/JS shell after I fixed my config | Edge frozen as `source_type='web'` at paste time — fixing config only changes routing for future pastes. Recover it with `lode backfill jira` (or `confluence`), then `lode work` — see [Recovering a link pasted before the connector was active](#recovering-a-link-pasted-before-the-connector-was-active) above. |
 | `Settings()` fails on load with a base-URL error | `jira_base_url` / `confluence_base_url` is non-empty but malformed — must be a well-formed `http(s)` URL, or leave it empty to infer. |
 | `lode config` won't show my token | Working as designed — tokens are `secret=True` and never echoed. |
 | Two URL forms of the same issue made two nodes | They shouldn't — a browser permalink and an API URL of the same issue parse to the same key and dedup onto one row. If they didn't, the link shape may not carry the issue key/page id; check the URL includes `/browse/{KEY}` (JIRA) or `/pages/{id}/` (Confluence). |
