@@ -104,8 +104,9 @@ def source_screen_key_pairs(classes: dict[str, type]) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
     for name, cls in classes.items():
         for binding in cls.__dict__.get("BINDINGS", []):
-            key = binding.key if hasattr(binding, "key") else binding[0]
-            pairs.add((name, key))
+            # Every screen's BINDINGS use Textual `Binding` objects (the repo's
+            # uniform style); a bare-tuple entry would (correctly) fail loud here.
+            pairs.add((name, binding.key))
     return pairs
 
 
