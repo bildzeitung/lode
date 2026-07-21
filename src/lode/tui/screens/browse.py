@@ -229,12 +229,13 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
-from textual.widgets import DataTable, Header, Input
+from textual.widgets import Header, Input
 from textual.widgets.data_table import RowDoesNotExist
 
 from lode.notes_read import list_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
 from lode.tui.services.edit import delete_note, load_head
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
@@ -303,7 +304,7 @@ class BrowseScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(id=TABLE_ID, cursor_type="row")
+        yield LodeDataTable(id=TABLE_ID, cursor_type="row")
         yield Input(id=SEARCH_INPUT_ID, placeholder="Search summaries...")
         yield LodeFooter()
 
@@ -311,7 +312,7 @@ class BrowseScreen(Screen[None]):
         # Columns are (re)built in _reload_rows, not here: the Summary column's
         # width depends on the current terminal width, which _reload_rows reads
         # back off the laid-out table. on_mount only needs to take focus.
-        self.query_one(f"#{TABLE_ID}", DataTable).focus()
+        self.query_one(f"#{TABLE_ID}", LodeDataTable).focus()
         # Closed by default (lode-olmi.4) -- display=False claims no vertical
         # space, so the "one-line input box at the bottom" only appears once
         # '/' or '?' is pressed.
@@ -395,7 +396,7 @@ class BrowseScreen(Screen[None]):
         since it shares this one reload path -- a resize-triggered rebuild
         never loses the selection either.
         """
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         selected_note_id: str | None = None
         if table.row_count > 0:
             selected_note_id = table.coordinate_to_cell_key(
@@ -457,7 +458,7 @@ class BrowseScreen(Screen[None]):
                 pass
         table.move_cursor(row=restored_index)
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: LodeDataTable.RowSelected) -> None:
         """Enter/select on a row opens that note's editor directly (lode-olmi.2)."""
         note_id = event.row_key.value
         if note_id is not None:
@@ -465,7 +466,7 @@ class BrowseScreen(Screen[None]):
 
     def action_inspect_selected(self) -> None:
         """``i``: open the highlighted row's enrichment inspector modal."""
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -474,7 +475,7 @@ class BrowseScreen(Screen[None]):
 
     def action_view_content(self) -> None:
         """``v``: view the highlighted row's retrieved external content, if any (lode-0sjj)."""
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -492,7 +493,7 @@ class BrowseScreen(Screen[None]):
         to :meth:`_reload_rows`, which reads :attr:`_expanded_note_id` on
         every rebuild -- setting it here and reloading is the whole toggle.
         """
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -506,7 +507,7 @@ class BrowseScreen(Screen[None]):
 
     def action_delete_selected(self) -> None:
         """``d``: soft-delete the highlighted row's note, after confirming (lode-d32.1)."""
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
         note_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -554,7 +555,7 @@ class BrowseScreen(Screen[None]):
         self._open_search(direction=-1)
 
     def _open_search(self, *, direction: int) -> None:
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         if table.row_count == 0:
             return
         self._search_direction = direction
@@ -588,7 +589,7 @@ class BrowseScreen(Screen[None]):
         """
         if not query:
             return
-        table = self.query_one(f"#{TABLE_ID}", DataTable)
+        table = self.query_one(f"#{TABLE_ID}", LodeDataTable)
         row_count = table.row_count
         if row_count == 0:
             return
@@ -607,7 +608,7 @@ class BrowseScreen(Screen[None]):
         search_input.display = False
         search_input.value = ""
         self._search_open = False
-        self.query_one(f"#{TABLE_ID}", DataTable).focus()
+        self.query_one(f"#{TABLE_ID}", LodeDataTable).focus()
 
     def action_dismiss_screen(self) -> None:
         """Escape: close an open search box first, else pop back to capture.

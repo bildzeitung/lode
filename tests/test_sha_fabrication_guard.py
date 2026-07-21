@@ -51,10 +51,10 @@ from pathlib import Path
 
 import pytest
 
+from _hookharness import SH, pretooluse_hook, run_hook
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sha-fabrication-guard.sh"
-SETTINGS = REPO_ROOT / ".claude" / "settings.json"
-SH = shutil.which("sh") or "/bin/sh"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the guard shells out to jq"
@@ -270,45 +270,17 @@ def test_no_hex_early_out_does_not_change_any_decision() -> None:
 
 def _hook_command() -> str:
     """The guard's shell one-liner, read from the committed settings.json."""
-    settings = json.loads(SETTINGS.read_text())
-    pre_tool_use = settings["hooks"]["PreToolUse"]
-    matching = [
-        h["command"]
-        for entry in pre_tool_use
-        if entry.get("matcher") == "Bash"
-        for h in entry["hooks"]
-        if "sha-fabrication-guard.sh" in h.get("command", "")
-    ]
-    assert len(matching) == 1, (
-        f"expected exactly one sha-fabrication-guard hook, got {matching}"
-    )
-    return matching[0]
+    return pretooluse_hook("sha-fabrication-guard.sh")
 
 
 def _hook_output(command: str, *, path: str | None = None) -> dict | None:
     """Run the committed hook one-liner against `command` via `/bin/sh -c` (dash on Linux --
     lode-9gm2). `path`, when given, overrides PATH for the subprocess only, to simulate a
-    jq-less machine (lode-oii9) without touching the real PATH of the test process. `CWD` is
+    jq-less machine (lode-oii9) without touching the real PATH of the test process. `cwd` is
     this repo, and `CLAUDE_PROJECT_DIR` is deliberately left unset so the hook's own
     `git rev-parse --show-toplevel` fallback is what's under test.
     """
-    payload = json.dumps(
-        {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
-    )
-    env = None if path is None else {"PATH": path}
-    proc = subprocess.run(
-        [SH, "-c", _hook_command()],
-        input=payload,
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=env,
-    )
-    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
-    if not proc.stdout.strip():
-        return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]
+    return run_hook(_hook_command(), command, path=path, cwd=REPO_ROOT)
 
 
 def test_hook_denies_fabricated_sha_end_to_end_under_dash() -> None:
@@ -401,20 +373,7 @@ def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
     )
 
 
-def test_settings_json_still_carries_the_bd_deps_and_gh_write_guards() -> None:
-    """No regression to the existing lode-ij24 / lode-o29m guards from adding this third one."""
-    settings = json.loads(SETTINGS.read_text())
-    bash_hooks = [
-        h["command"]
-        for entry in settings["hooks"]["PreToolUse"]
-        if entry.get("matcher") == "Bash"
-        for h in entry["hooks"]
-    ]
-    assert any("blocks:" in c for c in bash_hooks), "lode-ij24 bd-deps guard missing"
-    assert any("external-tracker" in c or "PENDING A HUMAN" in c for c in bash_hooks), (
-        "lode-o29m gh-write guard missing"
-    )
-    assert any("sha-fabrication-guard.sh" in c for c in bash_hooks), (
-        "lode-fpmi sha-fabrication guard missing"
-    )
-    assert len(bash_hooks) == 3
+# The GLOBAL "which PreToolUse(Bash) guards are installed" inventory assertion (including this
+# guard's own presence) lives once, in tests/test_hook_guards_inventory.py, next to the shared
+# harness -- not here, where adding a FOURTH guard anywhere would turn this unrelated file red
+# (lode-zlg8).

@@ -89,10 +89,11 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.coordinate import Coordinate
 from textual.screen import Screen
-from textual.widgets import DataTable, Header
+from textual.widgets import Header
 
 from lode.notes_read import list_notes_with_all_tags, list_tags, short_note_id
 from lode.tui.dates import format_adaptive_date
+from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens.edit import EditScreen
 
@@ -156,8 +157,8 @@ class TagsScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Vertical(
-            DataTable(id=TAG_LIST_ID, cursor_type="cell", show_header=False),
-            DataTable(id=NOTES_TABLE_ID, cursor_type="row"),
+            LodeDataTable(id=TAG_LIST_ID, cursor_type="cell", show_header=False),
+            LodeDataTable(id=NOTES_TABLE_ID, cursor_type="row"),
         )
         yield LodeFooter()
 
@@ -165,7 +166,7 @@ class TagsScreen(Screen[None]):
         # Both panels are (re)populated in on_screen_resume, not here (see its
         # docstring) -- on_mount only needs to take focus, the same split
         # BrowseScreen.on_mount uses.
-        self.query_one(f"#{TAG_LIST_ID}", DataTable).focus()
+        self.query_one(f"#{TAG_LIST_ID}", LodeDataTable).focus()
 
     def on_screen_resume(self) -> None:
         """(Re)load both panels every time this screen becomes visible.
@@ -241,7 +242,7 @@ class TagsScreen(Screen[None]):
         the cursor back to the top-left cell when the highlighted tag is
         still present afterward.
         """
-        table = self.query_one(f"#{TAG_LIST_ID}", DataTable)
+        table = self.query_one(f"#{TAG_LIST_ID}", LodeDataTable)
         previous_tag = self._tag_at(*table.cursor_coordinate)
 
         tags = list_tags(self.app.db_path)
@@ -279,7 +280,7 @@ class TagsScreen(Screen[None]):
         see :meth:`_tag_cell_text`'s docstring for why a bare ``str`` cell is
         unsafe.
         """
-        table = self.query_one(f"#{NOTES_TABLE_ID}", DataTable)
+        table = self.query_one(f"#{NOTES_TABLE_ID}", LodeDataTable)
         table.clear(columns=True)
         table.add_columns("Id", "Date", "Version", "Summary")
         for row in list_notes_with_all_tags(self.app.db_path, self._selected):
@@ -291,7 +292,7 @@ class TagsScreen(Screen[None]):
                 key=row.note_id,
             )
 
-    def _toggle_tag_at(self, table: DataTable, row: int, col: int) -> None:
+    def _toggle_tag_at(self, table: LodeDataTable, row: int, col: int) -> None:
         """Flip the selected state of the tag at grid cell ``(row, col)``.
 
         A no-op on a cell that carries no tag (see :meth:`_tag_at`).
@@ -314,13 +315,13 @@ class TagsScreen(Screen[None]):
         while the notes table is focused would silently toggle whatever tag
         the (unrelated, unfocused) grid's cursor happens to sit on.
         """
-        table = self.query_one(f"#{TAG_LIST_ID}", DataTable)
+        table = self.query_one(f"#{TAG_LIST_ID}", LodeDataTable)
         if self.focused is not table:
             return
         row, col = table.cursor_coordinate
         self._toggle_tag_at(table, row, col)
 
-    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+    def on_data_table_cell_selected(self, event: LodeDataTable.CellSelected) -> None:
         """``enter`` toggles the tag under the cursor -- DataTable's own
         native cell-select binding (``cursor_type="cell"``), reused instead
         of adding a redundant one."""
@@ -330,7 +331,7 @@ class TagsScreen(Screen[None]):
             event.data_table, event.coordinate.row, event.coordinate.column
         )
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+    def on_data_table_row_selected(self, event: LodeDataTable.RowSelected) -> None:
         """Selecting a note opens its editor directly (this ticket's own acceptance
         criterion; see the module docstring)."""
         if event.data_table.id != NOTES_TABLE_ID:
