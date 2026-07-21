@@ -79,14 +79,8 @@ def _hook_command() -> str:
 def _hook_output(command: str, *, path: str | None = None) -> dict | None:
     """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
 
-    Driven through **`/bin/sh -c`** (dash on Linux), NOT `bash -c` (lode-9gm2): that is the actual
-    interpreter the Claude Code harness uses to run PreToolUse hooks, and dash rejects bash-only
-    syntax that bash silently accepts -- a test using bash cannot see that class of bug. This
-    guard used to be the one guard driven through `bash -c` instead, until lode-zlg8 fixed it to
-    match `test_bd_deps_guard.py` and `test_sha_fabrication_guard.py`.
-
-    `path`, when given, overrides PATH for the subprocess only -- used to simulate a jq-less
-    machine (lode-oii9) without touching the real PATH of the process running this test.
+    Driven through `/bin/sh -c` (dash) by `run_hook`, never `bash -c` -- see `_hookharness`.
+    Until lode-zlg8 this was the one guard whose test drove `bash -c` instead (lode-9gm2).
     """
     return run_hook(_hook_command(), command, path=path)
 

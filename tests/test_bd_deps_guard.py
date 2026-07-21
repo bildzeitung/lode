@@ -50,19 +50,9 @@ def _hook_command() -> str:
     return pretooluse_hook("blocks:")
 
 
-def _hook_output(
-    command: str, *, path: str | None = None, hook_command: str | None = None
-) -> dict | None:
-    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through.
-
-    `hook_command`, when given, overrides the shell one-liner run -- used by the sabotage test to
-    exercise a deliberately-broken variant without touching the real settings.json.
-    """
-    return run_hook(
-        hook_command if hook_command is not None else _hook_command(),
-        command,
-        path=path,
-    )
+def _hook_output(command: str, *, path: str | None = None) -> dict | None:
+    """Run the guard against `command`; return its hookSpecificOutput, or None if it fell through."""
+    return run_hook(_hook_command(), command, path=path)
 
 
 def _run(command: str, *, path: str | None = None) -> str | None:
