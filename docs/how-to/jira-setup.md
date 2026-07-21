@@ -75,26 +75,11 @@ missing → inactive (the link quietly uses the web path instead).
 lode config
 ```
 
-You'll see `jira_enabled = true` in the knob table. **The credential rows are *not* a
-reliable "am I credentialed?" check today**, so don't read too much into them:
-
-- `jira_token` / `confluence_token` are `secret=True` and excluded from the table
-  entirely — you'll see no row for them at all, whether set or not.
-- `jira_email` / `confluence_email` reflect only the `config.toml` value: an email you
-  put in `config.toml` is shown verbatim, but one supplied via `LODE_JIRA_EMAIL` (the
-  recommended path) won't appear here, because env-var credentials resolve separately and
-  don't flow into this table.
-
-So `lode config` confirming the **flag** is really the most it reliably tells you right
-now. The trustworthy check is the end-to-end draw-down in step 4: if the link fetches a
-real snapshot, credentials resolved; if it tombstones or looks like a login page, they
-didn't — re-check the env vars are exported in the shell you run lode from.
-
-> Being improved (`lode-dx4r`): `lode config` will show a presence indicator
-> (`[REDACTED]`) for all four credential keys when a value resolves from *any* source —
-> env var or `config.toml` — so you can confirm lode has them without echoing the values.
-> That same change also stops `jira_email`/`confluence_email` from printing a real address
-> out of `config.toml`. Until it lands, use the step-4 check above.
+You'll see `jira_enabled = true` in the knob table. Note: the **token and email are
+never shown** — they're `secret=True` and excluded from the table by construction, so
+`lode config` confirming the flag is the most it will echo. If a JIRA link still isn't
+drawing down after this, credentials aren't resolving — re-check the env vars are
+exported in the shell you run lode from.
 
 ## 4. Try it end to end
 
