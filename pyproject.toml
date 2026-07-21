@@ -48,6 +48,7 @@ dependencies = [
 dev = [
     "pytest",        # tests (run via nox)
     "pytest-xdist",  # parallel test execution (`-n auto`, lode-b4w.6)
+    "pytest-cov",    # coverage measurement (`nox -s coverage`, lode-qxdn.3, CI-only)
     "pytest-timeout", # per-test timeout regression net (lode-kmes) -- turns a
                       # wedged test into a named failure instead of an
                       # indefinite stall on the landing gate; see the

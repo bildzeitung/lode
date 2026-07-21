@@ -7,10 +7,11 @@ Two entry points run by default, both required before any merge (CLAUDE.md):
                                                          every test, no marker filter;
                                                          this is what /land re-gates with)
 
-Plus two opt-in sessions that are **not** in the default set:
+Plus three opt-in sessions that are **not** in the default set:
 
-    nox -s unit     pytest -m "not slow"              (fast inner loop, lode-pql)
-    nox -s eval     pytest tests/test_eval_live.py    (the golden-set eval, CI-only)
+    nox -s unit      pytest -m "not slow"                     (fast inner loop, lode-pql)
+    nox -s eval      pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
+    nox -s coverage  pytest --cov=lode --cov-report=xml ...   (coverage measurement, CI-only, lode-qxdn.3)
 
 **Fast vs. full split (lode-pql).** ``pytest --durations`` profiling found a small
 set of tests dominate wall-clock: end-to-end CLI flows and skeleton-gate tests that
@@ -220,6 +221,38 @@ def unit(session: nox.Session) -> None:
     ``8``, lode-bv6y — see the module docstring).
     """
     session.run("pytest", "-m", "not slow", "-n", _xdist_workers())
+
+
+@nox.session
+def coverage(session: nox.Session) -> None:
+    """Run the FULL test suite under pytest-cov and emit a report — CI-only (lode-qxdn.3).
+
+    Measures the SAME suite ``nox -s tests`` certifies — full, slow markers
+    included, no ``-m`` filter — so the coverage number describes the same
+    suite the tests badge backs, not a narrower one.
+
+    This is a SEPARATE invocation, not an addition to ``tests`` itself: the
+    shared ``tests`` session stays bare ``pytest -n`` with no ``--cov``, so
+    coverage instrumentation never rides `/land`'s re-gate or a developer's
+    local ``nox -s tests`` (settled on lode-qxdn.3 — coverage is reporting,
+    not a merge gate).
+
+    Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
+    ``8``, lode-bv6y — see the module docstring); pytest-cov combines
+    coverage data across xdist workers automatically once xdist is active, no
+    extra flags needed. Emits a terminal summary plus ``coverage.xml``
+    (Cobertura format, written to the cwd) for upload to a coverage service.
+    Report-only: enforces no threshold — a low percentage does not fail this
+    session.
+    """
+    session.run(
+        "pytest",
+        "--cov=lode",
+        "--cov-report=xml",
+        "--cov-report=term",
+        "-n",
+        _xdist_workers(),
+    )
 
 
 @nox.session

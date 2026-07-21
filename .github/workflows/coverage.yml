@@ -1,0 +1,107 @@
+name: coverage
+
+# Push/PR-triggered coverage measurement -- a SEPARATE CI-only invocation of
+# the FULL `nox -s coverage` suite (same suite `nox -s tests`/tests.yml
+# certifies, no marker filter), on Python 3.14. Report-only (lode-qxdn.3):
+# there is no coverage-percentage threshold here, and neither a low
+# percentage nor a Codecov upload failure turns this workflow red. The
+# shared `tests` nox session stays bare `pytest -n` with no --cov, so
+# coverage instrumentation never rides `/land`'s re-gate or a developer's
+# local `nox -s tests` -- see noxfile.py's `coverage` session docstring.
+# Workflow filename/job identity for lode-qxdn.6's badge: coverage.yml / job
+# `coverage`.
+#
+# push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
+# narrowed to trunk + land/** so this workflow (as heavy as tests.yml: a full
+# `-e .[dev]` install plus reranker/embedder weights, running the full suite
+# a second time) doesn't also fire on a v* tag push or other non-push refs.
+# No tags-ignore needed -- defining only `branches` already excludes tag
+# pushes; see docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+on:
+  push:
+    branches: [trunk, "land/**"]
+  pull_request:
+
+env:
+  # Point LODE_HOME at a workspace-local path (rather than leaving it at the
+  # default ~/.lode) so the model-weights cache below lives at a path that
+  # does not depend on the runner's HOME (config.py's lode_home() /
+  # model_cache_dir()).
+  LODE_HOME: ${{ github.workspace }}/.lode-ci-home
+  # Same pin as tests.yml, for the same reason: noxfile.py's
+  # _xdist_workers() defaults to 8 (sized for an 8-core dev machine).
+  # GitHub's free ubuntu-latest runners are 2-core/7GB; 8 workers each
+  # loading a ~1.1GB ONNX reranker would risk OOM. See tests.yml's comment
+  # for the known cost of this pin (it muzzles the CPU-starvation flakes the
+  # 8-wide default exists to keep visible -- lode-t1y/lode-9vns/lode-64jn --
+  # those are defects that go unobserved here, not defects that went away).
+  LODE_TEST_WORKERS: "2"
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history + tags — setuptools-scm needs git describe to resolve the version
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: pip install -e '.[dev]'
+
+      - name: Resolve model cache key
+        # Identical approach to tests.yml -- derive the cache key from the
+        # PINNED model ids (via a Settings import, not a source regex-scrape)
+        # rather than a lockfile or bare constant, so a pin change invalidates
+        # the cache. Must stay AFTER the install (it imports lode) and
+        # BEFORE the cache restore below.
+        id: model_cache
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          from lode.config import Settings
+
+          s = Settings()
+          ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
+          print("key=models-" + ids.replace("/", "_"))
+          EOF
+
+      - name: Cache model weights
+        # Same cache as tests.yml, keyed identically -- a warm cache here
+        # means this leg's full-suite run is also fully offline. GitHub caches
+        # are scoped per-repo BY KEY (not per-workflow), so this byte-identical
+        # key shares one entry with tests.yml: whichever workflow populates it
+        # first, the other restores it. The only duplicated download is the
+        # cold-cache case where both workflows run concurrently and race to
+        # populate -- one save wins, the other no-ops (`cache already exists`).
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LODE_HOME }}/models
+          key: ${{ steps.model_cache.outputs.key }}
+
+      - name: Run coverage (nox -s coverage)
+        # Runs the FULL suite (no -m filter) under pytest-cov, combining
+        # coverage across xdist workers automatically, and writes
+        # coverage.xml (Cobertura) to the workspace root. No
+        # ANTHROPIC_API_KEY is set: the live eval (tests/test_eval_live.py)
+        # self-excludes unless LODE_RUN_LIVE_EVAL=1, which only `nox -s eval`
+        # sets, so this leg stays offline and keyless by design, same as
+        # tests.yml.
+        run: nox -s coverage
+
+      - name: Upload coverage to Codecov
+        # Report-only: fail_ci_if_error is explicitly false, so neither a
+        # Codecov outage nor an upload hiccup turns this workflow red --
+        # coverage is reporting here, not a merge gate (lode-qxdn.3). The
+        # repo-scoped CODECOV_TOKEN secret was created by the repo owner
+        # (lode-otsh) and can do nothing but accept coverage uploads for
+        # this repository.
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
