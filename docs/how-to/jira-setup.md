@@ -71,15 +71,27 @@ at load with a clear message.
 A connector is **active** only when its flag is on **and** credentials resolve. Either
 missing → inactive (the link quietly uses the web path instead).
 
+`lode config` shows `jira_enabled = true` in the knob table, but that's just the flag —
+it can't tell you whether credentials actually resolved or whether the tenant is
+reachable. `lode verify` (read-only, writes nothing) does both in one shot:
+
 ```bash
-lode config
+lode verify --jira
 ```
 
-You'll see `jira_enabled = true` in the knob table. Note: the **token and email are
-never shown** — they're `secret=True` and excluded from the table by construction, so
-`lode config` confirming the flag is the most it will echo. If a JIRA link still isn't
-drawing down after this, credentials aren't resolving — re-check the env vars are
-exported in the shell you run lode from.
+It prints whether the flag is on, whether credentials resolved (and from which source —
+env var or `config.toml`; the token is **never** shown), and whether the base URL is
+configured or will be inferred — then, if active, makes one authenticated GET to confirm
+the credentials actually reach the tenant, printing the authenticated account's display
+name on success. Pass a real issue key to also dry-run fetching real content:
+
+```bash
+lode verify --jira PROJ-123
+```
+
+Exit code `0` means verified reachable; non-zero names exactly what's wrong (inactive
+flag/credentials, unresolved base URL, bad credentials, bad base URL, or an unreachable
+tenant) — fix that before moving on to step 4.
 
 ## 4. Try it end to end
 

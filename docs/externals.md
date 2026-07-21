@@ -449,6 +449,28 @@ whenever validating a change that touches either connector.
   `lode-mfts` lands, a Confluence refresh job fails immediately with `RuntimeError: refresh_external:
   no fetch unit yet for source_type='confluence' ...`; `bd show lode-mfts` shows whether it has landed.
 
+*Fast first step: `lode verify`.* Before running the full add/work/show cycle below, `lode verify
+--jira` / `lode verify --confluence` (`lode-04lz`) is a read-only preflight that confirms the same
+things steps 1-3 below check by hand — the flag is on, credentials resolve (and from which source:
+env var vs `config.toml`; the token is never echoed), and the base URL is configured or inferable —
+and then makes ONE authenticated, read-only GET to the connector's current-user endpoint
+(`{base}/rest/api/3/myself` for JIRA, `{base}/wiki/rest/api/user/current` for Confluence) to prove
+the credentials actually reach the tenant. It writes nothing (no DB row, no job, no embedding), so a
+config/auth mistake surfaces in seconds instead of after a `lode add` + `lode work` round trip. Pass
+a real issue key/URL (JIRA) or page id/URL (Confluence) as the optional positional argument to also
+dry-run real content access via the same fetch unit steps 4-6 below exercise:
+
+```
+lode verify --jira PROJ-123
+lode verify --confluence https://<site>.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook
+```
+
+Exit code `0` means verified reachable; any non-zero exit prints which piece is missing or wrong
+(inactive flag/credentials, unresolved base URL, 401/403 credentials, 404 base URL, or a transient
+"unreachable right now") — fix that before proceeding to the steps below, which additionally prove
+the full save-path wiring (`refresh` job, snapshot, embedding) that `verify` deliberately does not
+touch.
+
 *Steps*
 
 1. Set the token env vars (env vars are the primary credential source — a real token should never
