@@ -1,6 +1,7 @@
 # lode
 
 [![Build](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/build.yml?branch=trunk)](https://github.com/bildzeitung/lode/actions/workflows/build.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/bildzeitung/lode/tests.yml?branch=trunk)](https://github.com/bildzeitung/lode/actions/workflows/tests.yml)
 [![License: Apache 2.0](https://img.shields.io/github/license/bildzeitung/lode)](LICENSE)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
