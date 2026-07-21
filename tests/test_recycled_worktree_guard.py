@@ -21,6 +21,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "recycled-worktree-guard.sh"
 
@@ -84,22 +86,15 @@ def _run(
     )
 
 
-def test_usage_error_with_no_args_exits_2(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "script_args", [[], ["one", "two"]], ids=["no-args", "too-many-args"]
+)
+def test_wrong_argument_count_exits_2(tmp_path: Path, script_args: list[str]) -> None:
+    """Anything but exactly one positional arg is a usage error (exit 2) -- a
+    caller bug, distinct from a worktree problem (exit 0/1)."""
     repo = _init_repo(tmp_path)
     result = subprocess.run(
-        ["bash", str(SCRIPT)],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 2, result.stdout + result.stderr
-
-
-def test_usage_error_with_too_many_args_exits_2(tmp_path: Path) -> None:
-    repo = _init_repo(tmp_path)
-    result = subprocess.run(
-        ["bash", str(SCRIPT), "one", "two"],
+        ["bash", str(SCRIPT), *script_args],
         cwd=repo,
         capture_output=True,
         text=True,
