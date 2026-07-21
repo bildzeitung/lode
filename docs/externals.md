@@ -316,8 +316,11 @@ A snapshot's current head is a **direct** lexical/vector candidate on its own co
 reachable via graph-expansion from a citing note: `lode.retrieval.live_head_versions` unions each
 external's non-tombstone `head_snapshot_id` alongside note heads, so both `lexical_search` and
 `vector_search` admit it (`lode-c5l`). A *stale* (non-head) snapshot stays excluded from both direct
-legs by construction — only head pointers are read; `trust_rank` still tiers current-vs-stale for a
-snapshot reached via graph expansion instead. `lode.embedding.embed`'s body resolution is polymorphic
+legs by construction — only head pointers are read. It is also unreachable via graph expansion: a
+`graph_expand` (`lode-c4cd`) note→external edge resolves to `external_id`, not a specific
+`snapshot_id`, so it always follows through to the external's *current* head — never a stale one —
+and `trust_rank` tiers a graph-reached external `CURRENT_EXTERNAL` accordingly, regardless of which
+edge type (`user`/`ai`) led there. `lode.embedding.embed`'s body resolution is polymorphic
 (versions, then snapshots) so the `embed` job enqueued above runs to completion instead of raising.
 
 **Redact-before-index applies to both legs identically.** The FTS leg chunks

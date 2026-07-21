@@ -966,14 +966,18 @@ def test_graph_expand_user_edge_beats_ai_edge_to_same_node(repo, conn) -> None:
     assert all(h.edge_source == "user" for h in new)
 
 
-def test_graph_expand_skips_concept_label_to_ids_not_in_notes(repo, conn) -> None:
-    """AI-inferred edges to concept labels (not existing note_ids) are silently
-    skipped — no note exists for them, so nothing to expand."""
+def test_graph_expand_skips_concept_label_to_ids_not_in_notes_or_externals(
+    repo, conn
+) -> None:
+    """AI-inferred edges to concept labels (not a real note_id or external_id) are
+    silently skipped — no note and no external exists for them, so nothing to
+    expand to (lode-c4cd: a note or external id IS expanded — see the tests
+    below; only a true concept label like "python" is skipped)."""
     va = repo.save("note-a", "alpha").version_id
     note_id_a = conn.execute(
         "SELECT note_id FROM versions WHERE version_id = ?", (va,)
     ).fetchone()[0]
-    # Edge to a concept label, not a real note_id.
+    # Edge to a concept label, not a real note_id or external_id.
     _insert_edge(conn, from_id=note_id_a, to_id="python", source="ai")
 
     fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
@@ -981,8 +985,88 @@ def test_graph_expand_skips_concept_label_to_ids_not_in_notes(repo, conn) -> Non
 
     result = graph_expand(conn, direct_hits)
 
-    # No new hits: the concept label doesn't match any note in the DB.
+    # No new hits: the concept label doesn't match any note or external in the DB.
     assert result == direct_hits
+
+
+def test_graph_expand_traverses_user_edge_to_external_and_appends_snapshot_passages(
+    repo, conn
+) -> None:
+    """Acceptance (lode-c4cd): a fresh note→external user edge brings the
+    external's current-head snapshot passages into the graph-expanded hits, even
+    though the snapshot body itself never independently ranked for the query."""
+    va = repo.save("note-a", "see EXT-1 re: the deploy").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    result = ingest_snapshot(conn, "EXT-1", "web", "the ticket body about widgets")
+    assert result is not None
+    _insert_edge(conn, from_id=note_id_a, to_id="EXT-1", source="user")
+
+    # Only the note matches "deploy" — the snapshot body ("widgets") does not.
+    fused = reciprocal_rank_fusion(lexical_search(conn, "deploy", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+    assert direct_hits
+
+    result_hits = graph_expand(conn, direct_hits)
+
+    new = result_hits[len(direct_hits) :]
+    assert new, "should have appended passages from EXT-1's current-head snapshot"
+    assert all(h.edge_source == "user" for h in new)
+    assert all(h.target_version == result.snapshot_id for h in new)
+
+
+def test_graph_expand_traverses_ai_edge_to_external_and_appends_snapshot_passages(
+    repo, conn
+) -> None:
+    """AI-inferred note→external edges are followed too — no source filtering,
+    same as note-to-note expansion (lode-c4cd)."""
+    va = repo.save("note-a", "see EXT-1 re: the deploy").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    result = ingest_snapshot(conn, "EXT-1", "web", "the ticket body about widgets")
+    assert result is not None
+    _insert_edge(conn, from_id=note_id_a, to_id="EXT-1", source="ai")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "deploy", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result_hits = graph_expand(conn, direct_hits)
+
+    new = result_hits[len(direct_hits) :]
+    assert new
+    assert all(h.edge_source == "ai" for h in new)
+    assert all(h.target_version == result.snapshot_id for h in new)
+
+
+def test_graph_expand_skips_tombstoned_external_head(repo, conn) -> None:
+    """graph_expand does not expand to an external whose current head is a
+    tombstone (link rot) — mirrors test_graph_expand_skips_deleted_linked_notes,
+    the note-side analogue."""
+    va = repo.save("note-a", "alpha").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO externals (external_id, source_type) VALUES ('EXT-1', 'web')"
+    )
+    conn.execute(
+        "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+        "VALUES ('snap-tomb', 'EXT-1', '[tombstone: http_404]', 'tombstone')"
+    )
+    conn.execute(
+        "UPDATE externals SET head_snapshot_id = 'snap-tomb' WHERE external_id = 'EXT-1'"
+    )
+    conn.commit()
+    _insert_edge(conn, from_id=note_id_a, to_id="EXT-1", source="user")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "alpha", k=10), [])
+    direct_hits = expand_parents(conn, fused)
+
+    result = graph_expand(conn, direct_hits)
+
+    assert result == direct_hits  # tombstoned head contributes nothing
 
 
 def test_graph_expand_does_not_duplicate_direct_hit_passages(repo, conn) -> None:
@@ -1176,6 +1260,28 @@ def test_trust_rank_full_gradient_with_graph_expanded_tiers(repo, conn) -> None:
     ]
 
 
+def test_trust_rank_graph_expanded_external_is_current_external_tier(
+    repo, conn
+) -> None:
+    """Acceptance (lode-c4cd): a graph-expanded hit that reached an external
+    tiers CURRENT_EXTERNAL, not USER_ANNOTATION/AI_EDGE — classified by the TYPE
+    of node reached (a snapshot id), not by edge_source, for either edge type."""
+    current_snap = _insert_external_snapshot(
+        conn, external_id="EXT-1", snapshot_id="snap-current", is_head=True
+    )
+    hit_user = ExpandedHit(
+        "p-user-ext", current_snap, "0:5", "text", "block", 0.0, edge_source="user"
+    )
+    hit_ai = ExpandedHit(
+        "p-ai-ext", current_snap, "0:5", "text", "block", 0.0, edge_source="ai"
+    )
+
+    ranked = trust_rank(conn, [hit_user, hit_ai])
+
+    assert ranked.withheld == []
+    assert {item.tier for item in ranked.context} == {TrustTier.CURRENT_EXTERNAL}
+
+
 def test_trust_rank_graph_expanded_hits_are_never_withheld(repo, conn) -> None:
     """Graph-expanded hits always resolve to a tier and are never withheld."""
     v = repo.save("note-a", "alpha").version_id
@@ -1223,3 +1329,28 @@ def test_graph_expand_then_trust_rank_end_to_end(repo, conn) -> None:
         i for i, item in enumerate(ranked.context) if item.tier is TrustTier.AI_EDGE
     )
     assert owned_idx < ai_idx
+
+
+def test_graph_expand_to_external_then_trust_rank_end_to_end(repo, conn) -> None:
+    """End-to-end acceptance (lode-c4cd): a note matches the query directly, and
+    its attached external — reached only via graph expansion, since the
+    snapshot body itself never independently ranks — lands in .context tiered
+    CURRENT_EXTERNAL, carrying the snapshot's own citation."""
+    va = repo.save("note-a", "see EXT-1 re: the deploy").version_id
+    note_id_a = conn.execute(
+        "SELECT note_id FROM versions WHERE version_id = ?", (va,)
+    ).fetchone()[0]
+    result = ingest_snapshot(conn, "EXT-1", "web", "totally unrelated ticket text")
+    assert result is not None
+    _insert_edge(conn, from_id=note_id_a, to_id="EXT-1", source="user")
+
+    fused = reciprocal_rank_fusion(lexical_search(conn, "deploy", k=10), [])
+    big = expand_parents(conn, fused)
+    ctx = graph_expand(conn, big)
+    ranked = trust_rank(conn, ctx)
+
+    snapshot_item = next(
+        item for item in ranked.context if item.target_version == result.snapshot_id
+    )
+    assert snapshot_item.tier is TrustTier.CURRENT_EXTERNAL
+    assert "ticket" in snapshot_item.passage_text

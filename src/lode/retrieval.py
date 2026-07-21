@@ -32,8 +32,11 @@ candidate on its own content rather than only reachable via graph-expansion
 from a citing note (``docs/externals.md`` "externals are directly retrievable").
 A *stale* (non-head) snapshot stays excluded from both direct legs by
 construction — only head pointers are read — the same way a superseded note
-version is; :func:`trust_rank` still tiers current-vs-stale for a snapshot
-reached via graph expansion instead.
+version is. :func:`graph_expand` (a note→external edge, lode-c4cd) also only
+ever reaches an external's *current* head — edges resolve to ``external_id``,
+not a specific ``snapshot_id`` — so a stale snapshot is unreachable by either
+path; :func:`trust_rank` tiers it :data:`TrustTier.STALE_EXTERNAL` only in the
+(currently untriggered) case of a direct hit whose target isn't the head.
 
 The query vector for the dense leg is the caller's (the ``emb(q)`` node in the
 pipeline is the embedder's concern, distinct from the search node), so
@@ -445,9 +448,22 @@ def graph_expand(
     graph — a networkx :class:`~networkx.DiGraph` built from the ``edges`` table
     (``schema.sql``) — up to ``Settings.drawdown_hop_limit`` hops
     (``docs/configuration.md``, "Draw-down hop limit", default 1). For each reached
-    node that resolves to a live note in the ``notes`` table, its current head
-    passages are appended as new :class:`ExpandedHit` entries with ``edge_source``
-    set to the edge type that led there (``'user'`` or ``'ai'``).
+    node that resolves to a live **note** or a live **external** (``docs/externals.md``
+    "Retrieval uses an explicit trust gradient" — a note→external edge is exactly
+    the case that gradient depends on), its current head passages (the note's
+    ``head_version_id``, or the external's ``head_snapshot_id``) are appended as new
+    :class:`ExpandedHit` entries with ``edge_source`` set to the edge type that led
+    there (``'user'`` or ``'ai'`` — both are followed, no source filtering, same as
+    note-to-note expansion). A reached id that resolves to neither (a true concept
+    label, e.g. an AI-inferred edge to ``"python"``) is silently skipped — there is
+    no content to expand to.
+
+    **Externals always resolve to their current head.** Edges point at
+    ``external_id``, not at a specific ``snapshot_id``, so a graph-reached external
+    is always its *current* head snapshot — never a stale one (that only happens on
+    the direct-hit path, ``docs/externals.md``). :func:`trust_rank` tiers a
+    graph-reached external as :data:`TrustTier.CURRENT_EXTERNAL`, bypassing the
+    edge-type-based tiering that still applies to a graph-reached **note**.
 
     **No-op when no edges exist.** If the ``edges`` table has no ``fresh`` rows,
     the input is returned unchanged — the expected state before enrichment infers
@@ -457,8 +473,10 @@ def graph_expand(
 
     ``edge_source`` on the new hits feeds :func:`trust_rank`:
 
-    - ``'user'`` → :data:`TrustTier.USER_ANNOTATION` (tier 2)
-    - ``'ai'``  → :data:`TrustTier.AI_EDGE` (tier 5)
+    - reached node is a **note**: ``'user'`` → :data:`TrustTier.USER_ANNOTATION`
+      (tier 2); ``'ai'`` → :data:`TrustTier.AI_EDGE` (tier 5).
+    - reached node is an **external**: always :data:`TrustTier.CURRENT_EXTERNAL`
+      (tier 3), regardless of ``edge_source`` (see above).
 
     When multiple paths reach the same node, the most-trusted edge type wins
     (``'user'`` beats ``'ai'``). Seeds (notes already providing direct hits) are
@@ -535,7 +553,9 @@ def graph_expand(
     if not reached:
         return hits
 
-    # Keep only reached node IDs that are actual live notes in the DB.
+    # Keep only reached node IDs that are actual live notes OR live externals in
+    # the DB. A reached id matching neither (a true concept label) has no content
+    # to expand to and is silently dropped.
     reached_ids = list(reached)
     placeholders = ", ".join("?" for _ in reached_ids)
     reached_notes: dict[str, str] = {
@@ -549,22 +569,37 @@ def graph_expand(
             reached_ids,
         )
     }
-    if not reached_notes:
+    reached_externals: dict[str, str] = {
+        row[0]: row[1]  # external_id -> head_snapshot_id
+        for row in conn.execute(
+            "SELECT e.external_id, e.head_snapshot_id "
+            "FROM externals e "
+            "JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id "
+            f"WHERE e.external_id IN ({placeholders}) "
+            f"AND {_LIVE_SNAPSHOT_PREDICATE}",
+            reached_ids,
+        )
+    }
+    if not reached_notes and not reached_externals:
         return hits
 
-    # Fetch passages for the head versions of reached notes.
-    head_versions = list(reached_notes.values())
-    placeholders = ", ".join("?" for _ in head_versions)
+    # Fetch passages for the head versions of reached notes and the head
+    # snapshots of reached externals in one query.
+    target_ids = list(reached_notes.values()) + list(reached_externals.values())
+    placeholders = ", ".join("?" for _ in target_ids)
     passage_rows = conn.execute(
         f"SELECT passage_id, target_version, char_range, text, parent_block "
         f"FROM passages WHERE target_version IN ({placeholders})",
-        head_versions,
+        target_ids,
     ).fetchall()
     if not passage_rows:
         return hits
 
-    # Reverse map: head_version_id -> note_id (for edge_source lookup).
+    # Reverse maps: head_version_id -> note_id, head_snapshot_id -> external_id
+    # (for edge_source lookup — reached[] is keyed by the original graph node id,
+    # which is a note_id or an external_id, not the resolved head target).
     version_to_note_id = {v: k for k, v in reached_notes.items()}
+    snapshot_to_external_id = {v: k for k, v in reached_externals.items()}
 
     # Passage ids already in hits — never duplicated (direct hit wins).
     existing_passage_ids = {h.passage_id for h in hits}
@@ -573,8 +608,10 @@ def graph_expand(
     for passage_id, target_version, char_range, text, parent_block in passage_rows:
         if passage_id in existing_passage_ids:
             continue  # already a direct retrieval hit; keep its higher-trust tier
-        note_id = version_to_note_id.get(target_version)
-        if note_id is None:
+        node_id = version_to_note_id.get(target_version) or snapshot_to_external_id.get(
+            target_version
+        )
+        if node_id is None:
             continue
         new_hits.append(
             ExpandedHit(
@@ -584,7 +621,7 @@ def graph_expand(
                 passage_text=text,
                 parent_block=parent_block,
                 score=0.0,
-                edge_source=reached[note_id],
+                edge_source=reached[node_id],
             )
         )
 
@@ -601,12 +638,16 @@ class TrustTier(IntEnum):
     override. The integer value *is* that rank, so **lower sorts earlier** (higher
     trust) in the context handed to the Q&A LLM.
 
-    :data:`OWNED_NOTE`, :data:`CURRENT_EXTERNAL`, and :data:`STALE_EXTERNAL` come
-    from direct retrieval hits (lexical/dense/rerank pipeline). :data:`USER_ANNOTATION`
-    and :data:`AI_EDGE` come from graph-expanded hits produced by :func:`graph_expand`
-    (``lode-72m.5``): user-curated edges yield ``USER_ANNOTATION`` (tier 2) and
-    AI-inferred edges yield ``AI_EDGE`` (tier 5). The integer values are stable —
-    no renumbering was needed when graph_expand landed.
+    :data:`OWNED_NOTE` and :data:`STALE_EXTERNAL` are direct-hit-only (lexical/dense/
+    rerank pipeline). :data:`CURRENT_EXTERNAL` comes from either a direct hit on an
+    external's current head snapshot, **or** a graph-expanded hit that reached an
+    external (:func:`graph_expand`, lode-c4cd) — edges resolve to an external's
+    *current* head by construction, so a graph-reached external is never stale.
+    :data:`USER_ANNOTATION` and :data:`AI_EDGE` are graph-expanded-only and apply
+    when the reached node is a **note**: a user-curated edge yields
+    ``USER_ANNOTATION`` (tier 2), an AI-inferred edge yields ``AI_EDGE`` (tier 5).
+    The integer values are stable — no renumbering was needed when graph_expand
+    landed, nor when it grew to reach externals.
     """
 
     OWNED_NOTE = 1
@@ -687,28 +728,38 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
     - present in ``snapshots``, not current head → :data:`TrustTier.STALE_EXTERNAL` (tier 4).
 
     **Graph-expanded hits** (``edge_source in {'user', 'ai'}`` — produced by
-    :func:`graph_expand`) are classified directly from their ``edge_source``,
-    bypassing the version-table lookup:
+    :func:`graph_expand`) are classified by the **type of node reached**, not
+    ``edge_source`` alone:
 
-    - ``edge_source == 'user'`` → :data:`TrustTier.USER_ANNOTATION` (tier 2);
-    - ``edge_source == 'ai'``  → :data:`TrustTier.AI_EDGE` (tier 5).
+    - reached node is an **external** (``target_version`` is a snapshot id) →
+      :data:`TrustTier.CURRENT_EXTERNAL` (tier 3), regardless of ``edge_source`` —
+      a graph-reached external always resolves to its current head (edges point at
+      ``external_id``, not a specific snapshot, ``docs/externals.md``), so
+      :data:`TrustTier.STALE_EXTERNAL` is unreachable via graph expansion by
+      construction; that tier stays direct-hit-only.
+    - reached node is a **note** (``target_version`` is a version id) →
+      ``edge_source == 'user'`` → :data:`TrustTier.USER_ANNOTATION` (tier 2);
+      ``edge_source == 'ai'``  → :data:`TrustTier.AI_EDGE` (tier 5).
 
     The sort is stable, so within a tier the upstream best-first (RRF) order is
     preserved. A direct hit whose ``target_version`` matches neither ``versions``
     nor ``snapshots`` cannot be placed on the gradient (nor cited); rather than
     drop it silently it is returned in ``withheld`` (acceptance: **withholds
     nothing silently**). Graph-expanded hits always have a tier and are never
-    withheld.
+    withheld — :func:`graph_expand` only ever produces one for an id that
+    resolved to a live note or a live external.
     """
     if not hits:
         return TrustRankedContext(context=[], withheld=[])
 
-    # Only look up direct hits in the DB; graph-expanded hits carry their tier
-    # via edge_source.
-    direct_targets = {h.target_version for h in hits if h.edge_source is None}
+    # Look up every hit's target_version in the DB — both direct hits (to
+    # classify owned-vs-current-vs-stale) and graph-expanded hits (to tell a
+    # reached external apart from a reached note, since only the former forces
+    # CURRENT_EXTERNAL regardless of edge_source).
+    all_targets = {h.target_version for h in hits}
 
-    if direct_targets:
-        target_list = list(direct_targets)
+    if all_targets:
+        target_list = list(all_targets)
         placeholders = ", ".join("?" for _ in target_list)
 
         owned: set[str] = {
@@ -736,9 +787,15 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
     withheld: list[WithheldHit] = []
     for hit in hits:
         if hit.edge_source is not None:
-            # Graph-expanded hit: tier comes from the edge type, not DB lookup.
+            # Graph-expanded hit: tier depends on the TYPE of node reached, not
+            # edge_source alone. A reached external is always current (edges
+            # resolve to the current head snapshot by construction) — tier it
+            # CURRENT_EXTERNAL regardless of which edge type led there. Only a
+            # reached note falls back to the edge-type-based tier.
             tier: TrustTier | None = (
-                TrustTier.USER_ANNOTATION
+                TrustTier.CURRENT_EXTERNAL
+                if hit.target_version in snapshots
+                else TrustTier.USER_ANNOTATION
                 if hit.edge_source == "user"
                 else TrustTier.AI_EDGE
             )
