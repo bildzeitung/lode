@@ -758,30 +758,26 @@ def trust_rank(conn: sqlite3.Connection, hits: list[ExpandedHit]) -> TrustRanked
     # CURRENT_EXTERNAL regardless of edge_source).
     all_targets = {h.target_version for h in hits}
 
-    if all_targets:
-        target_list = list(all_targets)
-        placeholders = ", ".join("?" for _ in target_list)
+    target_list = list(all_targets)
+    placeholders = ", ".join("?" for _ in target_list)
 
-        owned: set[str] = {
-            row[0]
-            for row in conn.execute(
-                f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
-                target_list,
-            )
-        }
-        # snapshot_id -> is it its external's current head? (current vs stale)
-        snapshots: dict[str, bool] = {
-            row[0]: row[0] == row[1]
-            for row in conn.execute(
-                f"SELECT s.snapshot_id, e.head_snapshot_id "
-                f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
-                f"WHERE s.snapshot_id IN ({placeholders})",
-                target_list,
-            )
-        }
-    else:
-        owned = set()
-        snapshots = {}
+    owned: set[str] = {
+        row[0]
+        for row in conn.execute(
+            f"SELECT version_id FROM versions WHERE version_id IN ({placeholders})",
+            target_list,
+        )
+    }
+    # snapshot_id -> is it its external's current head? (current vs stale)
+    snapshots: dict[str, bool] = {
+        row[0]: row[0] == row[1]
+        for row in conn.execute(
+            f"SELECT s.snapshot_id, e.head_snapshot_id "
+            f"FROM snapshots s JOIN externals e ON e.external_id = s.external_id "
+            f"WHERE s.snapshot_id IN ({placeholders})",
+            target_list,
+        )
+    }
 
     context: list[ContextItem] = []
     withheld: list[WithheldHit] = []
