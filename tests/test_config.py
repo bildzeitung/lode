@@ -321,17 +321,22 @@ def test_knob_rows_includes_only_runtime_and_tune_kinds() -> None:
     assert "content_hash" not in names
 
 
+def _knob_values(settings: Settings) -> dict[str, str]:
+    """``{name: value}`` from :func:`knob_rows`, dropping the kind column."""
+    return {name: value for name, value, _ in knob_rows(settings)}
+
+
 def test_knob_rows_reads_current_resolved_value_not_bare_default() -> None:
     # The row shows load_settings()'s CURRENT value, not Settings()'s default --
     # the table exists to answer "what is it set to", including a config.toml
     # override.
     overridden = Settings(retrieval_top_k=42)
-    rows = dict((name, value) for name, value, _ in knob_rows(overridden))
+    rows = _knob_values(overridden)
     assert rows["retrieval_top_k"] == "42"
 
 
 def test_knob_rows_renders_list_valued_knobs_comma_joined() -> None:
-    rows = dict((name, value) for name, value, _ in knob_rows(Settings()))
+    rows = _knob_values(Settings())
     assert rows["url_tracking_param_blocklist"] == "utm_*, fbclid, gclid"
 
 
@@ -571,7 +576,7 @@ def test_knob_rows_shows_unset_marker_when_neither_source_resolves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_credential_env(monkeypatch)
-    rows = dict((name, value) for name, value, _ in knob_rows(Settings()))
+    rows = _knob_values(Settings())
     for name in ALL_CREDENTIAL_FIELDS:
         assert rows[name] == UNSET_PLACEHOLDER
 
@@ -586,7 +591,7 @@ def test_knob_rows_shows_presence_placeholder_when_resolved_via_env_only(
     monkeypatch.setenv(JIRA_EMAIL_ENV, "env-jira@acme.com")
     monkeypatch.setenv(CONFLUENCE_TOKEN_ENV, "env-confluence-token")
     monkeypatch.setenv(CONFLUENCE_EMAIL_ENV, "env-confluence@acme.com")
-    rows = dict((name, value) for name, value, _ in knob_rows(Settings()))
+    rows = _knob_values(Settings())
     for name in ALL_CREDENTIAL_FIELDS:
         assert rows[name] == REDACTED_PLACEHOLDER
     # Never the raw values.
@@ -609,7 +614,7 @@ def test_knob_rows_shows_presence_placeholder_when_resolved_via_config_toml_only
         confluence_token="config-confluence-token",
         confluence_email="config-confluence@acme.com",
     )
-    rows = dict((name, value) for name, value, _ in knob_rows(s))
+    rows = _knob_values(s)
     for name in ALL_CREDENTIAL_FIELDS:
         assert rows[name] == REDACTED_PLACEHOLDER
 
@@ -626,7 +631,7 @@ def test_knob_rows_regression_guard_config_toml_email_never_leaks(
         jira_email="real-jira-address@acme.com",
         confluence_email="real-confluence-address@acme.com",
     )
-    rows = dict((name, value) for name, value, _ in knob_rows(s))
+    rows = _knob_values(s)
     assert rows["jira_email"] == REDACTED_PLACEHOLDER
     assert rows["confluence_email"] == REDACTED_PLACEHOLDER
     assert "real-jira-address@acme.com" not in rows.values()
@@ -638,7 +643,7 @@ def test_knob_rows_never_leaks_token_value_from_any_source(
 ) -> None:
     monkeypatch.setenv(JIRA_TOKEN_ENV, "super-secret-env-token")
     s = Settings(confluence_token="super-secret-config-token")
-    rows = dict((name, value) for name, value, _ in knob_rows(s))
+    rows = _knob_values(s)
     assert rows["jira_token"] == REDACTED_PLACEHOLDER
     assert rows["confluence_token"] == REDACTED_PLACEHOLDER
     assert "super-secret-env-token" not in rows.values()
