@@ -196,8 +196,8 @@ if ! rtk git merge-base --is-ancestor HEAD trunk; then
        "current local trunk HEAD before doing any work."
   rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
   rtk git reset --hard trunk
-  rtk git clean -fd
 fi
+rtk git clean -fd   # unconditional (lode-3v1p) -- see below: dirt and ancestry are independent axes
 ```
 
 **The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
@@ -217,6 +217,19 @@ bug, not a routine hiccup) rather than silently building on top of contamination
 ref in that report. The Rebase pickup cycle below carries its own copy of this guard, with one
 addition: an explicit `.claude/worktrees/` check, which that cycle needs because it has no `pwd`
 safety check of its own above it and this one does.
+
+**`git clean -fd` runs unconditionally, not just inside the failed-ancestor-check branch
+(lode-3v1p).** Ancestry and dirt are independent axes: a worktree recycled onto a `land/<other-id>`
+that has *since landed* has a `HEAD` that is **already** an ancestor of `trunk` — the check above
+passes trivially, exactly as it would for a genuinely fresh worktree — yet it can still carry that
+other ticket's untracked leftovers, which would otherwise survive since the reset branch (the only
+place `clean -fd` used to run) never fires for this case. Running `clean -fd` unconditionally, right
+after the ancestor check either way, closes that gap: it's a no-op on a genuinely fresh worktree
+(nothing untracked to remove, and it never touches `.gitignore`d build state like `venv/`), and it
+clears exactly the leftover dirt on an undetected recycle. This is why the ancestor check itself stays
+narrow (commit-graph only, not a general clean-tree assertion) rather than being widened into one —
+the two concerns are handled by two small, independent, composable steps. Full reasoning:
+[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
@@ -530,17 +543,23 @@ if ! rtk git merge-base --is-ancestor HEAD trunk; then
        "ancestor of trunk -- resetting onto current local trunk HEAD before my own fetch+checkout."
   rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
   rtk git reset --hard trunk
-  rtk git clean -fd
 fi
+rtk git clean -fd   # unconditional (lode-3v1p) -- runs after the `case`, so still worktree-scoped
 ```
 
 **Both preconditions are load-bearing.** The `case` is what keeps `reset --hard`/`clean -fd` off the
 user's main checkout if isolation ever fails to take — this cycle has no `pwd` safety check of its own
 above it, unlike the fresh-build cycle. The `rescue/` branch keeps another ticket's unpushed commits
 recoverable, since the ref being rewound is *theirs*, not mine (see the fresh-build cycle above).
-Note what the predicate does **not** cover: it reads the commit graph only, so a recycled worktree
-whose HEAD *is* an ancestor of `trunk` but whose working tree is dirty passes untouched — check
-`git status --short` yourself before gating if it looks wrong.
+
+**`git clean -fd` runs unconditionally, not just on a failed ancestor check (lode-3v1p).** The
+predicate reads the commit graph only: a recycled worktree whose HEAD *is* an ancestor of `trunk` —
+e.g. recycled onto a `land/<other-id>` that has *since landed* — passes it trivially, exactly like a
+genuinely fresh worktree, yet can still carry that other ticket's untracked leftovers. Since `clean
+-fd` now runs unconditionally right after the check (still gated by the `case` above, so it never
+reaches outside `.claude/worktrees/`), that dirt is cleaned either way rather than surviving to
+pollute my `git status --short` assertions and the `nox` run. Full reasoning:
+[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout
@@ -810,7 +829,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
-| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk && git clean -fd` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98) |
+| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p) |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
