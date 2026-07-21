@@ -410,7 +410,7 @@ not land anything (the false-"green" case above) and it must not bounce anything
 here failed on its *content*, the run simply never finished. Treat it like the same kind of machine
 fault: stop, re-run the gate cleanly with its real exit status captured, and only then decide
 green/red. (`land-review.md` carries no equivalent rule — it explicitly does not re-run gates at all,
-so there is no gate there to misread; see the note at the top of that file.)
+so there is no gate there to misread; see the note in section 4 ("What I don't do") of that file.)
 
 ### 3a. Order the accepted set — base before dependent; hold an orphaned dependent
 
