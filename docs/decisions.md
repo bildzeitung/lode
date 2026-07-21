@@ -441,7 +441,7 @@ are catalogued in [configuration.md](configuration.md).
   Installed version is still **2.1.216** (`claude --version`) — no release has shipped since the
   lode-ebhk check the day before — and the local changelog cache
   (`~/.claude/cache/changelog.md`) confirms `## 2.1.216` is still the newest heading, with nothing
-  beneath it. The 2.1.216 entry's sole `/code-review`-touching line is unchanged: "Improved
+  newer beneath it. The 2.1.216 entry's sole `/code-review`-touching line is unchanged: "Improved
   `/code-review ultra` empty-diff message to name the exact base ref and suggest passing an explicit
   base" — still cosmetic, still not a restoration of model invocation. Nothing in the changelog
   reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md` step 4's
