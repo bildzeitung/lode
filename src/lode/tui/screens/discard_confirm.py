@@ -13,7 +13,8 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Static
+
+from lode.tui.widgets.lode_static import LodeStatic
 
 #: The confirm dialog's message widget id (lode-0wj.1) -- read back in tests.
 CONFIRM_MESSAGE_ID = "capture-confirm-message"
@@ -48,7 +49,7 @@ class DiscardConfirmScreen(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            Static(
+            LodeStatic(
                 "Unsaved note. (S)ave, (D)iscard, or (C)ancel?",
                 id=CONFIRM_MESSAGE_ID,
             ),

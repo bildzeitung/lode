@@ -84,7 +84,7 @@ def test_ctrl_b_reaches_the_browse_screen_with_notes_newest_first(
     assert len(rows) == 2
     assert str(rows[0][3]) == "second captured note"  # newest-first
     assert str(rows[1][3]) == "first captured note"
-    assert rows[0][2] == "v1"
+    assert str(rows[0][2]) == "v1"
 
 
 def test_id_column_shows_the_shared_8_char_note_id_prefix(tmp_path: Path) -> None:
@@ -271,10 +271,69 @@ def test_ctrl_h_from_editor_opens_version_history_newest_first(
     rows = asyncio.run(_drive())
 
     assert len(rows) == 2
-    assert rows[0][1] == "v2"
-    assert rows[1][1] == "v1"
-    assert rows[0][2] == "update"
-    assert rows[1][2] == "create"
+    assert str(rows[0][1]) == "v2"
+    assert str(rows[1][1]) == "v1"
+    assert str(rows[0][2]) == "update"
+    assert str(rows[1][2]) == "create"
+
+
+def test_version_history_table_renders_brackets_literally_not_as_rich_markup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The version-history table is a ``LodeDataTable`` too (lode-3dz2).
+
+    ``versions.op`` is schema-constrained to ``create``/``update``/``delete``
+    (a ``NOT NULL CHECK`` -- see ``lode.retrieval``), so a real save/delete
+    can never itself put a bracket through this table -- unlike
+    ``ConfigScreen``'s knob table, there is no live-data reproduction here.
+    What this proves instead is that the *seam* covers this screen exactly
+    like every other: :func:`~lode.notes_read.list_versions` is monkeypatched
+    to hand back a row whose ``op`` contains a bracket, standing in for any
+    future column here that isn't so constrained, and the render is checked
+    through a real ``rich.Console`` -- not ``get_row_at`` alone, which
+    returns the stored cell, not the render, and cannot see this bug either
+    way (the same distinction every sibling test in this lineage makes).
+    """
+    import lode.tui.screens.version_history as version_history_module
+    from lode.notes_read import VersionRow
+
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        save(conn, "note-a", "a note")
+    finally:
+        conn.close()
+    app = LodeApp(db_path=db_path)
+
+    monkeypatch.setattr(
+        version_history_module,
+        "list_versions",
+        lambda db_path, note_id: [
+            VersionRow(
+                version_id="v1",
+                created="2026-07-20T00:00:00.000000Z",
+                op="[create]",
+                seq=1,
+            )
+        ],
+    )
+
+    async def _drive() -> object:
+        async with app.run_test() as pilot:
+            await pilot.press("ctrl+b")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.press("ctrl+h")
+            await pilot.pause()
+            assert isinstance(app.screen, VersionHistoryScreen)
+            table = app.screen.query_one(f"#{HISTORY_TABLE_ID}", DataTable)
+            return table.get_row_at(0)[2]
+
+    cell = asyncio.run(_drive())
+
+    buffer = io.StringIO()
+    Console(file=buffer, width=40, legacy_windows=False).print(cell)
+    assert buffer.getvalue().strip() == "[create]"
 
 
 def test_version_history_table_scrolls_within_its_own_pane_not_the_whole_screen(
