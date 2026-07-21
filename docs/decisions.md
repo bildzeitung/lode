@@ -1843,8 +1843,8 @@ are catalogued in [configuration.md](configuration.md).
   **Verdict: keep every guard.** They are cheap defensive assertions against a catastrophic and
   irreversible failure mode (unreviewed code riding into `trunk` on the wrong ticket's `land/<id>`);
   "probably fixed upstream" is not grounds to retire on. No guard is removed or weakened, and
-  `worktree.baseRef: "head"` is untouched — that remains the separate, pending human decision tracked
-  at `lode-r7ow`.
+  `worktree.baseRef: "head"` is untouched — the baseRef question is tracked in its own thread (the
+  human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not resolved here.
 
   **Falsification test this sets up:** with the fleet now on (or moving onto) `>= 2.1.216`, watch
   whether the recycled-worktree guard ever fires again — any `rescue/recycled-<sha>` branch, any

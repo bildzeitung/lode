@@ -531,8 +531,9 @@ contributing cause per the `baseRef` investigation above):
 prevent — unreviewed code riding into `trunk` on the wrong ticket's `land/<id>` — is catastrophic and
 irreversible. "Probably fixed upstream" is not grounds to retire a guard this cheap against a failure
 this expensive. No guard is removed or weakened here, and `worktree.baseRef: "head"` is left exactly
-as the `baseRef` investigation above left it — that remains a separate, pending human decision
-(`lode-r7ow`), not something this note resolves.
+as the `baseRef` investigation above left it — the baseRef question is tracked in its own thread (the
+human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not something this note
+resolves.
 
 **Falsification test this sets up.** The fleet is now on, or moving onto, `>= 2.1.216`. Watch whether
 the recycled-worktree guard **ever fires** — any `rescue/recycled-<sha>` branch created, any
