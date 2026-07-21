@@ -414,12 +414,13 @@ are catalogued in [configuration.md](configuration.md).
 
   **This claim is therefore version-bound, and that is the one thing a future reader must not lose.**
   Every other file states it flatly ("unreachable from any model context") and points here; *here* is
-  where the version pin lives. **WATCH ITEM:** because this was a deliberate upstream product decision
-  rather than a stable constraint, a later release could revise it or add an opt-in — re-check the
-  changelog for an entry restoring model invocation before assuming this still holds. If it is
-  restored, the correct fix collapses to simply un-breaking the old step 1 rather than keeping the
-  hand-reasoned pass. **Tracked as lode-ebhk** so this does not live only as prose here — a watch item
-  with no owner goes stale exactly the way (4) above did. Likely rationale for the removal (LIKELY — not stated in the changelog):
+  where the version pin lives. **WATCH ITEM [RETIRED 2026-07-21 — see the maintainer-decision note at
+  the end of this thread; do NOT re-file a watch ticket for this]:** because this was a deliberate
+  upstream product decision rather than a stable constraint, a later release could revise it or add an
+  opt-in — re-check the changelog for an entry restoring model invocation before assuming this still
+  holds. If it is restored, the correct fix collapses to simply un-breaking the old step 1 rather than
+  keeping the hand-reasoned pass. **Tracked as lode-ebhk** so this does not live only as prose here — a
+  watch item with no owner goes stale exactly the way (4) above did. Likely rationale for the removal (LIKELY — not stated in the changelog):
   `/code-review` and `/verify` are both expensive multi-agent skills and the `ultra` variant is
   separately billed, so gating them behind a human keystroke stops an autonomous agent firing them in
   a loop at unbounded cost.
@@ -456,6 +457,16 @@ are catalogued in [configuration.md](configuration.md).
   2.1.216's cosmetic empty-diff-message line, unchanged from the prior check). Nothing in the
   changelog reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md` step 4's
   hand-reasoned correctness pass stands, unchanged.** Re-filed as **lode-fr6z** for the next check.
+
+  **Update (maintainer decision, 2026-07-21) — watch item RETIRED; the re-file loop is struck.** By
+  maintainer decision, the recurring re-check-and-re-file cycle (lode-axyq→ebhk→cbc0→01tv→fr6z) ends
+  here: **lode-fr6z is closed and will not be re-filed, and no successor watch ticket is to be stood up
+  for this.** This supersedes the standing WATCH ITEM directive above — treat the upstream user-gating
+  of `/code-review` as settled and not expected to revert. `code-reviewer.md` step 4's hand-reasoned
+  correctness pass is the standing design regardless of what upstream does, so nothing here depends on
+  continued monitoring. If upstream ever does restore model invocation of `/code-review`, re-open this
+  thread **on explicit request only** — do not re-create a self-perpetuating watch ticket to poll for
+  it. (The version pin above stays as the historical record of when and why the capability was removed.)
 
   Either way, one thing stays rejected regardless of what upstream does: do **not** hand-roll a local
   copy of the bundled skill into a project-scope `.claude/skills/code-review/SKILL.md` to make it
