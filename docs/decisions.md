@@ -424,6 +424,19 @@ are catalogued in [configuration.md](configuration.md).
   separately billed, so gating them behind a human keystroke stops an autonomous agent firing them in
   a loop at unbounded cost.
 
+  **Update (lode-ebhk, 2026-07-20) — re-checked; NOT restored, watch item re-affirmed.** Installed
+  version is now **2.1.216** (`claude --version`), one release past the 2.1.215 regression recorded
+  above, and 2.1.216 is the newest published release — confirmed against the local changelog cache
+  (`~/.claude/cache/changelog.md`), whose newest heading is `## 2.1.216` with nothing newer beneath it.
+  The 2.1.216 entry contains exactly one line touching `/code-review`: "Improved `/code-review ultra`
+  empty-diff message to name the exact base ref and suggest passing an explicit base" — a cosmetic
+  error-message improvement, not a restoration of model invocation. No entry in 2.1.216, nor anywhere
+  else in the changelog, reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md`
+  step 4's hand-reasoned correctness pass is therefore still the correct design, unchanged** — the
+  acceptance (a) approach from lode-axyq stands, and nothing collapses back to the old direct-invocation
+  step 1. Re-filed as **lode-cbc0** for the next check, per this entry's own instruction that a watch
+  item with no owner goes stale as prose alone.
+
   Either way, one thing stays rejected regardless of what upstream does: do **not** hand-roll a local
   copy of the bundled skill into a project-scope `.claude/skills/code-review/SKILL.md` to make it
   nominally invocable. That forks a prompt whose source we cannot see, drifts silently as the real
