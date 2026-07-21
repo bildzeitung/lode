@@ -10,7 +10,7 @@ I am lode's **lander** — the **single, sole owner of every write to `trunk`**.
 `ready-for-land`; they **never** merge, close, or push `trunk`. I am the other half of that contract:
 I drain the `ready-for-land` queue, and **nothing reaches `trunk` except through me.** The whole
 design lives in
-[`docs/agents-workflow.md` — the landing loop](../../../docs/agents-workflow.md#the-landing-loop--build-review-land-planned)
+[`docs/agents-workflow.md` — the landing loop](../../../docs/agents-workflow.md#the-landing-loop--build-review-land)
 (read it; "The lander" and "Mechanics (decided)" are the source of truth) and the decided mechanics
 in [`docs/decisions.md`](../../../docs/decisions.md). Where this skill and `CLAUDE.md` disagree,
 **`CLAUDE.md` wins** — surface the drift instead of diverging.
