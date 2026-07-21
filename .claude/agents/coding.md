@@ -186,32 +186,37 @@ branch (`worktree-agent-<other-hash>`, carrying that ticket's commits) instead o
 `trunk` on top of `lode-7abi`'s pre-review commit and pushed `land/lode-eshl` carrying a foreign,
 unreviewed ticket's changes. A branch-name check alone can't catch this (the recycled branch still
 *looks* like a normal `worktree-agent-…` name), so before touching a single file I assert the actual
-commit graph instead of trusting the name:
+commit graph instead of trusting the name — via `scripts/recycled-worktree-guard.sh` (lode-ivth),
+extracted so this guard is shellcheck'd and unit-tested rather than living only as an inline bash
+block in this file:
 
 ```bash
 TOP=$(rtk git rev-parse --show-toplevel)
-case "$TOP" in
-  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
-  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset/clean. STOP and report."; exit 1 ;;
-esac
-if ! rtk git merge-base --is-ancestor HEAD trunk; then
-  echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
-       "ancestor of trunk -- this worktree carries commit(s) foreign to trunk (recycled from a" \
-       "previous ticket's build rather than freshly branched off trunk HEAD). Resetting onto" \
-       "current local trunk HEAD before doing any work."
-  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
-  rtk git reset --hard trunk
-fi
-rtk git clean -fd   # unconditional (lode-3v1p) -- runs after the `case`, so still worktree-scoped
+GUARD="$TOP/scripts/recycled-worktree-guard.sh"
+rtk "$GUARD" "before doing any work" || {
+  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
+    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
 ```
 
-**The `case` guard is the executable form of the pwd safety check above, placed in the same block as
-the destructive command it protects** — the same reasoning `code-reviewer.md` gives for its own copy
-of this guard: an English instruction upstream can be skipped or hand-waved under load; a `case` that
-`exit 1`s cannot. It also covers a broader precondition than the prose check above it (which only
-tests whether `pwd` is the repo root): a cwd that is neither the repo root nor a worktree — a
-subdirectory of the main checkout, say — passes that prose check as literally written but fails this
-`case`, so the destructive remediation below still never reaches the main checkout.
+**The bootstrap-gap check inside the `||` is not optional.** The guard script itself is read FROM
+this worktree — a worktree recycled from a branch cut before the script landed on trunk would not
+have it on disk at all, and silently proceeding as if nothing were wrong is exactly the failure mode
+this whole guard exists to prevent. `[ -x "$GUARD" ]` distinguishes that case (script missing or not
+executable — report and stop) from the script *running* and legitimately exiting 1 (not inside an
+isolated worktree — the script has already printed that diagnostic itself; the `exit 1` here just
+propagates it).
+
+**The script's `case "$TOP" in */.claude/worktrees/*)` guard is the executable form of the pwd safety
+check above, placed in the same block as the destructive command it protects** — an English
+instruction upstream can be skipped or hand-waved under load; a `case` that `exit 1`s cannot. It also
+covers a broader precondition than the prose check above it (which only tests whether `pwd` is the
+repo root): a cwd that is neither the repo root nor a worktree — a subdirectory of the main checkout,
+say — passes that prose check as literally written but fails this `case`, so the destructive
+remediation below still never reaches the main checkout. Every other call site of this same script
+(`code-reviewer.md`, `land-review.md`, and this file's own Rebase pickup cycle below) relies on the
+identical `case` guard inside the script — there is exactly one copy of this logic now, not four.
 
 **The `rescue/` branch is not optional.** `git reset --hard` moves the *currently checked-out branch
 ref* — and in a recycled worktree that ref belongs to **another ticket** (the observed reproductions
@@ -227,25 +232,14 @@ after this worktree was created, a normal race in a fan-out) still passes this c
 a worktree carrying commits `trunk` doesn't have — someone else's unreviewed work — fails it. On a
 failure I reset **and report it explicitly in my final hand-off** (this is live evidence of a harness
 bug, not a routine hiccup) rather than silently building on top of contamination. Name the `rescue/`
-ref in that report. Both this guard and the Rebase pickup cycle's copy below wrap the destructive
-work in the same explicit `.claude/worktrees/` `case` check — necessary now that `git clean -fd`
-runs **unconditionally** (lode-3v1p), outside the failed-ancestor-check branch, since on the user's
-main checkout `HEAD` *is* `trunk` (an ancestor of itself), so the ancestor check no longer keeps the
-clean from running there. The rebase-pickup cycle relies on that `case` especially, having no prose
-`pwd` safety check of its own above it as this cycle does.
-
-**`git clean -fd` runs unconditionally, not just inside the failed-ancestor-check branch
-(lode-3v1p).** Ancestry and dirt are independent axes: a worktree recycled onto a `land/<other-id>`
-that has *since landed* has a `HEAD` that is **already** an ancestor of `trunk` — the check above
-passes trivially, exactly as it would for a genuinely fresh worktree — yet it can still carry that
-other ticket's untracked leftovers, which would otherwise survive since the reset branch (the only
-place `clean -fd` used to run) never fires for this case. Running `clean -fd` unconditionally, right
-after the ancestor check either way, closes that gap: it's a no-op on a genuinely fresh worktree
-(nothing untracked to remove, and it never touches `.gitignore`d build state like `venv/`), and it
-clears exactly the leftover dirt on an undetected recycle. This is why the ancestor check itself stays
-narrow (commit-graph only, not a general clean-tree assertion) rather than being widened into one —
-the two concerns are handled by two small, independent, composable steps. Full reasoning:
-[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
+ref in that report. The Rebase pickup cycle below invokes the same script, with a different
+context message (lode-ivth). The script's own internals now fold in lode-3v1p's fix too: `git
+clean -fd` runs unconditionally right after the `case`/ancestor check, not just inside the
+failed-ancestor-check branch, so a worktree recycled onto a `land/<other-id>` that has *since
+landed* — whose `HEAD` is already an ancestor of `trunk`, passing the check trivially — still gets
+its untracked leftovers swept. Full reasoning lives in the script's own header comment and
+[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p") — one place, not duplicated
+across every call site, which is the whole point of the extraction.
 
 **Lock the worktree before touching a single file.** A freshly created worktree has **zero commits**
 beyond `trunk` — until my first commit, its branch is trivially "merged" into `trunk` by content
@@ -546,36 +540,31 @@ account in
 FETCH_HEAD` below *will* land me on the correct `land/<id>` regardless, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to work in: `checkout -B` carries **untracked**
 leftovers from a recycled worktree straight through, and those go on to pollute my `git status` and the
-`nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean:
+`nox` run I gate on. So, before the fetch, I assert this launch worktree actually started clean — via
+`scripts/recycled-worktree-guard.sh` (lode-ivth), the same script the fresh-build cycle above uses:
 
 ```bash
 TOP=$(rtk git rev-parse --show-toplevel)
-case "$TOP" in
-  */.claude/worktrees/*) ;;    # an isolated launch worktree — safe to repair
-  *) echo "NOT in an isolated launch worktree ($TOP): refusing to reset. STOP and report."; exit 1 ;;
-esac
-if ! rtk git merge-base --is-ancestor HEAD trunk; then
-  echo "CONTAMINATED LAUNCH WORKTREE (lode-nt98): HEAD ($(rtk git rev-parse --short HEAD)) is NOT an" \
-       "ancestor of trunk -- resetting onto current local trunk HEAD before my own fetch+checkout."
-  rtk git branch "rescue/recycled-$(rtk git rev-parse --short HEAD)" HEAD   # keep the evidence
-  rtk git reset --hard trunk
-fi
-rtk git clean -fd   # unconditional (lode-3v1p) -- runs after the `case`, so still worktree-scoped
+GUARD="$TOP/scripts/recycled-worktree-guard.sh"
+rtk "$GUARD" "before my own fetch+checkout" || {
+  [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
+    "worktree may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
 ```
 
-**Both preconditions are load-bearing.** The `case` is what keeps `reset --hard`/`clean -fd` off the
-user's main checkout if isolation ever fails to take — this cycle has no `pwd` safety check of its own
-above it, unlike the fresh-build cycle. The `rescue/` branch keeps another ticket's unpushed commits
-recoverable, since the ref being rewound is *theirs*, not mine (see the fresh-build cycle above).
-
-**`git clean -fd` runs unconditionally, not just on a failed ancestor check (lode-3v1p).** The
-predicate reads the commit graph only: a recycled worktree whose HEAD *is* an ancestor of `trunk` —
-e.g. recycled onto a `land/<other-id>` that has *since landed* — passes it trivially, exactly like a
-genuinely fresh worktree, yet can still carry that other ticket's untracked leftovers. Since `clean
--fd` now runs unconditionally right after the check (still gated by the `case` above, so it never
-reaches outside `.claude/worktrees/`), that dirt is cleaned either way rather than surviving to
-pollute my `git status --short` assertions and the `nox` run. Full reasoning:
-[docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p").
+**Both preconditions inside the script are load-bearing.** The `case` is what keeps
+`reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — this cycle
+has no `pwd` safety check of its own above it, unlike the fresh-build cycle. The `rescue/` branch
+keeps another ticket's unpushed commits recoverable, since the ref being rewound is *theirs*, not mine
+(see the fresh-build cycle above). The script's `git clean -fd` now runs unconditionally right after
+the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycled worktree whose HEAD
+*is* an ancestor of `trunk` (e.g. recycled onto a `land/<other-id>` that has since landed) still gets
+its untracked leftovers swept before they can pollute my `git status --short` assertions and the `nox`
+run; full reasoning in the script's own header and [docs/decisions.md](../../docs/decisions.md)
+(search "lode-3v1p"). The `[ -x "$GUARD" ]` check on the `||` path distinguishes a genuinely
+missing/non-executable script (bootstrap gap — report and stop) from the script running and
+legitimately exiting 1 (already reported by the script itself; this just propagates it).
 
 This never conflicts with what step 2 does next — checking out `land/<id>` on purpose is exactly
 this cycle's job, and this guard only cleans up the *starting* state before that intentional checkout
@@ -803,10 +792,12 @@ own guidance); the cycle above already applies them, but the *why*:
   my own past-tense account destroys the only record of what was actually asked for, silently
   (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
-- **Skipping the recycled-worktree guard, or treating my launch worktree's branch name as proof it's
-  clean.** A `worktree-agent-…`-named branch can still carry a previous ticket's unreviewed commits
-  (lode-nt98) — assert `git merge-base --is-ancestor HEAD trunk` before touching a file (fresh build)
-  or before my own fetch+checkout (rebase pickup), not just the branch name or `pwd`.
+- **Skipping `scripts/recycled-worktree-guard.sh`, or treating my launch worktree's branch name as
+  proof it's clean.** A `worktree-agent-…`-named branch can still carry a previous ticket's
+  unreviewed commits (lode-nt98) — run the guard before touching a file (fresh build) or before my
+  own fetch+checkout (rebase pickup), not just the branch name or `pwd`. Also: treating a missing or
+  non-executable guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of
+  stopping and reporting it.
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a follow-up issue.
@@ -845,7 +836,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
-| Recycled-worktree guard | `git merge-base --is-ancestor HEAD trunk` before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p) |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |
 | I never | review my own work, merge, `bd close`, push `trunk`, commit the `.beads/*.jsonl` export, or WRITE to an external tracker under the user's identity (lode-o29m) |
