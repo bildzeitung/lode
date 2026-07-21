@@ -28,6 +28,7 @@ mechanics live in focused companion docs:
 | [editing.md](editing.md) | The markdown editing surface: block-only live colouring, the keyboard open-link binding, and why a preview pane and clickable links are not built |
 | [conventions.md](conventions.md) | Prescriptive coding-style *fiats* (unilateral maintainer preferences, no independent rationale) -- `@import`ed by CLAUDE.md so they reach the main session and every subagent |
 | [agents-workflow.md](agents-workflow.md) | How lode is *built*: the design loop (`challenge`) and the coding loop (`/code` → `coding`) |
+| [how-to/](how-to/README.md) | Task-oriented how-to guides ("how do I change a config setting?", "how do I set up JIRA?") — recipes, as distinct from the reference/design docs above |
 
 ---
 
