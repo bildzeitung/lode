@@ -165,6 +165,8 @@ Cloud-only, Basic auth (account email + API token); JIRA REST v3 and Confluence 
 
 A missing token or email — from either source — resolves to a clean **"connector inactive"** state (`resolve_jira_credentials`/`resolve_confluence_credentials` return `None`), never an exception; the link falls through to the generic web fetcher. This is a deliberately different shape from the Anthropic credential chain (`src/lode/auth.py`, [decisions.md](decisions.md)): that chain never reads `config.toml` at all and raises `AuthError` on "nothing resolved" (there is no "connector inactive" fallback path for the LLM calls lode's own core loop depends on), whereas an Atlassian connector is opt-in per product and must degrade quietly when unconfigured.
 
+`lode verify --jira` / `lode verify --confluence` (`lode-04lz`) is a read-only preflight that confirms these knobs resolved the way you intended — which flag/credential/base-URL source is in effect, and whether the resolved credentials actually reach the tenant — without writing anything; see [externals.md](externals.md#atlassian-connectors-jira--confluence-cloud-lode-gpzn) for the full manual smoke-test procedure it's the fast first step of. No new knob is introduced by it.
+
 ### Atlassian secrets are excluded from `lode config` / the TUI knob table
 
 `jira_token` and `confluence_token` never appear in `knob_rows()`'s output (`src/lode/config.py::_knob`'s `secret=True` flag), so neither `lode config` nor the TUI's Ctrl+O diagnostics screen ever renders one — this is enforced structurally, not by each renderer remembering to skip two field names. `jira_email` / `confluence_email` / the base-URL overrides are ordinary knobs and do appear in the table.
