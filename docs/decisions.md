@@ -447,6 +447,16 @@ are catalogued in [configuration.md](configuration.md).
   reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md` step 4's
   hand-reasoned correctness pass stands, unchanged.** Re-filed as **lode-01tv** for the next check.
 
+  **Update (lode-01tv, 2026-07-21) — re-checked; NOT restored, watch item re-affirmed again.**
+  Installed version has moved to **2.1.217** (`claude --version`) — one release past the lode-cbc0
+  check earlier the same day — and the local changelog cache (`~/.claude/cache/changelog.md`)
+  confirms `## 2.1.217` is the newest heading, with nothing newer beneath it. The 2.1.217 entry
+  contains **no `/code-review`-touching line at all** (`grep -ni "code-review"` against the full
+  changelog cache finds nothing under the `## 2.1.217` heading; the nearest hit above it is still
+  2.1.216's cosmetic empty-diff-message line, unchanged from the prior check). Nothing in the
+  changelog reverses or qualifies the 2.1.215 removal quoted above. **`code-reviewer.md` step 4's
+  hand-reasoned correctness pass stands, unchanged.** Re-filed as **lode-fr6z** for the next check.
+
   Either way, one thing stays rejected regardless of what upstream does: do **not** hand-roll a local
   copy of the bundled skill into a project-scope `.claude/skills/code-review/SKILL.md` to make it
   nominally invocable. That forks a prompt whose source we cannot see, drifts silently as the real
