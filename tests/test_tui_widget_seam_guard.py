@@ -41,6 +41,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCREENS_DIR = REPO_ROOT / "src" / "lode" / "tui" / "screens"
 
+# The markup-parsing widgets screens actually construct today -- NOT the whole
+# bug class. Any other ``textual.widgets`` widget that parses a bare ``str`` as
+# console markup belongs here too the moment a screen reaches for it: the
+# obvious next one is ``Label`` (literally ``class Label(Static)``, same
+# ``markup=True`` default, same silent [bracket]-eating). None are used in
+# ``screens/`` yet, so adding them now would guard against nothing -- but when
+# one is, give it its own ``Lode*`` seam (like ``LodeStatic``) and add its name
+# here, or the exact bug this ticket closed silently reopens on a new widget.
 _GUARDED_NAMES = frozenset({"DataTable", "Static"})
 
 
