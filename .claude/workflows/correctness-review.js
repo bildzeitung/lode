@@ -101,10 +101,11 @@ const locKey = loc => {
 const titleTokens = s => new Set(String(s == null ? '' : s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean))
 
 const titleSimilarity = (a, b) => {
-  if (a.size === 0 && b.size === 0) return 1
   let shared = 0
   for (const t of a) if (b.has(t)) shared++
   const union = a.size + b.size - shared
+  // union === 0 only when both sets are empty (two empty titles) — treat that
+  // as identical (1), same as the removed explicit both-empty guard did.
   return union ? shared / union : 1
 }
 
