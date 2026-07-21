@@ -337,7 +337,8 @@ flowchart TD
 ### Recycled-worktree guard (lode-nt98)
 
 `isolation: "worktree"` is supposed to hand a dispatched agent a **fresh** worktree, branched off
-local `trunk` HEAD with zero commits of its own. That assumption was falsified in production,
+**`origin/trunk`** HEAD (`worktree.baseRef: "fresh"`; `origin/trunk` can lag local `trunk` by however
+long since `/land`'s last push, usually small but never measured) with zero commits of its own. That assumption was falsified in production,
 discovered while technically reviewing `lode-eshl`: the harness handed the `lode-eshl` **builder** a
 **recycled** worktree still checked out on `lode-7abi`'s build branch (`worktree-agent-a6b4350c…`),
 carrying `lode-7abi`'s own (pre-review) commit. The eshl builder merged `trunk` in on top of that
@@ -1567,7 +1568,7 @@ mode would only make the *symptom* legible; it would not stop a reviewer from di
 the first place. So `land-review` is now dispatched exactly like the producer-side agents already
 are (`code/SKILL.md`'s `coding` and `code-reviewer` dispatches): via the Agent tool with
 `subagent_type: "claude"` **and `isolation: "worktree"`**, mandatory. The reviewer is launched
-already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, and
+already cwd'd inside its own `.claude/worktrees/agent-<hash>` and
 does all of its `git fetch`/`git diff` work there — never in the lander's checkout.
 
 **Superseded by lode-c6ir (2026-07-20):** the paragraph above describes the original fix — isolation
@@ -1585,7 +1586,7 @@ passes no `isolation` option at all. Full reasoning: [docs/decisions.md](decisio
 an explicit `isolation: "worktree"` belt-and-braces, since frontmatter `isolation` was then unused
 repo-wide. A dedicated probe retired it: two dispatches differing only in `subagent_type`, both with
 no call-site `isolation` argument, isolated the variable cleanly — `subagent_type: "land-review"`
-landed in its own `.claude/worktrees/agent-<hash>` branched from local `trunk` HEAD, while the control
+landed in its own `.claude/worktrees/agent-<hash>`, while the control
 (`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
 every agent by default" as a confound. Frontmatter isolation is therefore the sole enforcement point
 for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
