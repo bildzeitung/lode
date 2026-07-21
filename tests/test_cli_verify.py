@@ -440,6 +440,35 @@ def test_verify_jira_optional_issue_arg_content_dry_run_tombstone(
     assert "content dry-run (ABC-999): tombstoned (http_404)" in result.stdout
 
 
+def test_verify_jira_content_dry_run_transient_does_not_affect_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient blip on the content dry-run, after the auth probe already
+    succeeded, is reported and shrugged off -- it never changes the exit code
+    (only the auth probe does) and never crashes with a traceback."""
+    home = tmp_path / "home"
+    _write_config(home, jira_enabled=True, jira_base_url=_BASE)
+    fetcher = _QueueFetcher(
+        [
+            _response({"displayName": "Alice"}),
+            TransientFetchError("timeout: read timed out"),
+        ]
+    )
+    monkeypatch.setattr(cli, "_default_verify_fetcher", lambda *a, **k: fetcher)
+
+    result = runner.invoke(
+        app,
+        ["verify", "--jira", "ABC-123"],
+        env={
+            "LODE_HOME": str(home),
+            "LODE_JIRA_EMAIL": "alice@example.com",
+            "LODE_JIRA_TOKEN": "tok",
+        },
+    )
+    assert result.exit_code == 0
+    assert "content dry-run (ABC-123): tenant unreachable" in result.stdout
+
+
 def test_verify_confluence_optional_page_arg_content_dry_run_ok(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

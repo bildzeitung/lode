@@ -43,11 +43,9 @@ from lode.config import (
     JIRA_TOKEN_ENV,
     AtlassianCredentials,
     Settings,
-    confluence_active,
     config_path,
     config_rows,
     default_db_path,
-    jira_active,
     knob_rows,
     lance_dir,
     load_settings,
@@ -2112,7 +2110,10 @@ def _run_verify(
         if jira
         else resolve_confluence_credentials(settings)
     )
-    active = jira_active(settings) if jira else confluence_active(settings)
+    # Equivalent to jira_active/confluence_active(settings) by their own
+    # definition (enabled AND creds resolve), but without re-resolving the
+    # credentials already in hand above.
+    active = enabled and credentials is not None
 
     console.print(f"{connector}_enabled: {enabled}")
     email_source = _credential_source(email_env, config_email)
@@ -2246,30 +2247,46 @@ def _run_verify(
                 highlight=False,
             )
         else:
-            content_result = (
-                fetch_jira_issue(
-                    external_id, base_url, fetcher=probe_fetcher, settings=settings
+            try:
+                content_result = (
+                    fetch_jira_issue(
+                        external_id, base_url, fetcher=probe_fetcher, settings=settings
+                    )
+                    if jira
+                    else fetch_confluence_page(
+                        external_id, base_url, fetcher=probe_fetcher, settings=settings
+                    )
                 )
-                if jira
-                else fetch_confluence_page(
-                    external_id, base_url, fetcher=probe_fetcher, settings=settings
-                )
-            )
-            if content_result.status is FetchStatus.OK:
+            except TransientFetchError as exc:
+                # The content dry-run never changes the exit code (only the
+                # auth probe does -- see the exit-code contract above); the
+                # pure fetch units propagate TransientFetchError uncaught, so a
+                # transient blip on this second call, after auth already
+                # succeeded, is reported and shrugged off exactly like a
+                # tombstone rather than crashing the command with a traceback.
                 console.print(
-                    f"content dry-run ({external_id}): OK",
-                    style="ok",
-                    markup=False,
-                    highlight=False,
-                )
-            else:
-                console.print(
-                    f"content dry-run ({external_id}): tombstoned "
-                    f"({content_result.tombstone_reason})",
+                    f"content dry-run ({external_id}): tenant unreachable "
+                    f"right now ({exc})",
                     style="danger",
                     markup=False,
                     highlight=False,
                 )
+            else:
+                if content_result.status is FetchStatus.OK:
+                    console.print(
+                        f"content dry-run ({external_id}): OK",
+                        style="ok",
+                        markup=False,
+                        highlight=False,
+                    )
+                else:
+                    console.print(
+                        f"content dry-run ({external_id}): tombstoned "
+                        f"({content_result.tombstone_reason})",
+                        style="danger",
+                        markup=False,
+                        highlight=False,
+                    )
 
     return 0
 
