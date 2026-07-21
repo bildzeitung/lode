@@ -72,9 +72,12 @@ jobs:
 
       - name: Cache model weights
         # Same cache as tests.yml, keyed identically -- a warm cache here
-        # means this leg's full-suite run is also fully offline. Not shared
-        # across workflows (each gets its own cache scope), so this workflow
-        # pays its own cache-population cost on a cold cache.
+        # means this leg's full-suite run is also fully offline. GitHub caches
+        # are scoped per-repo BY KEY (not per-workflow), so this byte-identical
+        # key shares one entry with tests.yml: whichever workflow populates it
+        # first, the other restores it. The only duplicated download is the
+        # cold-cache case where both workflows run concurrently and race to
+        # populate -- one save wins, the other no-ops (`cache already exists`).
         uses: actions/cache@v4
         with:
           path: ${{ env.LODE_HOME }}/models
