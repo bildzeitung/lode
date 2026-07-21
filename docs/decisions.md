@@ -172,7 +172,7 @@ are catalogued in [configuration.md](configuration.md).
   one of those forces it, the coupling stands.
 - **Landing loop — architecture + mechanics settled; two future upgrades noted.** The whole landing
   loop is decided in
-  [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land-planned) — all landing
+  [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land) — all landing
   through one `/land`, split technical/semantic review, the `ready-for-land` **label**, minimal
   landing context (head SHA + summary), `land/<ticket-id>` branches, and the v1 single-lander lock (a
   local "skip if running" guard + the one-machine convention). Deferred, *not* blocking v1: (1) a
