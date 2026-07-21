@@ -502,6 +502,49 @@ account of the guard sites: [land-review.md](../.claude/agents/land-review.md),
 [coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md), and
 [Isolating `land-review` dispatches](#isolating-land-review-dispatches-lode-g387), below.
 
+**2026-07-21 update (lode-ag7j) — CC 2.1.216 data point, guard KEPT.** Claude Code 2.1.216 shipped
+three worktree fixes, verified live on 2026-07-20 (main session on 2.1.216; `.claude/settings.json`
+still carried the undocumented `worktree.baseRef: "head"` at that point, still un-ruled-out as a
+contributing cause per the `baseRef` investigation above):
+
+1. Fixed worktree-isolated subagents redirecting git into the shared checkout via `git -C`,
+   `--git-dir`, or `GIT_DIR`/`GIT_WORK_TREE`.
+2. Fixed worktree sessions landing in another project's leftover worktree when the working directory
+   did not match the selected project.
+3. Fixed background sessions whose worktree has no git repository being undeletable.
+
+**Honest mapping — none of the three is a confirmed fix for lode-nt98:**
+
+- **Fix #2 is the tempting candidate but does not obviously apply.** Its changelog framing is
+  explicitly **cross-project** ("another project's leftover worktree… working directory did not match
+  the selected project"). lode-nt98 is **same-project, same-repo** — the `lode-eshl` builder was
+  handed `lode-7abi`'s own leftover worktree, not another project's. The underlying "land in a pooled
+  leftover worktree" mechanism is plausibly shared between the two, but that is a plausibility, not a
+  confirmation — the changelog text does not say it covers lode's single-project fleet.
+- **Fix #1 is relevant only to the retired `lode-k5e` architecture**, where a reviewer used to drive
+  the builder's worktree in place via `git -C`. Current design already fetches the branch into the
+  agent's own launch worktree instead, so this fix changes nothing operationally here — it just means
+  the isolation-guard behavior `lode-k5e` fought has moved upstream.
+- **Fix #3 does not touch lode's guards** — lode's worktrees are always inside a git repository.
+
+**Verdict: keep every guard, unchanged.** They are cheap defensive assertions; the failure mode they
+prevent — unreviewed code riding into `trunk` on the wrong ticket's `land/<id>` — is catastrophic and
+irreversible. "Probably fixed upstream" is not grounds to retire a guard this cheap against a failure
+this expensive. No guard is removed or weakened here, and `worktree.baseRef: "head"` is left exactly
+as the `baseRef` investigation above left it — the baseRef question is tracked in its own thread (the
+human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not something this note
+resolves.
+
+**Falsification test this sets up.** The fleet is now on, or moving onto, `>= 2.1.216`. Watch whether
+the recycled-worktree guard **ever fires** — any `rescue/recycled-<sha>` branch created, any
+guard-triggered `git reset --hard trunk` — across many `/code` and `/land` passes going forward:
+
+- **If it stops firing over a sustained window:** evidence that an upstream fix (candidate: #2)
+  addressed the underlying recycling mechanism after all, despite the cross-project framing above —
+  file a follow-up to retire the lode-nt98 guard family and revisit `worktree.baseRef: "head"`.
+- **If it keeps firing:** 2.1.216 did not address lode-nt98 for this repo's same-project case; the
+  `baseRef` hypothesis (above) stands, and the guards stay.
+
 ### Concurrency cap (lode-2cf)
 
 `/code`'s fan-out (builders and reviewers, plus the step-0/step-1 sweep dispatches) shares **one
