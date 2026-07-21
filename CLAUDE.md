@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **EVERY change to this repository — code, docs, configs, ANYTHING — MUST be made in a git worktree, NEVER directly on `trunk`** (this repo's default branch). This is non-negotiable.
 
-Before editing, creating, or deleting a single file, you MUST first create/enter a worktree (use `EnterWorktree`, or the plan-mode worktree isolation option). Worktrees for this repo live under `.claude/worktrees/`. Branch them from **local `trunk` HEAD**, not `origin/trunk` (which may be stale). Once a worktree's branch is merged into `trunk`, delete the worktree.
+Before editing, creating, or deleting a single file, you MUST first create/enter a worktree (use `EnterWorktree`, or the plan-mode worktree isolation option). Worktrees for this repo live under `.claude/worktrees/`. They branch from **`origin/trunk`** — `.claude/settings.json`'s `worktree.baseRef: "fresh"` (a deliberate choice, `lode-jzbz`; the harness supports no way to pin a literal local-`trunk` ref at all — `"fresh"`/`"head"` are the only two values it accepts, see [`docs/agents-workflow.md`](docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). `origin/trunk` can therefore lag local `trunk` by however long it's been since the last push — `/land` pushes `trunk` immediately after every merge, so that window is expected to usually be small, but it has never been measured. Once a worktree's branch is merged into `trunk`, delete the worktree.
 
 If you find yourself about to run `Edit`, `Write`, or any mutating command while on `trunk`: **STOP.** Create the worktree first, then do the work there. When in doubt, confirm you are NOT on `trunk` before your first write.
 

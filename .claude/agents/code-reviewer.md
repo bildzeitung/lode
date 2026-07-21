@@ -36,7 +36,9 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   configured to run on **`opus`**; if the announced ID is not an Opus model, the pin didn't take
   effect — I say so plainly so the operator can see the mismatch before I review anything.
 - **I review in my own launch worktree, never the builder's.** `isolation: "worktree"` gives me a
-  clean worktree off `trunk` HEAD with its own launch branch — I fetch `origin/land/<id>` and check
+  clean worktree off **`origin/trunk`** HEAD (`worktree.baseRef: "fresh"`; `origin/trunk` can lag local
+  `trunk` by however long since `/land`'s last push, usually small but never measured) with its own
+  launch branch — I fetch `origin/land/<id>` and check
   that branch out **into this worktree** (step 2), so `Edit`/`Write`/`nox` all work normally: no
   `EnterWorktree`, no `git -C`, no guard to work around. This replaces an earlier `git -C
   <builder-worktree>` architecture, which turned out to be fighting a guard rather than working around
@@ -130,13 +132,15 @@ consumer — the backstop sweep that replaced it discovers worktrees live off `g
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree
 
-My launch worktree is *supposed* to start clean, off `trunk` HEAD, with no changes of its own —
-exactly the tree that made an earlier review silently analyze an empty diff (lode-k5e). **That
-assumption doesn't always hold**: the harness's `isolation: "worktree"` hand-off has been observed
-handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
-branch instead — confirmed for a reviewer specifically (lode-nt98: this reviewer's own launch
-worktree started life checked out on a different ticket's `land/<id>` branch, at that ticket's
-*pre-review* commit, rather than clean off `trunk` HEAD). The `git checkout -B … FETCH_HEAD` below
+My launch worktree is *supposed* to start clean, off **`origin/trunk`** HEAD (`worktree.baseRef:
+"fresh"`; can lag local `trunk` by however long since `/land`'s last push, usually small but never
+measured), with no changes of its own — exactly the tree that made an earlier review silently analyze
+an empty diff (lode-k5e). **That assumption doesn't always hold**: the harness's `isolation:
+"worktree"` hand-off has been observed handing a dispatched agent a **recycled** worktree still
+checked out on a *previous* ticket's build branch instead — confirmed for a reviewer specifically
+(lode-nt98: this reviewer's own launch worktree started life checked out on a different ticket's
+`land/<id>` branch, at that ticket's *pre-review* commit, rather than clean off `origin/trunk` HEAD).
+The `git checkout -B … FETCH_HEAD` below
 will land me on the correct `land/<id>` regardless of what I started on, so this guard is **not** what
 makes the checkout correct. What it buys is a clean tree to review in: `checkout -B` carries
 **untracked** leftovers from a recycled worktree straight through, and those go on to pollute the

@@ -162,7 +162,9 @@ claimed it yet, so this is the real claim. Either way, claim before I touch a fi
 
 The `/code` skill launches me with the harness **`isolation: "worktree"`** option, so I begin
 **already cwd'd inside `.claude/worktrees/agent-<hash>` on my own branch** (`worktree-agent-…`,
-branched from `trunk` HEAD). I do **not** `git worktree add`, and I do **not** call `EnterWorktree`
+branched from **`origin/trunk`** — `.claude/settings.json`'s `worktree.baseRef: "fresh"`; `origin/trunk`
+can lag local `trunk` by however long since `/land`'s last push, usually small but never measured).
+I do **not** `git worktree add`, and I do **not** call `EnterWorktree`
 — both are *refused* for a subagent pinned at the repo root (`EnterWorktree` "cannot create a
 worktree from a subagent with a cwd override", and its `path` form rejects a cwd that "is the
 repository root"). Neither is needed: the harness already put me here.
@@ -182,7 +184,7 @@ The main checkout is never mine to touch — not for editing, not for landing.
 the branch name.** The harness's `isolation: "worktree"` hand-off has been observed handing a
 dispatched builder a **recycled** launch worktree still checked out on a *previous* ticket's build
 branch (`worktree-agent-<other-hash>`, carrying that ticket's commits) instead of a fresh branch off
-`trunk` HEAD — confirmed in production (lode-eshl's technical review): the eshl builder merged
+`origin/trunk` HEAD — confirmed in production (lode-eshl's technical review): the eshl builder merged
 `trunk` on top of `lode-7abi`'s pre-review commit and pushed `land/lode-eshl` carrying a foreign,
 unreviewed ticket's changes. A branch-name check alone can't catch this (the recycled branch still
 *looks* like a normal `worktree-agent-…` name), so before touching a single file I assert the actual
@@ -533,7 +535,7 @@ never kicked back), I stop and report — nothing to pick up.
 **Recycled-worktree guard (lode-nt98) — first thing, before the fetch below.** The same harness
 `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
-branch, carrying that ticket's commits, instead of a fresh branch off `trunk` HEAD — confirmed in
+branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
 production for both a fresh-build producer and a `code-reviewer` (lode-eshl's technical review; full
 account in
 [`docs/agents-workflow.md`](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)). The `git checkout -B …
@@ -834,7 +836,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Thing | Value |
 |---|---|
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **local `trunk` HEAD**; I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
