@@ -60,6 +60,125 @@ _PAYWALL_HTML = """
 </body></html>
 """
 
+# A realistically messy page: nav chrome, a cookie/consent banner, a
+# related-articles rail, a comment CTA, a footer, and inline <script>/<style>
+# alongside a real multi-paragraph article. This pins trafilatura's ACTUAL
+# extraction behavior (lode-g274.3) rather than merely its documented tag
+# list — note the cookie banner, related-articles rail, and comment CTA are
+# deliberately built from <div>, not <nav>/<aside>/<footer>: trafilatura's
+# own MANUALLY_CLEANED/MANUALLY_STRIPPED tag lists (settings.py, verified
+# against the installed 2.1.0) do NOT cover <div> or <header> at all — their
+# removal here depends entirely on trafilatura's XPath/density-based
+# main-content discovery, not on a fixed tag rule. A too-minimal fixture
+# would not exercise that path (see the module note below); this one is
+# deliberately sized and shaped like a real news-article page so it does.
+_MESSY_ARTICLE_HTML = """
+<html>
+<head>
+<title>Why Local-First Note Apps Are Having a Moment</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  .cookie-banner { position: fixed; bottom: 0; background: #222; color: #fff; }
+  .related-articles a { color: blue; }
+</style>
+<script src="https://cdn.example.com/analytics.js"></script>
+</head>
+<body>
+
+<div class="cookie-banner" id="consent-banner">
+  <p>We use cookies and similar technologies to personalize content, tailor
+  and measure ads, and provide a better experience. By clicking "Accept All"
+  you agree to this use of cookies as described in our Cookie Policy.</p>
+  <button>Accept All</button>
+  <button>Reject Non-Essential</button>
+  <a href="/cookie-policy">Cookie Policy</a>
+</div>
+
+<header>
+  <div class="logo"><a href="/">DailyDev Times</a></div>
+  <nav class="main-nav">
+    <ul>
+      <li><a href="/">Home</a></li>
+      <li><a href="/world">World</a></li>
+      <li><a href="/technology">Technology</a></li>
+      <li><a href="/sports">Sports</a></li>
+      <li><a href="/subscribe">Subscribe</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main>
+<article>
+<h1>Why Local-First Note Apps Are Having a Moment</h1>
+<p class="byline">By Jordan Alvarez | Published March 3, 2026 | 6 min read</p>
+
+<p>For years, the default assumption in productivity software was that your
+notes belonged in the cloud: synced instantly across devices, backed up
+automatically, and searchable from anywhere with a browser. That assumption
+is now being challenged by a wave of local-first tools that store data on
+your own machine first and treat sync as an optional, secondary concern
+rather than the whole point of the product.</p>
+
+<p>The appeal is partly about resilience. A local-first application keeps
+working when the network does not: on a plane, in a basement office with
+spotty wifi, or during a provider outage that takes an entire cloud service
+offline for hours. Because the canonical copy of your data lives on disk
+rather than behind an API a company can change or shut down, users describe
+a sense of ownership that syncing services rarely offer.</p>
+
+<p>It is also about speed. Round-tripping every keystroke to a remote server
+adds latency that becomes noticeable the moment you start typing quickly, or
+searching across a large archive of past notes. Tools built local-first can
+lean on fast, embedded indexes instead, returning results in milliseconds
+rather than the hundreds of milliseconds a network round trip usually costs,
+which changes how the software feels to use every single day.</p>
+
+<p>None of this is free. Local-first tools still need a story for syncing
+across a laptop and a phone, for backup when a hard drive fails, and for
+collaboration when more than one person needs to see the same notes. The
+best implementations treat these as solvable engineering problems rather
+than reasons to fall back to a cloud-first design, and the last two years
+have produced noticeably more mature answers to all three.</p>
+
+</article>
+</main>
+
+<aside class="related-articles">
+  <h2>Related Stories</h2>
+  <ul>
+    <li><a href="/story/offline-first-databases">Offline-First Databases Explained</a></li>
+    <li><a href="/story/crdt-primer">A Gentle Primer on CRDTs</a></li>
+    <li><a href="/story/sync-engines-2026">The State of Sync Engines in 2026</a></li>
+  </ul>
+</aside>
+
+<div class="comments-cta">
+  <h3>Join the Discussion</h3>
+  <p>Sign in to leave a comment. 128 people are already talking about this.</p>
+  <button>View 128 Comments</button>
+</div>
+
+<footer>
+  <p>&copy; 2026 DailyDev Times. All rights reserved.</p>
+  <nav class="footer-links">
+    <a href="/privacy">Privacy Policy</a> |
+    <a href="/terms">Terms of Service</a> |
+    <a href="/contact">Contact Us</a> |
+    <a href="/advertise">Advertise</a>
+  </nav>
+</footer>
+
+<script>
+  (function() {
+    window.dataLayer = window.dataLayer || [];
+    console.log("analytics pixel fired");
+  })();
+</script>
+
+</body>
+</html>
+"""
+
 
 class _StubFetcher:
     """Deterministic stand-in for :class:`~lode.webfetch.Fetcher`.
@@ -97,6 +216,68 @@ def test_ok_article_returns_clean_text_and_raw_html():
     # No scaffolding/chrome leaked through.
     assert "Home About Contact" not in result.clean_text
     assert fetcher.calls == [_URL]
+
+
+def test_extract_strips_realistic_chrome_and_keeps_article_body():
+    """Characterization test (lode-g274.3): pins trafilatura's ACTUAL
+    extraction behavior against a realistically messy page, not just its
+    documented tag-strip lists.
+
+    Goes through :func:`fetch_and_extract` (the lode-level call path, same
+    ``include_comments=False, include_tables=True`` configuration production
+    uses) rather than calling ``trafilatura.extract`` directly, so this also
+    covers our own call configuration, not just the library in isolation.
+
+    Pinned against trafilatura 2.1.0 (the version the ``trafilatura>=2.1,<2.2``
+    bound in ``pyproject.toml`` resolves, lode-g274.1) — moving off 2.1.0 is a
+    deliberate act that re-baselines these fixtures first (epic lode-g274,
+    acceptance criteria).
+
+    A version bump that starts leaking nav/cookie-banner/related-articles/
+    comment-CTA/footer/script chrome into ``clean_text`` — or starts dropping
+    real article paragraphs — must fail this test rather than silently
+    degrading every downstream embedding and citation.
+    """
+    fetcher = _StubFetcher(
+        response=RawResponse(final_url=_URL, status_code=200, text=_MESSY_ARTICLE_HTML)
+    )
+
+    result = fetch_and_extract(_URL, fetcher=fetcher, settings=load_settings())
+
+    assert result.status is FetchStatus.OK
+    assert result.clean_text is not None
+    text = result.clean_text
+
+    # The real article survives: title and a distinguishing phrase from
+    # every paragraph, so a bump that truncates the body (not just chrome)
+    # is caught too.
+    assert "Why Local-First Note Apps Are Having a Moment" in text
+    assert "local-first tools that store data on" in text
+    assert "sense of ownership that syncing services rarely offer" in text
+    assert "Round-tripping every keystroke to a remote server" in text
+    assert "solvable engineering problems rather than reasons to fall back" in text
+
+    # Nav chrome (<nav>, plus the <header> logo — <header> is in NEITHER of
+    # trafilatura's strip lists, so this leg exercises density, not the tag
+    # rule).
+    assert "DailyDev Times" not in text
+    assert "Sports" not in text
+    # Cookie/consent banner (a <div> — density-only, not tag-stripped).
+    assert "Accept All" not in text
+    assert "Cookie Policy" not in text
+    # Related-articles rail (<aside>).
+    assert "Related Stories" not in text
+    assert "Offline-First Databases Explained" not in text
+    # Comment CTA (a <div> — density-only, not tag-stripped).
+    assert "Join the Discussion" not in text
+    assert "128 Comments" not in text
+    # Footer (<footer>).
+    assert "Privacy Policy" not in text
+    assert "Advertise" not in text
+    # Inline <script>/<style>.
+    assert "dataLayer" not in text
+    assert "analytics pixel" not in text
+    assert "position: fixed" not in text
 
 
 def test_js_scaffold_yields_tombstone_not_scaffolding_text():
