@@ -1475,8 +1475,19 @@ via the same `lode.jobs.enqueue_derive_jobs` primitive (`types=("enrich",)` only
 unique index still dedupes an in-flight job, still forces past a `done` one); the enqueue is one
 SQLite transaction, resumable by construction, draining is `lode work`'s job; FTS is unaffected (it
 carries no model of its own). Once every enqueued job reaches `done` and rewrites its `annotations`
-under the current model, `lode status`'s enrichment "mixed" hint clears on its own — there is no
-separate manifest to reconcile.
+under the current model, `lode status`'s enrichment hint clears on its own — there is no separate
+manifest to reconcile.
+
+**`lode status`'s hint reads this exact query (decided, lode-o9k3).** The stale-detection scan above
+is not just conceptually mirrored by the `lode status` hint — `src/lode/cli.py`'s
+`_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this command force-enqueues
+from, and fires whenever that list is non-empty. This replaced an earlier, looser `lode status` check
+(a plain `COUNT(DISTINCT model) > 1` scan over the whole `annotations` table, unscoped to live heads)
+that missed the primary intended workflow — a corpus uniformly re-enriched under a single OLD model
+reads as "not mixed" under a distinct-count, even though this command would re-enqueue the entire
+corpus for it. Sharing one query instead of two independently-maintained approximations of "is
+enrichment stale" is what makes "`lode status` says clean" and "`lode reenrich` has work" structurally
+unable to disagree; full decision record: [configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745).
 
 **No `--all`/whole-corpus flag.** Nothing in this ticket's scope asked for one, and the ticket's own
 cost argument above is itself the reason not to add one speculatively — `lode reembed`'s "no scope
