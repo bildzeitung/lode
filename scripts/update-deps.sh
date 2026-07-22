@@ -156,6 +156,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   exit 0
 fi
 
+# shellcheck source=venv-install.sh
+. "$REPO/scripts/venv-install.sh"
+
 # Trash ./venv and rebuild it FRESH from $1 (a lock file path) -- never
 # patched in place, so there is never a half-migrated venv to reason about
 # ONCE THIS FUNCTION RETURNS SUCCESSFULLY. Every caller below checks its
@@ -171,7 +174,11 @@ fi
 # the "gates green" branch even with a deliberately-failing install step).
 # Chaining with `&&` makes the function's own return code reflect the
 # FIRST failing step regardless of the caller's -e state, independent of
-# how the function happens to be invoked.
+# how the function happens to be invoked. install_locked_venv() (lode-02xy,
+# scripts/venv-install.sh) carries the same guarantee for the actual install
+# steps it performs -- this function chains that same way around it so the
+# combined venv-creation-plus-install sequence stays one failure-transparent
+# chain end to end.
 rebuild_venv() {
   local lockfile="$1"
   deactivate 2>/dev/null || true
@@ -179,11 +186,7 @@ rebuild_venv() {
   rm -rf ./venv &&
     python -m venv venv &&
     . ./venv/bin/activate &&
-    pip install -U uv &&
-    uv pip install -U pip &&
-    uv pip install --require-hashes -r "$lockfile" &&
-    uv pip install -e . --no-deps &&
-    uv pip install -e '.[dev]'
+    install_locked_venv "$lockfile"
 }
 
 echo "update-deps.sh: installing the candidate lock into a freshly rebuilt ./venv..."
