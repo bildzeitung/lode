@@ -12,6 +12,7 @@ constant (``Settings.embedding_vector_dim``).
 from pathlib import Path
 
 import lancedb
+import pyarrow as pa
 
 from lode.config import load_settings
 from lode.vectorstore import VectorStore
@@ -239,6 +240,103 @@ def test_model_revisions_includes_none_for_rows_that_predate_the_field(
     )
 
     assert store.model_revisions(model) == {"sha-1", None}
+
+
+# --- schema-mismatch self-heal (lode-t08v) ---------------------------------
+#
+# A release that adds a column to VectorStore._schema() (e.g. model_revision,
+# lode-crh8.1) leaves a pre-existing on-disk table on the old shape.
+# create_table(exist_ok=True) used to reject that unconditionally with a
+# "Schema Error", crashing every caller (search, status, reembed alike) until
+# a human ran `rm -rf` on the lancedb dir by hand (lode-2lu2's documented
+# workaround). These pin the self-heal: _open_or_create_table detects the
+# mismatch and drops+recreates on the current schema before returning.
+
+
+def _write_stale_schema_table(tmp_path: Path) -> None:
+    """Simulate an old on-disk table that predates the ``model_revision`` column.
+
+    Writes a real table under the pinned dim but with an older, narrower
+    schema than :meth:`VectorStore._schema` currently declares -- the exact
+    shape a pre-lode-crh8.1 table would have. Carries one row under the
+    ``"v1"`` target so the self-heal tests can assert it's gone after the
+    heal (dropping the stale table is expected to lose it -- the regenerable-
+    cache contract, module docstring).
+    """
+    old_schema = pa.schema(
+        [
+            pa.field("passage_id", pa.string()),
+            pa.field("target_version", pa.string()),
+            pa.field("vector", pa.list_(pa.float32(), DIM)),
+            pa.field("model", pa.string()),
+            # no model_revision column -- the stale, pre-migration shape.
+        ]
+    )
+    db = lancedb.connect(tmp_path / "vectors")
+    db.create_table(
+        "embeddings",
+        schema=old_schema,
+        data=[
+            {
+                "passage_id": "stale",
+                "target_version": "v1",
+                "vector": [1.0, 0.0, 0.0, 0.0],
+                "model": _settings().embedding_model,
+            }
+        ],
+    )
+
+
+def test_replace_vectors_self_heals_a_schema_mismatched_table(
+    tmp_path: Path,
+) -> None:
+    _write_stale_schema_table(tmp_path)
+    store = _store(tmp_path)
+
+    # Used to raise "Schema Error: Provided schema does not match existing
+    # table schema" -- must now self-heal (drop + recreate) and write clean.
+    store.replace_vectors("v2", [_row("b", "v2", [0.0, 1.0, 0.0, 0.0])])
+
+    table = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+    assert table.schema == store._schema()
+    rows = table.to_arrow().to_pylist()
+    assert {r["passage_id"] for r in rows} == {"b"}
+
+
+def test_self_heal_drops_the_stale_rows(tmp_path: Path) -> None:
+    # Dropping the mismatched table is a real, expected side effect -- the
+    # pre-existing "v1" row (written under the old schema) does not survive
+    # the heal. Losing it costs a re-embed, never data (module docstring):
+    # the SQLite rows it was derived from are untouched.
+    _write_stale_schema_table(tmp_path)
+    store = _store(tmp_path)
+
+    store.replace_vectors("v2", [_row("b", "v2", [0.0, 1.0, 0.0, 0.0])])
+
+    assert store.vectors_for("v1") == []
+
+
+def test_search_self_heals_a_schema_mismatched_table(tmp_path: Path) -> None:
+    # Every caller of _open_or_create_table shares the heal -- a read path
+    # must not crash on a mismatched table either; it recreates it empty,
+    # same as any cold/never-written store.
+    _write_stale_schema_table(tmp_path)
+    store = _store(tmp_path)
+
+    assert store.search([1.0, 0.0, 0.0, 0.0], k=5) == []
+
+
+def test_matching_schema_table_is_not_dropped(tmp_path: Path) -> None:
+    # The heal must not fire (and so must not discard data) when the
+    # on-disk schema already matches -- only a genuine mismatch drops.
+    store = _store(tmp_path)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+
+    # A second, unrelated write through a fresh VectorStore instance (same
+    # schema) must not disturb the first version's already-written row.
+    _store(tmp_path).replace_vectors("v2", [_row("c", "v2", [0.0, 1.0, 0.0, 0.0])])
+
+    assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
 
 
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:

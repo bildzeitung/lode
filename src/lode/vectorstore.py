@@ -108,11 +108,36 @@ class VectorStore:
         )
 
     def _open_or_create_table(self):
-        """Open the vector table, creating it with the pinned schema on first use."""
+        """Open the vector table, creating it with the pinned schema on first use.
+
+        **Self-heals a schema-mismatched table (lode-t08v).** A release that adds
+        a column to :meth:`_schema` (e.g. ``model``, ``model_revision``,
+        lode-crh8.1) leaves any pre-existing on-disk table on the *old* shape;
+        ``create_table(exist_ok=True)`` then unconditionally rejects it with
+        "Provided schema does not match existing table schema", and every caller
+        of this method -- read or write -- goes through here, so that used to mean
+        the whole store was stuck until a human ran ``rm -rf`` on the LanceDB
+        directory by hand (the interim workaround lode-2lu2 documents). Instead:
+        if a table already exists and its schema doesn't match the pinned one,
+        drop it and recreate on the current schema before returning. This is
+        safe under the module's own regenerable-cache contract (top-of-file
+        docstring) -- dropping loses only derived vectors, never the irreplaceable
+        SQLite rows, and ``lode reembed`` + ``lode work`` (or the next live
+        ``embed()``/``search()`` call, same as any cold cache) repopulate it.
+        No flag, no separate rebuild command: this is the single place LanceDB
+        is touched, so healing it here covers every call path uniformly.
+        """
         import lancedb
 
         db = lancedb.connect(self._lance_dir)
-        return db.create_table(_VECTOR_TABLE, schema=self._schema(), exist_ok=True)
+        schema = self._schema()
+        if _VECTOR_TABLE in db.list_tables().tables:
+            table = db.open_table(_VECTOR_TABLE)
+            if table.schema != schema:
+                db.drop_table(_VECTOR_TABLE)
+                return db.create_table(_VECTOR_TABLE, schema=schema)
+            return table
+        return db.create_table(_VECTOR_TABLE, schema=schema, exist_ok=True)
 
     def replace_vectors(
         self, target_version: str, rows: list[dict[str, object]]
