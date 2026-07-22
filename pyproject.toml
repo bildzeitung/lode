@@ -11,9 +11,12 @@ requires-python = ">=3.14"
 license = "Apache-2.0"                # SPDX expression (PEP 639) — needs setuptools>=77
 license-files = ["LICENSE"]
 
-# Runtime dependencies are seeded from the decided stack (docs/stack.md), the
-# same source as requirements.txt. Intentionally unpinned until the build starts
-# (docs/design.md §7); pin both files together when that happens.
+# Runtime dependencies are seeded from the decided stack (docs/stack.md).
+# This file stays the INTENT layer -- ranges/floors, with a real lower bound
+# only where a version demonstrably matters (trafilatura below is the first
+# such case). requirements.lock is the ONLY place exact versions live --
+# regenerated via `uv pip compile` (scripts/python-init.sh), never hand-edited
+# here. See docs/stack.md#dependency-locking-lode-g2741 for the split.
 dependencies = [
     "textual[syntax]", # TUI, plus the tree-sitter grammar bundle (~15
                        # languages, no markdown-only extra) -- HARD dep for
@@ -41,7 +44,13 @@ dependencies = [
     "networkx",    # in-memory knowledge-graph traversal
     "xxhash",      # 128-bit content-address hash (docs/storage.md)
     "httpx",       # web draw-down HTTP client (lode-w0h.1 — see docs/stack.md)
-    "trafilatura", # web draw-down readability extraction (lode-w0h.1 — see docs/stack.md)
+    "trafilatura>=2.1,<2.2", # web draw-down readability extraction
+                             # (lode-w0h.1 — see docs/stack.md). Bounded to the
+                             # 2.1.x series (lode-g274.1) so the lock resolves
+                             # 2.1.0, the version lode-g274.3's characterization
+                             # fixtures assert extraction behavior against.
+                             # Moving off 2.1.0 is a deliberate act: bump this
+                             # ceiling and re-baseline lode-g274.3 first.
 ]
 
 [project.optional-dependencies]

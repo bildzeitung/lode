@@ -45,7 +45,7 @@ In Mermaid labels use `<br>` for line breaks (never `\n`), and avoid `<b>`/`<i>`
 
 ## Python environment
 
-Build the venv with the lightweight init script (creates `./venv` from `requirements.txt`):
+Build the venv with the lightweight init script (creates `./venv` and installs from the lock):
 
 ```bash
 ./scripts/python-init.sh
@@ -54,7 +54,11 @@ Build the venv with the lightweight init script (creates `./venv` from `requirem
 
 - The venv lives at **`./venv`** (repo root), not in module subdirs.
 - Run **`nox -t fix`** (and `nox -s tests`) before merging any Python change; run tests via nox, not a hand-rolled venv.
-- `requirements.txt` is a single editable-install line (`-e .[dev]`) so `pyproject.toml` is the one source of truth for dependencies; the actual dep list lives there (`[project].dependencies` + the `dev` extra), seeded from the decided stack (`docs/stack.md`) and unpinned until the build starts.
+- `pyproject.toml` is the INTENT layer (ranges/floors); `requirements.lock` is the ONLY place exact
+  runtime versions live (hash-verified, `dev` extra deliberately unlocked) — `scripts/python-init.sh`
+  installs from it by default, with `--unlocked` as the escape hatch to resolve fresh from
+  `pyproject.toml`. Full split: [`docs/stack.md`](docs/stack.md#dependency-locking-lode-g2741)
+  (`lode-g274.1`).
 
 ## Coding conventions
 

@@ -2,11 +2,13 @@
 
 The hazard, discovered while reviewing lode-7abi: ``noxfile.py`` sets
 ``default_venv_backend = "none"``, so gates run in whatever venv is already
-active. ``requirements.txt`` is a single editable install (``-e .[dev]``), so
-that venv's ``lode`` resolves to the ``src`` of whichever checkout it was built
-in. Activate the main checkout's venv while sitting in a worktree and pytest
-collects **this** checkout's ``tests/`` while importing **that** one's ``src``
--- silently, in either the false-FAIL or the false-PASS direction.
+active. ``scripts/python-init.sh`` always installs the local package editable
+(``-e .``, whether via the locked default path or ``--unlocked`` --
+lode-g274.1), so that venv's ``lode`` resolves to the ``src`` of whichever
+checkout it was built in. Activate the main checkout's venv while sitting in a
+worktree and pytest collects **this** checkout's ``tests/`` while importing
+**that** one's ``src`` -- silently, in either the false-FAIL or the
+false-PASS direction.
 
 These exercise ``tests/conftest.py``'s ``_wrong_source_tree_message`` directly.
 The ``pytest_configure`` hook that calls it can't be tested from inside the

@@ -125,9 +125,11 @@ def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | Non
     The hazard (lode-jh80, discovered reviewing lode-7abi): ``noxfile.py`` sets
     ``default_venv_backend = "none"``, so gates run in whatever venv is already
     active rather than provisioning one — deliberate, for speed. But
-    ``requirements.txt`` is a single editable install (``-e .[dev]``), so a
-    venv's ``lode`` resolves to the ``src`` of *whichever checkout it was built
-    in*. Activate the main checkout's venv while sitting in a worktree and
+    ``scripts/python-init.sh`` always installs the local package editable
+    (``-e .``, whether via the locked default path or ``--unlocked`` --
+    lode-g274.1), so a venv's ``lode`` resolves to the ``src`` of *whichever
+    checkout it was built in*. Activate the main checkout's venv while sitting
+    in a worktree and
     pytest collects **this** checkout's ``tests/`` while importing **that**
     one's ``src``. Nothing warns, and the run reports a result for the wrong
     tree in either direction: a false FAIL when this branch's fix is never
@@ -145,8 +147,9 @@ def _wrong_source_tree_message(lode_file: str, checkout_root: Path) -> str | Non
     imported is the one whose source this checkout owns") as one rule instead
     of two special cases, and it also rejects a stale non-editable copy
     installed into a ``site-packages`` inside this same checkout. The repo only
-    ever installs editable (``requirements.txt`` is a single ``-e .[dev]``), so
-    the ``src`` layout is the only shape that legitimately occurs.
+    ever installs editable (``scripts/python-init.sh`` always passes ``-e``,
+    locked or ``--unlocked`` -- lode-g274.1), so the ``src`` layout is the
+    only shape that legitimately occurs.
     """
     expected_src = checkout_root / "src"
     resolved = Path(lode_file).resolve()
