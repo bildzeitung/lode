@@ -1285,7 +1285,12 @@ def test_reenrich_never_enqueues_embed_jobs(tmp_path: Path) -> None:
     assert types == {"enrich"}
 
 
-def test_status_hints_enrichment_model_mixed(tmp_path: Path) -> None:
+def test_status_hints_enrichment_stale_when_two_models_disagree_with_config(
+    tmp_path: Path,
+) -> None:
+    """Two distinct stored models, both != current config -- the old
+    2+-distinct 'mixed' case, still covered by the new stale-vs-current-config
+    check (a strict superset once scoped to live heads)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -1293,6 +1298,9 @@ def test_status_hints_enrichment_model_mixed(tmp_path: Path) -> None:
         conn.execute(
             "INSERT INTO versions (version_id, note_id, body, op) "
             "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
         )
         conn.commit()
         _write_ai_annotation(conn, "note-1", "ver-1", "model-a")
@@ -1304,13 +1312,18 @@ def test_status_hints_enrichment_model_mixed(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert (
-        "the enrichment store's AI annotations carry more than one model"
-        in result.stdout
+        "the enrichment store's AI annotations disagree with the currently "
+        "configured enrichment_llm" in result.stdout
     )
     assert "No action needed." not in result.stdout
 
 
-def test_status_no_enrichment_hint_when_all_one_model(tmp_path: Path) -> None:
+def test_status_hints_enrichment_stale_uniform_disagreement(tmp_path: Path) -> None:
+    """lode-o9k3: the gap `_enrichment_model_mixed` missed -- a corpus
+    uniformly enriched under a SINGLE model that differs from the currently
+    configured enrichment_llm (the primary "just bumped enrichment_llm"
+    workflow) must fire the hint, even though there is only one distinct
+    stored model on record."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
@@ -1319,8 +1332,42 @@ def test_status_no_enrichment_hint_when_all_one_model(tmp_path: Path) -> None:
             "INSERT INTO versions (version_id, note_id, body, op) "
             "VALUES ('ver-1', 'note-1', 'body', 'create')"
         )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
         conn.commit()
-        _write_ai_annotation(conn, "note-1", "ver-1", "model-a")
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert (
+        "the enrichment store's AI annotations disagree with the currently "
+        "configured enrichment_llm" in result.stdout
+    )
+    assert "No action needed." not in result.stdout
+
+
+def test_status_no_enrichment_hint_when_all_one_model_matches_config(
+    tmp_path: Path,
+) -> None:
+    """A single stored model that agrees with the current config stays quiet --
+    matches `lode reenrich`'s own "nothing stale" verdict for the same DB."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm)
     finally:
         conn.close()
 
@@ -1331,12 +1378,15 @@ def test_status_no_enrichment_hint_when_all_one_model(tmp_path: Path) -> None:
     assert "No action needed." in result.stdout
 
 
-def test_enrichment_model_mixed_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _BoomConn:
-        def execute(self, *_args: object, **_kwargs: object) -> None:
-            raise sqlite3.OperationalError("db exploded")
+def test_enrichment_model_stale_is_never_fatal(tmp_path: Path) -> None:
+    # A directory in place of the db file: sqlite3 can't open it, raising
+    # inside _open_db -- the failure path _enrichment_model_stale must
+    # swallow rather than propagate (mirrors _model_revision_status's own
+    # "Never raises" contract, per the other status-hint probes).
+    not_a_db = tmp_path / "not-a-db"
+    not_a_db.mkdir()
 
-    assert cli._enrichment_model_mixed(_BoomConn()) is False  # type: ignore[arg-type]
+    assert cli._enrichment_model_stale(not_a_db, "x") is False
 
 
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
