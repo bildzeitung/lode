@@ -10,21 +10,11 @@
 # with --require-hashes, so a hash mismatch FAILS the install rather than
 # merely warning. `-e .` and `--require-hashes` are mutually exclusive in a
 # single pip/uv invocation (both reject an editable/unhashed requirement once
-# --require-hashes is set), so this is a three-step install:
-#
-#   1. hash-verified runtime deps, from requirements.lock
-#   2. the local package itself, editable, --no-deps (its runtime deps were
-#      already satisfied by step 1 -- --no-deps keeps this step from
-#      re-resolving them unhashed, which would defeat the lock)
-#   3. the dev extra, resolved FRESH from pyproject.toml -- deliberately NOT
-#      locked (epic lode-g274 OQ#1: dev-tool drift is not this lock's job;
-#      the gates themselves, run at HEAD, are the backstop for it). Already
-#      installed, hash-locked runtime deps satisfy pyproject.toml's ranges,
-#      so this step only resolves/installs the dev-only packages -- but it
-#      MUST repeat `-e`: a plain (non-editable) `.[dev]` here would silently
-#      overwrite step 2's editable install with a frozen build-time copy,
-#      which is exactly the failure the wrong-source-tree guard
-#      (tests/conftest.py, lode-jh80) exists to catch.
+# --require-hashes is set), so this is a multi-step install -- shared with
+# scripts/update-deps.sh's rebuild_venv via install_locked_venv() in
+# scripts/venv-install.sh (lode-02xy; see that file for the step-by-step
+# breakdown and why it's `&&`-chained), so a future step change is made once,
+# not drifted between the two scripts.
 #
 # `--unlocked` skips the lock entirely and resolves everything fresh from
 # pyproject.toml instead (the pre-lock behavior) -- the deliberate "what
@@ -45,13 +35,14 @@ done
 
 python -m venv venv
 . ./venv/bin/activate
-pip install -U uv
-uv pip install -U pip
+
+# shellcheck source=venv-install.sh
+. "$(dirname "$0")/venv-install.sh"
 
 if [ "$UNLOCKED" -eq 1 ]; then
+    pip install -U uv
+    uv pip install -U pip
     uv pip install -e '.[dev]'
 else
-    uv pip install --require-hashes -r requirements.lock
-    uv pip install -e . --no-deps
-    uv pip install -e '.[dev]'
+    install_locked_venv requirements.lock
 fi
