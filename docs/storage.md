@@ -1330,3 +1330,71 @@ add `model_revision` to `VectorStore._schema`, capture it at `embed()` time via 
 a `lode status` check reading the two comparisons above — as **one ticket**, and `lode-g274.7`'s
 re-embed/regenerate capability is what a WARN-ed mismatch resolves into, never blocking anything on
 its own. Neither needs a further design question answered before it can be scoped.
+
+## Re-embedding the corpus deliberately (lode-g274.7)
+
+`lode reembed` is the regeneration capability §8a's WARN-never-REFUSE decision requires — the
+deliberate act a mixed/drift `lode status` hint points at, since a mismatch is never corrected
+automatically. It also covers the pre-pin case §8a's own opening acknowledges: an index built before
+`model_revision` even existed carries `NULL` on every row, and this is how that gets a real value.
+
+**What "the corpus" means, scoped to live heads.** `lode reembed` enqueues one `embed` job per
+**live head** — every note's current `head_version_id` and every external's current
+`head_snapshot_id` (`lode.retrieval.live_head_versions`, the same notes-UNION-externals set
+retrieval itself is scoped to). This is not a narrowing: `passages`/`embeddings` are already "heads
+only" ([data shape sketch](#data-shape-sketch) above) — a superseded version or snapshot carries no
+live vectors to regenerate in the first place. There is no partial/targeted re-embed (one note, one
+source) — the triggering event (a model swap, or a cache eviction that changed the resolved
+revision) is corpus-wide by nature, so the command always re-embeds every live head rather than
+offering a scope flag nothing would use.
+
+**Forces regeneration past a `done` job, reusing the existing enqueue primitive.** The passive
+reconciliation scan's `embed_gap` step (above) only re-enqueues a head with **no live** (pending or
+running) embed job — a `done` job already covers it, by design, since that step exists to heal a
+job that never ran, not to second-guess one that succeeded. `lode reembed` is the opposite case: a
+`done` job under a stale `model_revision` is exactly what needs a *fresh* one, so it force-enqueues
+every live head unconditionally. It still goes through `lode.jobs.enqueue_derive_jobs` — the same
+primitive every capture uses, `types=("embed",)` only — so the live-job partial unique index still
+dedupes a head that already has a job in flight; nothing new was built to force the enqueue itself.
+
+**Rebuild-in-place, not build-then-swap.** Each live head's vectors are replaced atomically as its
+own `embed` job runs (`VectorStore.replace_vectors`'s existing delete-then-add for that
+`target_version`) — no shadow index, no whole-corpus swap kept in reserve. The corpus is necessarily
+**mixed** for the run's duration: some heads already on the new revision, others still on the old
+one. That is not a new failure mode a re-embed run has to guard against — it is exactly the state
+the per-vector `model_revision` field above was built to make **detectable** (`lode status`'s
+"mixed" hint) and **safe** (retrieval keeps working throughout, on whichever revision each head
+currently carries) rather than something to hide behind a swap. Build-then-swap was considered and
+rejected here for the same reason PIN was deferred in the download-control decision above: it is
+real cost (a second copy of the whole index) bought against a risk the mixed-state design already
+neutralizes.
+
+**Resumable by construction — no new interruption-handling was built.** `lode reembed`'s enqueue
+step runs inside one SQLite transaction; interrupted before it commits, nothing is enqueued at all,
+so re-running the command is always safe. It does not itself drain the jobs it enqueues — that is
+`lode work`'s job, the async work queue's own durable, resumable execution engine (["lag is safe by
+construction"](#one-property-makes-this-easy-lag-is-safe-by-construction) above): interrupting
+`lode work` mid-drain leaves whatever was still pending exactly that, pending, safe to resume with
+another `lode work` run. **Resume an interrupted regeneration with `lode work`, not by re-running
+`lode reembed`** — the latter has no notion of "already did this run," so calling it again
+re-enqueues a job for every live head again, including ones the interrupted run already finished
+(harmless — `embed()` converges to the same state on a repeat run — but wasted inference at corpus
+scale). Once every enqueued job reaches `done`, the manifest agrees with the index again:
+`VectorStore.model_revisions()` returns a single revision and `lode status`'s hints clear, assuming
+nothing else changed the live cache mid-run.
+
+**The lexical/FTS leg needs nothing.** FTS is written synchronously at save time from `chunk()`'s
+deterministic output (`LexicalCacheBackend`, [capture-path cache composition](#data-shape-sketch)) and
+carries no model of its own — an embedding-model change cannot desync it, so `lode reembed` enqueues
+no `refresh` of `passages_fts` and the lexical leg is simply unaffected, confirming the open question
+this ticket originally posed.
+
+**Embedder only — the enrichment LLM is explicitly out of scope here.** This matches `lode-crh8`'s
+own DB-invalidation scoping, same as §8a above. The enrichment LLM (Claude) also persists into the
+DB (`annotations`/`edges`, [configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
+and a mismatch there is symmetrically detectable — but *correcting* it (a targeted re-enrich) is
+tracked as its own ticket, `lode-14jr`, not folded in here: re-enrichment costs a Claude API call per
+head (unlike the embedder's local ONNX inference), so "always regenerate every live head
+unconditionally" — the right default for a free, local, CPU-bound embed — is not obviously the right
+default for a paid, remote, rate-limited enrich, and deserves its own design pass rather than
+inheriting this command's shape by assumption.
