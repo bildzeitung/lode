@@ -93,6 +93,17 @@ class VectorStore:
                     pa.list_(pa.float32(), self._settings.embedding_vector_dim),
                 ),
                 pa.field("model", pa.string()),
+                # The resolved HuggingFace revision (commit SHA) the embedder
+                # actually produced this vector under -- one field on the same
+                # per-row write, not a new table
+                # (docs/storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81,
+                # lode-crh8.1's per-vector mismatch-behavior decision). Nullable:
+                # a row written before this field existed simply carries NULL,
+                # and a resolution failure at embed time (offline, rate-limited)
+                # is recorded as NULL rather than failing the embed (WARN, never
+                # REFUSE). NULL is itself a distinct value :meth:`model_revisions`
+                # can surface as part of a mixed index.
+                pa.field("model_revision", pa.string()),
             ]
         )
 
@@ -114,8 +125,9 @@ class VectorStore:
         converge instead of accumulate. ``target_version`` is a lowercase hex
         content-address (``lode.hashing``), so it is safe to inline in the delete
         predicate. ``rows`` must carry the table's columns (``passage_id``,
-        ``target_version``, ``vector``, ``model``); an empty list just clears the
-        version.
+        ``target_version``, ``vector``, ``model``); ``model_revision`` is optional
+        per row (a missing key converts to ``NULL``, same as an explicit ``None``)
+        — an empty list just clears the version.
         """
         table = self._open_or_create_table()
         table.delete(f"target_version = '{target_version}'")
@@ -142,6 +154,38 @@ class VectorStore:
             .to_list()
         )
         return [row["vector"] for row in rows]
+
+    def model_revisions(self, model: str) -> set[str | None]:
+        """Distinct ``model_revision`` values recorded for ``model``'s live vectors.
+
+        **This is "the manifest"** — per the ``lode-crh8.1`` decision
+        (``docs/storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81``)
+        there is no separate manifest file/table; the manifest is this aggregate
+        read over the ``embeddings`` rows already written. A plain metadata-filtered
+        scan, no ANN query — mirrors :meth:`vectors_for`'s shape.
+
+        More than one distinct value means the index is currently **mixed**: some
+        passages under ``model`` were embedded under a different resolved revision
+        than others (e.g. a mid-corpus cache eviction and re-pull), detectable
+        structurally with no separate bookkeeping. ``None`` is itself a member the
+        set can carry — a row written before the ``model_revision`` field existed,
+        or one where the revision probe failed at embed time, is recorded as
+        ``NULL`` and shows up here as ``None``, not omitted. Empty if the store has
+        never written a vector under ``model`` (including a never-written store,
+        which opens empty and finds none — mirrors :meth:`search`/:meth:`vectors_for`).
+
+        Projects the ``model_revision`` column only (unlike :meth:`vectors_for`,
+        which needs the vectors themselves) so the scan never deserializes a
+        single fixed-width ``vector`` blob just to read one string per row.
+        """
+        rows = (
+            self._open_or_create_table()
+            .search()
+            .where(f"model = '{model}'")
+            .select(["model_revision"])
+            .to_list()
+        )
+        return {row["model_revision"] for row in rows}
 
     def search(
         self, query_vector: list[float], *, k: int, where: str | None = None

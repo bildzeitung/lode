@@ -25,12 +25,19 @@ def _settings():
     return load_settings(embedding_vector_dim=DIM)
 
 
-def _row(passage_id: str, target_version: str, vector: list[float]):
+def _row(
+    passage_id: str,
+    target_version: str,
+    vector: list[float],
+    *,
+    model_revision: str | None = None,
+):
     return {
         "passage_id": passage_id,
         "target_version": target_version,
         "vector": vector,
         "model": _settings().embedding_model,
+        "model_revision": model_revision,
     }
 
 
@@ -54,6 +61,8 @@ def test_replace_vectors_persists_at_pinned_dim_with_metadata(tmp_path: Path) ->
     assert all(r["target_version"] == "v1" for r in rows)
     assert all(len(r["vector"]) == DIM for r in rows)
     assert all(r["model"] == _settings().embedding_model for r in rows)
+    # model_revision is nullable -- _row()'s default (never passed here).
+    assert all(r["model_revision"] is None for r in rows)
 
 
 def test_search_returns_nearest_passages_first(tmp_path: Path) -> None:
@@ -168,3 +177,89 @@ def test_vectors_for_unknown_target_returns_empty(tmp_path: Path) -> None:
 def test_vectors_for_on_never_written_store_returns_empty(tmp_path: Path) -> None:
     # Mirrors search()'s empty-store handling: opens an empty table, no raise.
     assert _store(tmp_path).vectors_for("v1") == []
+
+
+# --- model_revisions (lode-g274.4's "the manifest is this per-vector data") ---
+#
+# docs/storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81:
+# there is no separate manifest artifact -- it's the aggregate of the existing
+# per-row model_revision field. More than one distinct value means the index
+# is currently mixed.
+
+
+def test_model_revisions_on_never_written_store_returns_empty(tmp_path: Path) -> None:
+    assert _store(tmp_path).model_revisions(_settings().embedding_model) == set()
+
+
+def test_model_revisions_returns_the_single_recorded_revision(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    model = _settings().embedding_model
+    store.replace_vectors(
+        "v1",
+        [
+            _row("a", "v1", [1.0, 0.0, 0.0, 0.0], model_revision="sha-1"),
+            _row("b", "v1", [0.0, 1.0, 0.0, 0.0], model_revision="sha-1"),
+        ],
+    )
+
+    assert store.model_revisions(model) == {"sha-1"}
+
+
+def test_model_revisions_detects_a_mixed_index(tmp_path: Path) -> None:
+    # Some passages embedded under one revision, others under a different one
+    # (e.g. a mid-corpus cache eviction and re-pull) -- more than one distinct
+    # value means the index is structurally mixed.
+    store = _store(tmp_path)
+    model = _settings().embedding_model
+    store.replace_vectors(
+        "v1",
+        [
+            _row("a", "v1", [1.0, 0.0, 0.0, 0.0], model_revision="sha-1"),
+            _row("b", "v1", [0.0, 1.0, 0.0, 0.0], model_revision="sha-2"),
+        ],
+    )
+
+    assert store.model_revisions(model) == {"sha-1", "sha-2"}
+
+
+def test_model_revisions_includes_none_for_rows_that_predate_the_field(
+    tmp_path: Path,
+) -> None:
+    # A row written before model_revision existed (or whose probe failed at
+    # embed time) carries NULL -- surfaced here as None, a distinct member of
+    # the set, not silently omitted.
+    store = _store(tmp_path)
+    model = _settings().embedding_model
+    store.replace_vectors(
+        "v1",
+        [
+            _row("a", "v1", [1.0, 0.0, 0.0, 0.0], model_revision="sha-1"),
+            _row("b", "v1", [0.0, 1.0, 0.0, 0.0]),  # model_revision=None default
+        ],
+    )
+
+    assert store.model_revisions(model) == {"sha-1", None}
+
+
+def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:
+    # A different model's rows must not bleed into this model's manifest read.
+    store = _store(tmp_path)
+    store.replace_vectors(
+        "v1",
+        [_row("a", "v1", [1.0, 0.0, 0.0, 0.0], model_revision="sha-1")],
+    )
+    table = lancedb.connect(tmp_path / "vectors").open_table("embeddings")
+    table.add(
+        [
+            {
+                "passage_id": "z",
+                "target_version": "v1",
+                "vector": [0.0, 0.0, 0.0, 1.0],
+                "model": "some-other/model",
+                "model_revision": "sha-other",
+            }
+        ]
+    )
+
+    assert store.model_revisions(_settings().embedding_model) == {"sha-1"}
+    assert store.model_revisions("some-other/model") == {"sha-other"}

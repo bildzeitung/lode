@@ -11,6 +11,7 @@ the production dim is the pinned build constant.
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import lancedb
 import pytest
@@ -85,6 +86,9 @@ def test_embed_writes_one_vector_per_passage(tmp_path: Path) -> None:
         assert {r["target_version"] for r in rows} == {version}
         assert all(len(r["vector"]) == DIM for r in rows)
         assert all(r["model"] == _settings().embedding_model for r in rows)
+        # _StubEmbedder has no model_revision() -- the duck-typed probe finds
+        # nothing to call, so every row carries NULL (lode-g274.4).
+        assert all(r["model_revision"] is None for r in rows)
         # Vector rows are keyed to the persisted passages.
         sqlite_ids = {
             pid
@@ -247,6 +251,213 @@ def test_empty_body_embeds_nothing(tmp_path: Path) -> None:
         conn.close()
 
 
+# --- model_revision: per-vector provenance (lode-g274.4, lode-crh8.1's ---------
+# DETECT-not-PIN / WARN-per-vector decision, docs/storage.md §8a)
+
+
+class _StubEmbedderWithRevision(_StubEmbedder):
+    """A stub that DOES report a resolved revision, unlike the plain stub above.
+
+    Exercises the duck-typed :func:`lode.embedding._embedder_model_revision`
+    probe's positive path -- most other tests in this file use the plain
+    `_StubEmbedder`, which has no `model_revision()` at all (the negative path,
+    covered by `test_embed_writes_one_vector_per_passage` above).
+    """
+
+    def __init__(self, dim: int, revision: str) -> None:
+        super().__init__(dim)
+        self.revision = revision
+        self.revision_calls = 0
+
+    def model_revision(self) -> str:
+        self.revision_calls += 1
+        return self.revision
+
+
+def test_embed_records_the_embedder_reported_revision_per_row(tmp_path: Path) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        version = _save_note(conn)
+        lance_dir = tmp_path / "vectors"
+        stub = _StubEmbedderWithRevision(DIM, "sha-abc123")
+
+        embed(conn, version, lance_dir=lance_dir, embedder=stub, settings=_settings())
+
+        rows = _open_vector_table(lance_dir).to_arrow().to_pylist()
+        assert rows
+        assert all(r["model_revision"] == "sha-abc123" for r in rows)
+    finally:
+        conn.close()
+
+
+def test_embed_skips_the_revision_probe_when_nothing_to_embed(tmp_path: Path) -> None:
+    conn = init_db(tmp_path / "lode.db")
+    try:
+        # A whitespace-only body chunks to zero passages -- same edge as
+        # test_empty_body_embeds_nothing, but asserting the revision probe
+        # specifically is never reached either (nothing will record it).
+        version = _save_note(conn, body="   \n\n  \n")
+        stub = _StubEmbedderWithRevision(DIM, "sha-abc123")
+
+        n = embed(
+            conn,
+            version,
+            lance_dir=tmp_path / "vectors",
+            embedder=stub,
+            settings=_settings(),
+        )
+
+        assert n == 0
+        assert stub.revision_calls == 0
+    finally:
+        conn.close()
+
+
+def test_embedder_model_revision_probe_never_raises_on_a_broken_method(
+    tmp_path: Path,
+) -> None:
+    """A revision probe that raises must not take the embed down (WARN, never fail)."""
+    conn = init_db(tmp_path / "lode.db")
+    try:
+
+        class _BoomEmbedder(_StubEmbedder):
+            def model_revision(self) -> str:
+                raise RuntimeError("network's out")
+
+        version = _save_note(conn)
+        lance_dir = tmp_path / "vectors"
+
+        n = embed(
+            conn,
+            version,
+            lance_dir=lance_dir,
+            embedder=_BoomEmbedder(DIM),
+            settings=_settings(),
+        )
+
+        assert n > 0
+        rows = _open_vector_table(lance_dir).to_arrow().to_pylist()
+        assert all(r["model_revision"] is None for r in rows)
+    finally:
+        conn.close()
+
+
+def test_resolve_model_revision_returns_the_probed_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    class _FakeModelInfo:
+        sha = "deadbeef123"
+
+    captured: dict[str, str] = {}
+
+    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+        captured["repo_id"] = repo_id
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    model_id = _settings().embedding_model
+    assert resolve_model_revision(model_id) == "deadbeef123"
+    # Probed via the pinned HF source repo id, not the friendly model id --
+    # they can differ for some models (lode.config.model_cache_identity).
+    from lode.config import model_cache_identity
+
+    hf_source, _model_file = model_cache_identity(model_id)  # type: ignore[misc]
+    assert captured["repo_id"] == hf_source
+
+
+def test_resolve_model_revision_unknown_model_returns_none_no_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    def _boom(repo_id: str) -> None:
+        raise AssertionError("must not be reached for an unpinned model id")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _boom)
+
+    assert resolve_model_revision("not-a-real/model-id") is None
+
+
+def test_resolve_model_revision_never_raises_on_probe_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    def _offline(repo_id: str) -> None:
+        raise OSError("no network")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _offline)
+
+    assert resolve_model_revision(_settings().embedding_model) is None
+
+
+def test_fast_embed_embedder_model_revision_resolves_and_caches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """FastEmbedEmbedder.model_revision() loads the model, probes once, caches."""
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    probe_calls = 0
+
+    class _FakeModelInfo:
+        sha = "resolved-sha"
+
+    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(_settings())
+    assert embedder.model_revision() == "resolved-sha"
+    assert embedder.model_revision() == "resolved-sha"
+    # Resolved once at load time, cached for this instance's lifetime -- not
+    # re-probed on every model_revision() call.
+    assert probe_calls == 1
+
+
+def test_fast_embed_embedder_model_revision_none_on_probe_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    def _offline(repo_id: str) -> None:
+        raise OSError("no network")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _offline)
+
+    embedder = FastEmbedEmbedder(_settings())
+    assert embedder.model_revision() is None
+
+
 # --- FastEmbedEmbedder.embed_query: the asymmetric query side (lode-bkc) --------
 #
 # The query path applies the ``search_query:`` prefix (vs ``search_document:`` for
@@ -291,6 +502,7 @@ def test_load_passes_durable_model_cache_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import fastembed
+    import huggingface_hub
 
     monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
     captured: dict[str, object] = {}
@@ -300,6 +512,11 @@ def test_load_passes_durable_model_cache_dir(
             captured.update(kwargs)
 
     monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+    # _load() also probes the revision (lode-g274.4) -- stub it offline so this
+    # stays a hermetic, network-free test like every other one in this section.
+    monkeypatch.setattr(
+        huggingface_hub, "model_info", lambda repo_id: SimpleNamespace(sha="unused")
+    )
 
     embedder = FastEmbedEmbedder(_settings())
     embedder._load()
@@ -319,6 +536,7 @@ def test_load_logs_progress_around_the_model_construction(
     import logging
 
     import fastembed
+    import huggingface_hub
 
     monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
 
@@ -327,6 +545,11 @@ def test_load_logs_progress_around_the_model_construction(
             pass
 
     monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+    # Same offline stub as the sibling test above -- _load() now also probes
+    # the revision (lode-g274.4).
+    monkeypatch.setattr(
+        huggingface_hub, "model_info", lambda repo_id: SimpleNamespace(sha="unused")
+    )
 
     embedder = FastEmbedEmbedder(_settings())
     with caplog.at_level(logging.INFO):

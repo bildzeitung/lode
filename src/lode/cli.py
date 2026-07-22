@@ -1290,6 +1290,54 @@ def _cold_model_cache(settings: Settings) -> bool:
     return any(_model_cache_probe(model_id) is False for model_id in probes)
 
 
+def _model_revision_status(
+    settings: Settings, lance_dir_path: Path | str
+) -> tuple[bool, bool]:
+    """``(mixed, drift)`` for the embedder's live per-vector ``model_revision`` record.
+
+    Per ``lode-crh8.1``'s decision (``docs/storage.md``
+    #model-provenance-the-embedder-revision-manifest-decided-lode-crh81) the
+    "manifest" is the aggregate of the per-vector ``model_revision`` field
+    already on every ``embeddings`` row (:meth:`lode.vectorstore.VectorStore.
+    model_revisions`), not a separate committed artifact -- this reads that
+    aggregate and compares it against a fresh live probe.
+
+    - ``mixed`` — the live store currently holds more than one distinct
+      ``model_revision`` for ``settings.embedding_model``: some passages were
+      embedded under a different resolved revision than others (e.g. a
+      mid-corpus cache eviction and re-pull). A pure LanceDB metadata scan, no
+      network.
+    - ``drift`` — a fresh ``huggingface_hub.model_info(repo).sha`` probe (the
+      embedder's *currently* resolvable revision) disagrees with at least one
+      recorded, non-``None`` revision. ``False`` if the probe could not judge
+      (offline, rate-limited, an unpinned model id) or the index has never
+      been embedded under this model -- an absent verdict must never read as
+      "agrees" any more than ``_model_cache_probe``'s ``None`` reads as
+      "warm" (lode-l38d.6's same non-fatal contract).
+
+    Never raises: any failure (a corrupt LanceDB dir, an import error) is
+    reported as ``(False, False)`` -- this can only ever add hint lines to
+    ``lode status``, never fail the command.
+    """
+    try:
+        from lode.embedding import resolve_model_revision
+        from lode.vectorstore import VectorStore
+
+        recorded = VectorStore(lance_dir_path, settings).model_revisions(
+            settings.embedding_model
+        )
+        if not recorded:
+            return False, False
+        mixed = len(recorded) > 1
+        current = resolve_model_revision(settings.embedding_model)
+        drift = current is not None and any(
+            rev is not None and rev != current for rev in recorded
+        )
+        return mixed, drift
+    except Exception:
+        return False, False
+
+
 @app.command()
 def status(
     db: Path | None = _DB_OPTION,
@@ -1306,10 +1354,13 @@ def status(
 
     Below that, an action-hint footer tells you what to do next: run
     "lode work" if anything is pending or still-retryable, run
-    "lode models pull" if the local model cache is cold, or an explicit
-    "No action needed." if neither applies. Dead-letter jobs get no hint --
+    "lode models pull" if the local model cache is cold, flag the embedder's
+    live vectors if their recorded model_revision is mixed or has drifted from
+    what the cache currently resolves (lode-crh8.1), or an explicit
+    "No action needed." if none of those apply. Dead-letter jobs get no hint --
     they are already listed above with their errors, and won't be retried.
     """
+    db_path = db or default_db_path()
     conn = _open_db(db)
     try:
         job_counts = dict(
@@ -1432,6 +1483,16 @@ def status(
     except Exception:
         settings = None
     cache_cold = False if settings is None else _cold_model_cache(settings)
+    # Same non-fatal contract as cache_cold above, and the same reason it stays
+    # OUTSIDE the settings try: _model_revision_status documents "Never raises"
+    # in its own right, so folding it into the settings guard would swallow a
+    # future bug in ITS internal guard too.
+    revision_mixed = False
+    revision_drift = False
+    if settings is not None:
+        revision_mixed, revision_drift = _model_revision_status(
+            settings, lance_dir(db_path)
+        )
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1449,7 +1510,26 @@ def status(
             "'lode models pull' to warm it.",
             highlight=False,
         )
-    if pending_or_failed == 0 and not cache_cold:
+    if revision_mixed:
+        console.print(
+            "[warn]Action needed:[/warn] the embedder's live vectors carry more "
+            "than one model revision -- the index is mixed; re-embed to make it "
+            "consistent again.",
+            highlight=False,
+        )
+    if revision_drift:
+        console.print(
+            "[warn]Action needed:[/warn] the embedder's cached weights have "
+            "moved past the revision your vectors were embedded with -- "
+            "re-embed to pick up the change.",
+            highlight=False,
+        )
+    if (
+        pending_or_failed == 0
+        and not cache_cold
+        and not revision_mixed
+        and not revision_drift
+    ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
 
 

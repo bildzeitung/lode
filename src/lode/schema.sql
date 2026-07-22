@@ -172,10 +172,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS passages_fts USING fts5 (
 -- embeddings — derived cache, one per passage. The vector physically lives in
 -- LanceDB in the running system (docs/stack.md "Why a split store"); this table
 -- is the data-shape row and the sqlite-vec fallback home for the vector blob.
+-- model_revision is the resolved HuggingFace revision (commit SHA) the
+-- embedder produced this vector under -- nullable (a row predating this field,
+-- or a resolution failure at embed time, carries NULL); the manifest for
+-- lode-crh8.1's per-vector mismatch-behavior decision
+-- (docs/storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81)
+-- is the aggregate of this column, not a separate artifact -- see the live
+-- LanceDB embeddings table (src/lode/vectorstore.py::VectorStore._schema),
+-- which carries the same shape; nothing writes this SQLite table today.
 CREATE TABLE IF NOT EXISTS embeddings (
-    passage_id TEXT PRIMARY KEY,
-    vector     BLOB NOT NULL,
-    model      TEXT NOT NULL,
+    passage_id     TEXT PRIMARY KEY,
+    vector         BLOB NOT NULL,
+    model          TEXT NOT NULL,
+    model_revision TEXT,
     FOREIGN KEY (passage_id) REFERENCES passages (passage_id)
 );
 

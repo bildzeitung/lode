@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Protocol
 
 from lode.chunking import Passage, chunk
-from lode.config import Settings, model_cache_dir
+from lode.config import Settings, model_cache_dir, model_cache_identity
 from lode.progress import op_progress
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
@@ -93,6 +93,59 @@ class Embedder(Protocol):
         ...
 
 
+def _embedder_model_revision(embedder: object) -> str | None:
+    """Best-effort resolved HF revision for the vectors ``embedder`` is about to write.
+
+    Duck-typed on an optional ``model_revision()`` method rather than a member
+    of the :class:`Embedder` Protocol itself — most callers across this tree
+    inject a stub with no real HuggingFace resolution to report, and "no
+    revision info available" is exactly what an absent method should mean here
+    (mirrors the existing NULL-on-predates-the-field story, ``docs/storage.md``
+    §8a). Only :class:`FastEmbedEmbedder` implements it for real. Never raises
+    — a probe failure is WARN territory (``lode-crh8.1``), never a reason to
+    fail an embed.
+    """
+    probe = getattr(embedder, "model_revision", None)
+    if probe is None:
+        return None
+    try:
+        return probe()
+    except Exception:
+        return None
+
+
+def resolve_model_revision(model_name: str) -> str | None:
+    """Resolve ``model_name``'s currently-live HuggingFace revision (commit SHA).
+
+    The same ``huggingface_hub.model_info(repo).sha`` lookup ``fastembed``'s own
+    loader performs internally at every non-offline load
+    (``fastembed/common/model_management.py``) but never exposes — captured here
+    into lode's own per-vector record instead of being discarded (the
+    download-control decision, ``docs/storage.md``
+    #model-provenance-the-embedder-revision-manifest-decided-lode-crh81,
+    ``lode-crh8.1``: DETECT, not PIN — a read-only probe, not a pinned download).
+
+    Resolves the HF source repo via :func:`lode.config.model_cache_identity` —
+    the same pinned identity ``lode status``'s cold-cache probe uses — so this
+    needs no ``fastembed`` registry lookup of its own. Returns ``None`` for a
+    model id outside that pinned set (a ``config.toml`` override) or on any
+    network/lookup failure: a probe failure is WARN territory, never a reason to
+    fail an embed (mismatch-behavior decision, same doc section), so a
+    resolution failure is recorded as ``model_revision = NULL`` on the write
+    rather than raised.
+    """
+    identity = model_cache_identity(model_name)
+    if identity is None:
+        return None
+    hf_source, _model_file = identity
+    try:
+        from huggingface_hub import model_info
+
+        return model_info(hf_source).sha
+    except Exception:
+        return None
+
+
 class FastEmbedEmbedder:
     """Default :class:`Embedder`: the pinned local ONNX model via ``fastembed``.
 
@@ -109,6 +162,7 @@ class FastEmbedEmbedder:
     def __init__(self, settings: Settings) -> None:
         self._model_name = settings.embedding_model
         self._model: object | None = None
+        self._revision: str | None = None
         self._load_lock = threading.Lock()
         self._heartbeat_interval_s = settings.progress_heartbeat_interval_s
 
@@ -136,7 +190,28 @@ class FastEmbedEmbedder:
                             model_name=self._model_name,
                             cache_dir=str(model_cache_dir()),
                         )
+                    # Captured alongside the model itself (same critical
+                    # section, same "only the first caller pays" property) --
+                    # a fresh probe every embed() call would otherwise double
+                    # the network round trip for no benefit, since this
+                    # instance's model_name can't change mid-lifetime. Never
+                    # raises (see resolve_model_revision); a failed probe just
+                    # leaves this None for this instance's lifetime, same as
+                    # any other WARN-territory provenance gap.
+                    self._revision = resolve_model_revision(self._model_name)
         return self._model
+
+    def model_revision(self) -> str | None:
+        """The resolved HuggingFace revision (commit SHA) behind this instance's weights.
+
+        Forces the same lazy load :meth:`embed_passages`/:meth:`embed_query`
+        trigger (so calling this alone still resolves it), then returns the
+        revision captured at load time. ``None`` if the probe could not judge
+        (a ``config.toml`` override outside the pinned identity set, or any
+        network/lookup failure) — WARN territory, not a reason to fail.
+        """
+        self._load()
+        return self._revision
 
     def warm(self) -> None:
         """Force the weights download/load now, ahead of any embed call.
@@ -255,12 +330,17 @@ def embed(
 
     embedder = embedder or FastEmbedEmbedder(settings)
     vectors = embedder.embed_passages([p.text for p in passages]) if passages else []
+    # Only probed when there is something to write -- an empty body that chunks
+    # to zero passages must not pay for (or attempt) a revision resolution that
+    # nothing will record.
+    model_revision = _embedder_model_revision(embedder) if passages else None
     rows: list[dict[str, object]] = [
         {
             "passage_id": p.passage_id,
             "target_version": p.target_version,
             "vector": vector,
             "model": settings.embedding_model,
+            "model_revision": model_revision,
         }
         for p, vector in zip(passages, vectors, strict=True)
     ]
