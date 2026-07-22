@@ -9,6 +9,12 @@ name: tests
 # un-mocked FastEmbedCrossEncoder reranker. Workflow filename is FROZEN:
 # lode-qxdn.5's badge URL will hard-code workflows/tests.yml/badge.svg.
 #
+# Also hosts the `lock-currency` job (lode-g274.6): the `tests` job below
+# installs from the committed, hash-verified `requirements.lock` rather than
+# resolving fresh, so this workflow tests the same bytes a developer runs;
+# `lock-currency` separately verifies that lock is still what `pyproject.toml`
+# would produce today. See each job's own comments for the mechanism.
+#
 # push trigger convention (lode-bmvy, mirrored from build.yml) -- narrowed to
 # trunk + land/** so this workflow (heavier than build.yml: a full `-e
 # .[dev]` install plus reranker/embedder weights) doesn't also fire on a v*
@@ -50,6 +56,50 @@ env:
   LODE_TEST_WORKERS: "2"
 
 jobs:
+  # Cheap, independent check: verify requirements.lock is still what `uv pip
+  # compile` would produce for the CURRENT pyproject.toml. No model download,
+  # no dev-extra install -- runs in parallel with (not gated by, or gating)
+  # the `tests` job below, so a stale lock fails in seconds rather than after
+  # paying for the slow leg's model download (lode-g274.6).
+  #
+  # Recompiling `-o requirements.lock` IN PLACE against the file this job
+  # just checked out is the whole mechanism: uv feeds an existing output
+  # file's own pins back to the resolver as its PREFERENCE set by default
+  # (only `--upgrade`/`-U` would ignore them -- `uv pip compile --help`), so
+  # the resolution only moves when a pyproject.toml constraint forces it. An
+  # upstream release alone (pyproject.toml and the committed lock both
+  # unchanged) reproduces the committed lock byte-for-byte and this job stays
+  # green; a `pyproject.toml` dependency change without a matching
+  # `requirements.lock` regeneration changes the resolution and this job
+  # fails the diff. Verified empirically (lode-g274.6 build notes): recompiling
+  # in place against an untouched pyproject.toml is byte-identical to the
+  # committed lock; a genuinely fresh compile (no prior content at the -o
+  # path) resolves a DIFFERENT graph -- concrete proof the preference-seeding
+  # is load-bearing, not cosmetic.
+  lock-currency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        # fetch-depth: 0 not needed here -- this job never runs `pip install
+        # -e .`, so setuptools-scm's git-describe requirement (which is why
+        # the `tests` job below needs full history) doesn't apply.
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: pip install -U uv
+
+      - name: Recompile requirements.lock, using the committed lock as the resolver's preference set
+        run: uv pip compile pyproject.toml --generate-hashes -o requirements.lock
+
+      - name: Fail if the recompiled lock differs from the committed one
+        run: git diff --exit-code requirements.lock
+
   tests:
     runs-on: ubuntu-latest
     # Well below GitHub's 360-minute default -- a hung model download (the
@@ -66,16 +116,21 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.14"
-          cache: pip
-          # pyproject.toml, not requirements.lock -- this leg installs `-e
-          # .[dev]` fresh (below), unaffected by the lock (lode-g274.1); the
-          # lock's own CI currency check is a separate, later leg
-          # (lode-g274.6). pyproject.toml is the real dependency source of
-          # truth for what this step installs (lode-2ouz).
-          cache-dependency-path: pyproject.toml
+          # No `cache: pip` here -- this leg installs via `uv` (below, through
+          # scripts/python-init.sh), which uses its own cache directory
+          # (~/.cache/uv), never pip's. A `cache: pip` option would populate
+          # nothing and silently do no work.
 
-      - name: Install dependencies
-        run: pip install -e '.[dev]'
+      - name: Install dependencies (from requirements.lock)
+        # Installs the same bytes a developer runs: the exact, hash-verified
+        # runtime set from requirements.lock, via the canonical 3-step
+        # locked install (scripts/python-init.sh, lode-g274.1) rather than a
+        # hand-copied duplicate of its steps in this YAML. Currency of the
+        # lock itself is the separate `lock-currency` job above, not this
+        # step -- this step trusts whatever lock was checked out.
+        run: |
+          ./scripts/python-init.sh
+          echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
 
       - name: Resolve model cache key
         # SINGLE implementation shared with coverage.yml -- see

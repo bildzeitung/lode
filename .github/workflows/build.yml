@@ -50,11 +50,14 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          # pyproject.toml, not requirements.lock -- this leg installs `-e
-          # .[dev]` fresh (below), unaffected by the lock (lode-g274.1); the
-          # lock's own CI currency check is a separate, later leg
-          # (lode-g274.6). pyproject.toml is the real dependency source of
-          # truth for what this step installs (lode-2ouz).
+          # pyproject.toml, not requirements.lock -- this leg never installs
+          # lode's runtime deps at all (the step below installs only `build`
+          # + `nox`; `python -m build` resolves/builds in its own isolated
+          # PEP 517 env), so it is unaffected by the lock (lode-g274.1) and
+          # out of scope for the lock's CI currency check, which lives in
+          # tests.yml's `lock-currency` job instead (lode-g274.6).
+          # pyproject.toml is the real dependency source of truth for what
+          # this step installs (lode-2ouz).
           cache-dependency-path: pyproject.toml
 
       - name: Install build tooling

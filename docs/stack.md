@@ -122,9 +122,17 @@ extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and reso
 fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
 regenerating the lock or probing an upstream bump before committing to it.
 
-CI enforcement (verifying the lock is current, installing from it) is a separate, later leg
-(`lode-g274.6`), blocked on the CI test-suite gate (`lode-qxdn.2`, since landed) — CI installs
-`-e .[dev]` fresh today, unaffected by this section.
+**CI enforcement (`lode-g274.6`):** `tests.yml`'s `tests` job installs from `requirements.lock`
+itself (via `scripts/python-init.sh`, the same install path a developer runs), and a separate,
+independent `lock-currency` job in the same workflow verifies the lock is current — it recompiles
+`pyproject.toml` with `uv pip compile … -o requirements.lock`, run **in place** against the
+just-checked-out committed lock. uv feeds an existing output file's own pins back to the resolver
+as its *preference* set by default (only `--upgrade`/`-U` ignores them), so the resolution only
+moves when a `pyproject.toml` constraint forces it — an upstream release alone reproduces the
+committed lock byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift.
+`build.yml` and `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at
+all (`python -m build` resolves in its own isolated env), and `coverage.yml` is report-only
+(`lode-qxdn.3`, no merge-gate status).
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
