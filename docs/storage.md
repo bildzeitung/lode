@@ -1235,8 +1235,9 @@ for the companion runtime-knob write-up)*
 persist nothing, so a revision change there alters ranking/gating going forward but cannot corrupt
 the stored index; they are out of scope for a manifest. The enrichment LLM (Claude) *is* in the
 epic's scope for the same DB-invalidation reason the embedder is, but is tracked separately
-(`lode-g274.5`) — it collapses to a `docs/configuration.md` edit because Anthropic aliases have no
-dated per-revision identity to pin against, so it needs no schema work here.
+([decided, lode-g274.5](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
+— it collapses to a `docs/configuration.md` edit because Anthropic aliases have no dated
+per-revision identity to pin against, so it needs no schema work here.
 
 This section settles the two axes `lode-g274.4`/`lode-g274.7` were both blocked on. They are
 **orthogonal**, not one decision — conflating them (as the epic originally did) is exactly what
