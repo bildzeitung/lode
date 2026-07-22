@@ -720,6 +720,129 @@ def test_status_hints_cold_model_cache(tmp_path: Path) -> None:
     assert "No action needed." not in result.stdout
 
 
+# --- lode-g274.4: model_revision manifest hints (mixed / drift, lode-crh8.1) ----
+
+
+def _write_embedding_revision(
+    db_path: Path, settings: Settings, *revisions: str | None
+) -> None:
+    """Seed the live LanceDB store with one vector row per ``revisions`` entry.
+
+    Bypasses ``embed()`` entirely -- these tests are about ``lode status``'s
+    footer reading the manifest back, not about the embed leg that writes it
+    (covered by ``tests/test_embedding.py``).
+    """
+    from lode.vectorstore import VectorStore
+
+    rows = [
+        {
+            "passage_id": f"p{i}",
+            "target_version": "v1",
+            "vector": [0.0] * settings.embedding_vector_dim,
+            "model": settings.embedding_model,
+            "model_revision": revision,
+        }
+        for i, revision in enumerate(revisions)
+    ]
+    VectorStore(config.lance_dir(db_path), settings).replace_vectors("v1", rows)
+
+
+def test_status_hints_mixed_model_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    import huggingface_hub
+
+    # The mixed check needs no live probe -- stub it offline so this test
+    # stays hermetic and isolates just the mixed-index signal (drift is
+    # covered by its own sibling test below).
+    def _offline(repo_id: str) -> None:
+        raise OSError("no network")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _offline)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    _write_embedding_revision(db_path, Settings(), "sha-1", "sha-2")
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "the index is mixed" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_hints_model_revision_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    import huggingface_hub
+
+    class _FakeModelInfo:
+        sha = "sha-current"
+
+    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    # Recorded revision disagrees with what a fresh probe resolves right now.
+    _write_embedding_revision(db_path, Settings(), "sha-stale")
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "moved past the revision" in result.stdout
+    assert "No action needed." not in result.stdout
+
+
+def test_status_no_revision_hint_when_recorded_matches_live_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    import huggingface_hub
+
+    class _FakeModelInfo:
+        sha = "sha-current"
+
+    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+    _write_embedding_revision(db_path, Settings(), "sha-current")
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_status_no_revision_hint_when_never_embedded(
+    tmp_path: Path, warm_model_cache: None
+) -> None:
+    # A fresh DB/store that has never embedded anything -- model_revisions()
+    # returns empty, so neither hint can fire.
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_model_revision_status_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Same non-fatal contract as _cold_model_cache: any internal failure must
+    # answer (False, False), never raise -- lode status must never fail over
+    # this hint.
+    import lode.vectorstore as vectorstore_module
+
+    class _BoomVectorStore:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise OSError("lancedb exploded")
+
+    monkeypatch.setattr(vectorstore_module, "VectorStore", _BoomVectorStore)
+    assert cli._model_revision_status(Settings(), "unused") == (False, False)
+
+
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
 ) -> None:

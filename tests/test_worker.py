@@ -2357,6 +2357,11 @@ def _stub_embedder_returning(monkeypatch, vector: list[float]) -> None:
         "embed_passages",
         lambda self, texts: [vector for _ in texts],
     )
+    # embed() also duck-type-probes model_revision() (lode-g274.4) -- real
+    # FastEmbedEmbedder.model_revision() calls the (unpatched) _load(), which
+    # would otherwise both download the real ONNX model and hit the network
+    # for the revision probe. Stub it offline like embed_passages above.
+    monkeypatch.setattr(FastEmbedEmbedder, "model_revision", lambda self: None)
 
 
 def test_embed_handler_gates_material_first_snapshot(
