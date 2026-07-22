@@ -1398,3 +1398,60 @@ head (unlike the embedder's local ONNX inference), so "always regenerate every l
 unconditionally" — the right default for a free, local, CPU-bound embed — is not obviously the right
 default for a paid, remote, rate-limited enrich, and deserves its own design pass rather than
 inheriting this command's shape by assumption.
+
+## Re-enriching the corpus deliberately, targeted (lode-14jr)
+
+`lode reenrich` is the enrichment-LLM counterpart to `lode reembed` (`lode-g274.7` above) — the
+deliberate act the enrichment-side "mixed" `lode status` hint points at, since a mismatch there is
+never corrected automatically either (same WARN-never-REFUSE posture, §8a). It answers the scope
+question `lode-g274.7` deliberately left open rather than inheriting by assumption: **targeted, not
+whole-corpus, is the default here** — the opposite of `lode reembed`'s "always every live head."
+
+**Why targeted, not whole-corpus.** `lode reembed` always regenerates every live head unconditionally
+because its underlying inference is free, local, and CPU-bound — there is no cost axis to economize
+on, so a scope flag nothing would use was deliberately not built. Re-enrichment is the opposite: every
+head costs a real Claude API call. Force-enqueuing every live head on every `enrichment_llm` config
+bump would re-run that cost against content that was never affected — for a corpus of any size, a
+needless and potentially large spend. So `lode reenrich` force-enqueues only the heads that actually
+carry stale enrichment, leaving everything already current untouched.
+
+**Stale detection reuses the existing manifest — no new bookkeeping.** Per
+[configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745), "the
+manifest" for the enrichment LLM is already an aggregate read over `annotations.model`
+(`WHERE source = 'ai'`), not a separate artifact. `lode reenrich` uses that same read, scoped per head:
+a live head is force-enqueued only if it has at least one `'ai'` annotation (`source_version` = the
+head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently configured
+`enrichment_llm`. A head with **no** ai annotations at all is not stale by this definition — it is
+simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
+its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
+do.
+
+**Covers notes and externals, unlike `enrich_gap`'s notes-only scope.** `enrich_gap` (above) checks
+notes only. `lode reenrich` covers both notes and externals — mirroring `lode reembed`'s and
+`live_head_versions`'s notes-UNION-externals shape — because externals genuinely do get enriched
+(`lode.externals.py`'s material-change trigger enqueues `enrich` jobs same as notes) and
+`annotations.target` is polymorphic over both; excluding externals here would silently leave an
+external's stale enrichment undetected by this command even though `configuration.md`'s own
+`DISTINCT model` scan makes no such distinction.
+
+**`no_egress` is still respected.** Enrichment is the leg that leaves the box (a Claude API call) —
+unlike embedding, which never does — so `lode reenrich` excludes `no_egress` notes/externals from its
+scan even if their previously-recorded annotations happen to be stale, the same guard `enrich_gap`
+already applies. This is also why `lode reenrich` does not delegate to
+`lode.retrieval.live_head_versions` the way `lode reembed` does: that function has no notion of
+`no_egress` (it is scoped to retrieval, not egress), so `lode reenrich` runs its own query instead,
+matching `enrich_gap`'s existing shape rather than reusing a helper whose semantics don't fit.
+
+**Mechanism, resumability, and the FTS leg are otherwise identical to `lode reembed`.** Force-enqueues
+via the same `lode.jobs.enqueue_derive_jobs` primitive (`types=("enrich",)` only, live-job partial
+unique index still dedupes an in-flight job, still forces past a `done` one); the enqueue is one
+SQLite transaction, resumable by construction, draining is `lode work`'s job; FTS is unaffected (it
+carries no model of its own). Once every enqueued job reaches `done` and rewrites its `annotations`
+under the current model, `lode status`'s enrichment "mixed" hint clears on its own — there is no
+separate manifest to reconcile.
+
+**No `--all`/whole-corpus flag.** Nothing in this ticket's scope asked for one, and the ticket's own
+cost argument above is itself the reason not to add one speculatively — `lode reembed`'s "no scope
+flag" omission was because a flag would go unused; here a flag would just make it easy to reintroduce
+the cost problem targeting was built to avoid. If a genuine whole-corpus need turns up later, it is a
+new, separately-justified ticket, not a default this one should carry silently.
