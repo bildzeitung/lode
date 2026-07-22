@@ -1221,3 +1221,111 @@ rebuilds the backlog from the content↔derived diff), with **one durable except
 `batch_handle`s**, which a scan can't reconstruct without double-spending. So it doesn't fit cleanly
 on either side of the irreplaceable/regenerable line — another reason the partition is by *rows*,
 not by *file* ([the partition is by rows](stack.md#the-partition-is-by-rows-not-by-file)).
+
+---
+
+## Model provenance: the embedder revision manifest (decided, lode-crh8.1)
+
+*(§8a — split out of `lode-crh8` as the epic's own true first deliverable; see
+[configuration.md](configuration.md#model-provenance-download-control-and-mismatch-behavior-lode-crh81)
+for the companion runtime-knob write-up)*
+
+**Scope: the embedder only**, per the epic's own DB-invalidation scoping (`lode-crh8`, decided
+2026-07-21) — the reranker and the NLI/entailment cross-encoder run at retrieval/answer time and
+persist nothing, so a revision change there alters ranking/gating going forward but cannot corrupt
+the stored index; they are out of scope for a manifest. The enrichment LLM (Claude) *is* in the
+epic's scope for the same DB-invalidation reason the embedder is, but is tracked separately
+(`lode-g274.5`) — it collapses to a `docs/configuration.md` edit because Anthropic aliases have no
+dated per-revision identity to pin against, so it needs no schema work here.
+
+This section settles the two axes `lode-g274.4`/`lode-g274.7` were both blocked on. They are
+**orthogonal**, not one decision — conflating them (as the epic originally did) is exactly what
+produced the ambiguity this ticket exists to close:
+
+1. **Download-control: DETECT, not PIN (v1).** `fastembed` resolves the embedder's HuggingFace repo
+   HEAD *at download time* and exposes no `revision=` parameter of its own
+   (`fastembed/common/model_management.py:235`, confirmed by direct source read, `lode-g274.4`'s
+   FINDING note). Full pinning is achievable anyway — lode could pre-materialize the weights itself
+   at a chosen SHA via `huggingface_hub.snapshot_download(repo, revision=<sha>)` (already a direct
+   dep) and hand `fastembed` `specific_model_path`, bypassing its downloader entirely. That is real
+   and was seriously considered, but it means lode takes over the download path outright: bootstrap
+   (what happens before any SHA is pinned), offline/air-gapped fallback, partial-download recovery,
+   and a deliberate re-pin workflow all become lode's problem instead of `fastembed`'s. **Decision:
+   not worth that ongoing surface for v1.** DETECT only needs a **read-only probe** of the resolved
+   revision — the exact same `huggingface_hub.model_info(repo).sha` lookup `fastembed`'s own loader
+   already performs internally (`model_management.py:235`) — captured into lode's own record instead
+   of being discarded after `fastembed` uses it internally. No new failure mode, no new owned
+   subsystem. **PIN is not rejected, only deferred** — see the open-decision entry in
+   [decisions.md](decisions.md) for the revisit trigger.
+
+2. **Mismatch-behavior: WARN, never REFUSE — recorded PER-VECTOR.** REFUSE was rejected outright: it
+   is "correct" in the abstract but can hard-block an entirely innocent event (the model cache
+   directory getting cleared, `lode-gmo`'s own motivating incident for why it now lives under
+   `$LODE_HOME/models/` instead of a wipeable tmpdir) — bricking embed/enrich on a routine cache
+   eviction is a worse failure than the drift it prevents, and it fights the async work queue's own
+   design invariant that [workers can lag arbitrarily without corrupting anything](#one-property-makes-this-easy-lag-is-safe-by-construction).
+   A live-cache mismatch is surfaced as a **warning** (`lode status`, mirroring the existing
+   cold-cache hint, `lode-l38d.6`), and correcting it is a deliberate act — the regeneration
+   capability (`lode-g274.7`) — never an automatic refusal blocking normal operation.
+
+   **PER-VECTOR recording turned out to be nearly free, not "a real schema change" as the epic
+   originally worried.** The `embeddings` row shape *already* carries `model` **per passage vector**
+   — this was not a new decision, it was already true before this ticket:
+
+   ```
+   embeddings   passage_id, vector, model, model_revision         # derived; one per passage
+   ```
+
+   The live write path is the LanceDB `embeddings` table (`src/lode/vectorstore.py::VectorStore._schema`),
+   which already declares a per-row `model: string` field, populated from `settings.embedding_model`
+   at every `embed()` call (`src/lode/embedding.py`). (The SQLite `embeddings` table in `schema.sql`
+   documents the same row shape as the sqlite-vec fallback-down, but nothing writes it today — the
+   live store is LanceDB only, per [stack.md](stack.md#why-a-split-store).) The only gap was that the
+   per-row `model` field carried the friendly model id, never the revision that actually produced the
+   vector. **The fix is one new field, `model_revision`, on the same per-row write** — not a new
+   table, not a migration story, because passage vectors are already fully **regenerable cache**
+   (they are rebuilt from the note/snapshot body on every new head, [above](#data-shape-sketch)): an
+   installation with pre-existing vectors that predate this field simply carries `model_revision =
+   NULL` on old rows until they are next re-embedded (naturally, on the next head change, or via a
+   deliberate `lode-g274.7` regeneration run) — no backfill migration is required for correctness,
+   only for completeness of the audit trail. **This is exactly the property that makes per-vector
+   recording NOT split `lode-g274.4` into further tickets**, contrary to this ticket's own opening
+   framing: it is a column addition to an existing per-row write, not a new data shape.
+
+   Per-vector recording is what makes a **mixed** index — some passages embedded under one revision,
+   others under a different one, e.g. after a mid-corpus cache eviction and re-pull — structurally
+   **detectable and repairable**, not merely prevented at the whole-index granularity a single global
+   flag would give: a scan for `DISTINCT (model, model_revision)` pairs currently present in
+   `embeddings` answers "is this index mixed" directly, with no separate bookkeeping to keep in sync.
+
+**The manifest is this per-vector data — there is no separate manifest file, table, or committed
+constant.** `lode-g274.4`'s framing ("persist a manifest somewhere durable and reviewable... compare
+the live cache against it") is satisfied by treating "the manifest" as an **aggregate read over the
+existing `embeddings` rows**, not a new artifact:
+
+- **What the index was actually built with** — the `DISTINCT (model, model_revision)` pairs across
+  live `embeddings` rows. Detects a mixed index with no extra state.
+- **Whether that agrees with what a fresh embed would resolve *right now*** — the same read-only
+  `huggingface_hub.model_info(repo).sha` probe from the download-control decision above, compared
+  against the most recently written `model_revision`. Detects drift since the last embed, the way
+  `lode status`'s existing cold-cache hint (`lode-l38d.6`, [configuration.md](configuration.md))
+  already answers "are the weights on disk" via a cheap, `fastembed`-import-free lookup.
+
+Nothing here is git-committed, and that is deliberate, not an oversight against the epic's "committed
+and human-reviewable" success criterion: under a DETECT (not PIN) design, the actually-resolved
+revision is a **fact about a given installation's pull history**, not a fact the lode source tree can
+assert once for every user — two installs that ran `lode models pull` on different days can
+legitimately and correctly disagree. "Committed" is satisfied in the sense the rest of `storage.md`'s
+provenance story already uses it (durably persisted, human-inspectable, survives a restart — the
+`annotations.model`/`prompt_ver` columns are the same shape of per-row, per-installation provenance,
+not git-tracked data) rather than the literal git sense. The one thing that *is* still a git-tracked
+build constant, unchanged by this decision, is the **friendly model id** itself
+(`nomic-ai/nomic-embed-text-v1.5`, [configuration.md](configuration.md#models)) — "which model" stays
+pinned in code; "which exact revision of it is currently live" is the runtime fact this section adds
+a place for.
+
+**Unblocks, per this ticket's acceptance criteria:** `lode-g274.4` can now scope its build directly —
+add `model_revision` to `VectorStore._schema`, capture it at `embed()` time via the probe above, wire
+a `lode status` check reading the two comparisons above — as **one ticket**, and `lode-g274.7`'s
+re-embed/regenerate capability is what a WARN-ed mismatch resolves into, never blocking anything on
+its own. Neither needs a further design question answered before it can be scoped.
