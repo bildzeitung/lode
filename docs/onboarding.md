@@ -28,9 +28,11 @@ pyenv install --skip-existing   # optional: match .python-version
 
 ### 2. Build the virtualenv
 
-`scripts/python-init.sh` creates `./venv` at the repo root and installs the project
-editable with its dev extras (`-e .[dev]`), keeping `pyproject.toml` the single source of
-truth for dependencies:
+`scripts/python-init.sh` creates `./venv` at the repo root and installs from the
+committed, hash-verified `requirements.lock` by default — the exact, fully-resolved
+runtime dependency set (`pyproject.toml` stays the *intent* layer: ranges/floors, never
+exact versions). See [`docs/stack.md`](stack.md#dependency-locking-lode-g2741) for the
+full split.
 
 ```bash
 ./scripts/python-init.sh
@@ -38,6 +40,31 @@ truth for dependencies:
 ```
 
 Re-activate in every new shell; re-run the script only when dependencies change.
+
+#### Updating dependencies
+
+`scripts/update-deps.sh` is the **only** sanctioned way to move `requirements.lock` —
+never hand-edit it or run a bare `uv pip compile`. It recompiles a candidate lock from
+`pyproject.toml`, prints a readable version diff against the committed lock (names and
+versions only, no hash noise — the diff is the point), then installs the candidate into
+a freshly rebuilt `./venv` and runs the quality gates (`nox -t fix`, `nox -s tests`). On
+green it promotes the candidate over `requirements.lock` for you to review and commit.
+
+On ANY other failure — the candidate install itself (an uninstallable or
+hash-mismatched pin, a yanked release, a network blip) just as much as a red gate — it
+prints a failure report meant to be pasted straight into a bd ticket, then trashes
+whatever venv state exists and rebuilds `./venv` clean from the unchanged committed
+lock. The committed lock is never touched by a failed update, in every case. The venv
+rebuild itself is best-effort: it's expected to succeed, but if that rollback rebuild
+also hits a failure (e.g. its own network blip), the script prints a loud warning after
+the report — rather than silently losing the report — and tells you to re-run
+`scripts/python-init.sh` by hand to restore `./venv`.
+
+```bash
+scripts/update-deps.sh --dry-run          # see what would change; touches nothing
+scripts/update-deps.sh                    # recompile + gate + promote/rollback the WHOLE lock
+scripts/update-deps.sh --package trafilatura   # bump just one package
+```
 
 ### 3. Restore the issue database (beads)
 
