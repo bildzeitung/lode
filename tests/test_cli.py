@@ -843,6 +843,183 @@ def test_model_revision_status_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -
     assert cli._model_revision_status(Settings(), "unused") == (False, False)
 
 
+# --- lode-g274.7: `lode reembed` -- deliberate corpus regeneration ----------
+
+
+def test_reembed_forces_fresh_job_past_a_done_embed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live head whose embed job already reached 'done' still gets a fresh one.
+
+    This is the whole point of the command (lode-g274.7): 'done' is exactly
+    what a stale model_revision looks like, so -- unlike the passive
+    reconcile embed_gap step, which treats 'done' as covered -- reembed must
+    force a new job regardless.
+    """
+    import lode.enrich as enrich_mod
+
+    # 'add' opportunistically runs its own enrich job inline
+    # (_enrich_immediately) -- stub it so this test, which only cares about
+    # the embed leg, never constructs a real Anthropic client.
+    monkeypatch.setattr(enrich_mod, "enrich_version", lambda conn, vid, s, **kw: None)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "hello world", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+
+    conn = sqlite3.connect(db_path)
+    try:
+        (version_id,) = conn.execute("SELECT head_version_id FROM notes").fetchone()
+        # Simulate a completed initial embed (as if under a since-superseded
+        # model revision) -- reconcile's own embed_gap step would treat this
+        # as fully covered and enqueue nothing more.
+        conn.execute("UPDATE jobs SET status = 'done' WHERE type = 'embed'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reembed", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 embed job(s)" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        statuses = [
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'embed' AND "
+                "target_version = ? ORDER BY id",
+                (version_id,),
+            ).fetchall()
+        ]
+    finally:
+        reader.close()
+    # The original 'done' job is untouched; a fresh 'pending' one sits beside it.
+    assert statuses == ["done", "pending"]
+
+
+def test_reembed_no_live_heads_is_a_clean_no_op(tmp_path: Path) -> None:
+    """An empty corpus enqueues nothing and says so, exiting 0."""
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["reembed", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live heads to re-embed" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute("SELECT COUNT(*) FROM jobs").fetchone()
+    finally:
+        reader.close()
+    assert count == 0
+
+
+def test_reembed_covers_external_heads_too(tmp_path: Path) -> None:
+    """An external's current head_snapshot_id is force-enqueued too (lode-621 shape).
+
+    Mirrors live_head_versions' notes-UNION-externals scope -- reembed
+    delegates to that same function rather than enumerating notes alone.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'body text', 'ok')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reembed", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 embed job(s)" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        statuses = [
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'embed' AND target_version = 'snap-1'"
+            ).fetchall()
+        ]
+    finally:
+        reader.close()
+    assert statuses == ["pending"]
+
+
+def test_reembed_excludes_soft_deleted_and_tombstoned_heads(tmp_path: Path) -> None:
+    """A soft-deleted note and a tombstoned external contribute no live head.
+
+    Not a re-test of live_head_versions' own filtering (covered by
+    tests/test_retrieval.py) -- just confirms reembed genuinely delegates to
+    it rather than enumerating notes/externals on its own, looser, terms.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+            conn.execute(
+                "INSERT INTO versions (version_id, note_id, body, op) "
+                "VALUES ('ver-1', 'note-1', 'body', 'delete')"
+            )
+            conn.execute(
+                "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+            )
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'body text', 'tombstone')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reembed", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no live heads to re-embed" in result.stdout
+
+
+def test_reembed_never_enqueues_enrich_jobs(tmp_path: Path) -> None:
+    """reembed forces only the embed leg -- enrich is untouched (lode-g274.7 scope)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+            conn.execute(
+                "INSERT INTO versions (version_id, note_id, body, op) "
+                "VALUES ('ver-1', 'note-1', 'body', 'create')"
+            )
+            conn.execute(
+                "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reembed", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+
+    reader = sqlite3.connect(db_path)
+    try:
+        types = {r[0] for r in reader.execute("SELECT type FROM jobs").fetchall()}
+    finally:
+        reader.close()
+    assert types == {"embed"}
+
+
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
 ) -> None:
