@@ -173,9 +173,17 @@ class VectorStore:
         ``NULL`` and shows up here as ``None``, not omitted. Empty if the store has
         never written a vector under ``model`` (including a never-written store,
         which opens empty and finds none — mirrors :meth:`search`/:meth:`vectors_for`).
+
+        Projects the ``model_revision`` column only (unlike :meth:`vectors_for`,
+        which needs the vectors themselves) so the scan never deserializes a
+        single fixed-width ``vector`` blob just to read one string per row.
         """
         rows = (
-            self._open_or_create_table().search().where(f"model = '{model}'").to_list()
+            self._open_or_create_table()
+            .search()
+            .where(f"model = '{model}'")
+            .select(["model_revision"])
+            .to_list()
         )
         return {row["model_revision"] for row in rows}
 
