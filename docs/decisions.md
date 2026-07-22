@@ -1905,3 +1905,26 @@ are catalogued in [configuration.md](configuration.md).
      *stands*, and only the grounds for revisiting it are open. Unowned. Any reconsideration must
      start from a real-terminal OSC-8/click test rather than the original "provably inert" framing.
      See [editing.md — Mouse-clickable links: conceded](editing.md#mouse-clickable-links-conceded-in-favour-of-a-keyboard-binding).
+
+- **Full embedder-revision pinning — deferred, not rejected (lode-crh8.1).** `lode-crh8.1` settled the
+  embedder's model-provenance data shape and mismatch behavior as **DETECT** (a read-only
+  `huggingface_hub.model_info(repo).sha` probe, recorded per passage vector) rather than **PIN** (lode
+  pre-materializing weights at a chosen SHA via `huggingface_hub.snapshot_download(repo,
+  revision=<sha>)` and handing `fastembed` `specific_model_path`, bypassing its own downloader) — full
+  write-up: [storage.md](storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81).
+  Pinning is real and achievable (`lode-g274.4`'s FINDING note verified the `specific_model_path`
+  lever against the installed `fastembed` source), and is strictly *stronger* than DETECT — it would
+  guarantee a fresh install resolves the exact same weights a prior one did, not just warn after the
+  fact when it doesn't. **Deferred because the cost is real and ongoing, not one-time:** owning the
+  download path means lode also owns bootstrap (what happens before any SHA is pinned), the
+  offline/air-gapped fallback story, partial-download recovery, and a deliberate re-pin workflow for
+  when the model is intentionally upgraded — none of which `fastembed`'s own downloader currently
+  costs lode anything to get. DETECT ships the whole reproducibility/audit story (a per-vector
+  manifest, `lode status` drift warning, and a regeneration path via `lode-g274.7`) without taking on
+  any of that surface. **Revisit if:** a real, observed silent-drift incident occurs in practice (the
+  live cache resolves a different revision than a prior embed used, undetected until well after the
+  fact — the failure mode the whole epic exists to close) — DETECT can only warn *after* the drift has
+  already happened, whereas PIN prevents it outright; if that gap is ever shown to bite, upgrading
+  DETECT to PIN is additive (the manifest/mismatch mechanism is unchanged, only the download path
+  gains an explicit pinned-SHA source of truth, which — unlike the runtime-only DETECT manifest —
+  *would* become a genuine git-committed build constant, parallel to `_MODEL_CACHE_IDENTITY`).
