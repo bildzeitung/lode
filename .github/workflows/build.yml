@@ -50,10 +50,11 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          # NOT the default requirements.txt key -- that file is a single
-          # permanent `-e .[dev]` line that never changes, so that key would
-          # never invalidate. pyproject.toml is the real dependency source of
-          # truth (lode-2ouz).
+          # pyproject.toml, not requirements.lock -- this leg installs `-e
+          # .[dev]` fresh (below), unaffected by the lock (lode-g274.1); the
+          # lock's own CI currency check is a separate, later leg
+          # (lode-g274.6). pyproject.toml is the real dependency source of
+          # truth for what this step installs (lode-2ouz).
           cache-dependency-path: pyproject.toml
 
       - name: Install build tooling

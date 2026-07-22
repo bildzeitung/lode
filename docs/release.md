@@ -15,9 +15,10 @@ GitHub release. This is the design record for epic `lode-0ru`.
 - `src/lode/__init__.py` resolves `__version__` via `importlib.metadata.version("lode")`, falling
   back to `"0.0.0+unknown"` (wrapped in `try/except PackageNotFoundError`) for a raw source tree
   that was never installed — not even editable.
-- Because `requirements.txt` is a single `-e .[dev]` editable install, every dev checkout already
-  has package metadata, so `lode version` always reports a real scm-derived version — something
-  like `0.1.dev4+g<sha>` between releases, and the exact tag (e.g. `0.1.0`) on a release commit.
+- Because `scripts/python-init.sh` always installs the local package editable (`-e .`, whether via
+  the locked default path or `--unlocked` — `lode-g274.1`), every dev checkout already has package
+  metadata, so `lode version` always reports a real scm-derived version — something like
+  `0.1.dev4+g<sha>` between releases, and the exact tag (e.g. `0.1.0`) on a release commit.
 
 `lode version` (`src/lode/cli.py`) and its test (`tests/test_cli.py`) need no changes — both key
 off `__version__`, which now resolves dynamically instead of a hardcoded string.

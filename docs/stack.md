@@ -94,6 +94,38 @@ It stays a **single file** (not split into `core.db` + `cache.db`) for three con
   `prompt_ver`, FTS rows, a dangling `batch_handle`); all of it is absorbed by structural staleness
   + reconciliation, so a superset restore is safe.
 
+---
+
+## Dependency locking (lode-g2741)
+
+Two files, two jobs — **never pin the same thing in both**:
+
+- **`pyproject.toml` is the INTENT layer.** Ranges and floors, not exact versions. A real lower
+  (or upper) bound appears here only where a version demonstrably matters — e.g. `trafilatura
+  >=2.1,<2.2`, bounded so the lock below always resolves 2.1.0, the version `lode-g274.3`'s
+  characterization fixtures assert extraction behavior against. Moving off 2.1.0 is a deliberate
+  act: bump the ceiling and re-baseline `lode-g274.3` first, not an incidental side effect of an
+  unrelated dependency bump.
+- **`requirements.lock` is the ONLY place exact versions live.** A committed, fully-transitive,
+  hash-verified (`uv pip compile --generate-hashes`) lock of the **runtime** dependency set only —
+  the `dev` extra is deliberately *not* locked (epic `lode-g274` OQ#1: dev-tool drift is not this
+  lock's job; the gates themselves, run at HEAD, are the backstop for that). Regenerated only via
+  `uv pip compile` (`scripts/update-deps.sh`, `lode-g274.2`, once it lands) — never hand-edited;
+  the hashes make hand-editing impractical anyway.
+
+`./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
+mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
+`--require-hashes` are mutually exclusive in one pip/uv invocation, so the install is three steps:
+hash-verified runtime deps from the lock, then the local package editable (`--no-deps`, so this
+step can't silently re-resolve — and un-pin — what step one just hash-verified), then the `dev`
+extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and resolves everything
+fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
+regenerating the lock or probing an upstream bump before committing to it.
+
+CI enforcement (verifying the lock is current, installing from it) is a separate, later leg
+(`lode-g274.6`), blocked on the CI test-suite gate (`lode-qxdn.2`, since landed) — CI installs
+`-e .[dev]` fresh today, unaffected by this section.
+
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
 ([decisions.md](decisions.md)) — an optimization, not a correctness need.

@@ -1,2 +1,0 @@
-# lode — Python dependencies
--e .[dev]
