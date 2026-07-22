@@ -190,9 +190,9 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 |---|---|---|---|
 | Embedding model | build | `nomic-ai/nomic-embed-text-v1.5` | Local ONNX via `fastembed`. A change re-keys the vector space → full re-embed + re-index. ([stack.md](stack.md)) |
 | Embedding vector dimension | build | `768` | Output dimension of the embedding model. **LanceDB table creation needs this fixed**; it must match the model (`nomic-embed-text-v1.5` → 768). Re-keying it = full re-embed. |
-| Enrichment LLM | runtime | Claude Haiku 4.5 | High-volume background extraction. |
-| Q&A LLM | runtime | Claude Sonnet 4.6 | Default interactive synthesis model. |
-| Q&A "think harder" | runtime | Opus 4.8 (toggle) | Higher-quality, higher-cost synthesis on demand. |
+| Enrichment LLM | runtime | Claude Haiku 4.5 | High-volume background extraction. Persists into the DB (`annotations`/`edges`) — DB-affecting provenance, recorded + detected per-row, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
+| Q&A LLM | runtime | Claude Sonnet 4.6 | Default interactive synthesis model. Answer-time only, persists nothing — recorded default, no provenance machinery. |
+| Q&A "think harder" | runtime | Opus 4.8 (toggle) | Higher-quality, higher-cost synthesis on demand. Answer-time only, persists nothing — recorded default, no provenance machinery. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs (Claude). See [stack.md](stack.md).
 
@@ -221,6 +221,15 @@ It warms all three local models (the embedder, and the reranker/NLI cross-encode
 - **No separate manifest artifact.** "The manifest" is the aggregate of that per-vector data (`DISTINCT (model, model_revision)` across live `embeddings` rows), not a new committed file or table — see storage.md for why that's correct under a DETECT (not PIN) design, where the resolved revision is a per-installation fact, not something the source tree can assert once for every user. The **friendly model id** stays the only git-tracked build constant here (the `Embedding model` row above), unchanged by this decision.
 
 This unblocks `lode-g274.4` (embedder manifest + `lode status` check) and `lode-g274.7` (re-embed/regenerate capability) to be scoped without further design questions, per `lode-crh8.1`'s acceptance criteria.
+
+### Model provenance: the enrichment LLM (decided, lode-g274.5)
+
+`lode-crh8`'s DB-invalidation scoping also covers the **enrichment LLM** (`enrichment_llm`, [Models](#models) above) — its output (tags, entities, summaries, inferred edges) persists into `annotations`/`edges` the same way the embedder's output persists into `embeddings`, so a silent model change is the same class of problem for enrichment as for embedding. Unlike the embedder, there is no PIN-vs-DETECT axis to decide: this model generation's Anthropic IDs (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-4-8`) have **no dated-snapshot form** — the bare/marketing ID *is* the complete stable identifier, and appending a date suffix 404s. There is nothing more specific to pin against, so the mechanism collapses to record + detect:
+
+- **Recorded per-row, already.** `annotations.model` (alongside `prompt_ver`) is populated from `settings.enrichment_llm` at every enrichment write (`src/lode/enrich.py::_write_enrichment`) — this predates this decision; it is the same per-row provenance shape [storage.md](storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81) describes for `annotations`/`edges` generally. No schema change and no new write path were needed here.
+- **No separate manifest.** As with the embedder, "the manifest" is an aggregate read over existing rows, not a new artifact: a `DISTINCT model` scan over `annotations WHERE source = 'ai'` answers "what did the enrichment store actually get built with," and detects a mix (e.g. after a mid-corpus `enrichment_llm` config change) with no additional bookkeeping. That mix is exactly what makes drift **detectable** — the acceptance bar this ticket is scoped to — and correcting it (a targeted re-enrich) is `lode-g274.7`'s concern, not this one's.
+- **No attempt to pin beyond the bare ID.** `enrichment_llm`'s default (`claude-haiku-4-5`, [Models](#models) above) stays a plain build/runtime knob, recorded as-is.
+- **The Q&A models are explicitly out of scope.** `qa_llm` / `qa_think_harder_llm` run at answer time and persist nothing — a change alters synthesis going forward, never the stored DB — so they keep a recorded default only ([Models](#models) above) with no provenance or pinning machinery attached, mirroring the embedder-vs-reranker/NLI split above.
 
 ## Build constants (chosen once)
 
