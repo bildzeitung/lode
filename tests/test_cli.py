@@ -1311,10 +1311,12 @@ def test_status_hints_enrichment_stale_when_two_models_disagree_with_config(
     result = runner.invoke(app, ["status", "--db", str(db_path)])
 
     assert result.exit_code == 0
-    assert (
-        "the enrichment store's AI annotations disagree with the currently "
-        "configured enrichment_llm" in result.stdout
-    )
+    # A short substring, not the full sentence: rich wraps the hint line at
+    # the terminal width in a test runner, so a phrase spanning the wrap
+    # point would match against a newline instead of a space (same pattern
+    # as the revision_mixed/revision_drift hint assertions above).
+    assert "disagree with the currently" in result.stdout
+    assert "configured enrichment_llm" in result.stdout
     assert "No action needed." not in result.stdout
 
 
@@ -1343,10 +1345,8 @@ def test_status_hints_enrichment_stale_uniform_disagreement(tmp_path: Path) -> N
     result = runner.invoke(app, ["status", "--db", str(db_path)])
 
     assert result.exit_code == 0
-    assert (
-        "the enrichment store's AI annotations disagree with the currently "
-        "configured enrichment_llm" in result.stdout
-    )
+    assert "disagree with the currently" in result.stdout
+    assert "configured enrichment_llm" in result.stdout
     assert "No action needed." not in result.stdout
 
 
