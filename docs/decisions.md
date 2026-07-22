@@ -1670,14 +1670,16 @@ are catalogued in [configuration.md](configuration.md).
   merged into. `land-review` is now dispatched exactly like the producer-side agents already are
   (`code/SKILL.md`'s `coding`/`code-reviewer` dispatches, precedent already established): Agent tool,
   `subagent_type: "claude"`, **`isolation: "worktree"` mandatory** — launched already cwd'd inside its
-  own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, entirely separate from the
-  lander's checkout. `merge_one` itself is untouched by this ticket.
+  own `.claude/worktrees/agent-<hash>`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`,
+  `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never
+  measured), entirely separate from the lander's checkout. `merge_one` itself is untouched by this
+  ticket.
 
   **Costs nothing in capability, needs no new cleanup mechanism.** `land-review` only ever `git
   fetch`es the branch(es) under review and diffs them by ref (never checks anything out —
   [`land-review.md`](../.claude/agents/land-review.md)), so isolation changes *where*
   that happens, never *what* it does. And because `land-review` never commits, its scratch worktree's
-  HEAD never diverges from the `trunk` HEAD it was branched from, so the existing worktree-GC
+  HEAD never diverges from the `origin/trunk` HEAD it was branched from, so the existing worktree-GC
   backstop (lode-h1vn / lode-amif, above) reclaims it under its existing predicate with no dedicated
   code — that pass's own GC step normally, and the next pass that reaches it if this one aborts
   early (see the agents-workflow.md section above for the exact bound). **Enforcement is
@@ -1740,8 +1742,7 @@ are catalogued in [configuration.md](configuration.md).
 
   **Confirmed and dropped (lode-p2vi, 2026-07-20).** Two dedicated probe dispatches — both with no
   call-site `isolation` argument, differing only in `subagent_type` — isolated the variable cleanly:
-  `subagent_type: "land-review"` landed in its own `.claude/worktrees/agent-<hash>` (branched from
-  local `trunk` HEAD, `HEAD` matching `trunk`'s, as designed), while the control
+  `subagent_type: "land-review"` landed in its own `.claude/worktrees/agent-<hash>`, while the control
   (`subagent_type: "claude"`, otherwise identical) ran in the main checkout on `trunk` — the exact
   lode-g387 hazard. Since the only variable between the two dispatches was the agent definition, the
   isolation is attributable to `.claude/agents/land-review.md`'s frontmatter alone. `land/SKILL.md`
