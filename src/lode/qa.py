@@ -9,9 +9,11 @@ to a verbatim span of a specific cited target (``docs/stack.md`` "Q&A LLM";
 verifies the evidence and abstains; citations are enforced by verification, not
 by this response schema (``docs/retrieval.md``).
 
-**Model tier (``docs/stack.md`` "Q&A LLM").** Claude **Sonnet 4.6**
-(:data:`SONNET_MODEL`) is the default; **Opus 4.8** (:data:`OPUS_MODEL`) is the
-"think harder" toggle (``think_harder=True``). Credentials resolve via the SDK
+**Model tier (``docs/stack.md`` "Q&A LLM").** The model is read from
+``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
+``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
+4.8**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
+so a user override actually reaches the call. Credentials resolve via the SDK
 (env var or ``ant auth login`` profile) -- :func:`lode.auth.build_client`, never
 a hardcoded key.
 
@@ -48,9 +50,13 @@ from lode.auth import build_client
 from lode.config import Settings
 from lode.egress import RedactedSend, WithheldCitation, gate_qa_egress
 
-#: Default Q&A model -- Claude Sonnet 4.6 (``docs/stack.md`` "Q&A LLM").
+#: Default Q&A model -- Claude Sonnet 4.6 (``docs/stack.md`` "Q&A LLM"). Mirrors
+#: :attr:`lode.config.Settings.qa_llm`'s default; the live value always comes
+#: from settings, never this constant directly (lode-obms).
 SONNET_MODEL = "claude-sonnet-4-6"
 #: "Think harder" toggle -- Claude Opus 4.8 (``docs/stack.md`` "Q&A LLM").
+#: Mirrors :attr:`lode.config.Settings.qa_think_harder_llm`'s default; the live
+#: value always comes from settings, never this constant directly (lode-obms).
 OPUS_MODEL = "claude-opus-4-8"
 
 #: Output cap for the synthesis call. Comfortably under the SDK's non-streaming
@@ -141,18 +147,24 @@ def answer_question(
 ) -> QaResult:
     """Ask Claude for structured, cited claims answering ``question``.
 
-    Selects the model tier (Sonnet by default, Opus when ``think_harder``), then
-    runs the cloud-egress gate (:func:`lode.egress.gate_qa_egress`) over
-    ``passages`` -- excluding ``no_egress`` items, redacting secret spans, and
-    writing the ``egress_log`` audit row -- **before** any byte reaches Claude.
-    Only the redacted, cleared payloads it returns are sent. The structured
-    response is decoded with Pydantic into :class:`lode.answer.Answer` (claims
-    each pinned to a verbatim span of a cited target).
+    Selects the model tier from ``settings`` -- ``settings.qa_llm`` by default,
+    ``settings.qa_think_harder_llm`` when ``think_harder`` (lode-obms: these
+    ``Kind.RUNTIME`` knobs must actually be consulted, not shadowed by a
+    hardcoded constant) -- then runs the cloud-egress gate
+    (:func:`lode.egress.gate_qa_egress`) over ``passages`` -- excluding
+    ``no_egress`` items, redacting secret spans, and writing the ``egress_log``
+    audit row -- **before** any byte reaches Claude. Only the redacted, cleared
+    payloads it returns are sent. The structured response is decoded with
+    Pydantic into :class:`lode.answer.Answer` (claims each pinned to a verbatim
+    span of a cited target).
 
+    ``settings`` defaults to :class:`~lode.config.Settings`' own defaults when
+    omitted (same pattern as :func:`lode.redact.redact_before_egress_counting`).
     ``client`` defaults to a credential-resolved SDK client
     (:func:`lode.auth.build_client`); tests pass a mock so the gates stay offline.
     """
-    model = OPUS_MODEL if think_harder else SONNET_MODEL
+    settings = settings or Settings()
+    model = settings.qa_think_harder_llm if think_harder else settings.qa_llm
     passages = list(passages)
     # Keep note-vs-external per target so the prompt can tell Claude which support
     # field to cite (the gate's RedactedSend carries only target_id + text).

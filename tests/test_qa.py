@@ -101,6 +101,34 @@ def test_opus_when_think_harder(conn) -> None:
     assert client.messages.calls[0]["model"] == OPUS_MODEL
 
 
+def test_qa_llm_override_reaches_the_call(conn) -> None:
+    # lode-obms: settings.qa_llm was declared but never consulted -- an
+    # override must actually change which model gets called.
+    settings = Settings(qa_llm="claude-custom-qa-model")
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn, "q", [QaPassage("v1", "text")], client=client, settings=settings
+    )
+    assert result.model == "claude-custom-qa-model"
+    assert client.messages.calls[0]["model"] == "claude-custom-qa-model"
+
+
+def test_qa_think_harder_llm_override_reaches_the_call(conn) -> None:
+    # lode-obms: same for the think-harder tier's knob.
+    settings = Settings(qa_think_harder_llm="claude-custom-opus-model")
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=True,
+        client=client,
+        settings=settings,
+    )
+    assert result.model == "claude-custom-opus-model"
+    assert client.messages.calls[0]["model"] == "claude-custom-opus-model"
+
+
 def test_no_egress_passage_excluded_from_context(conn) -> None:
     client = _FakeClient(_envelope([]))
     result = answer_question(
