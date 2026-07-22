@@ -1227,7 +1227,7 @@ not by *file* ([the partition is by rows](stack.md#the-partition-is-by-rows-not-
 ## Model provenance: the embedder revision manifest (decided, lode-crh8.1)
 
 *(§8a — split out of `lode-crh8` as the epic's own true first deliverable; see
-[configuration.md](configuration.md#model-provenance-download-control-and-mismatch-behavior-lode-crh81)
+[configuration.md](configuration.md#model-provenance-download-control-and-mismatch-behavior-decided-lode-crh81)
 for the companion runtime-knob write-up)*
 
 **Scope: the embedder only**, per the epic's own DB-invalidation scoping (`lode-crh8`, decided
