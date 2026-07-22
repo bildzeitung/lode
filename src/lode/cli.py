@@ -1338,6 +1338,39 @@ def _model_revision_status(
         return False, False
 
 
+def _enrichment_model_mixed(conn: sqlite3.Connection) -> bool:
+    """Whether stored AI enrichment carries more than one distinct ``model``.
+
+    The enrichment-LLM counterpart to :func:`_model_revision_status`'s "mixed"
+    concept, per ``docs/configuration.md``'s
+    #model-provenance-the-enrichment-llm-decided-lode-g2745 decision: "the
+    manifest" is a ``DISTINCT model`` aggregate read over ``annotations WHERE
+    source = 'ai'``, not a separate artifact, so this is a plain SQLite scan,
+    no network. There is no ``drift`` counterpart here (unlike the embedder) —
+    that same decision established Claude's bare/marketing model IDs (e.g.
+    ``claude-haiku-4-5``) have no dated-snapshot form to probe a fresh
+    revision against, so the recorded value is the only signal there is.
+
+    ``True`` only once at least two distinct non-``NULL`` models are on
+    record — a fresh corpus (nothing enriched yet) or one enriched entirely
+    under a single model reads ``False``, same as ``_model_revision_status``
+    treats an empty/singleton recorded set as not mixed.
+
+    Never raises: any failure (a locked DB, an unexpectedly old schema) is
+    reported as ``False`` — this can only ever add a hint line to ``lode
+    status``, never fail the command, mirroring the other status-hint
+    probes' non-fatal contract.
+    """
+    try:
+        (count,) = conn.execute(
+            "SELECT COUNT(DISTINCT model) FROM annotations "
+            "WHERE source = 'ai' AND model IS NOT NULL"
+        ).fetchone()
+        return count > 1
+    except Exception:
+        return False
+
+
 @app.command()
 def status(
     db: Path | None = _DB_OPTION,
@@ -1356,9 +1389,12 @@ def status(
     "lode work" if anything is pending or still-retryable, run
     "lode models pull" if the local model cache is cold, flag the embedder's
     live vectors if their recorded model_revision is mixed or has drifted from
-    what the cache currently resolves (lode-crh8.1), or an explicit
-    "No action needed." if none of those apply. Dead-letter jobs get no hint --
-    they are already listed above with their errors, and won't be retried.
+    what the cache currently resolves (lode-crh8.1), flag the enrichment
+    store if its AI annotations carry more than one model (lode-14jr -- no
+    drift counterpart, since Claude model IDs have no dated-snapshot form to
+    probe against), or an explicit "No action needed." if none of those
+    apply. Dead-letter jobs get no hint -- they are already listed above with
+    their errors, and won't be retried.
     """
     db_path = db or default_db_path()
     conn = _open_db(db)
@@ -1373,6 +1409,10 @@ def status(
         egress_counts = conn.execute(
             "SELECT purpose, COUNT(*) FROM egress_log GROUP BY purpose ORDER BY purpose"
         ).fetchall()
+        # Read while `conn` is still open -- _enrichment_model_mixed is a plain
+        # SQLite scan (unlike _model_revision_status's LanceDB read below,
+        # which opens its own connection independently).
+        enrichment_mixed = _enrichment_model_mixed(conn)
     finally:
         conn.close()
 
@@ -1524,11 +1564,19 @@ def status(
             "re-embed to pick up the change.",
             highlight=False,
         )
+    if enrichment_mixed:
+        console.print(
+            "[warn]Action needed:[/warn] the enrichment store's AI annotations "
+            "carry more than one model -- run 'lode reenrich' to make it "
+            "consistent again.",
+            highlight=False,
+        )
     if (
         pending_or_failed == 0
         and not cache_cold
         and not revision_mixed
         and not revision_drift
+        and not enrichment_mixed
     ):
         console.print("[ok]No action needed.[/ok]", highlight=False)
 
@@ -1629,6 +1677,120 @@ def reembed(
         )
     else:
         typer.echo("no live heads to re-embed.")
+
+
+@app.command()
+def reenrich(
+    db: Path | None = _DB_OPTION,
+) -> None:
+    """Force a fresh enrich job for every live head whose annotations are stale (lode-14jr).
+
+    The enrichment-LLM counterpart to ``lode reembed`` (``lode-g274.7``) --
+    but scoped **targeted, not whole-corpus**, unlike that command.
+    Re-enrichment costs a Claude API call per head (``lode reembed``'s embed
+    leg is free, local ONNX inference), so blindly re-enriching every live
+    head on every ``enrichment_llm`` config bump would be needlessly
+    expensive; this only force-enqueues the heads that actually need it
+    (``docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr``).
+
+    **Stale means "disagrees with the currently configured `enrichment_llm`,"
+    detected the same way ``lode status``'s "mixed" hint detects it**
+    (``docs/configuration.md``
+    #model-provenance-the-enrichment-llm-decided-lode-g2745): a ``DISTINCT
+    model`` read over ``annotations WHERE source = 'ai'``, not a separate
+    manifest. A live head -- every note's current ``head_version_id`` and
+    every external's current ``head_snapshot_id``, mirroring
+    :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals scope --
+    is force-enqueued only if it has at least one ``'ai'`` annotation
+    (``source_version`` = the head id) whose ``model`` column differs from
+    ``settings.enrichment_llm`` right now. A head with **no** ai annotations
+    at all is not stale -- it is simply unenriched, which the passive
+    reconciliation scan's ``enrich_gap`` step already covers on its own,
+    ordinary schedule; duplicating that here would only re-enqueue work
+    ``lode work`` was already going to do.
+
+    **``no_egress`` content is never swept in, even if its stored annotations
+    happen to be stale.** Unlike embedding, enrichment leaves the box (a
+    Claude API call) -- ``no_egress`` exists precisely to keep a note or
+    external's content from ever making that trip, so this command excludes
+    it the same way ``reconcile``'s ``enrich_gap`` step does, rather than
+    delegating to ``live_head_versions`` (which has no notion of
+    ``no_egress`` -- it is scoped to retrieval, not egress).
+
+    Reuses :func:`lode.jobs.enqueue_derive_jobs` (``types=("enrich",)`` only
+    -- this never touches ``embed``) -- the same primitive every capture
+    uses. The live-job partial unique index still dedupes a head that
+    already has an enrich job in flight, so running this twice before the
+    queue drains enqueues nothing extra the second time; a ``done`` job under
+    a stale model -- the whole point here -- is not what that index guards
+    against, so this still forces a fresh job past it, exactly as ``lode
+    reembed`` does for embed.
+
+    **Resumable by construction**, same as ``lode reembed``: the enqueue
+    runs in one SQLite transaction, and draining is ``lode work``'s job, not
+    this command's -- interrupting ``lode work`` mid-drain just leaves the
+    rest pending, safe to resume with another ``lode work`` run.
+
+    Once every enqueued job reaches ``done`` and rewrites its ``annotations``
+    rows under the current model, ``lode status``'s "mixed" hint clears on
+    its own -- there is no separate manifest to reconcile, per the same
+    decision the detection above reads.
+    """
+    from lode.jobs import enqueue_derive_jobs
+
+    settings = _resolve_settings()
+    conn = _open_db(db)
+    try:
+        stale = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT DISTINCT n.head_version_id
+                FROM notes n
+                JOIN versions v ON v.version_id = n.head_version_id
+                WHERE n.head_version_id IS NOT NULL
+                  AND v.op != 'delete'
+                  AND v.purged_at IS NULL
+                  AND n.no_egress = 0
+                  AND EXISTS (
+                      SELECT 1 FROM annotations a
+                      WHERE a.source = 'ai'
+                        AND a.source_version = n.head_version_id
+                        AND a.model IS NOT NULL
+                        AND a.model != ?
+                  )
+                UNION
+                SELECT DISTINCT e.head_snapshot_id
+                FROM externals e
+                JOIN snapshots s ON s.snapshot_id = e.head_snapshot_id
+                WHERE e.head_snapshot_id IS NOT NULL
+                  AND s.status != 'tombstone'
+                  AND e.no_egress = 0
+                  AND EXISTS (
+                      SELECT 1 FROM annotations a
+                      WHERE a.source = 'ai'
+                        AND a.source_version = e.head_snapshot_id
+                        AND a.model IS NOT NULL
+                        AND a.model != ?
+                  )
+                """,
+                (settings.enrichment_llm, settings.enrichment_llm),
+            ).fetchall()
+        ]
+        with conn:
+            for version_id in stale:
+                enqueue_derive_jobs(conn, version_id, types=("enrich",))
+    finally:
+        conn.close()
+
+    if stale:
+        typer.echo(
+            f"enqueued {len(stale)} enrich job(s) for live head(s) whose "
+            "annotations disagree with the current enrichment_llm -- run "
+            "'lode work' (or 'lode work --wait') to run them."
+        )
+    else:
+        typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
 @app.command(name="jobs")

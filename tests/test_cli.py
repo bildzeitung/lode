@@ -1020,6 +1020,325 @@ def test_reembed_never_enqueues_enrich_jobs(tmp_path: Path) -> None:
     assert types == {"embed"}
 
 
+# --- lode-14jr: `lode reenrich` -- targeted, not whole-corpus, regeneration --
+
+
+def _write_ai_annotation(
+    conn: sqlite3.Connection, target: str, source_version: str, model: str
+) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO annotations "
+            "(target, source_version, kind, payload, source, status, model) "
+            "VALUES (?, ?, 'summary', ?, 'ai', 'fresh', ?)",
+            (target, source_version, json.dumps("a summary"), model),
+        )
+
+
+def test_reenrich_forces_fresh_job_for_a_head_with_a_stale_model(
+    tmp_path: Path,
+) -> None:
+    """A live head whose recorded annotations.model disagrees with the
+    currently configured enrichment_llm gets a fresh enrich job -- even past
+    a 'done' one, mirroring reembed's force-past-done behavior for embed.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+        with conn:
+            conn.execute(
+                "INSERT INTO jobs (type, target_version, status) "
+                "VALUES ('enrich', 'ver-1', 'done')"
+            )
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 enrich job(s)" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        statuses = [
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'enrich' AND "
+                "target_version = 'ver-1' ORDER BY id"
+            ).fetchall()
+        ]
+    finally:
+        reader.close()
+    # The original 'done' job is untouched; a fresh 'pending' one sits beside it.
+    assert statuses == ["done", "pending"]
+
+
+def test_reenrich_skips_a_head_already_on_the_current_model(tmp_path: Path) -> None:
+    """A head whose annotations already agree with enrichment_llm is left alone."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm)
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no stale enrichment found" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'enrich'"
+        ).fetchone()
+    finally:
+        reader.close()
+    assert count == 0
+
+
+def test_reenrich_skips_a_head_never_enriched(tmp_path: Path) -> None:
+    """A head with no ai annotations at all is unenriched, not stale -- reconcile's
+    enrich_gap step owns that case; reenrich must enqueue nothing for it."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no stale enrichment found" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'enrich'"
+        ).fetchone()
+    finally:
+        reader.close()
+    assert count == 0
+
+
+def test_reenrich_covers_a_stale_external_head_too(tmp_path: Path) -> None:
+    """An external's current head_snapshot_id is force-enqueued too, mirroring
+    reembed's/live_head_versions' notes-UNION-externals scope -- even though
+    enrich_gap itself checks notes only."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO externals (external_id, source_type) VALUES ('ext-1', 'web')"
+            )
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, external_id, body, status) "
+                "VALUES ('snap-1', 'ext-1', 'body text', 'ok')"
+            )
+            conn.execute(
+                "UPDATE externals SET head_snapshot_id = 'snap-1' WHERE external_id = 'ext-1'"
+            )
+        _write_ai_annotation(conn, "ext-1", "snap-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 enrich job(s)" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        statuses = [
+            r[0]
+            for r in reader.execute(
+                "SELECT status FROM jobs WHERE type = 'enrich' AND target_version = 'snap-1'"
+            ).fetchall()
+        ]
+    finally:
+        reader.close()
+    assert statuses == ["pending"]
+
+
+def test_reenrich_excludes_no_egress_content_even_if_stale(tmp_path: Path) -> None:
+    """A no_egress note/external is never swept in, even with stale annotations --
+    enrichment leaves the box, unlike embed, and no_egress exists to prevent that."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id, no_egress) VALUES ('note-1', 1)")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no stale enrichment found" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'enrich'"
+        ).fetchone()
+    finally:
+        reader.close()
+    assert count == 0
+
+
+def test_reenrich_excludes_soft_deleted_and_tombstoned_heads(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'delete')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no stale enrichment found" in result.stdout
+
+
+def test_reenrich_no_live_heads_is_a_clean_no_op(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "no stale enrichment found" in result.stdout
+
+    reader = sqlite3.connect(db_path)
+    try:
+        (count,) = reader.execute("SELECT COUNT(*) FROM jobs").fetchone()
+    finally:
+        reader.close()
+    assert count == 0
+
+
+def test_reenrich_never_enqueues_embed_jobs(tmp_path: Path) -> None:
+    """reenrich forces only the enrich leg -- embed is untouched (lode-14jr scope)."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+
+    reader = sqlite3.connect(db_path)
+    try:
+        types = {r[0] for r in reader.execute("SELECT type FROM jobs").fetchall()}
+    finally:
+        reader.close()
+    assert types == {"enrich"}
+
+
+def test_status_hints_enrichment_model_mixed(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "model-a")
+        _write_ai_annotation(conn, "note-1", "ver-1", "model-b")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert (
+        "the enrichment store's AI annotations carry more than one model"
+        in result.stdout
+    )
+    assert "No action needed." not in result.stdout
+
+
+def test_status_no_enrichment_hint_when_all_one_model(tmp_path: Path) -> None:
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "model-a")
+    finally:
+        conn.close()
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "Action needed" not in result.stdout
+    assert "No action needed." in result.stdout
+
+
+def test_enrichment_model_mixed_is_never_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BoomConn:
+        def execute(self, *_args: object, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("db exploded")
+
+    assert cli._enrichment_model_mixed(_BoomConn()) is False  # type: ignore[arg-type]
+
+
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
 ) -> None:
