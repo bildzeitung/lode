@@ -49,7 +49,9 @@ steps later. Running me in that tree with no isolation means anything I do (even
 an accidental checkout, a stray `git add`) lands in the tree the lander is about to merge into, which
 is exactly what dirtied it in an observed incident (three non-isolated dispatches; one left a full
 branch diff staged, and the next merge misread the resulting dirty tree as a conflict). Isolation
-gives me my own disposable worktree, branched from local `trunk` HEAD, entirely separate from the
+gives me my own disposable worktree, branched from **`origin/trunk`** HEAD (`worktree.baseRef:
+"fresh"`; `origin/trunk` can lag local `trunk` by however long since `/land`'s last push, usually
+small but never measured), entirely separate from the
 lander's checkout — I never open or touch the lander's tree at all. This changes nothing about *how*
 I work:
 I still only `git fetch` the branch(es) and diff by ref (below), never checking anything out, so my
@@ -58,12 +60,12 @@ change. Full rationale:
 [docs/agents-workflow.md — Isolating land-review dispatches](../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 
 **Recycled-worktree guard (lode-qv5t, mirroring lode-nt98) — asserted before any fetch or diff, not
-assumed.** My own launch worktree is *supposed* to start fresh, branched off local `trunk` HEAD with
+assumed.** My own launch worktree is *supposed* to start fresh, branched off `origin/trunk` HEAD with
 zero commits of its own — the assumption the previous paragraph's "never diverges" claim rested on.
 That assumption has been observed **false** in production for a dispatched agent's launch worktree
 generally (lode-nt98: a builder and a `code-reviewer` were each handed a **recycled** worktree still
 checked out on a *previous* ticket's build branch, carrying that ticket's commits, rather than a
-fresh branch off `trunk` HEAD). Nothing about my own role makes me immune to the same harness
+fresh branch off `origin/trunk` HEAD). Nothing about my own role makes me immune to the same harness
 behavior — I get the identical `isolation: "worktree"` dispatch mechanism, just with a different
 `subagent_type`. **My CORRECTNESS exposure from this is nil** (unchanged, still worth stating
 plainly so the two halves are never conflated): I never check anything out, so a recycled worktree's

@@ -235,7 +235,10 @@ named in the reason).
 
 Each builder then runs its orderly cycle. The worktree is **handed to it by the harness**
 (`isolation: "worktree"`) — a subagent pinned at the repo root cannot create its own, so it begins
-*already inside* `.claude/worktrees/agent-<hash>` on a branch off local `trunk` HEAD. It works
+*already inside* `.claude/worktrees/agent-<hash>` on a branch off **`origin/trunk`** HEAD
+(`.claude/settings.json`'s `worktree.baseRef: "fresh"`, `lode-jzbz`; `origin/trunk` can lag local
+`trunk` by however long since `/land`'s last push — usually small, since `/land` pushes `trunk`
+immediately after every merge, but never measured). It works
 in-cwd with plain git, and if its `pwd` is ever the repo root it **stops and reports** rather than
 writing on `trunk`. Before touching a file it **locks that worktree** (`git worktree lock`) — a
 freshly created worktree has zero commits beyond `trunk`, so until the first commit its branch reads
@@ -293,7 +296,7 @@ flowchart TD
     OCLAIM --> DISP["Phase 1 — dispatch coding builder<br>(Sonnet · isolation: worktree)"]
     T2 --> DISP
 
-    DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off local trunk HEAD)"]
+    DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off origin/trunk HEAD ·<br>baseRef: fresh, can lag local trunk)"]
     WT --> GUARD{"pwd is repo root?"}
     GUARD -->|"yes"| BAIL["STOP & report —<br>never write on trunk"]
     GUARD -->|"no, in worktree"| RGUARD{"HEAD ancestor<br>of trunk?"}
@@ -334,7 +337,8 @@ flowchart TD
 ### Recycled-worktree guard (lode-nt98)
 
 `isolation: "worktree"` is supposed to hand a dispatched agent a **fresh** worktree, branched off
-local `trunk` HEAD with zero commits of its own. That assumption was falsified in production,
+**`origin/trunk`** HEAD (`worktree.baseRef: "fresh"`; `origin/trunk` can lag local `trunk` by however
+long since `/land`'s last push, usually small but never measured) with zero commits of its own. That assumption was falsified in production,
 discovered while technically reviewing `lode-eshl`: the harness handed the `lode-eshl` **builder** a
 **recycled** worktree still checked out on `lode-7abi`'s build branch (`worktree-agent-a6b4350c…`),
 carrying `lode-7abi`'s own (pre-review) commit. The eshl builder merged `trunk` in on top of that
@@ -346,10 +350,12 @@ would have silently gained its unreviewed code the moment `land/lode-eshl` lande
 launch worktree also started life checked out on `land/lode-7abi` rather than clean off `trunk` HEAD.
 
 What ships here is a **defensive assertion** — a mitigation that makes each agent safe against the
-symptom. It is deliberately *not* a root-cause fix. `.claude/settings.json` carries
-`"worktree": { "baseRef": "head" }` (added in the drive-by chore commit `2d8c9da`, described in no
-doc until now). Do not read the guard below as evidence that the harness offers no lever — it means
-nobody had pulled one yet at the time `lode-nt98` shipped.
+symptom. It is deliberately *not* a root-cause fix. At the time `lode-nt98` shipped,
+`.claude/settings.json` carried `"worktree": { "baseRef": "head" }` (added in the drive-by chore commit
+`2d8c9da`, described in no doc until then) — since changed to the explicit `"fresh"`, see [Decision
+applied: baseRef fresh](#decision-applied-baseref-fresh-lode-jzbz-2026-07-21), below. Do not read the
+guard below as evidence that the harness offers no lever — it means nobody had pulled one yet at the
+time `lode-nt98` shipped.
 
 #### `baseRef` investigation (lode-r7ow)
 
@@ -405,6 +411,47 @@ never measured it.
 a human's call, not an agent's — that has not changed just because the investigation now favors
 `"fresh"`.** The finding above and this write-up are the input to that decision; the setting itself is
 left untouched here. See the bd ticket (`lode-r7ow`) for the pending human decision.
+
+#### Decision applied: baseRef fresh (lode-jzbz, 2026-07-21)
+
+**The human decision above has been made and applied.** `lode-r7ow` was investigation-only by design
+(its own acceptance criteria were narrowed to exclude the setting change, precisely so the write-up
+above didn't have to be rebuilt around a two-line edit); the decision itself and its application were
+tracked separately, on `lode-jzbz`.
+
+**Decision:** `.claude/settings.json`'s `worktree.baseRef` is set to the **explicit string `"fresh"`**
+— the key is retained, not removed. Removing the key gets the identical runtime behavior via the
+harness default, but leaves nothing in `settings.json` signalling the value was chosen deliberately;
+an absent key reads to the next maintainer as an oversight, not a decision. Keeping the key with an
+explicit value makes the choice legible at the point of configuration, not just in this write-up.
+
+**Rationale (unchanged from the finding above):** under `baseRef: "head"`, the docs state that *any*
+reuse of a worktree name reopens it "at the old tip" unconditionally — a precise, mechanism-level
+match for the `lode-nt98`/`lode-eshl` recycled-worktree symptom, not merely a correlation. Under
+`"fresh"`, a reused worktree instead resets to the default branch once it has no uncommitted changes,
+is still on the branch Claude Code created for it, and carries no unmerged commits of its own —
+closing that mechanism for the general, ongoing case (once a prior ticket's branch has landed and its
+`land/<id>` ref is gone). It does **not** close every recycling scenario — `lode-eshl`'s exact
+reproduction predates the prior branch landing, so `"fresh"`'s reset condition would not have been met
+there either — the finding above already says so; the decision accepts that this is a partial, not a
+complete, fix.
+
+**Accepted cost:** a `"fresh"` worktree branches from `origin/<default-branch>` (`origin/trunk`), not
+local `trunk` HEAD — the exact staleness `2d8c9da`'s original commit and this repo's prior worktree
+policy warned about, and now a cost knowingly accepted rather than an oversight. `/land` pushes `trunk`
+to origin immediately after every merge, so the lag between local `trunk` and `origin/trunk` is
+expected to usually be small — but "usually small" was never measured before this decision and still
+isn't; a worktree dispatched while a push is actively in flight can start one merge behind. If that
+staleness window ever turns out to matter in practice, it is the thing to measure and revisit, not a
+reason to have deferred this decision further.
+
+**Consequence for this repo's docs:** every place that asserted a dispatched worktree "branches from
+local `trunk` HEAD" was already inaccurate under **either** `baseRef` value (`"head"` means the
+*current* worktree's `HEAD`, per the finding above — never the absolute local-`trunk` guarantee those
+claims implied; `"fresh"` means `origin/<default-branch>`; no literal trunk-pinned ref is a supported
+option at all). With the setting now explicitly `"fresh"`, those five assertions — `CLAUDE.md`,
+`coding.md`, `code-reviewer.md`, `land-review.md`, and this file — are corrected to say `origin/trunk`,
+with the staleness window stated plainly rather than implied away, wherever each file makes the claim.
 
 Given that, the assertion is defence in depth rather than the answer. `coding.md` (both cycles),
 `code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
@@ -530,10 +577,11 @@ contributing cause per the `baseRef` investigation above):
 **Verdict: keep every guard, unchanged.** They are cheap defensive assertions; the failure mode they
 prevent — unreviewed code riding into `trunk` on the wrong ticket's `land/<id>` — is catastrophic and
 irreversible. "Probably fixed upstream" is not grounds to retire a guard this cheap against a failure
-this expensive. No guard is removed or weakened here, and `worktree.baseRef: "head"` is left exactly
-as the `baseRef` investigation above left it — the baseRef question is tracked in its own thread (the
-human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not something this note
-resolves.
+this expensive. No guard is removed or weakened here. `worktree.baseRef` was still `"head"` at the time
+of this 2.1.216 verification (2026-07-20), exactly as the `baseRef` investigation above had left it —
+that changed the following day: see [Decision applied: baseRef
+fresh](#decision-applied-baseref-fresh-lode-jzbz-2026-07-21) above (`lode-jzbz`, 2026-07-21). This
+note's own verdict — keep every guard regardless of the `baseRef` value — is unaffected by that switch.
 
 **Falsification test this sets up.** The fleet is now on, or moving onto, `>= 2.1.216`. Watch whether
 the recycled-worktree guard **ever fires** — any `rescue/recycled-<sha>` branch created, any
@@ -1122,9 +1170,9 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Thing | Rule |
 |---|---|
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
-| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from local `trunk` HEAD, pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
+| Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
-| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef: "head"` is now documented and investigated (lode-r7ow) — its reuse semantics is a documented, mechanism-level match for the recycling; switching to the default `"fresh"` is recommended but is a pending **human** decision (repo-wide blast radius) — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow) |
+| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
@@ -1520,7 +1568,7 @@ mode would only make the *symptom* legible; it would not stop a reviewer from di
 the first place. So `land-review` is now dispatched exactly like the producer-side agents already
 are (`code/SKILL.md`'s `coding` and `code-reviewer` dispatches): via the Agent tool with
 `subagent_type: "claude"` **and `isolation: "worktree"`**, mandatory. The reviewer is launched
-already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk` HEAD, and
+already cwd'd inside its own `.claude/worktrees/agent-<hash>` and
 does all of its `git fetch`/`git diff` work there — never in the lander's checkout.
 
 **Superseded by lode-c6ir (2026-07-20):** the paragraph above describes the original fix — isolation
@@ -1538,7 +1586,7 @@ passes no `isolation` option at all. Full reasoning: [docs/decisions.md](decisio
 an explicit `isolation: "worktree"` belt-and-braces, since frontmatter `isolation` was then unused
 repo-wide. A dedicated probe retired it: two dispatches differing only in `subagent_type`, both with
 no call-site `isolation` argument, isolated the variable cleanly — `subagent_type: "land-review"`
-landed in its own `.claude/worktrees/agent-<hash>` branched from local `trunk` HEAD, while the control
+landed in its own `.claude/worktrees/agent-<hash>`, while the control
 (`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
 every agent by default" as a confound. Frontmatter isolation is therefore the sole enforcement point
 for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
