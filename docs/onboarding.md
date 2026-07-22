@@ -145,6 +145,10 @@ This warms `$LODE_HOME/models/` (the [model cache directory](configuration.md#pa
 retrieval are fully offline; see [configuration.md](configuration.md#models) for
 the `HF_HUB_OFFLINE=1` air-gapped escape hatch.
 
+**Hit a "Provided schema does not match existing table schema" crash after pulling a release?** That's
+a stale LanceDB vector cache — see [storage.md's "Rebuild the vector
+cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2lu2) how-to.
+
 ### 6. Run the dev loop (nox)
 
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./venv`**, not an isolated
