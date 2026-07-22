@@ -187,8 +187,9 @@ scripts/rtk-setup.sh          # idempotent: adds the excludes to ~/.config/rtk/c
 Four project rules that bite newcomers; [CLAUDE.md](../CLAUDE.md) is authoritative:
 
 - **Never edit `trunk` directly** — code, docs, config, anything. Every change starts in a
-  git worktree under `.claude/worktrees/`, branched from **local `trunk` HEAD**. Merge back
-  with `--no-ff`.
+  git worktree under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef:
+  "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually
+  small, never measured). Merge back with `--no-ff`.
 - **Gate before merging:** `nox -t fix` and `nox -s tests`.
 - **A pre-commit hook re-exports and stages `.beads/issues.jsonl` on every commit.** Stage
   explicit paths — never `git add -A`.
