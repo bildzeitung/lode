@@ -62,7 +62,7 @@ def test_documented_defaults_load() -> None:
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
     assert s.progress_heartbeat_interval_s == 15.0
-    assert s.anthropic_call_timeout_s == 120.0
+    assert s.llm_call_timeout_s == 120.0
 
 
 # --- load_settings() reads config.toml (lode-40g) ----------------------------
@@ -161,6 +161,71 @@ def test_load_settings_config_toml_unknown_key_raises(
         load_settings()
 
 
+# --- llm_call_timeout_s back-compat rename (lode-568v.2) --------------------
+#
+# anthropic_call_timeout_s was renamed vendor-neutral ahead of the LLMProvider
+# seam; a config.toml still carrying the old key must keep working rather than
+# tripping extra="forbid" (docs/stack.md "Config shape").
+
+
+def test_load_settings_remaps_old_anthropic_timeout_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        "anthropic_call_timeout_s = 42.0\n", encoding="utf-8"
+    )
+    assert load_settings().llm_call_timeout_s == 42.0
+
+
+def test_load_settings_new_key_wins_when_both_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        "anthropic_call_timeout_s = 42.0\nllm_call_timeout_s = 7.0\n",
+        encoding="utf-8",
+    )
+    assert load_settings().llm_call_timeout_s == 7.0
+
+
+# --- ModelTier coercion from a bare config.toml string (lode-568v.2) --------
+
+
+def test_load_settings_bare_string_model_knob_coerces_to_model_tier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        'enrichment_llm = "custom-model"\n', encoding="utf-8"
+    )
+    settings = load_settings()
+    assert settings.enrichment_llm.model == "custom-model"
+    assert settings.enrichment_llm.reasoning_effort is None
+
+
+def test_load_settings_inline_table_model_knob_sets_reasoning_effort(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        'qa_think_harder_llm = { model = "gpt-5.5", reasoning_effort = "high" }\n',
+        encoding="utf-8",
+    )
+    settings = load_settings()
+    assert settings.qa_think_harder_llm.model == "gpt-5.5"
+    assert settings.qa_think_harder_llm.reasoning_effort == "high"
+
+
+def test_llm_provider_defaults_to_anthropic() -> None:
+    assert Settings().llm_provider == "anthropic"
+
+
+def test_llm_provider_rejects_unsupported_value() -> None:
+    with pytest.raises(ValidationError):
+        Settings(llm_provider="openai")
+
+
 def test_load_settings_malformed_config_toml_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -179,9 +244,14 @@ def test_load_settings_malformed_config_toml_raises(
 
 def test_model_ids_are_pinned() -> None:
     s = Settings()
-    assert s.enrichment_llm == "claude-haiku-4-5"
-    assert s.qa_llm == "claude-sonnet-4-6"
-    assert s.qa_think_harder_llm == "claude-opus-4-8"
+    assert s.enrichment_llm.model == "claude-haiku-4-5"
+    assert s.qa_llm.model == "claude-sonnet-4-6"
+    assert s.qa_think_harder_llm.model == "claude-opus-4-8"
+    # A bare string knob coerces to a ModelTier with no reasoning effort
+    # (lode-568v.2 back-compat -- no migration required for existing configs).
+    assert s.enrichment_llm.reasoning_effort is None
+    assert s.qa_llm.reasoning_effort is None
+    assert s.qa_think_harder_llm.reasoning_effort is None
 
 
 def test_local_model_ids_and_dim_are_pinned() -> None:
@@ -340,6 +410,26 @@ def test_knob_rows_renders_list_valued_knobs_comma_joined() -> None:
     assert rows["url_tracking_param_blocklist"] == "utm_*, fbclid, gclid"
 
 
+def test_knob_rows_renders_model_tier_knobs_as_bare_model_id() -> None:
+    # lode-568v.2: the enrichment/qa model knobs became ModelTier pairs; str()
+    # on a ModelTier is the pydantic repr ("model='...' reasoning_effort=None"),
+    # which would leak into `lode config` + the TUI ConfigScreen (both feed
+    # knob_rows straight to display). Default (no effort) shows the bare id.
+    rows = _knob_values(Settings())
+    assert rows["enrichment_llm"] == "claude-haiku-4-5"
+    assert rows["qa_llm"] == "claude-sonnet-4-6"
+    assert rows["qa_think_harder_llm"] == "claude-opus-4-8"
+
+
+def test_knob_rows_appends_reasoning_effort_when_set() -> None:
+    # When a tier carries a reasoning_effort, surface it alongside the model id
+    # rather than hiding it or printing the pydantic repr.
+    rows = _knob_values(
+        Settings(qa_think_harder_llm={"model": "gpt-5.5", "reasoning_effort": "high"})
+    )
+    assert rows["qa_think_harder_llm"] == "gpt-5.5 (effort=high)"
+
+
 def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
     # Acceptance: works with no config.toml present (shows defaults).
     rows = knob_rows(Settings())
@@ -362,7 +452,7 @@ def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
         {"fetch_min_extract_chars": -1},  # ge=0
         {"retry_max_attempts": 0},  # ge=1
         {"progress_heartbeat_interval_s": 0},  # gt=0.0
-        {"anthropic_call_timeout_s": 0},  # gt=0.0
+        {"llm_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
         {"jira_base_url": "not-a-url"},  # malformed base URL (lode-gpzn.1)
         {"confluence_base_url": "ftp://wrong-scheme.example"},  # non-http(s)

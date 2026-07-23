@@ -47,13 +47,12 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-import anthropic
-
 from lode.answer import Claim
 from lode.config import Settings
 from lode.egress import WithheldCitation
 from lode.faithfulness import EntailmentScorer
 from lode.gate import apply_gate
+from lode.llm_provider import LLMProvider
 from lode.qa import QaPassage, QaResult, answer_question
 from lode.retrieval import ContextItem, TrustTier
 
@@ -121,7 +120,7 @@ def ask(
     context: Sequence[ContextItem],
     *,
     think_harder: bool = False,
-    client: anthropic.Anthropic | None = None,
+    provider: LLMProvider | None = None,
     scorer: EntailmentScorer | None = None,
     settings: Settings | None = None,
 ) -> CitedAnswer:
@@ -139,7 +138,8 @@ def ask(
     3. **Gate** the claims before display (:func:`gate_cited_answer`) against the
        stored bodies of the **egress-cleared** targets, abstaining if none survive.
 
-    ``client`` defaults to a credential-resolved SDK client inside
+    ``provider`` defaults to a credential-resolved
+    :class:`~lode.llm_provider.LLMProvider` inside
     :func:`lode.qa.answer_question`; tests pass a mock so the loop stays offline.
     ``settings`` is threaded into both the synthesis send and the gate, so the
     configured ``entailment_threshold`` is honored at step 3; ``scorer`` is the
@@ -171,7 +171,7 @@ def ask(
         question,
         passages,
         think_harder=think_harder,
-        client=client,
+        provider=provider,
         settings=settings,
     )
     return gate_cited_answer(result, bodies, scorer=scorer, settings=settings)

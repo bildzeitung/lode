@@ -42,6 +42,7 @@ from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import enqueue_derive_jobs
 from lode.jobs import now_iso as _now_iso
+from lode.llm_provider import AnthropicProvider
 from lode.storage import init_db
 from lode.worker import (
     _REGISTRY,
@@ -2084,7 +2085,7 @@ def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
         db_path,
         settings,
         _registry=_noop_registry(),
-        _batch_client=client,
+        _batch_client=AnthropicProvider(client),
         outcomes=outcomes,
     )
     # Batch-collected enrich outcomes are not counted in the main loop's
@@ -2123,7 +2124,11 @@ def test_drain_main_loop_skips_enrich_batch_in_flight(
     fake_batch.beta.messages.batches.retrieve.return_value = status_obj
 
     n = drain(
-        conn, db_path, settings, _registry=_noop_registry(), _batch_client=fake_batch
+        conn,
+        db_path,
+        settings,
+        _registry=_noop_registry(),
+        _batch_client=AnthropicProvider(fake_batch),
     )
     assert n == 1  # only the embed job processed by the main loop
 
@@ -2172,7 +2177,7 @@ def test_drain_enrich_never_dead_lettered(
             db_path,
             settings,
             _registry=_noop_registry(),
-            _batch_client=client,
+            _batch_client=AnthropicProvider(client),
         )
 
     row = _job(conn, job_id)
@@ -2207,12 +2212,12 @@ def test_drain_raises_auth_error_leaving_job_pending_uncharged(
     That is precisely the class of bug lode-85q exists to kill, so it is fixed
     here rather than papered over with an escape-hatch marker.
     """
-    import lode.enrich as enrich_mod
+    import lode.llm_provider as llm_provider_mod
 
     def _no_credentials() -> object:
         raise AuthError("no credentials (test)")
 
-    monkeypatch.setattr(enrich_mod, "build_client", _no_credentials)
+    monkeypatch.setattr(llm_provider_mod, "build_client", _no_credentials)
 
     enqueue_derive_jobs(conn, "ver-1")
     # A single drain() call now raises -- the permanent failure is not
@@ -2246,12 +2251,12 @@ def test_drain_still_runs_embed_jobs_when_credentials_are_missing(
 
     The contract: drain does all the credential-free work it can, THEN raises.
     """
-    import lode.enrich as enrich_mod
+    import lode.llm_provider as llm_provider_mod
 
     def _no_credentials() -> object:
         raise AuthError("no credentials (test)")
 
-    monkeypatch.setattr(enrich_mod, "build_client", _no_credentials)
+    monkeypatch.setattr(llm_provider_mod, "build_client", _no_credentials)
 
     # One note → one pending embed job + one pending enrich job.
     _insert_note_worker(conn)
@@ -2499,7 +2504,7 @@ def test_batch_submit_claims_pending_enrich_jobs(
     job_id = _insert_enrich_job_worker(conn)
 
     client = _fake_batch_client_worker(batch_id="test-batch")
-    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
 
     assert submitted == 1
     row = _job(conn, job_id)
@@ -2515,7 +2520,7 @@ def test_batch_submit_stamps_claimed_at(
 
     before = _now_iso()
     client = _fake_batch_client_worker(batch_id="test-batch")
-    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
     after = _now_iso()
 
     assert submitted == 1
@@ -2543,7 +2548,9 @@ def test_batch_submit_survives_crash_before_batch_handle_persist(
 
     with mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit):
         with pytest.raises(SystemExit):
-            _batch_submit_enrich(conn, settings, _client=_fake_batch_client_worker())
+            _batch_submit_enrich(
+                conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
+            )
 
     # The pre-claim CAS ran and stamped claimed_at before the (simulated)
     # crash; batch_handle never got persisted.
@@ -2567,7 +2574,7 @@ def test_batch_submit_no_op_when_no_pending_enrich(
 ) -> None:
     """_batch_submit_enrich returns 0 when there are no pending enrich jobs."""
     client = _fake_batch_client_worker()
-    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
     assert submitted == 0
     client.beta.messages.batches.create.assert_not_called()
 
@@ -2586,7 +2593,10 @@ def test_batch_pre_step_with_no_work_does_not_import_enrich(
     now either way (see ``test_importing_module_does_not_import_the_sdk``) -- but
     there is still no reason to import it to do nothing.
     """
-    assert pre_step(conn, settings, _client=_fake_batch_client_worker()) == 0
+    assert (
+        pre_step(conn, settings, _client=AnthropicProvider(_fake_batch_client_worker()))
+        == 0
+    )
     assert "lode.enrich" not in sys.modules
     assert "anthropic" not in sys.modules
 
@@ -2602,7 +2612,7 @@ def test_batch_submit_reverts_on_api_failure(
     client = mock.MagicMock()
     client.beta.messages.batches.create.side_effect = RuntimeError("api down")
 
-    submitted = _batch_submit_enrich(conn, settings, _client=client)
+    submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
     assert submitted == 0
 
     # Job reverted to 'failed' (not 'dead') — will be retried.
@@ -2620,7 +2630,7 @@ def test_batch_submit_auth_error_resets_to_pending_and_reraises(
     """_batch_submit_enrich treats AuthError as permanent (lode-9yy): the
     pre-claimed job is reset to 'pending' (uncharged, not 'failed' with
     backoff) and the exception is re-raised rather than absorbed."""
-    import lode.enrich as enrich_mod
+    import lode.llm_provider as llm_provider_mod
 
     _insert_note_worker(conn)
     job_id = _insert_enrich_job_worker(conn)
@@ -2628,9 +2638,10 @@ def test_batch_submit_auth_error_resets_to_pending_and_reraises(
     def _no_credentials() -> object:
         raise AuthError("no credentials (test)")
 
-    # No explicit _client -- forces submit_enrich_batch's own build_client()
-    # call, which is what actually raises AuthError in production.
-    monkeypatch.setattr(enrich_mod, "build_client", _no_credentials)
+    # No explicit _client -- forces submit_enrich_batch's own build_provider()
+    # -> build_client() call, which is what actually raises AuthError in
+    # production.
+    monkeypatch.setattr(llm_provider_mod, "build_client", _no_credentials)
 
     with pytest.raises(AuthError):
         _batch_submit_enrich(conn, settings)
@@ -2716,7 +2727,9 @@ def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(
 
     client = _fake_batch_client_worker(batch_id="race-batch")
     racing = _RacingSelectConn(conn, race_job_id=raced_job)
-    submitted = _batch_submit_enrich(racing, settings, _client=client)
+    submitted = _batch_submit_enrich(
+        racing, settings, _client=AnthropicProvider(client)
+    )
 
     # Only the job the batch step won (ver-b) is submitted.
     assert submitted == 1
@@ -2747,7 +2760,7 @@ def test_batch_collect_returns_false_when_in_progress(
     client = _fake_batch_client_worker(
         batch_id="in-flight-batch", processing_status="in_progress"
     )
-    ended = _batch_collect_enrich(conn, settings, _client=client)
+    ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
     assert ended == 0  # batch not ended, nothing processed
 
 
@@ -2775,7 +2788,7 @@ def test_batch_collect_returns_count_of_ended_batches(
     client = _fake_batch_client_worker(
         batch_id="done-batch", results=[result_obj], processing_status="ended"
     )
-    ended = _batch_collect_enrich(conn, settings, _client=client)
+    ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
     assert ended == 1  # one batch ended
 
     # Job marked done.
@@ -2820,7 +2833,7 @@ def test_batch_collect_resumes_after_restart_without_resubmit(
         batch_id="restart-batch", results=[result_obj], processing_status="ended"
     )
 
-    ended = _batch_collect_enrich(conn, settings, _client=client)
+    ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
 
     assert ended == 1
     client.beta.messages.batches.create.assert_not_called()
@@ -2844,7 +2857,7 @@ def test_batch_collect_in_flight_handle_survives_restart_no_resubmit(
 
     # Simulate several worker-startup passes while the batch is still running.
     for _ in range(3):
-        ended = _batch_collect_enrich(conn, settings, _client=client)
+        ended = _batch_collect_enrich(conn, settings, _client=AnthropicProvider(client))
         assert ended == 0
 
     client.beta.messages.batches.create.assert_not_called()
@@ -2888,7 +2901,13 @@ def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
     )
 
     gap = _reconcile(conn, steps=[("enrich_gap", _enrich_gap_step)])
-    drain(conn, db_path, settings, _registry=_noop_registry(), _batch_client=client)
+    drain(
+        conn,
+        db_path,
+        settings,
+        _registry=_noop_registry(),
+        _batch_client=AnthropicProvider(client),
+    )
 
     assert gap == 0  # in-flight batch job (running + handle) is not a gap
     client.beta.messages.batches.create.assert_not_called()  # never resubmitted
@@ -2914,7 +2933,13 @@ def test_drain_batch_steps_run_before_main_loop(
     client = _fake_batch_client_worker(
         batch_id="pre-batch", processing_status="in_progress"
     )
-    n = drain(conn, db_path, settings, _registry=_noop_registry(), _batch_client=client)
+    n = drain(
+        conn,
+        db_path,
+        settings,
+        _registry=_noop_registry(),
+        _batch_client=AnthropicProvider(client),
+    )
 
     assert n == 1  # only embed processed by main loop
     (enrich_status,) = conn.execute(

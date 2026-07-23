@@ -28,11 +28,13 @@ import tomllib
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lode.lock import lock_path
+from lode.llm_provider import ModelTier
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -282,18 +284,29 @@ class Settings(BaseModel):
         "aborted outright.",
         gt=0.0,
     )
-    anthropic_call_timeout_s: float = _knob(
+    llm_call_timeout_s: float = _knob(
         120.0,
         Kind.RUNTIME,
-        "Per-call client-side timeout (seconds) passed to the Anthropic "
-        "enrichment calls reachable from 'lode work' (enrich.py): the Batches "
-        "API pre-steps (client.beta.messages.batches.create/retrieve/results) "
-        "and the immediate Haiku call (client.messages.create) a residual "
-        "enrich job can take in drain()'s main loop -- bounds a hung network "
-        "call rather than letting it block 'lode work' forever (lode-olmi.15). "
-        "Distinct from fetch_timeout_s, which governs web draw-down HTTP "
-        "fetches, not Anthropic API calls.",
+        "Per-call client-side timeout (seconds) passed to EVERY cloud-LLM call "
+        "through the LLMProvider seam (lode-568v.2), immediate and batch alike: "
+        "the enrichment calls reachable from 'lode work' (enrich.py -- the "
+        "Batches API pre-steps and the immediate Haiku call a residual enrich "
+        "job can take in drain()'s main loop) and the Q&A synthesis call "
+        "(qa.py) -- bounds a hung network call rather than letting it block "
+        "forever (lode-olmi.15). Renamed vendor-neutral from "
+        "anthropic_call_timeout_s (lode-568v.1/.2); a config.toml still "
+        "carrying the old key is remapped by load_settings(). Distinct from "
+        "fetch_timeout_s, which governs web draw-down HTTP fetches, not LLM "
+        "provider calls.",
         gt=0.0,
+    )
+    llm_provider: Literal["anthropic"] = _knob(
+        "anthropic",
+        Kind.RUNTIME,
+        "Which LLMProvider implementation every cloud-LLM call site resolves "
+        "against (lode-568v.2) -- whole-app, not per-surface: setting this "
+        "sets it for enrichment AND Q&A together. Sole valid value until "
+        "lode-568v.3 lands OpenAI-via-Azure.",
     )
 
     # --- Externals (with connectors) -----------------------------------------
@@ -456,20 +469,26 @@ class Settings(BaseModel):
         "(nomic-embed-text-v1.5 → 768) — lode-txh.6.",
         gt=0,
     )
-    enrichment_llm: str = _knob(
-        "claude-haiku-4-5",
+    enrichment_llm: ModelTier = _knob(
+        ModelTier(model="claude-haiku-4-5"),
         Kind.RUNTIME,
-        "High-volume background extraction LLM (Claude Haiku 4.5).",
+        "High-volume background extraction LLM (Claude Haiku 4.5). A "
+        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
+        "still coerces to a ModelTier with reasoning_effort=None.",
     )
-    qa_llm: str = _knob(
-        "claude-sonnet-4-6",
+    qa_llm: ModelTier = _knob(
+        ModelTier(model="claude-sonnet-4-6"),
         Kind.RUNTIME,
-        "Default interactive Q&A synthesis LLM (Claude Sonnet 4.6).",
+        "Default interactive Q&A synthesis LLM (Claude Sonnet 4.6). A "
+        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
+        "still coerces to a ModelTier with reasoning_effort=None.",
     )
-    qa_think_harder_llm: str = _knob(
-        "claude-opus-4-8",
+    qa_think_harder_llm: ModelTier = _knob(
+        ModelTier(model="claude-opus-4-8"),
         Kind.RUNTIME,
-        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 4.8).",
+        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 4.8). A "
+        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
+        "still coerces to a ModelTier with reasoning_effort=None.",
     )
 
     # --- Build constants (chosen once) ---------------------------------------
@@ -567,6 +586,14 @@ def load_settings(**overrides: object) -> Settings:
     if path.is_file():
         with path.open("rb") as handle:
             file_values = tomllib.load(handle)
+    # Back-compat rename (lode-568v.2): a config.toml still carrying the old
+    # Anthropic-named key keeps working rather than tripping extra="forbid" --
+    # docs/stack.md "Config shape". Only applies to the file layer; overrides
+    # (CLI flags, tests) are expected to already use the current name.
+    if "anthropic_call_timeout_s" in file_values:
+        file_values.setdefault(
+            "llm_call_timeout_s", file_values.pop("anthropic_call_timeout_s")
+        )
     supplied = {
         k: v
         for k, v in overrides.items()
@@ -961,5 +988,16 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
             value = getattr(settings, name)
             if isinstance(value, list):
                 value = ", ".join(str(item) for item in value)
+            elif isinstance(value, ModelTier):
+                # Render the bare model/deployment id (matching the pre-seam
+                # str-valued knobs, lode-568v.2), appending the effort only when
+                # set -- str(ModelTier) would otherwise print the pydantic repr
+                # "model='...' reasoning_effort=None" in `lode config` + the TUI
+                # ConfigScreen (both feed knob_rows straight to display).
+                value = (
+                    f"{value.model} (effort={value.reasoning_effort})"
+                    if value.reasoning_effort is not None
+                    else value.model
+                )
         rows.append((name, str(value), kind))
     return rows

@@ -2057,3 +2057,39 @@ are catalogued in [configuration.md](configuration.md).
   - **No code changed by this ticket** — `src/lode/auth.py`, `enrich.py`, `qa.py`, `config.py`, and
     `schema.sql` are all unmodified; every reference above is a *pinned design* for the tickets that
     build it.
+
+- **2026-07-23 (lode-568v.2) — implementation details resolved while building the seam against T1's
+  pinned contract; recorded here since they're load-bearing for `lode-568v.3` (OpenAI/Azure) and not
+  yet written down anywhere else:**
+  - **`structured_call` gained a `tool_description` keyword beyond T1's pinned signature.** Required
+    for `AnthropicProvider`'s forced tool-use branch to send the *exact* tool description text
+    `enrich._call_haiku` sent pre-seam — byte-for-byte wire equivalence is this ticket's own acceptance
+    bar, and the pinned signature had no way to carry it. Same addition on `BatchRequest` for the batch
+    path. `lode-568v.3`'s `OpenAIProvider` can ignore it (its Responses-API structured output has no
+    per-request description field) or use it as a hint; the field is optional either way.
+  - **`BatchResult.parsed` holds the provider's raw decoded wire payload, never a schema-validated
+    domain object.** Wrapped in a `pydantic.RootModel[dict]` — literally satisfies T1's pinned
+    `BaseModel | None` type — rather than `EnrichmentResult` or any other caller-specific schema. This
+    is what keeps `AnthropicProvider` generic (it never needs to import or know about
+    `lode.enrich.EnrichmentResult`) while preserving the resume-on-restart durability
+    `collect_enrich_batch` depends on (`lode-i05.5`): the Anthropic batch handle stays the bare
+    `batch.id` string exactly as before, with no schema information encoded into it, because a fresh
+    process's freshly-built `AnthropicProvider` has no in-memory state to lose across a restart in the
+    first place. The caller (`enrich.py`) does its own `EnrichmentResult.model_validate(result.parsed.root)`
+    — exactly what it did pre-seam, just fed from the provider's raw payload instead of
+    `tool_block.input` directly.
+  - **`build_provider`'s Anthropic branch does NOT wrap a missing-credential failure into
+    `LLMAuthError`** — `lode.auth.build_client`'s `AuthError` propagates unchanged. T1's pinned
+    docstring for `build_provider` says it "raises `LLMAuthError`"; this ticket deliberately does not
+    implement that for the Anthropic branch, because `lode.worker`'s permanent-failure handling
+    (`lode-9yy`, `except AuthError`, dozens of pinning tests) is untouched by this ticket and stays
+    correct only as long as the exception type it catches is still what gets raised. Wrapping it would
+    have meant either (a) widening every `except AuthError` in `worker.py` to also catch
+    `LLMAuthError`, a change with no behavioral upside for an Anthropic-only build, or (b) making
+    `LLMAuthError` subclass the Anthropic-specific `AuthError`, which inverts the vendor-neutral seam's
+    whole point. Neither was worth doing for a zero-behavior-change ticket. **Follow-up, not resolved
+    here:** when `lode-568v.3` (OpenAI/Azure) lands, its own credential failures have no existing
+    exception type to preserve, so they should raise `LLMAuthError` for real — at that point
+    `worker.py`'s exception handling needs widening (catch both, or retire `AuthError` in favor of
+    `LLMAuthError` everywhere). `LLMAuthError`/`LLMProviderError` are still defined now, per the pinned
+    shape, ready for that provider to use.

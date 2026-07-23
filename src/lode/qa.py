@@ -13,9 +13,12 @@ by this response schema (``docs/retrieval.md``).
 ``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
 ``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
 4.8**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
-so a user override actually reaches the call. Credentials resolve via the SDK
-(env var or ``ant auth login`` profile) -- :func:`lode.auth.build_client`, never
-a hardcoded key.
+each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort,
+lode-568v.2), so a user override actually reaches the call. The call itself is
+routed through the vendor-neutral :class:`~lode.llm_provider.LLMProvider` seam
+(:func:`~lode.llm_provider.build_provider`) rather than a hardcoded Anthropic
+client -- credentials still resolve via the SDK's own chain underneath, never a
+hardcoded key.
 
 **The cloud-egress preconditions are honored before the send, not reimplemented.**
 :func:`answer_question` runs the landed Q&A egress gate
@@ -42,13 +45,12 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-import anthropic
 from pydantic import BaseModel, ConfigDict, Field
 
 from lode.answer import Answer, Claim
-from lode.auth import build_client
 from lode.config import Settings
 from lode.egress import RedactedSend, WithheldCitation, gate_qa_egress
+from lode.llm_provider import LLMProvider, build_provider
 
 #: Default Q&A model -- Claude Sonnet 4.6 (``docs/stack.md`` "Q&A LLM"). Mirrors
 #: :attr:`lode.config.Settings.qa_llm`'s default; the live value always comes
@@ -142,7 +144,7 @@ def answer_question(
     passages: Iterable[QaPassage],
     *,
     think_harder: bool = False,
-    client: anthropic.Anthropic | None = None,
+    provider: LLMProvider | None = None,
     settings: Settings | None = None,
 ) -> QaResult:
     """Ask Claude for structured, cited claims answering ``question``.
@@ -160,11 +162,14 @@ def answer_question(
 
     ``settings`` defaults to :class:`~lode.config.Settings`' own defaults when
     omitted (same pattern as :func:`lode.redact.redact_before_egress_counting`).
-    ``client`` defaults to a credential-resolved SDK client
-    (:func:`lode.auth.build_client`); tests pass a mock so the gates stay offline.
+    ``provider`` defaults to a credential-resolved
+    :class:`~lode.llm_provider.LLMProvider`
+    (:func:`~lode.llm_provider.build_provider`); tests pass a mock so the gates
+    stay offline.
     """
     settings = settings or Settings()
-    model = settings.qa_think_harder_llm if think_harder else settings.qa_llm
+    tier = settings.qa_think_harder_llm if think_harder else settings.qa_llm
+    model = tier.model
     passages = list(passages)
     # Keep note-vs-external per target so the prompt can tell Claude which support
     # field to cite (the gate's RedactedSend carries only target_id + text).
@@ -172,8 +177,16 @@ def answer_question(
 
     egress = gate_qa_egress(conn, model, passages, settings)
 
-    client = client or build_client()
-    envelope = _request_claims(client, model, question, egress.sent, is_external)
+    provider = provider or build_provider(settings)
+    envelope = _request_claims(
+        provider,
+        model,
+        tier.reasoning_effort,
+        question,
+        egress.sent,
+        is_external,
+        settings.llm_call_timeout_s,
+    )
     return QaResult(
         answer=Answer(envelope.claims),
         withheld_citations=egress.withheld_citations,
@@ -183,30 +196,37 @@ def answer_question(
 
 
 def _request_claims(
-    client: anthropic.Anthropic,
+    provider: LLMProvider,
     model: str,
+    reasoning_effort: str | None,
     question: str,
     sent: tuple[RedactedSend, ...],
     is_external: dict[str, bool],
+    timeout_s: float,
 ) -> _ClaimsEnvelope:
     """Make the structured-output call and return the decoded claims envelope.
 
-    Uses ``messages.parse`` with an ``output_format`` Pydantic model so the SDK
-    validates the response against the claims schema and returns a typed instance
-    (``docs/stack.md`` "structured outputs + Pydantic").
+    Routed through the :class:`~lode.llm_provider.LLMProvider` seam
+    (lode-568v.2) -- ``provider.structured_call`` with no ``tool_name`` uses
+    ``messages.parse`` with an ``output_format`` Pydantic model for
+    :class:`~lode.llm_provider.AnthropicProvider`, so the SDK validates the
+    response against the claims schema and returns a typed instance
+    (``docs/stack.md`` "structured outputs + Pydantic"), byte-for-byte
+    identical to the direct SDK call this replaced.
     """
     sources = "\n\n".join(
         _render_source(send, is_external.get(send.target_id, False)) for send in sent
     )
     user_prompt = f"QUESTION:\n{question}\n\nSOURCES:\n{sources}"
-    response = client.messages.parse(
+    return provider.structured_call(
         model=model,
-        max_tokens=MAX_TOKENS,
+        reasoning_effort=reasoning_effort,
         system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-        output_format=_ClaimsEnvelope,
+        user_prompt=user_prompt,
+        output_schema=_ClaimsEnvelope,
+        max_tokens=MAX_TOKENS,
+        timeout_s=timeout_s,
     )
-    return response.parsed_output
 
 
 def _render_source(send: RedactedSend, is_external: bool) -> str:

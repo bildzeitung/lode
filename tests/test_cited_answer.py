@@ -20,6 +20,7 @@ from lode.answer import Answer, Claim, Support
 from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
 from lode.config import Settings
 from lode.egress import WITHHELD_CITATION
+from lode.llm_provider import AnthropicProvider
 from lode.qa import QaResult, SONNET_MODEL
 from lode.retrieval import ContextItem, TrustTier
 from lode.storage import init_db
@@ -151,7 +152,10 @@ def test_surviving_claim_renders_with_its_citation(conn) -> None:
     )
 
     answer = ask(
-        conn, "How is lode stored?", [_note_context("v1", body)], client=client
+        conn,
+        "How is lode stored?",
+        [_note_context("v1", body)],
+        provider=AnthropicProvider(client),
     )
 
     assert not answer.abstained
@@ -169,7 +173,9 @@ def test_fabricated_claim_is_dropped_and_abstains(conn) -> None:
         [_note_claim("lode mutates in place.", "mutates in place", "v1")]
     )
 
-    answer = ask(conn, "q", [_note_context("v1", body)], client=client)
+    answer = ask(
+        conn, "q", [_note_context("v1", body)], provider=AnthropicProvider(client)
+    )
 
     assert answer.abstained
     assert answer.claims == ()
@@ -186,7 +192,9 @@ def test_partial_survival_drops_only_the_failures(conn) -> None:
         ]
     )
 
-    answer = ask(conn, "q", [_note_context("v1", body)], client=client)
+    answer = ask(
+        conn, "q", [_note_context("v1", body)], provider=AnthropicProvider(client)
+    )
 
     assert not answer.abstained
     assert [c.text for c in answer.claims] == ["event-sourced", "append-only"]
@@ -197,7 +205,12 @@ def test_empty_answer_abstains(conn) -> None:
     _insert_note(conn, note_id="n1", version_id="v1", body="some body")
     client = _FakeClient([])
 
-    answer = ask(conn, "q", [_note_context("v1", "some body")], client=client)
+    answer = ask(
+        conn,
+        "q",
+        [_note_context("v1", "some body")],
+        provider=AnthropicProvider(client),
+    )
 
     assert answer.abstained
     assert answer.claims == ()
@@ -223,7 +236,7 @@ def test_no_egress_note_kept_off_cloud_and_surfaced_as_withheld(conn) -> None:
             _note_context("v-open", "shareable body"),
             _note_context("v-secret", "secret body"),
         ],
-        client=client,
+        provider=AnthropicProvider(client),
     )
 
     prompt = _user_prompt(client)
@@ -250,7 +263,10 @@ def test_claim_citing_a_no_egress_target_fails_closed(conn) -> None:
     )
 
     answer = ask(
-        conn, "q", [_note_context("v-secret", "the secret is 42")], client=client
+        conn,
+        "q",
+        [_note_context("v-secret", "the secret is 42")],
+        provider=AnthropicProvider(client),
     )
 
     assert answer.abstained
@@ -267,7 +283,9 @@ def test_external_snapshot_cited_via_snapshot_id(conn) -> None:
     )
     client = _FakeClient([claim])
 
-    answer = ask(conn, "q", [_external_context("s1", body)], client=client)
+    answer = ask(
+        conn, "q", [_external_context("s1", body)], provider=AnthropicProvider(client)
+    )
 
     prompt = _user_prompt(client)
     assert '<source id="s1" kind="external">' in prompt
@@ -303,7 +321,7 @@ def test_no_egress_external_kept_off_cloud_and_surfaced_as_withheld(conn) -> Non
             _external_context("s-open", "public runbook"),
             _external_context("s-secret", "internal creds runbook"),
         ],
-        client=client,
+        provider=AnthropicProvider(client),
     )
 
     prompt = _user_prompt(client)
@@ -355,7 +373,7 @@ def test_ask_honors_configured_entailment_threshold(conn) -> None:
         conn,
         "q",
         [_note_context("v1", body)],
-        client=_FakeClient([claim]),
+        provider=AnthropicProvider(_FakeClient([claim])),
         scorer=_StubScorer(0.5),
         settings=Settings(entailment_threshold=0.8),
     )
@@ -365,7 +383,7 @@ def test_ask_honors_configured_entailment_threshold(conn) -> None:
         conn,
         "q",
         [_note_context("v1", body)],
-        client=_FakeClient([claim]),
+        provider=AnthropicProvider(_FakeClient([claim])),
         scorer=_StubScorer(0.5),
         settings=Settings(entailment_threshold=0.4),
     )
