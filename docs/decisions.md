@@ -490,6 +490,37 @@ are catalogued in [configuration.md](configuration.md).
   ticket is not that session. Do not declare parity or close this ticket's comparison criteria until both
   have actually been run and recorded here.
 
+  **Update (2026-07-23) — both comparisons have now been run; the acceptance bar is reframed from
+  parity to additive-value; the gate lands (lode-905v).** The retrospective (b) came back 2/2 and
+  green (best candidate `b70be43`/lode-gpzn.13, `77960d8...22e4341`). The live head-to-head (a) was
+  run by the maintainer's interactive session (runbook `specs/11-correctness-review-live-benchmark.md`):
+  a keystroke `/code-review high trunk...HEAD` on `land/lode-568v.2 @ fe31ecf` (the
+  "behavior-preserving LLMProvider seam" refactor) as the baseline, then the workflow 3× on the
+  identical range, scored finding-by-finding by a fresh session (full table on `bd show lode-905v`).
+  Result: **zero false positives across all three runs** — the refute stage killed every non-bug —
+  and the workflow recalled the `lode config` ModelTier display regression (2/3 runs) and the
+  batch-collect failure-isolation narrowing (1/3). It **missed the baseline's dominant finding in all
+  three runs** (the Q&A synthesis timeout silently cut 600s → 120s), and worse, every run's finder
+  *inverted* it — asserting trunk was unbounded when the Anthropic SDK's default client timeout is in
+  fact 600s. That is a **systematic FIND blind spot** — finders trusting a diff's own
+  "behavior-preserving" self-description instead of independently establishing prior behaviour
+  (including implicit library defaults) — filed as **lode-eohb**, and distinct from the *stochastic*
+  single-pass recall caveat **lode-p5gf**.
+
+  **The decision: parity with `/code-review` is NO LONGER the bar — this supersedes the paragraph
+  above.** correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
+  the reviewer's dispatch as pre-computed candidates, and the `code-reviewer`'s own hand-reasoned pass
+  runs regardless of whether the workflow ran, errored, or returned nothing. A recall miss therefore
+  *degrades the backstop on that run; it can never suppress the reviewer's own review*. So the honest
+  bar for landing is **"adds real findings at an acceptable false-positive rate," not finding-count
+  parity** — and on that bar the live evidence clears cleanly (0 FP, two genuine catches that
+  `/simplify` alone would not have made). lode-905v lands on this bar. The two residual FIND-quality
+  gaps — lode-p5gf (stochastic recall; a K-round-union mitigation is built but **unvalidated**, so it
+  does not land with this ticket) and lode-eohb (the systematic blind spot) — are tracked as
+  follow-ups and validated together via `specs/12-correctness-review-recall-validation.md`; neither
+  blocks landing an additive backstop, because the failure mode of both is "sometimes adds less,"
+  never "removes the reviewer's reasoning."
+
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
