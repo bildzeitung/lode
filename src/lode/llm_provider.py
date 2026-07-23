@@ -391,3 +391,25 @@ def build_provider(settings: Settings) -> LLMProvider:
         f"unsupported llm_provider {settings.llm_provider!r}",
         provider=settings.llm_provider,
     )
+
+
+# ---------------------------------------------------------------------------
+# Provenance (lode-568v.4, design pinned lode-568v.1)
+# ---------------------------------------------------------------------------
+
+
+def provider_identity(settings: Settings) -> str | None:
+    """The provider value :mod:`lode.enrich` persists for provenance.
+
+    ``docs/decisions.md`` (lode-568v.1): ``NULL`` means "anthropic" by
+    convention -- pre-seam rows have no ``provider`` column to backfill, and
+    every row written today is Anthropic-produced regardless (``anthropic``
+    is the only value ``settings.llm_provider`` accepts until ``lode-568v.3``
+    lands a second provider). So this returns ``None`` while the active
+    provider is Anthropic, and the literal provider string once a non-Anthropic
+    provider exists -- keeping the column's meaning consistent for old and new
+    rows alike, rather than writing the literal ``"anthropic"`` string once
+    this ticket lands and leaving every prior row looking different for no
+    semantic reason.
+    """
+    return None if settings.llm_provider == "anthropic" else settings.llm_provider

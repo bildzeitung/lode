@@ -185,6 +185,8 @@ def log_egress(
     model: str,
     sent_targets: Iterable[str],
     redactions: object | None = None,
+    *,
+    provider: str | None = None,
 ) -> int:
     """Write one ``egress_log`` row and return its id (``docs/storage.md`` §8).
 
@@ -192,14 +194,21 @@ def log_egress(
     ``sent_targets`` (the version/snapshot/passage ids sent) and ``redactions``
     (which redactions were applied) are stored as JSON summaries; ``redactions``
     may be ``None`` when nothing was stripped. ``purpose`` is ``qa`` here; the
-    enrichment send (E7) reuses this with ``enrich``. Commits before returning.
+    enrichment send (E7) reuses this with ``enrich``. ``provider`` is the LLM
+    vendor identity (lode-568v.4) -- ``None`` means "anthropic" by convention
+    (:func:`lode.llm_provider.provider_identity`); the Q&A send does not thread
+    it through yet (out of this ticket's scope, ``docs/decisions.md``
+    lode-568v.1), so it defaults to ``None`` here, which is also the correct
+    value today since Q&A is Anthropic-only regardless. Commits before
+    returning.
     """
     cur = conn.execute(
-        "INSERT INTO egress_log (purpose, model, sent_targets, redactions) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO egress_log (purpose, model, provider, sent_targets, redactions) "
+        "VALUES (?, ?, ?, ?, ?)",
         (
             purpose,
             model,
+            provider,
             json.dumps(list(sent_targets)),
             None if redactions is None else json.dumps(redactions),
         ),

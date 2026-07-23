@@ -20,6 +20,7 @@ from lode.llm_provider import (
     LLMProviderError,
     ModelTier,
     build_provider,
+    provider_identity,
 )
 
 
@@ -349,3 +350,24 @@ def test_llm_provider_error_carries_diagnostic_fields() -> None:
 def test_llm_auth_error_is_a_llm_provider_error() -> None:
     err = LLMAuthError("no creds", provider="openai")
     assert isinstance(err, LLMProviderError)
+
+
+# ---------------------------------------------------------------------------
+# provider_identity (lode-568v.4 -- provenance)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_identity_is_none_for_anthropic() -> None:
+    # NULL means "anthropic" by convention (docs/decisions.md lode-568v.1) --
+    # settings.llm_provider is Literal["anthropic"] today, the only value real
+    # Settings construction accepts.
+    assert provider_identity(Settings()) is None
+
+
+def test_provider_identity_returns_the_literal_string_for_non_anthropic() -> None:
+    # A duck-typed stand-in (real Settings can't hold a non-anthropic value
+    # yet, per its Literal["anthropic"] annotation) -- provider_identity only
+    # reads .llm_provider, so this exercises the future-provider branch ahead
+    # of lode-568v.3 landing a second one.
+    fake_settings = SimpleNamespace(llm_provider="openai")
+    assert provider_identity(fake_settings) == "openai"

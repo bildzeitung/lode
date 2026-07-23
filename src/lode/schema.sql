@@ -120,6 +120,14 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_external ON snapshots (external_id);
 -- the new body → fresh; quote absent but payload value present → stale; both
 -- absent → orphaned.  Without quoted_text, payload value presence → fresh vs
 -- orphaned (no stale state).
+--
+-- provider (lode-568v.4, design pinned lode-568v.1): the LLM vendor identity
+-- alongside `model`, so a cross-provider corpus stays legible once a second
+-- provider exists (lode-568v). NULL means "anthropic" by convention -- every
+-- row written before this column existed, and every row written today (only
+-- Anthropic is a valid `settings.llm_provider` value so far), is implicitly
+-- Anthropic -- so no backfill is needed. A future non-Anthropic provider
+-- writes its literal name here.
 CREATE TABLE IF NOT EXISTS annotations (
     id             INTEGER PRIMARY KEY,
     target         TEXT NOT NULL,
@@ -129,6 +137,7 @@ CREATE TABLE IF NOT EXISTS annotations (
     source         TEXT NOT NULL CHECK (source IN ('ai', 'user')),
     status         TEXT NOT NULL CHECK (status IN ('fresh', 'stale', 'orphaned')),
     model          TEXT,
+    provider       TEXT,
     prompt_ver     TEXT,
     confidence     REAL,
     quoted_text    TEXT,
@@ -272,11 +281,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_live ON jobs (
 -- egress_log — cloud-egress audit trail (docs/storage.md §8, externals.md
 -- privacy). One row per time content leaves the box, so exposure is auditable.
 -- sent_targets / redactions are JSON summaries.
+--
+-- provider (lode-568v.4, design pinned lode-568v.1): same treatment as
+-- annotations.provider above -- an audit trail's whole point is which vendor
+-- content went to, so it carries the same NULL-means-anthropic convention.
 CREATE TABLE IF NOT EXISTS egress_log (
     id           INTEGER PRIMARY KEY,
     ts           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     purpose      TEXT NOT NULL CHECK (purpose IN ('enrich', 'qa')),
     model        TEXT NOT NULL,
+    provider     TEXT,
     sent_targets TEXT NOT NULL,
     redactions   TEXT
 );

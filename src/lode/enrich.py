@@ -75,7 +75,12 @@ from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
 from lode.ids import short_version_id
-from lode.llm_provider import BatchRequest, LLMProvider, build_provider
+from lode.llm_provider import (
+    BatchRequest,
+    LLMProvider,
+    build_provider,
+    provider_identity,
+)
 from lode.redact import redact_before_egress_counting
 
 # `lode.llm_provider`'s own `import anthropic` is deferred inside
@@ -236,6 +241,7 @@ def _write_enrichment(
     result: EnrichmentResult,
     model: str,
     ts: str,
+    provider: str | None = None,
 ) -> None:
     """Write tags, entities, the whole-item summary, and inferred edges to the DB.
 
@@ -244,6 +250,11 @@ def _write_enrichment(
     when it is a snapshot (:func:`_resolve_enrich_target`, lode-7qi); the SQL
     below never distinguishes the two, since ``annotations.target`` /
     ``edges.from_id`` accept either by design (``src/lode/schema.sql``).
+
+    ``provider`` is the LLM vendor identity to record alongside ``model``
+    (lode-568v.4, design pinned lode-568v.1) -- ``None`` means "anthropic" by
+    convention; see :func:`lode.llm_provider.provider_identity`, which both
+    call sites use to compute it.
 
     Idempotent: deletes existing ``source='ai'`` annotations and edges keyed by
     ``source_version = version_id`` before inserting new rows. All writes commit
@@ -291,14 +302,15 @@ def _write_enrichment(
                 conn.execute(
                     "INSERT INTO annotations "
                     "(target, source_version, kind, payload, source, status, "
-                    "model, prompt_ver, created) "
-                    "VALUES (?, ?, ?, ?, 'ai', 'fresh', ?, ?, ?)",
+                    "model, provider, prompt_ver, created) "
+                    "VALUES (?, ?, ?, ?, 'ai', 'fresh', ?, ?, ?, ?)",
                     (
                         owner_id,
                         version_id,
                         kind,
                         payload,
                         model,
+                        provider,
                         ENRICH_PROMPT_VER,
                         ts,
                     ),
@@ -478,13 +490,30 @@ def enrich_version(
     # backward step — correct for "is this job due yet", wrong for "when was
     # this enrichment written".
     ts = jobs.iso(datetime.now(UTC))
+    # Provenance (lode-568v.4): the vendor identity alongside the model string
+    # -- named `provider_name` to avoid shadowing the LLMProvider instance
+    # bound to `provider` above.
+    provider_name = provider_identity(settings)
     _write_enrichment(
-        conn, target.owner_id, version_id, result, settings.enrichment_llm.model, ts
+        conn,
+        target.owner_id,
+        version_id,
+        result,
+        settings.enrichment_llm.model,
+        ts,
+        provider_name,
     )
 
     # Audit the egress -- one row per enrichment call.
     redactions = {version_id: redaction_count} if redaction_count else None
-    log_egress(conn, "enrich", settings.enrichment_llm.model, [version_id], redactions)
+    log_egress(
+        conn,
+        "enrich",
+        settings.enrichment_llm.model,
+        [version_id],
+        redactions,
+        provider=provider_name,
+    )
 
     log.info(
         "enrich_version: version=%s tags=%d entities=%d edges=%d summary=%s",
@@ -642,13 +671,15 @@ def submit_enrich_batch(
             [(batch_id, jid) for jid in submitted_job_ids],
         )
 
-    # Audit: one egress_log row per batch submission.
+    # Audit: one egress_log row per batch submission. `provider_name` (not
+    # `provider`) to avoid shadowing the LLMProvider instance bound above.
     log_egress(
         conn,
         "enrich",
         settings.enrichment_llm.model,
         submitted_version_ids,
         redactions or None,
+        provider=provider_identity(settings),
     )
 
     log.info(
@@ -735,6 +766,9 @@ def collect_enrich_batch(
     # Raw wall clock, formatted by jobs.iso — an enrichment record timestamp,
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
+    # Provenance (lode-568v.4): `provider_name`, not `provider`, to avoid
+    # shadowing the LLMProvider instance bound above.
+    provider_name = provider_identity(settings)
 
     for result in batch_results:
         version_id = result.custom_id
@@ -790,6 +824,7 @@ def collect_enrich_batch(
                 enrichment,
                 settings.enrichment_llm.model,
                 ts,
+                provider_name,
             )
             with conn:
                 conn.execute(
