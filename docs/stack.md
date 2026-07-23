@@ -366,10 +366,12 @@ with an unchanged model *string* would not otherwise be caught. That read-side u
 *every* cloud-LLM surface; there is no per-surface vendor axis.
 
 - `llm_provider: str = "anthropic"` (`Kind.RUNTIME`) — `"anthropic"` | `"openai"`.
-- `azure_openai_endpoint: str = ""` (`Kind.RUNTIME`) — e.g.
-  `https://{resource}.openai.azure.com/openai`. Empty means direct OpenAI (or a non-`"openai"`
-  provider); its presence is what distinguishes Azure routing from direct OpenAI *under* the one
-  `"openai"` provider value, not a second vendor axis.
+- `azure_openai_endpoint: str = ""` (`Kind.RUNTIME`) — the resource **root**, e.g.
+  `https://{resource}.openai.azure.com` (do **not** append `/openai`: it is passed to the openai
+  SDK's `AzureOpenAI(azure_endpoint=…)`, which appends `/openai` itself, so `.../openai` doubles the
+  path and every request 404s — verified against `openai==2.47.0`). Empty means direct OpenAI (or a
+  non-`"openai"` provider); its presence is what distinguishes Azure routing from direct OpenAI
+  *under* the one `"openai"` provider value, not a second vendor axis.
 - `azure_openai_api_version: str = ""` (`Kind.RUNTIME`) — passed as a **query param on every
   request** (verified against a working Azure config, see this ticket's notes), e.g.
   `2025-04-01-preview`, not a header. Required when `azure_openai_endpoint` is set.

@@ -313,11 +313,14 @@ class Settings(BaseModel):
     azure_openai_endpoint: str = _knob(
         "",
         Kind.RUNTIME,
-        "Azure OpenAI endpoint, e.g. https://{resource}.openai.azure.com/openai "
-        "(lode-568v.3). Empty means direct OpenAI (or a non-'openai' "
-        "llm_provider) -- its presence is what distinguishes Azure routing "
-        "from direct OpenAI under the one 'openai' llm_provider value "
-        "(docs/stack.md). Only meaningful when llm_provider == 'openai'. "
+        "Azure OpenAI resource endpoint, e.g. "
+        "https://{resource}.openai.azure.com (lode-568v.3) -- the resource "
+        "ROOT only; do NOT append '/openai', the openai SDK's AzureOpenAI "
+        "client adds that path segment itself (passing '.../openai' doubles "
+        "it and every request 404s). Empty means direct OpenAI (or a "
+        "non-'openai' llm_provider) -- its presence is what distinguishes "
+        "Azure routing from direct OpenAI under the one 'openai' llm_provider "
+        "value (docs/stack.md). Only meaningful when llm_provider == 'openai'. "
         "Requires azure_openai_api_version to also be set.",
     )
     azure_openai_api_version: str = _knob(

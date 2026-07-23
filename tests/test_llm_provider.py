@@ -323,7 +323,7 @@ def test_openai_structured_call_builds_json_schema_format() -> None:
     client = _fake_responses_client(output_text='{"name": "widget", "count": 3}')
     provider = OpenAIProvider(
         client,
-        endpoint="https://foo.openai.azure.com/openai",
+        endpoint="https://foo.openai.azure.com",
         api_version="2025-04-01-preview",
     )
 
@@ -396,6 +396,42 @@ def test_openai_structured_call_raises_on_unparseable_json() -> None:
     provider = OpenAIProvider(client)
 
     with pytest.raises(LLMProviderError, match="not valid JSON"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_raises_on_non_object_json() -> None:
+    # Non-strict json_schema mode is best-effort: the model can emit a top-level
+    # `null` (or array). json.loads succeeds but the value is not an object --
+    # must surface as a clean LLMProviderError, not a raw pydantic error.
+    client = _fake_responses_client(output_text="null")
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="not an object"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_refusal_item_is_not_a_json_object_after_walk() -> None:
+    # A top-level JSON array is likewise a non-object payload -- same guard.
+    client = _fake_responses_client(output_text="[1, 2, 3]")
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="not an object"):
         provider.structured_call(
             model="m",
             reasoning_effort=None,
@@ -549,6 +585,32 @@ def test_openai_submit_batch_captures_a_per_request_failure_as_errored() -> None
     assert result.error.provider == "openai"
 
 
+def test_openai_submit_batch_non_object_payload_does_not_poison_collect() -> None:
+    # Regression (lode-568v.3 correctness review): a model emitting top-level
+    # `null` under non-strict mode must NOT make collect_batch raise a raw
+    # pydantic error while building RootModel[dict](...) -- an unguarded raise
+    # there escapes worker.drain and, since the payload is persisted inline in
+    # the handle, re-crashes every subsequent drain, permanently wedging ALL
+    # enrich-batch collection. It must instead land as a per-request `errored`
+    # result that drains as an ordinary transient failure.
+    client = _fake_responses_client(output_text="null")
+    provider = OpenAIProvider(client)
+
+    handle = provider.submit_batch(
+        [_batch_request(custom_id="ver-3", tool_name="extract_widget")],
+        timeout_s=30.0,
+    )
+    status, results = provider.collect_batch(handle, timeout_s=30.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-3"
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert isinstance(result.error, LLMProviderError)
+    assert "not an object" in str(result.error)
+
+
 # ---------------------------------------------------------------------------
 # build_provider
 # ---------------------------------------------------------------------------
@@ -628,17 +690,17 @@ def test_build_provider_openai_azure_resolves_from_env(
 
     settings = Settings(
         llm_provider="openai",
-        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_endpoint="https://foo.openai.azure.com",
         azure_openai_api_version="2025-04-01-preview",
     )
     provider = build_provider(settings)
 
     assert isinstance(provider, OpenAIProvider)
     assert provider._client is sentinel_client
-    assert provider._endpoint == "https://foo.openai.azure.com/openai"
+    assert provider._endpoint == "https://foo.openai.azure.com"
     assert provider._api_version == "2025-04-01-preview"
     make_client.assert_called_once_with(
-        azure_endpoint="https://foo.openai.azure.com/openai",
+        azure_endpoint="https://foo.openai.azure.com",
         api_version="2025-04-01-preview",
         api_key="azure-key",
     )
@@ -651,7 +713,7 @@ def test_build_provider_openai_azure_missing_key_raises_llm_auth_error(
 
     settings = Settings(
         llm_provider="openai",
-        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_endpoint="https://foo.openai.azure.com",
         azure_openai_api_version="2025-04-01-preview",
     )
     with pytest.raises(LLMAuthError, match="AZURE_OPENAI_API_KEY"):

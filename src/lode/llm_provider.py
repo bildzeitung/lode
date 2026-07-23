@@ -703,6 +703,35 @@ class OpenAIProvider:
                 f"OpenAI/Azure response was not valid JSON: {exc}",
                 provider=self._provider_id,
             ) from exc
+        # A structured-output schema is always an object, but non-strict mode is
+        # best-effort: the model can still emit a top-level `null` or array. Guard
+        # here -- the single choke point both structured_call and submit_batch flow
+        # through -- so a non-object payload becomes a clean LLMProviderError rather
+        # than a raw pydantic ValidationError raised later out of collect_batch's
+        # `RootModel[dict](...)`. On the immediate path structured_call would wrap
+        # that itself, but on the batch path submit_batch stores the raw payload and
+        # collect_batch builds the RootModel with no guard -- an unguarded raise
+        # there escapes worker.drain (which catches only Auth errors) and, because
+        # the offending payload is persisted inline in the batch handle, re-crashes
+        # every subsequent drain, permanently wedging ALL enrich-batch collection.
+        # Failing here instead lets submit_batch record this one request as
+        # `errored` (like any other call failure), which drains as a transient
+        # per-job failure. (lode-568v.3 correctness review.)
+        if not isinstance(payload, dict):
+            kind = type(payload).__name__
+            _log.error(
+                "OpenAI/Azure structured-output call returned a non-object JSON "
+                "value (model=%s endpoint=%s api_version=%s type=%s) -- raw text: %s",
+                model,
+                self._endpoint,
+                self._api_version,
+                kind,
+                _safe_repr(text),
+            )
+            raise LLMProviderError(
+                f"OpenAI/Azure response JSON was not an object (got {kind})",
+                provider=self._provider_id,
+            )
         return payload
 
     @staticmethod

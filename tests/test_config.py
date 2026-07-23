@@ -242,16 +242,16 @@ def test_azure_openai_knobs_default_to_empty() -> None:
 
 def test_azure_openai_endpoint_requires_api_version() -> None:
     with pytest.raises(ValidationError, match="azure_openai_api_version"):
-        Settings(azure_openai_endpoint="https://foo.openai.azure.com/openai")
+        Settings(azure_openai_endpoint="https://foo.openai.azure.com")
 
 
 def test_azure_openai_endpoint_with_api_version_constructs() -> None:
     s = Settings(
         llm_provider="openai",
-        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_endpoint="https://foo.openai.azure.com",
         azure_openai_api_version="2025-04-01-preview",
     )
-    assert s.azure_openai_endpoint == "https://foo.openai.azure.com/openai"
+    assert s.azure_openai_endpoint == "https://foo.openai.azure.com"
     assert s.azure_openai_api_version == "2025-04-01-preview"
 
 
