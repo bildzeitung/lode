@@ -1928,3 +1928,43 @@ are catalogued in [configuration.md](configuration.md).
   DETECT to PIN is additive (the manifest/mismatch mechanism is unchanged, only the download path
   gains an explicit pinned-SHA source of truth, which — unlike the runtime-only DETECT manifest —
   *would* become a genuine git-committed build constant, parallel to `_MODEL_CACHE_IDENTITY`).
+
+- **2026-07-23 (lode-568v.1) — LLMProvider vendor-neutral seam pinned; design-first ahead of any
+  provider code.** Full write-up: [stack.md — LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1).
+  Settled so `lode-568v.2` (Anthropic behind the seam) and `lode-568v.3` (OpenAI-via-Azure) build
+  against one decided contract rather than inventing it mid-implementation:
+  - **Module home:** new `src/lode/llm_provider.py`, not `auth.py` — preserves `auth.py`'s
+    deliberately-cheap-to-import property (`lode-4q97`) rather than re-litigating it.
+  - **Protocol, not ABC** — matches the existing `Embedder` Protocol precedent the epic body itself
+    names.
+  - **One generic `structured_call` method** serves both the enrichment (forced tool-use) and Q&A
+    (`messages.parse`) immediate surfaces — normalizing *across providers*, not *across call
+    surfaces*: `AnthropicProvider` keeps the two existing wire mechanisms **literally distinct**,
+    selected by an optional `tool_name` param, rather than asserting the two mechanisms are
+    wire-equivalent (a claim this docs-only ticket can't verify, and `lode-568v.2`'s acceptance bar
+    is explicitly "byte-for-byte equivalent").
+  - **Batch stays two-phase** (`submit_batch`/`collect_batch`); a provider without a batch API
+    satisfies it by running every request synchronously inside `submit_batch` and self-encoding the
+    already-computed results into the returned handle string — `collect_batch` just decodes it,
+    always `"ended"`. No schema/mechanism the caller (`enrich.py`) needs to know about.
+  - **Provenance:** a new nullable `annotations.provider` column (not a composite string encoded into
+    `annotations.model`) — `NULL` means "anthropic" by convention, no backfill needed. Same treatment
+    for `egress_log.provider` (an audit trail's whole point is which vendor content went to). Schema
+    migration + write path is `lode-568v.4`'s scope; the read-side staleness-comparison consequence
+    (`lode-o9k3`'s `_enrichment_model_stale`) is already split out and tracked as `lode-568v.6`, not
+    re-opened here.
+  - **Challenge item (a) resolved:** each per-surface tier (`enrichment_llm`/`qa_llm`/
+    `qa_think_harder_llm`) becomes a `ModelTier(model, reasoning_effort)` pair rather than a bare
+    string, with back-compat coercion from a plain TOML string — this alone (no new abstraction)
+    lets "think harder" be a deployment swap, an effort bump on one deployment, or both, per config.
+  - **Challenge item (b) resolved:** `anthropic_call_timeout_s` renamed vendor-neutral to
+    `llm_call_timeout_s` (same default, same meaning); `load_settings()` gains a back-compat key
+    remap so an un-migrated `config.toml` keeps working under `extra="forbid"`.
+  - **Error contract:** every provider's failure paths raise `LLMProviderError`/`LLMAuthError`
+    (`.provider`, `.status_code`, `.request_id`, chained `__cause__`) rather than a raw SDK exception
+    or a generic lode error — addresses the challenge addendum's diagnosability concern for failures
+    only observable in a real Azure environment (api-version skew, content-filtering). The concrete
+    OpenAI/Azure field mapping is deferred to `lode-568v.3`; only the shape is pinned here.
+  - **No code changed by this ticket** — `src/lode/auth.py`, `enrich.py`, `qa.py`, `config.py`, and
+    `schema.sql` are all unmodified; every reference above is a *pinned design* for the tickets that
+    build it.
