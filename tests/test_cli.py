@@ -58,6 +58,7 @@ from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs
+from lode.llm_provider import AnthropicProvider
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
 from lode.versions import delete, save
@@ -1096,7 +1097,7 @@ def test_reenrich_skips_a_head_already_on_the_current_model(tmp_path: Path) -> N
             "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
         )
         conn.commit()
-        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm)
+        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm.model)
     finally:
         conn.close()
 
@@ -1372,7 +1373,7 @@ def test_status_no_enrichment_hint_when_all_one_model_matches_config(
             "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
         )
         conn.commit()
-        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm)
+        _write_ai_annotation(conn, "note-1", "ver-1", Settings().enrichment_llm.model)
     finally:
         conn.close()
 
@@ -4076,7 +4077,9 @@ class _FakeClient:
 def _mock_qa(monkeypatch: pytest.MonkeyPatch, claims: list[Claim]) -> _FakeClient:
     """Mock the Q&A SDK client so cited_answer.ask runs offline; return the client."""
     client = _FakeClient(claims)
-    monkeypatch.setattr("lode.qa.build_client", lambda: client)
+    monkeypatch.setattr(
+        "lode.qa.build_provider", lambda settings: AnthropicProvider(client)
+    )
     return client
 
 
@@ -5196,7 +5199,7 @@ def test_work_never_dead_letters_enrich(
     synthetic test case), submit_enrich_batch marks the job 'done' immediately
     (same skip logic as enrich_version).  The job must never become 'dead'.
     """
-    import lode.enrich as enrich_mod
+    import lode.llm_provider as llm_provider_mod
     import lode.worker as worker_mod
 
     db_path = tmp_path / "lode.db"
@@ -5208,10 +5211,11 @@ def test_work_never_dead_letters_enrich(
         conn.close()
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
-    # submit_enrich_batch calls build_client() before its per-row skip gate
-    # runs (lode-85q) -- stub it so the missing-version skip path is what's
-    # actually exercised here, not a real, un-mocked client construction.
-    monkeypatch.setattr(enrich_mod, "build_client", lambda: object())
+    # submit_enrich_batch calls build_provider() -> build_client() before its
+    # per-row skip gate runs (lode-85q) -- stub it so the missing-version skip
+    # path is what's actually exercised here, not a real, un-mocked client
+    # construction.
+    monkeypatch.setattr(llm_provider_mod, "build_client", lambda: object())
 
     result = runner.invoke(app, ["work", "--db", str(db_path)])
     assert result.exit_code == 0

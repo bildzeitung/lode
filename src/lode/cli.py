@@ -1603,7 +1603,7 @@ def status(
     # "Never raises" in its own right (lode-o9k3).
     enrichment_stale = False
     if settings is not None:
-        enrichment_stale = _enrichment_model_stale(db, settings.enrichment_llm)
+        enrichment_stale = _enrichment_model_stale(db, settings.enrichment_llm.model)
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1811,7 +1811,7 @@ def reenrich(
     settings = _resolve_settings()
     conn = _open_db(db)
     try:
-        stale = _stale_enrichment_heads(conn, settings.enrichment_llm)
+        stale = _stale_enrichment_heads(conn, settings.enrichment_llm.model)
         with conn:
             for version_id in stale:
                 enqueue_derive_jobs(conn, version_id, types=("enrich",))

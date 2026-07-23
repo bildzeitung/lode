@@ -30,8 +30,8 @@ pure local computation (a SQL scan, an in-process ONNX load) there is no safe
 way to abort mid-flight without cooperation from the callee, so making the
 wait *visible* (never silent) is the fix there. Network calls that *can* be
 given a real client-side timeout still get one directly at the call site
-(e.g. the Anthropic Batches API calls in ``enrich.py``, via
-``Settings.anthropic_call_timeout_s``) -- ``op_progress`` and an explicit
+(e.g. the cloud-LLM calls in ``enrich.py``/``qa.py``, via
+``Settings.llm_call_timeout_s``) -- ``op_progress`` and an explicit
 timeout are complementary, not alternatives.
 """
 

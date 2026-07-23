@@ -60,6 +60,7 @@ from lode.config import Settings, load_settings
 from lode.eval.golden import golden_set
 from lode.eval.harness import score_golden_set
 from lode.faithfulness import span_occurs
+from lode.llm_provider import AnthropicProvider
 from lode.storage import init_db
 
 #: FTS5 keyword that appears in _NOTE_BODY — used in Gate 4 to verify
@@ -268,7 +269,9 @@ def test_gate1_add_ask_yields_cited_claim_with_verbatim_span(
             )
         ]
     )
-    monkeypatch.setattr("lode.qa.build_client", lambda: fake_client)
+    monkeypatch.setattr(
+        "lode.qa.build_provider", lambda settings: AnthropicProvider(fake_client)
+    )
 
     ask_result = runner.invoke(app, ["ask", _IN_CORPUS_QUESTION, "--db", str(db_path)])
     assert ask_result.exit_code == 0, ask_result.output
@@ -324,7 +327,10 @@ def test_gate2_out_of_corpus_question_abstains(
 
     # The fake client returns no claims for the out-of-corpus question — the Q&A
     # step can't assert anything grounded, so the gate abstains.
-    monkeypatch.setattr("lode.qa.build_client", lambda: _FakeClient([]))
+    monkeypatch.setattr(
+        "lode.qa.build_provider",
+        lambda settings: AnthropicProvider(_FakeClient([])),
+    )
 
     ask_result = runner.invoke(
         app, ["ask", _OUT_OF_CORPUS_QUESTION, "--db", str(db_path)]
@@ -450,7 +456,9 @@ def test_gate4_fts_findable_before_lode_work(
             )
         ]
     )
-    monkeypatch.setattr("lode.qa.build_client", lambda: fake_client)
+    monkeypatch.setattr(
+        "lode.qa.build_provider", lambda settings: AnthropicProvider(fake_client)
+    )
 
     # Ask with a keyword from the note body — this exercises the lexical leg.
     ask_result = runner.invoke(app, ["ask", _FTS_KEYWORD, "--db", str(db_path)])

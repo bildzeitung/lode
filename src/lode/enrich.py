@@ -67,32 +67,25 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from lode import jobs
-from lode.auth import build_client
-
-# The SDK is used ONLY in the `client: anthropic.Anthropic` annotations below --
-# never at runtime in this module (the client is always constructed by
-# lode.auth.build_client, or injected). `from __future__ import annotations` keeps
-# those annotations strings, so guarding the import here keeps `import lode.enrich`
-# cheap: ~0.32s of the SDK import is the entire cost of importing this module.
-#
-# That matters because importing lode.enrich is NOT confined to the enrich path
-# (lode-4q97): lode.reconcile imports ENRICH_PROMPT_VER from here at module level,
-# and `lode work` runs a reconcile pass on EVERY invocation -- so an eager SDK
-# import here made a credential-free, embed-only drain pay for the SDK on every
-# run, to do nothing with it. Keeping this module cheap to import is what fixes
-# that at the source, rather than making each caller remember to defer.
-if TYPE_CHECKING:
-    import anthropic
 from lode.config import Settings
 from lode.curation import is_annotation_suppressed, is_edge_suppressed
 from lode.egress import log_egress
 from lode.ids import short_version_id
+from lode.llm_provider import BatchRequest, LLMProvider, build_provider
 from lode.redact import redact_before_egress_counting
+
+# `lode.llm_provider`'s own `import anthropic` is deferred inside
+# AnthropicProvider's construction path (via lode.auth.build_client), never at
+# module level -- this module never imports the SDK directly, keeping
+# `import lode.enrich` cheap (lode-4q97): lode.reconcile imports
+# ENRICH_PROMPT_VER from here at module level, and `lode work` runs a
+# reconcile pass on EVERY invocation, so an eager SDK import here would make a
+# credential-free, embed-only drain pay for the SDK on every run, to do
+# nothing with it.
 
 log = logging.getLogger(__name__)
 
@@ -190,42 +183,45 @@ class EnrichmentResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+#: Tool description sent to the provider's forced tool-use call -- pinned here
+#: (rather than inline) so :func:`_call_haiku` and :func:`_build_batch_request`
+#: send the byte-for-byte identical string (lode-568v.2).
+_TOOL_DESCRIPTION = "Extract structured enrichment from a note body."
+
+
 def _call_haiku(
     body: str,
     settings: Settings,
-    client: anthropic.Anthropic,
+    provider: LLMProvider,
 ) -> EnrichmentResult:
-    """Call Haiku with structured output via tool-use; return a validated result.
+    """Call Haiku with structured output via forced tool-use; return a validated result.
 
-    Forces a single tool call (``tool_choice={"type": "tool", "name": ...}``) so
-    the response is always a structured extraction parseable by Pydantic.
-    Raises on any API error -- the worker's retry/backoff layer handles transient
-    failures.
+    Routed through the :class:`~lode.llm_provider.LLMProvider` seam
+    (lode-568v.2) -- ``provider.structured_call`` forces a single tool call
+    (``tool_name`` given) so the response is always a structured extraction
+    parseable by Pydantic, byte-for-byte identical to the direct SDK call this
+    replaced. Raises on any API error -- the worker's retry/backoff layer
+    handles transient failures.
     """
     prompt = _PROMPT_TMPL.format(body=body)
+    tier = settings.enrichment_llm
     # Bounded client-side (lode-olmi.15): this immediate Haiku call is reachable
     # from `lode work`'s drain loop (a residual `enrich` job claimed by the main
     # claim/run loop, not the batch route -- see lode.worker.drain) as well as
     # from the capture path, and with no timeout it can otherwise hang the drain
     # indefinitely -- the same unbounded-hang the Batches API calls below are
     # bounded against, via the same knob.
-    response = client.messages.create(
-        model=settings.enrichment_llm,
-        max_tokens=1024,
+    return provider.structured_call(
+        model=tier.model,
+        reasoning_effort=tier.reasoning_effort,
         system=_SYSTEM,
-        tools=[
-            {
-                "name": _TOOL_NAME,
-                "description": "Extract structured enrichment from a note body.",
-                "input_schema": EnrichmentResult.model_json_schema(),
-            }
-        ],
-        tool_choice={"type": "tool", "name": _TOOL_NAME},
-        messages=[{"role": "user", "content": prompt}],
-        timeout=settings.anthropic_call_timeout_s,
+        user_prompt=prompt,
+        output_schema=EnrichmentResult,
+        max_tokens=1024,
+        timeout_s=settings.llm_call_timeout_s,
+        tool_name=_TOOL_NAME,
+        tool_description=_TOOL_DESCRIPTION,
     )
-    tool_block = next(b for b in response.content if b.type == "tool_use")
-    return EnrichmentResult.model_validate(tool_block.input)
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +417,7 @@ def enrich_version(
     version_id: str,
     settings: Settings,
     *,
-    client: anthropic.Anthropic | None = None,
+    provider: LLMProvider | None = None,
 ) -> EnrichmentResult | None:
     """Enrich a single note version or external snapshot with Haiku extraction.
 
@@ -438,9 +434,9 @@ def enrich_version(
     :param conn: Open SQLite connection.
     :param version_id: The version or snapshot to enrich.
     :param settings: Resolved settings (enrichment model, redaction patterns, ...).
-    :param client: Optional Anthropic client (credential-resolved via
-        :func:`lode.auth.build_client` if omitted). Inject in tests to avoid a
-        live API call.
+    :param provider: Optional :class:`~lode.llm_provider.LLMProvider`
+        (credential-resolved via :func:`~lode.llm_provider.build_provider` if
+        omitted). Inject in tests to avoid a live API call.
     """
     target = _resolve_enrich_target(conn, version_id)
 
@@ -470,10 +466,10 @@ def enrich_version(
         target.body, settings
     )
 
-    if client is None:
-        client = build_client()
+    if provider is None:
+        provider = build_provider(settings)
 
-    result = _call_haiku(redacted_body, settings, client)
+    result = _call_haiku(redacted_body, settings, provider)
 
     # Format via jobs.iso (the one definition of the schema's ISO-8601 ms-Z
     # shape), but stamp from the RAW wall clock, not jobs.now(): this is an
@@ -483,12 +479,12 @@ def enrich_version(
     # this enrichment written".
     ts = jobs.iso(datetime.now(UTC))
     _write_enrichment(
-        conn, target.owner_id, version_id, result, settings.enrichment_llm, ts
+        conn, target.owner_id, version_id, result, settings.enrichment_llm.model, ts
     )
 
     # Audit the egress -- one row per enrichment call.
     redactions = {version_id: redaction_count} if redaction_count else None
-    log_egress(conn, "enrich", settings.enrichment_llm, [version_id], redactions)
+    log_egress(conn, "enrich", settings.enrichment_llm.model, [version_id], redactions)
 
     log.info(
         "enrich_version: version=%s tags=%d entities=%d edges=%d summary=%s",
@@ -511,32 +507,28 @@ def _build_batch_request(
     version_id: str,
     body: str,
     settings: Settings,
-) -> dict:
-    """Build one Batches API request dict for ``version_id`` using ``body``.
+) -> BatchRequest:
+    """Build one :class:`~lode.llm_provider.BatchRequest` for ``version_id`` using ``body``.
 
     The ``custom_id`` is set to ``version_id`` so results can be mapped back to
-    the originating job row without a secondary lookup. ``params`` mirrors what
-    :func:`_call_haiku` passes to ``messages.create`` — same tool, same prompt
-    template, same extraction schema.
+    the originating job row without a secondary lookup. Mirrors what
+    :func:`_call_haiku` passes to ``provider.structured_call`` — same tool,
+    same prompt template, same extraction schema — so the provider's batch
+    submission is byte-for-byte identical to the immediate call's wire shape.
     """
     prompt = _PROMPT_TMPL.format(body=body)
-    return {
-        "custom_id": version_id,
-        "params": {
-            "model": settings.enrichment_llm,
-            "max_tokens": 1024,
-            "system": _SYSTEM,
-            "tools": [
-                {
-                    "name": _TOOL_NAME,
-                    "description": "Extract structured enrichment from a note body.",
-                    "input_schema": EnrichmentResult.model_json_schema(),
-                }
-            ],
-            "tool_choice": {"type": "tool", "name": _TOOL_NAME},
-            "messages": [{"role": "user", "content": prompt}],
-        },
-    }
+    tier = settings.enrichment_llm
+    return BatchRequest(
+        custom_id=version_id,
+        model=tier.model,
+        reasoning_effort=tier.reasoning_effort,
+        system=_SYSTEM,
+        user_prompt=prompt,
+        output_schema=EnrichmentResult,
+        max_tokens=1024,
+        tool_name=_TOOL_NAME,
+        tool_description=_TOOL_DESCRIPTION,
+    )
 
 
 def submit_enrich_batch(
@@ -544,9 +536,9 @@ def submit_enrich_batch(
     job_rows: list[tuple[int, str]],
     settings: Settings,
     *,
-    client: anthropic.Anthropic | None = None,
+    provider: LLMProvider | None = None,
 ) -> str | None:
-    """Submit a batch of enrich jobs to the Anthropic Batches API (50% off).
+    """Submit a batch of enrich jobs via the :class:`~lode.llm_provider.LLMProvider` seam.
 
     ``job_rows`` is a list of ``(job_id, target_version)`` drawn from the
     ``jobs`` table (status ``pending`` or ``running``).
@@ -560,32 +552,36 @@ def submit_enrich_batch(
       NULL``) targets are marked ``done`` immediately without an API call —
       exactly the same skip logic as :func:`enrich_version`.
     - Valid targets are redacted (:func:`lode.redact.redact_before_egress_counting`)
-      then included as Batches API request objects (``custom_id = version_id``).
-    - The batch is submitted to ``client.beta.messages.batches.create``.
+      then included as :class:`~lode.llm_provider.BatchRequest` objects
+      (``custom_id = version_id``).
+    - The batch is submitted via ``provider.submit_batch`` (the Anthropic
+      Batches API, 50% off, for :class:`~lode.llm_provider.AnthropicProvider`).
     - Each submitted job row is updated to ``status='running'`` with
-      ``batch_handle = batch_id`` so the handle survives a restart (lode-i05.5).
+      ``batch_handle`` set to the provider's returned handle so it survives a
+      restart (lode-i05.5).
     - A single ``egress_log`` row is written for all submitted version IDs.
 
-    Returns the batch ID on success, or ``None`` when ``job_rows`` is empty or
-    every version was gated out (all skipped, nothing submitted).
+    Returns the batch handle on success, or ``None`` when ``job_rows`` is empty
+    or every version was gated out (all skipped, nothing submitted).
 
-    Raises on Batches API errors — the caller is responsible for handling
+    Raises on provider errors — the caller is responsible for handling
     failures and reverting job rows to ``failed`` / ``pending`` as appropriate.
 
     :param conn: Open SQLite connection.
     :param job_rows: ``(job_id, target_version)`` pairs to submit.
     :param settings: Resolved settings (model, redaction patterns, …).
-    :param client: Optional Anthropic client; credential-resolved via
-        :func:`lode.auth.build_client` if omitted.
+    :param provider: Optional :class:`~lode.llm_provider.LLMProvider`;
+        credential-resolved via :func:`~lode.llm_provider.build_provider` if
+        omitted.
     """
     if not job_rows:
         return None
 
-    if client is None:
-        client = build_client()
+    if provider is None:
+        provider = build_provider(settings)
 
     # Gate each version; build batch requests only for valid ones.
-    requests: list[dict] = []
+    requests: list[BatchRequest] = []
     skip_ids: list[int] = []  # job_ids whose versions are skipped (gate out)
     submitted_job_ids: list[int] = []  # job_ids included in the batch
     submitted_version_ids: list[str] = []
@@ -636,10 +632,7 @@ def submit_enrich_batch(
     # Submit the batch — this is the network call that commits the spend.
     # Bounded client-side (lode-olmi.15): with no timeout this can otherwise
     # hang indefinitely with no signal to the caller.
-    batch = client.beta.messages.batches.create(
-        requests=requests, timeout=settings.anthropic_call_timeout_s
-    )
-    batch_id = batch.id
+    batch_id = provider.submit_batch(requests, timeout_s=settings.llm_call_timeout_s)
 
     # Persist the handle + flip to running so the collect step (and a restart)
     # can find these jobs (lode-i05.5).
@@ -653,7 +646,7 @@ def submit_enrich_batch(
     log_egress(
         conn,
         "enrich",
-        settings.enrichment_llm,
+        settings.enrichment_llm.model,
         submitted_version_ids,
         redactions or None,
     )
@@ -671,13 +664,14 @@ def collect_enrich_batch(
     batch_id: str,
     settings: Settings,
     *,
-    client: anthropic.Anthropic | None = None,
+    provider: LLMProvider | None = None,
     outcomes: list[str] | None = None,
 ) -> bool:
     """Poll a submitted batch and process results if it has ended.
 
-    Retrieves the batch status via ``client.beta.messages.batches.retrieve``.
-    If ``processing_status == 'ended'``, iterates results:
+    Polls via ``provider.collect_batch`` (``client.beta.messages.batches.retrieve``
+    for :class:`~lode.llm_provider.AnthropicProvider`). Once ended, iterates
+    results:
 
     - **succeeded**: validates the tool-use block, writes enrichment to DB
       via :func:`_write_enrichment`, marks the job ``done`` and stamps its
@@ -705,25 +699,22 @@ def collect_enrich_batch(
     when the batch is still in progress (caller should retry later).
 
     :param conn: Open SQLite connection.
-    :param batch_id: The Batches API handle recorded by :func:`submit_enrich_batch`.
+    :param batch_id: The batch handle recorded by :func:`submit_enrich_batch`.
     :param settings: Resolved settings (model, retry knobs, …).
-    :param client: Optional Anthropic client; credential-resolved via
-        :func:`lode.auth.build_client` if omitted.
+    :param provider: Optional :class:`~lode.llm_provider.LLMProvider`;
+        credential-resolved via :func:`~lode.llm_provider.build_provider` if
+        omitted.
     """
-    if client is None:
-        client = build_client()
+    if provider is None:
+        provider = build_provider(settings)
 
     # Bounded client-side (lode-olmi.15): with no timeout either call below
     # can otherwise hang indefinitely with no signal to the caller.
-    batch = client.beta.messages.batches.retrieve(
-        batch_id, timeout=settings.anthropic_call_timeout_s
+    status, batch_results = provider.collect_batch(
+        batch_id, timeout_s=settings.llm_call_timeout_s
     )
-    if batch.processing_status != "ended":
-        log.debug(
-            "collect_enrich_batch: batch=%s still %s",
-            batch_id,
-            batch.processing_status,
-        )
+    if status == "pending":
+        log.debug("collect_enrich_batch: batch=%s still pending", batch_id)
         return False
 
     # Map custom_id (version_id) → job_id for the in-flight set.
@@ -745,9 +736,7 @@ def collect_enrich_batch(
     # not a queue predicate (see enrich_version above).
     ts = jobs.iso(datetime.now(UTC))
 
-    for result in client.beta.messages.batches.results(
-        batch_id, timeout=settings.anthropic_call_timeout_s
-    ):
+    for result in batch_results:
         version_id = result.custom_id
         job_id = job_map.get(version_id)
         if job_id is None:
@@ -758,12 +747,13 @@ def collect_enrich_batch(
             )
             continue
 
-        if result.result.type == "succeeded":
+        if result.outcome == "succeeded":
             try:
-                tool_block = next(
-                    b for b in result.result.message.content if b.type == "tool_use"
-                )
-                enrichment = EnrichmentResult.model_validate(tool_block.input)
+                # result.parsed is the provider's raw decoded payload (a
+                # RootModel[dict], never a domain-specific validated model --
+                # see lode.llm_provider's module docstring); the schema
+                # validation stays this module's own job.
+                enrichment = EnrichmentResult.model_validate(result.parsed.root)
             except Exception as exc:
                 _mark_job_failed(conn, job_id, f"parse error: {exc}", settings)
                 log.warning(
@@ -798,7 +788,7 @@ def collect_enrich_batch(
                 target.owner_id,
                 version_id,
                 enrichment,
-                settings.enrichment_llm,
+                settings.enrichment_llm.model,
                 ts,
             )
             with conn:
@@ -820,11 +810,10 @@ def collect_enrich_batch(
 
         else:
             # errored, expired, canceled — treat as a transient failure.
-            error_type = result.result.type
             error_msg = (
-                f"batch result={error_type}"
-                if not hasattr(result.result, "error")
-                else f"batch error: {result.result.error}"
+                str(result.error)
+                if result.error is not None
+                else (f"batch result={result.outcome}")
             )
             _mark_job_failed(conn, job_id, error_msg, settings)
             log.warning(

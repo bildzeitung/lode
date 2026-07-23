@@ -25,6 +25,7 @@ from lode.cited_answer import CitedAnswer, ask
 from lode.config import load_settings
 from lode.eval.golden import golden_set
 from lode.eval.harness import GoldenScore, score_golden_set
+from lode.llm_provider import AnthropicProvider
 from lode.retrieval import ContextItem
 from lode.storage import init_db
 
@@ -269,7 +270,13 @@ def test_scorer_drives_the_real_cited_answer_gate(conn, settings, tmp_path):
     client = _FakeClient(claims_for)
 
     def answerer(question: str, context: Sequence[ContextItem]) -> CitedAnswer:
-        return ask(conn, question, context, client=client, settings=settings)
+        return ask(
+            conn,
+            question,
+            context,
+            provider=AnthropicProvider(client),
+            settings=settings,
+        )
 
     score = score_golden_set(
         conn,

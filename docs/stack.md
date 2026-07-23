@@ -206,6 +206,11 @@ def build_provider(settings: Settings) -> LLMProvider:
   (epic's resolved decision, 2026-07-22).
 - Failure is `LLMAuthError` (below), its message naming the *correct* env var(s) for whichever
   provider is active — generalizing today's Anthropic-worded `MISSING_CREDENTIALS_MESSAGE`.
+  **`lode-568v.2` implementation note:** the Anthropic branch does NOT wrap `build_client()`'s
+  `AuthError` into `LLMAuthError` — `AuthError` propagates unchanged, preserving `worker.py`'s
+  extensively-tested `lode-9yy` permanent-failure handling byte-for-byte. `LLMAuthError` is reserved
+  for a future non-Anthropic provider's own credential failures. Full rationale and the tracked
+  follow-up: `decisions.md` (`lode-568v.2`).
 
 ### 2 & 3. The two immediate structured-output calls — one seam method
 
@@ -228,8 +233,14 @@ def structured_call(
     max_tokens: int,
     timeout_s: float,
     tool_name: str | None = None,
+    tool_description: str | None = None,
 ) -> BaseModelT: ...
 ```
+
+`tool_description` is a `lode-568v.2` addition beyond this ticket's original pin — required for
+`AnthropicProvider`'s forced tool-use branch to send the *exact* tool description text `_call_haiku()`
+sent pre-seam (byte-for-byte wire equivalence is `lode-568v.2`'s own acceptance bar, and this pin had
+no way to carry it). See `decisions.md` (`lode-568v.2`) for the full rationale.
 
 **`AnthropicProvider` maps onto today's exact calls with zero behavior change (the decision this
 ticket's acceptance criteria names explicitly) via `tool_name`, not by unifying the underlying wire
@@ -248,6 +259,12 @@ passes `tool_name`:
 single wire mechanism for structured output — the Responses API's `text.format`/json_schema (see the
 Azure/OpenAI routing note below) — so it can honor or ignore `tool_name` as it sees fit; the param is
 Anthropic-mechanism-selecting, not a cross-provider requirement.
+
+**`lode-568v.2` note:** `timeout_s` is now threaded into *every* `structured_call` — including Q&A's,
+which pre-seam passed no client-side timeout to `messages.parse` at all (only the enrichment/batch
+calls read `anthropic_call_timeout_s`). This is the intended effect of unifying the seam ("every LLM
+call, immediate and batch alike" — §6 below), not an accidental behavior change: Q&A now gets the same
+hung-call protection enrichment already had, bounded by the same (renamed) knob.
 
 ### 4. The two-phase batch contract (the trap — pinned precisely)
 
@@ -269,12 +286,19 @@ class BatchRequest:
     output_schema: type[BaseModel]
     max_tokens: int
     tool_name: str | None = None
+    tool_description: str | None = None  # lode-568v.2 addition, see structured_call above
 
 @dataclass(frozen=True)
 class BatchResult:
     custom_id: str
     outcome: Literal["succeeded", "errored", "expired", "canceled"]
-    parsed: BaseModel | None          # set iff outcome == "succeeded"
+    parsed: BaseModel | None          # set iff outcome == "succeeded" -- the provider's RAW
+                                       # decoded wire payload (a pydantic.RootModel[dict]), NEVER
+                                       # a schema-validated domain object; the caller validates it
+                                       # against whatever output_schema it submitted (lode-568v.2,
+                                       # decisions.md -- keeps the provider generic and preserves
+                                       # lode-i05.5 restart durability with no schema info needing
+                                       # to survive in the persisted batch_handle)
     error: LLMProviderError | None    # set iff outcome != "succeeded"
 
 class LLMProvider(Protocol):

@@ -25,6 +25,7 @@ import pytest
 
 from lode.config import Settings
 from lode.curation import delete_annotation, delete_edge
+from lode.llm_provider import AnthropicProvider
 from lode.enrich import (
     ENRICH_PROMPT_VER,
     EnrichmentResult,
@@ -266,7 +267,9 @@ def test_enrich_version_writes_tags(
     """Tags are written as source='ai', kind='tag' annotations."""
     _insert_note(conn)
     result = EnrichmentResult(tags=["python", "auth"], entities=[], inferred_edges=[])
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _annotations(conn)
     tag_rows = [r for r in rows if r["kind"] == "tag"]
@@ -286,7 +289,9 @@ def test_enrich_version_writes_entities(
     result = EnrichmentResult(
         tags=[], entities=["FastAPI", "Pydantic"], inferred_edges=[]
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _annotations(conn)
     entity_rows = [r for r in rows if r["kind"] == "entity"]
@@ -307,7 +312,9 @@ def test_enrich_version_writes_summary(
         inferred_edges=[],
         summary="A note about Python authentication.",
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _annotations(conn)
     summary_rows = [r for r in rows if r["kind"] == "summary"]
@@ -325,7 +332,9 @@ def test_enrich_version_empty_summary_writes_no_row(
     """An empty summary produces no annotation row, mirroring an empty tag list."""
     _insert_note(conn)
     result = EnrichmentResult(tags=[], entities=[], inferred_edges=[], summary="")
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _annotations(conn)
     assert [r for r in rows if r["kind"] == "summary"] == []
@@ -353,7 +362,9 @@ def test_enrich_version_inferred_edges_are_source_ai(
             ),
         ],
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _edges(conn)
     assert len(rows) == 2
@@ -381,7 +392,9 @@ def test_enrich_version_returns_result(
     """enrich_version returns the validated EnrichmentResult on success."""
     _insert_note(conn)
     result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
-    returned = enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    returned = enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
     assert isinstance(returned, EnrichmentResult)
     assert returned.tags == ["design"]
 
@@ -389,16 +402,16 @@ def test_enrich_version_returns_result(
 def test_enrich_version_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """The immediate Haiku call is bounded by Settings.anthropic_call_timeout_s
+    """The immediate Haiku call is bounded by Settings.llm_call_timeout_s
     (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
     residual enrich job claimed by the main claim/run loop), so with no
     client-side timeout it could otherwise hang the drain forever.
     """
     _insert_note(conn)
     result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
-    settings = Settings(anthropic_call_timeout_s=42.0)
+    settings = Settings(llm_call_timeout_s=42.0)
     client = _fake_client(result)
-    enrich_version(conn, "ver-1", settings, client=client)
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
     create_kwargs = client.messages.create.call_args.kwargs
     assert create_kwargs["timeout"] == 42.0
@@ -410,12 +423,14 @@ def test_enrich_version_full_provenance(
     """Every annotation row carries model, prompt_ver, and source_version provenance."""
     _insert_note(conn)
     result = EnrichmentResult(tags=["x"], entities=["Y"], inferred_edges=[])
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = _annotations(conn)
     assert rows, "annotations must exist after enrichment"
     for row in rows:
-        assert row["model"] == settings.enrichment_llm
+        assert row["model"] == settings.enrichment_llm.model
         assert row["prompt_ver"] == ENRICH_PROMPT_VER
         assert row["source_version"] == "ver-1"
 
@@ -428,12 +443,14 @@ def test_enrich_version_summary_full_provenance(
     result = EnrichmentResult(
         tags=[], entities=[], inferred_edges=[], summary="A summary sentence."
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     rows = [r for r in _annotations(conn) if r["kind"] == "summary"]
     assert len(rows) == 1
     row = rows[0]
-    assert row["model"] == settings.enrichment_llm
+    assert row["model"] == settings.enrichment_llm.model
     assert row["prompt_ver"] == ENRICH_PROMPT_VER
     assert row["source_version"] == "ver-1"
 
@@ -444,12 +461,14 @@ def test_enrich_version_writes_egress_log(
     """One egress_log row with purpose='enrich' is written per enrichment call."""
     _insert_note(conn)
     result = EnrichmentResult(tags=["a"], entities=[], inferred_edges=[])
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     log_rows = conn.execute("SELECT purpose, model FROM egress_log").fetchall()
     assert len(log_rows) == 1
     assert log_rows[0][0] == "enrich"
-    assert log_rows[0][1] == settings.enrichment_llm
+    assert log_rows[0][1] == settings.enrichment_llm.model
 
 
 def test_enrich_version_empty_result_is_valid(
@@ -458,7 +477,9 @@ def test_enrich_version_empty_result_is_valid(
     """A note that yields no tags/entities/edges still succeeds and logs egress."""
     _insert_note(conn)
     result = EnrichmentResult(tags=[], entities=[], inferred_edges=[])
-    returned = enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    returned = enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
     assert returned is not None
     # No annotations or edges.
     assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
@@ -479,7 +500,7 @@ def test_enrich_version_skips_no_egress(
     _insert_note(conn, no_egress=1)
     client = _fake_client(EnrichmentResult())
 
-    result = enrich_version(conn, "ver-1", settings, client=client)
+    result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
     # The API must not have been called.
     client.messages.create.assert_not_called()
@@ -495,7 +516,7 @@ def test_enrich_version_skips_tombstone(
     _insert_note(conn, op="delete")
     client = _fake_client(EnrichmentResult())
 
-    result = enrich_version(conn, "ver-1", settings, client=client)
+    result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
     client.messages.create.assert_not_called()
 
@@ -507,7 +528,7 @@ def test_enrich_version_skips_purged(
     _insert_note(conn, purged_at="2026-01-01T00:00:00.000Z")
     client = _fake_client(EnrichmentResult())
 
-    result = enrich_version(conn, "ver-1", settings, client=client)
+    result = enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
     assert result is None
     client.messages.create.assert_not_called()
 
@@ -517,7 +538,9 @@ def test_enrich_version_skips_missing_version(
 ) -> None:
     """Missing version_id returns None without raising."""
     client = _fake_client(EnrichmentResult())
-    result = enrich_version(conn, "nonexistent-ver", settings, client=client)
+    result = enrich_version(
+        conn, "nonexistent-ver", settings, provider=AnthropicProvider(client)
+    )
     assert result is None
     client.messages.create.assert_not_called()
 
@@ -551,7 +574,9 @@ def test_enrich_version_snapshot_runs_haiku_and_writes_against_external_id(
         summary="A snapshot about Python auth.",
     )
     client = _fake_client(result)
-    returned = enrich_version(conn, "snap-1", settings, client=client)
+    returned = enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(client)
+    )
 
     assert returned == result
     client.messages.create.assert_called_once()
@@ -581,7 +606,9 @@ def test_enrich_version_snapshot_writes_egress_log(
     """A snapshot enrichment audits egress the same as a note enrichment."""
     _insert_external(conn)
     result = EnrichmentResult(tags=["a"], entities=[], inferred_edges=[])
-    enrich_version(conn, "snap-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     log_rows = conn.execute("SELECT purpose, model FROM egress_log").fetchall()
     assert len(log_rows) == 1
@@ -595,7 +622,9 @@ def test_enrich_version_skips_no_egress_external(
     _insert_external(conn, no_egress=1)
     client = _fake_client(EnrichmentResult())
 
-    result = enrich_version(conn, "snap-1", settings, client=client)
+    result = enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(client)
+    )
     assert result is None
     client.messages.create.assert_not_called()
     assert conn.execute("SELECT COUNT(*) FROM annotations").fetchone()[0] == 0
@@ -608,7 +637,9 @@ def test_enrich_version_skips_tombstone_snapshot(
     _insert_external(conn, status="tombstone")
     client = _fake_client(EnrichmentResult())
 
-    result = enrich_version(conn, "snap-1", settings, client=client)
+    result = enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(client)
+    )
     assert result is None
     client.messages.create.assert_not_called()
 
@@ -620,10 +651,14 @@ def test_enrich_version_snapshot_idempotent_replace(
     _insert_external(conn)
 
     first = EnrichmentResult(tags=["old-tag"], entities=[], inferred_edges=[])
-    enrich_version(conn, "snap-1", settings, client=_fake_client(first))
+    enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(_fake_client(first))
+    )
 
     second = EnrichmentResult(tags=["new-tag"], entities=[], inferred_edges=[])
-    enrich_version(conn, "snap-1", settings, client=_fake_client(second))
+    enrich_version(
+        conn, "snap-1", settings, provider=AnthropicProvider(_fake_client(second))
+    )
 
     payloads = {r["payload"] for r in _annotations(conn, version_id="snap-1")}
     assert "old-tag" not in payloads
@@ -652,7 +687,9 @@ def test_enrich_version_idempotent_replaces_old_results(
             InferredEdge(to_id="old-concept", reason="old", confidence=0.5)
         ],
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(first))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(first))
+    )
 
     second = EnrichmentResult(
         tags=["new-tag"],
@@ -661,7 +698,9 @@ def test_enrich_version_idempotent_replaces_old_results(
             InferredEdge(to_id="new-concept", reason="new", confidence=0.8)
         ],
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(second))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(second))
+    )
 
     # Only the second result remains.
     ann_rows = _annotations(conn)
@@ -690,12 +729,16 @@ def test_enrich_version_summary_idempotent_replace(
     first = EnrichmentResult(
         tags=[], entities=[], inferred_edges=[], summary="Old summary."
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(first))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(first))
+    )
 
     second = EnrichmentResult(
         tags=[], entities=[], inferred_edges=[], summary="New summary."
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(second))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(second))
+    )
 
     summary_rows = [r for r in _annotations(conn) if r["kind"] == "summary"]
     assert len(summary_rows) == 1
@@ -720,7 +763,9 @@ def test_enrich_version_user_annotations_preserved(
         )
 
     result = EnrichmentResult(tags=["ai-tag"], entities=[], inferred_edges=[])
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     # User annotation still present.
     user_rows = conn.execute(
@@ -747,7 +792,9 @@ def test_deleted_tag_is_not_re_added_on_re_enrichment(
     """
     _insert_note(conn)
     result = EnrichmentResult(tags=["python", "auth"], entities=[], inferred_edges=[])
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     # User deletes the "python" tag.
     (row_id,) = conn.execute(
@@ -759,7 +806,9 @@ def test_deleted_tag_is_not_re_added_on_re_enrichment(
     _update_note(
         conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
     )
-    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-2", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     tag_payloads = {
         json.loads(p)
@@ -784,7 +833,9 @@ def test_deleted_summary_is_not_re_added_on_re_enrichment(
     result = EnrichmentResult(
         tags=[], entities=[], inferred_edges=[], summary="A note about auth."
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     # User deletes (pins away) the AI summary.
     (row_id,) = conn.execute(
@@ -796,7 +847,9 @@ def test_deleted_summary_is_not_re_added_on_re_enrichment(
     _update_note(
         conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
     )
-    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-2", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     ai_summaries = conn.execute(
         "SELECT payload FROM annotations WHERE kind = 'summary' AND source = 'ai'"
@@ -822,7 +875,9 @@ def test_deleted_edge_is_not_re_added_on_re_enrichment(
             InferredEdge(to_id="jwt-topic", reason="mentions JWT", confidence=0.7)
         ],
     )
-    enrich_version(conn, "ver-1", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     (row_id,) = conn.execute(
         "SELECT id FROM edges WHERE to_id = 'jwt-topic'"
@@ -832,7 +887,9 @@ def test_deleted_edge_is_not_re_added_on_re_enrichment(
     _update_note(
         conn, version_id="ver-2", parent_version_id="ver-1", body="updated body"
     )
-    enrich_version(conn, "ver-2", settings, client=_fake_client(result))
+    enrich_version(
+        conn, "ver-2", settings, provider=AnthropicProvider(_fake_client(result))
+    )
 
     ai_edge_to_ids = {
         r[0]
@@ -1158,23 +1215,27 @@ def test_submit_enrich_batch_returns_batch_id(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client(batch_id="batch-xyz")
-    result_id = submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
     assert result_id == "batch-xyz"
 
 
 def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """create() is bounded by Settings.anthropic_call_timeout_s (lode-olmi.15) --
+    """create() is bounded by Settings.llm_call_timeout_s (lode-olmi.15) --
     the network call that commits the spend must not be able to hang forever
     with no client-side timeout at all.
     """
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    settings = Settings(anthropic_call_timeout_s=42.0)
+    settings = Settings(llm_call_timeout_s=42.0)
     client = _fake_batch_client(batch_id="batch-xyz")
-    submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     create_kwargs = client.beta.messages.batches.create.call_args.kwargs
     assert create_kwargs["timeout"] == 42.0
@@ -1188,7 +1249,9 @@ def test_submit_enrich_batch_stores_batch_handle(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client(batch_id="batch-handle-test")
-    submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     row = conn.execute(
         "SELECT status, batch_handle FROM jobs WHERE id = ?", (job_id,)
@@ -1205,7 +1268,9 @@ def test_submit_enrich_batch_skips_no_egress(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     # Nothing submitted to the batch (all gated out).
     assert result_id is None
@@ -1226,7 +1291,9 @@ def test_submit_enrich_batch_skips_tombstone(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id is None
     client.beta.messages.batches.create.assert_not_called()
@@ -1244,7 +1311,9 @@ def test_submit_enrich_batch_skips_purged(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id is None
     (status,) = conn.execute(
@@ -1258,7 +1327,9 @@ def test_submit_enrich_batch_returns_none_for_empty_input(
 ) -> None:
     """Empty job_rows returns None without calling the API."""
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id is None
     client.beta.messages.batches.create.assert_not_called()
@@ -1272,13 +1343,15 @@ def test_submit_enrich_batch_writes_egress_log(
     job_id = _insert_enrich_job(conn)
 
     client = _fake_batch_client(batch_id="batch-egress")
-    submit_enrich_batch(conn, [(job_id, "ver-1")], settings, client=client)
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
 
     rows = conn.execute(
         "SELECT purpose, model FROM egress_log WHERE purpose = 'enrich'"
     ).fetchall()
     assert len(rows) == 1
-    assert rows[0][1] == settings.enrichment_llm
+    assert rows[0][1] == settings.enrichment_llm.model
 
 
 def test_submit_enrich_batch_multiple_versions(
@@ -1292,7 +1365,10 @@ def test_submit_enrich_batch_multiple_versions(
 
     client = _fake_batch_client(batch_id="batch-multi")
     submit_enrich_batch(
-        conn, [(job1, "ver-1"), (job2, "ver-2")], settings, client=client
+        conn,
+        [(job1, "ver-1"), (job2, "ver-2")],
+        settings,
+        provider=AnthropicProvider(client),
     )
 
     # API called exactly once with both requests.
@@ -1329,7 +1405,9 @@ def test_submit_enrich_batch_includes_snapshot_target(
     job_id = _insert_enrich_job(conn, "snap-1")
 
     client = _fake_batch_client(batch_id="batch-snap")
-    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id == "batch-snap"
     call_kwargs = client.beta.messages.batches.create.call_args
@@ -1350,7 +1428,9 @@ def test_submit_enrich_batch_skips_no_egress_external(
     job_id = _insert_enrich_job(conn, "snap-1")
 
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id is None
     client.beta.messages.batches.create.assert_not_called()
@@ -1368,7 +1448,9 @@ def test_submit_enrich_batch_skips_tombstone_snapshot(
     job_id = _insert_enrich_job(conn, "snap-1")
 
     client = _fake_batch_client()
-    result_id = submit_enrich_batch(conn, [(job_id, "snap-1")], settings, client=client)
+    result_id = submit_enrich_batch(
+        conn, [(job_id, "snap-1")], settings, provider=AnthropicProvider(client)
+    )
 
     assert result_id is None
     client.beta.messages.batches.create.assert_not_called()
@@ -1389,7 +1471,10 @@ def test_submit_enrich_batch_mixed_note_and_snapshot_targets(
 
     client = _fake_batch_client(batch_id="batch-mixed")
     submit_enrich_batch(
-        conn, [(job1, "ver-1"), (job2, "snap-1")], settings, client=client
+        conn,
+        [(job1, "ver-1"), (job2, "snap-1")],
+        settings,
+        provider=AnthropicProvider(client),
     )
 
     call_kwargs = client.beta.messages.batches.create.call_args
@@ -1407,14 +1492,16 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
 ) -> None:
     """collect_enrich_batch returns False when the batch is still in progress."""
     client = _fake_batch_client(processing_status="in_progress")
-    ended = collect_enrich_batch(conn, "batch-in-flight", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-in-flight", settings, provider=AnthropicProvider(client)
+    )
     assert ended is False
 
 
 def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_results(
     conn: sqlite3.Connection,
 ) -> None:
-    """retrieve()/results() are bounded by Settings.anthropic_call_timeout_s
+    """retrieve()/results() are bounded by Settings.llm_call_timeout_s
     (lode-olmi.15) -- with no client-side timeout either call could otherwise
     hang forever with no signal back to 'lode work'.
     """
@@ -1424,9 +1511,11 @@ def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_resu
         conn.execute(
             "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
         )
-    settings = Settings(anthropic_call_timeout_s=42.0)
+    settings = Settings(llm_call_timeout_s=42.0)
     client = _fake_batch_client(results=[])
-    collect_enrich_batch(conn, "batch-done", settings, client=client)
+    collect_enrich_batch(
+        conn, "batch-done", settings, provider=AnthropicProvider(client)
+    )
 
     retrieve_kwargs = client.beta.messages.batches.retrieve.call_args.kwargs
     assert retrieve_kwargs["timeout"] == 42.0
@@ -1458,7 +1547,9 @@ def test_collect_enrich_batch_returns_true_and_writes_enrichment(
     br = _make_batch_result("ver-1", enrichment)
     client = _fake_batch_client(batch_id="batch-done", results=[br])
 
-    ended = collect_enrich_batch(conn, "batch-done", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-done", settings, provider=AnthropicProvider(client)
+    )
     assert ended is True
 
     # Job marked done and stamped with the current prompt_ver (lode-q47) --
@@ -1497,7 +1588,9 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
     br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
     client = _fake_batch_client(batch_id="batch-err", results=[br])
 
-    ended = collect_enrich_batch(conn, "batch-err", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-err", settings, provider=AnthropicProvider(client)
+    )
     assert ended is True
 
     row = conn.execute(
@@ -1525,7 +1618,9 @@ def test_collect_enrich_batch_dead_letters_at_max_attempts(
     br = _make_batch_result("ver-1", EnrichmentResult(), result_type="errored")
     client = _fake_batch_client(batch_id="batch-dead", results=[br])
 
-    collect_enrich_batch(conn, "batch-dead", settings_low, client=client)
+    collect_enrich_batch(
+        conn, "batch-dead", settings_low, provider=AnthropicProvider(client)
+    )
 
     (status,) = conn.execute(
         "SELECT status FROM jobs WHERE id = ?", (job_id,)
@@ -1539,7 +1634,9 @@ def test_collect_enrich_batch_idempotent_on_no_running_jobs(
     """collect_enrich_batch with no running jobs for the handle returns True."""
     # No running jobs with batch_handle='batch-xyz'.
     client = _fake_batch_client(batch_id="batch-xyz")
-    ended = collect_enrich_batch(conn, "batch-xyz", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-xyz", settings, provider=AnthropicProvider(client)
+    )
     # Batch is ended (processing_status='ended' is the default) so True.
     assert ended is True
 
@@ -1575,7 +1672,9 @@ def test_collect_enrich_batch_writes_enrichment_against_external_id(
     br = _make_batch_result("snap-1", enrichment)
     client = _fake_batch_client(batch_id="batch-snap-done", results=[br])
 
-    ended = collect_enrich_batch(conn, "batch-snap-done", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-snap-done", settings, provider=AnthropicProvider(client)
+    )
     assert ended is True
 
     (status, prompt_ver) = conn.execute(
@@ -1649,7 +1748,11 @@ def test_collect_enrich_batch_appends_outcome_line_on_success(
 
     outcomes: list[str] = []
     ended = collect_enrich_batch(
-        conn, "batch-outcome", settings, client=client, outcomes=outcomes
+        conn,
+        "batch-outcome",
+        settings,
+        provider=AnthropicProvider(client),
+        outcomes=outcomes,
     )
     assert ended is True
     assert outcomes == [format_enrich_outcome("ver-1", enrichment)]
@@ -1672,7 +1775,11 @@ def test_collect_enrich_batch_no_outcome_on_errored_result(
 
     outcomes: list[str] = []
     collect_enrich_batch(
-        conn, "batch-err-outcome", settings, client=client, outcomes=outcomes
+        conn,
+        "batch-err-outcome",
+        settings,
+        provider=AnthropicProvider(client),
+        outcomes=outcomes,
     )
     assert outcomes == []
 
@@ -1692,5 +1799,7 @@ def test_collect_enrich_batch_outcomes_default_none_is_a_no_op(
     br = _make_batch_result("ver-1", enrichment)
     client = _fake_batch_client(batch_id="batch-no-sink", results=[br])
 
-    ended = collect_enrich_batch(conn, "batch-no-sink", settings, client=client)
+    ended = collect_enrich_batch(
+        conn, "batch-no-sink", settings, provider=AnthropicProvider(client)
+    )
     assert ended is True

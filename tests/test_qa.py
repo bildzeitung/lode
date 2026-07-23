@@ -17,6 +17,7 @@ import pytest
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
+from lode.llm_provider import AnthropicProvider
 from lode.qa import (
     OPUS_MODEL,
     SONNET_MODEL,
@@ -78,7 +79,7 @@ def test_returns_parsed_structured_claims(conn) -> None:
         conn,
         "How is lode stored?",
         [QaPassage("v1", "lode is event-sourced")],
-        client=client,
+        provider=AnthropicProvider(client),
     )
     assert isinstance(result.answer, Answer)
     assert [c.text for c in result.answer.claims] == ["lode is event-sourced."]
@@ -87,7 +88,9 @@ def test_returns_parsed_structured_claims(conn) -> None:
 
 def test_sonnet_is_the_default_model(conn) -> None:
     client = _FakeClient(_envelope([]))
-    result = answer_question(conn, "q", [QaPassage("v1", "text")], client=client)
+    result = answer_question(
+        conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
+    )
     assert result.model == SONNET_MODEL
     assert client.messages.calls[0]["model"] == SONNET_MODEL
 
@@ -95,7 +98,11 @@ def test_sonnet_is_the_default_model(conn) -> None:
 def test_opus_when_think_harder(conn) -> None:
     client = _FakeClient(_envelope([]))
     result = answer_question(
-        conn, "q", [QaPassage("v1", "text")], think_harder=True, client=client
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=True,
+        provider=AnthropicProvider(client),
     )
     assert result.model == OPUS_MODEL
     assert client.messages.calls[0]["model"] == OPUS_MODEL
@@ -107,7 +114,11 @@ def test_qa_llm_override_reaches_the_call(conn) -> None:
     settings = Settings(qa_llm="claude-custom-qa-model")
     client = _FakeClient(_envelope([]))
     result = answer_question(
-        conn, "q", [QaPassage("v1", "text")], client=client, settings=settings
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        provider=AnthropicProvider(client),
+        settings=settings,
     )
     assert result.model == "claude-custom-qa-model"
     assert client.messages.calls[0]["model"] == "claude-custom-qa-model"
@@ -122,7 +133,7 @@ def test_qa_think_harder_llm_override_reaches_the_call(conn) -> None:
         "q",
         [QaPassage("v1", "text")],
         think_harder=True,
-        client=client,
+        provider=AnthropicProvider(client),
         settings=settings,
     )
     assert result.model == "claude-custom-opus-model"
@@ -138,7 +149,7 @@ def test_no_egress_passage_excluded_from_context(conn) -> None:
             QaPassage("v-open", "shareable note body"),
             QaPassage("v-secret", "private note body", no_egress=True),
         ],
-        client=client,
+        provider=AnthropicProvider(client),
     )
     prompt = _user_prompt(client)
     # The no_egress body and id never reach the cloud context...
@@ -160,7 +171,7 @@ def test_redaction_applied_before_send(conn) -> None:
         conn,
         "q",
         [QaPassage("v1", "the key is TOPSECRET-42 keep it safe")],
-        client=client,
+        provider=AnthropicProvider(client),
         settings=settings,
     )
     prompt = _user_prompt(client)
@@ -179,7 +190,7 @@ def test_external_and_note_sources_are_labelled(conn) -> None:
             QaPassage("v-note", "note text"),
             QaPassage("s-ext", "external text", is_external=True),
         ],
-        client=client,
+        provider=AnthropicProvider(client),
     )
     prompt = _user_prompt(client)
     assert '<source id="v-note" kind="note">' in prompt
@@ -192,7 +203,7 @@ def test_send_is_recorded_in_egress_log(conn) -> None:
         conn,
         "q",
         [QaPassage("v1", "text"), QaPassage("v-secret", "x", no_egress=True)],
-        client=client,
+        provider=AnthropicProvider(client),
     )
     row = conn.execute(
         "SELECT id, purpose, model, sent_targets FROM egress_log WHERE id = ?",
@@ -223,7 +234,7 @@ def test_egress_log_records_external_sends_and_excludes_withheld_ones(
             QaPassage("s-open", "public runbook", is_external=True),
             QaPassage("s-secret", "internal creds", is_external=True, no_egress=True),
         ],
-        client=client,
+        provider=AnthropicProvider(client),
     )
     (sent_targets,) = conn.execute(
         "SELECT sent_targets FROM egress_log WHERE id = ?",
@@ -237,5 +248,7 @@ def test_egress_log_records_external_sends_and_excludes_withheld_ones(
 def test_empty_answer_is_valid(conn) -> None:
     # The model asserting nothing is a valid answer (downstream abstention path).
     client = _FakeClient(_envelope([]))
-    result = answer_question(conn, "q", [QaPassage("v1", "text")], client=client)
+    result = answer_question(
+        conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
+    )
     assert result.answer.claims == []

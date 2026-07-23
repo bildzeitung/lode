@@ -49,8 +49,9 @@ before the main claim-run loop:
    drain tick).
 2. :func:`_batch_submit_enrich` — find **pending** enrich jobs (up to
    ``settings.enrichment_batch_flush_size``), gate out no_egress / tombstone /
-   purged versions, and submit the rest to ``client.beta.messages.batches.create``
-   (50%-off Batches API). Each submitted job row is updated to ``status='running'``
+   purged versions, and submit the rest via the ``LLMProvider`` seam's
+   ``submit_batch`` (``client.beta.messages.batches.create`` for the Anthropic
+   provider, 50%-off Batches API). Each submitted job row is updated to ``status='running'``
    with ``batch_handle`` set. On success returns the count submitted; on a
    **transient** API failure marks all newly-claimed jobs ``failed`` (short
    backoff, not re-raised — the embed drain continues) and returns 0. On a
@@ -705,7 +706,7 @@ def _batch_collect_enrich(
     never calls ``batches.create`` — only ``retrieve``/``results`` — so a
     restart can never resubmit.
 
-    ``_client`` is injectable for tests. ``outcomes``, if given, is passed
+    ``_client`` is injectable for tests (an ``LLMProvider``). ``outcomes``, if given, is passed
     through to :func:`lode.enrich.collect_enrich_batch` (lode-1gr.4) so a
     drain pass that collects a completed batch appends a per-note outcome
     line for each succeeded result — the batch pre-step runs ahead of
@@ -731,7 +732,7 @@ def _batch_collect_enrich(
 
     kwargs: dict = {}
     if _client is not None:
-        kwargs["client"] = _client
+        kwargs["provider"] = _client
 
     ended = 0
     for batch_id in batch_ids:
@@ -778,7 +779,7 @@ def _batch_submit_enrich(
     Returns the number of jobs included in the submitted batch (0 if no pending
     enrich jobs or all gated out).
 
-    ``_client`` is injectable for tests.
+    ``_client`` is injectable for tests (an ``LLMProvider``).
     """
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
@@ -832,7 +833,7 @@ def _batch_submit_enrich(
 
     kwargs: dict = {}
     if _client is not None:
-        kwargs["client"] = _client
+        kwargs["provider"] = _client
 
     try:
         batch_id = submit_enrich_batch(conn, claimed_rows, settings, **kwargs)
@@ -937,7 +938,7 @@ def drain(
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
-    tests (passed through to the batch pre-steps).
+    tests (an ``LLMProvider``, passed through to the batch pre-steps).
 
     ``outcomes`` (lode-1gr.4), if given, is a mutable list that this call
     appends human-readable per-job outcome lines to — from both channels: the
