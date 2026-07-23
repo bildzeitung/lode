@@ -410,6 +410,26 @@ def test_knob_rows_renders_list_valued_knobs_comma_joined() -> None:
     assert rows["url_tracking_param_blocklist"] == "utm_*, fbclid, gclid"
 
 
+def test_knob_rows_renders_model_tier_knobs_as_bare_model_id() -> None:
+    # lode-568v.2: the enrichment/qa model knobs became ModelTier pairs; str()
+    # on a ModelTier is the pydantic repr ("model='...' reasoning_effort=None"),
+    # which would leak into `lode config` + the TUI ConfigScreen (both feed
+    # knob_rows straight to display). Default (no effort) shows the bare id.
+    rows = _knob_values(Settings())
+    assert rows["enrichment_llm"] == "claude-haiku-4-5"
+    assert rows["qa_llm"] == "claude-sonnet-4-6"
+    assert rows["qa_think_harder_llm"] == "claude-opus-4-8"
+
+
+def test_knob_rows_appends_reasoning_effort_when_set() -> None:
+    # When a tier carries a reasoning_effort, surface it alongside the model id
+    # rather than hiding it or printing the pydantic repr.
+    rows = _knob_values(
+        Settings(qa_think_harder_llm={"model": "gpt-5.5", "reasoning_effort": "high"})
+    )
+    assert rows["qa_think_harder_llm"] == "gpt-5.5 (effort=high)"
+
+
 def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
     # Acceptance: works with no config.toml present (shows defaults).
     rows = knob_rows(Settings())

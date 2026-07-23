@@ -988,5 +988,16 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
             value = getattr(settings, name)
             if isinstance(value, list):
                 value = ", ".join(str(item) for item in value)
+            elif isinstance(value, ModelTier):
+                # Render the bare model/deployment id (matching the pre-seam
+                # str-valued knobs, lode-568v.2), appending the effort only when
+                # set -- str(ModelTier) would otherwise print the pydantic repr
+                # "model='...' reasoning_effort=None" in `lode config` + the TUI
+                # ConfigScreen (both feed knob_rows straight to display).
+                value = (
+                    f"{value.model} (effort={value.reasoning_effort})"
+                    if value.reasoning_effort is not None
+                    else value.model
+                )
         rows.append((name, str(value), kind))
     return rows
