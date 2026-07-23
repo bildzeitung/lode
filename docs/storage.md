@@ -1404,26 +1404,24 @@ inheriting this command's shape by assumption.
 The LanceDB vector store is a pure regenerable cache — `lode.db` is the source of truth, never it.
 Pulling a release whose `VectorStore._schema` gained columns (e.g. `model`, then `model_revision`
 from [the manifest decision](#model-provenance-the-embedder-revision-manifest-decided-lode-crh81)
-above) against an older on-disk table makes `_open_or_create_table`'s `create_table(exist_ok=True)`
-(`vectorstore.py`) reject the mismatch outright — `lode work` / `lode ask` crash with "Provided
-schema does not match existing table schema." Recovery:
+above) against an older on-disk table used to make `_open_or_create_table`'s `create_table(exist_ok=True)`
+(`vectorstore.py`) reject the mismatch outright — `lode work` / `lode ask` crashing with "Provided
+schema does not match existing table schema." **`_open_or_create_table` now self-heals this
+(lode-t08v):** on open, if the on-disk table's schema doesn't match the pinned one, it drops and
+recreates the table on the current schema before returning — safe under this store's own
+regenerable-cache contract, since dropping loses only derived vectors, never the irreplaceable
+SQLite rows. Recovery is now just the normal re-embed path, no manual removal step:
 
-1. Stop any running `lode work` / TUI.
-2. `rm -rf $LODE_HOME/lancedb` — the regenerable cache only ([paths](configuration.md#paths--locations));
-   `lode.db` (notes, version chains, jobs) is untouched. **Required even with `lode reembed`**:
-   `reembed` force-enqueues embed jobs (above) but never drops the old-schema table itself, so
-   `create_table(exist_ok=True)` still crashes on the mismatch without this manual step first.
-   (Interim — tracked for removal as `lode-t08v`, once the built-in drops and recreates the table
-   itself.)
-3. `lode reembed` — the shipped, first-class way to force-enqueue one `embed` job per live head
+1. Stop any running `lode work` / TUI (optional, but avoids racing a job against the drop).
+2. `lode reembed` — the shipped, first-class way to force-enqueue one `embed` job per live head
    (above).
-4. `lode work --wait` — the worker drains the queue, recreating the table under the current schema
-   as each job runs.
-5. Verify: `lode jobs --status done`, then `lode ask`.
+3. `lode work --wait` — the worker drains the queue; the first job to touch the table triggers the
+   self-heal, recreating it under the current schema, and every job repopulates it as it runs.
+4. Verify: `lode jobs --status done`, then `lode ask`.
 
 Only current head versions are re-embedded — the same `live_head_versions` scope `lode reembed`
 always uses (above) — so historical `as_of` vectors are not restored; that has never been retrievable
-from the live vector store anyway. If the local model cache is cold, step 4's first job pulls ~500MB
+from the live vector store anyway. If the local model cache is cold, step 3's first job pulls ~500MB
 of ONNX weights from HuggingFace mid-recovery; run `lode models pull`
 ([onboarding.md](onboarding.md#5-warm-the-local-model-cache)) first to avoid that surprise.
 
