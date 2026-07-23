@@ -565,6 +565,45 @@ are catalogued in [configuration.md](configuration.md).
   blocks landing an additive backstop, because the failure mode of both is "sometimes adds less,"
   never "removes the reviewer's reasoning."
 
+  **Update (lode-eohb) — the FIND-prompt fix for the "behavior-preserving" blind spot is built; the
+  dev-loop validation is NOT, for the same structural reason lode-905v's own benchmarks needed a
+  human.** `.claude/workflows/correctness-review.js`'s Find prompt (shared verbatim across all six
+  dimensions — logic, errors, concurrency, contracts, tests, exposure — so the fix is general, not a
+  timeout special-case) now instructs: treat a diff's own "behavior-preserving" / "no-op" / "pure
+  refactor" self-description as a claim to **disprove**, not a fact; independently establish the
+  PRIOR (base-of-range) behavior for every changed call — reading the base commit directly, not
+  inferring it from the diff's framing — **including implicit library/SDK defaults** (timeouts,
+  retries, pagination, …) that the diff may silently tighten. A new `reviewBase` (the left side of
+  the range, when the caller passes a two-sided one) is threaded into the prompt alongside the
+  existing `reviewTip`, so the instruction can point agents at a concrete `git show <reviewBase>:
+  <path>` rather than leaving "check the prior behavior" unanchored. Verified end-to-end (script
+  syntax + prompt rendering, both branches of the `reviewBase` ternary) against a stub Workflow
+  harness (`bun`, the only JS runtime available in this producer's dispatched context — `node` is
+  not installed) since the real `Workflow` tool is unreachable from here, same finding as every prior
+  ticket in this thread.
+
+  **Why this ships escalated, not `ready-for-code-review`:** the ticket's own acceptance bar requires
+  a **dev-loop re-run against the saved fe31ecf baseline** (does the fixed prompt now recall the B1
+  Q&A-timeout finding, still 0 false positives, B2/B3 not regressed) — that requires actually
+  invoking `Workflow`, which no dispatched `coding`/`code-reviewer` context can do (confirmed once
+  more this build: `ToolSearch` for `Workflow` and `select:Workflow` both return nothing). Sending
+  this to `code-reviewer` first would hit the identical wall the reviewer also cannot cross, spending
+  an Opus review cycle on a gap that isn't about code quality — so this escalates directly, mirroring
+  exactly how lode-905v's own two required benchmarks were handled.
+
+  **A second, compounding gap found this build**: the raw fixture files lode-905v's hand-off said
+  were "preserved" and would be "committed onto the FIND-quality follow-up branch" —
+  `specs/905v-live-results/` (the `/code-review` baseline text + 3 saved workflow-run JSONs) — **do
+  not exist anywhere on this machine.** Searched recursively across the main checkout and every
+  worktree under `.claude/worktrees/`: nothing. Only the *scored*, finding-by-finding table survived,
+  pasted verbatim into `bd show lode-905v`'s notes. The extended `specs/12-...md` runbook (Part B)
+  reproduces that scored table so a human running the validation isn't blocked on the missing raw
+  files — re-running the workflow against the *code* at the verified-reproducible range
+  `51dc7c2...fe31ecf` (confirmed via `git diff --stat` to touch exactly the files B1–B5 cite) doesn't
+  need the old raw JSON, only the scored baseline to compare against — but the original runs can no
+  longer be diffed byte-for-byte against new ones, which is worth knowing before anyone goes looking
+  for them.
+
   **Explicitly out of scope**, filed as a follow-up (lode-3ci): whether the builder still needs to
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
