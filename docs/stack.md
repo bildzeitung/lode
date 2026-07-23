@@ -152,3 +152,263 @@ nothing, fail gracefully with an actionable message (no traceback) and log the d
 
 **Model-tier split mirrors the harness:** cheap/deterministic high-volume work on Haiku;
 judgment-sensitive synthesis on Sonnet/Opus.
+
+---
+
+## LLM provider seam (decided, lode-568v.1)
+
+`lode-568v` (epic: support LLM vendors outside Anthropic — OpenAI via Azure) needs a vendor-neutral
+seam over the three cloud-LLM call surfaces before any provider code lands. This section is that
+seam, pinned design-first so `lode-568v.2` (Anthropic behind the seam, zero behavior change) and
+`lode-568v.3` (OpenAI-via-Azure behind the seam) build against one decided contract rather than
+inventing it under implementation pressure. **LLM only** — embeddings/reranker/NLI stay local-only
+and untouched (epic scope, decided 2026-07-22).
+
+### Module home, and Protocol vs ABC
+
+The seam lives in a **new module, `src/lode/llm_provider.py`** — not folded into `src/lode/auth.py`.
+`auth.py`'s own docstring already treats staying cheap to import as load-bearing (`lode-4q97`):
+`import anthropic` is deferred inside `build_client()` because most callers (e.g.
+`lode.worker.drain`, unconditionally) import the module only to *catch* `AuthError`, on paths that
+may never touch Anthropic at all. A seam that can construct **either** vendor's SDK client behind
+one factory has strictly more reason to keep that import discipline, and a fresh module keeps it
+from being re-litigated every time a provider is added. `auth.py`'s exact fate (kept as an internal
+credential-resolution helper the `AnthropicProvider` calls into, vs. absorbed wholesale) is left to
+`lode-568v.2` — an implementation detail, not a contract question.
+
+**Protocol, not ABC** — matching this repo's existing precedent for exactly this shape of seam: the
+`Embedder` Protocol (`src/lode/embedding.py`), cited directly in the epic body as the model for any
+future vendor-neutral abstraction ("independent of this epic … the existing `Embedder` Protocol").
+Structural typing needs no shared base class, and every current + hypothetical future provider
+already satisfies the same shape without inheriting anything, the same way `FastEmbedEmbedder` does
+today.
+
+### 1. Client + credential/routing construction
+
+Replaces `auth.build_client()`, which today constructs a bare `anthropic.Anthropic()` from the SDK's
+own credential chain with no routing insertion point at all:
+
+```python
+def build_provider(settings: Settings) -> LLMProvider:
+    """Resolve credentials + routing for settings.llm_provider; return its LLMProvider.
+
+    Raises LLMAuthError (provider-appropriate message) when nothing resolves.
+    """
+```
+
+- `settings.llm_provider == "anthropic"` → resolves via the same SDK credential chain
+  `build_client()` uses today (env var / `ant auth login` profile / workload-identity federation),
+  returns an `AnthropicProvider`.
+- `settings.llm_provider == "openai"` → resolves `OPENAI_API_KEY`, or — when
+  `settings.azure_openai_endpoint` is non-empty — `AZURE_OPENAI_API_KEY` plus the endpoint/
+  api-version routing knobs (§6 below); returns an `OpenAIProvider` (`lode-568v.3`'s implementation).
+  Azure-vs-direct-OpenAI is a routing detail *under* this one value, never a second provider value
+  (epic's resolved decision, 2026-07-22).
+- Failure is `LLMAuthError` (below), its message naming the *correct* env var(s) for whichever
+  provider is active — generalizing today's Anthropic-worded `MISSING_CREDENTIALS_MESSAGE`.
+
+### 2 & 3. The two immediate structured-output calls — one seam method
+
+`enrich._call_haiku()` (forced tool-use: `tools=[…]`, `tool_choice={"type": "tool", "name": …}`,
+reads `content` block `type == "tool_use"`) and `qa._request_claims()` (`messages.parse(...,
+output_format=...)`, reads `response.parsed_output`) take **identical inputs** once named generically
+— a model, a system prompt, a user prompt, an output Pydantic schema, a token cap, a timeout. There
+is no principled reason to keep them as two seam methods; the epic's own work-surface-4 language
+("response-shape differences must be normalized at the seam") is exactly this. One generic method:
+
+```python
+def structured_call(
+    self,
+    *,
+    model: str,
+    reasoning_effort: str | None,
+    system: str,
+    user_prompt: str,
+    output_schema: type[BaseModelT],
+    max_tokens: int,
+    timeout_s: float,
+    tool_name: str | None = None,
+) -> BaseModelT: ...
+```
+
+**`AnthropicProvider` maps onto today's exact calls with zero behavior change (the decision this
+ticket's acceptance criteria names explicitly) via `tool_name`, not by unifying the underlying wire
+mechanism** — asserting that `messages.parse` and forced tool-use are wire-equivalent isn't a claim
+this docs-only ticket can verify, and `lode-568v.2`'s own acceptance bar is "byte-for-byte
+equivalent." So the two existing mechanisms stay literally distinct, selected by whether the caller
+passes `tool_name`:
+
+- **Enrichment** passes `tool_name=_TOOL_NAME` → `AnthropicProvider` forces tool-use exactly as
+  `_call_haiku()` does today (same `tools=[…]`, same `tool_choice`, same `tool_use` block read).
+- **Q&A** passes no `tool_name` (`None`) → `AnthropicProvider` calls `messages.parse(output_format=
+  output_schema)` exactly as `_request_claims()` does today.
+
+`reasoning_effort` is meaningful only under a reasoning-capable OpenAI/Azure deployment (§6);
+`AnthropicProvider` ignores it (Anthropic has no such axis). `OpenAIProvider` (`lode-568v.3`) has a
+single wire mechanism for structured output — the Responses API's `text.format`/json_schema (see the
+Azure/OpenAI routing note below) — so it can honor or ignore `tool_name` as it sees fit; the param is
+Anthropic-mechanism-selecting, not a cross-provider requirement.
+
+### 4. The two-phase batch contract (the trap — pinned precisely)
+
+Anthropic's Batches path (`submit_enrich_batch` / `collect_enrich_batch`) is deliberately
+**two-phase across drain passes**: submit persists `batch_handle` on the job rows (survives a
+restart, `lode-i05.5`) and collect reaps on a *later* pass, so the drain keeps working while the
+batch cooks. A blocking `run_batch(requests) -> results` contract would regress Anthropic (the drain
+would block on it). The seam stays two-phase, and `enrich.py` keeps **all** job-row / `egress_log` /
+DB bookkeeping — the provider only implements "run this set of requests":
+
+```python
+@dataclass(frozen=True)
+class BatchRequest:
+    custom_id: str                      # version_id/snapshot_id, mirrors today's custom_id mapping
+    model: str
+    reasoning_effort: str | None
+    system: str
+    user_prompt: str
+    output_schema: type[BaseModel]
+    max_tokens: int
+    tool_name: str | None = None
+
+@dataclass(frozen=True)
+class BatchResult:
+    custom_id: str
+    outcome: Literal["succeeded", "errored", "expired", "canceled"]
+    parsed: BaseModel | None          # set iff outcome == "succeeded"
+    error: LLMProviderError | None    # set iff outcome != "succeeded"
+
+class LLMProvider(Protocol):
+    def submit_batch(self, requests: Sequence[BatchRequest], *, timeout_s: float) -> str:
+        """Submit; return an opaque, PERSISTABLE handle string (stored as batch_handle)."""
+        ...
+
+    def collect_batch(
+        self, handle: str, *, timeout_s: float
+    ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
+        """Poll `handle`; ("pending", None) or ("ended", <results, one per request>)."""
+        ...
+```
+
+- **`AnthropicProvider`**: `submit_batch` calls `client.beta.messages.batches.create(...)`, returns
+  `batch.id` as the handle — identical to `submit_enrich_batch` today. `collect_batch` calls
+  `batches.retrieve` + `.results` when ended — identical to `collect_enrich_batch` today.
+- **A provider without a batch API (OpenAI/Azure, `lode-568v.3`) satisfies the contract
+  degenerately: `submit_batch` runs every request through `structured_call()` synchronously, right
+  there** (the epic's own sanctioned "serialize as sequential immediate calls" behavior — a
+  long-running `submit_batch` call is the accepted cost, not a bug), **and returns a handle that
+  self-encodes the already-computed `BatchResult`s** (e.g. a JSON blob) rather than a server-side
+  batch id — there is no such thing to reference. `collect_batch` then just decodes its own handle
+  and returns `("ended", …)` immediately; no network call, no actual polling. The caller (`enrich.py`)
+  neither knows nor cares which strategy produced the handle — exactly the epic's "the caller asks
+  the provider to run the batch and does not know or care which strategy it used."
+
+```mermaid
+sequenceDiagram
+    participant E as enrich.py (drain pass N)
+    participant P as LLMProvider
+    participant E2 as enrich.py (drain pass N+1)
+    E->>P: submit_batch(requests)
+    Note over P: Anthropic: beta.messages.batches.create -> batch_id<br>Serialize: run every request now, encode results
+    P-->>E: handle (persisted as jobs.batch_handle)
+    E2->>P: collect_batch(handle)
+    Note over P: Anthropic: batches.retrieve/.results (may still be running)<br>Serialize: decode handle, always ended
+    P-->>E2: ("pending", None) or ("ended", results)
+```
+
+### 5. Provenance capture point
+
+A **new, nullable `annotations.provider TEXT` column** (alongside the existing `model TEXT`,
+`schema.sql`) — not a composite string encoded into `model`. `annotations.model` keeps recording
+exactly what it does today (the bare model/deployment string, unchanged in meaning and format);
+`provider` records the short id each `LLMProvider` implementation exposes (`"anthropic"` /
+`"openai"`). `NULL` on existing rows means "anthropic" by convention — the only provider that ever
+wrote a row before this epic — so no backfill is required, matching the existing
+"no separate manifest, aggregate read" provenance pattern
+([configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745)). Same
+treatment for **`egress_log`**: a new nullable `provider TEXT` column, populated by `log_egress()`
+call sites going forward — the audit trail's whole point is "content left the box," and which vendor
+it went to is part of that fact, not less so than for `annotations`. Schema migration + the
+`_write_enrichment`/`log_egress` write-path changes are `lode-568v.4`'s scope, not this ticket's.
+
+**Known consequence, scoped elsewhere:** `lode-o9k3`'s staleness comparison
+(`_enrichment_model_stale` / `_STALE_ENRICHMENT_LIVE_HEADS_SQL`) currently compares stored `model`
+against `settings.enrichment_llm` only; once `provider` is a real per-row fact, a provider switch
+with an unchanged model *string* would not otherwise be caught. That read-side update is
+`lode-568v.6`'s scope, already split out and tracked — not addressed here.
+
+### 6. Config shape
+
+**One whole-app provider selector** (resolved decision, 2026-07-22): setting a provider sets it for
+*every* cloud-LLM surface; there is no per-surface vendor axis.
+
+- `llm_provider: str = "anthropic"` (`Kind.RUNTIME`) — `"anthropic"` | `"openai"`.
+- `azure_openai_endpoint: str = ""` (`Kind.RUNTIME`) — e.g.
+  `https://{resource}.openai.azure.com/openai`. Empty means direct OpenAI (or a non-`"openai"`
+  provider); its presence is what distinguishes Azure routing from direct OpenAI *under* the one
+  `"openai"` provider value, not a second vendor axis.
+- `azure_openai_api_version: str = ""` (`Kind.RUNTIME`) — passed as a **query param on every
+  request** (verified against a working Azure config, see this ticket's notes), e.g.
+  `2025-04-01-preview`, not a header. Required when `azure_openai_endpoint` is set.
+- Keys stay **env/SDK-only, never in config.toml** — `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
+  (unchanged) for Anthropic, `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY` for OpenAI/Azure — mirrors
+  lode's existing keys-never-in-config invariant with no change needed to port it to Azure.
+
+**Per-surface tier becomes a `(model, reasoning_effort)` pair, not a bare string** — resolving the
+crux this ticket's acceptance criteria names explicitly. `enrichment_llm` / `qa_llm` /
+`qa_think_harder_llm` stay as three *separate* knobs (unchanged in count and meaning — each still
+selects a tier *within* the active provider), but each is now typed as a small `ModelTier` value:
+
+```python
+class ModelTier(BaseModel):
+    model: str                       # Anthropic model id, or an Azure/OpenAI deployment name
+    reasoning_effort: str | None = None   # meaningful only under a reasoning-capable deployment
+```
+
+A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-4-5"`)
+coerces to `ModelTier(model=<string>)` — back-compat, no migration required for existing configs; an
+inline table (`qa_think_harder_llm = { model = "gpt-5.5", reasoning_effort = "high" }`) sets both
+fields explicitly. This directly answers the challenge's three-way crux ("does 'think harder' select
+a different deployment, a different effort on one deployment, or both?") with **no new abstraction
+beyond upgrading each existing knob's type** — since `qa_llm` and `qa_think_harder_llm` are already
+two independent `ModelTier` values, a config can set `model` the same on both and vary only
+`reasoning_effort` (effort bump on one deployment), vary only `model` (deployment swap, today's
+existing Sonnet→Opus behavior — the historical case, preserved as-is), or vary both.
+
+**`anthropic_call_timeout_s` renamed vendor-neutral: `llm_call_timeout_s`, with a back-compat
+alias** — the second item this ticket's acceptance criteria names explicitly (the Anthropic-named
+knob would otherwise govern the OpenAI/Azure provider too, `config.py:285`). Same default (120.0s),
+same meaning (per-call client-side timeout passed to every LLM call, immediate and batch alike).
+Back-compat mechanism: `load_settings()` already massages the raw `config.toml` dict before
+constructing `Settings` (dropping `None`-valued overrides, `config.py`) — the same spot gains one
+more rename: a `config.toml` still carrying the old key is mapped onto the new one
+(`file_values.setdefault("llm_call_timeout_s", file_values.pop("anthropic_call_timeout_s", …))`-shape
+logic) before validation, so an un-migrated config file keeps working rather than tripping
+`extra="forbid"`. Exact implementation is `lode-568v.2`'s.
+
+### Error contract — diagnosability over genericness
+
+A provider's failure paths must surface enough to diagnose remotely, not collapse into one generic
+lode error — the two residual structural risks doc-reading alone can't close (Azure api-version
+skew, Azure content-filtering) are only observable in a real Azure environment, where logs are the
+only diagnostic surface this repo can't reproduce locally (challenge addendum, 2026-07-22):
+
+```python
+class LLMProviderError(RuntimeError):
+    """A provider call failure. Carries enough to diagnose remotely; chains onto
+    the underlying SDK exception via __cause__."""
+    provider: str
+    status_code: int | None
+    request_id: str | None
+
+class LLMAuthError(LLMProviderError):
+    """No credentials resolved for the active provider — raised by build_provider()."""
+```
+
+Every `LLMProvider` implementation's failure paths raise `LLMProviderError` (or a subclass) rather
+than letting a raw SDK exception escape uncaught, so callers (`enrich.py`/`qa.py`'s existing
+retry/backoff logic) catch one exception type across providers, while `.status_code`/`.request_id` +
+the chained `__cause__` still expose whatever the underlying SDK/HTTP response carried. This
+generalizes today's credential-only "provider-appropriate error messaging" (§1) to *runtime* call
+failures too. The concrete OpenAI/Azure field-by-field mapping (which response fields populate
+`status_code`/`request_id` for a Responses API error, an Azure content-filter rejection, etc.) is
+`lode-568v.3`'s scope — only the shape is pinned here.
