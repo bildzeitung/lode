@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lode.lock import lock_path
 from lode.llm_provider import ModelTier
@@ -300,13 +300,34 @@ class Settings(BaseModel):
         "provider calls.",
         gt=0.0,
     )
-    llm_provider: Literal["anthropic"] = _knob(
+    llm_provider: Literal["anthropic", "openai"] = _knob(
         "anthropic",
         Kind.RUNTIME,
         "Which LLMProvider implementation every cloud-LLM call site resolves "
-        "against (lode-568v.2) -- whole-app, not per-surface: setting this "
-        "sets it for enrichment AND Q&A together. Sole valid value until "
-        "lode-568v.3 lands OpenAI-via-Azure.",
+        "against (lode-568v.2/.3) -- whole-app, not per-surface: setting this "
+        "sets it for enrichment AND Q&A together. 'openai' routes to either "
+        "direct OpenAI or Azure OpenAI depending on azure_openai_endpoint -- "
+        "Azure-vs-direct-OpenAI is a routing detail under this one value, not "
+        "a second provider value (docs/stack.md).",
+    )
+    azure_openai_endpoint: str = _knob(
+        "",
+        Kind.RUNTIME,
+        "Azure OpenAI endpoint, e.g. https://{resource}.openai.azure.com/openai "
+        "(lode-568v.3). Empty means direct OpenAI (or a non-'openai' "
+        "llm_provider) -- its presence is what distinguishes Azure routing "
+        "from direct OpenAI under the one 'openai' llm_provider value "
+        "(docs/stack.md). Only meaningful when llm_provider == 'openai'. "
+        "Requires azure_openai_api_version to also be set.",
+    )
+    azure_openai_api_version: str = _knob(
+        "",
+        Kind.RUNTIME,
+        "Azure OpenAI api-version query param, e.g. '2025-04-01-preview' "
+        "(lode-568v.3) -- sent as a query param on every request, not a "
+        "header (verified against a working Azure config, docs/stack.md). "
+        "Required when azure_openai_endpoint is set; validated at Settings "
+        "construction.",
     )
 
     # --- Externals (with connectors) -----------------------------------------
@@ -536,6 +557,22 @@ class Settings(BaseModel):
                 f"invalid base URL {value!r}: must be a well-formed http(s) URL"
             )
         return value
+
+    @model_validator(mode="after")
+    def _azure_api_version_required_with_endpoint(self) -> "Settings":
+        """Fail loudly at load if azure_openai_endpoint is set with no api-version.
+
+        docs/stack.md "6. Config shape": azure_openai_api_version is "required
+        when azure_openai_endpoint is set" -- an Azure endpoint with no
+        api-version would otherwise surface as an opaque request failure from
+        the OpenAI SDK/HTTP layer at the first call, rather than at config load
+        (lode-568v.3).
+        """
+        if self.azure_openai_endpoint and not self.azure_openai_api_version:
+            raise ValueError(
+                "azure_openai_api_version is required when azure_openai_endpoint is set"
+            )
+        return self
 
 
 def knob_kinds() -> dict[str, str]:

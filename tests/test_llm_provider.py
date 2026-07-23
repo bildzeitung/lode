@@ -1,9 +1,10 @@
-"""Tests for lode.llm_provider -- the vendor-neutral LLMProvider seam (lode-568v.2).
+"""Tests for lode.llm_provider -- the vendor-neutral LLMProvider seam (lode-568v.2/.3).
 
 Covers what the enrich/qa/cited_answer/worker/cli test suites only exercise
 indirectly (through AnthropicProvider-wrapped fakes): ModelTier coercion, the
 AnthropicProvider wire mapping for structured_call/submit_batch/collect_batch,
-and build_provider's provider resolution.
+the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
+build_provider's provider resolution for both providers.
 """
 
 import unittest.mock as mock
@@ -19,6 +20,7 @@ from lode.llm_provider import (
     LLMAuthError,
     LLMProviderError,
     ModelTier,
+    OpenAIProvider,
     build_provider,
 )
 
@@ -298,6 +300,256 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
 
 
 # ---------------------------------------------------------------------------
+# OpenAIProvider.structured_call (lode-568v.3)
+# ---------------------------------------------------------------------------
+
+
+def _fake_responses_client(
+    *, output_text: str = "", status: str = "completed", output: list | None = None
+) -> mock.MagicMock:
+    response = SimpleNamespace(
+        status=status,
+        output=output if output is not None else [],
+        output_text=output_text,
+        incomplete_details=None,
+        error=None,
+    )
+    client = mock.MagicMock()
+    client.responses.create.return_value = response
+    return client
+
+
+def test_openai_structured_call_builds_json_schema_format() -> None:
+    client = _fake_responses_client(output_text='{"name": "widget", "count": 3}')
+    provider = OpenAIProvider(
+        client,
+        endpoint="https://foo.openai.azure.com/openai",
+        api_version="2025-04-01-preview",
+    )
+
+    result = provider.structured_call(
+        model="gpt-5.5",
+        reasoning_effort="high",
+        system="sys",
+        user_prompt="prompt",
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=42.0,
+        tool_name="extract_widget",
+        tool_description="Extract a widget.",
+    )
+
+    assert result == _Widget(name="widget", count=3)
+    kwargs = client.responses.create.call_args.kwargs
+    assert kwargs["model"] == "gpt-5.5"
+    assert kwargs["instructions"] == "sys"
+    assert kwargs["input"] == "prompt"
+    assert kwargs["max_output_tokens"] == 100
+    assert kwargs["timeout"] == 42.0
+    assert kwargs["reasoning"] == {"effort": "high"}
+    fmt = kwargs["text"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["name"] == "extract_widget"
+    assert fmt["strict"] is False  # deliberate -- see module docstring
+    assert fmt["description"] == "Extract a widget."
+    assert fmt["schema"] == _Widget.model_json_schema()
+
+
+def test_openai_structured_call_uses_schema_name_when_no_tool_name() -> None:
+    client = _fake_responses_client(output_text='{"name": "w"}')
+    provider = OpenAIProvider(client)
+
+    provider.structured_call(
+        model="gpt-5.5",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="p",
+        output_schema=_Widget,
+        max_tokens=10,
+        timeout_s=1.0,
+    )
+
+    fmt = client.responses.create.call_args.kwargs["text"]["format"]
+    assert fmt["name"] == "_Widget"
+    assert "reasoning" not in client.responses.create.call_args.kwargs
+    assert "description" not in fmt
+
+
+def test_openai_structured_call_raises_on_schema_mismatch() -> None:
+    client = _fake_responses_client(output_text='{"count": "not-a-widget-name"}')
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="did not match"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_raises_on_unparseable_json() -> None:
+    client = _fake_responses_client(output_text="not json at all")
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="not valid JSON"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_raises_on_refusal() -> None:
+    refusal_item = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="refusal", refusal="cannot help with that")],
+    )
+    client = _fake_responses_client(output_text="", output=[refusal_item])
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="refused"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_raises_on_no_text_output() -> None:
+    client = _fake_responses_client(output_text="")
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="no text output"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_raises_on_incomplete_status() -> None:
+    incomplete = SimpleNamespace(reason="content_filter")
+    response = SimpleNamespace(
+        status="incomplete",
+        output=[],
+        output_text="",
+        incomplete_details=incomplete,
+        error=None,
+    )
+    client = mock.MagicMock()
+    client.responses.create.return_value = response
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError, match="content_filter"):
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+
+def test_openai_structured_call_maps_sdk_exception_diagnostics() -> None:
+    class _FakeAPIError(Exception):
+        status_code = 400
+        request_id = "req-1"
+        body = {
+            "error": {
+                "message": "content filtered",
+                "innererror": {"content_filter_result": {"hate": {"filtered": True}}},
+            }
+        }
+
+    client = mock.MagicMock()
+    client.responses.create.side_effect = _FakeAPIError("bad request")
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="m",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+    err = excinfo.value
+    assert err.provider == "openai"
+    assert err.status_code == 400
+    assert err.request_id == "req-1"
+    assert "content_filter" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# OpenAIProvider.submit_batch / collect_batch (serialize, lode-568v.3)
+# ---------------------------------------------------------------------------
+
+
+def test_openai_submit_batch_serializes_requests_and_collect_returns_ended() -> None:
+    client = _fake_responses_client(output_text='{"name": "w", "count": 2}')
+    provider = OpenAIProvider(client)
+
+    handle = provider.submit_batch(
+        [_batch_request(custom_id="ver-1", tool_name="extract_widget")],
+        timeout_s=30.0,
+    )
+
+    # No network call in collect -- decodes the handle immediately (docs/stack.md).
+    client.responses.create.reset_mock()
+    status, results = provider.collect_batch(handle, timeout_s=30.0)
+
+    client.responses.create.assert_not_called()
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-1"
+    assert result.outcome == "succeeded"
+    assert result.error is None
+    assert result.parsed.root == {"name": "w", "count": 2}
+    assert _Widget.model_validate(result.parsed.root) == _Widget(name="w", count=2)
+
+
+def test_openai_submit_batch_captures_a_per_request_failure_as_errored() -> None:
+    client = mock.MagicMock()
+    client.responses.create.side_effect = RuntimeError("boom")
+    provider = OpenAIProvider(client)
+
+    handle = provider.submit_batch(
+        [_batch_request(custom_id="ver-2", tool_name="extract_widget")],
+        timeout_s=30.0,
+    )
+    status, results = provider.collect_batch(handle, timeout_s=30.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-2"
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert isinstance(result.error, LLMProviderError)
+    assert result.error.provider == "openai"
+
+
+# ---------------------------------------------------------------------------
 # build_provider
 # ---------------------------------------------------------------------------
 
@@ -329,6 +581,81 @@ def test_build_provider_propagates_auth_error_unwrapped(
 
     with pytest.raises(AuthError):
         build_provider(Settings())
+
+
+def test_build_provider_openai_direct_resolves_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    sentinel_client = object()
+    make_client = mock.MagicMock(return_value=sentinel_client)
+    # Patch the real SDK constructor (conftest's guard 1 would otherwise fail
+    # this test outright if it reached a real openai.OpenAI() construction --
+    # mirrors test_build_provider_anthropic_wraps_build_client's approach).
+    monkeypatch.setattr(openai, "OpenAI", make_client)
+
+    provider = build_provider(Settings(llm_provider="openai"))
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._provider_id == "openai"
+    assert provider._client is sentinel_client
+    make_client.assert_called_once_with(api_key="sk-test")
+
+
+def test_build_provider_openai_missing_key_raises_llm_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(LLMAuthError, match="OPENAI_API_KEY"):
+        build_provider(Settings(llm_provider="openai"))
+
+
+def test_build_provider_openai_azure_resolves_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "azure-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    sentinel_client = object()
+    make_client = mock.MagicMock(return_value=sentinel_client)
+    monkeypatch.setattr(openai, "AzureOpenAI", make_client)
+
+    settings = Settings(
+        llm_provider="openai",
+        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_api_version="2025-04-01-preview",
+    )
+    provider = build_provider(settings)
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._client is sentinel_client
+    assert provider._endpoint == "https://foo.openai.azure.com/openai"
+    assert provider._api_version == "2025-04-01-preview"
+    make_client.assert_called_once_with(
+        azure_endpoint="https://foo.openai.azure.com/openai",
+        api_version="2025-04-01-preview",
+        api_key="azure-key",
+    )
+
+
+def test_build_provider_openai_azure_missing_key_raises_llm_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+    settings = Settings(
+        llm_provider="openai",
+        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_api_version="2025-04-01-preview",
+    )
+    with pytest.raises(LLMAuthError, match="AZURE_OPENAI_API_KEY"):
+        build_provider(settings)
 
 
 # ---------------------------------------------------------------------------

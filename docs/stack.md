@@ -436,3 +436,44 @@ generalizes today's credential-only "provider-appropriate error messaging" (§1)
 failures too. The concrete OpenAI/Azure field-by-field mapping (which response fields populate
 `status_code`/`request_id` for a Responses API error, an Azure content-filter rejection, etc.) is
 `lode-568v.3`'s scope — only the shape is pinned here.
+
+### Implemented: `OpenAIProvider` (`lode-568v.3`)
+
+`src/lode/llm_provider.py::OpenAIProvider` is the second `LLMProvider` implementation, resolved by
+`build_provider` when `settings.llm_provider == "openai"`. It fills in the details this section left
+open:
+
+- **One wire mechanism regardless of `tool_name`**: the Responses API's `text.format` `json_schema`
+  (`client.responses.create(model=, instructions=<system>, input=<user_prompt>, max_output_tokens=,
+  text={"format": {...}}, reasoning={"effort": ...} if reasoning_effort else omitted, timeout=)`).
+  `tool_name` (when given, e.g. by the enrichment surface) becomes the schema's `name` field;
+  `tool_description` becomes its `description` field. Confirmed against the installed `openai==2.47.0`
+  SDK's actual `responses.create` signature and `Response`/`IncompleteDetails`/`ResponseOutputRefusal`
+  field shapes (not merely assumed from memory) — see the module docstring and `decisions.md`
+  (`lode-568v.3`) for what was and wasn't independently verifiable this way.
+- **`strict` is deliberately `False`**, not `True`. OpenAI's strict Structured Outputs mode requires
+  every object in the schema to set `additionalProperties: false` and list every property as
+  `required` (optional fields modeled as nullable) — a transformation `pydantic`'s
+  `model_json_schema()` does not perform. Asserting strict-mode compliance without that transform
+  would be exactly the wire-shape assumption the epic's challenge review flagged as highest-risk.
+  `OpenAIProvider.structured_call` validates the returned JSON against `output_schema` via
+  `model_validate` regardless — the real conformance check either way.
+- **Credential resolution**: `OPENAI_API_KEY` (direct OpenAI) or, when `azure_openai_endpoint` is
+  set, `AZURE_OPENAI_API_KEY` + the endpoint/api-version knobs (§6). Unlike `AnthropicProvider`'s
+  branch, a missing credential here raises `LLMAuthError` for real — there was no pre-existing
+  exception type to preserve for a provider that didn't exist before this ticket. This required
+  widening `lode.worker`'s three `except AuthError` sites to `except (AuthError, LLMAuthError)` so a
+  missing OpenAI/Azure credential gets the same permanent (no retry, no dead-letter) treatment
+  `lode-9yy` already gives a missing Anthropic credential — the follow-up `lode-568v.2`'s
+  implementation notes tracked.
+- **Batch = serialize, exactly as pinned above**: `submit_batch` runs every request through the same
+  Responses-API call synchronously and self-encodes the computed `BatchResult`s as a JSON blob string
+  (the handle); `collect_batch` decodes it with no network call, always `("ended", …)`.
+- **Diagnosability**: every failure path (a raised SDK exception, a non-`"completed"` response status,
+  a Structured Outputs refusal, unparseable/schema-mismatched JSON) logs the model/endpoint/api-version
+  in play plus the raw provider payload — including an Azure `innererror.content_filter_result` when
+  present in an error body — before raising, per the challenge addendum above.
+- **Acceptance is mock-only** (named risk, `decisions.md` `lode-568v.3`): no live Azure/OpenAI endpoint
+  was available to verify the Responses API's actual runtime behavior end-to-end (only its installed
+  SDK's *type shapes*, which were checked directly). The diagnostic logging above is the compensating
+  control the challenge review asked for — a first real run's failure is diagnosable from logs alone.

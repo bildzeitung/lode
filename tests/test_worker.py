@@ -42,7 +42,7 @@ from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import enqueue_derive_jobs
 from lode.jobs import now_iso as _now_iso
-from lode.llm_provider import AnthropicProvider
+from lode.llm_provider import AnthropicProvider, LLMAuthError
 from lode.storage import init_db
 from lode.worker import (
     _REGISTRY,
@@ -478,6 +478,26 @@ def test_run_auth_error_resets_to_pending_uncharged(
     _claim_one(conn, ("embed",), _now_iso())
     with pytest.raises(AuthError, match="no creds"):
         run_one(conn, job_id, db_path, settings, _auth_error_registry("no creds"))
+    row = _job(conn, job_id)
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert "no creds" in row["last_error"]
+
+
+def test_run_llm_auth_error_resets_to_pending_uncharged(
+    conn: sqlite3.Connection, db_path: Path, settings: Settings
+) -> None:
+    """lode-568v.3 widening: LLMAuthError (a missing OpenAI/Azure credential)
+    gets the identical permanent-failure treatment AuthError already does
+    (lode-9yy) -- reset to 'pending', no attempts charged, no backoff."""
+
+    def _fail(conn, tv, db, s):
+        raise LLMAuthError("no creds (test)", provider="openai")
+
+    job_id = _insert_job(conn)
+    _claim_one(conn, ("embed",), _now_iso())
+    with pytest.raises(LLMAuthError, match="no creds"):
+        run_one(conn, job_id, db_path, settings, {"embed": _fail})
     row = _job(conn, job_id)
     assert row["status"] == "pending"
     assert row["attempts"] == 0
@@ -2233,6 +2253,32 @@ def test_drain_raises_auth_error_leaving_job_pending_uncharged(
     assert attempts == 0  # uncharged — never dead, never even 'failed'
 
 
+def test_drain_raises_llm_auth_error_leaving_job_pending_uncharged(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lode-568v.3 widening: the same PERMANENT-failure treatment as the
+    AuthError test above, but for a missing OpenAI/Azure credential
+    (LLMAuthError) -- the whole point of widening drain()'s ``except
+    (AuthError, LLMAuthError)`` clause."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    openai_settings = settings.model_copy(update={"llm_provider": "openai"})
+
+    enqueue_derive_jobs(conn, "ver-1")
+    with pytest.raises(LLMAuthError):
+        drain(conn, db_path, openai_settings, _registry=_noop_registry())
+
+    row = conn.execute(
+        "SELECT status, attempts FROM jobs WHERE type = 'enrich'"
+    ).fetchone()
+    status, attempts = row
+    assert status == "pending"
+    assert attempts == 0  # uncharged — never dead, never even 'failed'
+
+
 def test_drain_still_runs_embed_jobs_when_credentials_are_missing(
     conn: sqlite3.Connection,
     db_path: Path,
@@ -2650,6 +2696,33 @@ def test_batch_submit_auth_error_resets_to_pending_and_reraises(
     assert row["status"] == "pending"
     assert row["attempts"] == 0
     assert "no credentials" in row["last_error"]
+
+
+def test_batch_submit_llm_auth_error_resets_to_pending_and_reraises(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lode-568v.3 widening: same permanent-failure treatment, but for a
+    missing OpenAI/Azure credential (LLMAuthError) rather than AuthError."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+    _insert_note_worker(conn)
+    job_id = _insert_enrich_job_worker(conn)
+    openai_settings = settings.model_copy(update={"llm_provider": "openai"})
+
+    # No explicit _client -- forces submit_enrich_batch's own build_provider()
+    # -> _build_openai_client() call, which is what actually raises
+    # LLMAuthError in production for a missing OpenAI/Azure credential.
+    with pytest.raises(LLMAuthError):
+        _batch_submit_enrich(conn, openai_settings)
+
+    row = _job(conn, job_id)
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert "OPENAI_API_KEY" in row["last_error"]
 
 
 class _FrozenCursor:

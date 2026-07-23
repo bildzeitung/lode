@@ -221,9 +221,45 @@ def test_llm_provider_defaults_to_anthropic() -> None:
     assert Settings().llm_provider == "anthropic"
 
 
+def test_llm_provider_accepts_openai() -> None:
+    # lode-568v.3: "openai" is the second valid llm_provider value.
+    assert Settings(llm_provider="openai").llm_provider == "openai"
+
+
 def test_llm_provider_rejects_unsupported_value() -> None:
     with pytest.raises(ValidationError):
-        Settings(llm_provider="openai")
+        Settings(llm_provider="azure")
+
+
+# --- Azure OpenAI routing knobs (lode-568v.3) --------------------------------
+
+
+def test_azure_openai_knobs_default_to_empty() -> None:
+    s = Settings()
+    assert s.azure_openai_endpoint == ""
+    assert s.azure_openai_api_version == ""
+
+
+def test_azure_openai_endpoint_requires_api_version() -> None:
+    with pytest.raises(ValidationError, match="azure_openai_api_version"):
+        Settings(azure_openai_endpoint="https://foo.openai.azure.com/openai")
+
+
+def test_azure_openai_endpoint_with_api_version_constructs() -> None:
+    s = Settings(
+        llm_provider="openai",
+        azure_openai_endpoint="https://foo.openai.azure.com/openai",
+        azure_openai_api_version="2025-04-01-preview",
+    )
+    assert s.azure_openai_endpoint == "https://foo.openai.azure.com/openai"
+    assert s.azure_openai_api_version == "2025-04-01-preview"
+
+
+def test_azure_openai_api_version_alone_is_fine() -> None:
+    # Only azure_openai_endpoint presence triggers the requirement -- an
+    # api_version with no endpoint is meaningless but not itself invalid.
+    s = Settings(azure_openai_api_version="2025-04-01-preview")
+    assert s.azure_openai_endpoint == ""
 
 
 def test_load_settings_malformed_config_toml_raises(

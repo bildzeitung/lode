@@ -46,7 +46,11 @@ chain) rather than being swallowed as just another job failure:
 1. **LLM-client construction** — patches ``anthropic.Anthropic.__init__``
    (+ ``AsyncAnthropic`` if present) to fail unconditionally, before the SDK's own
    credential-chain logic runs, so it fires identically whether the environment is
-   keyed or not.
+   keyed or not. Also patches ``openai.OpenAI.__init__`` and
+   ``openai.AzureOpenAI.__init__`` the same way (lode-568v.3): a test that
+   reaches the real ``OpenAIProvider`` construction path with no fake installed
+   must fail the same way an unmocked Anthropic path does, not silently
+   construct a real client.
 2. **Generic outbound socket egress** — patches ``socket.socket.connect`` *and*
    ``socket.socket.connect_ex`` (independent C methods; the latter does not call
    the former, so guarding only ``connect`` would leave the guard failing open)
@@ -434,6 +438,29 @@ def _block_unmocked_network_and_llm_access(
         monkeypatch.setattr(anthropic.Anthropic, "__init__", _blocked_init)
         if hasattr(anthropic, "AsyncAnthropic"):
             monkeypatch.setattr(anthropic.AsyncAnthropic, "__init__", _blocked_init)
+
+        # Same guard for the OpenAI/Azure provider (lode-568v.3) -- a test
+        # reaching real openai.OpenAI()/AzureOpenAI() construction with no
+        # fake installed must fail loudly, the same as the Anthropic case
+        # above.
+        import openai
+
+        def _blocked_openai_init(self: object, *args: object, **kwargs: object) -> None:
+            pytest.fail(
+                "test constructed a real openai.OpenAI/AzureOpenAI client -- "
+                "no fake was installed for it. If this test genuinely needs "
+                "live OpenAI/Azure access, opt in with @pytest.mark.network "
+                "(tests/conftest.py)."
+            )
+
+        monkeypatch.setattr(openai.OpenAI, "__init__", _blocked_openai_init)
+        monkeypatch.setattr(openai.AzureOpenAI, "__init__", _blocked_openai_init)
+        if hasattr(openai, "AsyncOpenAI"):
+            monkeypatch.setattr(openai.AsyncOpenAI, "__init__", _blocked_openai_init)
+        if hasattr(openai, "AsyncAzureOpenAI"):
+            monkeypatch.setattr(
+                openai.AsyncAzureOpenAI, "__init__", _blocked_openai_init
+            )
 
     # Guard 2: generic outbound socket egress (any non-loopback destination).
     # Relaxed for @pytest.mark.slow too -- see module docstring.
