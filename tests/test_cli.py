@@ -1351,10 +1351,15 @@ def test_status_hints_enrichment_stale_uniform_disagreement(tmp_path: Path) -> N
 
 
 def test_status_no_enrichment_hint_when_all_one_model_matches_config(
-    tmp_path: Path,
+    tmp_path: Path, warm_model_cache: None
 ) -> None:
     """A single stored model that agrees with the current config stays quiet --
-    matches `lode reenrich`'s own "nothing stale" verdict for the same DB."""
+    matches `lode reenrich`'s own "nothing stale" verdict for the same DB.
+
+    Uses `warm_model_cache` because this asserts the all-clear footer ("No
+    action needed."): on a machine with no pulled weights -- every CI runner --
+    the cold-cache probe would otherwise inject its own "Action needed" line and
+    sink the assertion (the exact failure the fixture's docstring describes)."""
     db_path = tmp_path / "lode.db"
     conn = init_db(db_path)
     try:
