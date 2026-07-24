@@ -608,6 +608,45 @@ are catalogued in [configuration.md](configuration.md).
   *keep* its worktree at all now that neither the reviewer nor a rebase pickup opens it, and whether
   `/land`'s worktree GC should change as a result. **Resolved below — kept as-is.**
 
+  **Update (lode-p5gf) — FIND-recall reliability: K-round union + semantic dedup, mitigation shipped,
+  validation still pending.** lode-905v's own retrospective already showed FIND recall is stochastic
+  run-to-run — the tombstone bug above was found by 0 of 6 finders in one run and 4 of 6 in another,
+  identical code and prompts — filed separately as lode-p5gf per maintainer decision to land lode-905v
+  and treat reliability separately. Chosen mitigation, implemented in
+  `.claude/workflows/correctness-review.js`: run each dimension's FIND prompt `FIND_ROUNDS` times (2,
+  a starting default) independently and union the results via a shared near-duplicate merge, rather
+  than loop-until-dry (rejected: no natural cost ceiling for a dimension that stays flaky every round,
+  where a fixed K has a hard, predictable bound) or more finders/a completeness-critic pass (rejected:
+  adds a whole extra reviewing role rather than reusing the redundancy the stochasticity itself calls
+  for). **Cost tradeoff, explicit since this runs inside every `/code` pass:** Find calls multiply by
+  `FIND_ROUNDS` (12 finder calls instead of 6, at the K=2 default); Verify calls do **not** multiply by
+  `FIND_ROUNDS` — a dimension's own cross-round duplicates are merged *before* Verify runs, so a bug
+  found in every round of the same dimension still costs exactly one Verify call.
+
+  **Semantic dedup, not just line-proximity.** The original REPORT-stage dedup collapsed survivors only
+  on an *exact* file:line match — deliberately, since a raw proximity window risked collapsing two
+  genuinely distinct bugs. That left the residual gap this ticket names directly: the tombstone was
+  cited at `:319` by some finders and `:322` by others, the *same* bug, missed by exact-location dedup.
+  The fix (`mergeNearDuplicates` in the script) requires **both** a location match (same file, line
+  within a small window) **and** title-token-Jaccard similarity above a threshold before two findings
+  are treated as the same bug — closing the residual gap without reintroducing the risk the original
+  exact-match rule was guarding against. The same function also unions a single dimension's own
+  `FIND_ROUNDS`, so the K-round mitigation does not reopen the duplicate-findings problem lode-905v's
+  REPORT dedup was built to close.
+
+  **What is NOT yet true: `FIND_ROUNDS = 2` is a starting default, not a validated optimum, and the
+  distribution-level acceptance bar (run the gpzn.13 retrospective, `77960d8...22e4341`, N≥5 times and
+  report per-run recall) has NOT been executed.** That validation needs a `Workflow`-capable session —
+  the same constraint as lode-905v's own benchmark above: no `coding` producer or `code-reviewer`
+  dispatch reaches the `Workflow` tool, only the `/code` orchestrator's own main session does. A
+  producer building this ticket is not that session, so it cannot run or record that validation itself.
+  `specs/12-correctness-review-recall-validation.md` is the runbook (mirroring `specs/11`'s precedent
+  for lode-905v's own live-benchmark step) for a human or the maintainer's own interactive session to
+  run the retrospective N≥5 times against both the pre-mitigation and post-mitigation script and record
+  per-run recall on lode-p5gf. **Do not declare this ticket's reliability bar met until that has
+  actually been run and recorded there** — the code above is built and reviewable now, but "solved" is
+  a claim only the runbook's result can support.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
@@ -2132,3 +2171,106 @@ are catalogued in [configuration.md](configuration.md).
     `worker.py`'s exception handling needs widening (catch both, or retire `AuthError` in favor of
     `LLMAuthError` everywhere). `LLMAuthError`/`LLMProviderError` are still defined now, per the pinned
     shape, ready for that provider to use.
+
+- **2026-07-23 (lode-568v.3) — `OpenAIProvider` implemented; the named acceptance risk from the
+  original challenge review, and how it was mitigated as far as this repo can:**
+  - **Acceptance is mock-only — named explicitly, as the challenge review required.** No live
+    Azure/OpenAI endpoint was reachable from this build. What *was* verified directly: the installed
+    `openai==2.47.0` SDK's actual `responses.create()` signature, and the real field shapes of
+    `Response`, `Response.incomplete_details` (`IncompleteDetails.reason` is genuinely
+    `Literal["max_output_tokens", "content_filter"] | None` — confirmed by introspecting the installed
+    package, not assumed), `ResponseOutputRefusal` (`.refusal`, `.type`), and `openai.APIStatusError`
+    (`.status_code`, `.request_id`, `.body` all populate as expected from a constructed instance). What
+    remains **unverified**: the actual runtime *content* of a real Responses API call/response against
+    a live Azure deployment — whether `text.format` `json_schema` with `strict=False` behaves as
+    documented, whether a real content-filter rejection actually surfaces via
+    `incomplete_details.reason == "content_filter"` vs. a raised `APIStatusError` vs. something else
+    Azure-specific, and whether `reasoning={"effort": ...}` is accepted by every deployment this ticket
+    might be pointed at. The diagnostic-logging compensating control (`docs/stack.md` "Error contract")
+    is the mitigation the challenge addendum asked for: the first real run's failure is diagnosable
+    from logs (model/endpoint/api-version, raw payload, content-filter category) even though this repo
+    could not exercise the real wire to find failures itself.
+  - **`strict=False`, not `True`, for the Structured Outputs `json_schema` format** — a deliberate
+    choice, not an oversight. `pydantic`'s `model_json_schema()` does not produce a
+    strict-mode-compliant schema (would need `additionalProperties: false` + all-properties-required
+    recursively), and transforming it to be so was assessed as its own unverified-against-the-wire risk
+    — exactly the class of assumption the challenge review flagged. Non-strict mode is a smaller,
+    better-understood risk, and `OpenAIProvider.structured_call`'s own `model_validate` against
+    `output_schema` is the real conformance check either way once a typed result is needed.
+  - **One wire mechanism for both call surfaces, per the pinned design** — `tool_name`/`tool_description`
+    are honored as the Responses API json_schema format's `name`/`description` fields (not ignored),
+    but there is no separate function-calling code path; `docs/stack.md` "2 & 3." already pinned this.
+  - **Worker exception-handling widened, closing lode-568v.2's tracked follow-up**: `lode.worker`'s
+    three `except AuthError` sites (`run_one`, `_batch_submit_enrich`, `drain`) now read
+    `except (AuthError, LLMAuthError)` — a missing OpenAI/Azure credential now gets the identical
+    permanent, no-retry, no-dead-letter treatment `lode-9yy` already gives a missing Anthropic
+    credential. `AuthError` itself is untouched (Anthropic's own credential failures still raise it,
+    unwrapped, exactly as `lode-568v.2` left it) — this is purely an addition to the `except` tuple,
+    not a change to what Anthropic raises.
+  - **Batch handle is a self-encoded JSON blob**, exactly as `lode-568v.1` pinned: `submit_batch` runs
+    every request through the same Responses-API call synchronously and encodes the resulting
+    `BatchResult`s (success payload or a serialized `LLMProviderError`) into the string returned as the
+    handle; `collect_batch` decodes it with no network call, always `("ended", …)`. Note this handle is
+    duplicated verbatim across every job row in the submitted set (`enrich.py`'s existing
+    `UPDATE jobs SET batch_handle = ?` loop writes the identical string to each row, the same way it
+    writes Anthropic's single server-side `batch.id` to each row today) — an accepted, unoptimized cost
+    of the degenerate "serialize" strategy, not a bug.
+  - **`azure_openai_api_version` required whenever `azure_openai_endpoint` is set**, enforced by a
+    `Settings` `model_validator(mode="after")` — fails at config-load time rather than as an opaque
+    request failure from the SDK/HTTP layer at the first real call.
+  - **`openai` added as a runtime dependency**, `requirements.lock` regenerated via `uv pip compile`
+    per `docs/stack.md`'s dependency-locking split. That regeneration also picked up an unrelated
+    `numpy` version drift (`2.5.1` → `2.4.6`, confirmed via a side-by-side regeneration against the
+    *unmodified* `pyproject.toml` — the same drift happens with no `openai` dependency added at all, so
+    it is pre-existing PyPI/resolver drift since the lock was last regenerated, not something this
+    ticket's dependency addition caused) — left as-is; hand-editing a generated lock file to avoid it
+    would violate the lock's own "regenerated, never hand-edited" rule.
+- **2026-07-23 (lode-568v.4) — implementation details resolved while building the provenance write
+  path against T1's pinned `annotations.provider` / `egress_log.provider` shape:**
+  - **Migration mechanism:** both columns are added the same way every other post-deployment column in
+    this schema is (`storage.py`'s `_apply_migrations` forward-only `ALTER TABLE ... ADD COLUMN`,
+    guarded against the existing-column `OperationalError`) — no new migration mechanism, and per T1's
+    pinned "NULL means anthropic" convention, no backfill `UPDATE` either; every pre-existing row reads
+    back `NULL`, which already means anthropic.
+  - **`provider_identity(settings)` (new, `lode.llm_provider`)** is the one place the "write `NULL`
+    while the active provider is anthropic, else the literal provider string" rule lives — both
+    `_write_enrichment` call sites and both `enrich.py` `log_egress` call sites compute it from this
+    single function rather than re-deriving `settings.llm_provider == "anthropic"` at each site.
+  - **Local variable named `provider_name`, never `provider`, at every enrichment call site.** All four
+    functions that needed this value (`enrich_version`, `submit_enrich_batch`, `collect_enrich_batch`,
+    and `_write_enrichment`'s caller-side computation) already bind `provider` to the
+    :class:`~lode.llm_provider.LLMProvider` *instance* (the seam object T2 introduced) — reusing that
+    name for the provenance string would shadow it. `provider_name` is the identity string;
+    `_write_enrichment`'s own parameter is still named `provider` since that function has no seam
+    object to collide with.
+  - **`egress.log_egress` gained an optional keyword-only `provider: str | None = None`,** not a
+    required positional — the Q&A send (`gate_qa_egress` → `log_egress`) is explicitly out of this
+    ticket's scope (see T1's note above: "the read-side staleness-comparison consequence is already
+    split out ... not re-opened here" applies symmetrically to the write side for Q&A, which this
+    ticket's own scope text never named). Leaving Q&A's call site unchanged and defaulting to `None` is
+    also the *correct* value today, not just a scope dodge: Q&A is Anthropic-only regardless, and `NULL`
+    is exactly what `provider_identity` would have computed for it.
+  - **Not done here (deliberately deferred to `lode-568v.6`):** no read-side consumer — `lode status`,
+    `lode reenrich`, or `_enrichment_model_stale` (`lode-o9k3`) — was touched. This ticket is schema +
+    write path + migration only, per its own acceptance criteria; a provider switch on an unchanged
+    model string does not yet mark the corpus stale.
+
+- **2026-07-23 (lode-568v.6) — read-side provider-aware staleness implemented, closing the gap
+  `lode-568v.4` left open:**
+  - **`_STALE_ENRICHMENT_LIVE_HEADS_SQL`'s per-branch mismatch predicate becomes `(a.model != ? OR
+    a.provider IS NOT ?)`**, not two independently-OR'd checks — `IS NOT`, not `!=`, for the provider
+    leg, and deliberately in both directions: a stored `NULL` means "anthropic" by convention
+    (`lode-568v.4`), and the current provider passed in is itself `NULL` while the active provider is
+    anthropic. A plain `!=` against a NULL operand in SQLite is never true, which would silently
+    exempt the anthropic-vs-anthropic comparison — the common case today, before a second provider
+    ships — from ever resolving correctly either way.
+  - **Both `_stale_enrichment_heads` and `_enrichment_model_stale` gained a required
+    `current_provider: str | None` parameter** — no default — so every call site names its intent
+    explicitly rather than silently falling back to "anthropic." Both `lode status` and `lode
+    reenrich` pass `lode.llm_provider.provider_identity(settings)`, never `settings.llm_provider`
+    directly, keeping the write-side and read-side convention identical by construction rather than by
+    two independently-maintained call sites agreeing to use the same string.
+  - **No user-facing wording change.** `lode status`'s hint text and `lode reenrich`'s summary line
+    still read "disagree with the currently configured enrichment_llm" — accurate as shorthand for
+    "enrichment identity," and changing it risked nothing but test churn for no behavioral gain; the
+    docstrings on both functions spell out the provider leg for anyone reading the code.

@@ -58,6 +58,11 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # lode-gpzn.2: persisted Atlassian API base (see schema.sql's comment on
         # the column) — nullable, NULL for every pre-existing (web) row.
         "ALTER TABLE externals ADD COLUMN api_base TEXT",
+        # lode-568v.4: LLM provider identity alongside `model` (see schema.sql's
+        # comment on the column) — nullable, NULL means "anthropic" by
+        # convention, no backfill needed for pre-existing rows.
+        "ALTER TABLE annotations ADD COLUMN provider TEXT",
+        "ALTER TABLE egress_log ADD COLUMN provider TEXT",
     ]
     for ddl in _migrations:
         try:

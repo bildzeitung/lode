@@ -159,6 +159,30 @@ def test_log_egress_null_redactions_when_nothing_stripped(tmp_path: Path) -> Non
         conn.close()
 
 
+def test_log_egress_provider_defaults_to_none(tmp_path: Path) -> None:
+    # lode-568v.4: unspecified provider stays NULL -- "anthropic" by
+    # convention (docs/decisions.md lode-568v.1). The Q&A send
+    # (gate_qa_egress) doesn't thread a provider through yet -- out of this
+    # ticket's scope -- so this is also gate_qa_egress's real behavior today.
+    conn = _new_db(tmp_path)
+    try:
+        log_egress(conn, QA_PURPOSE, "claude-sonnet", ["v1"])
+        provider = conn.execute("SELECT provider FROM egress_log").fetchone()[0]
+        assert provider is None
+    finally:
+        conn.close()
+
+
+def test_log_egress_provider_persists_when_given(tmp_path: Path) -> None:
+    conn = _new_db(tmp_path)
+    try:
+        log_egress(conn, "enrich", "gpt-4o", ["v1"], provider="openai")
+        provider = conn.execute("SELECT provider FROM egress_log").fetchone()[0]
+        assert provider == "openai"
+    finally:
+        conn.close()
+
+
 def test_gate_logs_every_qa_send_with_purpose_model_and_targets(tmp_path: Path) -> None:
     # Acceptance: every Q&A send is recorded in egress_log (purpose, model, ids).
     conn = _new_db(tmp_path)

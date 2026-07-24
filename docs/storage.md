@@ -136,8 +136,8 @@ The version "graph" is therefore a **linear chain per note**. Two separate mecha
 - **Single-instance = a startup advisory lock** (lockfile/PID beside the DB; refuse to start if
   held, pointing at the running PID). This is **not** needed for data integrity — CAS + SQLite cover
   that — but the **async workers (see [design.md](design.md) save path) need a single owner**: two
-  instances would run duplicate, racing enrichment + embedding loops and double-spend on Claude
-  Batches. That, not corruption, is why we enforce one instance.
+  instances would run duplicate, racing enrichment + embedding loops and double-spend on the
+  enrichment LLM's batch calls. That, not corruption, is why we enforce one instance.
 
 Do not pay for merge semantics we will never use.
 
@@ -363,6 +363,14 @@ no permanent chrome to a screen most notes never populate. Follow-up build ticke
 - **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,
   confidence. Enables re-running enrichment after a model upgrade, auditing a bad link, bulk
   purge. Cheap now, painful to retrofit.
+- **Provider identity alongside the model id** (`annotations.provider` / `egress_log.provider`,
+  decided [lode-568v.1](decisions.md), written [lode-568v.4](decisions.md)) — a bare model-name
+  string can ambiguously belong to more than one vendor once a second LLM provider exists
+  ([lode-568v](decisions.md)), so the vendor identity is recorded too. `NULL` means "anthropic" by
+  convention (every row written before this column existed, and every row written while
+  `settings.llm_provider == "anthropic"`, is implicitly Anthropic) — no backfill needed. Making a
+  provider switch on an unchanged model string visible to `lode status` / `lode reenrich` was a
+  read-side concern, out of scope here — implemented in [lode-568v.6](decisions.md), below.
 - **`source: ai | user` on the annotation layer.** Users *will* correct an AI tag or link. That
   correction is still metadata (doesn't touch note content), and it is **pinned**:
   - **AI annotations are version-scoped** — regenerable, allowed to go stale, re-derived per head.
@@ -419,8 +427,9 @@ two halves split along the ownership boundary:
 ## The async work queue
 
 The "capture stays instant" promise ([design.md](design.md) §1) is structurally a promise that the
-derived work happens *later*: chunk + embed, enrich via Claude, propose inferred edges, refresh
-externals, and re-derive the corpus when `prompt_ver` or the model bumps. That backlog needs a home.
+derived work happens *later*: chunk + embed, enrich via the configured cloud LLM, propose inferred
+edges, refresh externals, and re-derive the corpus when `prompt_ver` or the model bumps. That backlog
+needs a home.
 
 ### One property makes this easy: lag is safe by construction
 
@@ -441,7 +450,7 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   work. (This does put more cache-ish state in the "irreplaceable" file — see
   [the partition is by rows](stack.md#the-partition-is-by-rows-not-by-file).)
 - **Job types:** `embed(version)` — fast, local, **high priority**; `enrich(version, prompt_ver)` —
-  slow, Claude; `refresh(external)` — implemented with the first connector (`lode-w0h.3`): the web
+  slow, cloud LLM; `refresh(external)` — implemented with the first connector (`lode-w0h.3`): the web
   draw-down trigger enqueues it via `enqueue_derive_jobs(..., types=("refresh",))` when a note-save
   detects a pasted URL, atomically with the edge + version write. The shared fetch→ingest handler
   is `lode.drawdown.refresh_external`; `lode-w0h.6`'s later refresh policy reuses it unchanged.
@@ -540,50 +549,57 @@ the whole `pending -> failed -> dead` lifecycle above assumes a failure is
 *transient* — safe to retry with backoff, and eventually dead-letter as a last
 resort. That is the right default for a flaky network call, a rate limit, or a
 Batches API hiccup. It is **wrong** for a failure that retrying can never fix: most
-concretely `lode.auth.AuthError`, raised by `lode.auth.build_client` when no
-Anthropic credentials can be resolved. Retrying an unauthenticated call burns the
-retry budget on something structurally certain to fail again, and the operator
-never sees `build_client`'s actionable "set `ANTHROPIC_API_KEY` / run `ant auth
-login`" message — they see an ordinary failed, then dead-lettered, job.
+concretely `lode.auth.AuthError`, raised by `lode.auth.build_client` (the Anthropic
+provider path) when no Anthropic credentials can be resolved, and — since the
+OpenAI/Azure provider landed (`lode-568v.3`) — `lode.llm_provider.LLMAuthError`,
+raised by `build_provider()` when no `OPENAI_API_KEY`/`AZURE_OPENAI_API_KEY`
+resolves. Retrying an unauthenticated call burns the retry budget on something
+structurally certain to fail again, and the operator never sees the active
+provider's actionable credential message (Anthropic's "set `ANTHROPIC_API_KEY` /
+run `ant auth login`", or the OpenAI/Azure equivalent naming the missing env var)
+— they see an ordinary failed, then dead-lettered, job.
 
-The taxonomy: **permanent** = `lode.auth.AuthError` (today's only member; a future
+The taxonomy: **permanent** = `lode.auth.AuthError` and `lode.llm_provider.LLMAuthError`
+(the latter added when the OpenAI/Azure provider landed, `lode-568v.3` — a missing
+OpenAI/Azure credential is exactly as permanent as a missing Anthropic one; a future
 config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
-`run_one` and `_batch_submit_enrich` special-case `AuthError` ahead of their
-generic catch: the claimed job is reset straight back to `'pending'` with
+`run_one` and `_batch_submit_enrich` special-case `(AuthError, LLMAuthError)` ahead
+of their generic catch: the claimed job is reset straight back to `'pending'` with
 `attempts` untouched (never `'failed'` with backoff, never `'dead'`), then the
 exception is **re-raised** rather than absorbed. What happens next depends on the
 caller — the queue mechanism itself has no opinion here, by design; each caller
 decides how loud "surface it" should be:
 
-- `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints
-  `build_client`'s actionable message to stderr and exits non-zero — the same
-  clean, traceback-free treatment `lode ask` already gives `AuthError`.
+- `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints the active
+  provider's actionable message to stderr and exits non-zero — the same clean,
+  traceback-free treatment `lode ask` already gives `AuthError`/`LLMAuthError`.
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
-  stay instant (`design.md` §1) regardless of whether Anthropic credentials are
-  configured. The job is already back at `'pending'`, uncharged, for the next
-  explicit `lode work` to report loudly.
+  stay instant (`design.md` §1) regardless of whether the active provider's
+  credentials are configured. The job is already back at `'pending'`, uncharged,
+  for the next explicit `lode work` to report loudly.
 - `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
-  request) needs no special case of its own: it never wraps its `build_client()` /
-  `collect_enrich_batch()` calls in a broad `except`, so an `AuthError` there
-  already propagates out of it — the swallow this section fixes never existed on
-  that path. `drain` handles it identically to `_batch_submit_enrich`'s, below.
+  request) needs no special case of its own: it never wraps its `collect_enrich_batch()`
+  call (which resolves credentials via `build_provider()`) in a broad `except`, so an `AuthError`/`LLMAuthError`
+  there already propagates out of it — the swallow this section fixes never
+  existed on that path. `drain` handles it identically to `_batch_submit_enrich`'s,
+  below.
 
 **A missing credential must not starve the credential-free work.** Both enrich
 batch pre-steps run *before* `drain`'s reclaim, retry-reset, and main claim/run
 loop — so a pre-step that raised on the spot would abort the entire drain. That
 is not acceptable: `embed` jobs are produced by the **local** fastembed model and
-have nothing to do with Anthropic credentials, and a pending enrich job is
-essentially always present (every `add` enqueues one). Raising from the pre-step
-would therefore abort *every* `lode work` before the first embed ever ran, leaving
-an unkeyed user's embeds pending forever and silently killing the dense half of
-retrieval — trading "enrich is retried forever" for "the whole queue stops",
-which is strictly worse.
+have nothing to do with the cloud LLM provider's credentials, and a pending
+enrich job is essentially always present (every `add` enqueues one). Raising from
+the pre-step would therefore abort *every* `lode work` before the first embed
+ever ran, leaving an unkeyed user's embeds pending forever and silently killing
+the dense half of retrieval — trading "enrich is retried forever" for "the whole
+queue stops", which is strictly worse.
 
-So `drain` **stashes** the pre-step's `AuthError`, completes the reclaim, the
+So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError`, completes the reclaim, the
 retry-reset and the main claim/run loop, and re-raises it only at the end. The
 main loop drains `embed` ahead of `enrich` (`_claim_one` orders on type), so the
 embeds land before any residual enrich job re-raises out of `run_one`. Net effect
@@ -1038,17 +1054,23 @@ lock-first discipline**, generalized from one caller to all of them.
 ### The one thing reconciliation can't reconstruct: a submitted Batch
 
 Almost all "what work remains" is *derivable* by scanning content vs derived outputs — **except a
-submitted Claude Batch.** Once POSTed, that's money in flight (`batch_abc123`); a reconciliation
-scan would see "not yet enriched" and **resubmit, double-spending.** So **batch handles and their
-member jobs are persisted durably and resumed on restart** — re-poll the handle, ingest results,
-mark done. This is the requirement that rules out an in-memory queue.
+submitted enrichment batch.** Once submitted, that's money in flight (e.g. Anthropic's `batch_abc123`
+under the default provider); a reconciliation scan would see "not yet enriched" and **resubmit,
+double-spending.** So **batch handles and their member jobs are persisted durably and resumed on
+restart** — re-poll the handle, ingest results, mark done. This is the requirement that rules out an
+in-memory queue. (A provider with no batch API of its own serializes instead of submitting a real
+batch, `lode-568v.3` — the handle it returns self-encodes the already-computed results rather than
+naming a server-side batch, but it is persisted and resumed the same way; see the [two-phase batch
+contract](stack.md#llm-provider-seam-decided-lode-568v1).)
 
 ### Enrichment latency: interactive now, batch for bulk
 
-A freshly-captured note enriches via **one immediate Haiku call** (seconds, full Haiku price — tiny
-per note) so its tags/entities/edges appear promptly. Only **bulk / backfill / re-enrichment** goes
-through the 50%-off **Batches API** (≤24h, non-interactive). Either way the **embedding lands in
-seconds**, so the note is retrievable immediately regardless.
+A freshly-captured note enriches via **one immediate enrichment-LLM call** (seconds; the default
+Anthropic Claude Haiku 4.5 price is tiny per note) so its tags/entities/edges appear promptly. Only
+**bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's 50%-off
+**Batches API** (≤24h, non-interactive) under the default provider, or serialized sequential calls
+under a provider with no batch API ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)).
+Either way the **embedding lands in seconds**, so the note is retrievable immediately regardless.
 
 **How the immediate path stays a fast path, not a second job system (lode-npx.2, lode-a3x).**
 `save()` enqueues the `enrich` job exactly like `embed` — no special case — so a `pending` row
@@ -1088,9 +1110,10 @@ flowchart LR
 
 `lode work` (one-shot, `--loop`, and `--wait` alike) makes several potentially
 slow, blocking calls per pass — reconcile's step registry, drain's two
-Batches API pre-steps, the main claim/run loop (an `embed` job can trigger a
-first-use fastembed/ONNX model load), and the Anthropic Batches API network
-calls themselves. Before this ticket, none of them printed or logged anything
+enrich-batch pre-steps, the main claim/run loop (an `embed` job can trigger a
+first-use fastembed/ONNX model load), and the enrichment provider's batch-path
+network calls themselves (Anthropic's Batches API under the default provider).
+Before this ticket, none of them printed or logged anything
 *while* they ran — every existing line fired only *after* a step returned —
 so a one-shot run blocked inside one of these produced no visible sign of
 what was happening until it either finished or hung forever.
@@ -1109,16 +1132,18 @@ uniformly from `worker.py`/`reconcile.py`/`embedding.py` without threading
 **"Bound a genuinely stuck op" has two different answers depending on what
 kind of op it is:**
 
-- For a call that can be given a real client-side timeout — the Anthropic
-  enrichment calls (`enrich.py`): the Batches API calls
-  (`client.beta.messages.batches.create`/`retrieve`/`results`) and the
-  immediate Haiku call (`client.messages.create`) a residual `enrich` job can
-  take in `drain()`'s main claim/run loop — one is:
-  `Settings.anthropic_call_timeout_s` (default 120s), the same pattern
-  `fetch_timeout_s` already established for web draw-down HTTP fetches. A
-  timed-out call now raises rather than hanging forever; the existing
-  transient-failure retry/backoff accounting handles it like any other
-  failure.
+- For a call that can be given a real client-side timeout — the enrichment
+  calls (`enrich.py`) routed through the `LLMProvider` seam
+  ([stack.md](stack.md#llm-provider-seam-decided-lode-568v1)): the batch-path
+  calls (Anthropic's `client.beta.messages.batches.create`/`retrieve`/`results`
+  under the default provider; serialized immediate calls under a provider with
+  no batch API) and the immediate `structured_call` a residual `enrich` job can
+  take in `drain()`'s main claim/run loop — one is: `Settings.llm_call_timeout_s`
+  (default 120s; renamed vendor-neutral from `anthropic_call_timeout_s`,
+  `lode-568v.1`/`.2` — a `config.toml` still carrying the old key is remapped),
+  the same pattern `fetch_timeout_s` already established for web draw-down HTTP
+  fetches. A timed-out call now raises rather than hanging forever; the existing
+  transient-failure retry/backoff accounting handles it like any other failure.
 - For a call this codebase cannot safely abort mid-flight without cooperation
   from the callee — a local SQL scan (reconcile's steps), an in-process ONNX
   model construction (`embedding.py`) — there is no safe interrupt mechanism
@@ -1153,7 +1178,8 @@ snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),
-             model, prompt_ver, confidence, created
+             model, provider?, prompt_ver, confidence, created          # provider: NULL=anthropic
+                                                                         # (lode-568v.4)
 passages     passage_id, target_version(version_id|snapshot_id), ord,  # derived; heads only
              char_range, text, parent_block                            #   structure-aware chunks
 embeddings   passage_id, vector, model                                 # derived; one per passage
@@ -1164,12 +1190,13 @@ jobs         id, type(embed|enrich|refresh), target_version,           # async w
              attempts, last_error?, batch_handle?, claimed_at?,        #   lifecycle: pending->
              next_attempt_at, created                                  #   running->{done|failed->
                                                                        #   pending|dead}
-egress_log   id, ts, purpose(enrich|qa), model,                        # cloud-egress audit trail
-             sent_targets(version_id|passage_id …), redactions
+egress_log   id, ts, purpose(enrich|qa), model, provider?,             # cloud-egress audit trail
+             sent_targets(version_id|passage_id …), redactions         # provider: NULL=anthropic
 ```
 
-`no_egress` on `notes`/`externals` marks content that is **indexed locally but never sent to Claude**
-(no enrichment, excluded from cloud Q&A context — see [externals.md](externals.md#privacy-consequence-of-aggregation)).
+`no_egress` on `notes`/`externals` marks content that is **indexed locally but never sent to the
+configured cloud LLM** (no enrichment, excluded from cloud Q&A context — see
+[externals.md](externals.md#privacy-consequence-of-aggregation)).
 `egress_log` records every time content leaves the box, so exposure is auditable.
 
 The UI composes `content node + its annotations` at render time. Nothing is ever written back
@@ -1233,11 +1260,12 @@ for the companion runtime-knob write-up)*
 **Scope: the embedder only**, per the epic's own DB-invalidation scoping (`lode-crh8`, decided
 2026-07-21) — the reranker and the NLI/entailment cross-encoder run at retrieval/answer time and
 persist nothing, so a revision change there alters ranking/gating going forward but cannot corrupt
-the stored index; they are out of scope for a manifest. The enrichment LLM (Claude) *is* in the
+the stored index; they are out of scope for a manifest. The enrichment LLM *is* in the
 epic's scope for the same DB-invalidation reason the embedder is, but is tracked separately
 ([decided, lode-g274.5](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
-— it collapses to a `docs/configuration.md` edit because Anthropic aliases have no dated
-per-revision identity to pin against, so it needs no schema work here.
+— it collapses to a `docs/configuration.md` edit because Anthropic's model aliases (the only
+provider when this was decided, 2026-07-21) have no dated per-revision identity to pin against, so
+it needs no schema work here.
 
 This section settles the two axes `lode-g274.4`/`lode-g274.7` were both blocked on. They are
 **orthogonal**, not one decision — conflating them (as the epic originally did) is exactly what
@@ -1390,10 +1418,10 @@ no `refresh` of `passages_fts` and the lexical leg is simply unaffected, confirm
 this ticket originally posed.
 
 **Embedder only — the enrichment LLM is explicitly out of scope here.** This matches `lode-crh8`'s
-own DB-invalidation scoping, same as §8a above. The enrichment LLM (Claude) also persists into the
+own DB-invalidation scoping, same as §8a above. The enrichment LLM also persists into the
 DB (`annotations`/`edges`, [configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
 and a mismatch there is symmetrically detectable — but *correcting* it (a targeted re-enrich) is
-tracked as its own ticket, `lode-14jr`, not folded in here: re-enrichment costs a Claude API call per
+tracked as its own ticket, `lode-14jr`, not folded in here: re-enrichment costs a cloud LLM call per
 head (unlike the embedder's local ONNX inference), so "always regenerate every live head
 unconditionally" — the right default for a free, local, CPU-bound embed — is not obviously the right
 default for a paid, remote, rate-limited enrich, and deserves its own design pass rather than
@@ -1436,7 +1464,7 @@ whole-corpus, is the default here** — the opposite of `lode reembed`'s "always
 **Why targeted, not whole-corpus.** `lode reembed` always regenerates every live head unconditionally
 because its underlying inference is free, local, and CPU-bound — there is no cost axis to economize
 on, so a scope flag nothing would use was deliberately not built. Re-enrichment is the opposite: every
-head costs a real Claude API call. Force-enqueuing every live head on every `enrichment_llm` config
+head costs a real cloud LLM call. Force-enqueuing every live head on every `enrichment_llm` config
 bump would re-run that cost against content that was never affected — for a corpus of any size, a
 needless and potentially large spend. So `lode reenrich` force-enqueues only the heads that actually
 carry stale enrichment, leaving everything already current untouched.
@@ -1447,10 +1475,25 @@ manifest" for the enrichment LLM is already an aggregate read over `annotations.
 (`WHERE source = 'ai'`), not a separate artifact. `lode reenrich` uses that same read, scoped per head:
 a live head is force-enqueued only if it has at least one `'ai'` annotation (`source_version` = the
 head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently configured
-`enrichment_llm`. A head with **no** ai annotations at all is not stale by this definition — it is
+`enrichment_llm`, **or** whose `provider` disagrees with the currently active provider
+(`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
 do.
+
+**Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
+(written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
+same model/deployment string can name different vendors across a provider switch, so `model` alone
+would silently miss that case. `_STALE_ENRICHMENT_LIVE_HEADS_SQL` (`src/lode/cli.py`) therefore treats
+an `'ai'` annotation as stale if `model != enrichment_llm` **or** `provider` disagrees with the
+currently active provider — compared with SQL's NULL-safe `IS NOT`, not `!=`, in both directions: a
+stored `NULL` means "anthropic" by convention (`lode.llm_provider.provider_identity`), and the current
+provider is itself `NULL` while `settings.llm_provider` is `"anthropic"`. A plain `!=` against a NULL
+operand is never true, which would silently exempt the anthropic-vs-anthropic case — the common case
+today — from ever comparing correctly either way. Both `_stale_enrichment_heads` and
+`_enrichment_model_stale` take the current provider as an explicit `current_provider: str | None`
+parameter — callers pass `provider_identity(settings)`, never `settings.llm_provider` directly, so the
+convention stays consistent between the write side and this read side.
 
 **Covers notes and externals, unlike `enrich_gap`'s notes-only scope.** `enrich_gap` (above) checks
 notes only. `lode reenrich` covers both notes and externals — mirroring `lode reembed`'s and
@@ -1460,7 +1503,7 @@ notes only. `lode reenrich` covers both notes and externals — mirroring `lode 
 external's stale enrichment undetected by this command even though `configuration.md`'s own
 `DISTINCT model` scan makes no such distinction.
 
-**`no_egress` is still respected.** Enrichment is the leg that leaves the box (a Claude API call) —
+**`no_egress` is still respected.** Enrichment is the leg that leaves the box (a cloud LLM call) —
 unlike embedding, which never does — so `lode reenrich` excludes `no_egress` notes/externals from its
 scan even if their previously-recorded annotations happen to be stale, the same guard `enrich_gap`
 already applies. This is also why `lode reenrich` does not delegate to
@@ -1476,10 +1519,11 @@ carries no model of its own). Once every enqueued job reaches `done` and rewrite
 under the current model, `lode status`'s enrichment hint clears on its own — there is no separate
 manifest to reconcile.
 
-**`lode status`'s hint reads this exact query (decided, lode-o9k3).** The stale-detection scan above
-is not just conceptually mirrored by the `lode status` hint — `src/lode/cli.py`'s
-`_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this command force-enqueues
-from, and fires whenever that list is non-empty. This replaced an earlier, looser `lode status` check
+**`lode status`'s hint reads this exact query (decided, lode-o9k3; provider-aware since lode-568v.6).**
+The stale-detection scan above is not just conceptually mirrored by the `lode status` hint —
+`src/lode/cli.py`'s `_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this
+command force-enqueues from, and fires whenever that list is non-empty. This replaced an earlier,
+looser `lode status` check
 (a plain `COUNT(DISTINCT model) > 1` scan over the whole `annotations` table, unscoped to live heads)
 that missed the primary intended workflow — a corpus uniformly re-enriched under a single OLD model
 reads as "not mixed" under a distinct-count, even though this command would re-enqueue the entire

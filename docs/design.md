@@ -56,9 +56,11 @@ It's worth being exact, because "AI" and "embedding" are easy to conflate:
   It raises semantic recall but never blocks capture; the brief pre-vector window is masked by the
   lexical leg of hybrid retrieval (see [retrieval.md](retrieval.md)), so a fresh note is never
   invisible.
-- **Async, slow** — the **Claude enrichment pass** (tags, entities, inferred edges). A fresh note
-  enriches via one immediate Haiku call; bulk/backfill/re-enrichment goes through the 50%-off
-  Batches API.
+- **Async, slow** — the **enrichment LLM pass** (tags, entities, inferred edges), provider-selected
+  via `llm_provider` ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)); default
+  Anthropic Claude Haiku. A fresh note enriches via one immediate call; bulk/backfill/re-enrichment
+  goes through the provider's batch path — Anthropic's 50%-off Batches API by default, or serialized
+  sequential calls under a provider with no batch API.
 
 So *both* the embedding and the LLM are derived/async; the embedding is merely the cheap-local one.
 Only the mechanical lexical index rides the capture path. The async tiers are driven by a **durable
@@ -81,7 +83,7 @@ flowchart TD
     SYNC -. enqueue jobs (same txn) .-> Q[["Durable work queue<br>(SQLite · single owner)<br>+ reconciliation scan"]]
 
     Q --> E["Async · fast · local<br>Chunk → embed passages<br>(fastembed/ONNX) → LanceDB"]
-    Q --> X["Async · slow<br>Claude Haiku enrichment<br>(interactive now · Batches for bulk)<br>→ tags · entities · inferred edges"]
+    Q --> X["Async · slow<br>Enrichment LLM (default: Claude Haiku)<br>(interactive now · batched for bulk)<br>→ tags · entities · inferred edges"]
 
     E -. raises semantic recall .-> CACHE[("Derived cache<br>(regenerable)")]
     X -. with full provenance .-> CACHE
@@ -124,8 +126,9 @@ as guaranteeing the citation *holds*; see
 
 1. **Async enrichment at capture, never blocking.** On save, a background pass extracts
    entities (people, projects, systems, tickets), suggests a title, and tags. User leaves
-   immediately; structuring happens after. **Extraction is a Claude pass** (Haiku, structured
-   outputs — see [stack.md](stack.md)), recorded with full provenance (`model`, `prompt_ver`,
+   immediately; structuring happens after. **Extraction is an enrichment-LLM pass** (default:
+   Claude Haiku, structured outputs — see [stack.md](stack.md)), recorded with full provenance
+   (`model`, `prompt_ver`,
    source `version_id`) — never a storage-engine black box, so it stays auditable and
    re-runnable on a model upgrade. The same pass proposes inferred edges
    ([externals.md](externals.md)), gated as suggestions.
@@ -166,7 +169,9 @@ The decisions everything else hangs on. Each links to its full treatment.
   → [externals.md](externals.md)
 - **Content never leaves the box for indexing; enrichment and Q&A are explicit, governed egress.**
   Chunking, embeddings, reranking, and citation-checking are local; only enrichment and Q&A send
-  text to Claude — logged, redacted-before-egress, and skippable per note/source via `no_egress`.
+  text to the configured cloud LLM ([provider-selected](stack.md#llm-provider-seam-decided-lode-568v1),
+  Anthropic by default) — logged, redacted-before-egress, and skippable per note/source via
+  `no_egress`.
   → [privacy](externals.md#privacy-consequence-of-aggregation)
 
 ---

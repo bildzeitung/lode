@@ -86,6 +86,7 @@ import lode.jira_backfill  # noqa: F401
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.lexical import LexicalCacheBackend
+from lode.llm_provider import provider_identity
 from lode.notes_read import (
     candidate_rows_conn,
     list_deleted_notes,
@@ -1341,8 +1342,15 @@ def _model_revision_status(
 #: The live-head (notes UNION externals) scan `lode reenrich` force-enqueues
 #: from -- shared with `_enrichment_model_stale` (lode-o9k3) below so "status
 #: says clean" and "reenrich has work" read the identical query, never a
-#: separately-maintained approximation. Two positional `?` placeholders, both
-#: bound to the same `enrichment_llm` value -- see `_stale_enrichment_heads`.
+#: separately-maintained approximation. Four positional `?` placeholders, two
+#: per UNION branch: (model, provider) each -- see `_stale_enrichment_heads`.
+#: The provider comparison uses `IS NOT` rather than `!=` because it must stay
+#: NULL-safe both ways: a stored `NULL` means "anthropic" by convention
+#: (lode-568v.4's `provider_identity`), and the current provider is itself
+#: `NULL` while the active provider is anthropic -- plain `!=` against a NULL
+#: operand is never true in SQL, which would silently exempt every
+#: anthropic-vs-anthropic row (the common case today) from ever comparing
+#: equal, and non-equal, correctly (lode-568v.6).
 _STALE_ENRICHMENT_LIVE_HEADS_SQL = """
     SELECT DISTINCT n.head_version_id
     FROM notes n
@@ -1356,7 +1364,7 @@ _STALE_ENRICHMENT_LIVE_HEADS_SQL = """
           WHERE a.source = 'ai'
             AND a.source_version = n.head_version_id
             AND a.model IS NOT NULL
-            AND a.model != ?
+            AND (a.model != ? OR a.provider IS NOT ?)
       )
     UNION
     SELECT DISTINCT e.head_snapshot_id
@@ -1370,21 +1378,32 @@ _STALE_ENRICHMENT_LIVE_HEADS_SQL = """
           WHERE a.source = 'ai'
             AND a.source_version = e.head_snapshot_id
             AND a.model IS NOT NULL
-            AND a.model != ?
+            AND (a.model != ? OR a.provider IS NOT ?)
       )
 """
 
 
-def _stale_enrichment_heads(conn: sqlite3.Connection, enrichment_llm: str) -> list[str]:
-    """Live head ids (notes UNION externals) whose recorded AI annotations disagree with `enrichment_llm`.
+def _stale_enrichment_heads(
+    conn: sqlite3.Connection, enrichment_llm: str, current_provider: str | None
+) -> list[str]:
+    """Live head ids (notes UNION externals) whose recorded AI annotations disagree with `enrichment_llm` or `current_provider`.
 
     The exact scan ``lode reenrich`` force-enqueues from
     (docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr):
     a live head -- not soft-deleted/tombstoned, not purged, ``no_egress = 0``
     -- carrying at least one ``'ai'`` annotation whose ``model`` differs from
-    `enrichment_llm` right now. A head with no ``'ai'`` annotation at all is
-    unenriched, not stale -- reconcile's ``enrich_gap`` step owns that case,
-    not this one.
+    `enrichment_llm`, OR whose ``provider`` differs from `current_provider`,
+    right now. A head with no ``'ai'`` annotation at all is unenriched, not
+    stale -- reconcile's ``enrich_gap`` step owns that case, not this one.
+
+    `current_provider` follows the same ``None`` == "anthropic" convention
+    :func:`lode.llm_provider.provider_identity` writes at enrichment time
+    (lode-568v.4/lode-568v.6): pass its return value, not
+    ``settings.llm_provider`` directly, so a stored ``NULL`` (an
+    anthropic-produced row, pre-seam or post-) compares equal to a currently-
+    anthropic config, and a provider switch -- same model/deployment string,
+    different vendor -- is legible as stale even though ``model`` alone
+    wouldn't catch it.
 
     Extracted so :func:`_enrichment_model_stale` (the ``lode status`` hint,
     lode-o9k3) reads this identical query rather than a separately-maintained
@@ -1394,13 +1413,21 @@ def _stale_enrichment_heads(conn: sqlite3.Connection, enrichment_llm: str) -> li
     return [
         row[0]
         for row in conn.execute(
-            _STALE_ENRICHMENT_LIVE_HEADS_SQL, (enrichment_llm, enrichment_llm)
+            _STALE_ENRICHMENT_LIVE_HEADS_SQL,
+            (
+                enrichment_llm,
+                current_provider,
+                enrichment_llm,
+                current_provider,
+            ),
         ).fetchall()
     ]
 
 
-def _enrichment_model_stale(db: Path | None, enrichment_llm: str) -> bool:
-    """Whether any live head's recorded AI annotation disagrees with `enrichment_llm` right now (lode-o9k3).
+def _enrichment_model_stale(
+    db: Path | None, enrichment_llm: str, current_provider: str | None
+) -> bool:
+    """Whether any live head's recorded AI annotation disagrees with `enrichment_llm` or `current_provider` right now (lode-o9k3/lode-568v.6).
 
     Supersedes the old 2+-distinct "mixed" check that used to live here
     (``COUNT(DISTINCT model) FROM annotations WHERE source = 'ai'``,
@@ -1412,6 +1439,14 @@ def _enrichment_model_stale(db: Path | None, enrichment_llm: str) -> bool:
     docs/configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745
     for the recorded decision to replace (not supplement) that check with
     this one.
+
+    `current_provider` extends that same "identity, not just model string"
+    principle to the LLM vendor (lode-568v.6): the same model/deployment
+    string can mean different providers, so a provider switch alone -- with
+    ``enrichment_llm`` held constant -- must also mark the corpus stale. Pass
+    :func:`lode.llm_provider.provider_identity`'s return value here, never
+    ``settings.llm_provider`` directly -- see :func:`_stale_enrichment_heads`
+    for why.
 
     Reads :func:`_stale_enrichment_heads` -- the identical, live-head-scoped
     query ``lode reenrich`` force-enqueues from -- and asks only "is that
@@ -1432,7 +1467,7 @@ def _enrichment_model_stale(db: Path | None, enrichment_llm: str) -> bool:
     try:
         conn = _open_db(db)
         try:
-            return bool(_stale_enrichment_heads(conn, enrichment_llm))
+            return bool(_stale_enrichment_heads(conn, enrichment_llm, current_provider))
         finally:
             conn.close()
     except Exception:
@@ -1459,11 +1494,12 @@ def status(
     live vectors if their recorded model_revision is mixed or has drifted from
     what the cache currently resolves (lode-crh8.1), flag the enrichment
     store if any live head's AI annotations disagree with the currently
-    configured enrichment_llm (lode-14jr/lode-o9k3 -- no drift counterpart,
-    since Claude model IDs have no dated-snapshot form to probe against), or
-    an explicit "No action needed." if none of those apply. Dead-letter jobs
-    get no hint -- they are already listed above with their errors, and
-    won't be retried.
+    configured enrichment_llm or the currently active provider
+    (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart, since Claude
+    model IDs have no dated-snapshot form to probe against), or an explicit
+    "No action needed." if none of those apply. Dead-letter jobs get no hint
+    -- they are already listed above with their errors, and won't be
+    retried.
     """
     db_path = db or default_db_path()
     conn = _open_db(db)
@@ -1603,7 +1639,9 @@ def status(
     # "Never raises" in its own right (lode-o9k3).
     enrichment_stale = False
     if settings is not None:
-        enrichment_stale = _enrichment_model_stale(db, settings.enrichment_llm.model)
+        enrichment_stale = _enrichment_model_stale(
+            db, settings.enrichment_llm.model, provider_identity(settings)
+        )
     console.print()
     # markup stays ON here -- these strings are author-written, not DB-derived,
     # so the [warn]/[ok] tags are the point. highlight stays OFF for the same
@@ -1764,20 +1802,25 @@ def reenrich(
     expensive; this only force-enqueues the heads that actually need it
     (``docs/storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr``).
 
-    **Stale means "disagrees with the currently configured `enrichment_llm`,"
-    detected by the exact same query ``lode status``'s hint reads**
-    (:func:`_stale_enrichment_heads`, shared with :func:`_enrichment_model_stale`,
-    lode-o9k3 -- so "status says clean" and "reenrich has work" cannot
-    disagree). A live head -- every note's current ``head_version_id`` and
-    every external's current ``head_snapshot_id``, mirroring
+    **Stale means "disagrees with the currently configured `enrichment_llm`
+    OR the currently active provider," detected by the exact same query
+    ``lode status``'s hint reads** (:func:`_stale_enrichment_heads`, shared
+    with :func:`_enrichment_model_stale`, lode-o9k3/lode-568v.6 -- so "status
+    says clean" and "reenrich has work" cannot disagree). A live head --
+    every note's current ``head_version_id`` and every external's current
+    ``head_snapshot_id``, mirroring
     :func:`lode.retrieval.live_head_versions`'s notes-UNION-externals scope --
     is force-enqueued only if it has at least one ``'ai'`` annotation
     (``source_version`` = the head id) whose ``model`` column differs from
-    ``settings.enrichment_llm`` right now. A head with **no** ai annotations
-    at all is not stale -- it is simply unenriched, which the passive
-    reconciliation scan's ``enrich_gap`` step already covers on its own,
-    ordinary schedule; duplicating that here would only re-enqueue work
-    ``lode work`` was already going to do.
+    ``settings.enrichment_llm``, or whose ``provider`` column disagrees with
+    the currently active provider (:func:`lode.llm_provider.provider_identity`),
+    right now. Provider awareness closes the gap where the same
+    model/deployment string means a different vendor across a provider
+    switch -- the ``model`` comparison alone would miss that (lode-568v.6). A
+    head with **no** ai annotations at all is not stale -- it is simply
+    unenriched, which the passive reconciliation scan's ``enrich_gap`` step
+    already covers on its own, ordinary schedule; duplicating that here would
+    only re-enqueue work ``lode work`` was already going to do.
 
     **``no_egress`` content is never swept in, even if its stored annotations
     happen to be stale.** Unlike embedding, enrichment leaves the box (a
@@ -1811,7 +1854,9 @@ def reenrich(
     settings = _resolve_settings()
     conn = _open_db(db)
     try:
-        stale = _stale_enrichment_heads(conn, settings.enrichment_llm.model)
+        stale = _stale_enrichment_heads(
+            conn, settings.enrichment_llm.model, provider_identity(settings)
+        )
         with conn:
             for version_id in stale:
                 enqueue_derive_jobs(conn, version_id, types=("enrich",))

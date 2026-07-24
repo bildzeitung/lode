@@ -516,9 +516,16 @@ def run_one(
     handler = registry[job_type]
     short = short_version_id(target_version)
 
-    # Deferred import so the Anthropic SDK stays off this module's import graph;
-    # bound before the `try` because an `except` clause header needs the class.
+    # Deferred import so the Anthropic/OpenAI SDKs stay off this module's
+    # import graph; bound before the `try` because an `except` clause header
+    # needs the classes. LLMAuthError (lode-568v.3) is caught alongside
+    # AuthError -- a missing OpenAI/Azure credential is exactly as permanent,
+    # user-actionable a failure as a missing Anthropic one (lode-9yy), and
+    # lode-568v.2's tracked follow-up said this widening was needed once a
+    # second provider's credential failures had no existing exception type to
+    # preserve (docs/decisions.md).
     from lode.auth import AuthError
+    from lode.llm_provider import LLMAuthError
 
     try:
         outcome = handler(conn, target_version, db_path, settings)
@@ -547,9 +554,10 @@ def run_one(
     # never dead-lettered. Reset the claim to 'pending' (uncharged) and re-raise
     # so the caller sees build_client's actionable message.
     #
-    # Ordered ahead of `except Exception` — AuthError is a RuntimeError, so the
-    # generic arm would otherwise swallow it. That swallow IS the bug lode-9yy fixes.
-    except AuthError as exc:
+    # Ordered ahead of `except Exception` — AuthError/LLMAuthError are both
+    # RuntimeError subclasses, so the generic arm would otherwise swallow them.
+    # That swallow IS the bug lode-9yy fixes.
+    except (AuthError, LLMAuthError) as exc:
         # CAS on the exact claim (id + status='running' + claimed_at — lode-nggm
         # tightened this from status alone): this job is not necessarily still
         # ours. `cli._enrich_immediately` reaches run_one via claim_and_run_one,
@@ -799,10 +807,12 @@ def _batch_submit_enrich(
         return 0
 
     # Below the early-return guard, same as _batch_collect_enrich (lode-4q97).
-    # AuthError is bound here rather than in the handler because an `except` clause
-    # header needs the class.
+    # AuthError/LLMAuthError are bound here rather than in the handler because
+    # an `except` clause header needs the classes (LLMAuthError widening,
+    # lode-568v.3 -- see run_one's identical comment).
     from lode.auth import AuthError
     from lode.enrich import submit_enrich_batch
+    from lode.llm_provider import LLMAuthError
 
     # Pre-claim each job with an asserted CAS (rowcount == 1), exactly as
     # _claim_one does, and submit ONLY the jobs this step actually won. The
@@ -859,9 +869,9 @@ def _batch_submit_enrich(
     # be folded into the transient revert below: no attempts charged, no backoff,
     # never dead-lettered. Reset the pre-claimed jobs to 'pending' (uncharged)
     # and re-raise so `lode work` sees build_client's actionable message.
-    # Ordered ahead of `except Exception` — AuthError is a RuntimeError, so the
-    # generic arm would otherwise swallow it.
-    except AuthError as exc:
+    # Ordered ahead of `except Exception` — AuthError/LLMAuthError are both
+    # RuntimeError subclasses, so the generic arm would otherwise swallow them.
+    except (AuthError, LLMAuthError) as exc:
         log.error(
             "_batch_submit_enrich: permanent, user-actionable failure — "
             "not retried, resetting %d job(s) to pending: %s",
@@ -959,9 +969,13 @@ def drain(
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
 
-    # Unconditional -- the `except` header below needs the class on every drain --
-    # and cheap only because lode.auth does not import the Anthropic SDK (lode-4q97).
+    # Unconditional -- the `except` header below needs the classes on every
+    # drain -- and cheap only because neither lode.auth nor lode.llm_provider
+    # imports the Anthropic/OpenAI SDKs at module level (lode-4q97).
+    # LLMAuthError alongside AuthError: lode-568v.3 widening, see run_one's
+    # identical comment.
     from lode.auth import AuthError
+    from lode.llm_provider import LLMAuthError
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
     #
@@ -987,7 +1001,7 @@ def drain(
     # The reclaim/reset sweeps between them are left uninstrumented on purpose:
     # they are fast local UPDATEs with no network or model call to stall on.
     heartbeat_interval_s = settings.progress_heartbeat_interval_s
-    permanent: AuthError | None = None
+    permanent: AuthError | LLMAuthError | None = None
     try:
         with op_progress(
             "drain.batch_collect", heartbeat_interval_s=heartbeat_interval_s
@@ -999,7 +1013,7 @@ def drain(
             "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
-    except AuthError as exc:
+    except (AuthError, LLMAuthError) as exc:
         permanent = exc
 
     reclaimed = _reclaim_stale_running(conn, settings)

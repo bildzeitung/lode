@@ -16,8 +16,8 @@ is the storage realization of the ownership boundary and data shape in [storage.
 | Embeddings | **Local, on-machine** | Open model via fastembed/ONNX (`nomic-ai/nomic-embed-text-v1.5`, **768-dim** — pinned + verified in `lode-txh.6`) — CPU-only, no torch. **Loaded in-process via `fastembed` (a thin wrapper over `onnxruntime` + tokenizers) — there is no model server or daemon; this is *not* Ollama.** The reranker and faithfulness-NLI models below run the same way, in the same process. **Chosen specifically to honor [privacy](externals.md#privacy-consequence-of-aggregation)**: note/email/ticket content is never sent off-box *for indexing*. The resulting vectors land in LanceDB. Accepts slightly lower retrieval quality + a bundled model file (~100–500MB) in exchange |
 | Reranker | **Local cross-encoder** (`BAAI/bge-reranker-base`) | First-class retrieval stage ([retrieval.md](retrieval.md)), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings via `fastembed` — no new stack, content stays on-box. (`fastembed` does not ship `bge-reranker-v2-m3`; `bge-reranker-base` is the loadable bge-family pick — verified in `lode-txh.6`.) Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus ([decisions.md](decisions.md)) |
 | Faithfulness NLI | **Local cross-encoder repurposed** (`BAAI/bge-reranker-base` via `fastembed`'s `TextCrossEncoder`) | Entailment leg of the [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them): scores whether cited spans jointly entail a synthesized claim, so multi-note synthesis is answered rather than refused. `fastembed` ships **no** dedicated NLI model, so the cross-encoder is repurposed as the entailment scorer — same **ONNX runtime**, on-box, no separate loader (verified in `lode-txh.6`). Ships in v1 **conservative and fail-closed**; the model + acceptance **threshold ship untuned** and are revisited against the eval harness ([decisions.md](decisions.md)) |
-| Enrichment LLM | **Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok) | High-volume background tagging/extraction. Use **structured outputs** (`output_config.format` + Pydantic) so the derived layer gets validated JSON. A **fresh note enriches interactively** (one immediate call) for promptness; **bulk / backfill / re-enrichment** goes through the **Batches API** (50% off, non-interactive). Driven by the durable [work queue](storage.md#the-async-work-queue); submitted batch handles are persisted so a restart resumes rather than resubmits. **`no_egress` notes are skipped** (never enriched); every send is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
-| Q&A LLM | **Claude Sonnet 4.6** default (`claude-sonnet-4-6`, $3/$15); **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
+| Enrichment LLM | Provider-selected via `llm_provider` ([LLM provider seam](#llm-provider-seam-decided-lode-568v1), `lode-568v.2`/`.3`); default **Anthropic Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok), or an OpenAI/Azure deployment when `llm_provider = "openai"` | High-volume background tagging/extraction. Use **structured outputs** so the derived layer gets validated JSON. A **fresh note enriches interactively** (one immediate call) for promptness; **bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's **Batches API** (50% off, non-interactive) under the default provider, or serialized sequential calls under a provider with no batch API (`lode-568v.3`). Driven by the durable [work queue](storage.md#the-async-work-queue); submitted batch handles are persisted so a restart resumes rather than resubmits. **`no_egress` notes are skipped** (never enriched); every send is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
+| Q&A LLM | Provider-selected via `llm_provider` (same seam); default **Anthropic Claude Sonnet 4.6** (`claude-sonnet-4-6`, $3/$15) with **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle, or OpenAI/Azure deployments under `qa_llm`/`qa_think_harder_llm` when `llm_provider = "openai"` | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
 | Web-fetch HTTP client | **`httpx`** | First connector (E12 web draw-down, `lode-w0h.1`) — synchronous GET with an explicit `follow_redirects`/`max_redirects` cap and a typed exception hierarchy (`TooManyRedirects`/`TimeoutException`/`NetworkError`) that maps onto the fetch-outcome taxonomy ([externals.md](externals.md#draw-down-rules)). Chosen over `requests` purely on maintenance status — `requests` is in long-term maintenance mode, httpx is the actively developed equivalent with the same sync call shape (both have a redirect cap and typed exceptions; that pair differentiates only against stdlib). Chosen over stdlib `urllib.request` because its redirect cap is a hardcoded `HTTPRedirectHandler.max_redirections = 10`, not a per-request knob, so the `fetch_max_redirects` setting could not be honored without subclassing |
 | Web-fetch readability extraction | **`trafilatura`** | Same ticket. Named directly in the fetch-outcome decision: `extract()` returns `str \| None`, and `None` on failed/empty extraction *is* the taxonomy's testable "not real content" signal, combined with a configured length floor for short-but-non-`None` teasers (paywalls). Verified locally against synthetic JS-shell/paywall/article fixtures during the build. Chosen over `readability-lxml` (stale, weaker boilerplate removal) and `boilerpy3` (thinner API) |
 
@@ -43,8 +43,8 @@ match: it put the **heaviest, least-durability-critical machinery under the most
 Oracle Free is unsupported/unpatched (security included) on a box aggregating email + tickets + repo
 contents; it makes backup a full-DB dump instead of a file copy; and it front-loads the heaviest
 yak-shaving onto an MVP (build step 1, [design.md](design.md) §7) that needs none of its
-differentiators (the note↔note graph fits in memory; entity extraction is Claude's job — with
-provenance — not a DB black box).
+differentiators (the note↔note graph fits in memory; entity extraction is the enrichment LLM's job —
+with provenance — not a DB black box).
 
 ---
 
@@ -56,7 +56,7 @@ Three rebuildable tiers, plus one non-regenerable exception that belongs with th
 |---|---|---|
 | Embeddings | Local CPU model over head nodes | **Cheap** — minutes for thousands of notes, tens of minutes for ~100k. No dollars, no network. |
 | Lexical (FTS5) + explicit edges | Deterministic re-parse | **Trivial** — pure computation, no model. |
-| AI annotations + inferred edges | Claude Haiku via the Batches API | **Real $ + hours** — ~tens of dollars per ~10k notes, non-interactive. Not prohibitive, but not free. |
+| AI annotations + inferred edges | The enrichment LLM (default: Claude Haiku via Anthropic's Batches API; a provider without a batch API serializes instead, [LLM provider seam](#llm-provider-seam-decided-lode-568v1)) | **Real $ + hours** — ~tens of dollars per ~10k notes, non-interactive. Not prohibitive, but not free. |
 | **User curation** (`source = user`) | — (not derived from anything) | **Not regenerable.** A fixed tag, a confirmed or deleted link — genuine user decisions. Stored with the irreplaceable set in SQLite. |
 
 So "drop the derived layer and lose nothing" holds only for the first three tiers; user curation is
@@ -142,16 +142,23 @@ snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrich
 engine-agnostic; the access layer hides the cache engine so LanceDB can be swapped (sqlite-vec is
 the simpler fallback-down) without touching the core.
 
-**Embeddings reality check:** Anthropic has **no first-party embeddings API**, so embeddings was
-always going to be a separate runtime decision regardless of using Claude for the LLM work. Going
-local resolves it in favor of the privacy principle; LanceDB just stores the resulting vectors.
+**Embeddings reality check:** embeddings are **local-only regardless of which cloud LLM vendor is
+configured** — Anthropic in particular has no first-party embeddings API, but even a vendor that does
+offer one (e.g. OpenAI) doesn't change the decision: local embedding is a deliberate [privacy
+principle](externals.md#privacy-consequence-of-aggregation), not an availability accident, and stays
+out of scope for the vendor-neutral seam below (epic scope, decided 2026-07-22). LanceDB just stores
+the resulting local vectors.
 
-**Auth:** no hardcoded `ANTHROPIC_API_KEY`. Resolve via the SDK chain (env var, then an
-`ant auth login` profile, then workload-identity federation), same as the harness. If that resolves
-nothing, fail gracefully with an actionable message (no traceback) and log the detail.
+**Auth:** no hardcoded API key for any provider. Anthropic resolves via the SDK's own chain (env var,
+then an `ant auth login` profile, then workload-identity federation), same as the harness; OpenAI/Azure
+resolves via `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY` (see [LLM provider seam](#llm-provider-seam-decided-lode-568v1)
+below). If nothing resolves, fail gracefully with an actionable, provider-appropriate message (no
+traceback) and log the detail.
 
-**Model-tier split mirrors the harness:** cheap/deterministic high-volume work on Haiku;
-judgment-sensitive synthesis on Sonnet/Opus.
+**Model-tier split mirrors the harness:** cheap/deterministic high-volume work on the cheaper tier
+(default: Claude Haiku); judgment-sensitive synthesis on a stronger tier (default: Claude Sonnet, with
+Opus as a "think harder" toggle) — now provider-portable via `ModelTier` ([§6](#6-config-shape)), so
+the same split holds under an OpenAI/Azure deployment.
 
 ---
 
@@ -366,10 +373,12 @@ with an unchanged model *string* would not otherwise be caught. That read-side u
 *every* cloud-LLM surface; there is no per-surface vendor axis.
 
 - `llm_provider: str = "anthropic"` (`Kind.RUNTIME`) — `"anthropic"` | `"openai"`.
-- `azure_openai_endpoint: str = ""` (`Kind.RUNTIME`) — e.g.
-  `https://{resource}.openai.azure.com/openai`. Empty means direct OpenAI (or a non-`"openai"`
-  provider); its presence is what distinguishes Azure routing from direct OpenAI *under* the one
-  `"openai"` provider value, not a second vendor axis.
+- `azure_openai_endpoint: str = ""` (`Kind.RUNTIME`) — the resource **root**, e.g.
+  `https://{resource}.openai.azure.com` (do **not** append `/openai`: it is passed to the openai
+  SDK's `AzureOpenAI(azure_endpoint=…)`, which appends `/openai` itself, so `.../openai` doubles the
+  path and every request 404s — verified against `openai==2.47.0`). Empty means direct OpenAI (or a
+  non-`"openai"` provider); its presence is what distinguishes Azure routing from direct OpenAI
+  *under* the one `"openai"` provider value, not a second vendor axis.
 - `azure_openai_api_version: str = ""` (`Kind.RUNTIME`) — passed as a **query param on every
   request** (verified against a working Azure config, see this ticket's notes), e.g.
   `2025-04-01-preview`, not a header. Required when `azure_openai_endpoint` is set.
@@ -436,3 +445,44 @@ generalizes today's credential-only "provider-appropriate error messaging" (§1)
 failures too. The concrete OpenAI/Azure field-by-field mapping (which response fields populate
 `status_code`/`request_id` for a Responses API error, an Azure content-filter rejection, etc.) is
 `lode-568v.3`'s scope — only the shape is pinned here.
+
+### Implemented: `OpenAIProvider` (`lode-568v.3`)
+
+`src/lode/llm_provider.py::OpenAIProvider` is the second `LLMProvider` implementation, resolved by
+`build_provider` when `settings.llm_provider == "openai"`. It fills in the details this section left
+open:
+
+- **One wire mechanism regardless of `tool_name`**: the Responses API's `text.format` `json_schema`
+  (`client.responses.create(model=, instructions=<system>, input=<user_prompt>, max_output_tokens=,
+  text={"format": {...}}, reasoning={"effort": ...} if reasoning_effort else omitted, timeout=)`).
+  `tool_name` (when given, e.g. by the enrichment surface) becomes the schema's `name` field;
+  `tool_description` becomes its `description` field. Confirmed against the installed `openai==2.47.0`
+  SDK's actual `responses.create` signature and `Response`/`IncompleteDetails`/`ResponseOutputRefusal`
+  field shapes (not merely assumed from memory) — see the module docstring and `decisions.md`
+  (`lode-568v.3`) for what was and wasn't independently verifiable this way.
+- **`strict` is deliberately `False`**, not `True`. OpenAI's strict Structured Outputs mode requires
+  every object in the schema to set `additionalProperties: false` and list every property as
+  `required` (optional fields modeled as nullable) — a transformation `pydantic`'s
+  `model_json_schema()` does not perform. Asserting strict-mode compliance without that transform
+  would be exactly the wire-shape assumption the epic's challenge review flagged as highest-risk.
+  `OpenAIProvider.structured_call` validates the returned JSON against `output_schema` via
+  `model_validate` regardless — the real conformance check either way.
+- **Credential resolution**: `OPENAI_API_KEY` (direct OpenAI) or, when `azure_openai_endpoint` is
+  set, `AZURE_OPENAI_API_KEY` + the endpoint/api-version knobs (§6). Unlike `AnthropicProvider`'s
+  branch, a missing credential here raises `LLMAuthError` for real — there was no pre-existing
+  exception type to preserve for a provider that didn't exist before this ticket. This required
+  widening `lode.worker`'s three `except AuthError` sites to `except (AuthError, LLMAuthError)` so a
+  missing OpenAI/Azure credential gets the same permanent (no retry, no dead-letter) treatment
+  `lode-9yy` already gives a missing Anthropic credential — the follow-up `lode-568v.2`'s
+  implementation notes tracked.
+- **Batch = serialize, exactly as pinned above**: `submit_batch` runs every request through the same
+  Responses-API call synchronously and self-encodes the computed `BatchResult`s as a JSON blob string
+  (the handle); `collect_batch` decodes it with no network call, always `("ended", …)`.
+- **Diagnosability**: every failure path (a raised SDK exception, a non-`"completed"` response status,
+  a Structured Outputs refusal, unparseable/schema-mismatched JSON) logs the model/endpoint/api-version
+  in play plus the raw provider payload — including an Azure `innererror.content_filter_result` when
+  present in an error body — before raising, per the challenge addendum above.
+- **Acceptance is mock-only** (named risk, `decisions.md` `lode-568v.3`): no live Azure/OpenAI endpoint
+  was available to verify the Responses API's actual runtime behavior end-to-end (only its installed
+  SDK's *type shapes*, which were checked directly). The diagnostic logging above is the compensating
+  control the challenge review asked for — a first real run's failure is diagnosable from logs alone.
