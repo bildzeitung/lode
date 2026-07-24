@@ -2123,3 +2123,23 @@ are catalogued in [configuration.md](configuration.md).
     `lode reenrich`, or `_enrichment_model_stale` (`lode-o9k3`) — was touched. This ticket is schema +
     write path + migration only, per its own acceptance criteria; a provider switch on an unchanged
     model string does not yet mark the corpus stale.
+
+- **2026-07-23 (lode-568v.6) — read-side provider-aware staleness implemented, closing the gap
+  `lode-568v.4` left open:**
+  - **`_STALE_ENRICHMENT_LIVE_HEADS_SQL`'s per-branch mismatch predicate becomes `(a.model != ? OR
+    a.provider IS NOT ?)`**, not two independently-OR'd checks — `IS NOT`, not `!=`, for the provider
+    leg, and deliberately in both directions: a stored `NULL` means "anthropic" by convention
+    (`lode-568v.4`), and the current provider passed in is itself `NULL` while the active provider is
+    anthropic. A plain `!=` against a NULL operand in SQLite is never true, which would silently
+    exempt the anthropic-vs-anthropic comparison — the common case today, before a second provider
+    ships — from ever resolving correctly either way.
+  - **Both `_stale_enrichment_heads` and `_enrichment_model_stale` gained a required
+    `current_provider: str | None` parameter** — no default — so every call site names its intent
+    explicitly rather than silently falling back to "anthropic." Both `lode status` and `lode
+    reenrich` pass `lode.llm_provider.provider_identity(settings)`, never `settings.llm_provider`
+    directly, keeping the write-side and read-side convention identical by construction rather than by
+    two independently-maintained call sites agreeing to use the same string.
+  - **No user-facing wording change.** `lode status`'s hint text and `lode reenrich`'s summary line
+    still read "disagree with the currently configured enrichment_llm" — accurate as shorthand for
+    "enrichment identity," and changing it risked nothing but test churn for no behavioral gain; the
+    docstrings on both functions spell out the provider leg for anyone reading the code.

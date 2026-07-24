@@ -369,8 +369,8 @@ no permanent chrome to a screen most notes never populate. Follow-up build ticke
   ([lode-568v](decisions.md)), so the vendor identity is recorded too. `NULL` means "anthropic" by
   convention (every row written before this column existed, and every row written while
   `settings.llm_provider == "anthropic"`, is implicitly Anthropic) — no backfill needed. Making a
-  provider switch on an unchanged model string visible to `lode status` / `lode reenrich` is a
-  read-side concern, out of scope here and tracked as [lode-568v.6](decisions.md).
+  provider switch on an unchanged model string visible to `lode status` / `lode reenrich` was a
+  read-side concern, out of scope here — implemented in [lode-568v.6](decisions.md), below.
 - **`source: ai | user` on the annotation layer.** Users *will* correct an AI tag or link. That
   correction is still metadata (doesn't touch note content), and it is **pinned**:
   - **AI annotations are version-scoped** — regenerable, allowed to go stale, re-derived per head.
@@ -1456,10 +1456,25 @@ manifest" for the enrichment LLM is already an aggregate read over `annotations.
 (`WHERE source = 'ai'`), not a separate artifact. `lode reenrich` uses that same read, scoped per head:
 a live head is force-enqueued only if it has at least one `'ai'` annotation (`source_version` = the
 head's `version_id`/`snapshot_id`) whose `model` disagrees with the currently configured
-`enrichment_llm`. A head with **no** ai annotations at all is not stale by this definition — it is
+`enrichment_llm`, **or** whose `provider` disagrees with the currently active provider
+(`lode-568v.6`, below). A head with **no** ai annotations at all is not stale by this definition — it is
 simply unenriched, which the passive reconciliation scan's `enrich_gap` step (above) already covers on
 its own schedule; re-enqueuing it here too would just duplicate work `lode work` was already going to
 do.
+
+**Provider is part of the same identity, not a second check (lode-568v.6).** `annotations.provider`
+(written since `lode-568v.4`) can disagree with the active provider even while `model` matches — the
+same model/deployment string can name different vendors across a provider switch, so `model` alone
+would silently miss that case. `_STALE_ENRICHMENT_LIVE_HEADS_SQL` (`src/lode/cli.py`) therefore treats
+an `'ai'` annotation as stale if `model != enrichment_llm` **or** `provider` disagrees with the
+currently active provider — compared with SQL's NULL-safe `IS NOT`, not `!=`, in both directions: a
+stored `NULL` means "anthropic" by convention (`lode.llm_provider.provider_identity`), and the current
+provider is itself `NULL` while `settings.llm_provider` is `"anthropic"`. A plain `!=` against a NULL
+operand is never true, which would silently exempt the anthropic-vs-anthropic case — the common case
+today — from ever comparing correctly either way. Both `_stale_enrichment_heads` and
+`_enrichment_model_stale` take the current provider as an explicit `current_provider: str | None`
+parameter — callers pass `provider_identity(settings)`, never `settings.llm_provider` directly, so the
+convention stays consistent between the write side and this read side.
 
 **Covers notes and externals, unlike `enrich_gap`'s notes-only scope.** `enrich_gap` (above) checks
 notes only. `lode reenrich` covers both notes and externals — mirroring `lode reembed`'s and
@@ -1485,10 +1500,11 @@ carries no model of its own). Once every enqueued job reaches `done` and rewrite
 under the current model, `lode status`'s enrichment hint clears on its own — there is no separate
 manifest to reconcile.
 
-**`lode status`'s hint reads this exact query (decided, lode-o9k3).** The stale-detection scan above
-is not just conceptually mirrored by the `lode status` hint — `src/lode/cli.py`'s
-`_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this command force-enqueues
-from, and fires whenever that list is non-empty. This replaced an earlier, looser `lode status` check
+**`lode status`'s hint reads this exact query (decided, lode-o9k3; provider-aware since lode-568v.6).**
+The stale-detection scan above is not just conceptually mirrored by the `lode status` hint —
+`src/lode/cli.py`'s `_enrichment_model_stale` calls the identical `_stale_enrichment_heads` this
+command force-enqueues from, and fires whenever that list is non-empty. This replaced an earlier,
+looser `lode status` check
 (a plain `COUNT(DISTINCT model) > 1` scan over the whole `annotations` table, unscoped to live heads)
 that missed the primary intended workflow — a corpus uniformly re-enriched under a single OLD model
 reads as "not mixed" under a distinct-count, even though this command would re-enqueue the entire
