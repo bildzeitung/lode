@@ -1,6 +1,6 @@
 ---
 name: sweep
-description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
+description: The third `/loop` leg — a SURFACE-ONLY human-decision surfacer. Scans bd for work that has stopped waiting on a human and nothing else consumes (`land-escalated` branches, `human`-labeled decision tickets, epics ready for a human close-decision), dedups against a durable cross-machine digest issue, and surfaces new items; also lists every `deferred`-status ticket in its report each pass (read-only, no dedup, never in the digest) so parked work stays visible. Writes no `trunk`, makes no decisions, dispatches no builders/landers/auditors. Run self-paced as `/loop 30m /sweep`. Examples — "/sweep", "/loop 30m /sweep", "what needs a human decision right now?", "sweep the human-decision queue".
 ---
 
 # sweep
@@ -12,6 +12,12 @@ downstream consumer** are the ones parked for a human: a `land-escalated` branch
 decision ticket, and an epic that's `epic-audited` + open + every child closed. Nothing pings a
 human when work parks on one of these — you only find it by manually running `bd`. I turn that
 silence into an active surface.
+
+I also list every `deferred`-status ticket in my report, every pass — a different kind of parked
+work: not waiting on a decision, but explicitly shelved "deal with later" by a human already.
+`bd ready` hides it by design and no loop leg lists it, so it otherwise vanishes from every workflow
+surface entirely. Unlike the three kinds above, it carries no dedup state, drives no digest
+rewrite, and never triggers a notification — it's visibility only, recomputed fresh every pass.
 
 I am the **lowest-privilege** loop leg, deliberately: I write **one** self-owned bookkeeping issue
 (a running digest) and nothing else. The full design record — why this exists, what was challenged,
@@ -37,6 +43,9 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   I never `git add`, commit, or `bd import` it.
 - **Never claims work off `bd ready`** and needs no worktree — every step here is `bd` plumbing run
   from wherever I'm invoked; I touch no `git` and write no repo files at all.
+- **Never treats a `deferred`-status ticket as a human-decision item.** §2a lists it in the report
+  for visibility only — it never enters `$CURRENT`/`$NEW_IDS`, never touches the digest, and never
+  fires a `PushNotification`.
 
 ## 0. Setup — Dolt-authoritative
 
@@ -102,6 +111,33 @@ while IFS=$'\t' read -r e TITLE; do
 done < <(rtk bd list --type=epic --label epic-audited --status open --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 ```
+
+## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
+
+A third, independent read, on its own track. `deferred`-status tickets are explicitly parked "deal
+with later" by a human — the opposite of a fresh human-decision item — but `bd ready` hides them by
+design and no other loop leg lists them, so once parked they otherwise vanish from every workflow
+surface. I list them for visibility only:
+
+```bash
+DEFERRED=$(rtk bd list --status deferred --json \
+  | jq -r '(. // []) | .[] | "\(.id)\t\(.title)"')
+```
+
+Same `(. // [])` null-empty guard as §1/§2, for the same reason — an empty result serializes as
+literal `null`, and a bare `.[]` would abort on it.
+
+**Deliberately excluded from everything else in this skill:**
+
+- `$DEFERRED` never feeds `$CURRENT` (§3) — it must never enter `$CURRENT_IDS`/`$NEW_IDS` (§5),
+  never drive the digest rewrite/no-op decision, and never trigger the §7 `PushNotification`. A
+  ticket moving into (or out of) `deferred` is not a new human-decision item.
+- `$DEFERRED` is never written into the digest body (§6) and carries **no dedup state** of its
+  own — it is recomputed fresh, in full, every pass, straight into the §8 report.
+
+If this query itself errors, the failure is isolated to this step alone: note "deferred list
+unavailable this pass" in the §8 report and continue — it must **not** suppress the §6 rewrite or
+the §7 notification for the (unrelated) escalation/human/epic queue.
 
 ## 3. Build the current queue (dedup on stable IDs)
 
@@ -229,14 +265,24 @@ the report block alone and say so plainly in the report — never fail a pass ov
 rtk scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
-Report exactly one line plus, when non-empty, the loud new-items block:
+Report exactly one line, then the deferred section (always present, §2a — report-only, no dedup,
+never part of the digest), plus, when non-empty, the loud new-items block:
 
 ```
-sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable
+sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-to-close rows> closable, <len $DEFERRED> deferred
+
+## Deferred (surfaced, not reviewed) (<len $DEFERRED>)
+<id> <title>
+...
+(none)
 ```
 
-If §4 found `N > 1` duplicate digests, or any sub-step in §1/§2 failed, say so plainly in the same
-report (see below) — the pass still ends cleanly either way.
+The deferred section lists every current `$DEFERRED` row (id + title) each pass, in full, with no
+dedup — or the literal `(none)` when `$DEFERRED` is empty. It never gates on, or feeds, anything
+else in this report: not the digest rewrite, not `$NEW_IDS`, not the `PushNotification`.
+
+If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed, or the §2a deferred query
+failed, say so plainly in the same report (see below) — the pass still ends cleanly either way.
 
 ## Failure handling — a sub-step fails, the loop survives
 
@@ -255,6 +301,10 @@ real items from the durable record a human relies on.
   `--body-file` write).
 - If §4 finds `N > 1` digests, the write path stops for the pass (that anomaly is reported, never
   guessed at).
+- If the §2a deferred query errors, that failure is isolated to the deferred section alone: note
+  "deferred list unavailable this pass" in the report and continue — it must **not** suppress the
+  §6 rewrite or §7 notification for the (unrelated) escalation/human/epic queue, and vice versa: a
+  §1/§2 failure never suppresses the §2a deferred section, which has no rewrite to protect.
 - A failed pass still ends with a report and exit 0, so the next `/loop` tick gets a clean shot.
 
 ## What I never do
@@ -271,6 +321,7 @@ real items from the durable record a human relies on.
 
 ## Stop and report
 
-When the pass ends I report: the one-line summary (§8), the full **NEW HUMAN-DECISION ITEMS** block
-when `$NEW_IDS` is non-empty, any duplicate-digest anomaly, and any sub-step that failed. A clean,
+When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
+the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty, any duplicate-digest
+anomaly, and any sub-step that failed. A clean,
 unchanged queue is a valid, common outcome — I say so plainly and stop.
