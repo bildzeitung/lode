@@ -1025,14 +1025,21 @@ def test_reembed_never_enqueues_enrich_jobs(tmp_path: Path) -> None:
 
 
 def _write_ai_annotation(
-    conn: sqlite3.Connection, target: str, source_version: str, model: str
+    conn: sqlite3.Connection,
+    target: str,
+    source_version: str,
+    model: str,
+    provider: str | None = None,
 ) -> None:
+    """``provider`` defaults to ``None`` -- the anthropic convention
+    (:func:`lode.llm_provider.provider_identity`, lode-568v.4) -- so every
+    existing call site keeps writing an anthropic-produced row unchanged."""
     with conn:
         conn.execute(
             "INSERT INTO annotations "
-            "(target, source_version, kind, payload, source, status, model) "
-            "VALUES (?, ?, 'summary', ?, 'ai', 'fresh', ?)",
-            (target, source_version, json.dumps("a summary"), model),
+            "(target, source_version, kind, payload, source, status, model, provider) "
+            "VALUES (?, ?, 'summary', ?, 'ai', 'fresh', ?, ?)",
+            (target, source_version, json.dumps("a summary"), model, provider),
         )
 
 
@@ -1392,7 +1399,179 @@ def test_enrichment_model_stale_is_never_fatal(tmp_path: Path) -> None:
     not_a_db = tmp_path / "not-a-db"
     not_a_db.mkdir()
 
-    assert cli._enrichment_model_stale(not_a_db, "x") is False
+    assert cli._enrichment_model_stale(not_a_db, "x", None) is False
+
+
+# --- lode-568v.6: provider joins model in the staleness identity --
+
+
+def test_stale_enrichment_heads_flags_provider_mismatch_with_matching_model(
+    tmp_path: Path,
+) -> None:
+    """Same model, different provider: the model comparison alone would miss
+    this -- a provider switch with the model/deployment string held constant
+    is exactly the gap lode-568v.6 closes."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        # Recorded under a non-anthropic provider; current provider is
+        # anthropic (None) -- same model string either side.
+        _write_ai_annotation(conn, "note-1", "ver-1", "shared-model", "azure_openai")
+
+        heads = cli._stale_enrichment_heads(conn, "shared-model", None)
+    finally:
+        conn.close()
+    assert heads == ["ver-1"]
+
+
+def test_stale_enrichment_heads_flags_provider_mismatch_other_direction(
+    tmp_path: Path,
+) -> None:
+    """The NULL-safe comparison must catch the switch in the other direction
+    too: an anthropic-produced row (provider NULL, by convention) compared
+    against a currently-active non-anthropic provider."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        # provider=None -- the anthropic convention (lode-568v.4).
+        _write_ai_annotation(conn, "note-1", "ver-1", "shared-model")
+
+        heads = cli._stale_enrichment_heads(conn, "shared-model", "azure_openai")
+    finally:
+        conn.close()
+    assert heads == ["ver-1"]
+
+
+def test_stale_enrichment_heads_clean_when_model_and_provider_both_match(
+    tmp_path: Path,
+) -> None:
+    """A non-anthropic provider that agrees on both model and provider is not
+    stale -- this only reduces to the anthropic/anthropic case by coincidence
+    in every other test in this file."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "shared-model", "azure_openai")
+
+        heads = cli._stale_enrichment_heads(conn, "shared-model", "azure_openai")
+    finally:
+        conn.close()
+    assert heads == []
+
+
+def test_enrichment_model_stale_true_on_provider_switch_alone(tmp_path: Path) -> None:
+    """The lode-o9k3 status-hint wrapper reads the same provider-aware query."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(conn, "note-1", "ver-1", "shared-model")
+    finally:
+        conn.close()
+
+    assert cli._enrichment_model_stale(db_path, "shared-model", "azure_openai") is True
+
+
+def test_reenrich_forces_fresh_job_on_provider_switch_with_same_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`lode reenrich` re-enqueues a head whose model already agrees with
+    config but whose recorded provider no longer does -- the CLI-level
+    counterpart of the direct query tests above, wired through
+    `lode.llm_provider.provider_identity`."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        # Same model as the active config, but recorded under a different
+        # provider than the one now active.
+        _write_ai_annotation(
+            conn, "note-1", "ver-1", Settings().enrichment_llm.model, "azure_openai"
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(cli, "provider_identity", lambda _settings: None)
+
+    result = runner.invoke(app, ["reenrich", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    assert "enqueued 1 enrich job(s)" in result.stdout
+
+
+def test_status_hints_enrichment_stale_on_provider_switch_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_model_cache: None
+) -> None:
+    """`lode status` fires the same hint when only the provider disagrees --
+    the acceptance criterion this ticket exists to satisfy."""
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        conn.execute("INSERT INTO notes (note_id) VALUES ('note-1')")
+        conn.execute(
+            "INSERT INTO versions (version_id, note_id, body, op) "
+            "VALUES ('ver-1', 'note-1', 'body', 'create')"
+        )
+        conn.execute(
+            "UPDATE notes SET head_version_id = 'ver-1' WHERE note_id = 'note-1'"
+        )
+        conn.commit()
+        _write_ai_annotation(
+            conn, "note-1", "ver-1", Settings().enrichment_llm.model, "azure_openai"
+        )
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(cli, "provider_identity", lambda _settings: None)
+
+    result = runner.invoke(app, ["status", "--db", str(db_path)])
+
+    assert result.exit_code == 0
+    assert "disagree with the currently" in result.stdout
+    assert "configured enrichment_llm" in result.stdout
+    assert "No action needed." not in result.stdout
 
 
 def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
