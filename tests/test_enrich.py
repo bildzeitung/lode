@@ -165,7 +165,8 @@ def _fake_client(result: EnrichmentResult) -> mock.MagicMock:
 def _annotations(conn: sqlite3.Connection, version_id: str = "ver-1") -> list[dict]:
     """Return all annotation rows for a version as dicts."""
     rows = conn.execute(
-        "SELECT kind, payload, source, status, model, prompt_ver, source_version "
+        "SELECT kind, payload, source, status, model, prompt_ver, source_version, "
+        "provider "
         "FROM annotations WHERE source_version = ? ORDER BY kind, payload",
         (version_id,),
     ).fetchall()
@@ -178,6 +179,7 @@ def _annotations(conn: sqlite3.Connection, version_id: str = "ver-1") -> list[di
             "model": r[4],
             "prompt_ver": r[5],
             "source_version": r[6],
+            "provider": r[7],
         }
         for r in rows
     ]
@@ -433,6 +435,9 @@ def test_enrich_version_full_provenance(
         assert row["model"] == settings.enrichment_llm.model
         assert row["prompt_ver"] == ENRICH_PROMPT_VER
         assert row["source_version"] == "ver-1"
+        # lode-568v.4: NULL means "anthropic" by convention -- settings.llm_provider
+        # is "anthropic" here (the only value accepted today).
+        assert row["provider"] is None
 
 
 def test_enrich_version_summary_full_provenance(
@@ -465,10 +470,14 @@ def test_enrich_version_writes_egress_log(
         conn, "ver-1", settings, provider=AnthropicProvider(_fake_client(result))
     )
 
-    log_rows = conn.execute("SELECT purpose, model FROM egress_log").fetchall()
+    log_rows = conn.execute(
+        "SELECT purpose, model, provider FROM egress_log"
+    ).fetchall()
     assert len(log_rows) == 1
     assert log_rows[0][0] == "enrich"
     assert log_rows[0][1] == settings.enrichment_llm.model
+    # lode-568v.4: NULL means "anthropic" by convention.
+    assert log_rows[0][2] is None
 
 
 def test_enrich_version_empty_result_is_valid(
@@ -1348,10 +1357,12 @@ def test_submit_enrich_batch_writes_egress_log(
     )
 
     rows = conn.execute(
-        "SELECT purpose, model FROM egress_log WHERE purpose = 'enrich'"
+        "SELECT purpose, model, provider FROM egress_log WHERE purpose = 'enrich'"
     ).fetchall()
     assert len(rows) == 1
     assert rows[0][1] == settings.enrichment_llm.model
+    # lode-568v.4: NULL means "anthropic" by convention.
+    assert rows[0][2] is None
 
 
 def test_submit_enrich_batch_multiple_versions(
@@ -1562,11 +1573,13 @@ def test_collect_enrich_batch_returns_true_and_writes_enrichment(
 
     # Enrichment written to DB.
     ann_rows = conn.execute(
-        "SELECT kind, payload FROM annotations WHERE source_version = 'ver-1'"
+        "SELECT kind, payload, provider FROM annotations WHERE source_version = 'ver-1'"
     ).fetchall()
     kinds = {r[0] for r in ann_rows}
     assert "tag" in kinds
     assert "entity" in kinds
+    # lode-568v.4: NULL means "anthropic" by convention, on the batch route too.
+    assert all(r[2] is None for r in ann_rows)
 
     edge_rows = conn.execute(
         "SELECT to_id FROM edges WHERE source_version = 'ver-1'"

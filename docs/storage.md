@@ -363,6 +363,14 @@ no permanent chrome to a screen most notes never populate. Follow-up build ticke
 - **Provenance on every annotation:** model id, prompt/version, source `version_id`, timestamp,
   confidence. Enables re-running enrichment after a model upgrade, auditing a bad link, bulk
   purge. Cheap now, painful to retrofit.
+- **Provider identity alongside the model id** (`annotations.provider` / `egress_log.provider`,
+  decided [lode-568v.1](decisions.md), written [lode-568v.4](decisions.md)) — a bare model-name
+  string can ambiguously belong to more than one vendor once a second LLM provider exists
+  ([lode-568v](decisions.md)), so the vendor identity is recorded too. `NULL` means "anthropic" by
+  convention (every row written before this column existed, and every row written while
+  `settings.llm_provider == "anthropic"`, is implicitly Anthropic) — no backfill needed. Making a
+  provider switch on an unchanged model string visible to `lode status` / `lode reenrich` is a
+  read-side concern, out of scope here and tracked as [lode-568v.6](decisions.md).
 - **`source: ai | user` on the annotation layer.** Users *will* correct an AI tag or link. That
   correction is still metadata (doesn't touch note content), and it is **pinned**:
   - **AI annotations are version-scoped** — regenerable, allowed to go stale, re-derived per head.
@@ -1153,7 +1161,8 @@ snapshots    snapshot_id(=H(framed: external_id,body)), external_id, body,
 annotations  id, target(note_id|external_id), source_version,          # derived layer
              kind, payload, source(ai|user),
              status(fresh|stale|orphaned),
-             model, prompt_ver, confidence, created
+             model, provider?, prompt_ver, confidence, created          # provider: NULL=anthropic
+                                                                         # (lode-568v.4)
 passages     passage_id, target_version(version_id|snapshot_id), ord,  # derived; heads only
              char_range, text, parent_block                            #   structure-aware chunks
 embeddings   passage_id, vector, model                                 # derived; one per passage
@@ -1164,8 +1173,8 @@ jobs         id, type(embed|enrich|refresh), target_version,           # async w
              attempts, last_error?, batch_handle?, claimed_at?,        #   lifecycle: pending->
              next_attempt_at, created                                  #   running->{done|failed->
                                                                        #   pending|dead}
-egress_log   id, ts, purpose(enrich|qa), model,                        # cloud-egress audit trail
-             sent_targets(version_id|passage_id …), redactions
+egress_log   id, ts, purpose(enrich|qa), model, provider?,             # cloud-egress audit trail
+             sent_targets(version_id|passage_id …), redactions         # provider: NULL=anthropic
 ```
 
 `no_egress` on `notes`/`externals` marks content that is **indexed locally but never sent to Claude**

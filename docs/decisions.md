@@ -2147,3 +2147,32 @@ are catalogued in [configuration.md](configuration.md).
     it is pre-existing PyPI/resolver drift since the lock was last regenerated, not something this
     ticket's dependency addition caused) — left as-is; hand-editing a generated lock file to avoid it
     would violate the lock's own "regenerated, never hand-edited" rule.
+- **2026-07-23 (lode-568v.4) — implementation details resolved while building the provenance write
+  path against T1's pinned `annotations.provider` / `egress_log.provider` shape:**
+  - **Migration mechanism:** both columns are added the same way every other post-deployment column in
+    this schema is (`storage.py`'s `_apply_migrations` forward-only `ALTER TABLE ... ADD COLUMN`,
+    guarded against the existing-column `OperationalError`) — no new migration mechanism, and per T1's
+    pinned "NULL means anthropic" convention, no backfill `UPDATE` either; every pre-existing row reads
+    back `NULL`, which already means anthropic.
+  - **`provider_identity(settings)` (new, `lode.llm_provider`)** is the one place the "write `NULL`
+    while the active provider is anthropic, else the literal provider string" rule lives — both
+    `_write_enrichment` call sites and both `enrich.py` `log_egress` call sites compute it from this
+    single function rather than re-deriving `settings.llm_provider == "anthropic"` at each site.
+  - **Local variable named `provider_name`, never `provider`, at every enrichment call site.** All four
+    functions that needed this value (`enrich_version`, `submit_enrich_batch`, `collect_enrich_batch`,
+    and `_write_enrichment`'s caller-side computation) already bind `provider` to the
+    :class:`~lode.llm_provider.LLMProvider` *instance* (the seam object T2 introduced) — reusing that
+    name for the provenance string would shadow it. `provider_name` is the identity string;
+    `_write_enrichment`'s own parameter is still named `provider` since that function has no seam
+    object to collide with.
+  - **`egress.log_egress` gained an optional keyword-only `provider: str | None = None`,** not a
+    required positional — the Q&A send (`gate_qa_egress` → `log_egress`) is explicitly out of this
+    ticket's scope (see T1's note above: "the read-side staleness-comparison consequence is already
+    split out ... not re-opened here" applies symmetrically to the write side for Q&A, which this
+    ticket's own scope text never named). Leaving Q&A's call site unchanged and defaulting to `None` is
+    also the *correct* value today, not just a scope dodge: Q&A is Anthropic-only regardless, and `NULL`
+    is exactly what `provider_identity` would have computed for it.
+  - **Not done here (deliberately deferred to `lode-568v.6`):** no read-side consumer — `lode status`,
+    `lode reenrich`, or `_enrichment_model_stale` (`lode-o9k3`) — was touched. This ticket is schema +
+    write path + migration only, per its own acceptance criteria; a provider switch on an unchanged
+    model string does not yet mark the corpus stale.
