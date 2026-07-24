@@ -29,6 +29,7 @@ dependencies = [
     "typer",       # CLI (repo convention — never argparse)
     "rich",        # CLI colour/width rendering (lode-l38d.1 — see docs/stack.md)
     "anthropic",   # Claude API (enrichment Haiku, Q&A Sonnet/Opus)
+    "openai",      # OpenAI-via-Azure LLMProvider (lode-568v.3) -- Responses API
     "pydantic",    # structured outputs for the derived layer
     "fastembed",   # embeddings + reranker + NLI via bundled ONNX runtime
     "pyarrow",     # direct import in vectorstore.py (lode-zcoz) — lancedb's

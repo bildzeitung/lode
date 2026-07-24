@@ -2094,6 +2094,59 @@ are catalogued in [configuration.md](configuration.md).
     `LLMAuthError` everywhere). `LLMAuthError`/`LLMProviderError` are still defined now, per the pinned
     shape, ready for that provider to use.
 
+- **2026-07-23 (lode-568v.3) — `OpenAIProvider` implemented; the named acceptance risk from the
+  original challenge review, and how it was mitigated as far as this repo can:**
+  - **Acceptance is mock-only — named explicitly, as the challenge review required.** No live
+    Azure/OpenAI endpoint was reachable from this build. What *was* verified directly: the installed
+    `openai==2.47.0` SDK's actual `responses.create()` signature, and the real field shapes of
+    `Response`, `Response.incomplete_details` (`IncompleteDetails.reason` is genuinely
+    `Literal["max_output_tokens", "content_filter"] | None` — confirmed by introspecting the installed
+    package, not assumed), `ResponseOutputRefusal` (`.refusal`, `.type`), and `openai.APIStatusError`
+    (`.status_code`, `.request_id`, `.body` all populate as expected from a constructed instance). What
+    remains **unverified**: the actual runtime *content* of a real Responses API call/response against
+    a live Azure deployment — whether `text.format` `json_schema` with `strict=False` behaves as
+    documented, whether a real content-filter rejection actually surfaces via
+    `incomplete_details.reason == "content_filter"` vs. a raised `APIStatusError` vs. something else
+    Azure-specific, and whether `reasoning={"effort": ...}` is accepted by every deployment this ticket
+    might be pointed at. The diagnostic-logging compensating control (`docs/stack.md` "Error contract")
+    is the mitigation the challenge addendum asked for: the first real run's failure is diagnosable
+    from logs (model/endpoint/api-version, raw payload, content-filter category) even though this repo
+    could not exercise the real wire to find failures itself.
+  - **`strict=False`, not `True`, for the Structured Outputs `json_schema` format** — a deliberate
+    choice, not an oversight. `pydantic`'s `model_json_schema()` does not produce a
+    strict-mode-compliant schema (would need `additionalProperties: false` + all-properties-required
+    recursively), and transforming it to be so was assessed as its own unverified-against-the-wire risk
+    — exactly the class of assumption the challenge review flagged. Non-strict mode is a smaller,
+    better-understood risk, and `OpenAIProvider.structured_call`'s own `model_validate` against
+    `output_schema` is the real conformance check either way once a typed result is needed.
+  - **One wire mechanism for both call surfaces, per the pinned design** — `tool_name`/`tool_description`
+    are honored as the Responses API json_schema format's `name`/`description` fields (not ignored),
+    but there is no separate function-calling code path; `docs/stack.md` "2 & 3." already pinned this.
+  - **Worker exception-handling widened, closing lode-568v.2's tracked follow-up**: `lode.worker`'s
+    three `except AuthError` sites (`run_one`, `_batch_submit_enrich`, `drain`) now read
+    `except (AuthError, LLMAuthError)` — a missing OpenAI/Azure credential now gets the identical
+    permanent, no-retry, no-dead-letter treatment `lode-9yy` already gives a missing Anthropic
+    credential. `AuthError` itself is untouched (Anthropic's own credential failures still raise it,
+    unwrapped, exactly as `lode-568v.2` left it) — this is purely an addition to the `except` tuple,
+    not a change to what Anthropic raises.
+  - **Batch handle is a self-encoded JSON blob**, exactly as `lode-568v.1` pinned: `submit_batch` runs
+    every request through the same Responses-API call synchronously and encodes the resulting
+    `BatchResult`s (success payload or a serialized `LLMProviderError`) into the string returned as the
+    handle; `collect_batch` decodes it with no network call, always `("ended", …)`. Note this handle is
+    duplicated verbatim across every job row in the submitted set (`enrich.py`'s existing
+    `UPDATE jobs SET batch_handle = ?` loop writes the identical string to each row, the same way it
+    writes Anthropic's single server-side `batch.id` to each row today) — an accepted, unoptimized cost
+    of the degenerate "serialize" strategy, not a bug.
+  - **`azure_openai_api_version` required whenever `azure_openai_endpoint` is set**, enforced by a
+    `Settings` `model_validator(mode="after")` — fails at config-load time rather than as an opaque
+    request failure from the SDK/HTTP layer at the first real call.
+  - **`openai` added as a runtime dependency**, `requirements.lock` regenerated via `uv pip compile`
+    per `docs/stack.md`'s dependency-locking split. That regeneration also picked up an unrelated
+    `numpy` version drift (`2.5.1` → `2.4.6`, confirmed via a side-by-side regeneration against the
+    *unmodified* `pyproject.toml` — the same drift happens with no `openai` dependency added at all, so
+    it is pre-existing PyPI/resolver drift since the lock was last regenerated, not something this
+    ticket's dependency addition caused) — left as-is; hand-editing a generated lock file to avoid it
+    would violate the lock's own "regenerated, never hand-edited" rule.
 - **2026-07-23 (lode-568v.4) — implementation details resolved while building the provenance write
   path against T1's pinned `annotations.provider` / `egress_log.provider` shape:**
   - **Migration mechanism:** both columns are added the same way every other post-deployment column in
