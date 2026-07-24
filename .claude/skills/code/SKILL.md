@@ -451,6 +451,18 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    acting on it, never applies one on the workflow's say-so alone (`code-reviewer.md` step 4 spells out
    how it treats this input).
 
+   **Also fold `result.unverified` and `result.degraded`, separately from the survivors — never silently
+   dropped (lode-wtwb).** A finding whose verifier crashed/timed out comes back in its own `unverified`
+   array, not folded into `refuted` — that conflation is the exact bug lode-wtwb closed (a 14/22-agent
+   session-limit crash on the lode-ns3r run made `findings: []` look like a clean pass while every
+   "refuted" entry was actually an unreachable skeptic, including a High-severity finding the orchestrator
+   only caught by hand-inspecting refutation-reason strings). So: if `result.unverified` is non-empty,
+   hand those entries to the reviewer too, labeled plainly as **unverified, not refuted** — the workflow's
+   skeptic never got to weigh in, so these need the reviewer's own judgment at least as much as a
+   confirmed survivor does, arguably more. If `result.degraded` is `true` (any Find round or Verify agent
+   in the run failed to produce output, per `result.stats`), say so explicitly — this run's absence of
+   findings in a given dimension does not mean that dimension is clean.
+
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
    **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
    never writes `trunk`. From there it fetches `origin/land/<id>` and checks the branch out **into that
@@ -472,7 +484,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > own launch worktree. `correctness-review` Workflow findings (I ran it just now, orchestrator-side,
    > over `trunk...land/lode-ai1` — treat every entry as a candidate to confirm yourself against the
    > real diff, never as settled truth): <survivors JSON, or "none — the workflow found nothing /
-   > errored: <detail> / was unavailable even here">. Fold that into your own reasoned correctness pass
+   > errored: <detail> / was unavailable even here">. **Unverified findings (verifier crashed/timed
+   > out — never treat these as refuted, lode-wtwb):** <`result.unverified` JSON, or "none">. **Run
+   > health:** <"clean" if `result.degraded` is false, else "DEGRADED — <result.stats.findRoundsFailed>
+   > find round(s) / <result.stats.verifyAgentsFailed> verify agent(s) / <result.stats.dimensionsFailed>
+   > whole dimension(s) failed to produce output; absence of a finding in an affected dimension is not
+   > evidence of a clean pass">. Fold all of that into your own reasoned correctness pass
    > against `trunk...HEAD` (`/code-review` itself is unreachable from any model context, lode-axyq —
    > see code-reviewer.md step 4) + `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`,
    > and swap the ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert
@@ -491,7 +508,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
    re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`**
-   (so `/land` can pick it up). If a **builder** escalated, say so — it reverted to green, pushed,
+   (so `/land` can pick it up). If the `correctness-review` Workflow came back `degraded` for this
+   ticket (any Find/Verify agent failed to produce output, per `result.stats`), say so plainly here too
+   — a degraded run's absence of findings in an affected dimension is not the same as a clean one, and
+   the reviewer's hand-reasoned pass is the only thing that covered that gap this time (lode-wtwb). If a
+   **builder** escalated, say so — it reverted to green, pushed,
    applied `land-escalated`, did **not** hand off, and a human owes a build decision. If a **reviewer**
    escalated, likewise — green branch pushed, `land-escalated` set, not landable until the human
    decides. For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in
