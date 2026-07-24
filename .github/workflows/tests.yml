@@ -56,10 +56,11 @@ env:
   LODE_TEST_WORKERS: "2"
 
 jobs:
-  # Cheap, independent check: verify requirements.lock is still what `uv pip
-  # compile` would produce for the CURRENT pyproject.toml. No model download,
-  # no dev-extra install -- runs in parallel with (not gated by, or gating)
-  # the `tests` job below, so a stale lock fails in seconds rather than after
+  # Cheap, independent check: verify requirements.lock is still what
+  # scripts/compile-lock.sh (the single shared lock-gen command, lode-sys4)
+  # would produce for the CURRENT pyproject.toml. No model download, no
+  # dev-extra install -- runs in parallel with (not gated by, or gating) the
+  # `tests` job below, so a stale lock fails in seconds rather than after
   # paying for the slow leg's model download (lode-g274.6).
   #
   # Recompiling `-o requirements.lock` IN PLACE against the file this job
@@ -76,6 +77,14 @@ jobs:
   # committed lock; a genuinely fresh compile (no prior content at the -o
   # path) resolves a DIFFERENT graph -- concrete proof the preference-seeding
   # is load-bearing, not cosmetic.
+  #
+  # scripts/compile-lock.sh derives --python-version from .python-version
+  # (lode-sys4 / lode-gyag root cause): without it, `uv pip compile` resolves
+  # against whichever interpreter it finds, which can differ from this job's
+  # own 3.14 and silently pick up/drop python-version-marker-gated transitives
+  # (lancedb's `overrides`, anyio's marker-gated `typing_extensions`),
+  # producing a lock that flaps against this diff for reasons unrelated to
+  # any real pyproject.toml change.
   lock-currency:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -89,13 +98,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version-file: .python-version
+          # Reads the SAME file scripts/compile-lock.sh derives its
+          # --python-version target from (lode-sys4) -- this job's own
+          # interpreter and the lock-gen target are the same single source of
+          # truth, so they can never drift from each other on this leg.
 
       - name: Install uv
         run: pip install -U uv
 
       - name: Recompile requirements.lock, using the committed lock as the resolver's preference set
-        run: uv pip compile pyproject.toml --generate-hashes -o requirements.lock
+        run: scripts/compile-lock.sh -o requirements.lock
 
       - name: Fail if the recompiled lock differs from the committed one
         run: git diff --exit-code requirements.lock
