@@ -65,21 +65,21 @@ done
 entirely and go straight to confirmation with that target. (An explicit `patch`/`minor`/`major` only
 makes sense once a baseline tag exists; on a first release it still proposes `v0.1.0` and says so.)
 
-**Otherwise, parse conventional-commit subjects since `$LATEST_TAG`:**
+**Otherwise, derive the bump via `scripts/release-bump.sh`** (lode-ns3r) — this used to be an inline
+shell snippet embedded directly in this file, which silently under-detected feat/fix commits due to
+a leading-newline bug in how it split `git log`'s NUL-delimited record stream (only the newest
+commit in the range was read correctly; see the script's own header comment for the full mechanism
+and the concrete v1.2.0 case it produced, lode-905v). It is now an extracted, tested script — same
+"ungated inline shell in a SKILL.md rots silently" lesson as `scripts/merge-precheck.sh`, lode-mh9g:
 
 ```bash
-BUMP="none"
-while IFS= read -r -d '' MSG; do
-  SUBJECT="$(printf '%s' "$MSG" | head -1)"
-  if printf '%s' "$MSG" | grep -qE 'BREAKING[ -]CHANGE:' \
-     || printf '%s' "$SUBJECT" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:'; then
-    BUMP="breaking"; break                                    # highest priority, stop scanning
-  elif printf '%s' "$SUBJECT" | grep -qE '^feat(\([^)]*\))?:' && [ "$BUMP" != "feat" ]; then
-    BUMP="feat"
-  elif printf '%s' "$SUBJECT" | grep -qE '^fix(\([^)]*\))?:' && [ "$BUMP" = "none" ]; then
-    BUMP="fix"
-  fi
-done < <(git log "${LATEST_TAG}..HEAD" --format='%B%x00')
+BUMP="$(scripts/release-bump.sh "${LATEST_TAG}..HEAD")" || {
+  echo "GATE COULD NOT RUN: scripts/release-bump.sh failed on range ${LATEST_TAG}..HEAD" >&2
+  # surface the script's own stderr verbatim and stop -- this is a machine
+  # fault (exit 2), never a signal about the commits themselves; do not
+  # silently fall back to a guessed bump.
+  exit 1
+}
 ```
 
 Precedence when several kinds of commits are present: **breaking > feat > fix**. Then bump the
