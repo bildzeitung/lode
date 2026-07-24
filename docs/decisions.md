@@ -647,6 +647,17 @@ are catalogued in [configuration.md](configuration.md).
   actually been run and recorded there** — the code above is built and reviewable now, but "solved" is
   a claim only the runbook's result can support.
 
+  **Reconciliation (2026-07-24) — the lode-eohb "ships escalated" note above is now historical, not
+  current.** The `specs/12-correctness-review-recall-validation.md` Part-B validation this thread
+  called for was run from a `Workflow`-capable session: B1 (the qa.py `600s`→`120s` timeout finding)
+  went from missed-and-inverted 0/3 to surfaced-and-correctly-characterized 3/3, at 0 false positives.
+  The B2/B3 recall dip observed under eohb-alone was single-round stochastic variance, not a
+  regression from the FIND-prompt fix — it recovered to ~pre-fix rates once measured under the
+  combined eohb+p5gf production config (the K-round union + semantic dedup this ticket describes
+  above, which is what actually ships once both land). lode-eohb subsequently landed on `trunk` via
+  `/land` (merge `3e4f3c4`), after lode-p5gf. The paragraphs above are left as-is as the accurate
+  record of what was true at build time.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied
