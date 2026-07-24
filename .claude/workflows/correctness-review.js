@@ -44,6 +44,25 @@ const reviewTip = (() => {
   return m && m[2] ? m[2] : refRange
 })()
 
+// The left side of the range, when there is one — the PRIOR state a finder must
+// independently check before accepting the diff's own account of what changed
+// (lode-eohb: finders trusted a diff's "behavior-preserving" self-description
+// instead of checking what the prior code, and any implicit library default it
+// relied on, actually did — and missed a real timeout regression as a result).
+const reviewBase = (() => {
+  const m = refRange.match(/^(.*?)\.\.\.?(.*)$/)
+  return m && m[1] ? m[1] : null
+})()
+
+// Built as its own top-level literal (not nested inside the Find prompt's own
+// template literal below) to keep backtick-escaping trivial to verify by eye —
+// a nested template literal inside a `${...}` substitution is valid JS but
+// harder to eyeball-check, and this whole file already learned the hard way
+// (lode-905v) that a subtle JS-syntax mistake here ships silently inert.
+const priorBehaviorInstruction = reviewBase
+  ? ` — read the base side directly (\`git show ${reviewBase}:<path>\`, or the diff's own removed lines) rather than inferring it from`
+  : ', rather than inferring it from'
+
 // lode-p5gf: FIND recall is stochastic run-to-run — an identical dimension,
 // same code, same prompt, can miss a real bug in one pass and catch it in the
 // next (observed: the lode-905v tombstone bug was found by 0 of 6 finders in
@@ -256,6 +275,8 @@ async function reviewDimension(dim) {
 Get the diff yourself: \`git diff ${refRange}\` (use \`--stat\` first if it's large, then inspect the hunks that could plausibly hold this class of bug — you do not need to re-read hunks with no relevance to ${dim.label}). Every finding needs a precise repo-relative file:line citation you actually read in the diff, and a concrete failure scenario.
 
 READ AT THE REVIEWED COMMIT, NOT THE WORKING TREE. The code under review is the state at \`${reviewTip}\` (the tip of the range). When you need more context than the diff hunk shows, read the file at that commit — \`git show ${reviewTip}:<path>\` — never \`cat <path>\` / the working tree, which may sit on a later revision where this very code has already changed. Cite file:line as they stand at \`${reviewTip}\`.
+
+DO NOT TRUST THE DIFF'S OWN "BEHAVIOR-PRESERVING" CLAIM. If a commit message, docstring, comment, or identifier in the diff describes the change as behavior-preserving, a no-op, a pure refactor, or equivalent — treat that as a claim to DISPROVE, not a fact you can build on. For every call your dimension touches, independently establish what the PRIOR behavior actually was${priorBehaviorInstruction} what the diff's framing asserts. This includes IMPLICIT behavior the code never states outright: a library's or SDK's default timeout, retry count, pagination size, encoding, or similar. If the diff newly pins a value that the prior code left to such a default, or changes what flows into one, go verify what that default actually was on the prior side — check the installed dependency's own source or documented defaults; do not take the diff's comment about it on faith. A confident "no behavior change" conclusion that rests only on re-reading the diff's own description of itself is not verification, and must not be reported as benign without that independent check.
 
 Your class this pass: ${dim.brief}
 
