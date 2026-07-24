@@ -391,9 +391,9 @@ Two branches each green *in isolation* can break when **combined** (a clean git 
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**.
 
 **Every re-gate in this section — the combined re-gate below and the isolation-replay loop's own
-`nox -s tests` — runs in the FOREGROUND, in the same turn, and its result is read from its own real
-exit status, never from a downstream command's.** No `run_in_background`, no `Monitor`, no ending a
-turn on a pending gate — the same lode-95o rule the producer agents already carry
+`nox -s tests` / `nox -s lock_currency` — runs in the FOREGROUND, in the same turn, and its result is
+read from its own real exit status, never from a downstream command's.** No `run_in_background`, no
+`Monitor`, no ending a turn on a pending gate — the same lode-95o rule the producer agents already carry
 (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`); `nox -s tests` fits well under
 `Bash`'s 600000ms timeout cap. And never pipe a gate through `tail`/`head`/`grep` and read the
 *pipeline's* exit status as the gate's own: a shell pipeline's exit status is its **last** element's,
@@ -572,8 +572,16 @@ set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a
 
 ```bash
 . ./venv/bin/activate
-rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, commit that as part of the merge result
+rtk nox -t fix && rtk nox -s tests && rtk nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
+
+**`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
+public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
+lock (or whose merge with another accepted branch this pass changed the resolved graph) fails this
+the same way a red `nox -s tests` would; treat it identically — **Red** below covers it, and the
+isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency` call) to find the
+culprit. This needs network (PyPI) same as the model-download leg of `nox -s tests` already does, so
+running it here adds no new environment requirement.
 
 **`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
 an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
@@ -604,7 +612,7 @@ machine. A red gate is content; exit 2 is the machine.
       # new trunk. Continue with the rest.
       continue
     fi
-    if rtk nox -s tests; then
+    if rtk nox -s tests && rtk nox -s lock_currency; then
       :                          # survivor — keep it merged
     else
       rtk git reset --hard HEAD~1   # back the culprit out
