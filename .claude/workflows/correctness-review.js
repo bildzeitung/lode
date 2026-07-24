@@ -6,7 +6,7 @@ export const meta = {
     'Invoked by the /code ORCHESTRATOR (main session) — never by a dispatched coding or code-reviewer subagent, neither of which reaches the Workflow tool (verified empirically, lode-905v) — as a backstop to the reviewer\'s own correctness reasoning, not a replacement for it. Requires args {refRange}: a git ref range/comparison that `git diff` accepts directly (e.g. "trunk...HEAD" for a live review, or a historical "<sha1>...<sha2>" for a retrospective run) — both ends must already be reachable commits; no working-tree checkout is performed, so the caller does not need to be sitting on any particular branch.',
   phases: [
     { title: 'Find', detail: 'one agent per correctness dimension over the diff' },
-    { title: 'Verify', detail: 'refute-biased skeptic per finding; unresolved defaults to refuted' },
+    { title: 'Verify', detail: 'refute-biased skeptic per finding; a verifier that produces no verdict (infra failure) reports the finding as unverified, never as refuted (lode-wtwb)' },
   ],
 }
 
@@ -288,13 +288,22 @@ ${UNTRUSTED}`,
   )
 
   const roundResults = rounds.filter(Boolean)
-  if (roundResults.length === 0) return { dim: dim.key, survivors: [], refuted: [], injectionSuspects: [] }
+  // A round that errored/produced nothing is dropped by design (lode-p5gf's
+  // own K-round redundancy mitigates it), but still count it: a run where
+  // FIND itself is falling over — not just VERIFY — must also show up in
+  // `degraded` below (lode-wtwb: an infrastructure failure must never be
+  // able to quietly reduce the finding count without the caller being able
+  // to tell, without hand-inspecting individual reason strings).
+  const findRoundsFailed = rounds.length - roundResults.length
+  if (roundResults.length === 0) {
+    return { dim: dim.key, survivors: [], refuted: [], unverified: [], injectionSuspects: [], findRoundsFailed, verifyAgentsFailed: 0 }
+  }
 
   const rawFindings = roundResults.flatMap((r, i) => (r.findings || []).map(f => ({ item: f, tag: i + 1 })))
   const injectionSuspects = [...new Set(roundResults.flatMap(r => r.injectionSuspects || []))]
 
   if (rawFindings.length === 0) {
-    return { dim: dim.key, survivors: [], refuted: [], injectionSuspects }
+    return { dim: dim.key, survivors: [], refuted: [], unverified: [], injectionSuspects, findRoundsFailed, verifyAgentsFailed: 0 }
   }
 
   // Union this dimension's own rounds BEFORE Verify: a bug independently
@@ -328,14 +337,25 @@ ${UNTRUSTED}`,
 
   const survivors = []
   const refuted = []
+  const unverified = []
   for (const item of verified.filter(Boolean)) {
     const { f, v } = item
-    // No verdict at all (verifier errored/produced nothing) is treated the
-    // same as the refute-biased default this phase exists to enforce:
-    // default to refuted rather than silently reporting an unverified
-    // finding as real.
+    // No verdict at all (verifier agent errored, timed out, or otherwise
+    // produced nothing) is a THIRD state — neither confirmed nor refuted —
+    // and must NEVER be folded into `refuted`. That conflation is exactly
+    // what let a session-limit crash across most verifiers read as a clean
+    // review with zero real refutations behind it: `findings: []` looked
+    // healthy while every one of the 10 "refuted" entries was actually an
+    // unreachable skeptic (lode-wtwb, from the lode-ns3r run,
+    // resumeFromRunId wf_9b60ff50-0c6). Fail CLOSED instead: keep the
+    // finding visible in its own array, so an infrastructure fault can only
+    // ever surface as "unverified", never be silently reported as "checked
+    // and found not to be a bug."
     if (!v) {
-      refuted.push({ ...f, refutationReason: 'verifier produced no verdict — defaulted to refuted' })
+      unverified.push({
+        ...f,
+        unverifiedReason: 'verifier produced no verdict (agent errored, timed out, or hit a session/rate limit)',
+      })
       continue
     }
     if (v.real) {
@@ -345,7 +365,7 @@ ${UNTRUSTED}`,
     }
   }
 
-  return { dim: dim.key, survivors, refuted, injectionSuspects }
+  return { dim: dim.key, survivors, refuted, unverified, injectionSuspects, findRoundsFailed, verifyAgentsFailed: unverified.length }
 }
 
 // pipeline(), not parallel(-all-finds)-then-verify-all: each dimension's own
@@ -378,23 +398,57 @@ const survivors = mergeNearDuplicates(
   'flaggedByDims',
 )
 const refuted = dims.flatMap(r => r.refuted)
+// Same merge as `survivors` — a finding an infra fault kept unverified in one
+// dimension can be the same underlying bug another dimension's finder also
+// raised (and that copy may have verified cleanly either way); collapse
+// near-duplicates the identical way, rather than inventing a second rule.
+const unverified = mergeNearDuplicates(
+  dims.flatMap(r => (r.unverified || []).map(f => ({ item: f, tag: r.dim }))),
+  'flaggedByDims',
+)
 const injectionFlags = [...new Set(dims.flatMap(r => r.injectionSuspects))]
 
 survivors.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])
+unverified.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])
 
-const totalRaw = survivors.length + refuted.length
-log(`${totalRaw} raw findings across ${DIMENSIONS.length} dimensions × ${FIND_ROUNDS} find rounds each -> ${survivors.length} survived refutation + near-duplicate merge, ${refuted.length} refuted`)
+const totalRaw = survivors.length + refuted.length + unverified.length
+const findRoundsFailed = dims.reduce((acc, r) => acc + (r.findRoundsFailed || 0), 0)
+const verifyAgentsFailed = dims.reduce((acc, r) => acc + (r.verifyAgentsFailed || 0), 0)
+const dimensionsFailed = DIMENSIONS.length - dims.length
+// lode-wtwb: the caller must be able to tell a partially-failed run from a
+// clean one WITHOUT hand-inspecting refutation-reason strings — this is
+// exactly the gap that let a 14/22-agent crash read as a healthy
+// `findings: []`. `degraded` is true the moment ANY agent (Find or Verify,
+// anywhere in the run) failed to produce output, regardless of whether that
+// happened to leave `unverified` non-empty for this particular run.
+const degraded = findRoundsFailed > 0 || verifyAgentsFailed > 0 || dimensionsFailed > 0
+
+log(`${totalRaw} raw findings across ${DIMENSIONS.length} dimensions × ${FIND_ROUNDS} find rounds each -> ${survivors.length} survived refutation + near-duplicate merge, ${refuted.length} refuted, ${unverified.length} unverified (infra failure, never counted as refuted)`)
+if (degraded) {
+  log(`DEGRADED RUN: ${dimensionsFailed} whole dimension(s) failed, ${findRoundsFailed} find round(s) failed, ${verifyAgentsFailed} verify agent(s) produced no verdict — see result.unverified and result.stats`)
+}
 
 // The calling code-reviewer session evaluates and applies fixes with its own
 // Edit/Write — never this workflow, which is read-only throughout.
 return {
   refRange,
   findings: survivors,
+  // A THIRD state, distinct from both `findings` (confirmed) and `refuted`
+  // (actively disproved): a finding whose verifier never returned a verdict
+  // because of an infrastructure fault. Returned in its own array — never
+  // folded into either of the other two — so a caller cannot mistake a
+  // degraded run for a clean pass without reading this field.
+  unverified,
   refuted,
   injectionFlags,
+  degraded,
   stats: {
     bySeverity: survivors.reduce((acc, f) => ({ ...acc, [f.severity]: (acc[f.severity] || 0) + 1 }), {}),
     totalRaw,
     falsePositiveRate: totalRaw ? Math.round((refuted.length / totalRaw) * 100) + '%' : 'n/a',
+    unverifiedCount: unverified.length,
+    findRoundsFailed,
+    verifyAgentsFailed,
+    dimensionsFailed,
   },
 }
