@@ -114,13 +114,23 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import NoReturn
 
 import nox
+import nox.command
 
 nox.options.default_venv_backend = "none"
+
+# Exit status meaning "this gate could not RUN" -- a machine fault, not a content
+# failure. `/land` must never isolate or bounce a branch on it (lode-9i2p; the
+# original carrier of this contract is ``scripts/validate-mermaid.sh``). nox
+# collapses every ordinary session failure to exit 1, so signalling anything
+# else means leaving the process directly -- see ``_machine_fault`` below.
+GATE_MACHINE_FAULT = 2
 
 # A bare ``nox`` runs only the offline, keyless gates; ``eval`` (network + an API
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
@@ -227,6 +237,20 @@ def unit(session: nox.Session) -> None:
     session.run("pytest", "-m", "not slow", "-n", _xdist_workers())
 
 
+def _machine_fault(session: nox.Session, why: str) -> NoReturn:
+    """Abort a gate with ``GATE_MACHINE_FAULT`` -- the gate could not run (lode-9i2p).
+
+    Deliberately **not** ``session.error``: that is nox's *content*-failure
+    channel and exits 1, which ``/land`` reads as "this branch is bad" and
+    bounces on. Nothing about the branch's content failed here.
+    """
+    session.warn(
+        f"{session.name}: {why} Exiting {GATE_MACHINE_FAULT}: the GATE could not "
+        "run -- this is NOT a verdict on any branch's content."
+    )
+    sys.exit(GATE_MACHINE_FAULT)
+
+
 @nox.session
 def lock_currency(session: nox.Session) -> None:
     """Verify requirements.lock is still what pyproject.toml resolves to (lode-sys4).
@@ -254,19 +278,55 @@ def lock_currency(session: nox.Session) -> None:
     skipped lock check is worse than a noisy one here, since the alternative
     is a stale lock landing on ``trunk`` unnoticed until the public CI badge
     catches it later.
+
+    **Failing closed is not the same as failing indistinguishably** -- so the
+    two failure kinds carry two different exit statuses, exactly as
+    ``scripts/validate-mermaid.sh`` does (lode-9i2p):
+
+    - **exit 1 -- CONTENT.** The committed lock genuinely disagrees with what
+      ``pyproject.toml`` resolves to. Some branch's diff caused this; ``/land``
+      may isolate and bounce on it.
+    - **exit 2 -- MACHINE.** The gate could not run: ``uv`` is absent, or
+      ``scripts/compile-lock.sh`` could not resolve at all (PyPI unreachable, a
+      5xx, DNS). This says *nothing* about the content being gated, and
+      ``/land`` must stop the pass rather than isolate -- otherwise a transient
+      network blip bounces (and deletes) every reviewed branch in the pass,
+      each with a fabricated "stale lock" finding. That distinction matters
+      more here than for any other gate this repo has: unlike ``nox -t
+      fix``/``nox -s tests`` (the offline, keyless default set), this one needs
+      ``uv`` present and PyPI reachable on *every* invocation, so its machine
+      fault is a live possibility on the one machine that writes ``trunk``.
     """
     if shutil.which("uv") is None:
-        session.error(
-            "lock_currency: 'uv' not found on PATH -- cannot verify "
-            "requirements.lock currency locally (fails closed, lode-sys4). "
-            "Install uv (pip install -U uv) and re-run. CI's lock-currency "
-            "job (tests.yml) still catches a stale lock on push, but only "
-            "after this local gate was skipped."
+        _machine_fault(
+            session,
+            "'uv' not found on PATH -- cannot verify requirements.lock "
+            "currency locally (fails closed, lode-sys4). Install uv "
+            "(pip install -U uv) and re-run. CI's lock-currency job "
+            "(tests.yml) still catches a stale lock on push, but only after "
+            "this local gate was skipped.",
         )
     with tempfile.TemporaryDirectory() as tmp:
         candidate = Path(tmp) / "requirements.lock"
         candidate.write_bytes(Path("requirements.lock").read_bytes())
-        session.run("scripts/compile-lock.sh", "-o", str(candidate), external=True)
+        try:
+            # -q: uv pip compile otherwise echoes the ENTIRE compiled lock
+            # (every package + every hash, ~2500 lines) to stdout on top of
+            # writing -o -- which would bury the surrounding gate output
+            # /land reads to decide which branch to bounce. uv strips -q from
+            # the header comment it autogenerates, so the byte-for-byte diff
+            # below is unaffected.
+            session.run(
+                "scripts/compile-lock.sh", "-q", "-o", str(candidate), external=True
+            )
+        except nox.command.CommandFailed:
+            _machine_fault(
+                session,
+                "scripts/compile-lock.sh could not resolve pyproject.toml -- "
+                "PyPI unreachable, a 5xx, or a DNS failure (its own output "
+                "above names the cause). The committed lock has NOT been shown "
+                "to be stale.",
+            )
         # uv's autogenerated header comment records the literal `-o PATH` it
         # was invoked with -- normalize the leaked scratch path back to the
         # real committed filename before diffing, same as
@@ -288,6 +348,8 @@ def lock_currency(session: nox.Session) -> None:
             check=False,  # non-zero means "lock is stale" -- inspected below, not an error to raise
         )
         if diff.returncode != 0:
+            # session.error -> nox exit 1: a CONTENT failure, the one status
+            # /land is allowed to attribute to a branch and bounce on.
             session.error(
                 "requirements.lock is STALE -- pyproject.toml resolves to "
                 "something different than the committed lock. Run "

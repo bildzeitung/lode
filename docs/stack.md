@@ -171,16 +171,38 @@ own copy of the `uv pip compile` command string:
   combined re-gate (`.claude/skills/land/SKILL.md`, alongside `nox -t fix`/`nox -s tests`) and in its
   per-branch isolation-replay loop — so a stale lock is caught locally, by the single trunk-writer,
   before the public CI badge is the only thing that catches it.
-- **Offline / `uv`-absent behaviour: fails closed, everywhere.** `scripts/compile-lock.sh` exits
-  non-zero with an explicit message if `uv` is not on `PATH`, rather than silently skipping the
-  check; `nox -s lock_currency` does the same check itself before invoking the script, so the error
-  surfaces as a nox session failure rather than a confusing script error. This matches this repo's
-  stance elsewhere that a gate which cannot run must never be mistaken for one that passed (see
-  `scripts/validate-mermaid.sh`'s exit-2 distinction, `lode-9i2p`) — a stale lock landing unnoticed
-  because a local check was quietly skipped is worse than a noisy failure that tells a developer to
-  install `uv`. CI's `lock-currency` job installs `uv` itself first, so this only bites a developer
-  machine or `/land`'s local pre-flight without `uv` installed — the public CI badge still catches a
-  stale lock in that case, just later.
+- **Offline / `uv`-absent behaviour: fails closed, and fails *distinguishably*.**
+  `scripts/compile-lock.sh` exits non-zero with an explicit message if `uv` is not on `PATH`, rather
+  than silently skipping the check. A stale lock landing unnoticed because a local check was quietly
+  skipped is worse than a noisy failure that tells a developer to install `uv`. But failing closed is
+  only half of `lode-9i2p`'s rule, and the half that is easy to get wrong is the other one — so
+  `nox -s lock_currency` splits its own non-zero into two statuses, the same contract
+  `scripts/validate-mermaid.sh` already carries:
+  - **exit 1 — CONTENT.** The committed lock genuinely disagrees with what `pyproject.toml` resolves
+    to. Some diff caused it; `/land` may attribute it to a branch, isolate, and bounce.
+  - **exit 2 — MACHINE.** The gate could not run at all: `uv` absent, or `compile-lock.sh` unable to
+    resolve (PyPI unreachable, a 5xx, DNS). Nothing about any branch's content failed, so `/land`
+    stops the pass and surfaces it as a human decision instead of isolating. Without this split, a
+    transient PyPI blip on the lander would bounce — and delete — every reviewed branch in the pass,
+    each with a fabricated "stale lock" finding, which is precisely the failure `lode-9i2p` was filed
+    to prevent. nox collapses every ordinary session failure to exit 1, so the session leaves the
+    process directly (`sys.exit`) for the machine-fault path.
+
+  This gate needs that distinction more than the offline default set does, not less: `nox -t
+  fix`/`nox -s tests` are offline once the model cache is warm, whereas `lock_currency` requires `uv`
+  and a reachable PyPI on **every** invocation. CI's `lock-currency` job installs `uv` itself first,
+  so the uv-absent path only bites a developer machine or `/land`'s local pre-flight — the public CI
+  badge still catches a stale lock in that case, just later.
+- **Attribution needs a baseline, not just an exit code (`lode-sys4`).** `/land`'s isolation-replay
+  loop finds a culprit by merging the accepted branches one at a time and blaming the one that turns
+  the gate red. That is sound for `nox -s tests`, which asks a question about the tree alone. It is
+  *not* sound for `lock_currency`, which asks whether the committed lock is a fixed point of the tree
+  **plus the ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a
+  `uv` release that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`,
+  so the lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  the gate once on bare `origin/trunk` before entering the loop: red there means the staleness
+  predates every branch in the set and is not attributable to any of them — stop the pass, don't
+  isolate.
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
