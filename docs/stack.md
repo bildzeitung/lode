@@ -113,6 +113,16 @@ Two files, two jobs — **never pin the same thing in both**:
   `uv pip compile` (`scripts/update-deps.sh`, `lode-g274.2`, once it lands) — never hand-edited;
   the hashes make hand-editing impractical anyway.
 
+  **Single-tool exception: `ruff==0.15.22` is pinned in the `dev` extra (`lode-umh2`).** ruff
+  0.16.0 (released 2026-07-23) enforces a much larger default rule set than the version that last
+  certified trunk clean, producing 100+ pre-existing violations across ~46 untouched files and
+  turning `nox -t fix` red repo-wide for every producer — not a regression in any one branch's own
+  code. This is a deliberate, maintainer-approved *partial rescission* of the unlocked-`dev` policy
+  above, scoped to ruff alone as a stopgap; it does **not** extend to any other `dev` tool. The
+  underlying decision — whether to adopt 0.16's rules, add an explicit `[tool.ruff.lint] select`,
+  or land a dedicated repo-wide cleanup — is deferred to `lode-ju25`; once that lands, this pin
+  should be revisited (loosened or replaced) rather than left indefinitely.
+
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
 `--require-hashes` are mutually exclusive in one pip/uv invocation, so the install is three steps:
