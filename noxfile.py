@@ -285,6 +285,7 @@ def lock_currency(session: nox.Session) -> None:
                 "requirements.lock",
                 str(candidate),
             ],
+            check=False,  # non-zero means "lock is stale" -- inspected below, not an error to raise
         )
         if diff.returncode != 0:
             session.error(
