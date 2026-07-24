@@ -582,8 +582,8 @@ decides how loud "surface it" should be:
   credentials are configured. The job is already back at `'pending'`, uncharged,
   for the next explicit `lode work` to report loudly.
 - `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
-  request) needs no special case of its own: it never wraps its `build_provider()` /
-  `collect_batch()` calls in a broad `except`, so an `AuthError`/`LLMAuthError`
+  request) needs no special case of its own: it never wraps its `collect_enrich_batch()`
+  call (which resolves credentials via `build_provider()`) in a broad `except`, so an `AuthError`/`LLMAuthError`
   there already propagates out of it — the swallow this section fixes never
   existed on that path. `drain` handles it identically to `_batch_submit_enrich`'s,
   below.
