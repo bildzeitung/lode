@@ -168,7 +168,7 @@ Runs app-side, after the Q&A LLM returns and before display:
    "connect these two notes" gets answered, not refused. The scorer is an injectable seam (a Protocol +
    a lazily-loaded FastEmbed default), so it loads no model unless a claim actually reaches step 3 and
    tests stay offline. It runs on the **same ONNX runtime** as the reranker — on-box, no $, no
-   Anthropic round-trip.
+   cloud-LLM round-trip.
 4. **Drop or flag** claims that fail; never silently display them.
 5. **Abstain.** If nothing survives the gate, the system says **"your notes don't answer this"** —
    the honest failure mode. Fidelity over fluency means a *willingness to return nothing* rather than

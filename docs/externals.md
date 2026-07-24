@@ -131,8 +131,8 @@ content, and a persistently-redirecting URL still dedups onto one node.
 
 `snapshot_id = H(external_id ‖ body)` makes an *identical* refetch free (same hash, no new row). But
 a chatty external — an active PR refreshed hourly, one new comment each time — produces a **new
-snapshot every refresh**, and naively each one would trigger a paid Claude **re-enrichment**
-([stack.md](stack.md) Batches). Owned notes have a no-op-save guard; externals need the analogous
+snapshot every refresh**, and naively each one would trigger a paid **re-enrichment** call through the
+enrichment LLM ([stack.md](stack.md) batch path). Owned notes have a no-op-save guard; externals need the analogous
 cost control, so the two operations are gated separately:
 
 - **Re-embed on any change** — local, cheap, keeps retrieval current.
@@ -160,9 +160,10 @@ The `enrich` job the gate enqueues resolves polymorphically (`lode-7qi`): `lode.
 points (`enrich_version`, and the Batches API route `submit_enrich_batch`/`collect_enrich_batch` that
 actually claims a pending `enrich` job first in production) all resolve `target_version` against
 `versions`/`notes` first, falling back to `snapshots`/`externals` — the same blind resolution
-`lode.embedding._version_body` already used for the `embed` leg. A material change therefore runs real
-Haiku extraction over the snapshot body and writes annotations/edges against the `external_id` (the
-same polymorphic `annotations.target` / `edges.from_id` a note's `note_id` writes against).
+`lode.embedding._version_body` already used for the `embed` leg. A material change therefore runs a
+real enrichment-LLM extraction (default: Haiku) over the snapshot body and writes annotations/edges
+against the `external_id` (the same polymorphic `annotations.target` / `edges.from_id` a note's
+`note_id` writes against).
 
 **The write path** (`lode.externals.ingest_snapshot`, `lode-w0h.2`) is the mirrored analogue of the
 note save path: dedup on `external_id` (one `externals` row per source, created on first sight),
@@ -675,22 +676,26 @@ Not "content never leaves the machine" — that's false and the headline must no
 
 - **Local, never leaves:** chunking, embeddings, reranking, NLI entailment. **Indexing and
   retrieval are fully on-box.**
-- **Leaves the box to Anthropic:** **enrichment** (Haiku, *every note*, background) and **Q&A**
-  (Sonnet/Opus, the *retrieved passages* — which can include mirrored ticket/email/repo snapshots —
-  *per question*). The aggregation that makes this box valuable is exactly what Q&A ships into the
-  cloud prompt, often invisibly.
+- **Leaves the box to the configured cloud LLM provider** — [provider-selected via
+  `llm_provider`](stack.md#llm-provider-seam-decided-lode-568v1), Anthropic by default: **enrichment**
+  (default: Haiku, *every note*, background) and **Q&A** (default: Sonnet/Opus, the *retrieved
+  passages* — which can include mirrored ticket/email/repo snapshots — *per question*). Setting
+  `llm_provider = "openai"` sends the identical payloads to OpenAI/Azure instead — the privacy
+  boundary is *leaves the box to whichever provider is configured*, not "leaves the box to
+  Anthropic" specifically. The aggregation that makes this box valuable is exactly what Q&A ships
+  into the cloud prompt, often invisibly, regardless of which provider is active.
 
 ### Two redactions, aimed at the right legs
 
 Redaction is not one control. Because embedding is **local**, redacting before it only affects local
 *retrievability* — it does **nothing** about egress, since the secret still sits in `versions.body`
-and is still sent to Claude at enrichment/Q&A time:
+and is still sent to the configured cloud LLM at enrichment/Q&A time:
 
 - **Redact-before-index** — a pasted `.env` / API key doesn't become locally *retrievable* (vector
   + FTS). Local-at-rest concern.
 - **Redact-before-egress** — strip known secret patterns from the **enrichment payload and the Q&A
-  context** before they're sent to Claude. This is the control that actually limits cloud exposure,
-  and it's the one §6 originally omitted.
+  context** before they're sent to the configured cloud LLM. This is the control that actually
+  limits cloud exposure, and it's the one §6 originally omitted.
 - **`purge`** (the [corrective half](#hard-delete-the-deliberate-immutability-break-corrective-half))
   remains the only thing that removes the durable copy from `versions.body`.
 
@@ -699,7 +704,7 @@ and is still sent to Claude at enrichment/Q&A time:
 A note — or an external source (a specific repo / ticket project) — can be marked **`no_egress`**:
 
 - still **captured, chunked, embedded, and locally retrievable** (keyword + vector);
-- **never sent to Claude** — no enrichment, and **excluded from cloud Q&A context**;
+- **never sent to the configured cloud LLM** — no enrichment, and **excluded from cloud Q&A context**;
 - in an answer it is **cited as "present, withheld from cloud synthesis"** rather than silently
   dropped, so the user knows relevant material exists but was kept local. (A local-LLM fallback that
   could synthesize over withheld notes is a future option — see [decisions.md](decisions.md).)
