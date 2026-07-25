@@ -588,7 +588,7 @@ def run_one(
         )
         raise
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         err = str(exc)
         log.warning(
             "job %d (%s target=%s) failed (attempt %d/%d): %s",

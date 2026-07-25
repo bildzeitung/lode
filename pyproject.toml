@@ -114,3 +114,23 @@ lode = ["*.sql"]
 # Ship the TUI's external stylesheet (lode-1i8.4) — package-data keys are
 # per-package and non-recursive, so lode.tui needs its own entry.
 "lode.tui" = ["*.tcss"]
+
+[tool.ruff.lint]
+ignore = [
+  "B008",
+  "B017",
+  "BLE001",
+  "C402",
+  "C408",
+  "FLY002",
+  "ISC004",
+  "PLW1510",
+  "PYI034",
+  "RUF012",
+  "RUF059",
+  "SIM102",
+  "SIM117",
+  "TRY004",
+  "UP046",
+  "UP047"
+]

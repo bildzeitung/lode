@@ -50,7 +50,7 @@ def test_model_tier_accepts_explicit_fields() -> None:
 
 def test_model_tier_is_frozen() -> None:
     tier = ModelTier(model="x")
-    with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError on frozen assign
+    with pytest.raises(Exception):
         tier.model = "y"
 
 
