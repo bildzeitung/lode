@@ -109,7 +109,7 @@ class EgressDecision(Generic[T]):
         return tuple(WithheldCitation(item.target_id) for item in self.withheld)
 
 
-def partition_egress(items: Iterable[T]) -> EgressDecision[T]:
+def partition_egress[T](items: Iterable[T]) -> EgressDecision[T]:
     """Split egress candidates by ``no_egress``: withhold the never-sent ones.
 
     The single precondition both send paths consume -- enrichment (E7) and Q&A (E6)
