@@ -37,7 +37,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -49,8 +49,8 @@ from typer.testing import CliRunner
 from lode import __version__, cli, config
 from lode.answer import Claim, Support
 from lode.auth import AuthError
-from lode.cli import app
 from lode.cited_answer import CitedAnswer
+from lode.cli import app
 from lode.config import Settings, load_settings
 from lode.egress import WithheldCitation
 from lode.embedding import embed
@@ -1655,8 +1655,8 @@ def test_model_cache_probe_warm_and_cold(
     # The probe is keyed by the entry's `sources.hf` repo id, NOT by the
     # friendly model id in settings -- the two differ for some models, so a
     # probe keyed on the model id would report a warm cache cold forever.
-    from lode.config import model_cache_identity
     from lode.cli import _model_cache_probe
+    from lode.config import model_cache_identity
 
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
@@ -1688,8 +1688,8 @@ def test_model_cache_probe_matches_model_id_case_insensitively(
     # otherwise a config.toml with a case-variant id loads fine everywhere else
     # in lode while the probe reports "cannot judge" and the cold hint can never
     # fire for it.
-    from lode.config import model_cache_identity
     from lode.cli import _model_cache_probe
+    from lode.config import model_cache_identity
 
     home = tmp_path / "home"
     monkeypatch.setenv("LODE_HOME", str(home))
@@ -2005,7 +2005,7 @@ def test_purge_hard_deletes_a_note_and_reports_the_sweep(
     assert note_id in result.stdout  # it reports what it swept, not refuses
 
     # The body is overwritten with the [purged YYYY-MM-DD] marker and purged_at set.
-    marker = f"[purged {datetime.now(timezone.utc):%Y-%m-%d}]"
+    marker = f"[purged {datetime.now(UTC):%Y-%m-%d}]"
     assert marker in result.stdout
     assert _rows(
         db_path,
@@ -2106,7 +2106,7 @@ def test_notes_date_column_renders_in_local_time(
         0
     ][0]
     utc_dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=timezone.utc
+        tzinfo=UTC
     )
     expected_local = (utc_dt - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
     assert expected_local in result.stdout
@@ -5624,7 +5624,7 @@ def test_work_refuses_when_lock_held(tmp_path: Path) -> None:
 
 def _stale_iso(seconds_ago: int) -> str:
     """An ISO-8601 timestamp ``seconds_ago`` seconds in the past."""
-    dt = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    dt = datetime.now(UTC) - timedelta(seconds=seconds_ago)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 

@@ -33,11 +33,11 @@ import pytest
 
 from lode.config import Settings
 from lode.storage import init_db
-from lode.tui.services import capture as capture_mod
 from lode.tui.app import LodeApp
-from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, RELATED_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
+from lode.tui.services import capture as capture_mod
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import save
 
 

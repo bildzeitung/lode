@@ -28,7 +28,7 @@ this to shorten what they display.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lode.timestamps import parse_stamp
 
@@ -55,7 +55,7 @@ def format_adaptive_date(created: str, *, now: datetime | None = None) -> str:
     rather than "today" even though it's under 24h old.
     """
     dt = parse_stamp(created).astimezone()
-    reference = (now if now is not None else datetime.now(timezone.utc)).astimezone()
+    reference = (now if now is not None else datetime.now(UTC)).astimezone()
     delta_days = (reference.date() - dt.date()).days
     if delta_days == 0:
         return dt.strftime("%H:%M")

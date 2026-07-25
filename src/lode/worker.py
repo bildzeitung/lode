@@ -139,7 +139,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from lode import jobs
-from lode.config import Settings, lance_dir as _lance_dir
+from lode.config import Settings
+from lode.config import lance_dir as _lance_dir
 from lode.ids import short_version_id
 from lode.progress import op_progress
 
@@ -234,7 +235,7 @@ def _run_dead_letter_hook(
         return
     try:
         hook(conn, target_version, last_error, claimed_at, settings)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.exception(
             "dead-letter hook for job type %r (target=%s) failed; job remains "
             "'dead' but its dead-letter side effect was not recorded",

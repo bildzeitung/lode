@@ -645,7 +645,7 @@ class OpenAIProvider:
 
         try:
             response = self._client.responses.create(**kwargs)
-        except Exception as exc:  # noqa: BLE001 -- normalize every SDK failure
+        except Exception as exc:
             raise self._error_from_exception(exc, model=model) from exc
 
         return self._extract_json_payload(response, model=model)

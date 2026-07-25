@@ -93,9 +93,9 @@ from textual.widgets import Header
 
 from lode.notes_read import list_notes_with_all_tags, list_tags, short_note_id
 from lode.tui.dates import format_adaptive_date
+from lode.tui.screens.edit import EditScreen
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.screens.edit import EditScreen
 
 #: The top panel's tag grid widget id -- read back in tests.
 TAG_LIST_ID = "tags-tag-list"

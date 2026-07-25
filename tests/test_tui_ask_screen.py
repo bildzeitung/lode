@@ -29,9 +29,9 @@ from lode.answer import Claim, Support
 from lode.cited_answer import CitedAnswer
 from lode.egress import WithheldCitation
 from lode.tui.app import LodeApp
-from lode.tui.services.ask import AskResult
 from lode.tui.screens.ask import QUESTION_ID, RESULTS_ID, AskScreen
 from lode.tui.screens.capture import CaptureScreen
+from lode.tui.services.ask import AskResult
 
 
 def test_app_registers_ask_screen(tmp_path: Path) -> None:

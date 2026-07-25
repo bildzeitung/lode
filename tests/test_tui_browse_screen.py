@@ -14,6 +14,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from conftest import _press_and_settle
 from rich.console import Console
 from rich.text import Text
 from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
@@ -51,8 +52,6 @@ from lode.tui.screens.snapshot_viewer import (
 from lode.tui.screens.version_history import HISTORY_TABLE_ID, VersionHistoryScreen
 from lode.tui.screens.version_view import VERSION_BODY_ID, VersionViewScreen
 from lode.versions import save
-
-from conftest import _press_and_settle
 
 
 def test_app_registers_browse_screen(tmp_path: Path) -> None:

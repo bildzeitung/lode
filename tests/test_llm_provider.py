@@ -7,8 +7,8 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
-import unittest.mock as mock
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from pydantic import BaseModel

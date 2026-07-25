@@ -57,7 +57,7 @@ class AskResult:
     rather than assumed away).
     """
 
-    answer: "CitedAnswer"
+    answer: CitedAnswer
     as_of: dict[str, str | None] = field(default_factory=dict)
 
 
@@ -105,7 +105,7 @@ def run_ask(
         conn.close()
 
 
-def _resolve_as_of(conn: sqlite3.Connection, support: "Support") -> str | None:
+def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
     """Resolve one citation's as-of timestamp from the store.
 
     A note ``version_id`` is stamped at write time (``versions.created``); an
@@ -154,7 +154,7 @@ def render_ask_result(result: AskResult) -> str:
     return "\n".join(lines)
 
 
-def _render_citation(support: "Support", as_of: str | None) -> str:
+def _render_citation(support: Support, as_of: str | None) -> str:
     """Render one support as an indented ``[<id-kind> <id>, as of <ts>] "<span>"`` line."""
     if support.version_id is not None:
         target = f"version {support.version_id}"

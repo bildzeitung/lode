@@ -95,8 +95,8 @@ def test_the_real_running_checkout_passes() -> None:
     If this ever fails, the venv really is resolving ``lode`` from another
     checkout -- which is the guard doing its job, not a broken test.
     """
-    import lode
-
     from conftest import _CHECKOUT_ROOT
+
+    import lode
 
     assert _wrong_source_tree_message(lode.__file__, _CHECKOUT_ROOT) is None

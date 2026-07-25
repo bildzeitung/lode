@@ -101,7 +101,7 @@ class WorkerLock:
     # Context-manager protocol
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> "WorkerLock":
+    def __enter__(self) -> WorkerLock:
         self.acquire()
         return self
 

@@ -15,9 +15,8 @@ from lode.progress import op_progress
 
 
 def test_op_progress_logs_starting_and_done(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        with op_progress("my_op"):
-            pass
+    with caplog.at_level(logging.INFO), op_progress("my_op"):
+        pass
 
     assert "my_op: starting" in caplog.text
     assert "my_op: done" in caplog.text

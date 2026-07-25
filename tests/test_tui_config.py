@@ -31,9 +31,9 @@ from typer.testing import CliRunner
 
 from lode.cli import app as cli_app
 from lode.config import (
+    _SECRET_SEED_PATTERNS,
     Kind,
     Settings,
-    _SECRET_SEED_PATTERNS,
     config_path,
     config_rows,
     default_db_path,

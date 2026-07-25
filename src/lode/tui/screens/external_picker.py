@@ -17,9 +17,9 @@ from textual.widgets import Header
 
 from lode.enrichment_view import ExternalView
 from lode.ids import short_version_id
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 
 #: The many-externals picker table's widget id -- read back in tests.
 EXTERNAL_PICKER_TABLE_ID = "external-picker-table"

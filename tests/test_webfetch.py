@@ -392,7 +392,7 @@ def _fake_client_cls(status_code: int, captured: dict) -> type:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
-        def __enter__(self) -> "_FakeClient":
+        def __enter__(self) -> _FakeClient:
             return self
 
         def __exit__(self, *exc) -> bool:

@@ -64,11 +64,10 @@ dev = [
                       # indefinite stall on the landing gate; see the
                       # `[tool.pytest.ini_options]` `timeout` setting below.
     "nox",           # task runner (`nox -t fix` before merging)
-    "ruff==0.15.22", # lint / format -- pinned (lode-umh2): 0.16.0's larger default
-                      # rule set produces 100+ pre-existing violations across ~46
-                      # untouched files (lode-ju25, deferred). Single-tool carve-out
-                      # from the otherwise-unlocked `dev` extra (lode-g274.1) -- not
-                      # a reversal of that policy for any other dev tool.
+    "ruff==0.16.0",   # lint / format -- pinned to prevent unwanted churn
+                      # Single-tool carve-out from the otherwise-unlocked `dev`
+		      # extra (lode-g274.1) -- not a reversal of that policy
+		      # for any other dev tool.
     "shellcheck-py", # bundles the shellcheck binary — the `nox -s shellcheck` gate
     "build",         # `python -m build` — canonical wheel/sdist packaging front-end
 ]

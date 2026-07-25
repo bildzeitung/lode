@@ -17,7 +17,7 @@ model ids (`embedding_model`; `rerank_model`/`entailment_model` share one id,
 lode-txh.6) still matches what `list_supported_models()` reports today.
 """
 
-from lode.config import Settings, _MODEL_CACHE_IDENTITY, model_cache_identity
+from lode.config import _MODEL_CACHE_IDENTITY, Settings, model_cache_identity
 
 
 def test_pinned_identity_covers_every_resolved_model_id() -> None:

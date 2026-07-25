@@ -38,9 +38,9 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
+from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.lode_static import LodeStatic
-from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.versions import SaveResult
 
 #: The diff view's widget id — read back in tests.

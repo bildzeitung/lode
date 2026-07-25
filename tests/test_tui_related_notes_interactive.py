@@ -20,14 +20,14 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.services.related import RelatedNote
-from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import RELATED_ID, CaptureScreen
 from lode.tui.screens.edit import EDIT_RELATED_ID, EditScreen
 from lode.tui.screens.related_note_modal import (
     RELATED_MODAL_BODY_ID,
     RelatedNoteModalScreen,
 )
+from lode.tui.services.related import RelatedNote
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 
 _RELATED = [
     RelatedNote(note_id="note-a", snippet="a", age="1 day ago"),
