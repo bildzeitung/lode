@@ -17,6 +17,7 @@ Usage::
 import os
 from pathlib import Path
 from types import TracebackType
+from typing import Self
 
 
 class LockHeld(RuntimeError):
@@ -101,7 +102,7 @@ class WorkerLock:
     # Context-manager protocol
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> WorkerLock:
+    def __enter__(self) -> Self:
         self.acquire()
         return self
 
