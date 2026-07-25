@@ -60,7 +60,7 @@ def resolve_level(level: str | int | None = None) -> int:
         return level
     resolved = logging.getLevelName(level.strip().upper())
     if not isinstance(resolved, int):
-        raise ValueError(f"unknown log level: {level!r}")
+        raise TypeError(f"unknown log level: {level!r}")
     return resolved
 
 

@@ -37,7 +37,7 @@ def test_int_level_passes_through() -> None:
 
 
 def test_unknown_level_raises() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         resolve_level("LOUD")
 
 
