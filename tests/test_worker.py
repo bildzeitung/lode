@@ -2591,11 +2591,13 @@ def test_batch_submit_survives_crash_before_batch_handle_persist(
     _insert_note_worker(conn)
     job_id = _insert_enrich_job_worker(conn)
 
-    with mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit):
-        with pytest.raises(SystemExit):
-            _batch_submit_enrich(
-                conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
-            )
+    with (
+        mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit),
+        pytest.raises(SystemExit),
+    ):
+        _batch_submit_enrich(
+            conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
+        )
 
     # The pre-claim CAS ran and stamped claimed_at before the (simulated)
     # crash; batch_handle never got persisted.
