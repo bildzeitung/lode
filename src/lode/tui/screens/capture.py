@@ -106,7 +106,7 @@ letter, so the retirement above is history, not a free key. Rationale lives on
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from textual import work
 from textual.app import ComposeResult
@@ -178,7 +178,7 @@ class CaptureScreen(Screen[None]):
     # fit comfortably within it. Adding "Link" (lode-5ill) still fits: the
     # footer's real consumed width test (test_tui_app.py) measured it well
     # under the 100-column bound with all 9 entries (4 screen + 5 app) shown.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save & new"),
         Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),

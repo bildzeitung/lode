@@ -81,6 +81,7 @@ lode-l38d.9's bd notes.
 from __future__ import annotations
 
 import math
+from typing import ClassVar
 
 from rich.text import Text
 from textual import events
@@ -131,7 +132,7 @@ class TagsScreen(Screen[None]):
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
         Binding("space", "toggle_tag", "Toggle", show=False),
     ]

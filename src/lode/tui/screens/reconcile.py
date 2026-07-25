@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import difflib
 from collections.abc import Callable
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -62,7 +63,7 @@ def _diff_text(conflict: Conflict) -> str:
 class ReconcileScreen(Screen[None]):
     """A buffer-vs-head diff with re-apply/discard bindings for a CAS reject."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("r", "reapply", "Re-apply"),
         Binding("d", "discard", "Discard"),
     ]

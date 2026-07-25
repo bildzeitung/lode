@@ -69,6 +69,7 @@ already covers the rest).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 from textual.app import App
 from textual.binding import Binding
@@ -110,7 +111,7 @@ class LodeApp(App[str | None]):
     #: Registration convention for every E11 screen: name -> Screen subclass,
     #: pushed via ``push_screen("name")``. Extend this dict, not this class,
     #: when a new screen lands.
-    SCREENS = {
+    SCREENS: ClassVar = {
         "capture": CaptureScreen,
         "config": ConfigScreen,
         "ask": AskScreen,
@@ -119,7 +120,7 @@ class LodeApp(App[str | None]):
         "tags": TagsScreen,
     }
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("ctrl+q", "quit", "Quit", priority=True),
         # "Cfg" stays abbreviated (lode-uczx, amending lode-l38d.3's original
         # rationale). lode's minimum supported terminal width is 100 columns

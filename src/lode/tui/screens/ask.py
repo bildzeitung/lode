@@ -11,6 +11,8 @@ runs the pipeline off the UI thread, and displays what
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -42,7 +44,7 @@ class AskScreen(Screen[None]):
     silently fails on a Screen -- see ``docs/keybindings.md``).
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 

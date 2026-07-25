@@ -8,6 +8,7 @@ build_provider's provider resolution for both providers.
 """
 
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest import mock
 
 import pytest
@@ -509,7 +510,7 @@ def test_openai_structured_call_maps_sdk_exception_diagnostics() -> None:
     class _FakeAPIError(Exception):
         status_code = 400
         request_id = "req-1"
-        body = {
+        body: ClassVar = {
             "error": {
                 "message": "content filtered",
                 "innererror": {"content_filter_result": {"hate": {"filtered": True}}},

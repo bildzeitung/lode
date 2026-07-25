@@ -225,6 +225,8 @@ this module now keeps only :class:`BrowseScreen`, and every cross-screen
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -274,7 +276,7 @@ class BrowseScreen(Screen[None]):
     # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
     # the full words fit comfortably within it.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View"),

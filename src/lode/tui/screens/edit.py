@@ -120,6 +120,8 @@ now, and the cycle no longer exists.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -163,7 +165,7 @@ class EditScreen(Screen[None]):
     # another round of this). "Inspect"/"View" were left alone -- shortening
     # either alone wasn't enough on its own, and two 3-4 letter cuts read
     # better than one very short one.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
         Binding("ctrl+f", "focus_related", "Rel"),
