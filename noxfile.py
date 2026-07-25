@@ -147,8 +147,8 @@ def _xdist_workers() -> str:
 @nox.session(tags=["fix"])
 def fix(session: nox.Session) -> None:
     """Format and lint-fix the tree in place (ruff)."""
-    session.run("ruff", "format", ".")
-    session.run("ruff", "check", "--fix", ".")
+    session.run("./venv/bin/ruff", "format", ".")
+    session.run("./venv/bin/ruff", "check", "--fix", ".")
 
 
 @nox.session
