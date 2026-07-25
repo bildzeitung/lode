@@ -39,7 +39,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from lode.config import Settings
 from lode.redact import redact_before_egress_counting
@@ -90,7 +90,7 @@ T = TypeVar("T", bound=Withholdable)
 
 
 @dataclass(frozen=True)
-class EgressDecision(Generic[T]):
+class EgressDecision[T]:
     """Partition of egress candidates into what may be sent vs what is withheld.
 
     ``sendable`` cleared the no_egress precondition and may go to Claude (still
