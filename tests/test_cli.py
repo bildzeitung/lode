@@ -2105,9 +2105,7 @@ def test_notes_date_column_renders_in_local_time(
     created = _rows(db_path, "SELECT created FROM notes WHERE note_id = ?", (note_id,))[
         0
     ][0]
-    utc_dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
-        tzinfo=UTC
-    )
+    utc_dt = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
     expected_local = (utc_dt - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
     assert expected_local in result.stdout
     # The whole-hour UTC-5 offset always shifts the displayed hour, so the raw
