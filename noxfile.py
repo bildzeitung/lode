@@ -136,6 +136,57 @@ GATE_MACHINE_FAULT = 2
 # key) and ``build`` (packaging, not a code gate) stay explicit, never a default.
 nox.options.sessions = ["fix", "tests", "shellcheck", "linkcheck"]
 
+# The project's own venv, always at this fixed location relative to this file
+# (CLAUDE.md: "The venv lives at ./venv (repo root)").
+_VENV_BIN = Path(__file__).parent.resolve() / "venv" / "bin"
+
+
+def _venv_tool(session: nox.Session, name: str) -> str:
+    """Resolve ``name`` to its path inside the project's own ``./venv/bin`` (lode-0yfn).
+
+    ``venv_backend = "none"`` (above) means every session inherits whatever
+    PATH the invoking shell happens to have. A bare tool name like ``"ruff"``
+    (or a cwd-relative fragment like ``"./venv/bin/ruff"``, which silently
+    breaks the moment a session is invoked from anywhere but the repo root)
+    then resolves whichever copy is *earliest* on that PATH -- which, on a box
+    with a stale system-wide install (pip ``--user``, pipx, ...) sitting ahead
+    of the activated venv, is silently NOT the one pinned in
+    ``pyproject.toml``/``requirements.lock``, and the gate reports success
+    anyway. Reproduced directly: an ambient ``~/.local/bin/ruff`` (0.15.11)
+    shadowing the venv's pinned ``ruff`` (0.15.22 at the time), so
+    ``nox -t fix`` ran a different ruff than the one the repo pins and
+    silently skipped work (e.g. ruff-format's markdown Python-fence
+    reformatting) while still exiting 0.
+
+    Resolving straight to this fixed on-disk path -- derived from this file's
+    own location, never from cwd or whatever PATH order the shell produced --
+    makes that ambient-PATH ordering (and cwd) irrelevant, for every session
+    below that shells out to a dev-extra tool (``ruff``, ``pytest``,
+    ``shellcheck``, ``python``). Fails the session loudly if the tool isn't
+    there: those tools only ever come from the project venv (installed via
+    the ``dev`` extra, ``docs/stack.md``'s dependency-locking section), so a
+    missing venv means the session cannot do its job regardless -- surfacing
+    that beats silently falling through to whatever ambient copy happens to
+    exist.
+
+    Deliberately NOT applied to the ``build`` session: that one shells out to
+    ambient ``python -m build`` on purpose (its own docstring, and
+    ``build.yml``/``release.yml``, run it with no ``./venv`` at all --
+    ``python -m build`` resolves/builds in its own isolated PEP 517 env and
+    never touches the dev-extra/lock tools this guard exists to pin). Also not
+    applied to ``lock_currency``, which resolves ``uv`` -- a separate,
+    system-wide tool never installed into ``./venv``, already checked
+    explicitly via ``shutil.which`` and failed closed if absent.
+    """
+    tool = _VENV_BIN / name
+    if not tool.is_file():
+        session.error(
+            f"expected the project venv's {name!r} at {tool}, not found -- "
+            "run ./scripts/python-init.sh first (see CLAUDE.md) before "
+            "running this session"
+        )
+    return str(tool)
+
 
 def _xdist_workers() -> str:
     """Effective pytest-xdist worker count for ``-n`` (``LODE_TEST_WORKERS``, lode-bv6y).
@@ -160,9 +211,17 @@ def _xdist_workers() -> str:
 
 @nox.session(tags=["fix"])
 def fix(session: nox.Session) -> None:
-    """Format and lint-fix the tree in place (ruff)."""
-    session.run("./venv/bin/ruff", "format", ".")
-    session.run("./venv/bin/ruff", "check", "--fix", ".")
+    """Format and lint-fix the tree in place (ruff).
+
+    Invokes the project venv's own ``ruff`` by explicit on-disk path
+    (``_venv_tool``, lode-0yfn) rather than a bare name or a cwd-relative
+    fragment, so a stale system-wide ``ruff`` earlier on PATH -- or a session
+    invoked from a cwd other than the repo root -- can never silently shadow
+    the pinned copy and produce a falsely-green gate.
+    """
+    ruff = _venv_tool(session, "ruff")
+    session.run(ruff, "format", ".")
+    session.run(ruff, "check", "--fix", ".")
 
 
 @nox.session
@@ -176,8 +235,12 @@ def tests(session: nox.Session) -> None:
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
     ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
     no test skipped, just distributed across workers.
+
+    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
+    lode-0yfn), not by bare name, so ambient PATH order can't substitute a
+    different pytest than the one the dev extra installed.
     """
-    session.run("pytest", "-n", _xdist_workers())
+    session.run(_venv_tool(session, "pytest"), "-n", _xdist_workers())
 
 
 @nox.session
@@ -191,6 +254,11 @@ def shellcheck(session: nox.Session) -> None:
     test operators) fail the gate; ``info``/``style`` notes do not, keeping the
     signal level in line with what ruff enforces for Python. Scoped to tracked
     files via ``git ls-files`` so scratch/vendored scripts never enter the gate.
+
+    Invokes the venv's own ``shellcheck`` (from the ``shellcheck-py`` dev dep)
+    by explicit path (``_venv_tool``, lode-0yfn), not by bare name, so a
+    system-installed ``shellcheck`` earlier on PATH can't substitute a
+    different binary/version.
     """
     files = subprocess.run(
         ["git", "ls-files", "*.sh"],
@@ -200,7 +268,7 @@ def shellcheck(session: nox.Session) -> None:
     ).stdout.split()
     if not files:
         session.skip("no tracked shell scripts to check")
-    session.run("shellcheck", "--severity=warning", *files)
+    session.run(_venv_tool(session, "shellcheck"), "--severity=warning", *files)
 
 
 @nox.session
@@ -215,8 +283,13 @@ def linkcheck(session: nox.Session) -> None:
     anchor this gate found already sitting in trunk. Pure Python, no Docker
     and no network, so -- unlike ``validate-mermaid.sh`` -- it belongs in the
     default offline gate set alongside ``fix``/``tests``/``shellcheck``.
+
+    Invokes the venv's own ``python`` by explicit path (``_venv_tool``,
+    lode-0yfn), not by bare name, so an ambient ``python``/``python3`` earlier
+    on PATH can't run this against a different interpreter than the one with
+    the project's deps (e.g. ``typer``) installed.
     """
-    session.run("python", "scripts/check_links.py")
+    session.run(_venv_tool(session, "python"), "scripts/check_links.py")
 
 
 @nox.session
@@ -233,8 +306,11 @@ def unit(session: nox.Session) -> None:
 
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
     ``8``, lode-bv6y — see the module docstring).
+
+    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
+    lode-0yfn), not by bare name — see the ``tests`` session for why.
     """
-    session.run("pytest", "-m", "not slow", "-n", _xdist_workers())
+    session.run(_venv_tool(session, "pytest"), "-m", "not slow", "-n", _xdist_workers())
 
 
 def _machine_fault(session: nox.Session, why: str) -> NoReturn:
@@ -379,9 +455,12 @@ def coverage(session: nox.Session) -> None:
     (Cobertura format, written to the cwd) for upload to a coverage service.
     Report-only: enforces no threshold — a low percentage does not fail this
     session.
+
+    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
+    lode-0yfn), not by bare name — see the ``tests`` session for why.
     """
     session.run(
-        "pytest",
+        _venv_tool(session, "pytest"),
         "--cov=lode",
         "--cov-report=xml",
         "--cov-report=term",
@@ -449,11 +528,14 @@ def eval(session: nox.Session) -> None:
     is absent: the Q&A leg hits Claude, so this is the credentialed CI-style
     check, never part of the offline test gate (see ``docs/decisions.md``,
     Shape A, lode-5y8.5).
+
+    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
+    lode-0yfn), not by bare name — see the ``tests`` session for why.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         session.skip("ANTHROPIC_API_KEY not set — eval needs Anthropic credentials")
     session.run(
-        "pytest",
+        _venv_tool(session, "pytest"),
         "tests/test_eval_live.py",
         "-v",
         env={"LODE_RUN_LIVE_EVAL": "1"},
