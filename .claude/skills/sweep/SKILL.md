@@ -64,12 +64,21 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 `land-escalated` query (it should never carry that label, but cheap insurance costs nothing):
 
 ```bash
-ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --json \
+ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
   | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)"')
 
 HUMAN=$(rtk bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
 ```
+
+**`--limit 0` on the `ESCALATED` query is load-bearing, not noise.** `bd list` defaults to
+`--limit 50` and that cap applies to `--json` too, with **no** truncation signal — bd neither errors
+nor marks the result short (the same fact §2a documents below for the deferred query). §6 rewrites
+the digest **wholesale** from `$CURRENT`, so a silently truncated `$ESCALATED` would drop items 51+
+from the durable digest outright — indistinguishable from those escalations having been resolved —
+and then re-notify them as "new" on a later pass once the truncated set shifts. `0` means unlimited.
+(`bd human list` carries no documented default-cap behavior as of this writing, so it is left as-is
+here.)
 
 **Why `(. // [])` and not a bare `.[]`:** an *empty* `bd` result serializes as literal `null`, not
 `[]` (seen most often on `bd human list` when no `human` ticket is open). A bare `jq '.[]'` on that
@@ -110,9 +119,14 @@ while IFS=$'\t' read -r e TITLE; do
   # epics, which is why it reads fine in a one-epic spot check).
   CLOSABLE="${CLOSABLE}${ROW}
 "
-done < <(rtk bd list --type=epic --label epic-audited --status open --json \
+done < <(rtk bd list --type=epic --label epic-audited --status open --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 ```
+
+**`--limit 0` is load-bearing here too, same reason as §1's `ESCALATED` query above:** `bd list`
+defaults to `--limit 50` on `--json` output with no truncation signal, and §6 rebuilds the digest
+wholesale from `$CURRENT` — a silently capped epic query would drop epics 51+ from the durable
+`epic-ready-to-close` record, indistinguishable from those epics having been closed already.
 
 ## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
 
@@ -133,7 +147,7 @@ newline embedded in a title instead of letting it break the row.
 to `--json` too, with **no** truncation signal — bd neither errors nor marks the result short. Since
 this section promises the deferred list "in full, with no dedup" every pass, a default-capped query
 would silently under-report past 50 while the §8 count read as the true total. `0` means unlimited.
-(§1/§2/§4 carry the same unbounded pattern — out of scope here, tracked in `lode-hwbm`.)
+(§1/§2/§4 carried the same unbounded pattern — fixed alongside this one, lode-hwbm.)
 
 **Deliberately excluded from everything else in this skill:**
 
@@ -161,9 +175,15 @@ scratchpad state file was explicitly rejected during design because it re-notifi
 from a second machine. The digest issue is found by a **reserved label**, not a remembered ID:
 
 ```bash
-DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --json)
+DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --limit 0 --json)
 N=$(echo "$DIGEST_ROWS" | jq '(. // []) | length')   # `(. // [])` for the same null-serializes-empty reason as §1
 ```
+
+**`--limit 0` here guards the `N > 1` anomaly detection itself, not just the digest body.** Without
+it, a truncated result could report `N == 1` (a false steady-state read) even when duplicate digests
+exist beyond the default 50-row cap — silently masking the exact anomaly §4's own next paragraph
+exists to catch. In practice this issue should never have more than one or two rows; the explicit
+bound is cheap insurance against the same silent-cap failure mode as §1/§2 above.
 
 - **`N == 0`** — bootstrap. Only create it if `$CURRENT` is non-empty (an empty queue with no prior
   digest is a clean no-op — nothing to bootstrap, nothing to write). Create it with a **placeholder
