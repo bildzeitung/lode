@@ -45,12 +45,10 @@
 
 set -uo pipefail
 
-gate_could_not_run() {
-  echo "GATE COULD NOT RUN: $1" >&2
-  shift
-  for line in "$@"; do echo "$line" >&2; done
-  exit 2
-}
+# shellcheck source=gate-lib.sh
+. "$(dirname "$0")/gate-lib.sh"
+# No GATE_ADVISORY set here -- this gate carries no domain-specific trailer,
+# the same shape it always had (see gate-lib.sh's GATE_ADVISORY contract).
 
 # Arg-count check first, and it must exit 2 -- never let an unset "${1:?...}"
 # exit 1, which would collide with a legitimate "none" outcome being

@@ -68,14 +68,17 @@
 set -uo pipefail   # deliberately NOT -e: this script's entire job is to
                    # inspect a command's exit code, which -e would short-circuit
 
-gate_could_not_run() {
-  echo "GATE COULD NOT RUN: $1" >&2
-  shift
-  for line in "$@"; do echo "$line" >&2; done
-  echo "This is a machine fault a human must fix, not a branch conflict --" >&2
-  echo "do not kick this branch back needs-rebase in place of diagnosing it." >&2
-  exit 2
-}
+# shellcheck source=gate-lib.sh
+. "$(dirname "$0")/gate-lib.sh"
+
+# This gate's own domain-specific advisory, appended after every call's cause
+# lines (see gate-lib.sh's GATE_ADVISORY contract) — set once, so it does not
+# need repeating at each of this file's call sites below.
+# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
+GATE_ADVISORY=(
+  "This is a machine fault a human must fix, not a branch conflict --"
+  "do not kick this branch back needs-rebase in place of diagnosing it."
+)
 
 # Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`. In a script
 # run as `bash merge-precheck.sh`, an unset `${1:?}` exits 1, which is exactly

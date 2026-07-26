@@ -43,18 +43,22 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
 # The ONE owner of the gate-could-not-run contract: the banner callers key on,
 # the caller's cause lines, the standing instruction to a reader, and exit 2.
-# Callers supply only the cause — the part that genuinely differs. Keeping the
-# banner and the exit code here means a new call site cannot accidentally emit
-# half the contract (.claude/agents/coding.md, code-reviewer.md and
-# .claude/skills/land/SKILL.md all key on exactly this stderr).
-gate_could_not_run() {
-  echo "GATE COULD NOT RUN: $1" >&2
-  shift
-  for line in "$@"; do echo "$line" >&2; done
-  echo "This is a machine fault a human must fix, not a mermaid syntax error —" >&2
-  echo "do not hand-verify diagrams or hand off in place of this gate." >&2
-  exit 2
-}
+# Callers supply only the cause — the part that genuinely differs. Sourced
+# from scripts/gate-lib.sh (lode-090f) so this contract cannot accidentally
+# drift out of sync with scripts/merge-precheck.sh / scripts/release-bump.sh —
+# all three, plus .claude/agents/coding.md, code-reviewer.md and
+# .claude/skills/land/SKILL.md, key on exactly this stderr shape.
+# shellcheck source=gate-lib.sh
+. "$(dirname "$0")/gate-lib.sh"
+
+# This gate's own domain-specific advisory, appended after every call's cause
+# lines (see gate-lib.sh's GATE_ADVISORY contract) — set once, so it does not
+# need repeating at each of this file's three call sites below.
+# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
+GATE_ADVISORY=(
+  "This is a machine fault a human must fix, not a mermaid syntax error —"
+  "do not hand-verify diagrams or hand off in place of this gate."
+)
 
 if ! docker info >/dev/null 2>&1; then
   if command -v docker >/dev/null 2>&1; then
