@@ -674,8 +674,12 @@ are catalogued in [configuration.md](configuration.md).
   a genuine third state — neither confirmed nor refuted — returned in its own `unverified` array
   (never folded into `refuted`), each entry carrying an `unverifiedReason` instead of a
   `refutationReason`. The same near-duplicate merge `survivors` already used (lode-905v's
-  `mergeNearDuplicates`) applies to `unverified` too, so a bug an infra fault dropped in one
-  dimension but a different dimension's finder also raised still collapses correctly. The top-level
+  `mergeNearDuplicates`) applies to `unverified` too — within that array only, so the several copies
+  one infra fault leaves unverified across dimensions collapse to one. It deliberately does NOT
+  collapse across the three arrays: they partition findings by verification *state*, so a bug one
+  dimension confirmed and another left unverified legitimately appears in both, each label true of
+  its own copy. Cross-pool merging is the thing to avoid — dropping an unverified copy because a
+  similar-titled entry sits in `refuted` would re-create this very bug. The top-level
   result also gains **`degraded`** (true the moment any Find round, Verify agent, or whole dimension
   in the run failed to produce output) plus `stats.{findRoundsFailed,verifyAgentsFailed,
   dimensionsFailed,unverifiedCount}` — a partially-failed run is now distinguishable from a clean

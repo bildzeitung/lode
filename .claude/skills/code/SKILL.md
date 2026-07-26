@@ -452,16 +452,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    how it treats this input).
 
    **Also fold `result.unverified` and `result.degraded`, separately from the survivors — never silently
-   dropped (lode-wtwb).** A finding whose verifier crashed/timed out comes back in its own `unverified`
-   array, not folded into `refuted` — that conflation is the exact bug lode-wtwb closed (a 14/22-agent
-   session-limit crash on the lode-ns3r run made `findings: []` look like a clean pass while every
-   "refuted" entry was actually an unreachable skeptic, including a High-severity finding the orchestrator
-   only caught by hand-inspecting refutation-reason strings). So: if `result.unverified` is non-empty,
-   hand those entries to the reviewer too, labeled plainly as **unverified, not refuted** — the workflow's
-   skeptic never got to weigh in, so these need the reviewer's own judgment at least as much as a
-   confirmed survivor does, arguably more. If `result.degraded` is `true` (any Find round or Verify agent
-   in the run failed to produce output, per `result.stats`), say so explicitly — this run's absence of
-   findings in a given dimension does not mean that dimension is clean.
+   dropped (lode-wtwb; incident account in `docs/decisions.md`).** A finding whose verifier crashed comes
+   back in its own `unverified` array rather than folded into `refuted`, so: if `result.unverified` is
+   non-empty, hand those entries to the reviewer too, labeled plainly as **unverified, not refuted**. If
+   `result.degraded` is `true` (any Find round or Verify agent produced no output, per `result.stats`),
+   say so explicitly — this run's silence in a given dimension does not mean that dimension is clean.
+   How the reviewer then *weighs* an unverified entry is its own call, spelled out in `code-reviewer.md`
+   step 4.
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
    **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it

@@ -290,20 +290,17 @@ ${UNTRUSTED}`,
   const roundResults = rounds.filter(Boolean)
   // A round that errored/produced nothing is dropped by design (lode-p5gf's
   // own K-round redundancy mitigates it), but still count it: a run where
-  // FIND itself is falling over — not just VERIFY — must also show up in
-  // `degraded` below (lode-wtwb: an infrastructure failure must never be
-  // able to quietly reduce the finding count without the caller being able
-  // to tell, without hand-inspecting individual reason strings).
+  // FIND itself is falling over — not just VERIFY — must also reach
+  // `degraded` below (lode-wtwb).
   const findRoundsFailed = rounds.length - roundResults.length
-  if (roundResults.length === 0) {
-    return { dim: dim.key, survivors: [], refuted: [], unverified: [], injectionSuspects: [], findRoundsFailed, verifyAgentsFailed: 0 }
-  }
 
   const rawFindings = roundResults.flatMap((r, i) => (r.findings || []).map(f => ({ item: f, tag: i + 1 })))
   const injectionSuspects = [...new Set(roundResults.flatMap(r => r.injectionSuspects || []))]
 
+  // Covers the all-rounds-failed case too: `roundResults` empty means
+  // `rawFindings` and `injectionSuspects` are both empty as well.
   if (rawFindings.length === 0) {
-    return { dim: dim.key, survivors: [], refuted: [], unverified: [], injectionSuspects, findRoundsFailed, verifyAgentsFailed: 0 }
+    return { dim: dim.key, survivors: [], refuted: [], unverified: [], injectionSuspects, findRoundsFailed }
   }
 
   // Union this dimension's own rounds BEFORE Verify: a bug independently
@@ -331,7 +328,18 @@ ${fence(`Severity: ${f.severity}\nLocation (open this yourself): ${f.location}\n
 Diff for reference: \`git diff ${refRange}\` — then read the cited location at \`${reviewTip}\` (via \`git show\`, not the working tree) with enough surrounding context to judge it yourself.
 ${UNTRUSTED}`,
         { label: `verify:${dim.key}`, phase: 'Verify', schema: VERDICT_SCHEMA },
-      ).then(v => ({ f, v })),
+      )
+        // Keep the finding paired with its (missing) verdict even if the task
+        // REJECTS instead of resolving falsy. Not currently reached — on the
+        // reference crash (wf_9b60ff50-0c6) all 10 failed verify agents arrived
+        // as falsy resolutions and hit the `!v` branch below. It stays because
+        // a rejection would otherwise be a falsy slot that `filter(Boolean)`
+        // drops, putting the finding in NO array with `verifyAgentsFailed` at
+        // 0 — an infra fault quietly shrinking the finding count, exactly what
+        // lode-wtwb exists to prevent. Cheaper to close than to rely on an
+        // undocumented runtime contract staying the way it is today.
+        .then(v => ({ f, v }))
+        .catch(() => ({ f, v: null })),
     ),
   )
 
@@ -365,7 +373,7 @@ ${UNTRUSTED}`,
     }
   }
 
-  return { dim: dim.key, survivors, refuted, unverified, injectionSuspects, findRoundsFailed, verifyAgentsFailed: unverified.length }
+  return { dim: dim.key, survivors, refuted, unverified, injectionSuspects, findRoundsFailed }
 }
 
 // pipeline(), not parallel(-all-finds)-then-verify-all: each dimension's own
@@ -398,10 +406,15 @@ const survivors = mergeNearDuplicates(
   'flaggedByDims',
 )
 const refuted = dims.flatMap(r => r.refuted)
-// Same merge as `survivors` — a finding an infra fault kept unverified in one
-// dimension can be the same underlying bug another dimension's finder also
-// raised (and that copy may have verified cleanly either way); collapse
-// near-duplicates the identical way, rather than inventing a second rule.
+// Same merge as `survivors`: one infra fault typically kills several verifiers
+// at once, so the same underlying bug raised by two dimensions' finders lands
+// twice in here — collapse near-duplicates the identical way, rather than
+// inventing a second rule. Deliberately WITHIN this array only, never against
+// `survivors`/`refuted`: the three arrays partition findings by verification
+// STATE, so a bug one dimension confirmed and another left unverified belongs
+// in both, and each label is true of its own copy. Cross-pool collapse is the
+// thing to avoid — folding an unverified copy into `refuted` because a
+// similar-titled entry sits there is precisely the conflation lode-wtwb closed.
 const unverified = mergeNearDuplicates(
   dims.flatMap(r => (r.unverified || []).map(f => ({ item: f, tag: r.dim }))),
   'flaggedByDims',
@@ -413,14 +426,14 @@ unverified.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])
 
 const totalRaw = survivors.length + refuted.length + unverified.length
 const findRoundsFailed = dims.reduce((acc, r) => acc + (r.findRoundsFailed || 0), 0)
-const verifyAgentsFailed = dims.reduce((acc, r) => acc + (r.verifyAgentsFailed || 0), 0)
+// Counted PRE-merge, unlike `stats.unverifiedCount` below: this is how many
+// verify agents actually failed, not how many distinct bugs they left unjudged.
+const verifyAgentsFailed = dims.reduce((acc, r) => acc + (r.unverified || []).length, 0)
 const dimensionsFailed = DIMENSIONS.length - dims.length
-// lode-wtwb: the caller must be able to tell a partially-failed run from a
-// clean one WITHOUT hand-inspecting refutation-reason strings — this is
-// exactly the gap that let a 14/22-agent crash read as a healthy
-// `findings: []`. `degraded` is true the moment ANY agent (Find or Verify,
-// anywhere in the run) failed to produce output, regardless of whether that
-// happened to leave `unverified` non-empty for this particular run.
+// One boolean the caller can check instead of parsing reason strings (the gap
+// that let a 14/22-agent crash read as a healthy `findings: []` — see the `!v`
+// branch above). True the moment ANY agent, Find or Verify, produced no output,
+// whether or not that left `unverified` non-empty for this particular run.
 const degraded = findRoundsFailed > 0 || verifyAgentsFailed > 0 || dimensionsFailed > 0
 
 log(`${totalRaw} raw findings across ${DIMENSIONS.length} dimensions × ${FIND_ROUNDS} find rounds each -> ${survivors.length} survived refutation + near-duplicate merge, ${refuted.length} refuted, ${unverified.length} unverified (infra failure, never counted as refuted)`)
@@ -433,11 +446,8 @@ if (degraded) {
 return {
   refRange,
   findings: survivors,
-  // A THIRD state, distinct from both `findings` (confirmed) and `refuted`
-  // (actively disproved): a finding whose verifier never returned a verdict
-  // because of an infrastructure fault. Returned in its own array — never
-  // folded into either of the other two — so a caller cannot mistake a
-  // degraded run for a clean pass without reading this field.
+  // The third state — verifier never returned a verdict. Never folded into
+  // `findings` or `refuted`; see the `!v` branch above for why.
   unverified,
   refuted,
   injectionFlags,

@@ -8,13 +8,10 @@ tickets) — and then record the result on the ticket. Delete it once the result
 
 ## What this checks
 
-The `/code` run of 2026-07-24 invoked `.claude/workflows/correctness-review.js` over
-`trunk...b760b3d` (lode-ns3r) and hit an API session limit: 14 of 22 agents errored, most of them
-VERIFY skeptics. The workflow returned `findings: []` — an apparently clean review — but every one
-of the 10 entries in `refuted[]` carried the reason `'verifier produced no verdict — defaulted to
-refuted'`. Zero of the refutations were real, and a High-severity SIGPIPE finding in
-`scripts/release-bump.sh` was silently discarded as a result (mechanically confirmed true — see
-lode-ns3r's own comment thread).
+The full incident account is in [`docs/decisions.md`](../docs/decisions.md), under "Update
+(lode-wtwb, 2026-07-24)" — that is the durable record; it is not repeated here. The facts this
+runbook needs: the crashed run is `wf_9b60ff50-0c6`, it reviewed `b760b3d` (lode-ns3r), and the
+bug it silently discarded was a High-severity SIGPIPE finding in `scripts/release-bump.sh`.
 
 lode-wtwb's fix changes a verifier-produced-no-verdict outcome from "folded into `refuted`" to "a
 third state, returned in its own `unverified` array, with `degraded: true` at the top level." This
@@ -58,13 +55,22 @@ resumed (e.g. it's aged out), fall back to a fresh run over the same range inste
 
 ```
 Workflow({ scriptPath: "specs/wtwb-verify-crash-results/correctness-review.js",
-           args: { refRange: "trunk...b760b3d" } })
+           args: { refRange: "b760b3d~1...b760b3d" } })
 ```
 
-A fresh run won't necessarily reproduce the original session-limit crash (that was an
-infrastructure condition, not a property of the diff), so it's a weaker check — it confirms the
-fixed script's *logic* is sound but not that this exact historical crash now resolves differently.
-Note explicitly on lode-wtwb which path you took.
+Note the range is pinned to the reviewed commit and its own parent, **not** `trunk...b760b3d` as
+the original run used. `b760b3d` has since been merged into `trunk`, so it is now an ancestor of
+it and the three-dot merge base of `trunk...b760b3d` *is* `b760b3d` — that range diffs to nothing,
+which would hand every FIND agent an empty diff and drive Step 2's "appears in neither array"
+branch to report a false regression while reviewing no code at all. `b760b3d~1...b760b3d` cannot
+go stale that way regardless of what `trunk` absorbs later.
+
+A fresh run won't reproduce the original session-limit crash (that was an infrastructure
+condition, not a property of the diff), so it is a **much** weaker check — weak enough that it
+cannot by itself satisfy criterion 3. If no verifier happens to crash, the changed `if (!v)`
+branch never executes, and the SIGPIPE finding lands in `findings` exactly as the *unfixed* script
+would have put it there. Treat the fallback as evidence the fixed script still runs end to end and
+returns the new fields, nothing more. Note explicitly on lode-wtwb which path you took.
 
 Save the returned result JSON to `specs/wtwb-verify-crash-results/result.json`.
 
@@ -89,8 +95,18 @@ Check the saved result:
 
 Append to lode-wtwb: which replay path was used (resume vs. fresh), whether the SIGPIPE finding
 appears in `findings` or `unverified`, the `degraded` flag's value, and `stats.falsePositiveRate`.
-If the finding is present in either array, lode-wtwb's acceptance criterion 3 is met. If absent
-from both, say so plainly and do not close the ticket on partial evidence.
+
+Then judge criterion 3 by the path actually taken — the two are **not** interchangeable:
+
+- **Resume path (`resumeFromRunId`), finding present in either array** → criterion 3 is met. This
+  is the only path that reproduces the no-verdict state the fix changes.
+- **Fallback path, and at least one verifier produced no verdict** (`unverified` non-empty,
+  `degraded: true`) → criterion 3 is met; the changed branch demonstrably executed.
+- **Fallback path with no verifier crash** (`unverified` empty, `degraded: false`) → criterion 3 is
+  **NOT** met, even though the SIGPIPE finding is sitting in `findings`. The unfixed script produces
+  that same result, so it discriminates nothing. Record it as inconclusive and leave the criterion
+  open rather than reading a green-looking result as a pass.
+- **Absent from both arrays** → say so plainly and do not close the ticket on partial evidence.
 
 ## After the result is recorded
 
