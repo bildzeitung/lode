@@ -113,34 +113,15 @@ Two files, two jobs — **never pin the same thing in both**:
   `scripts/compile-lock.sh` (`scripts/update-deps.sh`, `lode-g274.2`) — never hand-edited; the
   hashes make hand-editing impractical anyway.
 
-  **Single-tool exception: `ruff==0.16.0` is pinned in the `dev` extra (`lode-umh2`).** This is a
-  deliberate, maintainer-approved *partial rescission* of the unlocked-`dev` policy above, scoped
-  to ruff alone — but, unlike the version this originally replaced, it is **not** a stopgap
-  awaiting a follow-up decision: the pin is permanent policy, because it is the only thing that
-  keeps a future ruff default-set expansion from arriving unannounced (ruff 0.16, released
-  2026-07-23, enforced a much larger default rule set than the version that last certified trunk
-  clean, turning `nox -t fix` red repo-wide for every producer with no regression in any one
-  branch's own code — the version bump is what a future repeat of that would need).
-
-  **Rule-set model (settled `lode-cs5u`, superseding `lode-ju25`): ruff's full default set, minus
-  a shrinking `[tool.ruff.lint] ignore` list.** `lode-ju25` originally proposed the opposite
-  shape — an explicit opt-in `select = ["E4", "E7", "E9", "F"]` — and is closed with that text
-  still reading as its authoritative decision; it is superseded. The maintainer's call (2026-07-25):
-  reducing `ignore` is the simpler route to a codebase that is lint-clean against *all* of ruff's
-  default checks. Consequences of this model, stated honestly:
-
-  - **`ignore` is a work queue, not a policy.** Every entry in `[tool.ruff.lint] ignore`
-    (`pyproject.toml`) names a rule with outstanding violations somewhere in the tree, removed as
-    the epic that owns adopting it (`lode-cs5u`) fixes those sites. The terminal state is
-    `ignore = []` — there are no permanent exclusions.
-  - **This model does not give back `lode-ju25`'s churn-proofing.** A future ruff default-set
-    expansion can turn `nox -t fix` red repo-wide again, exactly as 0.16 did; the version pin above
-    is the only mitigation, and it works only because an expansion can now arrive solely via a
-    deliberate version bump, never a `dev`-extra resolve.
-
-  **Markdown Python-fence formatting is accepted (`lode-ju25` decision 3).** `ruff format` also
-  formats the Python code fences embedded in `docs/*.md`; the resulting churn to those fences is
-  wanted, not something to revert.
+  **Single-tool exception: `ruff==0.16.0` is pinned in the `dev` extra.** This is a deliberate,
+  maintainer-approved *partial rescission* of the unlocked-`dev` policy above, scoped to ruff alone.
+  `lode-umh2` established the carve-out at `ruff==0.15.22` as a stopgap; `lode-ju25` then re-pinned
+  it to `0.16.0`, and at that point it stopped being a stopgap awaiting a follow-up decision and
+  became permanent policy. Ruff 0.16 (released 2026-07-23) enforced a much larger default rule set
+  than the version that last certified trunk clean, turning `nox -t fix` red repo-wide for every
+  producer with no regression in any one branch's own code; the pin is the only thing that keeps a
+  repeat of that from arriving unannounced. *Which* rules that pinned ruff enforces is a separate
+  question, settled in [Ruff's lint rule set](#ruffs-lint-rule-set-settled-lode-cs5u) below.
 
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
@@ -150,6 +131,28 @@ step can't silently re-resolve — and un-pin — what step one just hash-verifi
 extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and resolves everything
 fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
 regenerating the lock or probing an upstream bump before committing to it.
+
+### Ruff's lint rule set (settled `lode-cs5u`)
+
+**The model: ruff's full default set, minus a shrinking `[tool.ruff.lint] ignore` list.**
+`lode-ju25` originally proposed the opposite shape — an explicit opt-in
+`select = ["E4", "E7", "E9", "F"]` — and is closed with that text still reading as its
+authoritative decision; it is superseded. The maintainer's call (2026-07-25): reducing `ignore` is
+the simpler route to a codebase that is lint-clean against *all* of ruff's default checks.
+Consequences of this model, stated honestly:
+
+- **`ignore` is a work queue, not a policy.** Every entry in `[tool.ruff.lint] ignore`
+  (`pyproject.toml`) names a rule with outstanding violations somewhere in the tree, removed as the
+  epic that owns adopting it (`lode-cs5u`) fixes those sites. The terminal state is `ignore = []` —
+  there are no permanent exclusions.
+- **This model does not give back `lode-ju25`'s churn-proofing.** A future ruff default-set
+  expansion can turn `nox -t fix` red repo-wide again, exactly as 0.16 did. The `ruff==0.16.0` pin
+  above is the only mitigation, and it works only because an expansion can now arrive solely via a
+  deliberate version bump, never a `dev`-extra resolve.
+
+**Markdown Python-fence formatting is accepted (`lode-ju25` decision 3).** `ruff format` also
+formats the Python code fences embedded in `docs/*.md`; the resulting churn to those fences is
+wanted, not something to revert.
 
 ### The lock-gen command is derived from `.python-version`, not hard-coded (lode-sys4)
 
