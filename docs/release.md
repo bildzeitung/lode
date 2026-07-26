@@ -50,6 +50,17 @@ A `/release` Claude skill (lode-0ru.4) wraps step 1: it computes the next semver
 commit history since the last tag, compiles the release notes from the resolved ticket record
 (below), and drives the kickoff.
 
+The bump derivation itself is **not** inline shell in the skill — it lives in
+[`scripts/release-bump.sh`](../scripts/release-bump.sh) (lode-ns3r), which takes a git log range and
+prints exactly one of `breaking` / `feat` / `fix` / `none` on exit 0, or exits **2** for a machine
+fault (unresolvable range, git failure) so a broken *tool* is never mistaken for a verdict about the
+*commits* — the same exit-code contract as [`scripts/merge-precheck.sh`](../scripts/merge-precheck.sh)
+(lode-mh9g). Precedence when several kinds are present is **breaking > feat > fix > none**;
+`BREAKING CHANGE:` is honoured in a commit *body*, not just via a `!:` subject. It was extracted
+because the inline snippet it replaces silently under-detected feat/fix commits and would have
+under-proposed a release version unattended; `tests/test_release_bump.py` pins that behaviour against
+real git repos.
+
 ## CI workflow trigger scope (push and pull_request)
 
 Sibling to the tag-triggered flow above: `.github/workflows/build.yml` (lode-qxdn.1) and every
