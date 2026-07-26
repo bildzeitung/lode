@@ -391,9 +391,9 @@ Two branches each green *in isolation* can break when **combined** (a clean git 
 behaviour). So I merge the whole accepted set, then re-gate the combined `trunk` **once**.
 
 **Every re-gate in this section — the combined re-gate below and the isolation-replay loop's own
-`nox -s tests` — runs in the FOREGROUND, in the same turn, and its result is read from its own real
-exit status, never from a downstream command's.** No `run_in_background`, no `Monitor`, no ending a
-turn on a pending gate — the same lode-95o rule the producer agents already carry
+`nox -s tests` / `nox -s lock_currency` — runs in the FOREGROUND, in the same turn, and its result is
+read from its own real exit status, never from a downstream command's.** No `run_in_background`, no
+`Monitor`, no ending a turn on a pending gate — the same lode-95o rule the producer agents already carry
 (`.claude/agents/coding.md`, `.claude/agents/code-reviewer.md`); `nox -s tests` fits well under
 `Bash`'s 600000ms timeout cap. And never pipe a gate through `tail`/`head`/`grep` and read the
 *pipeline's* exit status as the gate's own: a shell pipeline's exit status is its **last** element's,
@@ -572,8 +572,29 @@ set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a
 
 ```bash
 . ./venv/bin/activate
-rtk nox -t fix && rtk nox -s tests     # if nox -t fix reformats merged code, commit that as part of the merge result
+rtk nox -t fix && rtk nox -s tests && rtk nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
+
+**`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
+public CI badge does.** A branch that bumped a `pyproject.toml` dependency without regenerating the
+lock (or whose merge with another accepted branch this pass changed the resolved graph) fails this
+with **exit 1**, the same way a red `nox -s tests` would; treat *that* identically — **Red** below
+covers it, and the isolation-replay loop re-runs it per branch (see its own `nox -s lock_currency`
+call) to find the culprit.
+
+**`nox -s lock_currency` exit 2 is NOT a red gate either — same rule, same reason as
+`validate-mermaid.sh` below.** Exit 2 means the gate *could not run*: `uv` is not on `PATH`, or
+`scripts/compile-lock.sh` could not resolve at all (PyPI unreachable, a 5xx, DNS). Only exit **1**
+means the lock is genuinely stale. This gate needs that distinction more than any other I run, not
+less: `nox -t fix` and `nox -s tests` are `noxfile.py`'s *offline, keyless* default set and stay
+offline once the model cache is warm, whereas `lock_currency` requires `uv` present and PyPI
+reachable on **every single invocation** — a genuinely new environment requirement on the one machine
+that writes `trunk`, and one a `/loop 5m /land` re-runs all day. On exit 2 I do **not** isolate, do
+**not** bounce, and do **not** land: I stop the pass and surface the message as a human decision.
+Bouncing on it would delete every reviewed branch in the pass for a network blip, each with a
+fabricated "stale lock" finding. `lock_currency` is **last** in the `&&` chain above for exactly this
+reason — an `&&` chain reports its last-run command's status, so putting anything after it would mask
+the 2. Keep it there.
 
 **`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
 an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
@@ -597,6 +618,20 @@ machine. A red gate is content; exit 2 is the machine.
 
   ```bash
   rtk git reset --hard origin/trunk
+
+  # BASELINE before attributing anything (lode-sys4). `nox -s tests` asks a question about the tree
+  # alone, so pinning its red on "whichever branch was merged when it turned red" is sound. `nox -s
+  # lock_currency` does NOT: it asks whether the committed lock is a fixed point of the tree PLUS this
+  # machine's ambient uv PLUS today's PyPI — so it can be red with no branch involved at all (a uv
+  # release that changes the emitted format, an upstream yank, a lock that went stale on trunk itself).
+  # Establish that bare `origin/trunk` is green on it BEFORE entering the attribution loop; otherwise
+  # the loop blames — and deletes — whichever innocent branch happened to be merged first.
+  rtk nox -s lock_currency
+  #   exit 0 → attributable from here on: any later red IS caused by a merged branch. Continue.
+  #   exit 1 → trunk's own lock is stale, before any branch merged. Not attributable to anything in
+  #            $ACCEPTED: stop the pass, land nothing, surface as a human decision.
+  #   exit 2 → machine fault (see above): stop the pass, land nothing, surface it verbatim.
+
   for id in $ACCEPTED; do
     if ! merge_one "$id"; then
       # → real textual conflict against an earlier survivor merged this pass: needs-rebase kick-back
@@ -604,14 +639,25 @@ machine. A red gate is content; exit 2 is the machine.
       # new trunk. Continue with the rest.
       continue
     fi
-    if rtk nox -s tests; then
-      :                          # survivor — keep it merged
-    else
+    if ! rtk nox -s tests; then
       rtk git reset --hard HEAD~1   # back the culprit out
       # → bounce <id> (Section "Bounce"); it does NOT land this pass
+      continue
     fi
+    rtk nox -s lock_currency
+    case $? in
+      0) : ;;                              # survivor — keep it merged
+      2) break ;;                          # machine fault mid-loop, NOT this branch: stop the pass,
+                                           # land nothing (skip section 4). Never bounce on a 2.
+      *) rtk git reset --hard HEAD~1 ;;    # back the culprit out → bounce <id> (Section "Bounce")
+    esac
   done
   ```
+
+  Read `$?` from the gate itself — `rtk` passes a child's exit status through unchanged, so
+  `rtk nox -s lock_currency` yields nox's own 0/1/2. The same lode-b8sr rule as ever applies with
+  extra force here: never pipe this gate into `tail`/`grep` and read the *pipeline's* status, which
+  would silently flatten a 2 into whatever ran last.
 
   The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. A branch
   `merge_one` reports as a real conflict here — one that passed the 2b precheck against `origin/trunk`

@@ -110,8 +110,8 @@ Two files, two jobs — **never pin the same thing in both**:
   hash-verified (`uv pip compile --generate-hashes`) lock of the **runtime** dependency set only —
   the `dev` extra is deliberately *not* locked (epic `lode-g274` OQ#1: dev-tool drift is not this
   lock's job; the gates themselves, run at HEAD, are the backstop for that). Regenerated only via
-  `uv pip compile` (`scripts/update-deps.sh`, `lode-g274.2`, once it lands) — never hand-edited;
-  the hashes make hand-editing impractical anyway.
+  `scripts/compile-lock.sh` (`scripts/update-deps.sh`, `lode-g274.2`) — never hand-edited; the
+  hashes make hand-editing impractical anyway.
 
   **Single-tool exception: `ruff==0.15.22` is pinned in the `dev` extra (`lode-umh2`).** ruff
   0.16.0 (released 2026-07-23) enforces a much larger default rule set than the version that last
@@ -132,17 +132,77 @@ extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and reso
 fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
 regenerating the lock or probing an upstream bump before committing to it.
 
-**CI enforcement (`lode-g274.6`):** `tests.yml`'s `tests` job installs from `requirements.lock`
-itself (via `scripts/python-init.sh`, the same install path a developer runs), and a separate,
-independent `lock-currency` job in the same workflow verifies the lock is current — it recompiles
-`pyproject.toml` with `uv pip compile … -o requirements.lock`, run **in place** against the
-just-checked-out committed lock. uv feeds an existing output file's own pins back to the resolver
-as its *preference* set by default (only `--upgrade`/`-U` ignores them), so the resolution only
-moves when a `pyproject.toml` constraint forces it — an upstream release alone reproduces the
-committed lock byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift.
-`build.yml` and `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at
-all (`python -m build` resolves in its own isolated env), and `coverage.yml` is report-only
-(`lode-qxdn.3`, no merge-gate status).
+### The lock-gen command is derived from `.python-version`, not hard-coded (lode-sys4)
+
+**Root cause of the original flap (`lode-gyag`):** `uv pip compile` does **not** read
+`.python-version` — it resolves against whichever interpreter it happens to discover on the
+invoking machine. Some transitive deps carry Python-version markers (`lancedb`'s
+`overrides>=0.7 ; python_full_version < "3.12"`; `anyio`'s marker-gated `typing_extensions ; python_version
+< "3.13"`), so the SAME `pyproject.toml` resolves a *different* lock depending on whether the
+generating machine's default Python was, say, 3.11 or 3.14. CI validates against 3.14 (this repo's
+`.python-version`), so a lock generated on an older interpreter diffed red against CI's recompile —
+not because a dependency actually changed, but because of *which Python resolved it*.
+
+**The fix:** every lock-gen invocation passes `--python-version "$(cat .python-version)"` explicitly,
+so the resolution target is always this repo's single source of truth for its interpreter, regardless
+of whatever Python happens to be default on the machine running the command. This lives in exactly
+**one** place — `scripts/compile-lock.sh` — which every caller below invokes rather than keeping its
+own copy of the `uv pip compile` command string:
+
+- `scripts/update-deps.sh` (both the whole-set `--upgrade` flow and the `--package NAME
+  --upgrade-package` flow) — the sanctioned way to move `requirements.lock` (`lode-g274.2`/`lode-fdjr`).
+- **CI enforcement (`lode-g274.6` / `lode-sys4`):** `tests.yml`'s `tests` job installs from
+  `requirements.lock` itself (via `scripts/python-init.sh`, the same install path a developer runs),
+  and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
+  it runs `scripts/compile-lock.sh -o requirements.lock`, **in place** against the just-checked-out
+  committed lock. uv feeds an existing output file's own pins back to the resolver as its *preference*
+  set by default (only `--upgrade`/`-U` ignores them), so the resolution only moves when a
+  `pyproject.toml` constraint forces it — an upstream release alone reproduces the committed lock
+  byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml` and
+  `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at all (`python -m
+  build` resolves in its own isolated env), and `coverage.yml` is report-only (`lode-qxdn.3`, no
+  merge-gate status).
+- **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check,
+  runnable on any dev machine — it seeds a scratch copy with the committed lock (mirroring CI's
+  in-place recompile so the preference-seeding behaves identically), recompiles it via
+  `scripts/compile-lock.sh`, and diffs the result against the committed file. Deliberately kept out
+  of the default `nox` session set (same reasoning as `eval`/`build`: it needs network to resolve
+  against PyPI, so a bare `nox` / `nox -s tests` stays offline). **`/land` runs it** as part of its
+  combined re-gate (`.claude/skills/land/SKILL.md`, alongside `nox -t fix`/`nox -s tests`) and in its
+  per-branch isolation-replay loop — so a stale lock is caught locally, by the single trunk-writer,
+  before the public CI badge is the only thing that catches it.
+- **Offline / `uv`-absent behaviour: fails closed, and fails *distinguishably*.**
+  `scripts/compile-lock.sh` exits non-zero with an explicit message if `uv` is not on `PATH`, rather
+  than silently skipping the check. A stale lock landing unnoticed because a local check was quietly
+  skipped is worse than a noisy failure that tells a developer to install `uv`. But failing closed is
+  only half of `lode-9i2p`'s rule, and the half that is easy to get wrong is the other one — so
+  `nox -s lock_currency` splits its own non-zero into two statuses, the same contract
+  `scripts/validate-mermaid.sh` already carries:
+  - **exit 1 — CONTENT.** The committed lock genuinely disagrees with what `pyproject.toml` resolves
+    to. Some diff caused it; `/land` may attribute it to a branch, isolate, and bounce.
+  - **exit 2 — MACHINE.** The gate could not run at all: `uv` absent, or `compile-lock.sh` unable to
+    resolve (PyPI unreachable, a 5xx, DNS). Nothing about any branch's content failed, so `/land`
+    stops the pass and surfaces it as a human decision instead of isolating. Without this split, a
+    transient PyPI blip on the lander would bounce — and delete — every reviewed branch in the pass,
+    each with a fabricated "stale lock" finding, which is precisely the failure `lode-9i2p` was filed
+    to prevent. nox collapses every ordinary session failure to exit 1, so the session leaves the
+    process directly (`sys.exit`) for the machine-fault path.
+
+  This gate needs that distinction more than the offline default set does, not less: `nox -t
+  fix`/`nox -s tests` are offline once the model cache is warm, whereas `lock_currency` requires `uv`
+  and a reachable PyPI on **every** invocation. CI's `lock-currency` job installs `uv` itself first,
+  so the uv-absent path only bites a developer machine or `/land`'s local pre-flight — the public CI
+  badge still catches a stale lock in that case, just later.
+- **Attribution needs a baseline, not just an exit code (`lode-sys4`).** `/land`'s isolation-replay
+  loop finds a culprit by merging the accepted branches one at a time and blaming the one that turns
+  the gate red. That is sound for `nox -s tests`, which asks a question about the tree alone. It is
+  *not* sound for `lock_currency`, which asks whether the committed lock is a fixed point of the tree
+  **plus the ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a
+  `uv` release that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`,
+  so the lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  the gate once on bare `origin/trunk` before entering the loop: red there means the staleness
+  predates every branch in the set and is not attributable to any of them — stop the pass, don't
+  isolate.
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
