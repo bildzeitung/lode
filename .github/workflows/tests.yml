@@ -128,7 +128,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version-file: .python-version
           # No `cache: pip` here -- this leg installs via `uv` (below, through
           # scripts/python-init.sh), which uses its own cache directory
           # (~/.cache/uv), never pip's. A `cache: pip` option would populate
