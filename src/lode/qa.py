@@ -63,13 +63,10 @@ OPUS_MODEL = "claude-opus-5"
 
 #: Output cap for the synthesis call. Comfortably under the SDK's non-streaming
 #: timeout guard; claims are a compact, bounded structure, not long prose.
-#: Opus 5 runs adaptive thinking by default when the ``thinking`` param is
-#: omitted, and thinking output would share this same cap with the response
-#: text -- risking mid-answer truncation for a cap sized for claims alone.
-#: :class:`~lode.llm_provider.AnthropicProvider` sidesteps this by passing
-#: ``thinking={"type": "disabled"}`` on every Q&A call (lode-d1sr), so this
-#: cap covers claims-only output exactly as it always has, for every model
-#: tier -- no thinking budget to reconcile it against.
+#: Models from Opus 5 onward would otherwise share this cap between thinking and
+#: response text; :class:`~lode.llm_provider.AnthropicProvider` pins thinking off
+#: on every Q&A call (lode-d1sr), so the cap still covers claims-only output.
+#: See that class's docstring for the rationale and its limits.
 MAX_TOKENS = 4096
 
 _SYSTEM_PROMPT = (

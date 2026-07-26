@@ -109,11 +109,9 @@ def test_opus_when_think_harder(conn) -> None:
 
 
 def test_thinking_disabled_for_think_harder_call(conn) -> None:
-    # lode-d1sr: OPUS_MODEL (Opus 5) runs adaptive thinking by default when
-    # `thinking` is omitted, sharing MAX_TOKENS between thinking and response
-    # text -- a cap sized for a compact claims structure with no thinking
-    # budget would then risk mid-answer truncation. AnthropicProvider passes
-    # thinking={"type": "disabled"} on every Q&A call to avoid that.
+    # lode-d1sr: end-to-end companion to test_llm_provider.py's provider-level
+    # assertion -- confirms the think-harder path actually reaches the branch
+    # that pins thinking off, so MAX_TOKENS still covers claims alone.
     client = _FakeClient(_envelope([]))
     answer_question(
         conn,

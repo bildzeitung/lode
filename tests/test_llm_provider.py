@@ -104,8 +104,8 @@ def test_structured_call_forces_tool_use_when_tool_name_given() -> None:
         }
     ]
     assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
-    # lode-d1sr: forced tool-use is incompatible with extended thinking on
-    # Anthropic's API, so this branch has no thinking default to disable.
+    # lode-d1sr: no thinking default to disable on this branch -- see the
+    # AnthropicProvider docstring.
     assert "thinking" not in kwargs
 
 
@@ -131,9 +131,8 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     assert kwargs["model"] == "claude-sonnet-4-6"
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
-    # lode-d1sr: thinking is explicitly disabled so a model that runs adaptive
-    # thinking by default (Opus 5 onward) doesn't share max_tokens between
-    # thinking and response text, truncating a cap sized for claims alone.
+    # lode-d1sr: thinking pinned off so it can't share max_tokens with the
+    # response -- see the AnthropicProvider docstring.
     assert kwargs["thinking"] == {"type": "disabled"}
     client.messages.create.assert_not_called()
 
