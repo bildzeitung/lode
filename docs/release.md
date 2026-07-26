@@ -61,6 +61,19 @@ because the inline snippet it replaces silently under-detected feat/fix commits 
 under-proposed a release version unattended; `tests/test_release_bump.py` pins that behaviour against
 real git repos.
 
+Likewise, latest-tag selection and SemVer comparison are **not** inline shell either — both the
+skill's Section 1 and `scripts/release.sh`'s own tag-monotonicity gate call
+[`scripts/release-latest-tag.sh`](../scripts/release-latest-tag.sh) (lode-b2bf), a single
+implementation shared by both instead of two hand-duplicated copies free to drift apart. With no
+arguments it prints the SemVer-greatest `vX.Y.Z` tag (empty output, still exit 0, when none exists
+— the first-release case); with `--gt VERSION` it exits 0 iff `VERSION` strictly exceeds that tag
+(or no tag exists at all). Exit **2** is the same machine-fault convention as `release-bump.sh`.
+Tag selection is deliberately SemVer-greatest rather than most-recently-created, and rejects
+anything that isn't exactly three numeric dot-separated components — the loose glob the inline
+snippets used previously would have let `v1.2.3-rc1` / `v1.2.3.4` / `v1.2.3beta` through as if they
+were ordinary releases; `tests/test_release_latest_tag.py` pins both properties against real git
+repos.
+
 ## CI workflow trigger scope (push and pull_request)
 
 Sibling to the tag-triggered flow above: `.github/workflows/build.yml` (lode-qxdn.1) and every

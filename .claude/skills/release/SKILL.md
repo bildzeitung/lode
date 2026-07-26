@@ -29,35 +29,28 @@ confirm both, and invoke the script.
 
 ### 1. Find the latest tag
 
-Mirror `scripts/release.sh`'s own selection — the SemVer-greatest `vX.Y.Z` tag, not just the most
-recently created one:
+Delegate to `scripts/release-latest-tag.sh` (lode-b2bf) — the SemVer-greatest `vX.Y.Z` tag, not
+just the most recently created one. This used to be an inline tag-selection loop +
+`version_gt()` comparator embedded directly in this file, hand-duplicated (and free to drift) in
+`scripts/release.sh`'s own monotonicity check — same "ungated inline shell in a SKILL.md rots
+silently" lesson as §2's `scripts/release-bump.sh` (lode-ns3r) below. It is now an extracted,
+tested script that both this skill and `scripts/release.sh` call, so there is exactly one
+implementation of tag selection and SemVer comparison to keep correct:
 
 ```bash
-version_gt() {   # $1 > $2, both bare X.Y.Z — same comparison scripts/release.sh uses
-  local IFS=.
-  local -a a=($1) b=($2)
-  for i in 0 1 2; do
-    if [ "${a[i]}" -gt "${b[i]}" ]; then return 0; fi
-    if [ "${a[i]}" -lt "${b[i]}" ]; then return 1; fi
-  done
-  return 1
+LATEST_TAG="$(scripts/release-latest-tag.sh)" || {
+  echo "GATE COULD NOT RUN: scripts/release-latest-tag.sh failed" >&2
+  # Exits 2 for a machine fault (git failure) and never for a statement
+  # about which tag is latest, same convention as scripts/release-bump.sh.
+  # Its stderr has already surfaced the detail verbatim. Stop -- do NOT
+  # silently guess a baseline tag.
+  exit 1
 }
-
-LATEST_TAG=""
-for t in $(git tag -l 'v*'); do
-  tv="${t#v}"
-  case "$tv" in
-    [0-9]*.[0-9]*.[0-9]*) ;;
-    *) continue ;;
-  esac
-  if [ -z "$LATEST_TAG" ] || version_gt "$tv" "${LATEST_TAG#v}"; then
-    LATEST_TAG="$t"
-  fi
-done
 ```
 
-**No tag found** → this is the first release. Per `docs/release.md` the first release is pinned to
-**`v0.1.0`** — propose that directly (no commit parsing needed) and skip to confirmation.
+**Empty `LATEST_TAG`** (no matching tag exists yet) → this is the first release. Per
+`docs/release.md` the first release is pinned to **`v0.1.0`** — propose that directly (no commit
+parsing needed) and skip to confirmation.
 
 ### 2. Derive the proposal
 
