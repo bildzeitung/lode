@@ -230,10 +230,13 @@ has a `venv` left over from the build. Rebuilding it every review is an accepted
 design (`docs/decisions.md`):
 
 ```bash
-./scripts/python-init.sh && . ./venv/bin/activate
+./scripts/python-init.sh
 ```
 
-For a docs-only branch there is no Python gate.
+This builds `./venv` only — it does **not** activate it. Activation happens inside `scripts/nox.sh`
+(step 5) instead: the isolation guard refuses any command that sources a file
+(`. ./venv/bin/activate`), which made the old combined build+activate step unrunnable by a
+worktree-isolated agent (lode-6874). For a docs-only branch there is no Python gate.
 
 ### 4. Technical review (the whole point)
 
@@ -334,10 +337,15 @@ files, `git commit --amend` the reformat in and re-run, until the gates are gree
 clean. Never gate a tree I then keep editing.
 
 ```bash
-rtk nox -t fix                        # ruff format + lint (fixes in place)
-rtk nox -s tests                      # pytest
+rtk scripts/nox.sh -t fix             # ruff format + lint (fixes in place)
+rtk scripts/nox.sh -s tests           # pytest
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
+
+`scripts/nox.sh` activates **this checkout's own** venv (built in step 3) and execs `nox` as one
+plain, guard-friendly command (lode-6874) — never hand-roll the activation (`VIRTUAL_ENV=...
+PATH=...`, `./venv/bin/nox`, …); those either trip the same isolation guard or silently run against
+the wrong checkout's venv (lode-jh80).
 
 **Run both `nox` invocations in the FOREGROUND, in the same turn, and read their output before doing
 anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
@@ -501,7 +509,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Technical review | correctness = **my own reasoning** against the diff, backed by `correctness-review` Workflow findings the **orchestrator** computed and handed me (I never invoke `Workflow` myself, lode-905v; `/code-review` is separately user-gated and unreachable from any model context, lode-axyq); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
-| Gates | `nox -t fix`, `nox -s tests` — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
+| Gates | `scripts/nox.sh -t fix`, `scripts/nox.sh -s tests` — the wrapper activates this checkout's own venv in one guard-friendly command (lode-6874) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Shell | prefix with `rtk` |

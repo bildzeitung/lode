@@ -283,6 +283,17 @@ stopped (a build- or review-time escalation) and why.
 > worktree's own venv (`./scripts/python-init.sh` from inside it) rather than reusing the main
 > checkout's — the preflight is a backstop for the times that rule gets forgotten, not a
 > replacement for following it.
+>
+> **Activating that venv is itself a separate problem under `isolation: "worktree"` (lode-6874).**
+> The harness isolation guard refuses any top-level command that sources a file (`.
+> ./venv/bin/activate`) — "can't be verified to stay inside the worktree" — so a worktree-isolated
+> agent cannot run the once-documented `./scripts/python-init.sh && . ./venv/bin/activate` as
+> written, and a hand-rolled `VIRTUAL_ENV=...`/`PATH=...` fallback trips the same guard while an
+> un-activated `./venv/bin/nox` trips lode-jh80's guard above instead. `scripts/nox.sh` closes both
+> at once: it sources the activation *inside* the script (never a top-level command the guard has
+> to reason about) and always activates the venv next to its own on-disk path, so `.claude/agents/
+> coding.md` and `code-reviewer.md` gate with `rtk scripts/nox.sh -t fix` / `-s tests` instead of
+> a raw `nox` invocation.
 
 ```mermaid
 flowchart TD

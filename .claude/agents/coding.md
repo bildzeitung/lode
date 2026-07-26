@@ -393,10 +393,16 @@ No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — s
 above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
-./scripts/python-init.sh && . ./venv/bin/activate   # first time / if no venv
-rtk nox -t fix                                       # ruff format + lint (fixes in place)
-rtk nox -s tests                                     # pytest
+./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
+rtk scripts/nox.sh -t fix             # ruff format + lint (fixes in place)
+rtk scripts/nox.sh -s tests           # pytest
 ```
+
+`scripts/nox.sh` activates **this checkout's own** venv and execs `nox` in one plain command — the
+isolation guard refuses any command that sources a file (`. ./venv/bin/activate`), which made the old
+two-part activation step unrunnable by a worktree-isolated agent (lode-6874). Never hand-roll the
+activation (`VIRTUAL_ENV=... PATH=...`, `./venv/bin/nox`, …) — those trip the same guard or, worse,
+silently run against the wrong checkout's venv (lode-jh80).
 
 A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
 long as I close the loop: **gate → (red? fix, re-gate) → green → commit whatever changed → clean.**
@@ -636,11 +642,14 @@ target tree — and the same FOREGROUND-only rule from the non-negotiables appli
 `run_in_background`, no `Monitor`, read the output in this turn.
 
 ```bash
-./scripts/python-init.sh && . ./venv/bin/activate   # a fresh worktree — always needs its own venv
-rtk nox -t fix                                       # ruff format + lint (fixes in place)
-rtk nox -s tests                                     # pytest
-scripts/validate-mermaid.sh                          # only if a docs/ diagram is in the branch
+./scripts/python-init.sh              # a fresh worktree — always needs its own venv
+rtk scripts/nox.sh -t fix             # ruff format + lint (fixes in place)
+rtk scripts/nox.sh -s tests           # pytest
+scripts/validate-mermaid.sh           # only if a docs/ diagram is in the branch
 ```
+
+Same `scripts/nox.sh` wrapper as the fresh-build cycle above — guard-friendly by construction
+(lode-6874); never hand-roll the activation.
 
 If `nox -t fix` reformats anything, commit it — step 3 already completed the merge commit, so this is
 an ordinary commit on top of it, not something folded into the merge. **Gates must be green before I
@@ -847,7 +856,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Rebase pickup | `needs-rebase` ticket → fetch + check out `land/<id>` into my own launch worktree, `git merge origin/trunk` (resolve a *mechanical* conflict directly with `Edit`; escalate a *genuine* one), re-gate, commit, **push it myself** (ordinary, non-force — a merge never rewrites origin), swap to `ready-for-land` myself (no review) (lode-cln) |
 | Rebase pickup's own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Venv | `./venv` via `./scripts/python-init.sh` |
-| Gates | `nox -t fix`, `nox -s tests`; `scripts/validate-mermaid.sh` for diagrams |
+| Gates | `scripts/nox.sh -t fix`, `scripts/nox.sh -s tests` — the wrapper activates this checkout's own venv in one guard-friendly command (lode-6874); `scripts/validate-mermaid.sh` for diagrams |
 | Clean-tree assertion | `git status --short` empty before gating, before hand-off, and before a rebase-pickup push — `nox` gates the working tree, not `HEAD`, so **the tree that gated green must be the tree committed and pushed** (lode-tpt) |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; follow them |
 | Shell | prefix with `rtk` |
