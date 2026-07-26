@@ -300,7 +300,8 @@ reviewer, mid-inspection, from leaving files staged
 or modified there (OBSERVED, 2026-07-19: three `land-review` agents dispatched with no isolation all
 ran in the main checkout; one left `lode-2zj0`'s full diff staged, and the next branch's `git merge
 --no-ff` aborted with "would be overwritten by merge" — with `git ls-files -u` empty, so it hit
-neither `merge_one`'s jsonl-restore retry path nor its real-conflict path, and the failure silently
+neither the merge step's jsonl-restore retry path (now `scripts/land-merge-one.sh`, lode-sfnb) nor its
+real-conflict path, and the failure silently
 read as an unretried conflict rather than what it was). Frontmatter `isolation: worktree` launches the
 reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk`
 HEAD — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
@@ -466,8 +467,9 @@ dependents go as well), and leave each one the same HELD note. They are not conf
 rejected; they simply have no foundation this pass, and they re-enter `land-review` next pass exactly
 as a held dependent does.
 
-**Pre-compute every merge message before the first merge — no `bd` call inside the merge loop.** The
-`<summary>` in each commit message comes from `bd show <id> --json` (`metadata.land_summary` / title).
+**Pre-compute every merge message before the first merge — no `bd` call inside the merge loop, and
+persisted to a FILE, never a bash variable (lode-sfnb).** The `<summary>` in each commit message comes
+from `bd show <id> --json` (`metadata.land_summary` / title).
 **Reconciled (lode-bns3), and note what is and is not established.** The previous wording here —
 "*any* `bd` read regenerates the passive export and leaves it **staged**" — is **not** what happens.
 Measured three times now, independently (lode-h1vn's review, lode-bns3's build, lode-bns3's review),
@@ -497,13 +499,48 @@ outright, so it never has to assume anything about what does or doesn't dirty it
 than restores because it only needs to **judge**, whereas this section must actually **clean** the
 index or the merge below refuses to run — the same invariant, two different jobs.)
 
+**lode-sfnb: the `declare -A MSG` associative array this block used to populate was cross-block shell
+state, and it silently broke.** An agent executing this skill runs each fenced code block as its own,
+separate Bash tool invocation — the harness does not carry variables, arrays, or function definitions
+between them. `MSG` used to be read by a `merge_one()` function defined in a *later*, separate fenced
+block (Section 3's merge loop, ~40 lines of prose below, past the jsonl-restore snippet). By the time
+that loop ran in its own invocation, `MSG` no longer existed — `${MSG[$id]}` silently expanded to the
+empty string, and `git merge -m ''` either produced an empty-message merge or failed outright with no
+output at all. **OBSERVED** landing the 2026-07-26 lode-ns3r/lode-1q2i/lode-sys4 pass: `declare -A MSG`
+was re-declared over a variable a prior `source` had already created as an INDEXED array, which bash
+refuses to convert (non-zero exit, completely empty stdout/stderr) — and every `MSG[lode-xxx]` lookup
+had also silently collapsed to index `0` before that.
+
+**The fix: write each message to a file under `.git/`, and do the actual merge from a script, not an
+inline bash function (see [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
+below).** A file on disk and a script under `scripts/` are both available identically to *every* Bash
+invocation — there is nothing to redeclare, so this can't be silently re-split by a future editor
+moving code around the way the bash array was. `git reset --hard` (Section 3's isolation-replay path)
+only resets the index and working tree, never anything under `.git/`, so these files survive that
+reset intact — which is exactly why `STATE_DIR` lives there and not in the working tree:
+
 ```bash
-declare -A MSG
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"    # under .git/ -- survives a later `git reset
+MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only resets the index+worktree)
+rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR"    # fresh per pass -- no stale message from an earlier
+                                               # /land tick can leak into this one
 for id in $ACCEPTED; do
   SUMMARY=$(rtk bd show "$id" --json | jq -r '.[0].metadata.land_summary // .[0].title')
-  MSG[$id]="Merge land/$id: $SUMMARY ($id)"
+  printf '%s' "Merge land/$id: $SUMMARY ($id)" > "$MSG_DIR/$id"
 done
 ```
+
+**Re-derive `STATE_DIR`/`MSG_DIR` at the top of every later block that needs them** — Section 3's merge
+loop and its isolation-replay copy, below both do this. Deriving `$(rtk git rev-parse --git-dir)` fresh
+each time is cheap and deterministic, not "state assumed to survive"; what actually persists across
+blocks is the **files** on disk, never the shell variables naming their location. `$ACCEPTED` itself
+has no file to read: it is the ordered, possibly-reduced set of accepted ticket ids for this pass — the
+agent running this skill already holds that list from 2c's `land-review` verdicts and 3a's ordering
+above, so **restate it literally** (e.g. `ACCEPTED="lode-a lode-b lode-c"`) at the top of every block
+below that iterates it. There is no way to re-derive `$ACCEPTED` mechanically from git or bd (it
+depends on `land-review`'s per-branch judgment calls, not on anything queryable), so this is the one
+piece of cross-block state this fix does not persist to a file — it is the agent's own working context,
+carried forward explicitly rather than assumed to still be sitting in a shell that no longer exists.
 
 Before merging anything, unstage the passive jsonl export — unconditionally, without needing to know
 what staged it (see the reconciliation above: it is *not* the reads above, and the `bd dolt pull`
@@ -526,43 +563,63 @@ loop this should not recur, but if the jsonl gets re-staged mid-loop by anything
 looks identical to a conflict and must not be classified as one on sight. Classify on the actual
 failure: `would be overwritten by merge` in stderr *with* an **empty** `git ls-files -u` (no unmerged
 index entries) is the passive-export trap, not a conflict — restore and retry the same merge once.
-Only a genuinely unmerged index (`git ls-files -u` non-empty) is a real textual conflict:
+Only a genuinely unmerged index (`git ls-files -u` non-empty) is a real textual conflict.
+
+**This retry-and-classify logic is now [`scripts/land-merge-one.sh`](../../../scripts/land-merge-one.sh)
+(lode-sfnb), not an inline `merge_one()` bash function.** The function used to be defined in this same
+fenced block and then called again, unmodified, from the isolation-replay loop in the "Red" branch
+below — but that "Red" branch only runs after a `git reset --hard` and a re-gate, each their own
+separate Bash invocation, so `merge_one` (and `MSG`, see 3a above) had already vanished by the time
+that second call site needed it. A script has no such problem — it exists on disk identically for
+both call sites, with no function to redeclare. It reads its message from the `MSG_DIR` files 3a
+wrote (never a bash variable), and communicates a real conflict's paths back over **stdout** (capture
+with `CONFLICTS=$(...)`) instead of a global `$CONFLICTS` bash variable — see the script's own header
+for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machine fault / missing
+message — the same convention `scripts/merge-precheck.sh` and `scripts/validate-mermaid.sh` use,
+lode-9i2p):
 
 ```bash
-merge_one() {   # $1 = id — merges "origin/land/$1" with its pre-computed message, retrying once past
-                 # a re-staged jsonl; returns non-zero ONLY on a real textual conflict (or an unretried
-                 # failure), never on the jsonl symptom. On a real conflict it sets $CONFLICTS (the
-                 # unmerged paths) for the needs-rebase kick-back, then aborts to a clean tree.
-  local id="$1" err
-  err=$(rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" 2>&1) && return 0
-  if printf '%s' "$err" | grep -q 'would be overwritten by merge' && [ -z "$(rtk git ls-files -u)" ]; then
-    rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # re-dirtied, not conflicted
-    rtk git merge --no-ff "origin/land/$id" -m "${MSG[$id]}" && return 0
-  fi
-  printf '%s\n' "$err" >&2
-  local unmerged; unmerged=$(rtk git ls-files -u)            # non-empty ONLY on a real textual conflict
-  if [ -n "$unmerged" ]; then
-    CONFLICTS=$(printf '%s\n' "$unmerged" | cut -f2- | sort -u)   # name the paths for the kick-back note...
-    rtk git merge --abort                                    # ...before the abort clears the unmerged index
-  fi
-  return 1        # real conflict — caller runs the needs-rebase kick-back (with $CONFLICTS) below
-}
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
+MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
+                                                         # except the FILES 3a wrote under $MSG_DIR
 
-# On trunk, accepted set = the IDs land-review accepted this pass.
+# On trunk, accepted set = the IDs land-review accepted this pass (3a's ordered, possibly-reduced
+# set). Restate it literally here -- it is not a file and not a shell variable that survived from a
+# prior block; it is the agent's own working context. e.g.: ACCEPTED="lode-a lode-b lode-c"
 for id in $ACCEPTED; do
-  if ! merge_one "$id"; then
-    # → real textual conflict with a branch already merged this pass: both passed the 2b precheck
-    # against origin/trunk but conflict with *each other*. Needs-rebase kick-back (see below, with
-    # $CONFLICTS), NOT a land — it leaves this pass's set, so it is excluded from the re-gate, and from
-    # the $LANDED that Section 4 closes and GCs. Symmetric with the isolation loop below; without this
-    # check merge_one's clean abort would silently drop it into $LANDED and close/delete unlanded work.
-    #
-    # 3a INVARIANT: this branch just LEFT the merge set — so drop its dependents from $ACCEPTED too
-    # (1a's full relation, transitively) and leave each the HELD note. Otherwise the loop merges a
-    # dependent whose base is no longer landing, putting this branch's un-landed content on trunk
-    # under the dependent's name.
-    continue
+  # Same idiom as Section 2b's merge-precheck.sh call, for the same reason: a command substitution
+  # inside an `if` condition is exempt from `set -e` (unlike a bare `VAR=$(cmd)` assignment, which
+  # would abort the shell on a non-zero exit before `rc=$?` is ever reached), and `$?` in the `else`
+  # arm is the SCRIPT's real exit status -- unlike `if ! CMD; then rc=$?`, whose `$?` is the negated
+  # test's own 0/1, not CMD's actual code, and would silently collapse exit 2 into exit 1.
+  if CONFLICTS=$(rtk scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+    rc=0
+  else
+    rc=$?
   fi
+  case "$rc" in
+    0) : ;;   # merged cleanly -- keep going
+    2)
+      # MACHINE FAULT (missing/empty message file, or an unexpected git failure) -- per lode-9i2p's
+      # rule, never read this as a conflict or a bounce. Stop the pass and surface the script's own
+      # stderr (already printed to this call's stderr) as a human decision.
+      exit 1
+      ;;
+    *)
+      # rc=1: real textual conflict with a branch already merged this pass -- both passed the 2b
+      # precheck against origin/trunk but conflict with *each other*. Needs-rebase kick-back (see
+      # below, with $CONFLICTS), NOT a land -- it leaves this pass's set, so it is excluded from the
+      # re-gate, and from the $LANDED that Section 4 closes and GCs. Symmetric with the isolation
+      # loop below; without this check the branch would silently drop into $LANDED and close/delete
+      # unlanded work.
+      #
+      # 3a INVARIANT: this branch just LEFT the merge set -- so drop its dependents from $ACCEPTED
+      # too (1a's full relation, transitively) and leave each the HELD note. Otherwise the loop
+      # merges a dependent whose base is no longer landing, putting this branch's un-landed content
+      # on trunk under the dependent's name.
+      continue
+      ;;
+  esac
 done
 ```
 
@@ -616,8 +673,16 @@ machine. A red gate is content; exit 2 is the machine.
   check](#bounce--clear-failure) fires here too — a live dependent means this bounce **escalates**
   rather than deleting the branch.)
 
+  This is a fresh Bash invocation — `STATE_DIR`/`MSG_DIR` and `$ACCEPTED` must be re-established the
+  same way the first-pass merge loop above does (lode-sfnb): re-deriving the path is cheap, and the
+  **files** under `$MSG_DIR` (not the shell variables naming them) are what actually survived
+  `git reset --hard` below, since that only resets the index and working tree, never anything under
+  `.git/`.
+
   ```bash
   rtk git reset --hard origin/trunk
+  STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- see above; MSG_DIR's files
+  MSG_DIR="$STATE_DIR/msg"                                 # (written in 3a) are untouched by the reset
 
   # BASELINE before attributing anything (lode-sys4). `nox -s tests` asks a question about the tree
   # alone, so pinning its red on "whichever branch was merged when it turned red" is sound. `nox -s
@@ -632,11 +697,25 @@ machine. A red gate is content; exit 2 is the machine.
   #            $ACCEPTED: stop the pass, land nothing, surface as a human decision.
   #   exit 2 → machine fault (see above): stop the pass, land nothing, surface it verbatim.
 
+  # $ACCEPTED: restate literally here too (3a's ordered set) -- it is the agent's own working
+  # context, not a file and not a shell variable that could have survived the reset above.
   for id in $ACCEPTED; do
-    if ! merge_one "$id"; then
+    # Same if/else idiom as the first-pass loop above, for the same reason: `if ! scripts/land-merge-
+    # one.sh ...; then rc=$?` would capture the NEGATED test's 0/1, not the script's real exit code,
+    # and would silently collapse a machine-fault 2 into the conflict arm.
+    if CONFLICTS=$(rtk scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+      rc=0
+    else
+      rc=$?
+    fi
+    if [ "$rc" -eq 2 ]; then
+      # MACHINE FAULT — never a branch verdict (lode-9i2p). Stop the pass here; do not bounce, do not
+      # isolate further, do not land anything from this pass.
+      exit 1
+    elif [ "$rc" -eq 1 ]; then
       # → real textual conflict against an earlier survivor merged this pass: needs-rebase kick-back
-      # (see below), not a bounce — its content wasn't judged bad, it just needs to replay onto the
-      # new trunk. Continue with the rest.
+      # (see below, with $CONFLICTS), not a bounce — its content wasn't judged bad, it just needs to
+      # replay onto the new trunk. Continue with the rest.
       continue
     fi
     if ! rtk nox -s tests; then
@@ -660,9 +739,9 @@ machine. A red gate is content; exit 2 is the machine.
   would silently flatten a 2 into whatever ran last.
 
   The survivors stay merged on local `trunk`; the culprit is bounced like any other failure. A branch
-  `merge_one` reports as a real conflict here — one that passed the 2b precheck against `origin/trunk`
-  but can't cleanly combine with an *earlier survivor* merged this pass — is handled as a
-  [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce.
+  `scripts/land-merge-one.sh` reports as a real conflict (exit 1) here — one that passed the 2b
+  precheck against `origin/trunk` but can't cleanly combine with an *earlier survivor* merged this
+  pass — is handled as a [needs-rebase kick-back](#needs-rebase--kick-back), not a bounce.
 
 ---
 
@@ -698,6 +777,12 @@ rtk git status --short
 rtk git push origin trunk
 rtk git status                 # MUST show trunk up to date with origin
 
+# $LANDED: the ids that actually stayed merged through Section 3 (whichever of $ACCEPTED survived --
+# on the Green path, all of it minus any mid-loop needs-rebase kick-backs; on the Red/isolation path,
+# whichever ids the replay loop kept merged, minus bounced culprits and held dependents). Like
+# $ACCEPTED (lode-sfnb), this is the agent's own working context from having just run Section 3, not
+# a file and not shell state that carried over automatically -- Section 3 ran as several separate Bash
+# invocations of its own. Restate it literally here, e.g.: LANDED="lode-a lode-c"
 for id in $LANDED; do
   rtk bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
   rtk bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
