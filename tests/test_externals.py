@@ -23,7 +23,6 @@ import pytest
 
 from lode.config import load_settings
 from lode.embedding import embed
-from lode.hashing import content_snapshot_id
 from lode.externals import (
     IngestResult,
     gate_reenrich,
@@ -32,6 +31,7 @@ from lode.externals import (
     set_no_egress,
     tombstone_body,
 )
+from lode.hashing import content_snapshot_id
 from lode.storage import init_db
 from lode.vectorstore import VectorStore
 from lode.webfetch import FetchResult, FetchStatus

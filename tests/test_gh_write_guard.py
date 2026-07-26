@@ -63,7 +63,6 @@ import shutil
 import subprocess
 
 import pytest
-
 from _hookharness import SH, pretooluse_hook, run_hook
 
 pytestmark = pytest.mark.skipif(

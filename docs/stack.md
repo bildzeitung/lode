@@ -295,7 +295,7 @@ DB bookkeeping — the provider only implements "run this set of requests":
 ```python
 @dataclass(frozen=True)
 class BatchRequest:
-    custom_id: str                      # version_id/snapshot_id, mirrors today's custom_id mapping
+    custom_id: str  # version_id/snapshot_id, mirrors today's custom_id mapping
     model: str
     reasoning_effort: str | None
     system: str
@@ -303,23 +303,29 @@ class BatchRequest:
     output_schema: type[BaseModel]
     max_tokens: int
     tool_name: str | None = None
-    tool_description: str | None = None  # lode-568v.2 addition, see structured_call above
+    tool_description: str | None = (
+        None  # lode-568v.2 addition, see structured_call above
+    )
+
 
 @dataclass(frozen=True)
 class BatchResult:
     custom_id: str
     outcome: Literal["succeeded", "errored", "expired", "canceled"]
-    parsed: BaseModel | None          # set iff outcome == "succeeded" -- the provider's RAW
-                                       # decoded wire payload (a pydantic.RootModel[dict]), NEVER
-                                       # a schema-validated domain object; the caller validates it
-                                       # against whatever output_schema it submitted (lode-568v.2,
-                                       # decisions.md -- keeps the provider generic and preserves
-                                       # lode-i05.5 restart durability with no schema info needing
-                                       # to survive in the persisted batch_handle)
-    error: LLMProviderError | None    # set iff outcome != "succeeded"
+    parsed: BaseModel | None  # set iff outcome == "succeeded" -- the provider's RAW
+    # decoded wire payload (a pydantic.RootModel[dict]), NEVER
+    # a schema-validated domain object; the caller validates it
+    # against whatever output_schema it submitted (lode-568v.2,
+    # decisions.md -- keeps the provider generic and preserves
+    # lode-i05.5 restart durability with no schema info needing
+    # to survive in the persisted batch_handle)
+    error: LLMProviderError | None  # set iff outcome != "succeeded"
+
 
 class LLMProvider(Protocol):
-    def submit_batch(self, requests: Sequence[BatchRequest], *, timeout_s: float) -> str:
+    def submit_batch(
+        self, requests: Sequence[BatchRequest], *, timeout_s: float
+    ) -> str:
         """Submit; return an opaque, PERSISTABLE handle string (stored as batch_handle)."""
         ...
 
@@ -403,8 +409,10 @@ selects a tier *within* the active provider), but each is now typed as a small `
 
 ```python
 class ModelTier(BaseModel):
-    model: str                       # Anthropic model id, or an Azure/OpenAI deployment name
-    reasoning_effort: str | None = None   # meaningful only under a reasoning-capable deployment
+    model: str  # Anthropic model id, or an Azure/OpenAI deployment name
+    reasoning_effort: str | None = (
+        None  # meaningful only under a reasoning-capable deployment
+    )
 ```
 
 A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-4-5"`)
@@ -439,9 +447,11 @@ only diagnostic surface this repo can't reproduce locally (challenge addendum, 2
 class LLMProviderError(RuntimeError):
     """A provider call failure. Carries enough to diagnose remotely; chains onto
     the underlying SDK exception via __cause__."""
+
     provider: str
     status_code: int | None
     request_id: str | None
+
 
 class LLMAuthError(LLMProviderError):
     """No credentials resolved for the active provider — raised by build_provider()."""

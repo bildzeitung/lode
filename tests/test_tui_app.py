@@ -17,7 +17,6 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-
 from textual.widgets import Footer
 from textual.widgets._footer import FooterKey
 
@@ -26,9 +25,9 @@ from lode.lexical import LexicalCacheBackend
 from lode.repository import CompositeCache, Repository
 from lode.storage import init_db
 from lode.tui.app import LodeApp
-from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens.capture import BODY_ID, CaptureScreen
 from lode.tui.screens.reconcile import ReconcileScreen
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 
 
 def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:

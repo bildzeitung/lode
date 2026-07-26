@@ -33,8 +33,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lode.lock import lock_path
 from lode.llm_provider import ModelTier
+from lode.lock import lock_path
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -562,7 +562,7 @@ class Settings(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _azure_api_version_required_with_endpoint(self) -> "Settings":
+    def _azure_api_version_required_with_endpoint(self) -> Settings:
         """Fail loudly at load if azure_openai_endpoint is set with no api-version.
 
         docs/stack.md "6. Config shape": azure_openai_api_version is "required

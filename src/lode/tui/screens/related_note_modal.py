@@ -13,7 +13,7 @@ import-cycle workaround.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
 from textual.binding import Binding
@@ -67,7 +67,7 @@ class RelatedNoteModalScreen(ModalScreen[None]):
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 

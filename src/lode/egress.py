@@ -39,7 +39,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from lode.config import Settings
 from lode.redact import redact_before_egress_counting
@@ -90,7 +90,7 @@ T = TypeVar("T", bound=Withholdable)
 
 
 @dataclass(frozen=True)
-class EgressDecision(Generic[T]):
+class EgressDecision[T]:
     """Partition of egress candidates into what may be sent vs what is withheld.
 
     ``sendable`` cleared the no_egress precondition and may go to Claude (still
@@ -109,7 +109,7 @@ class EgressDecision(Generic[T]):
         return tuple(WithheldCitation(item.target_id) for item in self.withheld)
 
 
-def partition_egress(items: Iterable[T]) -> EgressDecision[T]:
+def partition_egress[T](items: Iterable[T]) -> EgressDecision[T]:
     """Split egress candidates by ``no_egress``: withhold the never-sent ones.
 
     The single precondition both send paths consume -- enrichment (E7) and Q&A (E6)

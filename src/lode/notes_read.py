@@ -67,7 +67,6 @@ from pathlib import Path
 
 from lode.storage import init_db
 
-
 #: THE short note-id length across the epic (lode-1gr.2's Browse Id column,
 #: lode-1gr.5's 'lode show' short refs) -- long enough to feed
 #: 'lode purge <prefix>' (lode-1gr.3) unambiguously in practice. Distinct from

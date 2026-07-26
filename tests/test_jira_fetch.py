@@ -19,6 +19,7 @@ Two layers of test, mirroring tests/test_webfetch.py's own split:
 """
 
 import json
+from typing import Self
 
 import httpx
 import pytest
@@ -287,7 +288,7 @@ def _fake_client_cls(status_code: int, captured: dict) -> type:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
-        def __enter__(self) -> "_FakeClient":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *exc) -> bool:

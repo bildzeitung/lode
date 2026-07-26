@@ -10,6 +10,8 @@ EditScreen.action_inspect_selected` via ``Ctrl+G``, both keyed to a
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -68,7 +70,7 @@ class EnrichmentModalScreen(ModalScreen[None]):
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 

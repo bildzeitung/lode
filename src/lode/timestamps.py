@@ -18,7 +18,7 @@ backwards import -- ``cli.py`` must not import from ``tui``, so neither
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 #: The one stamp format ``notes.created`` / ``versions.created`` are written
 #: in (``strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`` in ``schema.sql``).
@@ -32,4 +32,4 @@ def parse_stamp(created: str) -> datetime:
     result is always UTC-aware; callers that need to display it convert with
     ``.astimezone()`` themselves -- this helper only owns the parse.
     """
-    return datetime.strptime(created, STAMP_FORMAT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(created, STAMP_FORMAT).replace(tzinfo=UTC)

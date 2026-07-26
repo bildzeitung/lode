@@ -15,6 +15,8 @@ level at a time" contract every other browse-family screen uses.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -22,9 +24,9 @@ from textual.widgets import Header
 
 from lode.notes_read import list_versions
 from lode.tui.dates import format_adaptive_date
+from lode.tui.screens.version_view import VersionViewScreen
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.screens.version_view import VersionViewScreen
 
 #: The version-history table's widget id -- read back in tests.
 HISTORY_TABLE_ID = "version-history-table"
@@ -50,7 +52,7 @@ class VersionHistoryScreen(Screen[None]):
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 

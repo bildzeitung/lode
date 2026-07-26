@@ -8,6 +8,8 @@ the async queue's retry machinery. All tests use a stub :class:`~lode.webfetch.F
 so the gate never makes a real network request.
 """
 
+from typing import Self
+
 import httpx
 import pytest
 
@@ -392,7 +394,7 @@ def _fake_client_cls(status_code: int, captured: dict) -> type:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
-        def __enter__(self) -> "_FakeClient":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *exc) -> bool:

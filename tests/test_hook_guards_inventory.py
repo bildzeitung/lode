@@ -13,7 +13,6 @@ import json
 import shutil
 
 import pytest
-
 from _hookharness import SETTINGS
 
 pytestmark = pytest.mark.skipif(

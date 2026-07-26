@@ -68,7 +68,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
 from textual import work
@@ -102,7 +102,7 @@ class RelatedNotesPanel(Static):
 
     can_focus = True
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("up", "select_previous", "Prev related"),
         Binding("down", "select_next", "Next related"),
         Binding("enter", "open_selected", "Open related"),

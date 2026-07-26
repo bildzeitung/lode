@@ -13,16 +13,15 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from conftest import _wait_until
 
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
-from lode.tui.services import capture as capture_mod
 from lode.tui.app import LodeApp
 from lode.tui.screens.capture import BODY_ID
 from lode.tui.screens.reconcile import DIFF_ID, ReconcileScreen
+from lode.tui.services import capture as capture_mod
 from lode.versions import save
-
-from conftest import _wait_until
 
 
 def _rows(db_path: Path, query: str, params: tuple = ()) -> list[tuple]:

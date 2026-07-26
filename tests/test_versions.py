@@ -6,11 +6,10 @@ row written); delete writes an op=delete tombstone preserving lineage; and a
 soft-deleted note recovers by repointing the head.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
-from datetime import datetime, timezone
 
 from lode.hashing import NO_PARENT, content_version_id
 from lode.storage import init_db
@@ -310,7 +309,7 @@ def test_purge_overwrites_targeted_body_and_sets_purged_at(conn):
 
     # The marker date is UTC (matching the store's UTC timestamps), so compare
     # against the UTC date — comparing local date would flake near midnight.
-    marker = f"[purged {datetime.now(timezone.utc):%Y-%m-%d}]"
+    marker = f"[purged {datetime.now(UTC):%Y-%m-%d}]"
     assert result.marker_body == marker
     (body, purged_at) = conn.execute(
         "SELECT body, purged_at FROM versions WHERE version_id = ?", (root,)

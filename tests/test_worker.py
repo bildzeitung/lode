@@ -29,14 +29,14 @@ import sqlite3
 import sys
 import threading
 import time
-import unittest.mock as mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
-import lode.jobs as jobs
+from lode import jobs
 from lode.auth import AuthError
 from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
@@ -1282,7 +1282,7 @@ def test_dead_letter_hook_exception_does_not_propagate(
     )
     _claim_one(conn, ("refresh",), _now_iso())
 
-    def _boom(conn, target_version, last_error, claimed_at, settings):  # noqa: ARG001
+    def _boom(conn, target_version, last_error, claimed_at, settings):
         raise RuntimeError("hook blew up")
 
     with mock.patch.dict("lode.worker._DEAD_LETTER_HOOKS", {"refresh": _boom}):
@@ -1370,7 +1370,7 @@ def test_run_transient_failure_does_not_run_dead_letter_hook_twice(
 
     hook_calls: list[str] = []
 
-    def _counting_hook(conn_, target_version, last_error, claimed_at, settings_):  # noqa: ARG001
+    def _counting_hook(conn_, target_version, last_error, claimed_at, settings_):
         hook_calls.append(target_version)
 
     def _reclaimed_then_transient_error(conn_, tv, db, s):
@@ -2312,7 +2312,6 @@ def test_drain_still_runs_embed_jobs_when_credentials_are_missing(
 
     def _embed(conn_, tv, db, s):
         embedded.append(tv)
-        return None
 
     # The AuthError still surfaces to the caller...
     with pytest.raises(AuthError):
@@ -2592,11 +2591,13 @@ def test_batch_submit_survives_crash_before_batch_handle_persist(
     _insert_note_worker(conn)
     job_id = _insert_enrich_job_worker(conn)
 
-    with mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit):
-        with pytest.raises(SystemExit):
-            _batch_submit_enrich(
-                conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
-            )
+    with (
+        mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit),
+        pytest.raises(SystemExit),
+    ):
+        _batch_submit_enrich(
+            conn, settings, _client=AnthropicProvider(_fake_batch_client_worker())
+        )
 
     # The pre-claim CAS ran and stamped claimed_at before the (simulated)
     # crash; batch_handle never got persisted.

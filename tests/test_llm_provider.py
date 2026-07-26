@@ -7,8 +7,9 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
-import unittest.mock as mock
 from types import SimpleNamespace
+from typing import ClassVar
+from unittest import mock
 
 import pytest
 from pydantic import BaseModel
@@ -50,7 +51,7 @@ def test_model_tier_accepts_explicit_fields() -> None:
 
 def test_model_tier_is_frozen() -> None:
     tier = ModelTier(model="x")
-    with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError on frozen assign
+    with pytest.raises(Exception):
         tier.model = "y"
 
 
@@ -509,7 +510,7 @@ def test_openai_structured_call_maps_sdk_exception_diagnostics() -> None:
     class _FakeAPIError(Exception):
         status_code = 400
         request_id = "req-1"
-        body = {
+        body: ClassVar = {
             "error": {
                 "message": "content filtered",
                 "innererror": {"content_filter_result": {"hate": {"filtered": True}}},

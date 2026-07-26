@@ -134,7 +134,7 @@ def test_reembed_same_head_is_idempotent(tmp_path: Path) -> None:
         ).fetchone()
         assert passage_count == first
         # Deterministic stub → identical vectors per passage on the re-embed.
-        key = lambda rows: {r["passage_id"]: r["vector"] for r in rows}  # noqa: E731
+        key = lambda rows: {r["passage_id"]: r["vector"] for r in rows}
         assert key(after) == key(before)
     finally:
         conn.close()

@@ -18,14 +18,13 @@ to exercise the actual schema constraints and CHECK clauses.
 
 import json
 import sqlite3
-import unittest.mock as mock
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from lode.config import Settings
 from lode.curation import delete_annotation, delete_edge
-from lode.llm_provider import AnthropicProvider
 from lode.enrich import (
     ENRICH_PROMPT_VER,
     EnrichmentResult,
@@ -35,9 +34,9 @@ from lode.enrich import (
     format_enrich_outcome,
     submit_enrich_batch,
 )
+from lode.llm_provider import AnthropicProvider
 from lode.reconcile import _enrich_gap_step
 from lode.storage import init_db
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
