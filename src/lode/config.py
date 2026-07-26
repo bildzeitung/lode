@@ -508,9 +508,9 @@ class Settings(BaseModel):
         "still coerces to a ModelTier with reasoning_effort=None.",
     )
     qa_think_harder_llm: ModelTier = _knob(
-        ModelTier(model="claude-opus-4-8"),
+        ModelTier(model="claude-opus-5"),
         Kind.RUNTIME,
-        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 4.8). A "
+        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5). A "
         "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
         "still coerces to a ModelTier with reasoning_effort=None.",
     )
