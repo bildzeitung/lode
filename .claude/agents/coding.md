@@ -394,8 +394,11 @@ above; `nox -s tests` fits well under `Bash`'s 600000ms timeout cap.
 
 ```bash
 ./scripts/python-init.sh              # first time / if no venv (builds ./venv itself)
+if [ ! -x scripts/nox.sh ]; then rtk git fetch origin trunk && rtk git checkout origin/trunk -- scripts/nox.sh; fi
 rtk scripts/nox.sh -t fix             # ruff format + lint (fixes in place)
 rtk scripts/nox.sh -s tests           # pytest
+# undo the restore above — keyed off HEAD, so it is a no-op unless I restored:
+if ! rtk git cat-file -e HEAD:scripts/nox.sh; then rtk git rm -f scripts/nox.sh; fi
 ```
 
 `scripts/nox.sh` activates **this checkout's own** venv and execs `nox` in one plain command — the
@@ -403,6 +406,18 @@ isolation guard refuses any command that sources a file (`. ./venv/bin/activate`
 two-part activation step unrunnable by a worktree-isolated agent (lode-6874). Never hand-roll the
 activation (`VIRTUAL_ENV=... PATH=...`, `./venv/bin/nox`, …) — those trip the same guard or, worse,
 silently run against the wrong checkout's venv (lode-jh80).
+
+**The restore covers a base-skew window; the undo keys off `HEAD`, not off my memory.** My worktree
+branches from **`origin/trunk`**, but my agent definition is resolved from the dispatching session's
+checkout (local `trunk`), and `/land` pushes `trunk` just *after* it merges — so for that window my
+instructions can name a wrapper my tree doesn't have yet and the gate dies with exit 127. The undo
+line must not rely on me remembering: step 7's clean-tree assertion checks for *uncommitted* changes,
+so a wrongly-committed `scripts/nox.sh` would leave a clean tree and pass. `git cat-file -e
+HEAD:scripts/nox.sh` asks what my branch actually committed instead. **Never substitute the old `.
+./venv/bin/activate` + bare `nox`**: the isolation guard rejects a command *string* containing a `.`
+source even when it sits in an `if` branch that never executes, so such a fallback is refused
+wholesale and breaks the working path too. Full mechanism:
+[docs/agents-workflow.md](../../docs/agents-workflow.md).
 
 A gate that fails after step 6's commit leaves my fix uncommitted — that's expected, not a problem, so
 long as I close the loop: **gate → (red? fix, re-gate) → green → commit whatever changed → clean.**

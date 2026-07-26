@@ -291,9 +291,48 @@ stopped (a build- or review-time escalation) and why.
 > written, and a hand-rolled `VIRTUAL_ENV=...`/`PATH=...` fallback trips the same guard while an
 > un-activated `./venv/bin/nox` trips lode-jh80's guard above instead. `scripts/nox.sh` closes both
 > at once: it sources the activation *inside* the script (never a top-level command the guard has
-> to reason about) and always activates the venv next to its own on-disk path, so `.claude/agents/
-> coding.md` and `code-reviewer.md` gate with `rtk scripts/nox.sh -t fix` / `-s tests` instead of
-> a raw `nox` invocation.
+> to reason about) and always activates the venv next to its own on-disk path, so
+> `.claude/agents/coding.md` and `code-reviewer.md` gate with `rtk scripts/nox.sh -t fix` /
+> `-s tests` instead of a raw `nox` invocation.
+>
+> **It is a gate entry point, so it carries the lode-9i2p exit contract** — 1 is a CONTENT verdict,
+> 2 is "the GATE could not run, never attribute this to a branch". An unusable venv exits **2**, and
+> the check is for `venv/bin/nox` rather than `venv/bin/activate`: `scripts/python-init.sh` writes
+> `activate` in its first step and installs nox (the unlocked `dev` extra) several steps later, so an
+> interrupted init leaves exactly the state an `activate` check waves through — after which a bare
+> `exec nox` resolves off PATH into *another* checkout's nox, the very hazard the wrapper exists to
+> close. It therefore execs `"$ROOT/venv/bin/nox"` by explicit path. Unlike `validate-mermaid.sh`'s
+> exit 2 (an unreachable docker engine, human-only), this one is **agent-fixable** by re-running
+> `./scripts/python-init.sh`, and its stderr says so — so the blanket "exit 2 is an escalation, not a
+> skip" reflex doesn't turn a one-command repair into a spurious human escalation.
+>
+> **Base skew: instructions come from `trunk`, the tree does not.** An agent's definition is resolved
+> from the dispatching session's checkout, but a `code-reviewer` checks the *branch* out over its
+> worktree, and a builder's worktree branches from `origin/trunk`, which lags local `trunk` between a
+> `/land` merge and its push. Either way an agent can be told to run a wrapper its tree predates —
+> exit 127, no gate at all, and the tempting improvisation is the un-activated bare `nox` that
+> lode-jh80 exists to stop. Both agent files therefore guard the gate with `if [ ! -x scripts/nox.sh
+> ]; then rtk git checkout origin/trunk -- scripts/nox.sh; fi`, and undo it afterwards with `if ! rtk
+> git cat-file -e HEAD:scripts/nox.sh; then rtk git rm -f scripts/nox.sh; fi`. The restore is safe
+> precisely because the wrapper anchors on its own on-disk path: the copy gates the worktree it was
+> restored *into*, not the checkout it came from. **The undo is keyed off `HEAD` rather than off the
+> agent remembering, because the clean-tree assertions cannot catch this class of mistake at all** —
+> they test for *uncommitted* changes, so a wrapper wrongly swept into a commit leaves a clean tree
+> and passes; asking `git cat-file -e HEAD:<path>` what the branch actually committed is the only
+> check that discriminates.
+>
+> **Why a restore rather than merging `origin/trunk` before every gate.** The `needs-rebase` pickup
+> path already takes the merge route and so needs no guard — the wrapper is present by construction —
+> but that is the right altitude only *there*, where merging trunk is the job. Making a reviewer (or
+> a fresh builder) merge trunk purely to obtain one file changes what the branch lands, and turns any
+> conflict into a rebase task in the middle of a review. The restore is deliberately the narrower
+> tool: it is scratch state that never reaches a commit, and it costs nothing on the common path
+> where the branch already carries the wrapper.
+>
+> **This fallback is what makes landing order a preference rather than a requirement.** Every branch
+> already in flight when `scripts/nox.sh` lands predates it, so landing it *after* the rest of its
+> batch avoids exercising the fallback at all; that is belt-and-braces, not a correctness
+> dependency, and `/land` enforces no ordering.
 
 ```mermaid
 flowchart TD
