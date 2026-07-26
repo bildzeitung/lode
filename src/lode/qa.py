@@ -62,12 +62,19 @@ SONNET_MODEL = "claude-sonnet-4-6"
 OPUS_MODEL = "claude-opus-5"
 
 #: Output cap for the synthesis call. Comfortably under the SDK's non-streaming
-#: timeout guard; claims are a compact, bounded structure, not long prose.
-#: Models from Opus 5 onward would otherwise share this cap between thinking and
-#: response text; :class:`~lode.llm_provider.AnthropicProvider` pins thinking off
-#: on every Q&A call (lode-d1sr), so the cap still covers claims-only output.
-#: See that class's docstring for the rationale and its limits.
-MAX_TOKENS = 4096
+#: timeout guard (~16K); claims are a compact, bounded structure, not long
+#: prose. Raised 4096 -> 8192 (lode-3dlt) to give headroom for adaptive
+#: thinking to share this budget with the claims response: an explicit
+#: ``thinking={"type": "disabled"}`` used to guarantee zero thinking tokens
+#: here, but that value 400s on Fable-class models at any effort and on Opus 5
+#: at effort xhigh/max (lode-3dlt), so
+#: :class:`~lode.llm_provider.AnthropicProvider` no longer sends it at all --
+#: Sonnet 4.6 (the ``qa_llm`` default) is unaffected (no thinking when the
+#: param is omitted), while Opus 5 (``qa_think_harder_llm`` default) and any
+#: Fable-class override now run adaptive thinking. This is headroom, not a
+#: hard truncation guarantee -- see that class's docstring for the full
+#: rationale.
+MAX_TOKENS = 8192
 
 _SYSTEM_PROMPT = (
     "You answer questions strictly from the SOURCES provided, which are passages "

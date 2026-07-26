@@ -276,28 +276,50 @@ class AnthropicProvider:
     for the batch path -- so routing through this seam is byte-for-byte
     equivalent to calling the SDK directly, as it was before this ticket.
 
-    **Thinking is pinned off on the ``messages.parse`` branch (lode-d1sr).**
-    This is the single source of truth for that decision; the call sites below
-    and :data:`lode.qa.MAX_TOKENS` point here rather than restate it.
+    **Thinking is never explicitly disabled on the ``messages.parse`` branch
+    (lode-3dlt, superseding lode-d1sr's ``thinking={"type": "disabled"}``
+    pin).** This is the single source of truth for that decision; the call
+    sites below and :data:`lode.qa.MAX_TOKENS` point here rather than restate
+    it.
 
+    lode-d1sr pinned ``thinking={"type": "disabled"}`` on this branch because
     Anthropic models from Opus 5 onward run adaptive thinking when ``thinking``
     is omitted, sharing ``max_tokens`` between thinking and response text --
-    which would let a cap sized for claims alone (:data:`lode.qa.MAX_TOKENS`)
-    truncate mid-answer. ``thinking={"type": "disabled"}`` restores pre-Opus-5
-    behavior. Two limits on that, both tracked in **lode-3dlt**:
+    which could let a cap sized for claims alone (:data:`lode.qa.MAX_TOKENS`)
+    truncate mid-answer. But an explicit ``disabled`` is **not** universally
+    accepted: Fable-class models (``claude-fable-5``, ``claude-mythos-5``)
+    reject it with a 400 at any effort level, and Opus 5 itself rejects the
+    combination of ``disabled`` with effort ``xhigh``/``max``. Both
+    ``qa_llm``/``qa_think_harder_llm`` are ``Kind.RUNTIME``, so a user override
+    to either shape hit an unhandled ``anthropic.BadRequestError`` (lode-3dlt).
 
-    - *The value is not universally accepted.* It is legal on the default Q&A
-      tiers (``qa_llm`` = Sonnet 4.6, ``qa_think_harder_llm`` = Opus 5 -- on
-      Opus 5 only at effort ``high`` or below, and lode never sends
-      ``output_config.effort``, so the API default ``high`` applies). But both
-      knobs are ``Kind.RUNTIME``, and an override to a Fable-class model
-      rejects an explicit ``disabled`` with a 400 at any effort.
-    - *The forced tool-use branch is left as-is*, because the enrichment tier
-      (``enrichment_llm`` = Haiku 4.5) predates thinking-on-by-default -- a
-      property of the MODEL, not of forced tool use. On the first-party Claude
-      API a forced ``tool_choice`` does not preclude thinking (only Amazon
-      Bedrock requires an explicit ``disabled`` alongside it), so a
-      ``Kind.RUNTIME`` override there would think too.
+    The fix is to never send ``disabled`` at all -- omit ``thinking`` entirely,
+    for every model, with no model-family branching. This works because
+    disabling thinking is not just illegal on some tiers, it is the
+    *disfavoured* setting even where it IS legal: Anthropic's current guidance
+    for Opus 5 prefers thinking on at low/medium effort over disabled (two
+    failure modes of disabled thinking -- tool calls emitted as plain text, and
+    ``<thinking>`` tag leakage -- neither applies badly here: this branch sends
+    no tools, and the schema-constrained ``output_format`` contains leakage).
+    :data:`lode.qa.MAX_TOKENS` was raised accordingly to give the now-possible
+    adaptive thinking headroom to share with the claims response. Net effect:
+    Sonnet 4.6 (``qa_llm`` default) is unaffected -- it does not think when
+    ``thinking`` is omitted, matching pre-lode-d1sr behavior. Opus 5
+    (``qa_think_harder_llm`` default) now runs adaptive thinking instead of
+    disabled, a deliberate change. Fable-class overrides now work.
+
+    *The forced tool-use branch needs no equivalent change* -- it has never
+    sent ``thinking`` at all (lode-d1sr never touched it), so it already
+    follows this same "never explicitly disable" rule; no Fable-class 400 is
+    reachable there today. This is a property of the enrichment tier
+    (``enrichment_llm`` = Haiku 4.5 predates thinking-on-by-default), not of
+    forced tool use itself -- on the first-party Claude API a forced
+    ``tool_choice`` does not preclude thinking (only Amazon Bedrock requires an
+    explicit ``disabled`` alongside it), so a ``Kind.RUNTIME`` override to a
+    thinking-capable model would think there too, sharing its own (smaller,
+    unraised) ``max_tokens`` budget between thinking and the tool-call JSON --
+    a real but separate, currently-unreachable risk tracked as a follow-up
+    rather than fixed here (lode-3dlt's design notes).
     """
 
     def __init__(self, client: anthropic.Anthropic) -> None:
@@ -316,7 +338,12 @@ class AnthropicProvider:
         tool_name: str | None = None,
         tool_description: str | None = None,
     ) -> BaseModelT:
-        # reasoning_effort is ignored -- Anthropic has no such axis.
+        # reasoning_effort is accepted but not sent to Anthropic here --
+        # output_config.effort (Anthropic's actual reasoning-depth axis, GA
+        # since Opus 4.7) is not yet wired through from this parameter; see
+        # the class docstring and lode-3dlt's design notes for the tracked
+        # follow-up. This is a "not implemented yet" gap, not "no such axis
+        # exists" -- Anthropic does have one.
         if tool_name is not None:
             # No `thinking` here (lode-d1sr): the enrichment tier predates
             # thinking-on-by-default. That is a model property, NOT a
@@ -339,9 +366,12 @@ class AnthropicProvider:
             tool_block = next(b for b in response.content if b.type == "tool_use")
             return output_schema.model_validate(tool_block.input)
 
-        # Thinking pinned off so it can't share max_tokens with the response
-        # (lode-d1sr) -- rationale, and the tiers that reject this value, in the
-        # class docstring.
+        # `thinking` is never sent here (lode-3dlt, superseding lode-d1sr's
+        # unconditional `disabled` pin) -- an explicit `disabled` 400s on
+        # Fable-class models at any effort and on Opus 5 at effort xhigh/max;
+        # omitting it lets every model run its own default (no thinking on
+        # Sonnet 4.6, adaptive thinking on Opus 5/Fable-class). See the class
+        # docstring for the full rationale.
         response = self._client.messages.parse(
             model=model,
             max_tokens=max_tokens,
@@ -349,7 +379,6 @@ class AnthropicProvider:
             messages=[{"role": "user", "content": user_prompt}],
             output_format=output_schema,
             timeout=timeout_s,
-            thinking={"type": "disabled"},
         )
         return response.parsed_output
 

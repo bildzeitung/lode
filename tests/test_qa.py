@@ -108,10 +108,13 @@ def test_opus_when_think_harder(conn) -> None:
     assert client.messages.calls[0]["model"] == OPUS_MODEL
 
 
-def test_thinking_disabled_for_think_harder_call(conn) -> None:
-    # lode-d1sr: end-to-end companion to test_llm_provider.py's provider-level
-    # assertion -- confirms the think-harder path actually reaches the branch
-    # that pins thinking off, so MAX_TOKENS still covers claims alone.
+def test_thinking_not_disabled_for_think_harder_call(conn) -> None:
+    # lode-3dlt (supersedes lode-d1sr's disabled pin): end-to-end companion to
+    # test_llm_provider.py's provider-level assertion -- confirms the
+    # think-harder (Opus 5 by default) path never sends an explicit
+    # thinking={"type": "disabled"}, since that value 400s on Fable-class
+    # models at any effort and on Opus 5 at effort xhigh/max. Opus 5 now runs
+    # adaptive thinking instead; MAX_TOKENS was raised to give it headroom.
     client = _FakeClient(_envelope([]))
     answer_question(
         conn,
@@ -120,7 +123,28 @@ def test_thinking_disabled_for_think_harder_call(conn) -> None:
         think_harder=True,
         provider=AnthropicProvider(client),
     )
-    assert client.messages.calls[0]["thinking"] == {"type": "disabled"}
+    assert "thinking" not in client.messages.calls[0]
+
+
+def test_think_harder_override_to_a_fable_class_model_works(conn) -> None:
+    # lode-3dlt: the regression this ticket exists to fix. Before the fix, a
+    # Kind.RUNTIME override of qa_think_harder_llm to a Fable-class model
+    # raised an unhandled anthropic.BadRequestError from deep in the provider
+    # (thinking={"type": "disabled"} is illegal on Fable-class models at any
+    # effort). The call must now succeed and must never send that value.
+    settings = Settings(qa_think_harder_llm="claude-fable-5")
+    client = _FakeClient(_envelope([]))
+    result = answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert result.model == "claude-fable-5"
+    assert client.messages.calls[0]["model"] == "claude-fable-5"
+    assert "thinking" not in client.messages.calls[0]
 
 
 def test_qa_llm_override_reaches_the_call(conn) -> None:

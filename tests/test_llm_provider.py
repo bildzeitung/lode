@@ -131,14 +131,45 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     assert kwargs["model"] == "claude-sonnet-4-6"
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
-    # lode-d1sr: thinking pinned off so it can't share max_tokens with the
-    # response -- see the AnthropicProvider docstring.
-    assert kwargs["thinking"] == {"type": "disabled"}
+    # lode-3dlt: `thinking` is never sent on this branch -- an explicit
+    # `disabled` (lode-d1sr) 400s on Fable-class models at any effort and on
+    # Opus 5 at effort xhigh/max. See the AnthropicProvider docstring.
+    assert "thinking" not in kwargs
     client.messages.create.assert_not_called()
 
 
+def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
+    # lode-3dlt: the regression this ticket exists to fix -- an explicit
+    # thinking={"type": "disabled"} 400s on Fable-class models at ANY effort
+    # level. No model-family branching in the fix, so the same assertion as
+    # the default-tier test above holds here too -- proving there is no
+    # per-model code path that could reintroduce the illegal value.
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=_Widget(name="w", count=1)
+    )
+    provider = AnthropicProvider(client)
+
+    result = provider.structured_call(
+        model="claude-fable-5",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="prompt",
+        output_schema=_Widget,
+        max_tokens=50,
+        timeout_s=7.0,
+    )
+
+    assert result == _Widget(name="w", count=1)
+    kwargs = client.messages.parse.call_args.kwargs
+    assert kwargs["model"] == "claude-fable-5"
+    assert "thinking" not in kwargs
+
+
 def test_structured_call_ignores_reasoning_effort() -> None:
-    # Anthropic has no reasoning_effort axis -- must not surface in the call.
+    # reasoning_effort is not yet wired through to Anthropic's
+    # output_config.effort (lode-3dlt design notes) -- must not surface as a
+    # raw kwarg in the call.
     client = mock.MagicMock()
     client.messages.parse.return_value = SimpleNamespace(
         parsed_output=_Widget(name="w")
