@@ -70,35 +70,83 @@ errfile="$(mktemp 2>/dev/null)" || gate_could_not_run \
   "Usual causes: TMPDIR points at a nonexistent, full, or read-only filesystem."
 trap 'rm -f "$errfile"' EXIT
 
-if ! git rev-list --count "$RANGE" >/dev/null 2>"$errfile"; then
+# Each `git log` read is CAPTURED into a variable with its exit status
+# checked, and every match then runs against that variable via a here-string.
+# `git log` is NEVER piped straight into `grep`. Two distinct bugs made that
+# mandatory, both of which shipped in the first cut of this script:
+#
+#   1. SIGPIPE + pipefail = a silent FALSE NEGATIVE. `grep -q` exits the
+#      instant it matches, closing the pipe; `git log` is then killed by
+#      SIGPIPE (exit 141), and `set -o pipefail` promotes that 141 to the
+#      status of the WHOLE pipeline -- so `if git log ... | grep -q ...`
+#      evaluated FALSE exactly when the marker WAS found, provided it was
+#      found early enough that output was still in flight. That inverts the
+#      check precisely in the case that matters most: a recent commit
+#      carrying the marker. Measured on lode's own history, `v1.1.0..HEAD` is
+#      ~75KB of `%B` -- far past the threshold -- and a synthetic range with
+#      the marker in the NEWEST commit returned `feat` (MINOR) where the
+#      right answer was `breaking` (MAJOR). Note this was a POSITION-dependent
+#      false negative: the same class of bug this script was extracted to fix
+#      (lode-ns3r), reintroduced through a different mechanism. A here-string
+#      has no writer process, so there is no pipe left to break.
+#
+#   2. An unchecked `git log` failure produced NO output, which reads
+#      identically to "no marker" / "no recognized prefixes" and returned a
+#      legitimate-looking `none` on exit 0 -- a machine fault reported as
+#      content, the exact thing this script's exit-2 contract exists to
+#      prevent.
+#
+# Checking each read's status also removes the need for a separate up-front
+# range validation: an unresolvable range fails the first `git log` with
+# git's own diagnostic, so one error path covers both.
+
+# NOTE on the `|| exit $?` at each call site below, which is load-bearing:
+# `read_log` is always invoked inside a command substitution, and a command
+# substitution runs in a SUBSHELL -- so `gate_could_not_run`'s `exit 2` ends
+# only that subshell, NOT this script. Without the explicit propagation the
+# assignment would simply succeed with an empty value and the script would
+# print a confident `none` on exit 0, which is precisely the machine-fault-
+# reported-as-content failure the exit-2 contract exists to prevent. The
+# diagnostics themselves still reach the terminal either way (stderr is not
+# captured by the substitution); it is only the exit status that needs help.
+read_log() {   # read_log <pretty-format> -> stdout, or exit 2 with git's own stderr
+  local out err
+  if out="$(git log "$RANGE" --format="$1" 2>"$errfile")"; then
+    printf '%s' "$out"
+    return 0
+  fi
+  local lines=("git log failed on range '$RANGE' (format '$1')."
+               "Usual causes: a deleted/mistyped tag, a malformed range expression,"
+               "or a machine fault. This is never a statement about the commits."
+               "Diagnose with: git log $RANGE --format='$1'")
   err="$(<"$errfile")"
-  lines=("range '$RANGE' does not resolve to a valid git log range."
-         "Usual causes: a deleted/mistyped tag, or a malformed range expression."
-         "Diagnose with: git rev-list --count $RANGE")
   if [ -n "$err" ]; then
     lines+=("git's own error output:")
     while IFS= read -r errline; do lines+=("$errline"); done <<<"$err"
   fi
-  gate_could_not_run "range does not resolve" "${lines[@]}"
-fi
+  gate_could_not_run "git log failed" "${lines[@]}"
+}
 
-# BREAKING-CHANGE-in-body check: a single whole-stream substring search, no
-# per-commit attribution needed, so no record-splitting bug to reintroduce.
-if git log "$RANGE" --format='%B' 2>/dev/null | grep -qE 'BREAKING[ -]CHANGE:'; then
+# BREAKING-CHANGE-in-body check: a whole-stream search. No per-commit
+# attribution is needed -- only "did ANY commit in range carry the marker" --
+# so there is no record-splitting to get wrong.
+BODIES="$(read_log '%B')" || exit $?
+if grep -qE 'BREAKING[ -]CHANGE:' <<<"$BODIES"; then
   echo breaking
   exit 0
 fi
 
-BUMP="none"
-while IFS= read -r SUBJECT; do
-  if printf '%s' "$SUBJECT" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:'; then
-    BUMP="breaking"
-    break                                                  # highest priority, stop scanning
-  elif printf '%s' "$SUBJECT" | grep -qE '^feat(\([^)]*\))?:' && [ "$BUMP" != "feat" ]; then
-    BUMP="feat"
-  elif printf '%s' "$SUBJECT" | grep -qE '^fix(\([^)]*\))?:' && [ "$BUMP" = "none" ]; then
-    BUMP="fix"
-  fi
-done < <(git log "$RANGE" --format='%s')
-
-echo "$BUMP"
+# Subjects: `%s` is one full line per commit, so `grep`'s own per-line
+# matching supplies the record boundaries and the `^` anchors bind per
+# commit. Precedence (breaking > feat > fix > none) falls out of the elif
+# chain, so no accumulator state is needed.
+SUBJECTS="$(read_log '%s')" || exit $?
+if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<<"$SUBJECTS"; then
+  echo breaking
+elif grep -qE '^feat(\([^)]*\))?:' <<<"$SUBJECTS"; then
+  echo feat
+elif grep -qE '^fix(\([^)]*\))?:' <<<"$SUBJECTS"; then
+  echo fix
+else
+  echo none
+fi

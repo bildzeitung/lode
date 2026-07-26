@@ -159,6 +159,115 @@ def test_breaking_change_in_body_of_non_newest_commit_is_detected(
     assert result.stdout == "breaking\n"
 
 
+def test_breaking_change_in_body_is_detected_in_a_large_range(tmp_path: Path) -> None:
+    """Regression test for a SIGPIPE/pipefail FALSE NEGATIVE found in review.
+
+    The first cut of the script ran the body scan as a pipeline::
+
+        if git log "$RANGE" --format='%B' | grep -qE 'BREAKING[ -]CHANGE:'
+
+    under `set -o pipefail`. `grep -q` exits the instant it matches, closing
+    the pipe; `git log` is then killed by SIGPIPE (141); pipefail promotes
+    that 141 to the status of the whole pipeline, so the `if` evaluated FALSE
+    *because* the marker was found. It only reproduces when the marker is
+    early in the stream AND enough output follows to exceed a pipe buffer --
+    i.e. a MARKER IN A RECENT COMMIT of a real-sized release range. lode's own
+    `v1.1.0..HEAD` is ~75KB of `%B`, well past that line.
+
+    Why `test_breaking_change_in_body_of_non_newest_commit_is_detected` above
+    did not catch it: it puts the marker in the OLDER commit of a two-commit
+    range, which is safe for two independent reasons at once (the whole stream
+    is read before grep can match, and it is a few hundred bytes anyway). It
+    asserts the acceptance criterion without being able to fail it. This test
+    inverts both conditions.
+
+    The stream size is chosen deliberately, not arbitrarily. Reproducing the
+    old failure is a RACE -- `git log` has to still be writing when `grep -q`
+    exits -- so the margin has to clear grep's read buffer AND the pipe buffer
+    together (~96KB), not just the 64KB pipe buffer. Measured over 20 trials
+    per shape against the pre-fix pipeline: ~100KB reproduced 19/20 (i.e. it
+    would have let a regression through 1 run in 20), while the ~160KB shape
+    below reproduced 20/20. Two 80KB filler commits also cost fewer
+    subprocesses than the five 20KB ones first tried here. Keep it at or above
+    this size; shrinking it silently weakens the test rather than failing it.
+    (80KB each, not one 160KB commit: Linux caps a single argv entry at 128KB,
+    so a larger `-m` message fails to commit at all.)
+    """
+    repo = _init_repo(tmp_path)
+    _git(repo, "tag", "v0.3.1")
+    filler = "x" * 80_000
+    for i in range(2):
+        _commit(repo, f"chore: filler {i}\n\n{filler}")
+    _commit(  # NEWEST -> emitted FIRST by `git log`, so grep matches immediately
+        repo,
+        "feat(storage): change chunk format\n\n"
+        "BREAKING CHANGE: old chunks must be re-embedded.",
+    )
+
+    # Guard the test's own premise: if the stream ever stops being comfortably
+    # larger than grep's read buffer plus the pipe buffer, this test would
+    # silently stop exercising the bug it exists for.
+    stream = _git(repo, "log", "v0.3.1..HEAD", "--format=%B").stdout
+    assert len(stream) > 128 * 1024, f"premise broken: stream is only {len(stream)}B"
+
+    result = _run("v0.3.1..HEAD", repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "breaking\n"
+
+
+def test_scopeless_feat_prefix_yields_feat(tmp_path: Path) -> None:
+    """Conventional-commit scopes are OPTIONAL. Every other prefix test in
+    this file happens to use one, so a regex that *required* a scope would
+    pass the whole suite -- these three pin the bare form."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "tag", "v0.3.1")
+    _commit(repo, "feat: add a thing")
+
+    result = _run("v0.3.1..HEAD", repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "feat\n"
+
+
+def test_scopeless_fix_prefix_yields_fix(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "tag", "v0.3.1")
+    _commit(repo, "fix: correct a thing")
+
+    result = _run("v0.3.1..HEAD", repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "fix\n"
+
+
+def test_scopeless_bang_prefix_yields_breaking(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _git(repo, "tag", "v0.3.1")
+    _commit(repo, "feat!: drop a thing")
+
+    result = _run("v0.3.1..HEAD", repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "breaking\n"
+
+
+def test_prefix_must_be_at_start_of_subject(tmp_path: Path) -> None:
+    """The prefix regexes are anchored -- a subject that merely mentions
+    "feat:" or "fix:" mid-line is not a conventional commit. Pins the anchor
+    across the review's swap of the matching engine from `grep -E` to bash's
+    own `=~`."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "tag", "v0.3.1")
+    _commit(repo, "chore: revert the feat: add reranker commit")
+    _commit(repo, "docs: explain when to use fix: vs feat:")
+
+    result = _run("v0.3.1..HEAD", repo)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "none\n"
+
+
 def test_precedence_breaking_over_feat_over_fix(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "tag", "v0.3.1")

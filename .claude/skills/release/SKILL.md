@@ -75,9 +75,10 @@ and the concrete v1.2.0 case it produced, lode-905v). It is now an extracted, te
 ```bash
 BUMP="$(scripts/release-bump.sh "${LATEST_TAG}..HEAD")" || {
   echo "GATE COULD NOT RUN: scripts/release-bump.sh failed on range ${LATEST_TAG}..HEAD" >&2
-  # surface the script's own stderr verbatim and stop -- this is a machine
-  # fault (exit 2), never a signal about the commits themselves; do not
-  # silently fall back to a guessed bump.
+  # The script exits 2 for a machine fault (unresolvable range, git failure)
+  # and never for a statement about the commits, so ANY non-zero here means
+  # "no verdict was produced". Its stderr has already surfaced the detail
+  # verbatim. Stop -- do NOT silently fall back to a guessed bump.
   exit 1
 }
 ```
