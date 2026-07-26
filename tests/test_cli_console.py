@@ -132,7 +132,7 @@ def test_console_highlight_is_disabled() -> None:
     """
     import lode.cli
 
-    assert lode.cli.console._highlight is False  # noqa: SLF001 -- no public accessor
+    assert lode.cli.console._highlight is False
 
 
 def test_err_console_highlight_is_disabled() -> None:
@@ -156,4 +156,4 @@ def test_err_console_highlight_is_disabled() -> None:
     """
     import lode.cli
 
-    assert lode.cli.err_console._highlight is False  # noqa: SLF001 -- no public accessor
+    assert lode.cli.err_console._highlight is False

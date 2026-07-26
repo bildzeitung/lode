@@ -21,7 +21,7 @@ from lode.cited_answer import CitedAnswer, ask, gate_cited_answer
 from lode.config import Settings
 from lode.egress import WITHHELD_CITATION
 from lode.llm_provider import AnthropicProvider
-from lode.qa import QaResult, SONNET_MODEL
+from lode.qa import SONNET_MODEL, QaResult
 from lode.retrieval import ContextItem, TrustTier
 from lode.storage import init_db
 

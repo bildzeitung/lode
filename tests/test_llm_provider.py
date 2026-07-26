@@ -7,8 +7,9 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
-import unittest.mock as mock
 from types import SimpleNamespace
+from typing import ClassVar
+from unittest import mock
 
 import pytest
 from pydantic import BaseModel
@@ -50,7 +51,7 @@ def test_model_tier_accepts_explicit_fields() -> None:
 
 def test_model_tier_is_frozen() -> None:
     tier = ModelTier(model="x")
-    with pytest.raises(Exception):  # noqa: B017 -- pydantic ValidationError on frozen assign
+    with pytest.raises(Exception):
         tier.model = "y"
 
 
@@ -103,6 +104,9 @@ def test_structured_call_forces_tool_use_when_tool_name_given() -> None:
         }
     ]
     assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
+    # lode-d1sr: no thinking default to disable on this branch -- see the
+    # AnthropicProvider docstring.
+    assert "thinking" not in kwargs
 
 
 def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
@@ -127,6 +131,9 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     assert kwargs["model"] == "claude-sonnet-4-6"
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
+    # lode-d1sr: thinking pinned off so it can't share max_tokens with the
+    # response -- see the AnthropicProvider docstring.
+    assert kwargs["thinking"] == {"type": "disabled"}
     client.messages.create.assert_not_called()
 
 
@@ -509,7 +516,7 @@ def test_openai_structured_call_maps_sdk_exception_diagnostics() -> None:
     class _FakeAPIError(Exception):
         status_code = 400
         request_id = "req-1"
-        body = {
+        body: ClassVar = {
             "error": {
                 "message": "content filtered",
                 "innererror": {"content_filter_result": {"hate": {"filtered": True}}},

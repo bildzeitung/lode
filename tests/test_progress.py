@@ -15,9 +15,8 @@ from lode.progress import op_progress
 
 
 def test_op_progress_logs_starting_and_done(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        with op_progress("my_op"):
-            pass
+    with caplog.at_level(logging.INFO), op_progress("my_op"):
+        pass
 
     assert "my_op: starting" in caplog.text
     assert "my_op: done" in caplog.text
@@ -33,9 +32,11 @@ def test_op_progress_yields_control_to_the_wrapped_block() -> None:
 
 
 def test_op_progress_heartbeats_a_slow_block(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        with op_progress("slow_op", heartbeat_interval_s=0.05):
-            time.sleep(0.25)
+    with (
+        caplog.at_level(logging.INFO),
+        op_progress("slow_op", heartbeat_interval_s=0.05),
+    ):
+        time.sleep(0.25)
 
     assert "slow_op: starting" in caplog.text
     assert "slow_op: still running" in caplog.text
@@ -46,9 +47,11 @@ def test_op_progress_does_not_heartbeat_a_fast_block(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A block that finishes well within the interval gets no heartbeat line."""
-    with caplog.at_level(logging.INFO):
-        with op_progress("fast_op", heartbeat_interval_s=10.0):
-            pass
+    with (
+        caplog.at_level(logging.INFO),
+        op_progress("fast_op", heartbeat_interval_s=10.0),
+    ):
+        pass
 
     assert "fast_op: starting" in caplog.text
     assert "fast_op: done" in caplog.text
@@ -58,9 +61,12 @@ def test_op_progress_does_not_heartbeat_a_fast_block(
 def test_op_progress_logs_failed_and_reraises_on_exception(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with caplog.at_level(logging.INFO), pytest.raises(ValueError, match="boom"):
-        with op_progress("failing_op"):
-            raise ValueError("boom")
+    with (
+        caplog.at_level(logging.INFO),
+        pytest.raises(ValueError, match="boom"),
+        op_progress("failing_op"),
+    ):
+        raise ValueError("boom")
 
     assert "failing_op: starting" in caplog.text
     assert "failing_op: failed" in caplog.text

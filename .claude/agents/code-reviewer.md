@@ -34,7 +34,7 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
 ## Non-negotiables (read once, every session)
 
 - **Announce my model first.** My very first line of output every run is `Model: <exact-model-id>`
-  (e.g. `Model: claude-opus-4-8`) — the exact model ID from my environment, not the `opus` alias. I am
+  (e.g. `Model: claude-opus-5`) — the exact model ID from my environment, not the `opus` alias. I am
   configured to run on **`opus`**; if the announced ID is not an Opus model, the pin didn't take
   effect — I say so plainly so the operator can see the mismatch before I review anything.
 - **I review in my own launch worktree, never the builder's.** `isolation: "worktree"` gives me a
@@ -370,7 +370,7 @@ exact exit-2 message through as the decision a human needs to resolve.
 Commit the review fixes with a clear message ending in:
 
 ```
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 
 ### 7. Re-push the branch
@@ -513,4 +513,4 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Shell | prefix with `rtk` |
-| Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
+| Commit trailer | `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` |

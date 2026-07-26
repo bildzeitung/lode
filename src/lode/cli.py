@@ -35,6 +35,16 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
+# Registers the "jira" connector into lode.backfill's registry on import
+# (lode-gpzn.10) -- deliberately a MODULE-LEVEL import here, not the lazy,
+# inside-the-command-function style `backfill`/`reconcile`/`work` otherwise
+# use to keep CLI startup light. Registration must happen exactly once, at
+# collection/process-start time, before any test's own registry-isolation
+# fixture runs -- a lazy import inside the `backfill` command races
+# tests/test_cli_backfill.py's fake-handler injection under pytest-xdist
+# (parallel worker processes make "which test calls `backfill()` first"
+# non-deterministic run to run).
+import lode.jira_backfill  # noqa: F401
 from lode import __version__, versions
 from lode.config import (
     CONFLUENCE_EMAIL_ENV,
@@ -57,36 +67,19 @@ from lode.config import (
 )
 from lode.confluence import HttpxConfluenceFetcher, fetch_confluence_page
 from lode.drawdown import _CONFLUENCE_PAGE_RE, _JIRA_ISSUE_RE, _resolve_api_base
-from lode.fetch_outcome import HttpOutcome, classify_http_status
-from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
-from lode.webfetch import (
-    Fetcher,
-    FetchStatus,
-    TooManyRedirectsError,
-    TransientFetchError,
-)
 from lode.enrichment_view import (
     EnrichmentItem,
     EnrichmentView,
     ExternalView,
     enrichment_view_conn,
 )
+from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
-
-# Registers the "jira" connector into lode.backfill's registry on import
-# (lode-gpzn.10) -- deliberately a MODULE-LEVEL import here, not the lazy,
-# inside-the-command-function style `backfill`/`reconcile`/`work` otherwise
-# use to keep CLI startup light. Registration must happen exactly once, at
-# collection/process-start time, before any test's own registry-isolation
-# fixture runs -- a lazy import inside the `backfill` command races
-# tests/test_cli_backfill.py's fake-handler injection under pytest-xdist
-# (parallel worker processes make "which test calls `backfill()` first"
-# non-deterministic run to run).
-import lode.jira_backfill  # noqa: F401
-from lode.lock import LockHeld, WorkerLock
-from lode.logconfig import configure_logging
+from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
 from lode.lexical import LexicalCacheBackend
 from lode.llm_provider import provider_identity
+from lode.lock import LockHeld, WorkerLock
+from lode.logconfig import configure_logging
 from lode.notes_read import (
     candidate_rows_conn,
     list_deleted_notes,
@@ -96,6 +89,12 @@ from lode.notes_read import (
 from lode.repository import AmbiguousNoteIdError, CompositeCache, Repository
 from lode.storage import init_db
 from lode.timestamps import parse_stamp
+from lode.webfetch import (
+    Fetcher,
+    FetchStatus,
+    TooManyRedirectsError,
+    TransientFetchError,
+)
 
 if TYPE_CHECKING:
     # Type-only; the runtime imports live inside ``ask`` / ``_retrieve`` so the
@@ -595,9 +594,9 @@ def _retrieve(
     question: str,
     *,
     lance_dir: str | Path,
-    embedder: "Embedder | None" = None,
+    embedder: Embedder | None = None,
     settings: Settings | None = None,
-) -> "list[ContextItem]":
+) -> list[ContextItem]:
     """Build the trust-ranked Q&A context for ``question`` — the full read pipeline (E4).
 
     The full read side (``docs/retrieval.md`` "The v1 retrieval pipeline"): lexical
@@ -651,7 +650,7 @@ def _retrieve(
 
 
 def _format_cited_answer(
-    answer: "CitedAnswer", as_of: dict[str, str | None]
+    answer: CitedAnswer, as_of: dict[str, str | None]
 ) -> list[str]:
     """Render a gated answer for the terminal: cited claims, or an abstention.
 
@@ -680,7 +679,7 @@ def _format_cited_answer(
     return lines
 
 
-def _format_citation(support: "Support", as_of: str | None) -> str:
+def _format_citation(support: Support, as_of: str | None) -> str:
     """Render one support as an indented ``<id-kind> <id>, as of <ts>  "<span>"`` line.
 
     ``as_of`` is ``None`` only for a target the store could not resolve
@@ -696,7 +695,7 @@ def _format_citation(support: "Support", as_of: str | None) -> str:
     return f'  - {provenance}  "{support.quoted_span}"'
 
 
-def _resolve_as_of(conn: sqlite3.Connection, support: "Support") -> str | None:
+def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
     """Resolve one citation's as-of provenance from the store.
 
     A note ``version_id``'s as-of is its write time (``versions.created``); an

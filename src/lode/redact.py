@@ -27,7 +27,7 @@ callers wire it in; it is implemented here once.
 
 import re
 from collections.abc import Sequence
-from functools import lru_cache
+from functools import cache
 
 from lode.config import Settings
 
@@ -35,7 +35,7 @@ REDACTION_MARKER = "[redacted]"
 """Replacement written in place of every matched secret span."""
 
 
-@lru_cache(maxsize=None)
+@cache
 def _compiled(patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
     """Compile (and memoize) a pattern set; patterns are validated at config load."""
     return tuple(re.compile(pattern) for pattern in patterns)

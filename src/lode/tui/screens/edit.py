@@ -120,22 +120,24 @@ now, and the cycle no longer exists.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
-from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
-from lode.tui.screens._markdown_area import _markdown_text_area
-from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens._link_open import open_link_under_cursor
+from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
 from lode.tui.screens.reconcile import ReconcileScreen
 from lode.tui.screens.version_history import VersionHistoryScreen
+from lode.tui.services.edit import EditConflict, EmptyEditError, load_head, save_edit
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.versions import SaveResult
 
 #: The editable note body's widget id -- read back in tests.
@@ -163,7 +165,7 @@ class EditScreen(Screen[None]):
     # another round of this). "Inspect"/"View" were left alone -- shortening
     # either alone wasn't enough on its own, and two 3-4 letter cuts read
     # better than one very short one.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Back"),
         Binding("ctrl+f", "focus_related", "Rel"),

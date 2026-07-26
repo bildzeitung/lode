@@ -106,7 +106,7 @@ letter, so the retirement above is history, not a free key. Rationale lives on
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from textual import work
 from textual.app import ComposeResult
@@ -115,14 +115,14 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
-from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_capture
 from lode.tui.latency_probe import probe_event_loop_lag
-from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.tui.screens._link_open import open_link_under_cursor
 from lode.tui.screens._markdown_area import _markdown_text_area
 from lode.tui.screens.discard_confirm import DiscardConfirmScreen
 from lode.tui.screens.reconcile import ReconcileScreen
+from lode.tui.services.capture import CaptureConflict, EmptyCaptureError, save_capture
+from lode.tui.widgets.lode_footer import LodeFooter
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 
 if TYPE_CHECKING:
     from lode.versions import SaveResult
@@ -178,7 +178,7 @@ class CaptureScreen(Screen[None]):
     # fit comfortably within it. Adding "Link" (lode-5ill) still fits: the
     # footer's real consumed width test (test_tui_app.py) measured it well
     # under the 100-column bound with all 9 entries (4 screen + 5 app) shown.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("ctrl+s", "save", "Save & new"),
         Binding("escape", "cancel", "Discard"),
         Binding("ctrl+f", "focus_related", "Related"),

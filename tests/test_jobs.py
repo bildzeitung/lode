@@ -356,7 +356,7 @@ def test_record_job_failure_is_a_noop_when_the_row_cycled_to_a_new_claim(conn) -
             (job_id,),
         )
 
-    new_attempts, dead, claim_lost = record_job_failure(
+    _, _, claim_lost = record_job_failure(
         conn, job_id, 0, stale_claimed_at, "boom", settings
     )
 

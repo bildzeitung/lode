@@ -17,7 +17,7 @@ is the storage realization of the ownership boundary and data shape in [storage.
 | Reranker | **Local cross-encoder** (`BAAI/bge-reranker-base`) | First-class retrieval stage ([retrieval.md](retrieval.md)), wired in v1 behind a toggle. Runs on the **same ONNX runtime** as embeddings via `fastembed` — no new stack, content stays on-box. (`fastembed` does not ship `bge-reranker-v2-m3`; `bge-reranker-base` is the loadable bge-family pick — verified in `lode-txh.6`.) Biggest single quality lever for cited Q&A; model/threshold tuning deferred until there's a corpus ([decisions.md](decisions.md)) |
 | Faithfulness NLI | **Local cross-encoder repurposed** (`BAAI/bge-reranker-base` via `fastembed`'s `TextCrossEncoder`) | Entailment leg of the [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them): scores whether cited spans jointly entail a synthesized claim, so multi-note synthesis is answered rather than refused. `fastembed` ships **no** dedicated NLI model, so the cross-encoder is repurposed as the entailment scorer — same **ONNX runtime**, on-box, no separate loader (verified in `lode-txh.6`). Ships in v1 **conservative and fail-closed**; the model + acceptance **threshold ship untuned** and are revisited against the eval harness ([decisions.md](decisions.md)) |
 | Enrichment LLM | Provider-selected via `llm_provider` ([LLM provider seam](#llm-provider-seam-decided-lode-568v1), `lode-568v.2`/`.3`); default **Anthropic Claude Haiku 4.5** (`claude-haiku-4-5`, $1/$5 per Mtok), or an OpenAI/Azure deployment when `llm_provider = "openai"` | High-volume background tagging/extraction. Use **structured outputs** so the derived layer gets validated JSON. A **fresh note enriches interactively** (one immediate call) for promptness; **bulk / backfill / re-enrichment** goes through the provider's batch path — Anthropic's **Batches API** (50% off, non-interactive) under the default provider, or serialized sequential calls under a provider with no batch API (`lode-568v.3`). Driven by the durable [work queue](storage.md#the-async-work-queue); submitted batch handles are persisted so a restart resumes rather than resubmits. **`no_egress` notes are skipped** (never enriched); every send is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
-| Q&A LLM | Provider-selected via `llm_provider` (same seam); default **Anthropic Claude Sonnet 4.6** (`claude-sonnet-4-6`, $3/$15) with **Opus 4.8** (`claude-opus-4-8`, $5/$25) as a "think harder" toggle, or OpenAI/Azure deployments under `qa_llm`/`qa_think_harder_llm` when `llm_provider = "openai"` | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
+| Q&A LLM | Provider-selected via `llm_provider` (same seam); default **Anthropic Claude Sonnet 4.6** (`claude-sonnet-4-6`, $3/$15) with **Opus 5** (`claude-opus-5`, $5/$25) as a "think harder" toggle, or OpenAI/Azure deployments under `qa_llm`/`qa_think_harder_llm` when `llm_provider = "openai"` | Low-volume, interactive, quality-sensitive synthesis. Returns **structured claims**, each pinned to a verbatim span of a specific version; a [faithfulness gate](retrieval.md#faithfulness-verify-citations-dont-just-require-them) verifies the evidence and abstains rather than emit an unsupported claim — citations are enforced by *verification*, not just by the response schema. **`no_egress` passages are excluded from the cloud context** (cited as "withheld from synthesis"); the context sent is redacted-before-egress and recorded in the [egress log](externals.md#privacy-consequence-of-aggregation) |
 | Web-fetch HTTP client | **`httpx`** | First connector (E12 web draw-down, `lode-w0h.1`) — synchronous GET with an explicit `follow_redirects`/`max_redirects` cap and a typed exception hierarchy (`TooManyRedirects`/`TimeoutException`/`NetworkError`) that maps onto the fetch-outcome taxonomy ([externals.md](externals.md#draw-down-rules)). Chosen over `requests` purely on maintenance status — `requests` is in long-term maintenance mode, httpx is the actively developed equivalent with the same sync call shape (both have a redirect cap and typed exceptions; that pair differentiates only against stdlib). Chosen over stdlib `urllib.request` because its redirect cap is a hardcoded `HTTPRedirectHandler.max_redirections = 10`, not a per-request knob, so the `fetch_max_redirects` setting could not be honored without subclassing |
 | Web-fetch readability extraction | **`trafilatura`** | Same ticket. Named directly in the fetch-outcome decision: `extract()` returns `str \| None`, and `None` on failed/empty extraction *is* the taxonomy's testable "not real content" signal, combined with a configured length floor for short-but-non-`None` teasers (paywalls). Verified locally against synthetic JS-shell/paywall/article fixtures during the build. Chosen over `readability-lxml` (stale, weaker boilerplate removal) and `boilerpy3` (thinner API) |
 
@@ -110,8 +110,8 @@ Two files, two jobs — **never pin the same thing in both**:
   hash-verified (`uv pip compile --generate-hashes`) lock of the **runtime** dependency set only —
   the `dev` extra is deliberately *not* locked (epic `lode-g274` OQ#1: dev-tool drift is not this
   lock's job; the gates themselves, run at HEAD, are the backstop for that). Regenerated only via
-  `uv pip compile` (`scripts/update-deps.sh`, `lode-g274.2`, once it lands) — never hand-edited;
-  the hashes make hand-editing impractical anyway.
+  `scripts/compile-lock.sh` (`scripts/update-deps.sh`, `lode-g274.2`) — never hand-edited; the
+  hashes make hand-editing impractical anyway.
 
   **Single-tool exception: `ruff==0.15.22` is pinned in the `dev` extra (`lode-umh2`).** ruff
   0.16.0 (released 2026-07-23) enforces a much larger default rule set than the version that last
@@ -132,17 +132,77 @@ extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and reso
 fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
 regenerating the lock or probing an upstream bump before committing to it.
 
-**CI enforcement (`lode-g274.6`):** `tests.yml`'s `tests` job installs from `requirements.lock`
-itself (via `scripts/python-init.sh`, the same install path a developer runs), and a separate,
-independent `lock-currency` job in the same workflow verifies the lock is current — it recompiles
-`pyproject.toml` with `uv pip compile … -o requirements.lock`, run **in place** against the
-just-checked-out committed lock. uv feeds an existing output file's own pins back to the resolver
-as its *preference* set by default (only `--upgrade`/`-U` ignores them), so the resolution only
-moves when a `pyproject.toml` constraint forces it — an upstream release alone reproduces the
-committed lock byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift.
-`build.yml` and `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at
-all (`python -m build` resolves in its own isolated env), and `coverage.yml` is report-only
-(`lode-qxdn.3`, no merge-gate status).
+### The lock-gen command is derived from `.python-version`, not hard-coded (lode-sys4)
+
+**Root cause of the original flap (`lode-gyag`):** `uv pip compile` does **not** read
+`.python-version` — it resolves against whichever interpreter it happens to discover on the
+invoking machine. Some transitive deps carry Python-version markers (`lancedb`'s
+`overrides>=0.7 ; python_full_version < "3.12"`; `anyio`'s marker-gated `typing_extensions ; python_version
+< "3.13"`), so the SAME `pyproject.toml` resolves a *different* lock depending on whether the
+generating machine's default Python was, say, 3.11 or 3.14. CI validates against 3.14 (this repo's
+`.python-version`), so a lock generated on an older interpreter diffed red against CI's recompile —
+not because a dependency actually changed, but because of *which Python resolved it*.
+
+**The fix:** every lock-gen invocation passes `--python-version "$(cat .python-version)"` explicitly,
+so the resolution target is always this repo's single source of truth for its interpreter, regardless
+of whatever Python happens to be default on the machine running the command. This lives in exactly
+**one** place — `scripts/compile-lock.sh` — which every caller below invokes rather than keeping its
+own copy of the `uv pip compile` command string:
+
+- `scripts/update-deps.sh` (both the whole-set `--upgrade` flow and the `--package NAME
+  --upgrade-package` flow) — the sanctioned way to move `requirements.lock` (`lode-g274.2`/`lode-fdjr`).
+- **CI enforcement (`lode-g274.6` / `lode-sys4`):** `tests.yml`'s `tests` job installs from
+  `requirements.lock` itself (via `scripts/python-init.sh`, the same install path a developer runs),
+  and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
+  it runs `scripts/compile-lock.sh -o requirements.lock`, **in place** against the just-checked-out
+  committed lock. uv feeds an existing output file's own pins back to the resolver as its *preference*
+  set by default (only `--upgrade`/`-U` ignores them), so the resolution only moves when a
+  `pyproject.toml` constraint forces it — an upstream release alone reproduces the committed lock
+  byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml` and
+  `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at all (`python -m
+  build` resolves in its own isolated env), and `coverage.yml` is report-only (`lode-qxdn.3`, no
+  merge-gate status).
+- **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check,
+  runnable on any dev machine — it seeds a scratch copy with the committed lock (mirroring CI's
+  in-place recompile so the preference-seeding behaves identically), recompiles it via
+  `scripts/compile-lock.sh`, and diffs the result against the committed file. Deliberately kept out
+  of the default `nox` session set (same reasoning as `eval`/`build`: it needs network to resolve
+  against PyPI, so a bare `nox` / `nox -s tests` stays offline). **`/land` runs it** as part of its
+  combined re-gate (`.claude/skills/land/SKILL.md`, alongside `nox -t fix`/`nox -s tests`) and in its
+  per-branch isolation-replay loop — so a stale lock is caught locally, by the single trunk-writer,
+  before the public CI badge is the only thing that catches it.
+- **Offline / `uv`-absent behaviour: fails closed, and fails *distinguishably*.**
+  `scripts/compile-lock.sh` exits non-zero with an explicit message if `uv` is not on `PATH`, rather
+  than silently skipping the check. A stale lock landing unnoticed because a local check was quietly
+  skipped is worse than a noisy failure that tells a developer to install `uv`. But failing closed is
+  only half of `lode-9i2p`'s rule, and the half that is easy to get wrong is the other one — so
+  `nox -s lock_currency` splits its own non-zero into two statuses, the same contract
+  `scripts/validate-mermaid.sh` already carries:
+  - **exit 1 — CONTENT.** The committed lock genuinely disagrees with what `pyproject.toml` resolves
+    to. Some diff caused it; `/land` may attribute it to a branch, isolate, and bounce.
+  - **exit 2 — MACHINE.** The gate could not run at all: `uv` absent, or `compile-lock.sh` unable to
+    resolve (PyPI unreachable, a 5xx, DNS). Nothing about any branch's content failed, so `/land`
+    stops the pass and surfaces it as a human decision instead of isolating. Without this split, a
+    transient PyPI blip on the lander would bounce — and delete — every reviewed branch in the pass,
+    each with a fabricated "stale lock" finding, which is precisely the failure `lode-9i2p` was filed
+    to prevent. nox collapses every ordinary session failure to exit 1, so the session leaves the
+    process directly (`sys.exit`) for the machine-fault path.
+
+  This gate needs that distinction more than the offline default set does, not less: `nox -t
+  fix`/`nox -s tests` are offline once the model cache is warm, whereas `lock_currency` requires `uv`
+  and a reachable PyPI on **every** invocation. CI's `lock-currency` job installs `uv` itself first,
+  so the uv-absent path only bites a developer machine or `/land`'s local pre-flight — the public CI
+  badge still catches a stale lock in that case, just later.
+- **Attribution needs a baseline, not just an exit code (`lode-sys4`).** `/land`'s isolation-replay
+  loop finds a culprit by merging the accepted branches one at a time and blaming the one that turns
+  the gate red. That is sound for `nox -s tests`, which asks a question about the tree alone. It is
+  *not* sound for `lock_currency`, which asks whether the committed lock is a fixed point of the tree
+  **plus the ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a
+  `uv` release that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`,
+  so the lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  the gate once on bare `origin/trunk` before entering the loop: red there means the staleness
+  predates every branch in the set and is not attributable to any of them — stop the pass, don't
+  isolate.
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
@@ -295,7 +355,7 @@ DB bookkeeping — the provider only implements "run this set of requests":
 ```python
 @dataclass(frozen=True)
 class BatchRequest:
-    custom_id: str                      # version_id/snapshot_id, mirrors today's custom_id mapping
+    custom_id: str  # version_id/snapshot_id, mirrors today's custom_id mapping
     model: str
     reasoning_effort: str | None
     system: str
@@ -303,23 +363,29 @@ class BatchRequest:
     output_schema: type[BaseModel]
     max_tokens: int
     tool_name: str | None = None
-    tool_description: str | None = None  # lode-568v.2 addition, see structured_call above
+    tool_description: str | None = (
+        None  # lode-568v.2 addition, see structured_call above
+    )
+
 
 @dataclass(frozen=True)
 class BatchResult:
     custom_id: str
     outcome: Literal["succeeded", "errored", "expired", "canceled"]
-    parsed: BaseModel | None          # set iff outcome == "succeeded" -- the provider's RAW
-                                       # decoded wire payload (a pydantic.RootModel[dict]), NEVER
-                                       # a schema-validated domain object; the caller validates it
-                                       # against whatever output_schema it submitted (lode-568v.2,
-                                       # decisions.md -- keeps the provider generic and preserves
-                                       # lode-i05.5 restart durability with no schema info needing
-                                       # to survive in the persisted batch_handle)
-    error: LLMProviderError | None    # set iff outcome != "succeeded"
+    parsed: BaseModel | None  # set iff outcome == "succeeded" -- the provider's RAW
+    # decoded wire payload (a pydantic.RootModel[dict]), NEVER
+    # a schema-validated domain object; the caller validates it
+    # against whatever output_schema it submitted (lode-568v.2,
+    # decisions.md -- keeps the provider generic and preserves
+    # lode-i05.5 restart durability with no schema info needing
+    # to survive in the persisted batch_handle)
+    error: LLMProviderError | None  # set iff outcome != "succeeded"
+
 
 class LLMProvider(Protocol):
-    def submit_batch(self, requests: Sequence[BatchRequest], *, timeout_s: float) -> str:
+    def submit_batch(
+        self, requests: Sequence[BatchRequest], *, timeout_s: float
+    ) -> str:
         """Submit; return an opaque, PERSISTABLE handle string (stored as batch_handle)."""
         ...
 
@@ -403,8 +469,10 @@ selects a tier *within* the active provider), but each is now typed as a small `
 
 ```python
 class ModelTier(BaseModel):
-    model: str                       # Anthropic model id, or an Azure/OpenAI deployment name
-    reasoning_effort: str | None = None   # meaningful only under a reasoning-capable deployment
+    model: str  # Anthropic model id, or an Azure/OpenAI deployment name
+    reasoning_effort: str | None = (
+        None  # meaningful only under a reasoning-capable deployment
+    )
 ```
 
 A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-4-5"`)
@@ -439,9 +507,11 @@ only diagnostic surface this repo can't reproduce locally (challenge addendum, 2
 class LLMProviderError(RuntimeError):
     """A provider call failure. Carries enough to diagnose remotely; chains onto
     the underlying SDK exception via __cause__."""
+
     provider: str
     status_code: int | None
     request_id: str | None
+
 
 class LLMAuthError(LLMProviderError):
     """No credentials resolved for the active provider — raised by build_provider()."""

@@ -21,7 +21,6 @@ import pytest
 from lode.staleness import reanchor_annotations, reanchor_edges
 from lode.storage import init_db
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

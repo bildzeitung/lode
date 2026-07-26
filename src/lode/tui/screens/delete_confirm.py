@@ -8,6 +8,8 @@ Split out of :mod:`lode.tui.screens.browse` per the one-Screen-per-module fiat
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -29,7 +31,7 @@ class DeleteConfirmScreen(ModalScreen[bool]):
     ``bool``: ``True`` on confirm, ``False`` on decline or Escape.
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("y", "choose(True)", "Yes, delete"),
         Binding("n", "choose(False)", "No, cancel"),
         Binding("escape", "choose(False)", "Cancel", show=False),

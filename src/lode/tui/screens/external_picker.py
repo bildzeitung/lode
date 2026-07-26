@@ -9,6 +9,8 @@ addressing rule shared with ``lode dump-html`` (lode-olmi.7).
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -17,9 +19,9 @@ from textual.widgets import Header
 
 from lode.enrichment_view import ExternalView
 from lode.ids import short_version_id
+from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 from lode.tui.widgets.lode_data_table import LodeDataTable
 from lode.tui.widgets.lode_footer import LodeFooter
-from lode.tui.screens.snapshot_viewer import SnapshotViewerScreen
 
 #: The many-externals picker table's widget id -- read back in tests.
 EXTERNAL_PICKER_TABLE_ID = "external-picker-table"
@@ -48,7 +50,7 @@ class ExternalPickerScreen(Screen[None]):
 
     # escape/Back uses the APP-NAMESPACED "app.pop_screen" -- the bare
     # "pop_screen" silently fails on a Screen. See docs/keybindings.md.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 

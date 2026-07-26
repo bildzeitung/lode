@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import difflib
 from collections.abc import Callable
+from typing import ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -38,9 +39,9 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Header, TextArea
 
+from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.widgets.lode_static import LodeStatic
-from lode.tui.services.reconcile import Conflict, discard, reapply
 from lode.versions import SaveResult
 
 #: The diff view's widget id — read back in tests.
@@ -62,7 +63,7 @@ def _diff_text(conflict: Conflict) -> str:
 class ReconcileScreen(Screen[None]):
     """A buffer-vs-head diff with re-apply/discard bindings for a CAS reject."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("r", "reapply", "Re-apply"),
         Binding("d", "discard", "Discard"),
     ]

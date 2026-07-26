@@ -225,6 +225,8 @@ this module now keeps only :class:`BrowseScreen`, and every cross-screen
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -234,9 +236,6 @@ from textual.widgets.data_table import RowDoesNotExist
 
 from lode.notes_read import list_notes, short_note_id
 from lode.tui.dates import format_adaptive_date
-from lode.tui.services.edit import delete_note, load_head
-from lode.tui.widgets.lode_data_table import LodeDataTable
-from lode.tui.widgets.lode_footer import LodeFooter
 from lode.tui.screens._browse_render import (
     _SUMMARY_ROW_HEIGHT,
     _clip_summary_to_row_height,
@@ -246,6 +245,9 @@ from lode.tui.screens._content_view import _view_note_external_content
 from lode.tui.screens.delete_confirm import DeleteConfirmScreen
 from lode.tui.screens.edit import EditScreen
 from lode.tui.screens.enrichment_modal import EnrichmentModalScreen
+from lode.tui.services.edit import delete_note, load_head
+from lode.tui.widgets.lode_data_table import LodeDataTable
+from lode.tui.widgets.lode_footer import LodeFooter
 from lode.versions import HeadConflictError
 
 #: The notes table's widget id -- read back in tests.
@@ -274,7 +276,7 @@ class BrowseScreen(Screen[None]):
     # 80-column bound that forced "Insp"/"Del"/"Exp" is superseded -- lode's
     # minimum supported terminal width is 100 columns (docs/tui.md) -- and
     # the full words fit comfortably within it.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("escape", "dismiss_screen", "Back"),
         Binding("i", "inspect_selected", "Inspect"),
         Binding("v", "view_content", "View"),

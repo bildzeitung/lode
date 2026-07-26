@@ -376,7 +376,7 @@ class TestAtlassianDetection:
         assert external_ids == ["ABC-123"]
         rows = _edges_from(conn, "note-1")
         assert len(rows) == 1
-        to_id, source, confidence, quoted_text, status, source_version = rows[0]
+        to_id, source, confidence, quoted_text, status, _ = rows[0]
         assert to_id == "ABC-123"
         assert source == "user"
         assert confidence == 1.0

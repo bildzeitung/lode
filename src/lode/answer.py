@@ -53,7 +53,7 @@ class Support(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _exactly_one_target(self) -> "Support":
+    def _exactly_one_target(self) -> Support:
         if (self.version_id is None) == (self.snapshot_id is None):
             raise ValueError(
                 "support must cite exactly one of version_id or snapshot_id"

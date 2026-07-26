@@ -88,10 +88,9 @@ def test_context_manager_acquires_and_releases(db_path: Path) -> None:
 def test_context_manager_releases_on_body_exception(db_path: Path) -> None:
     """Lock is released even when the body raises."""
     lf = lock_path(db_path)
-    with pytest.raises(RuntimeError):
-        with WorkerLock(db_path):
-            assert lf.exists()
-            raise RuntimeError("inner failure")
+    with pytest.raises(RuntimeError), WorkerLock(db_path):
+        assert lf.exists()
+        raise RuntimeError("inner failure")
     assert not lf.exists()
 
 
@@ -132,7 +131,7 @@ def _dead_pid() -> int:
     returns the now-dead PID.  Using Popen avoids the multi-threaded-fork
     deprecation warning that ``os.fork()`` triggers inside pytest.
     """
-    proc = subprocess.Popen(["true"])  # noqa: S603, S607
+    proc = subprocess.Popen(["true"])
     pid = proc.pid
     proc.wait()
     return pid

@@ -19,11 +19,11 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lode.tui.dates import format_adaptive_date
 
-_NOW = datetime(2026, 7, 6, 15, 0, 0, tzinfo=timezone.utc)  # a Monday
+_NOW = datetime(2026, 7, 6, 15, 0, 0, tzinfo=UTC)  # a Monday
 
 
 @contextmanager

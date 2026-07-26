@@ -33,8 +33,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lode.lock import lock_path
 from lode.llm_provider import ModelTier
+from lode.lock import lock_path
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
 # Documented, env-var-PRIMARY resolution for the JIRA/Confluence Cloud Basic-auth
@@ -508,9 +508,9 @@ class Settings(BaseModel):
         "still coerces to a ModelTier with reasoning_effort=None.",
     )
     qa_think_harder_llm: ModelTier = _knob(
-        ModelTier(model="claude-opus-4-8"),
+        ModelTier(model="claude-opus-5"),
         Kind.RUNTIME,
-        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 4.8). A "
+        "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5). A "
         "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
         "still coerces to a ModelTier with reasoning_effort=None.",
     )
@@ -562,7 +562,7 @@ class Settings(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def _azure_api_version_required_with_endpoint(self) -> "Settings":
+    def _azure_api_version_required_with_endpoint(self) -> Settings:
         """Fail loudly at load if azure_openai_endpoint is set with no api-version.
 
         docs/stack.md "6. Config shape": azure_openai_api_version is "required

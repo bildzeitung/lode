@@ -51,7 +51,7 @@ is the honest reject plus the buffer-preserving conflict it hands back.
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lode.config import Settings
 from lode.hashing import NO_PARENT, content_version_id
@@ -424,7 +424,7 @@ def purge(conn: sqlite3.Connection, note_id: str) -> PurgeResult:
                 (note_id,),
             )
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         marker = f"[purged {now:%Y-%m-%d}]"
         purged_at = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         conn.execute(

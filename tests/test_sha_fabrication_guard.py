@@ -50,7 +50,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

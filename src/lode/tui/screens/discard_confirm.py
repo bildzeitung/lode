@@ -9,6 +9,8 @@ answer is handled.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -40,7 +42,7 @@ class DiscardConfirmScreen(ModalScreen[str]):
     editor instead of a blank full screen.
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("s", "choose('save')", "Save & quit"),
         Binding("d", "choose('discard')", "Discard & quit"),
         Binding("c", "choose('cancel')", "Cancel"),
