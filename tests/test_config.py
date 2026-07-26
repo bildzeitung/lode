@@ -282,7 +282,7 @@ def test_model_ids_are_pinned() -> None:
     s = Settings()
     assert s.enrichment_llm.model == "claude-haiku-4-5"
     assert s.qa_llm.model == "claude-sonnet-4-6"
-    assert s.qa_think_harder_llm.model == "claude-opus-4-8"
+    assert s.qa_think_harder_llm.model == "claude-opus-5"
     # A bare string knob coerces to a ModelTier with no reasoning effort
     # (lode-568v.2 back-compat -- no migration required for existing configs).
     assert s.enrichment_llm.reasoning_effort is None
@@ -454,7 +454,7 @@ def test_knob_rows_renders_model_tier_knobs_as_bare_model_id() -> None:
     rows = _knob_values(Settings())
     assert rows["enrichment_llm"] == "claude-haiku-4-5"
     assert rows["qa_llm"] == "claude-sonnet-4-6"
-    assert rows["qa_think_harder_llm"] == "claude-opus-4-8"
+    assert rows["qa_think_harder_llm"] == "claude-opus-5"
 
 
 def test_knob_rows_appends_reasoning_effort_when_set() -> None:

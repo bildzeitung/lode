@@ -365,7 +365,7 @@ branches](../../docs/agents-workflow.md#stacked-land-branches-lode-02v).
 Commit after each completed unit of work, inside the worktree, with a clear message ending in:
 
 ```
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 ```
 
 **Before moving on to the gates, confirm nothing is left uncommitted:**
@@ -853,7 +853,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Shell | prefix with `rtk` |
 | Design source of truth | `docs/` (settled), `docs/decisions.md` (open), `docs/configuration.md` (tunables) |
 | Task tracker | **bd only** |
-| Commit trailer | `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` |
+| Commit trailer | `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` |
 
 Notes:
 - A green build pushes `origin/land/<id>`, marks `ready-for-code-review`, and **keeps the worktree**

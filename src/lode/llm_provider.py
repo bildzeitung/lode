@@ -275,6 +275,29 @@ class AnthropicProvider:
     for enrichment, ``messages.parse`` for Q&A, ``beta.messages.batches.*``
     for the batch path -- so routing through this seam is byte-for-byte
     equivalent to calling the SDK directly, as it was before this ticket.
+
+    **Thinking is pinned off on the ``messages.parse`` branch (lode-d1sr).**
+    This is the single source of truth for that decision; the call sites below
+    and :data:`lode.qa.MAX_TOKENS` point here rather than restate it.
+
+    Anthropic models from Opus 5 onward run adaptive thinking when ``thinking``
+    is omitted, sharing ``max_tokens`` between thinking and response text --
+    which would let a cap sized for claims alone (:data:`lode.qa.MAX_TOKENS`)
+    truncate mid-answer. ``thinking={"type": "disabled"}`` restores pre-Opus-5
+    behavior. Two limits on that, both tracked in **lode-3dlt**:
+
+    - *The value is not universally accepted.* It is legal on the default Q&A
+      tiers (``qa_llm`` = Sonnet 4.6, ``qa_think_harder_llm`` = Opus 5 -- on
+      Opus 5 only at effort ``high`` or below, and lode never sends
+      ``output_config.effort``, so the API default ``high`` applies). But both
+      knobs are ``Kind.RUNTIME``, and an override to a Fable-class model
+      rejects an explicit ``disabled`` with a 400 at any effort.
+    - *The forced tool-use branch is left as-is*, because the enrichment tier
+      (``enrichment_llm`` = Haiku 4.5) predates thinking-on-by-default -- a
+      property of the MODEL, not of forced tool use. On the first-party Claude
+      API a forced ``tool_choice`` does not preclude thinking (only Amazon
+      Bedrock requires an explicit ``disabled`` alongside it), so a
+      ``Kind.RUNTIME`` override there would think too.
     """
 
     def __init__(self, client: anthropic.Anthropic) -> None:
@@ -295,6 +318,9 @@ class AnthropicProvider:
     ) -> BaseModelT:
         # reasoning_effort is ignored -- Anthropic has no such axis.
         if tool_name is not None:
+            # No `thinking` here (lode-d1sr): the enrichment tier predates
+            # thinking-on-by-default. That is a model property, NOT a
+            # consequence of forced tool use -- see the class docstring.
             response = self._client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
@@ -313,6 +339,9 @@ class AnthropicProvider:
             tool_block = next(b for b in response.content if b.type == "tool_use")
             return output_schema.model_validate(tool_block.input)
 
+        # Thinking pinned off so it can't share max_tokens with the response
+        # (lode-d1sr) -- rationale, and the tiers that reject this value, in the
+        # class docstring.
         response = self._client.messages.parse(
             model=model,
             max_tokens=max_tokens,
@@ -320,6 +349,7 @@ class AnthropicProvider:
             messages=[{"role": "user", "content": user_prompt}],
             output_format=output_schema,
             timeout=timeout_s,
+            thinking={"type": "disabled"},
         )
         return response.parsed_output
 

@@ -104,6 +104,9 @@ def test_structured_call_forces_tool_use_when_tool_name_given() -> None:
         }
     ]
     assert kwargs["messages"] == [{"role": "user", "content": "prompt"}]
+    # lode-d1sr: no thinking default to disable on this branch -- see the
+    # AnthropicProvider docstring.
+    assert "thinking" not in kwargs
 
 
 def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
@@ -128,6 +131,9 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     assert kwargs["model"] == "claude-sonnet-4-6"
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
+    # lode-d1sr: thinking pinned off so it can't share max_tokens with the
+    # response -- see the AnthropicProvider docstring.
+    assert kwargs["thinking"] == {"type": "disabled"}
     client.messages.create.assert_not_called()
 
 
