@@ -4,7 +4,7 @@ Asserts the acceptance criteria offline (the Anthropic client is mocked, so no
 network call is ever made and the gates run without credentials):
 
 - structured claims are parsed via the anthropic ``messages.parse`` + Pydantic path;
-- Claude Sonnet 4.6 is the default model, Opus 4.8 the "think harder" toggle;
+- Claude Sonnet 4.6 is the default model, Opus 5 the "think harder" toggle;
 - ``no_egress`` passages are EXCLUDED from the cloud context (and surfaced as
   present-but-withheld);
 - redaction is applied to the context BEFORE it is sent;
@@ -106,6 +106,23 @@ def test_opus_when_think_harder(conn) -> None:
     )
     assert result.model == OPUS_MODEL
     assert client.messages.calls[0]["model"] == OPUS_MODEL
+
+
+def test_thinking_disabled_for_think_harder_call(conn) -> None:
+    # lode-d1sr: OPUS_MODEL (Opus 5) runs adaptive thinking by default when
+    # `thinking` is omitted, sharing MAX_TOKENS between thinking and response
+    # text -- a cap sized for a compact claims structure with no thinking
+    # budget would then risk mid-answer truncation. AnthropicProvider passes
+    # thinking={"type": "disabled"} on every Q&A call to avoid that.
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=True,
+        provider=AnthropicProvider(client),
+    )
+    assert client.messages.calls[0]["thinking"] == {"type": "disabled"}
 
 
 def test_qa_llm_override_reaches_the_call(conn) -> None:

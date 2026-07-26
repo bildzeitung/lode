@@ -275,6 +275,16 @@ class AnthropicProvider:
     for enrichment, ``messages.parse`` for Q&A, ``beta.messages.batches.*``
     for the batch path -- so routing through this seam is byte-for-byte
     equivalent to calling the SDK directly, as it was before this ticket.
+
+    **``messages.parse`` explicitly disables thinking (lode-d1sr).** Newer
+    Anthropic models (Opus 5 onward) run adaptive thinking by default when
+    ``thinking`` is omitted, sharing ``max_tokens`` between thinking and
+    response text -- ``thinking={"type": "disabled"}`` keeps this call's
+    behavior identical to every model that predates thinking-on-by-default,
+    across the whole model lineup this seam can be pointed at, not just Opus.
+    The forced tool-use branch needs no such change -- extended thinking is
+    incompatible with a forced ``tool_choice`` on Anthropic's API, so there is
+    no thinking default to disable there.
     """
 
     def __init__(self, client: anthropic.Anthropic) -> None:
@@ -295,6 +305,9 @@ class AnthropicProvider:
     ) -> BaseModelT:
         # reasoning_effort is ignored -- Anthropic has no such axis.
         if tool_name is not None:
+            # Forced tool-use (tool_choice={"type": "tool", ...}) is incompatible
+            # with extended thinking on Anthropic's API, so there is no thinking
+            # default to disable on this branch -- unaffected by lode-d1sr.
             response = self._client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
@@ -313,6 +326,13 @@ class AnthropicProvider:
             tool_block = next(b for b in response.content if b.type == "tool_use")
             return output_schema.model_validate(tool_block.input)
 
+        # Explicitly disabled (lode-d1sr): Opus 5 runs adaptive thinking by
+        # default when `thinking` is omitted, and thinking output shares
+        # max_tokens with the response text -- risking truncation of a cap
+        # (qa.MAX_TOKENS) sized for a compact claims structure with no
+        # thinking budget. Disabling keeps this call byte-for-byte equivalent
+        # to pre-Opus-5 behavior (no thinking) for every model this seam
+        # calls, not just Opus.
         response = self._client.messages.parse(
             model=model,
             max_tokens=max_tokens,
@@ -320,6 +340,7 @@ class AnthropicProvider:
             messages=[{"role": "user", "content": user_prompt}],
             output_format=output_schema,
             timeout=timeout_s,
+            thinking={"type": "disabled"},
         )
         return response.parsed_output
 

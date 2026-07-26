@@ -12,7 +12,7 @@ by this response schema (``docs/retrieval.md``).
 **Model tier (``docs/stack.md`` "Q&A LLM").** The model is read from
 ``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
 ``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
-4.8**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
+5**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
 each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort,
 lode-568v.2), so a user override actually reaches the call. The call itself is
 routed through the vendor-neutral :class:`~lode.llm_provider.LLMProvider` seam
@@ -56,13 +56,20 @@ from lode.llm_provider import LLMProvider, build_provider
 #: :attr:`lode.config.Settings.qa_llm`'s default; the live value always comes
 #: from settings, never this constant directly (lode-obms).
 SONNET_MODEL = "claude-sonnet-4-6"
-#: "Think harder" toggle -- Claude Opus 4.8 (``docs/stack.md`` "Q&A LLM").
+#: "Think harder" toggle -- Claude Opus 5 (``docs/stack.md`` "Q&A LLM").
 #: Mirrors :attr:`lode.config.Settings.qa_think_harder_llm`'s default; the live
 #: value always comes from settings, never this constant directly (lode-obms).
-OPUS_MODEL = "claude-opus-4-8"
+OPUS_MODEL = "claude-opus-5"
 
 #: Output cap for the synthesis call. Comfortably under the SDK's non-streaming
 #: timeout guard; claims are a compact, bounded structure, not long prose.
+#: Opus 5 runs adaptive thinking by default when the ``thinking`` param is
+#: omitted, and thinking output would share this same cap with the response
+#: text -- risking mid-answer truncation for a cap sized for claims alone.
+#: :class:`~lode.llm_provider.AnthropicProvider` sidesteps this by passing
+#: ``thinking={"type": "disabled"}`` on every Q&A call (lode-d1sr), so this
+#: cap covers claims-only output exactly as it always has, for every model
+#: tier -- no thinking budget to reconcile it against.
 MAX_TOKENS = 4096
 
 _SYSTEM_PROMPT = (
