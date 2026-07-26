@@ -1900,6 +1900,28 @@ assumption would not have closed it.
   **distributed remote-lock ref** (atomic `refs/locks/land` on origin, owner + timestamp for
   stale-break) is the documented upgrade for true concurrent multi-machine landing — and the natural
   seam toward real CI.
+- **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Three
+  "stop the pass" exits fire on a **machine** fault rather than a content red — the 2b cheap-conflict
+  precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and `nox -s lock_currency`'s exit 2
+  (added by lode-sys4, and network-dependent on every `/loop 5m /land` tick, which is what raised this
+  from a rare edge case to a routinely-reachable one). None of the three restores local `trunk` at its
+  own exit site — by design, so the remedy is implemented **once**, not restated per gate. `/land` is
+  `trunk`'s **sole** writer (confirmed by grep across every other skill/agent), so local `trunk` should
+  already equal `origin/trunk` at the start of any pass; the only way it can legitimately differ is a
+  **previous** pass that got interrupted after [Section 3](../.claude/skills/land/SKILL.md#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
+  had already `--no-ff`-merged into local `trunk` but before [Section 4](../.claude/skills/land/SKILL.md#4-land-the-survivors)
+  pushed it — one of the three named exit-2 stops, or an ungraceful crash/`SIGTERM`/killed harness.
+  Those leftover merge commits were never gated green on their own and never reached origin, so they
+  are not legitimate work to preserve. `/land`'s Section 1 now runs `git fetch origin` followed by
+  `git reset --hard origin/trunk` in place of `git pull --rebase`, discarding any such residue
+  unconditionally, every pass — self-healing regardless of *how* the previous pass died, which a
+  per-exit-site restore would not (a bare crash or kill runs no exit-site code at all). This strictly
+  subsumes `pull --rebase`'s one legitimate job (fast-forwarding a merely-behind local `trunk`): with no
+  extra local commits, a hard reset and a rebase land at the identical SHA; they diverge only in the
+  failure case, where `pull --rebase` would **replay** the residue forward (flattening its merge
+  bubbles per `CLAUDE.md`'s own workflow-gotcha) instead of discarding it. A content red (exit 1 on any
+  gate) is unaffected — that isolation-and-bounce path is unchanged. Full write-up:
+  [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 
 ### Where this is heading — a green-branch merge queue
 
