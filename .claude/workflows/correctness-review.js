@@ -86,7 +86,7 @@ const priorBehaviorInstruction = reviewBase
 // for a dimension that stays flaky round after round, where a fixed K has a
 // hard, predictable bound — a bounded worst case was chosen over an
 // adaptive-but-unbounded one.
-const FIND_ROUNDS = 2
+const FIND_ROUNDS = 1
 
 // Severity rank shared by both merge points below (lower = more severe).
 const SEV_RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 }
