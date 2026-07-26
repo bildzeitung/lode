@@ -658,6 +658,54 @@ are catalogued in [configuration.md](configuration.md).
   `/land` (merge `3e4f3c4`), after lode-p5gf. The paragraphs above are left as-is as the accurate
   record of what was true at build time.
 
+  **Update (lode-wtwb, 2026-07-24) — a crashed VERIFY agent was defaulting its finding to
+  `refuted`, silently discarding real bugs; fixed to a third `unverified` state.** During the
+  `/code` run of 2026-07-24, the workflow was invoked over `trunk...b760b3d` (lode-ns3r) and hit an
+  API session limit: 14 of 22 agents errored, most of them VERIFY skeptics. The workflow returned
+  `findings: []` — an apparently clean review — but every one of the 10 entries in `refuted[]`
+  carried the reason `'verifier produced no verdict — defaulted to refuted'`. Zero of the
+  refutations were real; a High-severity `set -o pipefail` + `grep -q` SIGPIPE finding in
+  `scripts/release-bump.sh` (mechanically confirmed true, see lode-ns3r's own comment thread) was
+  discarded this way, and the orchestrator only caught it by hand-inspecting refutation-reason
+  strings. The failure mode is fail-**open** on the wrong side, and gets *worse* under load — the
+  more agents in flight, the more likely a verifier dies, exactly when review matters most.
+
+  **Fix, in `.claude/workflows/correctness-review.js`:** a verifier that produces no verdict is now
+  a genuine third state — neither confirmed nor refuted — returned in its own `unverified` array
+  (never folded into `refuted`), each entry carrying an `unverifiedReason` instead of a
+  `refutationReason`. The same near-duplicate merge `survivors` already used (lode-905v's
+  `mergeNearDuplicates`) applies to `unverified` too — within that array only, so the several copies
+  one infra fault leaves unverified across dimensions collapse to one. It deliberately does NOT
+  collapse across the three arrays: they partition findings by verification *state*, so a bug one
+  dimension confirmed and another left unverified legitimately appears in both, each label true of
+  its own copy. Cross-pool merging is the thing to avoid — dropping an unverified copy because a
+  similar-titled entry sits in `refuted` would re-create this very bug. The top-level
+  result also gains **`degraded`** (true the moment any Find round, Verify agent, or whole dimension
+  in the run failed to produce output) plus `stats.{findRoundsFailed,verifyAgentsFailed,
+  dimensionsFailed,unverifiedCount}` — a partially-failed run is now distinguishable from a clean
+  one by the caller checking one boolean, never by parsing reason strings by hand.
+
+  **Wiring — the fix alone doesn't help unless the two consumers actually read the new fields.**
+  `.claude/skills/code/SKILL.md` Phase 2 now folds `result.unverified` (labeled plainly as
+  "unverified, not refuted") and `result.degraded` into the reviewer's dispatch prompt, alongside
+  the existing survivors, and step 5's user-facing report calls out a degraded run explicitly.
+  `.claude/agents/code-reviewer.md` step 4 now says an `unverified` finding gets at least as much
+  scrutiny as a confirmed survivor (its skeptic never weighed in at all, unlike a `refuted` one that
+  was actively checked and rejected), and that a degraded run's silence on a failed dimension is not
+  evidence that dimension is clean.
+
+  **Acceptance criterion 3 (regression replay of the lode-ns3r run, `resumeFromRunId
+  wf_9b60ff50-0c6`) is NOT executed by this fix — same structural reason lode-p5gf's and lode-eohb's
+  own validations needed a human.** `Workflow` is reachable only from the `/code` orchestrator's own
+  main session (verified empirically, lode-905v); a `coding` producer building this ticket is not
+  that session, so it cannot invoke `Workflow` (with or without `resumeFromRunId`) to confirm the
+  SIGPIPE finding now survives to the reviewer as `unverified` rather than vanishing. The runbook for
+  a human (or the maintainer's own interactive session) to execute this replay and record the result
+  is `specs/13-correctness-review-verify-crash-regression.md`, following the `specs/11`/`specs/12`
+  precedent. **Do not treat lode-wtwb's acceptance bar as fully met until that replay has actually
+  been run and its result recorded on this ticket** — the code above is built and reviewable now,
+  but the regression-replay criterion specifically needs the runbook's result.
+
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —
   "a clean code-reviewer run and a clean rebase-pickup run leave NO worktree behind" — was satisfied

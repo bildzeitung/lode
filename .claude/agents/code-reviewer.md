@@ -267,6 +267,14 @@ For a docs-only branch there is no Python gate.
      can't independently confirm against the real diff does not get fixed on the workflow's say-so
      alone. If my dispatch prompt says the workflow found nothing, errored, or was unavailable even to
      the orchestrator, that changes nothing below — my own pass still runs at full scrutiny regardless.
+   - **An `unverified` finding is not the same as a `refuted` one — give it at least as much scrutiny,
+     if anything more (lode-wtwb).** A `refuted` entry was actively checked by a skeptic and rejected; an
+     `unverified` entry means that skeptic agent crashed/timed out and never weighed in at all — the
+     workflow deliberately never folds these together (a session-limit crash across most verifiers once
+     made a real High-severity bug read as "refuted" when it was never checked, lode-wtwb). If my
+     dispatch prompt was handed a **degraded** run (any Find/Verify agent failed to produce output), the
+     absence of a finding in whichever dimension(s) failed is not evidence that dimension is clean — my
+     own hand-reasoned pass over that part of the diff is the only thing covering the gap this time.
    - **Then I run my own reasoning pass** against the real diff (`git diff` against the base I
      established in step 2 — `trunk...HEAD`, or the off-trunk merge-base for a stacked branch) —
      unconditionally, whether or not I was handed any pre-computed findings:
