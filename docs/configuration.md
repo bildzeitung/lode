@@ -275,6 +275,34 @@ override of `enrichment_llm` to a thinking-capable model would share its own
 tool-call JSON — is tracked as a follow-up rather than fixed here, since it
 needs its own tuning pass once someone actually wants that override.
 
+### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
+
+`AnthropicProvider.structured_call` accepted `reasoning_effort` from day one
+(`lode-568v.2`) but never sent it — a comment on the class used to (incorrectly)
+claim Anthropic has no such axis. It does: `output_config.effort`
+(`low`/`medium`/`high`/`xhigh`/`max`) has been GA since the 4.6 generation
+(`xhigh` added on Opus 4.7). `reasoning_effort` now reaches Anthropic as
+`output_config.effort` on **both** `structured_call` branches (the
+`messages.parse` Q&A path and the forced-tool-use enrichment path) and on the
+`submit_batch` path — every wire mechanism `AnthropicProvider` has. An
+effort value outside the legal five-value set raises `LLMProviderError`
+before any request is sent, rather than being silently dropped (the prior
+behavior) or surfacing as a raw `anthropic.BadRequestError` from deep inside
+the SDK.
+
+**Interaction with the `thinking`-omission decision directly above, checked
+and found not currently reachable.** Opus 5 rejects an explicit
+`thinking={"type": "disabled"}` paired with effort `xhigh`/`max` (400) — the
+same family of incompatibility lode-3dlt's fix exists to dodge. That
+combination is not reachable today: lode-3dlt already made both
+`structured_call` branches omit `thinking` entirely (never send `disabled`,
+on any branch, for any model), and this ticket does not change that — it only
+adds `effort` alongside the omitted `thinking`. Anthropic's own guidance
+already prefers effort-tuned thinking over disabling it, so there is no
+reason to reintroduce an explicit `disabled` later; the `AnthropicProvider`
+class docstring carries a standing note against doing so without re-reading
+this section first.
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |

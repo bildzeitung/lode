@@ -28,9 +28,16 @@ against exactly; read that first for the *why*. This module owns the *what*:
   :func:`lode.enrich._call_haiku` sends today (byte-for-byte wire equivalence
   is this ticket's own acceptance bar; the pinned signature had no way to
   carry it). Same addition on :class:`BatchRequest` for the batch path.
-- ``reasoning_effort`` is accepted by :class:`AnthropicProvider` but ignored --
-  Anthropic has no such axis (``docs/stack.md`` "the two immediate
-  structured-output calls").
+- ``reasoning_effort`` is wired through by :class:`AnthropicProvider` to
+  Anthropic's ``output_config.effort`` (GA since the 4.6 generation; ``xhigh``
+  added on Opus 4.7) on both the ``messages.parse`` branch and the
+  forced-tool-use branch of :meth:`structured_call`, and on the
+  :meth:`submit_batch` path (``lode-wnz1``, closing the gap left open by
+  ``lode-568v.2``). A value outside the legal set (``low``/``medium``/``high``/
+  ``xhigh``/``max``) raises :class:`LLMProviderError` before any request is
+  sent, rather than being silently dropped or surfacing as a raw
+  ``anthropic.BadRequestError``. See :class:`AnthropicProvider`'s own
+  docstring for the ``thinking``-interaction note.
 - **The batch handle stays the bare Anthropic ``batch.id`` string** (identical
   to ``submit_enrich_batch`` today) -- schema information never needs to
   survive to :meth:`collect_batch` because :class:`BatchResult.parsed` holds
@@ -123,7 +130,8 @@ class ModelTier(BaseModel):
     ``model`` is an Anthropic model id, or an Azure/OpenAI deployment name
     once a second provider lands (``lode-568v.3``). ``reasoning_effort`` is
     meaningful only under a reasoning-capable deployment; :class:`AnthropicProvider`
-    ignores it.
+    sends it as ``output_config.effort`` (``lode-wnz1``) and
+    :class:`OpenAIProvider` sends it as ``reasoning.effort``.
 
     A bare TOML string (every existing ``config.toml`` today, e.g.
     ``enrichment_llm = "claude-haiku-4-5"``) coerces to
@@ -267,6 +275,35 @@ class LLMProvider(Protocol):
 # exact calls with zero behavior change")
 # ---------------------------------------------------------------------------
 
+# The legal `output_config.effort` values (lode-wnz1) -- matches Anthropic's
+# `OutputConfigParam.effort: Literal["low", "medium", "high", "xhigh", "max"]`
+# exactly (verified against the installed `anthropic` SDK's type definitions,
+# not guessed). `xhigh` was added on Opus 4.7; all five are GA.
+_ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def _anthropic_output_config(
+    reasoning_effort: str | None, *, model: str
+) -> dict[str, str] | None:
+    """Build the ``output_config`` dict for ``reasoning_effort``, or ``None`` if unset.
+
+    Validates against :data:`_ANTHROPIC_EFFORT_LEVELS` so an invalid/unsupported
+    value fails clearly and immediately -- via :class:`LLMProviderError` --
+    rather than being silently dropped or surfacing as a raw
+    ``anthropic.BadRequestError`` deep inside the SDK call (lode-wnz1
+    acceptance criteria).
+    """
+    if reasoning_effort is None:
+        return None
+    if reasoning_effort not in _ANTHROPIC_EFFORT_LEVELS:
+        raise LLMProviderError(
+            f"invalid reasoning_effort {reasoning_effort!r} for model {model!r} "
+            f"-- Anthropic's output_config.effort accepts one of "
+            f"{sorted(_ANTHROPIC_EFFORT_LEVELS)}",
+            provider="anthropic",
+        )
+    return {"effort": reasoning_effort}
+
 
 class AnthropicProvider:
     """Wraps today's ``anthropic.Anthropic`` client; the sole provider (T2).
@@ -331,6 +368,18 @@ class AnthropicProvider:
     unraised) ``max_tokens`` budget between thinking and the tool-call JSON --
     a real but separate, currently-unreachable risk tracked as a follow-up
     rather than fixed here (lode-3dlt's design notes).
+
+    **``reasoning_effort`` (lode-wnz1)** is wired to ``output_config.effort``
+    on every branch below (validated against the legal
+    ``low``/``medium``/``high``/``xhigh``/``max`` set before any request is
+    sent -- see :func:`_anthropic_output_config`). This is independent of the
+    ``thinking``-omission rule above: neither branch sends an explicit
+    ``thinking`` value today, so pairing ``effort`` with ``thinking`` is not
+    currently reachable. **Do not reintroduce an explicit
+    ``thinking={"type": "disabled"}`` on either branch without re-reading this
+    note** -- Opus 5 rejects that combination outright at effort ``xhigh``/
+    ``max`` (400), which is exactly the interaction lode-3dlt's fix above
+    exists to avoid.
     """
 
     def __init__(self, client: anthropic.Anthropic) -> None:
@@ -349,18 +398,17 @@ class AnthropicProvider:
         tool_name: str | None = None,
         tool_description: str | None = None,
     ) -> BaseModelT:
-        # reasoning_effort is accepted but not sent to Anthropic here --
-        # output_config.effort (Anthropic's actual reasoning-depth axis, GA
-        # since the 4.6 generation; the xhigh level was added on Opus 4.7) is
-        # not yet wired through from this parameter; see the class docstring
-        # and lode-3dlt's design notes for the tracked follow-up. This is a
-        # "not implemented yet" gap, not "no such axis exists" -- Anthropic
-        # does have one.
+        # reasoning_effort -> output_config.effort (lode-wnz1): validated up
+        # front, then included only when set (an unset kwarg -- rather than
+        # `output_config=None` -- is how every other optional field on this
+        # call is already handled here, matching OpenAIProvider's `kwargs`
+        # pattern below).
+        output_config = _anthropic_output_config(reasoning_effort, model=model)
         if tool_name is not None:
             # No `thinking` here (lode-d1sr): the enrichment tier predates
             # thinking-on-by-default. That is a model property, NOT a
             # consequence of forced tool use -- see the class docstring.
-            response = self._client.messages.create(
+            create_kwargs: dict[str, Any] = dict(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
@@ -375,6 +423,9 @@ class AnthropicProvider:
                 messages=[{"role": "user", "content": user_prompt}],
                 timeout=timeout_s,
             )
+            if output_config is not None:
+                create_kwargs["output_config"] = output_config
+            response = self._client.messages.create(**create_kwargs)
             tool_block = next(b for b in response.content if b.type == "tool_use")
             return output_schema.model_validate(tool_block.input)
 
@@ -383,16 +434,25 @@ class AnthropicProvider:
         # Fable-class models at any effort and on Opus 5 at effort xhigh/max;
         # omitting it lets every model run its own default (no thinking on
         # Sonnet 4.6, adaptive thinking on Opus 5/Fable-class). See the class
-        # docstring for the full rationale.
+        # docstring for the full rationale, and its note on not reintroducing
+        # `disabled` alongside `output_config.effort`.
+        parse_kwargs: dict[str, Any] = dict(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user_prompt}],
+            output_format=output_schema,
+            timeout=timeout_s,
+        )
+        if output_config is not None:
+            # The SDK's `.parse()` helper merges this dict with the
+            # `output_format`-derived `{"format": ...}` it builds internally
+            # (verified against the installed SDK's `messages.parse` source --
+            # `merged_output_config = {**output_config, "format": ...}`), so
+            # passing `effort` here does not clobber the schema-format wiring.
+            parse_kwargs["output_config"] = output_config
         try:
-            response = self._client.messages.parse(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user_prompt}],
-                output_format=output_schema,
-                timeout=timeout_s,
-            )
+            response = self._client.messages.parse(**parse_kwargs)
         except ValidationError as exc:
             # ``messages.parse`` validates the response text against
             # ``output_schema`` inside the SDK, so a schema violation -- or a
@@ -447,6 +507,13 @@ class AnthropicProvider:
                     }
                 ]
                 params["tool_choice"] = {"type": "tool", "name": req.tool_name}
+            # reasoning_effort -> output_config.effort (lode-wnz1), same
+            # validation and shape as the immediate structured_call path above.
+            output_config = _anthropic_output_config(
+                req.reasoning_effort, model=req.model
+            )
+            if output_config is not None:
+                params["output_config"] = output_config
             api_requests.append({"custom_id": req.custom_id, "params": params})
 
         batch = self._client.beta.messages.batches.create(
