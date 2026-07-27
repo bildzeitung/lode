@@ -1554,8 +1554,9 @@ dispatched into that same tree with **no isolation**: the Agent tool call carrie
 symptom): three non-isolated `land-review` dispatches all ran in the main checkout; one left a full
 branch diff (`lode-2zj0`'s) staged there. The next branch's `git merge --no-ff` then aborted with
 "Your local changes to the following files would be overwritten by merge" — with `git ls-files -u`
-**empty**, so the failure matched neither `merge_one`'s jsonl-restore retry path (that only restores
-`.beads/issues.jsonl`, not arbitrary reviewer-left files) nor its real-conflict path (which requires
+**empty**, so the failure matched neither the merge step's jsonl-restore retry path (then an inline
+`merge_one()` bash function; now [`scripts/land-merge-one.sh`](../scripts/land-merge-one.sh), lode-sfnb
+— it only restores `.beads/issues.jsonl`, not arbitrary reviewer-left files) nor its real-conflict path (which requires
 a genuinely unmerged index). It silently read as an unretried conflict rather than what it actually
 was: a lander tree dirtied by something other than the branch being merged. Recovery required a
 human to confirm the staged content was safe on `origin/land/lode-2zj0` and hand-reset the tree.

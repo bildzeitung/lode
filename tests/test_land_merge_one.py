@@ -34,8 +34,29 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-merge-one.sh"
+
+
+def _assert_machine_fault_contract(stderr: str) -> None:
+    """Every exit-2 path must emit the WHOLE shared machine-fault contract.
+
+    `scripts/merge-precheck.sh`, `scripts/validate-mermaid.sh` and
+    `scripts/release-bump.sh` all open an exit-2 diagnostic with the same
+    ``GATE COULD NOT RUN:`` banner and close it with the same standing
+    instruction not to blame a branch for it (lode-9i2p). Emitting only half
+    of that is exactly how a machine fault gets read as a branch verdict, so
+    the contract is asserted here rather than left to convention.
+
+    Presence, not position: the unexpected-git-failure path deliberately
+    echoes git's own error out first, so the banner is not always the first
+    byte of stderr.
+    """
+    assert "GATE COULD NOT RUN:" in stderr, stderr
+    assert "machine fault a human must fix" in stderr, stderr
+    assert "do not kick this branch back needs-rebase" in stderr, stderr
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -139,6 +160,7 @@ def test_missing_message_file_exits_2_loud_never_empty_message_merge(
     assert result.stdout == ""
     assert "no precomputed merge message" in result.stderr
     assert "lode-b" in result.stderr
+    _assert_machine_fault_contract(result.stderr)
     after = _git(repo, "rev-parse", "trunk").stdout.strip()
     assert before == after, "no merge should have happened"
 
@@ -249,28 +271,26 @@ def test_unexpected_git_failure_exits_2_not_1(tmp_path: Path) -> None:
     result = _run("lode-f", msg_dir, repo)
 
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "machine fault" in result.stderr.lower()
+    assert result.stdout == "", (
+        "exit 2 must print nothing the caller could capture as $CONFLICTS"
+    )
+    _assert_machine_fault_contract(result.stderr)
     unmerged = _git(repo, "ls-files", "-u")
     assert unmerged.stdout == ""
 
 
-def test_usage_without_args_is_exit_2() -> None:
+@pytest.mark.parametrize("argv", [[], ["lode-a"], ["lode-a", "msgdir", "extra"]])
+def test_wrong_arg_count_is_exit_2_never_1(argv: list[str]) -> None:
+    """A caller bug must never land in the CONFLICT code. Exit 1 is reserved
+    for a real textual conflict, so a bad arg count exits 2 -- the same reason
+    `scripts/merge-precheck.sh` checks `$#` before anything else rather than
+    relying on `${1:?}` (whose exit 1 would collide)."""
     result = subprocess.run(
-        ["bash", str(SCRIPT)],
+        ["bash", str(SCRIPT), *argv],
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
-
-
-def test_usage_with_one_arg_is_also_exit_2() -> None:
-    result = subprocess.run(
-        ["bash", str(SCRIPT), "lode-a"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert "usage" in result.stderr
+    _assert_machine_fault_contract(result.stderr)
