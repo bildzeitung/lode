@@ -74,6 +74,13 @@ version_gt() {
   return 1
 }
 
+# Exactly three all-numeric, dot-separated components (see the header comment
+# for why this is stricter than the glob the inline snippets used). ONE
+# definition, applied both to the --gt argument and to every candidate tag --
+# a script whose whole purpose is ending duplicated SemVer logic should not
+# carry two copies of the rule internally.
+is_semver() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
 MODE="latest"
 CANDIDATE=""
 case "${1:-}" in
@@ -85,7 +92,7 @@ case "${1:-}" in
     fi
     MODE="gt"
     CANDIDATE="$2"
-    if ! echo "$CANDIDATE" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if ! is_semver "$CANDIDATE"; then
       gate_could_not_run \
         "release-latest-tag.sh --gt: version must be bare X.Y.Z (no leading 'v'), got '$CANDIDATE'"
     fi
@@ -118,10 +125,7 @@ LATEST=""
 while IFS= read -r t; do
   [ -n "$t" ] || continue
   tv="${t#v}"
-  # Exactly three numeric, dot-separated components -- not the looser
-  # `[0-9]*.[0-9]*.[0-9]*` glob the inline snippets used, which let
-  # "1.2.3-rc1" / "1.2.3.4" / "1.2.3beta" all through (see header comment).
-  if ! echo "$tv" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  if ! is_semver "$tv"; then
     continue
   fi
   if [ -z "$LATEST" ] || version_gt "$tv" "$LATEST"; then

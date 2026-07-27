@@ -69,12 +69,13 @@ fi
 # .claude/skills/release/SKILL.md; see that script's header comment for the
 # full extraction rationale.
 #
-# NOTE: this is deliberately `if scripts/... ; then ... else ... fi`, never
+# NOTE: this is deliberately `if scripts/... ; then : ; else ... fi`, never
 # `if ! scripts/... ; then`. Negating the condition with `!` would still
-# branch correctly, but `$?` inside the branch would then report the
-# NEGATED status (0 on the script's real exit 2, 1 on its real exit 1) --
+# branch correctly, but `!` collapses EVERY non-zero status to 0, so `$?`
+# inside the branch reads 0 whether the script really exited 1 or 2 --
 # verified by hand -- making it impossible to tell "does not exceed" (exit 1)
-# apart from "machine fault" (exit 2) once inside the branch.
+# apart from "machine fault" (exit 2) once inside the branch. The empty
+# `then :` arm is what lets the real status survive into `else`.
 if scripts/release-latest-tag.sh --gt "$VERSION"; then
   :
 else

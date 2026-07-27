@@ -237,6 +237,38 @@ def test_gt_multi_digit_components(tmp_path: Path) -> None:
 # --- Usage / machine-fault errors --------------------------------------------
 
 
+def test_git_failure_is_a_machine_fault_exit_2(tmp_path: Path) -> None:
+    """`git tag -l` failing is a statement about the MACHINE, never about
+    which tag is latest -- so it must exit 2, not report "no tag" (which the
+    callers read as "first release", waving through any version at all).
+
+    Mirrors `test_release_bump.py`'s own machine-fault coverage, and is the
+    only test that exercises the stderr-capture branch (the mktemp/errfile
+    machinery that forwards git's own message verbatim)."""
+    not_a_repo = tmp_path / "plain-dir"
+    not_a_repo.mkdir()
+
+    result = _run(not_a_repo)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    # The errfile branch actually forwarded git's own diagnostic.
+    assert "git's own error output:" in result.stderr
+
+
+def test_gt_git_failure_is_also_exit_2(tmp_path: Path) -> None:
+    """Same fault, --gt mode: must NOT be mistaken for "no tag exists, so
+    anything exceeds it" (exit 0), which would disable the gate entirely."""
+    not_a_repo = tmp_path / "plain-dir"
+    not_a_repo.mkdir()
+
+    result = _run(not_a_repo, "--gt", "9.9.9")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GATE COULD NOT RUN" in result.stderr
+
+
 def test_malformed_gt_candidate_is_exit_2(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
