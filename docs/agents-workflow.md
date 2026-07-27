@@ -239,8 +239,11 @@ Each builder then runs its orderly cycle. The worktree is **handed to it by the 
 (`.claude/settings.json`'s `worktree.baseRef: "fresh"`, `lode-jzbz`; `origin/trunk` can lag local
 `trunk` by however long since `/land`'s last push — usually small, since `/land` pushes `trunk`
 immediately after every merge, but never measured). It works
-in-cwd with plain git, and if its `pwd` is ever the repo root it **stops and reports** rather than
-writing on `trunk`. Before touching a file it **locks that worktree** (`git worktree lock`) — a
+in-cwd with plain git, and its very first executable action is `scripts/isolation-guard.sh`
+(lode-ska2) — a tested assertion that it is inside `.claude/worktrees/` at all, since the harness has
+been observed handing a dispatched agent no worktree whatsoever; on failure it **hard-stops and
+reports** rather than writing on `trunk`, and never self-provisions one ([full account
+below](#isolation-guard-lode-ska2--lode-jk44)). Before touching a file it **locks that worktree** (`git worktree lock`) — a
 freshly created worktree has zero commits beyond `trunk`, so until the first commit its branch reads
 as trivially "merged" into `trunk` by content identity, which is exactly what `/land`'s end-of-pass
 backstop sweep otherwise treats as safe to reclaim; nothing raised that lock before (lode-oqr), so
@@ -485,10 +488,10 @@ understood:
   and `coding.md`'s fresh-build site (step 3) each invoke the same
   `scripts/recycled-worktree-guard.sh`, which wraps its remediation in an explicit
   `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`, in the same
-  block as the destructive command. Every call site also runs `scripts/isolation-guard.sh` (lode-ska2,
-  below) immediately before it — a mechanical, script-backed precondition, not the prose `pwd` check
-  this section used to describe here (that prose has since been replaced; see [Isolation guard
-  (lode-ska2 / lode-jk44)](#isolation-guard-lode-ska2--lode-jk44), below, for why). Either script's
+  block as the destructive command. Every call site also runs [`scripts/isolation-guard.sh`
+  (lode-ska2)](#isolation-guard-lode-ska2--lode-jk44) immediately before it — a second, script-backed
+  assertion of the same predicate, which replaced the prose `pwd` check the agents used to
+  carry. Either script's
   `case` is what actually stops an agent whose `isolation: "worktree"` dispatch silently failed from
   letting `reset --hard`/`clean -fd` reach the user's **main checkout** — which is what would turn a
   contamination guard into the more damaging bug.
@@ -634,6 +637,24 @@ its mandate performed while still reading `ready-for-land`. Incidence that same 
 `code-reviewer` dispatches came up with no isolation worktree (`lode-k9ef`, `lode-sfnb`, `lode-6874`,
 `lode-3dlt`, `lode-b2bf`, `lode-u709`) — not a one-off.
 
+**One in-repo hypothesis this write-up does NOT rule out: how isolation is *requested* differs between
+the affected agents and the unaffected one.** `land-review.md` carries `isolation: worktree` in its
+**agent-definition frontmatter**; `coding.md` and `code-reviewer.md` do not — for them the option is
+passed at the `Agent`-tool call site by `code/SKILL.md`. `lode-p2vi` established (2026-07-20) that the
+frontmatter key alone suffices for `land-review`, and `lode-kt6g` moved it there precisely so "the
+requirement travels with the role rather than staying call-site prose"; that migration stopped at
+`land-review` and was never extended to the other two. Every observed failure is a `code-reviewer`
+dispatch — i.e. exclusively the call-site-request mechanism — and no `land-review` dispatch has been
+observed hitting it. **That correlation is suggestive, not established, and is explicitly not a claim
+that frontmatter would have prevented it:** the fault is harness-side *provisioning*, not a request
+this repo forgot to make, and `code-reviewer` dispatches both before and after that fan-out (including
+the one that reviewed this very ticket) received their worktrees normally through the same call-site
+path — so the mechanism cannot be the whole story. It is recorded here as the untested hypothesis it
+is, so the next reader does not close the root-cause question believing the in-repo search was
+exhaustive. Testing it means adding the frontmatter key to both agents and probing the way `lode-p2vi`
+probed `land-review` — a real dispatch-behaviour change deserving its own ticket, deliberately not
+folded into this bug fix.
+
 **Root cause: not determinable from this repo.** `isolation: "worktree"` is a harness feature
 implemented outside this codebase; nothing in `lode`'s own source, skills, or agent definitions
 controls whether the harness actually provisions a worktree before handing control to a dispatched
@@ -679,9 +700,12 @@ reasons beyond just preferring the simpler option:
 asserts the single precondition "is cwd inside `.claude/worktrees/` at all" — the logically *prior*
 question to the recycled-worktree guard's "is it the *right* worktree" — and, unlike that guard, never
 repairs anything on failure: there is no safe way to fabricate an isolated worktree from a
-non-isolated context, so its only two outcomes are exit 0 (proceed) or exit 1 (a diagnostic that
-explicitly forecloses `EnterWorktree` and `git worktree add` as next steps, not just reports the
-problem). It runs as the **first executable action** of `coding.md`'s fresh-build cycle (step 3),
+non-isolated context, so its two substantive outcomes are exit 0 (proceed) or exit 1 (a diagnostic
+that explicitly forecloses `EnterWorktree` and `git worktree add` as next steps, not just reports the
+problem); exit 2 is a caller bug (an argument was passed), and a cwd outside any git repository dies
+on `git rev-parse` under `set -e` rather than reaching the check at all. Every call site treats any
+non-zero exit as the same hard stop, so none of these are distinguished in practice. It runs as the
+**first executable action** of `coding.md`'s fresh-build cycle (step 3),
 `coding.md`'s rebase-pickup cycle (step 2, ahead of the recycled-worktree guard there too),
 `code-reviewer.md`'s step 2 (ahead of its recycled-worktree guard), and `land-review.md`'s first
 action — before `EnterWorktree` is even considered, closing the window in which the `lode-ska2`
@@ -689,9 +713,24 @@ incident's reviewer improvised its workaround. Full call sites:
 [coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md),
 [land-review.md](../.claude/agents/land-review.md).
 
-**What "mechanical, not by reading an instruction" means in practice here, honestly stated.** No
-component in this repo can force a dispatched LLM subagent to stop — that ceiling is real, and this
-fix does not pretend otherwise. What it changes: the *detection* is now a tested script rather than
+**What "mechanical, not by reading an instruction" means in practice here, honestly stated.** This is
+enforcement at the *instruction* level: the guard detects mechanically and exits non-zero, but nothing
+compels the agent to honour that exit code. Note what this claim is **not** — it is not that
+mechanical enforcement over a dispatched subagent is impossible. It plainly isn't: this repo's own
+committed `PreToolUse(Bash)` hooks (the `bd create --deps blocks:` inversion guard, the
+external-tracker write guard `lode-o29m`, the fabricated-SHA guard `lode-fpmi`) deny a dispatched
+subagent's tool calls outright, and the harness's own worktree pin refuses its off-worktree commands.
+A hook *can* stop an agent acting; what no repo component can do is force it to stop reasoning and
+return.
+
+Instruction level is nevertheless the **right** altitude here, by this repo's own settled rule rather
+than by concession: `lode-kt6g` fixed the proportionality test as *irreversible-and-public earns a
+default-deny mechanical fence; local-and-recoverable earns a structural fix that makes the mistake
+harder to make* — and classified a non-isolated dispatch as local-and-recoverable, since everything it
+can dirty lives in a working tree a human `git reset --hard` recovers, never off-machine. (A blanket
+`Edit`/`Write` hook would also be a *partial* fence at best: the largest write channel here is
+`nox -t fix`/`ruff --fix` going through `Bash`, and the main session legitimately edits at the repo
+root.) What this change buys within that altitude: the *detection* is now a tested script rather than
 the model eyeballing its own `pwd`, and the calling docs no longer leave the agent a live decision
 point to fill with improvisation on failure — they name the one sanctioned response (stop, report) and
 explicitly rule out the two the `lode-ska2` incident's agent reached for instead. This is the same bar

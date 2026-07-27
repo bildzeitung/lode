@@ -64,9 +64,13 @@ change. Full rationale:
 handing a dispatched **`code-reviewer`** NO worktree at all — cwd pinned to the main checkout at the
 repo root, on `trunk` — with nothing mechanical stopping it short of an English instruction (lode-ska2,
 lode-jk44). I share the identical dispatch mechanism, just with a different `subagent_type`; nothing
-about my own role makes me immune. My correctness exposure from a dirty tree is nil either way (I
-never check anything out — see above), but a broken dispatch landing me on the main checkout is still
-worth a hard stop rather than silent operation there, so this is the first thing I run:
+about my own role makes me immune. **This call site is not a consistency add-on — it is the one with
+the most to lose.** For a `code-reviewer` a failed isolation means landing in *some* tree it
+shouldn't write; for me it means landing in the **lander's own main checkout on `trunk`** — the exact
+tree `/land` is about to merge the accepted set into a few steps later, which is precisely how the
+non-isolated incident recounted above dirtied it (a staged full branch diff that the next merge
+misread as a conflict). My own verdict stays correct either way, since I never check anything out;
+what is at risk is `/land`'s merge, so this is the first thing I run:
 
 ```bash
 TOP=$(rtk git rev-parse --show-toplevel)
@@ -79,7 +83,8 @@ rtk "$ISOGUARD" || {
 ```
 
 On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
-fetch, no diff, no verdict. I report the exact diagnostic the script printed.
+fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
+[docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 
 **Recycled-worktree guard (lode-qv5t, mirroring lode-nt98) — asserted before any fetch or diff, not
 assumed.** My own launch worktree is *supposed* to start fresh, branched off `origin/trunk` HEAD with

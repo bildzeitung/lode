@@ -131,6 +131,52 @@ def test_a_worktree_outside_claude_worktrees_is_also_refused(tmp_path: Path) -> 
     assert "NOT DISPATCHED INTO AN ISOLATED WORKTREE" in result.stderr
 
 
+def test_a_near_miss_directory_name_is_refused(tmp_path: Path) -> None:
+    """The `case` glob must match the literal path SEGMENT `.claude/worktrees/`,
+    not merely contain the substring. A worktree under a sibling directory whose
+    name only *starts* with the right string (`.claude/worktrees-stale/`) is not
+    an isolated launch worktree and must be refused.
+
+    Without this, relaxing the glob's anchors to `*.claude/worktrees*` leaves
+    every other test in this module green -- verified by sabotage -- so this is
+    the assertion that actually pins the two `/` anchors.
+    """
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo, ".claude/worktrees-stale/agent-abc123", "worktree-agent-stale"
+    )
+
+    result = _run(wt)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "NOT DISPATCHED INTO AN ISOLATED WORKTREE" in result.stderr
+
+
+def test_every_agent_definition_invokes_the_guard() -> None:
+    """The guard only protects a dispatch that actually calls it, and every
+    call site is prose in a `.claude/agents/*.md` file -- so a new agent
+    definition would ship unguarded with nothing going red.
+
+    This pins the call sites themselves against the SHIPPED files (the
+    `tests/_hookharness.py` precedent: assert what is committed, never a
+    reimplementation). If a future agent definition is genuinely exempt,
+    this test is the place to record why.
+    """
+    agent_defs = sorted((REPO_ROOT / ".claude" / "agents").glob("*.md"))
+    assert agent_defs, "no .claude/agents/*.md found -- has the layout moved?"
+
+    missing = [
+        path.name
+        for path in agent_defs
+        if "scripts/isolation-guard.sh" not in path.read_text(encoding="utf-8")
+    ]
+    assert not missing, (
+        f"agent definition(s) {missing} never invoke scripts/isolation-guard.sh -- "
+        "a dispatch of theirs that loses its isolation worktree would run unguarded "
+        "against the main checkout on trunk (lode-ska2)"
+    )
+
+
 def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
     """Unlike recycled-worktree-guard.sh, this script never repairs on
     failure -- confirm HEAD, branches, and the working tree are untouched

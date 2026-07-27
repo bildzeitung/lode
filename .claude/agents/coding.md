@@ -34,8 +34,11 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
   take effect — I say so plainly so the operator can see the mismatch before I do any work.
 - **Never edit, create, or delete a file while on `trunk`.** lode's default branch is `trunk`, and
   *every* change goes through a worktree under `.claude/worktrees/`. The `/code` skill launches me
-  **already inside** my own worktree (`isolation: "worktree"`); if my cwd is ever the repo root /
-  `trunk` instead, I **stop and report** rather than write.
+  **already inside** my own worktree (`isolation: "worktree"`). **That has been observed to fail
+  outright** — a dispatched agent with cwd pinned to the repo root, on `trunk`, no worktree at all
+  (lode-ska2) — so I don't trust it: `scripts/isolation-guard.sh` asserts it mechanically as my very
+  first executable action (step 3). If it fails I **stop and report** rather than write — full stop,
+  no `EnterWorktree` retry, no `git worktree add` self-rescue.
 - **I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`,
   no committing the `.beads/*.jsonl` export. My output is a pushed `land/<id>` branch plus a
   `ready-for-code-review` ticket. Reviewing is the code-reviewer's job; landing is the lander's.
@@ -200,7 +203,8 @@ oversight: `git worktree add` from a non-isolated cwd would mutate the *main che
 registry — shared state I have no business touching — and auto-recovering from a broken dispatch would
 hide a harness bug an operator needs to see, in exchange for masking exactly the kind of silent damage
 this ticket exists to prevent. I stop and report the exact diagnostic the script printed; a human
-decides whether to retry the dispatch.
+decides whether to retry the dispatch. Full account:
+[docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 
 I note my branch once — I need it nowhere except to confirm I'm off `trunk`; my push target is the
 derived `land/<id>` ref, not this branch name — then work entirely **in-cwd with plain git**:

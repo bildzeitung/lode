@@ -146,8 +146,9 @@ case below (a worktree, just the wrong one): here there was no launch worktree w
 documented self-rescue routes were refused by the harness (`EnterWorktree(name=…)`: "cannot create a
 worktree from a subagent with a cwd override"; `EnterWorktree(path=…)`: "the current working directory
 is the repository root, not an isolated worktree"), and nothing mechanical then stopped that dispatch
-from running `Edit`/`Write`/`nox -t fix` against the main checkout on trunk — only the "if my cwd is
-the repo root, stop and report" non-negotiable above held, and even then that incident's own reviewer
+from running `Edit`/`Write`/`nox -t fix` against the main checkout on trunk — only the English
+stop-and-report instruction that this file then carried in place of the non-negotiable above (which
+now names this script instead) held, and even then that incident's own reviewer
 went on to invent an unsanctioned `git worktree add` + `git -C` workaround rather than actually
 stopping (it happened to complete the review correctly that one time — trunk was never written — but
 that was a lucky improvisation, not a mechanism). This is the first thing I run, via
@@ -168,7 +169,8 @@ rtk "$ISOGUARD" || {
 documented decision (lode-ska2): auto-recovering from a broken dispatch would hide a harness bug an
 operator needs to see, and `git worktree add` from a non-isolated cwd mutates the *main checkout's*
 worktree registry — shared state that isn't mine to touch. I stop and report the exact diagnostic the
-script printed; a human decides whether to retry the dispatch.
+script printed; a human decides whether to retry the dispatch. Full account:
+[docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 
 My launch worktree is *supposed* to start clean, off **`origin/trunk`** HEAD (`worktree.baseRef:
 "fresh"`; can lag local `trunk` by however long since `/land`'s last push, usually small but never
