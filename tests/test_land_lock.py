@@ -1,34 +1,35 @@
 """Tests for scripts/land-lock.sh (lode-aps3).
 
-`/land`'s Section 0 (`.claude/skills/land/SKILL.md`) is supposed to serialize
-`/land` passes on one machine with a local lockfile: only one tick may hold
-it at a time, and the rest skip cleanly rather than overlapping the one
-agent allowed to write `trunk`. The inline snippet this script replaces
-relied on `trap 'rm -f "$LOCK"' EXIT` to release the lock at pass end -- but
-an agent running the skill executes each fenced `bash` block as its own,
-separate Bash tool invocation, so that trap fired the instant Section 0's
-own block ended, releasing the lock before Section 1 even ran. Worse, its
-stale-lock reclaim compared the recorded PID with `kill -0`, and a PID
-recorded by ANY earlier Bash invocation is *always* already dead by the time
-a later invocation reads it in this per-block architecture -- so PID
-liveness could never tell "still running, just between blocks" apart from
-"crashed". VERIFIED LIVE (bd show lode-aps3's notes, 2026-07-27, real /land
-pass on trunk @ d732b05): the lock was gone by the second of two separate
-Bash invocations.
+WHY the trap-and-PID design this replaces could not work -- an agent runs
+each fenced `bash` block of `.claude/skills/land/SKILL.md` as its own Bash
+invocation, so a `trap ... EXIT` fires before the next section runs and a
+recorded PID is *always* already dead -- and why the replacement is a
+wall-clock staleness token: see the header comment of scripts/land-lock.sh.
+That rationale is deliberately NOT restated here (the
+tests/test_blocks_dependents.py precedent) -- it lives next to the code it
+constrains, so it cannot drift out of sync with a second copy. The header
+also records the two known limits of the mechanism (the TTL measures
+acquisition age, not idle time; the reclaim path is not atomic).
 
-The fix drops the trap and the PID check entirely in favor of a wall-clock
-staleness token: the lock records when it was acquired, and a later
-`acquire` reclaims it only once that recorded time is older than
-`LAND_LOCK_STALE_SECONDS` (default 1800s). This is the sole mechanism
-guaranteed to release an abandoned lock -- SKILL.md calls `release`
-explicitly only at the two points a normal pass is guaranteed to reach, and
-every other exit relies on this staleness reclaim.
+What this file adds on top of that is the regression gate, in two halves:
 
-All tests below run the ACTUAL `scripts/land-lock.sh` against a real,
-throwaway git repository in `tmp_path` (the script's only external
-dependency is `git rev-parse --git-dir`, to place the lock file under
-`.git/`) -- no fake git, no mocked subprocess, so a regression to the script
-itself turns these red.
+1. Behavioural tests that run the ACTUAL script against a real, throwaway
+   git repository in `tmp_path` (its only external dependency is
+   `git rev-parse --git-dir`, to place the lock under `.git/`) -- no fake
+   git, no mocked subprocess. Reintroducing either half of the old design
+   turns these red: a `trap` release makes
+   `test_second_acquire_without_release_is_skipped_while_fresh` fail (the
+   lock is gone by the next invocation), and a `kill -0` liveness check
+   makes `test_fresh_lock_with_an_unreachable_pid_is_not_reclaimed` fail.
+   Both mutations were run against this file and confirmed red (5 and 6
+   failures of 14 respectively).
+
+2. Call-site pins against the SHIPPED `SKILL.md`. The defect lived in a
+   markdown fence, where no gate reaches it, so the behavioural tests above
+   would all stay green while SKILL.md quietly went back to an inline trap
+   and stopped calling this script at all. Same reasoning and same shape as
+   `tests/test_isolation_guard.py`'s `test_every_agent_definition_invokes_
+   the_guard`.
 """
 
 from __future__ import annotations
@@ -88,6 +89,9 @@ def test_acquire_on_a_fresh_repo_succeeds_and_writes_a_lock_file(
     result = _run("acquire", repo=repo)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    # Placement matters as much as content: under `.git/`, so it is
+    # per-machine and can never be committed (same path the inline snippet
+    # this replaces used).
     lock = _lock_path(repo)
     assert lock.exists()
     fields = lock.read_text().split()
@@ -164,12 +168,13 @@ def test_stale_lock_is_reclaimed(tmp_path: Path) -> None:
     assert int(new_fields[2]) > old_epoch
 
 
-def test_fresh_lock_is_not_reclaimed_even_with_a_short_threshold_boundary(
+def test_fresh_lock_is_not_reclaimed_under_a_large_threshold(
     tmp_path: Path,
 ) -> None:
-    """A lock younger than the threshold must never be reclaimed, however
-    small the threshold -- staleness is a strict `>=` comparison, not a
-    guess."""
+    """A lock younger than the threshold must never be reclaimed. (This is
+    not a boundary test: pinning `>=` against `>` would mean asserting on a
+    one-second window that `date` can cross mid-test, and the two differ by
+    one second on a 1800s default -- operationally nothing.)"""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     recent_epoch = int(time.time())
@@ -260,15 +265,99 @@ def test_unknown_subcommand_is_exit_2(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lock placement
+# Machine fault vs. "another lander"
 # ---------------------------------------------------------------------------
 
 
-def test_lock_lives_under_git_dir(tmp_path: Path) -> None:
-    """Same path convention the inline snippet this replaces used: per-machine,
-    under `.git/`, never committed."""
+def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
+    tmp_path: Path,
+) -> None:
+    """`write_lock` discards its own stderr, so a lock that cannot be created
+    at all (unwritable git dir, full disk) is indistinguishable from one that
+    already exists unless the script checks. Reporting it as "another /land is
+    running" would block landing indefinitely behind a lander that does not
+    exist, every tick, with nothing naming the real cause -- lode-aps3's own
+    notes require "lock was not held" to be observable rather than silent."""
     repo = _init_repo(tmp_path)
+    git_dir = repo / ".git"
+    original_mode = git_dir.stat().st_mode
+    git_dir.chmod(0o500)  # readable + traversable, not writable
+    try:
+        result = _run("acquire", repo=repo)
+    finally:
+        git_dir.chmod(original_mode)  # or tmp_path teardown fails
 
-    assert _run("acquire", repo=repo).returncode == 0
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert "another /land" not in result.stderr
+    assert not _lock_path(repo).exists()
 
-    assert _lock_path(repo).exists()
+
+# ---------------------------------------------------------------------------
+# Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
+# ---------------------------------------------------------------------------
+
+LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
+
+
+def test_land_skill_acquires_and_releases_through_this_script() -> None:
+    """The lock only serializes a pass that actually calls this script, and
+    every call site is prose in a markdown fence that no gate parses. Pin the
+    shipped file (the tests/_hookharness.py precedent: assert what is
+    committed, never a reimplementation)."""
+    text = LAND_SKILL.read_text(encoding="utf-8")
+
+    assert "scripts/land-lock.sh acquire" in text, (
+        "land/SKILL.md never acquires the single-lander lock -- overlapping "
+        "/loop 5m /land ticks would both write trunk (lode-aps3)"
+    )
+    # Both explicit release sites: Section 1's empty-queue exit and the end of
+    # Section 4. Losing one is not a correctness bug (the TTL still reclaims)
+    # but it silently costs up to LAND_LOCK_STALE_SECONDS of blocked landing.
+    assert text.count("scripts/land-lock.sh release") >= 2, (
+        "land/SKILL.md lost one of its two explicit `release` call sites -- "
+        "that pass now waits out the whole staleness window instead"
+    )
+
+
+def _fenced_bash(markdown: str) -> str:
+    """The ```bash fences only -- what an agent actually EXECUTES.
+
+    Scanning the whole file would match the prose that *explains* the old
+    defect (it necessarily quotes `trap` and `kill -0`), so the pin has to
+    separate what is executed from what is merely described. That split is
+    also the point: the fence is the one part of this skill no gate parses,
+    which is how the bug survived unnoticed in the first place.
+    """
+    blocks: list[str] = []
+    in_bash = False
+    for line in markdown.splitlines():
+        if line.startswith("```"):
+            if in_bash:
+                in_bash = False
+            else:
+                in_bash = line.strip() in {"```bash", "```sh"}
+            continue
+        if in_bash:
+            blocks.append(line)
+    return "\n".join(blocks)
+
+
+def test_land_skill_never_reintroduces_an_inline_lock() -> None:
+    """The exact regression this ticket fixed: a lock managed inline in a
+    fenced block via `trap`/`kill -0`/`noclobber`, none of which can outlive
+    the single Bash invocation that block runs in."""
+    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
+    assert "land-lock.sh acquire" in executed, (
+        "the acquire call is not inside an executable ```bash fence -- "
+        "_fenced_bash() or the skill's layout has drifted"
+    )
+
+    offenders = [
+        pattern for pattern in ("trap ", "kill -0", "noclobber") if pattern in executed
+    ]
+    assert not offenders, (
+        f"land/SKILL.md EXECUTES inline lock machinery {offenders} -- a trap dies "
+        "with its own fenced block and a recorded PID is always already dead by "
+        "the next one; the lock must go through scripts/land-lock.sh (lode-aps3)"
+    )
