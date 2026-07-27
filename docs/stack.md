@@ -137,8 +137,8 @@ Two files, two jobs — **never pin the same thing in both**:
   fails loudly instead if the project venv (or the tool inside it) is missing. Because it fails
   closed, **any CI workflow running one of those sessions must build `./venv` first** — installing
   the dev extra into the runner's ambient interpreter is no longer enough, which is why
-  `coverage.yml` calls `scripts/python-init.sh --unlocked` rather than `pip install -e '.[dev]'`
-  (`tests.yml` already installed from the lock the same way). Deliberately **not**
+  `coverage.yml` calls `scripts/python-init.sh` (no flag) instead of `pip install -e '.[dev]'`,
+  same as `tests.yml`. Deliberately **not**
   applied to the `build` session, which shells out to ambient `python -m build` on purpose —
   `build.yml`/`release.yml` run it with no `./venv` at all, since packaging resolves its own
   isolated PEP 517 env and never touches the dev-extra/lock tools this guarantee exists to pin —
@@ -202,10 +202,13 @@ own copy of the `uv pip compile` command string:
   committed lock. uv feeds an existing output file's own pins back to the resolver as its *preference*
   set by default (only `--upgrade`/`-U` ignores them), so the resolution only moves when a
   `pyproject.toml` constraint forces it — an upstream release alone reproduces the committed lock
-  byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml` and
-  `coverage.yml` are unaffected: `build.yml` never installs lode's runtime deps at all (`python -m
-  build` resolves in its own isolated env), and `coverage.yml` is report-only (`lode-qxdn.3`, no
-  merge-gate status).
+  byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml`
+  never installs lode's runtime deps at all (`python -m build` resolves in its own isolated env), so
+  this job doesn't apply there. `coverage.yml` also doesn't run this `lock-currency` verification job
+  itself (it stays `tests.yml`-only) — but `coverage.yml`'s own install step *does* install from
+  `requirements.lock` (`lode-7byn`), same as `tests.yml`'s `tests` job, so the coverage number
+  describes the same dependency set the tests badge does; see the "Dependency locking" section above
+  for the history of why that wasn't always true.
 - **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check,
   runnable on any dev machine — it seeds a scratch copy with the committed lock (mirroring CI's
   in-place recompile so the preference-seeding behaves identically), recompiles it via
