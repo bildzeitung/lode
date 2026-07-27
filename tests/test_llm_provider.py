@@ -12,7 +12,7 @@ from typing import ClassVar
 from unittest import mock
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
 from lode.llm_provider import (
@@ -131,14 +131,105 @@ def test_structured_call_uses_messages_parse_when_no_tool_name() -> None:
     assert kwargs["model"] == "claude-sonnet-4-6"
     assert kwargs["output_format"] is _Widget
     assert kwargs["timeout"] == 7.0
-    # lode-d1sr: thinking pinned off so it can't share max_tokens with the
-    # response -- see the AnthropicProvider docstring.
-    assert kwargs["thinking"] == {"type": "disabled"}
+    # lode-3dlt: `thinking` is never sent on this branch -- an explicit
+    # `disabled` (lode-d1sr) 400s on Fable-class models at any effort and on
+    # Opus 5 at effort xhigh/max. See the AnthropicProvider docstring.
+    assert "thinking" not in kwargs
     client.messages.create.assert_not_called()
 
 
+def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
+    # lode-3dlt: the regression this ticket exists to fix -- an explicit
+    # thinking={"type": "disabled"} 400s on Fable-class models at ANY effort
+    # level. No model-family branching in the fix, so the same assertion as
+    # the default-tier test above holds here too -- proving there is no
+    # per-model code path that could reintroduce the illegal value.
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=_Widget(name="w", count=1)
+    )
+    provider = AnthropicProvider(client)
+
+    result = provider.structured_call(
+        model="claude-fable-5",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="prompt",
+        output_schema=_Widget,
+        max_tokens=50,
+        timeout_s=7.0,
+    )
+
+    assert result == _Widget(name="w", count=1)
+    kwargs = client.messages.parse.call_args.kwargs
+    assert kwargs["model"] == "claude-fable-5"
+    assert "thinking" not in kwargs
+
+
+def test_structured_call_raises_when_the_response_has_no_text_block() -> None:
+    # lode-3dlt: with `thinking` no longer pinned off, a response can spend its
+    # whole max_tokens budget inside thinking and come back with no text block
+    # at all -- the SDK's parsed_output is then None. Unguarded that None
+    # escapes under the `-> BaseModelT` annotation and fails as an
+    # AttributeError inside qa.answer_question; it must be an LLMProviderError
+    # naming the cause instead.
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=None, stop_reason="max_tokens"
+    )
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    message = str(excinfo.value)
+    assert "no text block" in message
+    # The diagnosis has to survive to the log, not just the exception type.
+    assert "max_tokens" in message
+    assert "claude-opus-5" in message
+    assert excinfo.value.provider == "anthropic"
+
+
+def test_structured_call_wraps_a_schema_validation_failure() -> None:
+    # lode-3dlt: messages.parse validates the response text against
+    # output_schema inside the SDK, so a text block truncated mid-JSON (newly
+    # more reachable now that thinking shares the budget) raises a raw pydantic
+    # ValidationError out of the SDK's own post-processing. The seam must
+    # convert it, exactly as OpenAIProvider already does.
+    client = mock.MagicMock()
+    with pytest.raises(ValidationError) as raised:
+        _Widget.model_validate_json('{"name": "w", "cou')
+    client.messages.parse.side_effect = raised.value
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    assert "_Widget" in str(excinfo.value)
+    assert excinfo.value.provider == "anthropic"
+    assert isinstance(excinfo.value.__cause__, ValidationError)
+
+
 def test_structured_call_ignores_reasoning_effort() -> None:
-    # Anthropic has no reasoning_effort axis -- must not surface in the call.
+    # reasoning_effort is not yet wired through to Anthropic's
+    # output_config.effort (lode-3dlt design notes) -- must not surface as a
+    # raw kwarg in the call.
     client = mock.MagicMock()
     client.messages.parse.return_value = SimpleNamespace(
         parsed_output=_Widget(name="w")

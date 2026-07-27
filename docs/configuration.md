@@ -237,6 +237,44 @@ This unblocks `lode-g274.4` (embedder manifest + `lode status` check) and `lode-
 
 **`lode status`'s hint upgraded from "mixed" to "stale-vs-current-config" (decided, lode-o9k3) — replaces, not supplements.** `lode-14jr`'s first cut of the `lode status` hint fired only on the bullet above's literal `COUNT(DISTINCT model) > 1` read — "the store has 2+ distinct recorded models." That check missed the primary intended workflow: deliberately bumping `enrichment_llm` on a corpus that was uniformly enriched under the OLD model leaves exactly **one** distinct stored model, so the 2+-distinct read stayed `False` while `lode reenrich` (`storage.md`'s [Re-enriching the corpus deliberately](storage.md#re-enriching-the-corpus-deliberately-targeted-lode-14jr) section) would in fact re-enqueue the entire corpus — `lode status` said "No action needed" while there was a corpus-wide backlog of it. The fix is to fire the hint on the same **live-head-scoped, stale-vs-current-config** condition `lode reenrich` itself already acts on (any live, non-`no_egress` head with an `'ai'` annotation whose `model` differs from `enrichment_llm` *right now*), not on the raw distinct-count. Once scoped identically, "stale" is a strict superset of the old "mixed" condition — any corpus with 2+ distinct recorded models still has at least one that disagrees with whatever `enrichment_llm` is currently configured to, so the new check fires everywhere the old one did, plus the uniform-disagreement case it missed. That makes this a straight **replacement**, not an additional hint alongside it: `src/lode/cli.py`'s `_enrichment_model_stale` now reads the identical query `lode reenrich` force-enqueues from (`_stale_enrichment_heads`), so "status says clean" and "reenrich has work" cannot disagree by construction — a separately-maintained approximation was exactly how they drifted apart the first time.
 
+### Thinking on the Q&A synthesis call (decided, lode-3dlt)
+
+`lode-d1sr` pinned `thinking={"type": "disabled"}` unconditionally on the Q&A
+`messages.parse` call (`AnthropicProvider.structured_call`, no `tool_name`) so
+that Opus-5-and-later's thinking-on-by-default couldn't share
+[`qa.MAX_TOKENS`](#models) with the claims response and truncate it. That value
+turned out to be **not universally accepted**: it 400s on Fable-class models
+(`claude-fable-5`, `claude-mythos-5`) at any effort level, and on Opus 5 itself
+when paired with effort `xhigh`/`max` — both reachable the moment
+`qa_llm` / `qa_think_harder_llm` (both `Kind.RUNTIME`) are overridden to such a
+model, turning a previously-working config into an unhandled
+`anthropic.BadRequestError` deep in the provider.
+
+**Fixed by never sending `disabled` at all** — `thinking` is now omitted
+entirely on that branch, for every model, with no model-family predicate.
+This is not just the simplest option (of the four considered — a
+model→capability predicate, a config-load validation that blocks Fable-class
+outright, and a catch-and-retry-without-the-param loop — see lode-3dlt's own
+description for why each was passed over): disabling thinking is the
+*disfavoured* setting on Opus 5 even where it's legal, so omitting it is also
+the behaviorally better choice, not merely a workaround. `qa.MAX_TOKENS` was
+raised `4096 -> 8192` to give the now-possible adaptive thinking room to share
+the budget with the claims response — headroom, not a hard truncation
+guarantee. Net effect: **Sonnet 4.6** (`qa_llm` default) is unaffected, since
+it runs no thinking when the parameter is omitted (matching pre-`lode-d1sr`
+behavior exactly); **Opus 5** (`qa_think_harder_llm` default) now runs adaptive
+thinking instead of disabled thinking, a deliberate change; **Fable-class**
+overrides now work.
+
+**The enrichment forced-tool-use branch needed no code change** — it has never
+sent `thinking` at all (`lode-d1sr` never touched it), so it already follows
+the same "never explicitly disable" rule and cannot hit this 400 today. A
+related but separate and currently-unreachable risk — a `Kind.RUNTIME`
+override of `enrichment_llm` to a thinking-capable model would share its own
+(smaller, unraised) `max_tokens=1024` between thinking and the forced
+tool-call JSON — is tracked as a follow-up rather than fixed here, since it
+needs its own tuning pass once someone actually wants that override.
+
 ## Build constants (chosen once)
 
 | Knob | Kind | Default | Notes |
