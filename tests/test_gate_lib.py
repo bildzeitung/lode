@@ -6,10 +6,13 @@ source for both -- not restated here.
 
 These tests exercise the library directly, under `bash -c '...'` sourcing it
 the same way every real caller does (`. "$(dirname "$0")/gate-lib.sh"`),
-rather than through any one of the three consuming scripts -- those each keep
-their own existing regression tests (tests/test_validate_mermaid_gate.py,
-tests/test_merge_precheck.py, tests/test_release_bump.py), which double as
-this library's integration coverage.
+rather than through any one of the consuming scripts -- those each keep their
+own existing regression tests (tests/test_validate_mermaid_gate.py,
+tests/test_merge_precheck.py, tests/test_release_bump.py,
+tests/test_release_latest_tag.py), which double as this library's integration
+coverage. Deliberately no count here: the list grows as consumers migrate
+onto the library (lode-25xp added release-latest-tag.sh; lode-igna will add
+land-merge-one.sh), and a hard-coded "three" just goes stale each time.
 
 Note what that division of labour does NOT cover: nothing here can see a
 consuming script setting GATE_ADVISORY *after* one of its own call sites,
