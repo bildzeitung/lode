@@ -1900,45 +1900,53 @@ assumption would not have closed it.
   **distributed remote-lock ref** (atomic `refs/locks/land` on origin, owner + timestamp for
   stale-break) is the documented upgrade for true concurrent multi-machine landing — and the natural
   seam toward real CI.
-- **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Three
-  "stop the pass" exits fire on a **machine** fault rather than a content red — the 2b cheap-conflict
-  precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and `nox -s lock_currency`'s exit 2
-  (added by lode-sys4, and network-dependent on every `/loop 5m /land` tick, which is what raised this
-  from a rare edge case to a routinely-reachable one). None restores local `trunk` at its own exit
-  site — by design, so the remedy is implemented **once**, not restated per gate. `/land` is the only
-  **agent** that writes `trunk`, so local `trunk` should already equal `origin/trunk` at pass start;
-  the only way it can legitimately differ is a **previous** pass interrupted after
+- **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
+  "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
+  cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and
+  `nox -s lock_currency`'s exit 2 (added by lode-sys4, and network-dependent on every `/loop 5m /land`
+  tick, which is what raised this from a rare edge case to a routinely-reachable one). None restores
+  local `trunk` at its own exit site — by design, so the remedy is implemented **once**, not restated
+  per gate. **The remedy is deliberately blind to that list**, so a fourth machine-fault gate needs no
+  change here and this passage cannot rot as gates are added. `/land` is the only **agent** that writes
+  `trunk`, so local `trunk` should already equal `origin/trunk` at pass start; the only way it can
+  legitimately differ is a **previous** pass interrupted after
   [Section 3](../.claude/skills/land/SKILL.md#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)
   had already `--no-ff`-merged into local `trunk` but before
-  [Section 4](../.claude/skills/land/SKILL.md#4-land-the-survivors) pushed it. Only **two** of the three
-  exit-2 stops can produce that state (`validate-mermaid.sh`, `nox -s lock_currency`); 2b's precheck
-  runs *before* Section 3 touches `trunk` at all, so it never leaves residue. The third route is an
-  ungraceful crash/`SIGTERM`/killed harness. Those leftover merges were never gated green on their own
-  and never reached origin, so they are not legitimate work to preserve. Section 1 now runs
-  `git fetch origin` followed by `git reset --hard origin/trunk` in place of `git pull --rebase`,
-  discarding the residue unconditionally, every pass — self-healing regardless of *how* the previous
-  pass died, which a per-exit-site restore cannot be (a bare crash or kill runs no exit-site code at
-  all). A content red (exit 1 on any gate) is unaffected — that isolation-and-bounce path is unchanged.
+  [Section 4](../.claude/skills/land/SKILL.md#4-land-the-survivors) pushed it — which only a gate that
+  fires *after* Section 3 starts merging can cause (2b's precheck runs before `trunk` is touched at
+  all, so it never leaves residue), or an ungraceful crash/`SIGTERM`/killed harness. Those leftover
+  merges were never gated green on their own and never reached origin, so they are not legitimate work
+  to preserve. Section 1 now runs `git fetch origin` followed by `git reset --hard origin/trunk` in
+  place of `git pull --rebase`, discarding the residue unconditionally, every pass — self-healing
+  regardless of *how* the previous pass died, which a per-exit-site restore cannot be (a bare crash or
+  kill runs no exit-site code at all). The cost of doing it at pass start rather than at each exit is
+  timing: the residue is cleared at the *next* pass's start, not at the instant of the stop, so it
+  persists between passes — which matters to `trunk`'s *readers*, below. A content red (exit 1 on any
+  gate) is unaffected — that isolation-and-bounce path is unchanged.
 
-  **It does not *strictly* subsume `pull --rebase`, and the difference is the whole risk surface.**
+  **It does not *strictly* subsume `pull --rebase`.**
   The two agree on the only job that matters in the normal case: with no extra local commits, a hard
   reset and a rebase land at the identical SHA. They diverge in **two** ways, not one.
   *First*, on local-only commits: `pull --rebase` **replays** them forward (flattening their merge
   bubbles per `CLAUDE.md`'s own workflow-gotcha), where the reset discards them — the intended fix.
-  *Second, and not considered when this was designed*: `pull --rebase` **refuses outright** on a dirty
+  *Second*: `pull --rebase` **refuses outright** on a dirty
   tree or index (`exit 128`, `cannot pull with rebase: You have unstaged changes` /
   `Your index contains uncommitted changes`), where `reset --hard` silently overwrites both. That cuts
-  both ways. It is a **fix** for the case that actually occurs here — `bd dolt pull`, Section 1's first
-  command, is documented to leave `.beads/issues.jsonl` *staged* (index != `HEAD`, worktree == index),
-  which is exactly the state that aborts `pull --rebase`, so the old form could kill the pass at its
-  own first command over an inert passive export. It is a **regression** for genuinely uncommitted work
+  both ways. It is a **fix** for a state the main checkout is known to reach: a *staged*
+  `.beads/issues.jsonl` (index != `HEAD`, worktree == index) is real and observed — Section 3's merge
+  loop unstages it every pass precisely because it has been seen aborting `git merge` — and that same
+  index state aborts `pull --rebase`, where `reset --hard` absorbs it. **What stages it is not
+  established, and nothing here should be read as settling it**: `land/SKILL.md`'s lode-bns3
+  reconciliation measured the suspected causes and found none of them responsible, and warns against
+  upgrading that hedge into a settled fact — a wrong causal story about a destructive path being worse
+  than an admitted gap. It is a **regression** for genuinely uncommitted work
   in the main checkout, which no `reflog` can recover. Discarded *commits* are recoverable
   (`git reflog`/`ORIG_HEAD`); discarded *uncommitted* work is not. Section 1 therefore prints
   `git log --oneline origin/trunk..trunk` before resetting, so the rare non-`/land` case is visible
   rather than silent.
 
   **The uncovered writer: the human main session.** The sole-writer claim was verified by grep across
-  the agent fleet, and holds there — `coding.md`, `code/SKILL.md`, `land-review.md` and
+  the agent fleet and holds there — `coding.md`, `code/SKILL.md`, `land-review.md` and
   `epic-audit/SKILL.md` all explicitly disclaim writing `trunk`, and `scripts/release.sh` *requires*
   `HEAD == origin/trunk` and refuses otherwise. It does **not** cover the human, and `CLAUDE.md` — which
   wins on disagreement — documents exactly that: a direct doc-only `git commit --no-verify` to `trunk`,
@@ -1956,10 +1964,8 @@ assumption would not have closed it.
   pass-start reset structurally cannot close that hole. Tracked separately as **lode-isl3**; it does not
   block this change.
 
-  Operative form: [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
-  Note the `git checkout -f trunk` there: a pass killed mid-`git merge` leaves an unmerged index, and a
-  bare `checkout` then fails rc=1 *even when already on `trunk`* — which would stop the pass at its
-  second command, in precisely the crash case the reset exists to heal.
+  Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
+  [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 
 ### Where this is heading — a green-branch merge queue
 
