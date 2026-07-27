@@ -76,10 +76,50 @@ with git merges and pushes), so I follow the bd-sync discipline strictly (see
 
 ```bash
 rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label/close state over refs/dolt/data
-rtk git -C "$(rtk git rev-parse --show-toplevel)" checkout trunk   # I land ON trunk, in the main checkout
+rtk git -C "$(rtk git rev-parse --show-toplevel)" checkout -f trunk   # I land ON trunk, in the main checkout
+  # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
-rtk git pull --rebase       # bring local trunk current with origin/trunk before I merge into it
+rtk git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
+rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
 ```
+
+**Why a hard reset, not `pull --rebase` (lode-k9ef).** I am the only **agent** that writes `trunk`, so
+at pass start local `trunk` should already be bit-for-bit `origin/trunk`. The only way it legitimately
+differs is a **previous** pass that died between
+[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s `--no-ff` merges and
+[Section 4](#4-land-the-survivors)'s push — `validate-mermaid.sh` or `nox -s lock_currency` exit 2
+(2b's precheck cannot: it runs before anything merges), or an ungraceful crash / `SIGTERM` / kill.
+Those merges were never gated green **on their own** and never reached origin: residue, not work.
+
+**This line is the *only* place that residue is cleared — every exit site below points here rather
+than restoring `trunk` itself.** That generality costs timing: the residue is discarded at the *next*
+pass's start, not at the instant of the stop, so it survives between passes. `/land` doesn't care (it
+re-derives everything from `origin`), but it is not nothing — see the reader caveat in the write-up
+below. What it buys is that a bare crash or kill self-heals too, which a per-exit-site restore cannot:
+a killed pass runs no exit-site code at all. Content reds (exit **1**) are untouched — they still
+isolate and bounce exactly as before.
+
+Two things the reset does **not** do that `pull --rebase` did, both deliberate: it does not replay
+local-only commits forward, and it does **not** refuse on a dirty tree or index. The second cuts both
+ways. A staged `.beads/issues.jsonl` in the main checkout is real and observed — it is why the
+[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red) merge loop unstages it every
+pass — and that index state aborts `pull --rebase` outright while `reset --hard` absorbs it. **What
+stages it is not established**; do not read this line as settling that (see the lode-bns3
+reconciliation in Section 3). The same permissiveness lets the reset destroy genuinely uncommitted
+work, which no reflog recovers — hence the `git log origin/trunk..trunk` line above, printed while the
+residue still exists. Discarded *commits* stay in `git reflog`; discarded *uncommitted* work does not.
+Do not "simplify" this back to `pull --rebase`.
+
+**The `checkout -f` is load-bearing, and not for cleanup** — `reset --hard` clears an unmerged index
+and `MERGE_HEAD` by itself. It is load-bearing because `reset --hard` moves whatever ref HEAD is on:
+were HEAD ever detached, it would leave `trunk` untouched, and the checkout is what guarantees the
+reset lands on the branch. `-f` is there purely so that checkout cannot *fail* — a pass killed
+mid-`git merge` leaves an unmerged index, and a bare `checkout` then fails rc=1 ("you need to resolve
+your current index first") *even when already on `trunk`*, stopping the pass at its second command in
+exactly the crash case this reset exists to heal.
+
+Full write-up, including the writer this does **not** cover:
+[docs/agents-workflow.md — Mechanics (decided)](../../../docs/agents-workflow.md#mechanics-decided).
 
 Then read the queue — every ticket carrying the **`ready-for-land`** label (it stays `in_progress`;
 the label, not a status, is the queue):
@@ -596,6 +636,10 @@ fabricated "stale lock" finding. `lock_currency` is **last** in the `&&` chain a
 reason — an `&&` chain reports its last-run command's status, so putting anything after it would mask
 the 2. Keep it there.
 
+**Neither exit-2 stop in this section restores local `trunk`** — deliberately; that is
+[Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job, and the reasoning lives there
+(lode-k9ef).
+
 **`validate-mermaid.sh` exit 2 is NOT a red gate — it is a machine fault, and isolating on it bounces
 an innocent branch.** Exit 2 means the *gate itself could not run*; only exit **1** means invalid
 mermaid. The distinction exists precisely because a broken tool used to be indistinguishable from
@@ -653,6 +697,11 @@ machine. A red gate is content; exit 2 is the machine.
     esac
   done
   ```
+
+  **Every "stop the pass" exit above (the baseline's exit 1/2, and the loop's own break on 2) leaves
+  local `trunk` exactly as it sits** — at bare `origin/trunk` for the baseline exits, or carrying
+  whichever prefix of `$ACCEPTED` had merged when the loop broke. I restore none of them; that is
+  [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job (lode-k9ef).
 
   Read `$?` from the gate itself — `rtk` passes a child's exit status through unchanged, so
   `rtk nox -s lock_currency` yields nox's own 0/1/2. The same lode-b8sr rule as ever applies with
