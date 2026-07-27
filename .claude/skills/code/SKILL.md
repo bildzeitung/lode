@@ -1,6 +1,6 @@
 ---
 name: code
-description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (a hand-reasoned correctness pass backed by a `correctness-review` Workflow the orchestrator runs beforehand, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
+description: Build one or more lode tasks as PRODUCERS in two phases — dispatch the `coding` subagent (Sonnet) to claim a bd issue, build in an isolated worktree, pass the quality gates, push its branch to origin, and hand off at ready-for-code-review; then dispatch the `code-reviewer` subagent (Opus) to fetch that branch and check it out into its own launch worktree, run the technical review (its own hand-reasoned correctness pass, plus /simplify), re-gate, and swap the ticket to ready-for-land. Producers never merge/close/push trunk; a separate `/land` lander does. Every invocation also sweeps for `needs-rebase` tickets first (branches /land kicked back on a conflict) and dispatches a `coding` producer to merge trunk in, re-gate, and push the result itself — an ordinary, non-force push, since a merge never rewrites what's already on origin — swapping each straight back to ready-for-land itself (lode-cln) — self-heals a clean merge or a mechanical (independent, non-overlapping) conflict on its own; a conflict where the two sides genuinely disagree still needs a human. `/code <id>` (or `/code --single`) is one producer; bare `/code` / `/code --all-ready` / `/code <id> <id> …` fans out N parallel producers across the ready frontier, throttled to a shared concurrency cap (builders + reviewers + sweep dispatches combined; memory-derived default, user-overridable, lode-2cf) so the fan-out never runs more agents at once than the machine can gate safely. Use for any task that changes the lode repo (code, docs, configs). Examples — "/code" (fan out across `bd ready`), "/code lode-1 lode-2 lode-3", "/code lode-123", "/code --single" (top one item from `bd ready`), "/code add a --json flag to the search CLI".
 ---
 
 # code
@@ -12,10 +12,9 @@ description: Build one or more lode tasks as PRODUCERS in two phases — dispatc
    The builder does **not** review its own work.
 2. **Technical review — `code-reviewer` subagent (Opus):** fetches the pushed `land/<id>` branch and
    checks it out into its own launch worktree (never `EnterWorktree`, never the builder's worktree),
-   runs its own reasoned **correctness pass** against the diff — backed by `correctness-review`
-   Workflow findings *I* (the orchestrator) compute beforehand and hand it as pre-computed input, since
-   `Workflow` is reachable only from this main session and not from any dispatched subagent (lode-905v;
-   `/code-review` itself is separately unreachable from any model context at all, lode-axyq) — plus the
+   runs its own reasoned **correctness pass** against the diff — that pass *is* the correctness review,
+   with no `correctness-review` Workflow behind it (lode-rlyx reversed lode-905v on measured cost;
+   `/code-review` is separately unreachable from any model context at all, lode-axyq) — plus the
    genuinely tool-backed **`/simplify`**, re-gates, re-pushes `land/<id>`, and swaps the ticket to
    **`ready-for-land`** (or escalates).
 
@@ -414,51 +413,23 @@ correctly **in order, build then review**, one task at a time, and relay what ca
      is stopped by the harness), so it must re-run the gate in the **FOREGROUND** within its own turn and
      complete the hand-off. Re-check both conditions once it returns before proceeding.
 
-   **Before dispatching each reviewer, run the `correctness-review` Workflow myself, right here in the
-   main session (lode-905v).** `Workflow` is reachable **only** from this orchestrating session —
-   verified empirically, twice: neither a `coding` builder nor a `code-reviewer` reaches it when
-   dispatched via the Agent tool with `isolation: "worktree"` (`ToolSearch` for it returns nothing
-   resembling `Workflow` in either dispatched context — see `docs/decisions.md`). So the correctness
-   workflow runs from *here*, between hand-off verification and reviewer dispatch, and its survivors are
-   handed to the reviewer as **pre-computed input** — never invoked inside the reviewer itself (the
-   first build attempt at this ticket assumed the reviewer could invoke it directly; that assumption is
-   what's falsified):
+   <a id="no-correctness-workflow"></a>
+   **Do NOT run a `correctness-review` Workflow here, or anywhere in this skill (lode-rlyx).** Phase 2
+   dispatches the reviewer directly once the hand-off verifies. The reviewer's own reasoned correctness
+   pass **is** the correctness review — not a backstop to one.
 
-   ```
-   Workflow({ scriptPath: ".claude/workflows/correctness-review.js", args: { refRange: "trunk...land/<id>" } })
-   ```
+   **The measure** (2026-07-26 fan-out): four workflow runs consumed **~8.1M subagent tokens, about 80%
+   of the entire invocation's spend** — against ~1.6M for eleven builders and ~0.4M for five reviewers
+   combined — exhausted the session limit in roughly twenty minutes, killed four in-flight reviewers,
+   and, being single-flight, serialized every reviewer dispatch behind them. Reviewers then repeatedly
+   **overturned** its findings on facts it had not checked, and the two branches that got no workflow
+   produced findings at least as good. Those figures come from that run's harness task notifications and
+   are not reproducible from this repo; the per-ticket evidence, their provenance, and the bar for ever
+   reinstating this live in `docs/decisions.md` (lode-rlyx).
 
-   If the call errors, times out, or `Workflow` doesn't resolve here either (a defensive check, not an
-   expected outcome — this session is where the design assumes it works), proceed without pre-computed
-   findings and say so plainly to the reviewer and in step 5's report; the reviewer's own hand-reasoned
-   pass is always the floor regardless of whether this ran.
-
-   **Concurrency — run one workflow call at a time, never overlapped with another ticket's own workflow
-   call (lode-905v, option (a) of the two the design offered).** The workflow fans one agent out per
-   correctness dimension (six today) *inside a single call*; running two calls concurrently for two
-   different tickets in a fan-out batch would silently double that fan-out on top of whatever
-   builders/reviewers are already in flight, against the same memory budget `CODE_MAX_CONCURRENT_AGENTS`
-   exists to protect (lode-2cf). So across a fan-out batch, finish one ticket's workflow call before
-   starting the next ticket's — this is the *one* thing kept single-flight; the **reviewer dispatches
-   themselves** still run concurrently exactly as before, since each reviewer receives its own findings
-   already computed and needs nothing further from the workflow once dispatched. Chosen over capping the
-   workflow's own internal concurrency because it needs no new per-workflow knob and the added
-   serialization is bounded (six agents' worth of one correctness pass per ticket, not a whole review
-   pipeline).
-
-   Fold the surviving findings (if any) into the dispatch prompt below as **orchestrator-supplied,
-   pre-computed candidates** — the reviewer independently confirms each one against the real diff before
-   acting on it, never applies one on the workflow's say-so alone (`code-reviewer.md` step 4 spells out
-   how it treats this input).
-
-   **Also fold `result.unverified` and `result.degraded`, separately from the survivors — never silently
-   dropped (lode-wtwb; incident account in `docs/decisions.md`).** A finding whose verifier crashed comes
-   back in its own `unverified` array rather than folded into `refuted`, so: if `result.unverified` is
-   non-empty, hand those entries to the reviewer too, labeled plainly as **unverified, not refuted**. If
-   `result.degraded` is `true` (any Find round or Verify agent produced no output, per `result.stats`),
-   say so explicitly — this run's silence in a given dimension does not mean that dimension is clean.
-   How the reviewer then *weighs* an unverified entry is its own call, spelled out in `code-reviewer.md`
-   step 4.
+   `.claude/workflows/correctness-review.js` is **kept on disk** for deliberate manual use — the
+   `specs/11`–`specs/13` runbooks reference it — but is off the automatic `/code` path. Do not put it
+   back without new evidence that it beats the reviewer's own pass per token.
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
    **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
@@ -478,20 +449,17 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > fetch origin land/lode-ai1 trunk`, then `TOP=$(git rev-parse --show-toplevel)` and `git checkout
    > -B "land/lode-ai1--${TOP##*/}" FETCH_HEAD` (a local name suffixed with your own launch
    > worktree's directory — unique by construction, so no `--detach` fallback is ever needed) into your
-   > own launch worktree. `correctness-review` Workflow findings (I ran it just now, orchestrator-side,
-   > over `trunk...land/lode-ai1` — treat every entry as a candidate to confirm yourself against the
-   > real diff, never as settled truth): <survivors JSON, or "none — the workflow found nothing /
-   > errored: <detail> / was unavailable even here">. **Unverified findings (verifier crashed/timed
-   > out — never treat these as refuted, lode-wtwb):** <`result.unverified` JSON, or "none">. **Run
-   > health:** <"clean" if `result.degraded` is false, else "DEGRADED — <result.stats.findRoundsFailed>
-   > find round(s) / <result.stats.verifyAgentsFailed> verify agent(s) / <result.stats.dimensionsFailed>
-   > whole dimension(s) failed to produce output; absence of a finding in an affected dimension is not
-   > evidence of a clean pass">. Fold all of that into your own reasoned correctness pass
-   > against `trunk...HEAD` (`/code-review` itself is unreachable from any model context, lode-axyq —
-   > see code-reviewer.md step 4) + `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`,
-   > and swap the ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert
-   > to green, swap to `land-escalated`, don't mark ready) only on a clarifying decision or "making it
-   > worse."
+   > own launch worktree. Your own reasoned correctness pass against `trunk...HEAD` **is** the
+   > correctness review — there are no pre-computed findings, by design, not by failure (lode-rlyx;
+   > `/code-review` is separately unreachable from any model context, lode-axyq — see code-reviewer.md
+   > step 4). Then `/simplify`, re-gate, commit, `git push origin HEAD:land/lode-ai1`, and swap the
+   > ticket to `ready-for-land`. Do **not** merge, close, or push trunk. Escalate (revert to green, swap
+   > to `land-escalated`, don't mark ready) only on a clarifying decision or "making it worse."
+
+   Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out
+   touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth
+   checking. That is cheap. What it must not be given is a fan-out's worth of pre-computed findings to
+   adjudicate.
 
    **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** Run [step 0's
    reclaim block](#reclaim) with `ID` set to this ticket, right after collecting the reviewer's result
@@ -505,11 +473,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
    re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`**
-   (so `/land` can pick it up). If the `correctness-review` Workflow came back `degraded` for this
-   ticket (any Find/Verify agent failed to produce output, per `result.stats`), say so plainly here too
-   — a degraded run's absence of findings in an affected dimension is not the same as a clean one, and
-   the reviewer's hand-reasoned pass is the only thing that covered that gap this time (lode-wtwb). If a
-   **builder** escalated, say so — it reverted to green, pushed,
+   (so `/land` can pick it up). If a **builder** escalated, say so — it reverted to green, pushed,
    applied `land-escalated`, did **not** hand off, and a human owes a build decision. If a **reviewer**
    escalated, likewise — green branch pushed, `land-escalated` set, not landable until the human
    decides. For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in
@@ -548,14 +512,10 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   run on the *built* branch, so always dispatch the reviewer *after* its builder returns
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
   ticket that escalated at build time.
-- **Phase 2 also runs a `correctness-review` Workflow from here (the main session) before each
-  reviewer dispatch (lode-905v).** `Workflow` is reachable only from this orchestrating session — not
-  from any dispatched `coding` or `code-reviewer` subagent (verified empirically for both). Its
-  survivors are handed to the reviewer as pre-computed candidates, never invoked inside the reviewer
-  itself. Run one workflow call at a time across a fan-out batch — never overlapped with another
-  ticket's own workflow call — since its internal per-dimension fan-out draws from the same memory
-  budget `CODE_MAX_CONCURRENT_AGENTS` protects (lode-2cf); the reviewer dispatches themselves still run
-  concurrently as before. Full record: `docs/decisions.md`.
+- **Phase 2 runs NO `correctness-review` Workflow — the reviewer's own reasoned pass is the whole
+  correctness review (lode-rlyx, reversing lode-905v on measured cost).** The script stays on disk for
+  deliberate manual use; it is off the automatic path. Rationale and numbers:
+  [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
   checked out on a previous ticket's build branch, rather than a fresh one off `trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
