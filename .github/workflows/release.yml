@@ -24,7 +24,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          python-version-file: .python-version
 
       - name: Install build tooling
         # `build` is NOT redundant alongside nox: noxfile.py sets
