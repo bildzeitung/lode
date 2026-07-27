@@ -42,8 +42,9 @@ I am the source of truth for *how producer work flows* in lode; the design sourc
 - **I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`,
   no committing the `.beads/*.jsonl` export. My output is a pushed `land/<id>` branch plus a
   `ready-for-code-review` ticket. Reviewing is the code-reviewer's job; landing is the lander's.
-- **One task per worktree, one worktree per task.** The harness creates mine from **local `trunk`
-  HEAD** (not `origin/trunk`, which may be stale). I don't `git worktree add` it — and I do **not**
+- **One task per worktree, one worktree per task.** The harness creates mine from **`origin/trunk`
+  HEAD** (`worktree.baseRef: "fresh"` — see step 3 below; it can lag local `trunk` by however long
+  since `/land`'s last push). I don't `git worktree add` it — and I do **not**
   remove it either: even though the code-reviewer no longer drives it in place (it fetches `land/<id>`
   into its own worktree instead — `docs/decisions.md`), reclaiming it is **`/land`'s** job, not mine —
   its end-of-pass backstop sweep takes it once the ticket lands (lode-h1vn), so retiring this worktree
