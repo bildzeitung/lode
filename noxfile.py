@@ -145,38 +145,31 @@ def _venv_tool(session: nox.Session, name: str) -> str:
     """Resolve ``name`` to its path inside the project's own ``./venv/bin`` (lode-0yfn).
 
     ``venv_backend = "none"`` (above) means every session inherits whatever
-    PATH the invoking shell happens to have. A bare tool name like ``"ruff"``
-    (or a cwd-relative fragment like ``"./venv/bin/ruff"``, which silently
-    breaks the moment a session is invoked from anywhere but the repo root)
-    then resolves whichever copy is *earliest* on that PATH -- which, on a box
-    with a stale system-wide install (pip ``--user``, pipx, ...) sitting ahead
-    of the activated venv, is silently NOT the one pinned in
-    ``pyproject.toml``/``requirements.lock``, and the gate reports success
-    anyway. Reproduced directly: an ambient ``~/.local/bin/ruff`` (0.15.11)
-    shadowing the venv's pinned ``ruff`` (0.15.22 at the time), so
-    ``nox -t fix`` ran a different ruff than the one the repo pins and
-    silently skipped work (e.g. ruff-format's markdown Python-fence
-    reformatting) while still exiting 0.
+    PATH the invoking shell happens to have, so a bare ``"ruff"`` resolves
+    whichever copy is *earliest* on it -- which, on a box with a stale
+    system-wide install (pip ``--user``, pipx, ...) ahead of the venv, is
+    silently NOT the pinned one, and the gate reports success anyway. Full
+    narrative, including the reproduction and why the ``dev`` extra pins ruff
+    at all: ``docs/stack.md``'s dependency-locking section.
 
-    Resolving straight to this fixed on-disk path -- derived from this file's
-    own location, never from cwd or whatever PATH order the shell produced --
-    makes that ambient-PATH ordering (and cwd) irrelevant, for every session
-    below that shells out to a dev-extra tool (``ruff``, ``pytest``,
-    ``shellcheck``, ``python``). Fails the session loudly if the tool isn't
-    there: those tools only ever come from the project venv (installed via
-    the ``dev`` extra, ``docs/stack.md``'s dependency-locking section), so a
-    missing venv means the session cannot do its job regardless -- surfacing
-    that beats silently falling through to whatever ambient copy happens to
-    exist.
+    Deriving the path from this file's own location rather than searching
+    PATH makes that ambient ordering irrelevant. Fails the session loudly if
+    the tool isn't there: these tools only ever come from the project venv, so
+    a missing venv means the session cannot do its job regardless -- surfacing
+    that beats silently falling through to whatever ambient copy exists.
+    **A consequence worth knowing before you edit CI: any workflow running one
+    of these sessions must build ``./venv`` first** (``scripts/python-init.sh``);
+    installing the dev extra into the runner's ambient interpreter is not
+    enough. ``tests.yml`` and ``coverage.yml`` both do.
 
-    Deliberately NOT applied to the ``build`` session: that one shells out to
-    ambient ``python -m build`` on purpose (its own docstring, and
-    ``build.yml``/``release.yml``, run it with no ``./venv`` at all --
-    ``python -m build`` resolves/builds in its own isolated PEP 517 env and
-    never touches the dev-extra/lock tools this guard exists to pin). Also not
-    applied to ``lock_currency``, which resolves ``uv`` -- a separate,
-    system-wide tool never installed into ``./venv``, already checked
-    explicitly via ``shutil.which`` and failed closed if absent.
+    Deliberately NOT applied to two sessions, both of which mean to reach a
+    tool outside ``./venv``: ``build`` (ambient ``python -m build``, which
+    ``build.yml``/``release.yml`` run with no ``./venv`` at all, and which
+    resolves its own isolated PEP 517 env) and ``lock_currency`` (``uv``, a
+    system-wide tool never installed into ``./venv``, already checked via
+    ``shutil.which`` and failed closed if absent). That exemption is enforced,
+    not just documented -- ``tests/test_noxfile_venv_tool.py`` fails if any
+    *other* session shells out to a dev-extra tool by bare name.
     """
     tool = _VENV_BIN / name
     if not tool.is_file():
@@ -213,11 +206,10 @@ def _xdist_workers() -> str:
 def fix(session: nox.Session) -> None:
     """Format and lint-fix the tree in place (ruff).
 
-    Invokes the project venv's own ``ruff`` by explicit on-disk path
-    (``_venv_tool``, lode-0yfn) rather than a bare name or a cwd-relative
-    fragment, so a stale system-wide ``ruff`` earlier on PATH -- or a session
-    invoked from a cwd other than the repo root -- can never silently shadow
-    the pinned copy and produce a falsely-green gate.
+    Resolves ``ruff`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
+    This is the session that bug was found in: a stale system-wide ``ruff``
+    earlier on PATH silently shadowed the pinned copy and this gate still
+    went green.
     """
     ruff = _venv_tool(session, "ruff")
     session.run(ruff, "format", ".")
@@ -236,9 +228,7 @@ def tests(session: nox.Session) -> None:
     ``8``, lode-bv6y — see the module docstring) — no marker filter changes,
     no test skipped, just distributed across workers.
 
-    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
-    lode-0yfn), not by bare name, so ambient PATH order can't substitute a
-    different pytest than the one the dev extra installed.
+    Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     session.run(_venv_tool(session, "pytest"), "-n", _xdist_workers())
 
@@ -255,10 +245,8 @@ def shellcheck(session: nox.Session) -> None:
     signal level in line with what ruff enforces for Python. Scoped to tracked
     files via ``git ls-files`` so scratch/vendored scripts never enter the gate.
 
-    Invokes the venv's own ``shellcheck`` (from the ``shellcheck-py`` dev dep)
-    by explicit path (``_venv_tool``, lode-0yfn), not by bare name, so a
-    system-installed ``shellcheck`` earlier on PATH can't substitute a
-    different binary/version.
+    Resolves ``shellcheck`` (the ``shellcheck-py`` dev dep) through
+    ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     files = subprocess.run(
         ["git", "ls-files", "*.sh"],
@@ -284,10 +272,8 @@ def linkcheck(session: nox.Session) -> None:
     and no network, so -- unlike ``validate-mermaid.sh`` -- it belongs in the
     default offline gate set alongside ``fix``/``tests``/``shellcheck``.
 
-    Invokes the venv's own ``python`` by explicit path (``_venv_tool``,
-    lode-0yfn), not by bare name, so an ambient ``python``/``python3`` earlier
-    on PATH can't run this against a different interpreter than the one with
-    the project's deps (e.g. ``typer``) installed.
+    Resolves ``python`` through ``_venv_tool`` (lode-0yfn) — see its docstring;
+    an ambient interpreter would not have the project's deps (e.g. ``typer``).
     """
     session.run(_venv_tool(session, "python"), "scripts/check_links.py")
 
@@ -307,8 +293,7 @@ def unit(session: nox.Session) -> None:
     Runs under ``pytest-xdist`` (``-n`` from ``LODE_TEST_WORKERS``, default
     ``8``, lode-bv6y — see the module docstring).
 
-    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
-    lode-0yfn), not by bare name — see the ``tests`` session for why.
+    Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     session.run(_venv_tool(session, "pytest"), "-m", "not slow", "-n", _xdist_workers())
 
@@ -456,8 +441,7 @@ def coverage(session: nox.Session) -> None:
     Report-only: enforces no threshold — a low percentage does not fail this
     session.
 
-    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
-    lode-0yfn), not by bare name — see the ``tests`` session for why.
+    Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     session.run(
         _venv_tool(session, "pytest"),
@@ -529,8 +513,7 @@ def eval(session: nox.Session) -> None:
     check, never part of the offline test gate (see ``docs/decisions.md``,
     Shape A, lode-5y8.5).
 
-    Invokes the venv's own ``pytest`` by explicit path (``_venv_tool``,
-    lode-0yfn), not by bare name — see the ``tests`` session for why.
+    Resolves ``pytest`` through ``_venv_tool`` (lode-0yfn) — see its docstring.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         session.skip("ANTHROPIC_API_KEY not set — eval needs Anthropic credentials")

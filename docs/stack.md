@@ -131,10 +131,14 @@ Two files, two jobs — **never pin the same thing in both**:
   anything was skipped (reproduced directly: an ambient `~/.local/bin/ruff` 0.15.11 masking the
   then-pinned `0.15.22`, which silently skipped ruff-format's markdown Python-fence reformatting
   while `nox -t fix` still exited 0). Fixed by resolving every dev-extra tool a session shells out
-  to — `ruff`, `pytest`, `shellcheck`, `python` — to its explicit on-disk path under `./venv/bin`
-  rather than by bare name or a cwd-relative fragment (`noxfile.py`'s `_venv_tool` helper), so
-  neither ambient PATH order nor invocation cwd can substitute a different binary; the session
-  fails loudly instead if the project venv (or the tool inside it) is missing. Deliberately **not**
+  to — `ruff`, `pytest`, `shellcheck`, `python` — to its explicit on-disk path under `./venv/bin`,
+  derived from `noxfile.py`'s own location rather than searched for on PATH (`noxfile.py`'s
+  `_venv_tool` helper), so ambient PATH order cannot substitute a different binary; the session
+  fails loudly instead if the project venv (or the tool inside it) is missing. Because it fails
+  closed, **any CI workflow running one of those sessions must build `./venv` first** — installing
+  the dev extra into the runner's ambient interpreter is no longer enough, which is why
+  `coverage.yml` calls `scripts/python-init.sh --unlocked` rather than `pip install -e '.[dev]'`
+  (`tests.yml` already installed from the lock the same way). Deliberately **not**
   applied to the `build` session, which shells out to ambient `python -m build` on purpose —
   `build.yml`/`release.yml` run it with no `./venv` at all, since packaging resolves its own
   isolated PEP 517 env and never touches the dev-extra/lock tools this guarantee exists to pin —
