@@ -1,21 +1,21 @@
 """Tests for scripts/gate-lib.sh (lode-090f).
 
-Shared `gate_could_not_run()` helper, factored out because the "exit 2 means
-the GATE could not run, never that the CONTENT is bad" contract (lode-9i2p)
-had reached three duplicated literal copies -- scripts/validate-mermaid.sh,
-scripts/merge-precheck.sh, scripts/release-bump.sh -- free to drift, and had
-already started to: validate-mermaid.sh's copy printed a two-line advisory
-that merge-precheck.sh's stated differently, and release-bump.sh's carried no
-advisory at all. Same "reaches three copies, extract" precedent as
-scripts/epic-children-closed.sh (tests/test_epic_children_closed.py) and
-scripts/recycled-worktree-guard.sh (tests/test_recycled_worktree_guard.py).
+Why the shared `gate_could_not_run()` helper was extracted, and what the
+GATE_ADVISORY contract is: see that script's own header. It is the single
+source for both -- not restated here.
 
 These tests exercise the library directly, under `bash -c '...'` sourcing it
 the same way every real caller does (`. "$(dirname "$0")/gate-lib.sh"`),
 rather than through any one of the three consuming scripts -- those each keep
 their own existing regression tests (tests/test_validate_mermaid_gate.py,
 tests/test_merge_precheck.py, tests/test_release_bump.py), which double as
-this library's integration coverage and must stay green unchanged.
+this library's integration coverage.
+
+Note what that division of labour does NOT cover: nothing here can see a
+consuming script setting GATE_ADVISORY *after* one of its own call sites,
+because these tests choose their own orderings. That ordering is pinned on
+the consumer side instead, by the advisory assertions in
+tests/test_validate_mermaid_gate.py and tests/test_merge_precheck.py.
 """
 
 from __future__ import annotations
@@ -81,13 +81,16 @@ def test_gate_advisory_set_once_is_appended_after_every_calls_cause_lines():
 
 
 def test_sourcing_under_nounset_does_not_error_on_unset_gate_advisory():
-    """Regression: bash's `set -u` treats `${arr[@]}` on a never-declared
-    array as an unbound-variable error (verified empirically, bash 5.2) --
-    unlike a scalar's more forgiving `${var:-}` default. Every real caller of
-    this library runs under `set -u` (merge-precheck.sh, release-bump.sh) or
-    at least sources it (validate-mermaid.sh), so simply sourcing gate-lib.sh
-    and calling gate_could_not_run with no GATE_ADVISORY ever set must not
-    itself blow up with "unbound variable" before reaching the exit-2 path."""
+    """Regression test for the `declare -p GATE_ADVISORY || GATE_ADVISORY=()`
+    line in gate-lib.sh -- see that line's comment for why bash's nounset
+    makes it necessary. Every real caller runs under `set -u`, so sourcing the
+    library and calling gate_could_not_run with GATE_ADVISORY never set must
+    not blow up with "unbound variable" before reaching the exit-2 path.
+
+    Deliberately kept even though the exact-stderr assertion in
+    test_no_gate_advisory_set_means_no_trailer_at_all would also fail if that
+    line regressed: this one names the mechanism and fails with a diagnostic
+    that points straight at it, rather than an opaque line-list mismatch."""
     result = _run('gate_could_not_run "summary" "cause"')
 
     assert result.returncode == 2

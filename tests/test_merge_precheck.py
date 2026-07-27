@@ -194,6 +194,7 @@ def test_unknown_base_ref_is_also_a_machine_fault(tmp_path: Path) -> None:
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
     assert "GATE COULD NOT RUN" in result.stderr
+    assert "not a branch conflict" in result.stderr
 
 
 def test_unrelated_histories_is_a_machine_fault(tmp_path: Path) -> None:
@@ -215,6 +216,7 @@ def test_unrelated_histories_is_a_machine_fault(tmp_path: Path) -> None:
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
     assert "GATE COULD NOT RUN" in result.stderr
+    assert "not a branch conflict" in result.stderr
 
 
 def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
@@ -222,7 +224,12 @@ def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
     `bash merge-precheck.sh`, the old `${1:?...}` form exited 1 -- exactly the
     CONFLICT code -- so a caller bug would be misread as a branch conflict.
     Reverting the explicit arity check back to `${1:?...}` makes this exit 1
-    and fails the assertion (defect: usage error colliding with exit 1)."""
+    and fails the assertion (defect: usage error colliding with exit 1).
+
+    This is also the call site most exposed to lode-090f's ordering hazard --
+    the header insists the arity check come FIRST, which is exactly the edit
+    that would move it above the file-scope `GATE_ADVISORY=(...)` assignment
+    and silently drop half the contract. Hence the advisory assertion."""
     result = subprocess.run(
         ["bash", str(SCRIPT)],
         capture_output=True,
@@ -231,6 +238,7 @@ def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
+    assert "not a branch conflict" in result.stderr
     assert result.stdout == ""
 
 

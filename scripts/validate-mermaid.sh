@@ -51,9 +51,13 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=gate-lib.sh
 . "$(dirname "$0")/gate-lib.sh"
 
-# This gate's own domain-specific advisory, appended after every call's cause
-# lines (see gate-lib.sh's GATE_ADVISORY contract) — set once, so it does not
-# need repeating at each of this file's three call sites below.
+# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
+# KEEP THIS ABOVE ALL THREE gate_could_not_run CALL SITES BELOW. A call placed
+# above it still exits 2 with a correct banner but silently emits HALF the
+# contract, and nothing catches that -- not set -u, not shellcheck, not the
+# library's own tests. Only tests/test_validate_mermaid_gate.py's
+# _assert_gate_could_not_run advisory assertion does; route any new exit-2 test
+# through that helper.
 # shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
 GATE_ADVISORY=(
   "This is a machine fault a human must fix, not a mermaid syntax error —"

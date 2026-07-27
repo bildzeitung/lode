@@ -71,9 +71,12 @@ set -uo pipefail   # deliberately NOT -e: this script's entire job is to
 # shellcheck source=gate-lib.sh
 . "$(dirname "$0")/gate-lib.sh"
 
-# This gate's own domain-specific advisory, appended after every call's cause
-# lines (see gate-lib.sh's GATE_ADVISORY contract) — set once, so it does not
-# need repeating at each of this file's call sites below.
+# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
+# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed above
+# it still exits 2 with a correct banner but silently emits HALF the contract,
+# and nothing catches that -- not set -u, not shellcheck, not the library's own
+# tests. Only tests/test_merge_precheck.py's "not a branch conflict" assertions
+# do; keep them on any new exit-2 test.
 # shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
 GATE_ADVISORY=(
   "This is a machine fault a human must fix, not a branch conflict --"

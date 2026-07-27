@@ -42,10 +42,31 @@
 # repeated per call site. Leave it unset (the default) for no trailer at all
 # -- release-bump.sh's shape, which carries none.
 #
+# THE COST OF THAT CONVENIENCE, and the one thing to get right when adding a
+# call site: this used to be structural. The advisory lived inside the function
+# body, so a call could not exist without emitting it. Now it is an ORDERING
+# CONVENTION -- a call site placed above its script's GATE_ADVISORY assignment
+# still exits 2 with a correct banner, but silently emits HALF the contract,
+# which is precisely how lode-9i2p's machine-vs-content confusion gets back in.
+# An accidentally-empty GATE_ADVISORY is byte-identical to release-bump.sh's
+# deliberately-empty one, so nothing mechanical can tell them apart: `set -u`
+# sees a validly declared-empty array, shellcheck's view is suppressed by the
+# SC2034 disable each caller needs, and this library's own tests choose their
+# own orderings. The ONLY thing that catches it is each consuming script's
+# tests asserting the advisory text on an exit-2 path -- so when you add a call
+# site, add or extend such an assertion (tests/test_merge_precheck.py and
+# tests/test_validate_mermaid_gate.py show the shape).
+#
 # GATE_ADVISORY is declared here (as an empty array, if not already set) so
 # that referencing it below is safe under `set -u`: bash's `nounset` treats a
 # never-declared array as an unbound-variable error on `${arr[@]}` (verified
 # empirically, bash 5.2), unlike a scalar's more forgiving `${var:-}` default.
+#
+# Do NOT "tidy" this into `[[ -v GATE_ADVISORY ]] || GATE_ADVISORY=()`. The two
+# are not equivalent: `-v` on an array tests element 0, so it reports FALSE for
+# an array that is declared but empty, and the `||` would then reinitialize a
+# caller's deliberately-empty GATE_ADVISORY (measured, bash 5.2). `declare -p`
+# tests declaration, which is the actual question here.
 declare -p GATE_ADVISORY >/dev/null 2>&1 || GATE_ADVISORY=()
 
 gate_could_not_run() {
