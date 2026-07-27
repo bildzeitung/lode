@@ -308,6 +308,17 @@ class AnthropicProvider:
     (``qa_think_harder_llm`` default) now runs adaptive thinking instead of
     disabled, a deliberate change. Fable-class overrides now work.
 
+    The raised cap is headroom, not a guarantee, so this branch now also
+    *handles* running out of it. Thinking shares ``max_tokens`` with the answer
+    text, and exhausting the budget shows up two ways: a response whose
+    ``content`` holds only a thinking block (the SDK's ``parsed_output`` is then
+    ``None``, which would otherwise escape under this method's ``-> BaseModelT``
+    annotation and fail as an ``AttributeError`` in the caller), or a text block
+    truncated mid-JSON (a raw ``pydantic.ValidationError`` from inside the SDK).
+    Both are converted to :class:`LLMProviderError` -- the same contract
+    :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
+    failure is diagnosable at the seam instead of surfacing far from its cause.
+
     *The forced tool-use branch needs no equivalent change* -- it has never
     sent ``thinking`` at all (lode-d1sr never touched it), so it already
     follows this same "never explicitly disable" rule; no Fable-class 400 is
@@ -340,10 +351,11 @@ class AnthropicProvider:
     ) -> BaseModelT:
         # reasoning_effort is accepted but not sent to Anthropic here --
         # output_config.effort (Anthropic's actual reasoning-depth axis, GA
-        # since Opus 4.7) is not yet wired through from this parameter; see
-        # the class docstring and lode-3dlt's design notes for the tracked
-        # follow-up. This is a "not implemented yet" gap, not "no such axis
-        # exists" -- Anthropic does have one.
+        # since the 4.6 generation; the xhigh level was added on Opus 4.7) is
+        # not yet wired through from this parameter; see the class docstring
+        # and lode-3dlt's design notes for the tracked follow-up. This is a
+        # "not implemented yet" gap, not "no such axis exists" -- Anthropic
+        # does have one.
         if tool_name is not None:
             # No `thinking` here (lode-d1sr): the enrichment tier predates
             # thinking-on-by-default. That is a model property, NOT a
@@ -372,15 +384,48 @@ class AnthropicProvider:
         # omitting it lets every model run its own default (no thinking on
         # Sonnet 4.6, adaptive thinking on Opus 5/Fable-class). See the class
         # docstring for the full rationale.
-        response = self._client.messages.parse(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user_prompt}],
-            output_format=output_schema,
-            timeout=timeout_s,
-        )
-        return response.parsed_output
+        try:
+            response = self._client.messages.parse(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user_prompt}],
+                output_format=output_schema,
+                timeout=timeout_s,
+            )
+        except ValidationError as exc:
+            # ``messages.parse`` validates the response text against
+            # ``output_schema`` inside the SDK, so a schema violation -- or a
+            # text block truncated mid-JSON because thinking ate the budget --
+            # surfaces as a raw pydantic error from the SDK's own
+            # post-processing. Wrap it: callers of this seam see
+            # LLMProviderError, exactly as OpenAIProvider already guarantees.
+            raise LLMProviderError(
+                f"Anthropic response did not match {output_schema.__name__} "
+                f"(model={model}, max_tokens={max_tokens}) -- a response "
+                f"truncated mid-JSON is indistinguishable from a genuine "
+                f"schema violation here: {exc}",
+                provider="anthropic",
+            ) from exc
+
+        parsed = response.parsed_output
+        if parsed is None:
+            # ``parsed_output`` scans ``content`` for a TEXT block and returns
+            # None when there is none. A response that spent its whole budget
+            # inside thinking carries only a thinking block and
+            # ``stop_reason="max_tokens"`` -- reachable precisely because
+            # lode-3dlt stopped pinning thinking off. Unguarded, that None
+            # escapes under this method's ``-> BaseModelT`` annotation and
+            # fails as an AttributeError inside :func:`lode.qa.answer_question`.
+            raise LLMProviderError(
+                f"Anthropic response contained no text block to decode into "
+                f"{output_schema.__name__} (model={model}, "
+                f"max_tokens={max_tokens}, "
+                f"stop_reason={getattr(response, 'stop_reason', None)!r}) -- "
+                f"typically the whole output budget was consumed by thinking",
+                provider="anthropic",
+            )
+        return parsed
 
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float

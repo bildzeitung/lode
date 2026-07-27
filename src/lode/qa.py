@@ -61,9 +61,8 @@ SONNET_MODEL = "claude-sonnet-4-6"
 #: value always comes from settings, never this constant directly (lode-obms).
 OPUS_MODEL = "claude-opus-5"
 
-#: Output cap for the synthesis call. Comfortably under the SDK's non-streaming
-#: timeout guard (~16K); claims are a compact, bounded structure, not long
-#: prose. Raised 4096 -> 8192 (lode-3dlt) to give headroom for adaptive
+#: Output cap for the synthesis call; claims are a compact, bounded structure,
+#: not long prose. Raised 4096 -> 8192 (lode-3dlt) to give headroom for adaptive
 #: thinking to share this budget with the claims response: an explicit
 #: ``thinking={"type": "disabled"}`` used to guarantee zero thinking tokens
 #: here, but that value 400s on Fable-class models at any effort and on Opus 5
@@ -71,9 +70,25 @@ OPUS_MODEL = "claude-opus-5"
 #: :class:`~lode.llm_provider.AnthropicProvider` no longer sends it at all --
 #: Sonnet 4.6 (the ``qa_llm`` default) is unaffected (no thinking when the
 #: param is omitted), while Opus 5 (``qa_think_harder_llm`` default) and any
-#: Fable-class override now run adaptive thinking. This is headroom, not a
-#: hard truncation guarantee -- see that class's docstring for the full
+#: Fable-class override now run adaptive thinking.
+#:
+#: What bounds this call in practice is
+#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), NOT the Anthropic
+#: SDK's non-streaming guard: that guard is skipped outright whenever an
+#: explicit ``timeout`` is passed, and the provider seam always passes one. (Its
+#: threshold is also ~21K output tokens for the models lode uses, not the ~16K
+#: once claimed here -- see ``_calculate_nonstreaming_timeout``.) So this value
+#: is headroom, not a hard truncation guarantee; exhausting it raises
+#: :class:`~lode.llm_provider.LLMProviderError` from the provider rather than
+#: yielding a malformed answer. See that class's docstring for the full
 #: rationale.
+#:
+#: Raising this cap while also allowing adaptive thinking pushes wall-clock up
+#: on the think-harder path twice over, and ``llm_call_timeout_s`` (120s) was
+#: NOT raised to match -- so the realistic failure mode on that path is now an
+#: ``anthropic.APITimeoutError`` rather than a truncated answer. Whether that
+#: timeout should rise, split per-call, or stay is a measurement-backed
+#: decision tracked in lode-wfyx, not settled here.
 MAX_TOKENS = 8192
 
 _SYSTEM_PROMPT = (

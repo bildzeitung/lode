@@ -12,7 +12,7 @@ from typing import ClassVar
 from unittest import mock
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
 from lode.llm_provider import (
@@ -164,6 +164,66 @@ def test_structured_call_omits_thinking_for_a_fable_class_model() -> None:
     kwargs = client.messages.parse.call_args.kwargs
     assert kwargs["model"] == "claude-fable-5"
     assert "thinking" not in kwargs
+
+
+def test_structured_call_raises_when_the_response_has_no_text_block() -> None:
+    # lode-3dlt: with `thinking` no longer pinned off, a response can spend its
+    # whole max_tokens budget inside thinking and come back with no text block
+    # at all -- the SDK's parsed_output is then None. Unguarded that None
+    # escapes under the `-> BaseModelT` annotation and fails as an
+    # AttributeError inside qa.answer_question; it must be an LLMProviderError
+    # naming the cause instead.
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=None, stop_reason="max_tokens"
+    )
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    message = str(excinfo.value)
+    assert "no text block" in message
+    # The diagnosis has to survive to the log, not just the exception type.
+    assert "max_tokens" in message
+    assert "claude-opus-5" in message
+    assert excinfo.value.provider == "anthropic"
+
+
+def test_structured_call_wraps_a_schema_validation_failure() -> None:
+    # lode-3dlt: messages.parse validates the response text against
+    # output_schema inside the SDK, so a text block truncated mid-JSON (newly
+    # more reachable now that thinking shares the budget) raises a raw pydantic
+    # ValidationError out of the SDK's own post-processing. The seam must
+    # convert it, exactly as OpenAIProvider already does.
+    client = mock.MagicMock()
+    with pytest.raises(ValidationError) as raised:
+        _Widget.model_validate_json('{"name": "w", "cou')
+    client.messages.parse.side_effect = raised.value
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=8192,
+            timeout_s=1.0,
+        )
+
+    assert "_Widget" in str(excinfo.value)
+    assert excinfo.value.provider == "anthropic"
+    assert isinstance(excinfo.value.__cause__, ValidationError)
 
 
 def test_structured_call_ignores_reasoning_effort() -> None:
