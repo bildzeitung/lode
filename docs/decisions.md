@@ -2071,6 +2071,45 @@ are catalogued in [configuration.md](configuration.md).
   up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+- **The "revisit only if a comparable incident shows up" trigger above fired: `lode-ska2` (6-of-6
+  `code-reviewer` dispatches with no worktree, in one fan-out) is exactly that incident, and every
+  failure was on the call-site-only mechanism this entry left untouched.** `lode-ojsr` (2026-07-27)
+  followed through: added `isolation: worktree` to both `coding.md` and `code-reviewer.md`'s
+  frontmatter, matching `land-review.md`, and attempted to probe it the way `lode-p2vi` probed
+  `land-review` above — dispatch with no call-site `isolation` option, confirm the frontmatter alone
+  provisions the worktree.
+
+  **The probe was structurally invalid, and why is itself the finding.** `lode-p2vi`'s probe dispatched
+  from the **top-level orchestrating session** (main checkout, on `trunk`) — the same vantage point
+  `/code`'s Phase 2 dispatches `code-reviewer` from, and where the real `lode-ska2` failures occurred.
+  `lode-ojsr` is a `coding` producer, bound by this repo's own worktree-isolation rule to never leave
+  its own launch worktree — so its probe dispatches were necessarily **nested** inside an
+  already-isolated session, not top-level. Three nested dispatches were run, each with no call-site
+  `isolation` option: `coding` (frontmatter now present), `code-reviewer` (frontmatter now present),
+  and a negative control, `subagent_type: "claude"` (no `isolation` frontmatter key at all, mirroring
+  `lode-p2vi`'s control). **All three landed in the identical worktree as the dispatching parent** —
+  same `pwd`, same `git rev-parse --show-toplevel`, same branch — including the zero-mechanism control.
+  A dispatch with no isolation-granting mechanism whatsoever produced the same "isolated" outcome as the
+  two frontmatter-bearing test cases, which rules out frontmatter as the explanation for any of the
+  three: the observed isolation is attributable to a **nested dispatch inheriting its parent's cwd**,
+  not to the frontmatter key. The frontmatter-vs-call-site variable is unobservable from a nested
+  vantage point — only a genuinely top-level probe can test it, and that is structurally out of reach
+  for any producer or reviewer session.
+
+  **What shipped anyway, and what didn't.** The frontmatter addition itself is a harmless, low-cost
+  mechanical change independent of the probe's outcome — it ships. `code/SKILL.md`'s call-site
+  `isolation: "worktree"` option for `coding`/`code-reviewer` is **left in place, deliberately** (unlike
+  `land-review`'s, dropped above after `lode-p2vi`'s clean confirmation): no clean top-level
+  confirmation exists yet for these two roles, so dropping the known-working call-site mechanism now
+  would be an unjustified risk. **This is the genuinely useful negative result the ticket asked to
+  preserve if the confound went unconfirmed:** the frontmatter-vs-call-site hypothesis remains
+  untested, not refuted and not confirmed, and the harness-side race/resource-pressure hypothesis in
+  [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
+  "Root cause: not determinable" paragraph is unweakened by this probe. A follow-up, `lode-09td`, carries
+  the top-level probe design forward — dispatch `coding`/`code-reviewer` and a `claude` control from the
+  main/orchestrating session itself, exactly as `lode-p2vi` did for `land-review`. Documented in
+  [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
+  and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 - **The "qualifies by construction" / "no dedicated cleanup" claim above is falsified by lode-nt98,
   and lode-qv5t (2026-07-20) closes the gap it left open.** Everything above this entry reasoned about
   `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated
