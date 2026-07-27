@@ -177,6 +177,59 @@ def test_every_agent_definition_invokes_the_guard() -> None:
     )
 
 
+def _frontmatter(path: Path) -> str:
+    """The YAML frontmatter block of a `.claude/agents/*.md` file.
+
+    Deliberately NOT a whole-file substring search, and `land-review.md` is the
+    file that proves why: its PROSE says "This frontmatter now carries
+    `isolation: worktree`", an exact unquoted match. A naive whole-file `in`
+    check therefore stays GREEN for `land-review` with the frontmatter key
+    deleted -- and `land-review` is the one role where that key is the SOLE
+    enforcement point (lode-p2vi dropped its call-site option), i.e. precisely
+    the file a whole-file check would fail to protect. Verified by sabotage.
+
+    (`coding.md`/`code-reviewer.md` happen to use the quoted `isolation:
+    "worktree"` form in prose, so a naive check would catch those two -- which
+    is exactly the kind of accident that makes a substring check look adequate
+    until the one case that matters slips through it.)
+    """
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n"), f"{path.name} does not open with a --- fence"
+    end = text.index("\n---\n", 3)
+    return text[4:end]
+
+
+def test_every_agent_definition_pins_isolation_in_frontmatter() -> None:
+    """The sibling of the guard-call-site check above, on the other axis.
+
+    `isolation: worktree` in the agent definition makes isolation a property
+    of the ROLE, so a dispatch cannot lose it by forgetting a call-site option
+    (lode-kt6g); for `land-review` the frontmatter is the SOLE enforcement
+    point (lode-p2vi dropped `land/SKILL.md`'s call-site option), and lode-ojsr
+    extended the key to `coding` and `code-reviewer` after lode-ska2's 6-of-6
+    no-worktree fan-out. Nothing went red if an edit silently dropped that line
+    -- exactly the gap the guard-call-site test above exists to close, on the
+    key rather than the call.
+
+    If a future agent definition is genuinely exempt (a read-only agent that
+    must NOT get its own worktree, say), this test is the place to record why.
+    """
+    agent_defs = sorted((REPO_ROOT / ".claude" / "agents").glob("*.md"))
+    assert agent_defs, "no .claude/agents/*.md found -- has the layout moved?"
+
+    missing = [
+        path.name
+        for path in agent_defs
+        if "isolation: worktree"
+        not in [line.strip() for line in _frontmatter(path).splitlines()]
+    ]
+    assert not missing, (
+        f"agent definition(s) {missing} carry no `isolation: worktree` frontmatter "
+        "key -- isolation would then rest entirely on every call site remembering "
+        "to pass it (lode-kt6g, lode-ojsr)"
+    )
+
+
 def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
     """Unlike recycled-worktree-guard.sh, this script never repairs on
     failure -- confirm HEAD, branches, and the working tree are untouched

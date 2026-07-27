@@ -363,9 +363,12 @@ real-conflict path, and the failure silently
 read as an unretried conflict rather than what it was). Frontmatter `isolation: worktree` launches the
 reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk`
 HEAD — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
-`code-reviewer` dispatches, though those two still request it at the call site: their agent
-definitions carry no `isolation:` frontmatter key, so for them the call-site option remains
-load-bearing. From there it `git fetch`es `origin/land/<id>` (and `origin/land/<base-id>` if
+`code-reviewer` dispatches. Those two now carry the same `isolation: worktree` frontmatter key
+(`lode-ojsr`) **and** still request it at the call site: unlike `land-review`, they have no top-level
+probe confirming frontmatter alone suffices for them, so the call-site option is kept as
+belt-and-braces rather than known-redundant — see
+[docs/decisions.md](../../../docs/decisions.md) (search "lode-ojsr").
+From there it `git fetch`es `origin/land/<id>` (and `origin/land/<base-id>` if
 stacked) and diffs entirely by ref — it never needs to check anything
 out — so under isolation any tree mutation it performs (accidental or not) lands in that disposable
 worktree, never in the one Section 3 is about to merge into.

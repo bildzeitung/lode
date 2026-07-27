@@ -2071,6 +2071,74 @@ are catalogued in [configuration.md](configuration.md).
   up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+- **The "revisit only if a comparable incident shows up" trigger above fired: `lode-ska2` (6-of-6
+  `code-reviewer` dispatches with no worktree, in one fan-out) is exactly that incident, and every
+  failure was on the call-site-only mechanism this entry left untouched.** `lode-ojsr` (2026-07-27)
+  followed through: added `isolation: worktree` to both `coding.md` and `code-reviewer.md`'s
+  frontmatter, matching `land-review.md`, and attempted to probe it the way `lode-p2vi` probed
+  `land-review` above — dispatch with no call-site `isolation` option, confirm the frontmatter alone
+  provisions the worktree.
+
+  **The probe was structurally invalid, and why is itself the finding.** `lode-p2vi`'s probe dispatched
+  from the **top-level orchestrating session** (main checkout, on `trunk`) — the same vantage point
+  `/code`'s Phase 2 dispatches `code-reviewer` from, and where the real `lode-ska2` failures occurred.
+  `lode-ojsr` is a `coding` producer, bound by this repo's own worktree-isolation rule to never leave
+  its own launch worktree — so its probe dispatches were necessarily **nested** inside an
+  already-isolated session, not top-level. Three nested dispatches were run, each with no call-site
+  `isolation` option: `coding` (frontmatter now present), `code-reviewer` (frontmatter now present),
+  and a negative control, `subagent_type: "claude"` (no `isolation` frontmatter key at all, mirroring
+  `lode-p2vi`'s control). **All three landed in the identical worktree as the dispatching parent** —
+  same `pwd`, same `git rev-parse --show-toplevel`, same branch — including the zero-mechanism control.
+  A dispatch with no isolation-granting mechanism whatsoever produced the same outcome as the two
+  frontmatter-bearing cases, so the observed isolation is attributable to **nested-dispatch cwd
+  inheritance**, not to the frontmatter key — leaving the variable unobservable from a nested vantage
+  point, and a genuinely top-level probe the only way to test it.
+
+  **A second, independent reason the nested probe could not have been valid — and the precondition the
+  top-level one must satisfy.** Whether a dispatched subagent's definition is resolved from the
+  *dispatching session's cwd* or from the *main checkout* is unverified [Likely the latter: nothing
+  documented suggests a branch checked out in one worktree can change what `.claude/agents/*.md` a
+  dispatch elsewhere reads]. If it is the main checkout, then `lode-ojsr`'s two "frontmatter now
+  present" test cases were **not actually frontmatter-bearing at all** — the key existed only on its
+  unmerged branch — which invalidates the probe a second time over, independently of the nesting. It
+  does not change the conclusion (still untested), but it does constrain `lode-09td`: a top-level probe
+  runs from the main checkout on `trunk`, so **the frontmatter must already be merged to `trunk` before
+  that probe can mean anything**, and `CLAUDE.md` forbids editing it there directly. That is the
+  concrete reason the frontmatter belongs on *this* branch rather than deferred into `lode-09td` —
+  deferring it would deadlock the follow-up. `lode-09td` should confirm the resolution rule first;
+  if definitions turn out to resolve from the dispatching cwd, a nested probe becomes valid after all
+  and the ticket gets much cheaper.
+
+  **What shipped anyway, and what didn't.** The frontmatter addition ships, and **not** on the strength
+  of the probe: the trigger this entry itself recorded — "revisit only if a comparable incident shows up
+  on one of those dispatches" — fired, and the change is that revisit. `code/SKILL.md`'s call-site
+  `isolation: "worktree"` option for `coding`/`code-reviewer` is **left in place, deliberately** (unlike
+  `land-review`'s, dropped above after `lode-p2vi`'s clean confirmation): no clean top-level
+  confirmation exists yet for these two roles, so dropping the known-working call-site mechanism now
+  would be an unjustified risk.
+
+  **Running both mechanisms at once is safe, on this repo's own evidence — not an assumption.**
+  `land-review` carried frontmatter `isolation: worktree` **and** the call-site option simultaneously
+  for the whole window between `lode-kt6g` and `lode-p2vi`, deliberately redundant, across *every* real
+  `/land` pass in that window (see this entry above: "every real pass dispatched `land-review` **with**
+  the call-site option"). The only problem it ever caused was epistemic — it proved nothing about the
+  frontmatter, which is why `lode-p2vi` needed a dedicated probe. No double provisioning, no orphaned
+  worktree, no altered hand-off was ever observed. So the belt-and-braces posture for
+  `coding`/`code-reviewer` is a configuration this repo has already run in anger, not a new risk.
+
+  **This is the genuinely useful negative result the ticket asked to preserve if the confound went
+  unconfirmed:** the frontmatter-vs-call-site hypothesis remains untested, not refuted and not
+  confirmed, and the harness-side race/resource-pressure hypothesis in
+  [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
+  "Root cause: not determinable" paragraph is unweakened by this probe. A follow-up, `lode-09td`, carries
+  the top-level probe design forward — dispatch `coding`/`code-reviewer` and a `claude` control from the
+  main/orchestrating session itself, exactly as `lode-p2vi` did for `land-review`. **It is labelled
+  `human` deliberately:** no `coding` producer can execute it (a producer is always nested, which is the
+  whole finding), so leaving it auto-selectable would have `/code` burn a build+review cycle
+  rediscovering exactly that — the second failure mode `code/SKILL.md`'s `human`-label filter exists to
+  prevent. Documented in
+  [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
+  and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
 - **The "qualifies by construction" / "no dedicated cleanup" claim above is falsified by lode-nt98,
   and lode-qv5t (2026-07-20) closes the gap it left open.** Everything above this entry reasoned about
   `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated

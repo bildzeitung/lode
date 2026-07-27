@@ -1,6 +1,7 @@
 ---
 name: code-reviewer
 description: Runs the producer's TECHNICAL review on a built lode branch that a coding producer left at ready-for-code-review — fetches the pushed land/<id> branch and checks it out into its own launch worktree, runs the technical review — its own hand-reasoned correctness pass, plus /simplify — re-gates, commits, re-pushes land/<id>, and swaps the ticket to ready-for-land (or escalates). It is the build-side technical gate, done by an agent that did NOT write the code. It never merges, closes, or writes trunk — a separate /land lander owns every write to trunk. Runs on Opus.
+isolation: worktree
 model: opus
 ---
 
