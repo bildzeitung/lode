@@ -3,8 +3,9 @@
 # Shared gate_could_not_run() helper for the "exit 2 means the GATE could not
 # run, never that the CONTENT is bad" convention (lode-9i2p). Sourced by every
 # scripts/*.sh gate that draws this distinction -- scripts/validate-mermaid.sh,
-# scripts/merge-precheck.sh, and scripts/release-bump.sh -- the same way
-# scripts/python-init.sh already sources scripts/venv-install.sh.
+# scripts/merge-precheck.sh, scripts/release-bump.sh, and
+# scripts/release-latest-tag.sh -- the same way scripts/python-init.sh
+# already sources scripts/venv-install.sh.
 #
 # Extracted per lode-090f: this exact function had reached three duplicated
 # literal copies (found technically reviewing lode-ns3r), free to drift --

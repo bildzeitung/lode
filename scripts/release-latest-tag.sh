@@ -52,12 +52,13 @@
 
 set -uo pipefail
 
-gate_could_not_run() {
-  echo "GATE COULD NOT RUN: $1" >&2
-  shift
-  for line in "$@"; do echo "$line" >&2; done
-  exit 2
-}
+# shellcheck source=gate-lib.sh
+. "$(dirname "$0")/gate-lib.sh"
+# No GATE_ADVISORY set here -- this gate carries no domain-specific trailer,
+# the same shape as scripts/release-bump.sh (see gate-lib.sh's GATE_ADVISORY
+# contract). Sourced FIRST, before any gate_could_not_run call site below --
+# see gate-lib.sh's header for why call-site placement relative to a
+# GATE_ADVISORY assignment matters when one IS set.
 
 # $1 > $2, both bare X.Y.Z (no leading "v"). NUMERIC per-component
 # comparison, never string comparison, so multi-digit components compare
