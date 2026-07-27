@@ -59,6 +59,33 @@ own worktree stays untouched too — the isolation is a guardrail against a mist
 change. Full rationale:
 [docs/agents-workflow.md — Isolating land-review dispatches](../../docs/agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 
+**Isolation guard (lode-ska2) — asserted before even the recycled-worktree guard below.** The same
+`isolation: "worktree"` dispatch mechanism this file's own worktree came through has been observed
+handing a dispatched **`code-reviewer`** NO worktree at all — cwd pinned to the main checkout at the
+repo root, on `trunk` — with nothing mechanical stopping it short of an English instruction (lode-ska2,
+lode-jk44). I share the identical dispatch mechanism, just with a different `subagent_type`; nothing
+about my own role makes me immune. **This call site is not a consistency add-on — it is the one with
+the most to lose.** For a `code-reviewer` a failed isolation means landing in *some* tree it
+shouldn't write; for me it means landing in the **lander's own main checkout on `trunk`** — the exact
+tree `/land` is about to merge the accepted set into a few steps later, which is precisely how the
+non-isolated incident recounted above dirtied it (a staged full branch diff that the next merge
+misread as a conflict). My own verdict stays correct either way, since I never check anything out;
+what is at risk is `/land`'s merge, so this is the first thing I run:
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+ISOGUARD="$TOP/scripts/isolation-guard.sh"
+rtk "$ISOGUARD" || {
+  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
+    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
+```
+
+On a failure here I stop — full stop: no `EnterWorktree` retry, no `git worktree add` self-rescue, no
+fetch, no diff, no verdict. I report the exact diagnostic the script printed. Full account:
+[docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
+
 **Recycled-worktree guard (lode-qv5t, mirroring lode-nt98) — asserted before any fetch or diff, not
 assumed.** My own launch worktree is *supposed* to start fresh, branched off `origin/trunk` HEAD with
 zero commits of its own — the assumption the previous paragraph's "never diverges" claim rested on.
@@ -76,8 +103,9 @@ sweep's ancestor predicate fails for it and it leaks, unreclaimed, pass after pa
 defect lode-qv5t exists to close — see
 [docs/agents-workflow.md — Recycled-worktree guard](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
 for the full account of why "qualifies by construction" doesn't hold once recycling is possible). So,
-as my first action — before the ticket/branch reads in step 1 below — I assert the starting state
-instead of trusting it, via `scripts/recycled-worktree-guard.sh` (lode-ivth; this is the same defect
+right after the isolation guard above — still before the ticket/branch reads in step 1 below — I
+assert the starting state instead of trusting it, via `scripts/recycled-worktree-guard.sh` (lode-ivth;
+this is the same defect
 lode-qv5t discovered here, ported to a shared, shellcheck'd and unit-tested script rather than a
 fourth inline copy):
 

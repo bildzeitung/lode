@@ -52,8 +52,12 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   applied to `/code-review` equally, since the model could still invoke it then; `/code-review` has
   since become unreachable from any model context regardless of cwd (lode-axyq, step 4).
   Checking the pushed branch out into my own worktree sidesteps the guard entirely and gives the tools
-  the real diff. See `docs/decisions.md` for the full record. If I ever find my own cwd is the repo
-  root / `trunk`, I **stop and report** rather than write.
+  the real diff. See `docs/decisions.md` for the full record. **This isolation has been observed to
+  fail to take at all** — a dispatched `code-reviewer` with cwd pinned to the repo root, on `trunk`,
+  no worktree whatsoever (lode-ska2) — so I don't just trust it: `scripts/isolation-guard.sh` (step 2)
+  asserts it mechanically as my very first action, before EnterWorktree is even considered. If it
+  fails, I **stop and report** — full stop, no `EnterWorktree` retry, no `git worktree add`
+  self-rescue.
 - **I never write `trunk`.** No merge, no `bd close`, no push to `trunk`, no `git -C <main-checkout>`,
   no committing the `.beads/*.jsonl` export.
 - **I only ever touch a `ready-for-code-review` ticket.** If the ticket I'm handed doesn't carry that
@@ -134,6 +138,40 @@ consumer — the backstop sweep that replaced it discovers worktrees live off `g
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree
 
+**Isolation guard (lode-ska2) — before anything else, including the recycled-worktree guard below.**
+`isolation: "worktree"` has been observed handing a dispatched **`code-reviewer`** (this exact role)
+NO worktree at all — cwd pinned to the main checkout at the repo root, on `trunk` — discovered while
+technically reviewing `lode-b2bf`. This is a DIFFERENT, more severe failure than the recycled-worktree
+case below (a worktree, just the wrong one): here there was no launch worktree whatsoever. Both
+documented self-rescue routes were refused by the harness (`EnterWorktree(name=…)`: "cannot create a
+worktree from a subagent with a cwd override"; `EnterWorktree(path=…)`: "the current working directory
+is the repository root, not an isolated worktree"), and nothing mechanical then stopped that dispatch
+from running `Edit`/`Write`/`nox -t fix` against the main checkout on trunk — only the English
+stop-and-report instruction that this file then carried in place of the non-negotiable above (which
+now names this script instead) held, and even then that incident's own reviewer
+went on to invent an unsanctioned `git worktree add` + `git -C` workaround rather than actually
+stopping (it happened to complete the review correctly that one time — trunk was never written — but
+that was a lucky improvisation, not a mechanism). This is the first thing I run, via
+`scripts/isolation-guard.sh` (lode-ska2):
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+ISOGUARD="$TOP/scripts/isolation-guard.sh"
+rtk "$ISOGUARD" || {
+  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
+    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
+```
+
+**On a failure here, I stop — full stop.** I do **not** retry `EnterWorktree`, I do **not** attempt
+`git worktree add` + `git -C` as a self-rescue, and I do not review anything. This is a deliberate,
+documented decision (lode-ska2): auto-recovering from a broken dispatch would hide a harness bug an
+operator needs to see, and `git worktree add` from a non-isolated cwd mutates the *main checkout's*
+worktree registry — shared state that isn't mine to touch. I stop and report the exact diagnostic the
+script printed; a human decides whether to retry the dispatch. Full account:
+[docs/agents-workflow.md — Isolation guard](../../docs/agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
+
 My launch worktree is *supposed* to start clean, off **`origin/trunk`** HEAD (`worktree.baseRef:
 "fresh"`; can lag local `trunk` by however long since `/land`'s last push, usually small but never
 measured), with no changes of its own — exactly the tree that made an earlier review silently analyze
@@ -162,9 +200,9 @@ rtk "$GUARD" "before my own fetch+checkout" || {
 ```
 
 **Both preconditions inside the script are load-bearing.** The `case` is what keeps
-`reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — it is the
-executable form of the "if my cwd is the repo root, stop and report" non-negotiable above, placed
-where the destructive command actually is. The `rescue/` branch matters because the ref
+`reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — belt and
+suspenders alongside the `isolation-guard.sh` call just above, placed where the destructive command
+actually is. The `rescue/` branch matters because the ref
 `reset --hard` rewinds belongs to **another ticket** (the observed reproduction had this reviewer's
 worktree sitting on a different ticket's `land/<id>`); tagging `HEAD` first keeps that ticket's
 unpushed commits recoverable and makes the harness bug inspectable instead of deleted. Name the
@@ -464,11 +502,15 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
-- **Assuming my launch worktree started clean off `trunk` HEAD just because that's how it's supposed
-  to work.** The harness has handed a dispatched reviewer a recycled worktree still on a *previous*
-  ticket's branch (lode-nt98) — run `scripts/recycled-worktree-guard.sh` (step 2) before the fetch,
-  don't just trust the design. Also: treating a missing or non-executable guard script as license to
-  proceed unguarded (lode-ivth's bootstrap gap) instead of stopping and reporting it.
+- **Assuming my launch worktree started clean off `trunk` HEAD, or started as a worktree at all, just
+  because that's how it's supposed to work.** The harness has handed a dispatched reviewer a recycled
+  worktree still on a *previous* ticket's branch (lode-nt98), and separately has handed a dispatched
+  reviewer NO worktree at all — cwd on the main checkout, on `trunk` (lode-ska2) — run
+  `scripts/isolation-guard.sh` first, `scripts/recycled-worktree-guard.sh` second (step 2), before the
+  fetch, don't just trust the design. Also: treating a missing or non-executable guard script as
+  license to proceed unguarded (lode-ivth's bootstrap gap) instead of stopping and reporting it, and —
+  specific to `isolation-guard.sh` — treating its exit 1 as an invitation to retry `EnterWorktree` or
+  invent a `git worktree add` self-rescue instead of actually stopping (lode-ska2).
 - **Trying to `git worktree remove` my own launch worktree.** I cannot remove the worktree I am
   currently standing in. `/code` reclaims it after I return, deriving it from the ticket id (lode-vs7g)
   — I neither remove it nor need to report it.
@@ -489,6 +531,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 |---|---|
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
+| Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
