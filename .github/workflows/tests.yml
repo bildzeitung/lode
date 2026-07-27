@@ -102,7 +102,10 @@ jobs:
           # Reads the SAME file scripts/compile-lock.sh derives its
           # --python-version target from (lode-sys4) -- this job's own
           # interpreter and the lock-gen target are the same single source of
-          # truth, so they can never drift from each other on this leg.
+          # truth, so they can never drift from each other. Since lode-u709
+          # EVERY setup-python step in this repo reads this file (no workflow
+          # carries a version literal any more), so that guarantee is
+          # repo-wide, not special to this job.
 
       - name: Install uv
         run: pip install -U uv
