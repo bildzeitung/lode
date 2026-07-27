@@ -52,7 +52,22 @@ jobs:
           python-version: "3.14"
 
       - name: Install dependencies
-        run: pip install -e '.[dev]'
+        # Must install into ./venv, NOT the runner's ambient interpreter:
+        # noxfile.py's `coverage` session resolves `pytest` to an explicit
+        # path under ./venv/bin (_venv_tool, lode-0yfn) and fails closed if
+        # it isn't there, so a bare `pip install -e '.[dev]'` would leave
+        # `nox -s coverage` below aborting on every run.
+        #
+        # `--unlocked` keeps this leg's existing resolve-fresh-from-
+        # pyproject.toml semantics (tests.yml deliberately installs the
+        # hash-verified requirements.lock instead — see its own comment); the
+        # only thing changing here is WHERE those same deps land. The
+        # GITHUB_PATH line then puts the venv ahead of the ambient
+        # interpreter for the `python`/`nox` steps below, exactly as
+        # tests.yml does.
+        run: |
+          ./scripts/python-init.sh --unlocked
+          echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
 
       - name: Resolve model cache key
         # SINGLE implementation shared with tests.yml -- see

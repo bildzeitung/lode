@@ -123,6 +123,28 @@ Two files, two jobs — **never pin the same thing in both**:
   repeat of that from arriving unannounced. *Which* rules that pinned ruff enforces is a separate
   question, settled in [Ruff's lint rule set](#ruffs-lint-rule-set-settled-lode-cs5u) below.
 
+  **The pin only constrains what `uv` installs, not what the gate runs (`lode-0yfn`).**
+  `noxfile.py` sets `default_venv_backend = "none"`, so a session inherits whatever PATH the
+  invoking shell has. A stale system-wide tool sitting earlier on PATH than the project's own
+  `./venv/bin` (e.g. a pip `--user` / pipx `ruff`) then silently shadows the pinned copy — the gate
+  runs a *different* ruff than the one pinned above and still reports success, with no signal that
+  anything was skipped (reproduced directly: an ambient `~/.local/bin/ruff` 0.15.11 masking the
+  then-pinned `0.15.22`, which silently skipped ruff-format's markdown Python-fence reformatting
+  while `nox -t fix` still exited 0). Fixed by resolving every dev-extra tool a session shells out
+  to — `ruff`, `pytest`, `shellcheck`, `python` — to its explicit on-disk path under `./venv/bin`,
+  derived from `noxfile.py`'s own location rather than searched for on PATH (`noxfile.py`'s
+  `_venv_tool` helper), so ambient PATH order cannot substitute a different binary; the session
+  fails loudly instead if the project venv (or the tool inside it) is missing. Because it fails
+  closed, **any CI workflow running one of those sessions must build `./venv` first** — installing
+  the dev extra into the runner's ambient interpreter is no longer enough, which is why
+  `coverage.yml` calls `scripts/python-init.sh --unlocked` rather than `pip install -e '.[dev]'`
+  (`tests.yml` already installed from the lock the same way). Deliberately **not**
+  applied to the `build` session, which shells out to ambient `python -m build` on purpose —
+  `build.yml`/`release.yml` run it with no `./venv` at all, since packaging resolves its own
+  isolated PEP 517 env and never touches the dev-extra/lock tools this guarantee exists to pin —
+  nor to `lock_currency`, which resolves `uv` itself (a separate, system-wide tool never installed
+  into `./venv`, already checked explicitly and failed closed if absent, `lode-sys4`).
+
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
 `--require-hashes` are mutually exclusive in one pip/uv invocation, so the install is three steps:
