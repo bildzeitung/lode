@@ -277,31 +277,35 @@ needs its own tuning pass once someone actually wants that override.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 
-`AnthropicProvider.structured_call` accepted `reasoning_effort` from day one
-(`lode-568v.2`) but never sent it — a comment on the class used to (incorrectly)
-claim Anthropic has no such axis. It does: `output_config.effort`
-(`low`/`medium`/`high`/`xhigh`/`max`) has been GA since the 4.6 generation
-(`xhigh` added on Opus 4.7). `reasoning_effort` now reaches Anthropic as
-`output_config.effort` on **both** `structured_call` branches (the
-`messages.parse` Q&A path and the forced-tool-use enrichment path) and on the
-`submit_batch` path — every wire mechanism `AnthropicProvider` has. An
-effort value outside the legal five-value set raises `LLMProviderError`
-before any request is sent, rather than being silently dropped (the prior
-behavior) or surfacing as a raw `anthropic.BadRequestError` from deep inside
-the SDK.
+A `ModelTier`'s `reasoning_effort` reaches Anthropic as `output_config.effort`
+(`low`/`medium`/`high`/`xhigh`/`max` — GA since the 4.6 generation, `xhigh`
+added on Opus 4.7) on every wire mechanism `AnthropicProvider` has: both
+`structured_call` branches (the `messages.parse` Q&A path and the
+forced-tool-use enrichment path) and `submit_batch`. Left unset — which is
+every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
+— the parameter is **omitted** from the request rather than sent as `null`. A
+value outside the legal five raises `LLMProviderError` before any request is
+sent, instead of being silently dropped.
 
-**Interaction with the `thinking`-omission decision directly above, checked
-and found not currently reachable.** Opus 5 rejects an explicit
-`thinking={"type": "disabled"}` paired with effort `xhigh`/`max` (400) — the
-same family of incompatibility lode-3dlt's fix exists to dodge. That
-combination is not reachable today: lode-3dlt already made both
-`structured_call` branches omit `thinking` entirely (never send `disabled`,
-on any branch, for any model), and this ticket does not change that — it only
-adds `effort` alongside the omitted `thinking`. Anthropic's own guidance
-already prefers effort-tuned thinking over disabling it, so there is no
-reason to reintroduce an explicit `disabled` later; the `AnthropicProvider`
-class docstring carries a standing note against doing so without re-reading
-this section first.
+**Caveat: the check is on the value, not on the value/model pairing.** Effort
+is not accepted by every model — it errors outright on Haiku 4.5 and Sonnet
+4.5, and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
+`Kind.RUNTIME` and two default to affected models (`enrichment_llm` = Haiku
+4.5, `qa_llm` = Sonnet 4.6), so setting `reasoning_effort` on a tier whose
+model does not support the level you ask for produces an unhandled
+`anthropic.BadRequestError` — where before it was inert. **Set
+`reasoning_effort` only alongside a model that supports it.** A
+model→capability predicate was deliberately rejected as a moving target
+(lode-3dlt's option 1); how to fail cleanly instead is tracked as lode-90o7,
+which also covers the same unvalidated knob on `OpenAIProvider`.
+
+**Interaction with the `thinking`-omission decision above: not reachable.**
+Opus 5 rejects `thinking={"type": "disabled"}` paired with effort
+`xhigh`/`max` (400) — the same family of incompatibility lode-3dlt exists to
+dodge. Since lode-3dlt omits `thinking` entirely on every branch and this
+change only adds `effort` alongside that omission, the combination cannot
+occur; the `AnthropicProvider` docstring carries a standing note against
+reintroducing an explicit `disabled`.
 
 ## Build constants (chosen once)
 

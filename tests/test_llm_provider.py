@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
 from lode.llm_provider import (
+    _ANTHROPIC_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
     LLMAuthError,
@@ -276,11 +277,15 @@ def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> 
 
 
 def test_structured_call_sends_effort_on_the_forced_tool_use_branch() -> None:
+    # NOT the enrichment default (claude-haiku-4-5): effort errors outright on
+    # Haiku 4.5, and xhigh does not exist below Opus 4.7. lode validates the
+    # value, not the value/model pairing (lode-90o7), so a mock would happily
+    # accept that combination -- don't enshrine an illegal one as the example.
     client = _fake_tool_use_client({"name": "widget", "count": 3})
     provider = AnthropicProvider(client)
 
     provider.structured_call(
-        model="claude-haiku-4-5",
+        model="claude-opus-5",
         reasoning_effort="xhigh",
         system="sys",
         user_prompt="prompt",
@@ -337,6 +342,23 @@ def test_structured_call_rejects_an_invalid_effort_value(bad_effort: str) -> Non
     assert excinfo.value.provider == "anthropic"
     client.messages.parse.assert_not_called()
     client.messages.create.assert_not_called()
+
+
+def test_effort_levels_match_the_installed_sdk_literal() -> None:
+    # `_ANTHROPIC_EFFORT_LEVELS` claims to mirror the SDK's own effort Literal
+    # exactly. Pin that claim mechanically: the ladder has grown once already
+    # (xhigh arrived with Opus 4.7), and a sixth level shipping upstream would
+    # otherwise make lode reject a legal value with a spurious
+    # LLMProviderError, with nothing failing to say so. Order is asserted too,
+    # since the constant is what renders the error message's intensity ladder.
+    import typing
+
+    from anthropic.types.output_config_param import OutputConfigParam
+
+    effort_hint = typing.get_type_hints(OutputConfigParam)["effort"]
+    # `effort: Optional[Literal[...]]` -- unwrap the Optional, then the Literal.
+    literal, _none = typing.get_args(effort_hint)
+    assert typing.get_args(literal) == _ANTHROPIC_EFFORT_LEVELS
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +423,12 @@ def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:
     client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-3")
     provider = AnthropicProvider(client)
 
-    provider.submit_batch([_batch_request(reasoning_effort="medium")], timeout_s=30.0)
+    # Override the Haiku 4.5 default model too -- effort errors on Haiku 4.5;
+    # see the forced-tool-use test above and lode-90o7.
+    provider.submit_batch(
+        [_batch_request(model="claude-opus-5", reasoning_effort="medium")],
+        timeout_s=30.0,
+    )
 
     (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
     assert req["params"]["output_config"] == {"effort": "medium"}
