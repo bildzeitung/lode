@@ -36,6 +36,20 @@
 # state -- `/land` only advances it with an already-gated, already-pushed
 # `trunk` -- so both holes close by reading it instead everywhere below.
 #
+# AND IT DELIBERATELY DOES NOT FETCH FIRST (lode-isl3). `origin/trunk` is read
+# from the local ref cache, as of whenever this repo last fetched. That is not
+# a gap to close: `worktree.baseRef: "fresh"` branches a launch worktree from
+# exactly this ref, so comparing against it asks precisely the right question
+# ("is HEAD derived from the base I was supposed to get?"). Fetching would
+# only ever advance the RIGHT-hand side of the ancestor test, which can flip
+# it false->true but never true->false -- i.e. it would make the guard
+# strictly MORE forgiving, weakening the very check this script exists to
+# perform -- while adding a network dependency to the first executable action
+# of every dispatch. A stale `origin/trunk` costs nothing on the remedy side
+# either: resetting onto a slightly-lagging but already-gated, already-pushed
+# ref is exactly what a genuinely fresh worktree gets, and CLAUDE.md already
+# accepts that lag. So: no fetch. Do not add one.
+#
 # On failure it repairs the worktree: tags the current (foreign) HEAD as
 # `rescue/recycled-<sha>` (the ref `reset --hard` is about to rewind belongs
 # to ANOTHER ticket -- if that ticket had committed but not pushed, this tag
@@ -62,8 +76,27 @@
 #           STOP and report rather than proceed -- it means `isolation:
 #           "worktree"` did not take at all, and this script will not touch
 #           the main checkout. The diagnostic is already printed to stderr.
-# Exit 2 -- usage error (wrong argument count). Caller bug, not a worktree
-#           problem.
+# Exit 2 -- the guard COULD NOT RUN, so its verdict is unknown -- never a
+#           statement about the worktree's content (lode-9i2p's machine-vs-
+#           content rule). Two causes: a usage error (wrong argument count),
+#           or `origin/trunk` not resolving at all. Like exit 1, the caller
+#           must STOP and report; unlike exit 1, nothing here is a claim that
+#           the worktree is dirty.
+#
+#           The `origin/trunk`-unresolvable arm is checked EXPLICITLY, up
+#           front, rather than left to fall out of the ancestor test (lode-isl3
+#           review). `git merge-base --is-ancestor HEAD origin/trunk` exits
+#           non-zero for BOTH "not an ancestor" and "no such ref", and `if !`
+#           consumes that status, so an unresolvable ref used to take the
+#           remediation branch: it printed the CONTAMINATED banner (a false
+#           accusation -- the worktree is fine), created a stray
+#           `rescue/recycled-<sha>` ref that nothing GCs, and only then died
+#           on `git reset --hard`'s own "unknown revision" (exit 128, verified
+#           empirically). Safe, but it misdiagnosed a missing ref as foreign
+#           commits -- exactly the confusion lode-9i2p exists to prevent.
+#           Bare `trunk` could not fail this way (a local branch that always
+#           exists), so this arm is specifically the cost of reading a
+#           remote-tracking ref, and is paid here rather than in a transcript.
 #
 # DIRT-AXIS GAP, CLOSED (lode-3v1p): the ancestor check alone cannot detect a
 # worktree recycled onto a `land/<id>` branch that has since landed -- HEAD
@@ -105,6 +138,15 @@ case "$top" in
     exit 1
     ;;
 esac
+
+if ! git rev-parse --verify --quiet origin/trunk >/dev/null; then
+  echo "GUARD COULD NOT RUN (lode-isl3): \`origin/trunk\` does not resolve in this repo, so there" \
+       "is no trusted ref to check HEAD against. This says NOTHING about whether this worktree is" \
+       "contaminated -- the check did not run. Likely causes: no \`origin\` remote, a remote under" \
+       "another name, or a clone that has never fetched \`trunk\`. Fix the remote, then re-dispatch." \
+       "STOP and report $context_message." >&2
+  exit 2
+fi
 
 if ! git merge-base --is-ancestor HEAD origin/trunk; then
   head_sha="$(git rev-parse --short HEAD)"

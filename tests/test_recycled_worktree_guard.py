@@ -182,6 +182,78 @@ def test_worktree_merely_behind_origin_trunk_is_still_a_noop(tmp_path: Path) -> 
     assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
 
 
+def test_genuinely_fresh_worktree_is_a_noop_even_mid_land_residue_window(
+    tmp_path: Path,
+) -> None:
+    """lode-isl3's OTHER half -- the false-positive axis. The ticket's stated
+    expectation is that "the guard's verdict should not depend on whether a
+    `/land` pass happens to be mid-flight", which cuts both ways: the two
+    sibling tests pin that a CONTAMINATED verdict is reached correctly during
+    the residue window, and this one pins that a CLEAN verdict is left alone
+    by it. A genuinely fresh worktree sitting at `origin/trunk` while local
+    `trunk` carries un-pushed merges must stay an exact no-op -- no rescue
+    ref, no reset, nothing.
+
+    This is the single most common real state during the window this ticket
+    is about (a `/code` producer dispatched while `/land` is mid-pass, which
+    happens by design under the shared concurrency cap), and without it
+    nothing here would catch a future "hardening" that made the predicate
+    stricter than ancestry -- e.g. requiring `HEAD == origin/trunk`, or
+    re-introducing a comparison against local `trunk` -- which would nuke and
+    rescue-tag every healthy worktree dispatched during a land."""
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo, ".claude/worktrees/fresh-mid-land", "worktree-agent-fresh2"
+    )
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    # A live /land pass has merged into local trunk but not yet pushed.
+    _advance_local_trunk_without_pushing(
+        repo, "residue.txt", "unpushed --no-ff merge, land still in flight"
+    )
+    assert _git(repo, "rev-parse", "trunk").stdout.strip() != head_before
+
+    result = _run(wt)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "CONTAMINATED" not in result.stderr
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    assert _git(repo, "branch", "--list", "rescue/*").stdout.strip() == ""
+    assert not (wt / "residue.txt").exists()
+
+
+def test_unresolvable_origin_trunk_exits_2_without_accusing_the_worktree(
+    tmp_path: Path,
+) -> None:
+    """Reading a remote-tracking ref adds a failure mode bare `trunk` never
+    had: the ref may not resolve at all. `git merge-base --is-ancestor` exits
+    non-zero for both "not an ancestor" and "no such ref", and `if !` consumes
+    that status -- so without the explicit up-front check this fell into the
+    remediation branch, printed the CONTAMINATED banner about a perfectly
+    clean worktree, left a stray `rescue/recycled-<sha>` ref behind, and only
+    then died on `git reset --hard`'s own error (exit 128).
+
+    Required behaviour is lode-9i2p's: the machine could not be checked, so
+    say exactly that (exit 2) and make no claim about the content. This test
+    goes red if the `git rev-parse --verify origin/trunk` pre-check is
+    removed."""
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(repo, ".claude/worktrees/no-origin", "worktree-agent-no-origin")
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    # Drop the remote entirely -- origin/trunk no longer resolves anywhere.
+    _git(repo, "remote", "remove", "origin")
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/trunk")
+
+    result = _run(wt)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GUARD COULD NOT RUN" in result.stderr
+    # Must NOT accuse the worktree of carrying foreign commits...
+    assert "CONTAMINATED" not in result.stderr
+    # ...and must leave it exactly as found: no rescue ref, no reset.
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    assert _git(repo, "branch", "--list", "rescue/*").stdout.strip() == ""
+
+
 def test_contaminated_worktree_is_rescued_reset_onto_origin_trunk_and_cleaned(
     tmp_path: Path,
 ) -> None:
@@ -272,12 +344,9 @@ def test_worktree_recycled_onto_land_branch_merged_but_not_pushed_is_still_caugh
     # branch checked out in two worktrees at once, and the main checkout
     # must stay on trunk throughout, exactly like the real /land pass this
     # models).
-    build_wt = repo / ".claude/worktrees/lode-x-build"
-    build_wt.parent.mkdir(parents=True, exist_ok=True)
-    _git(repo, "worktree", "add", "-q", str(build_wt), "-b", "land/lode-x", "trunk")
-    (build_wt / "landx.txt").write_text("lode-x's unreviewed build\n")
-    _git(build_wt, "add", "landx.txt")
-    _git(build_wt, "commit", "-q", "-m", "lode-x build commit")
+    build_wt = _add_worktree(
+        repo, ".claude/worktrees/lode-x-build", "land/lode-x", foreign_commit=True
+    )
     _git(build_wt, "push", "-q", "origin", "land/lode-x")
     land_x_sha = _git(build_wt, "rev-parse", "land/lode-x").stdout.strip()
     land_x_sha_short = _git(build_wt, "rev-parse", "--short", "HEAD").stdout.strip()
