@@ -61,28 +61,43 @@ Being the **single** lander is what serializes landing. v1 guarantees that with 
 **one machine**. (The distributed `refs/locks/land` ref for true concurrent multi-machine landing is
 a deferred upgrade, recorded in `docs/decisions.md` — **not** v1.)
 
+**This lock is real state that must span the whole pass, across every fenced block below — exactly
+the shape the governing rule above warns can't survive a `trap` or `$$` (lode-aps3).** A `trap 'CMD'
+EXIT` set in *this* block fires the instant *this block's own shell* exits, which is before Section 1
+even runs — releasing the lock immediately rather than at the end of the pass (OBSERVED LIVE,
+2026-07-27: two separate Bash invocations standing in for two ticks — the lock was already gone by
+the second one, see `bd show lode-aps3`'s notes for the reproduction). Worse, a PID recorded by *this*
+block is **always** dead by the time any *later* block reads it — a Bash tool invocation's shell has,
+by definition, already exited before control returns to the caller — so a `kill -0 $OWNER_PID`
+liveness check can never distinguish "the pass is still running, just between blocks" from "the pass
+crashed": it always reads dead. Neither a trap nor a PID check is state that can survive across the
+separate invocations this skill's blocks run in.
+
+**The fix (`scripts/land-lock.sh`, lode-aps3): no trap, no PID, a wall-clock staleness token
+instead.** The lock file records *when* it was acquired; a later `acquire` reclaims it only once that
+timestamp is older than `LAND_LOCK_STALE_SECONDS` (default 1800s/30min — generous enough that a
+genuinely still-running pass, mid land-review dispatch or combined re-gate, is never mistaken for
+dead). This staleness reclaim is the **sole** mechanism guaranteed to free an abandoned lock — it asks
+nothing of any particular exit site, so it can't be silently broken by a future "stop the pass" added
+somewhere below that forgets to release. `release` is called explicitly at the two points a normal
+pass is guaranteed to reach — the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)
+and the end of a full pass in [Section 4](#4-land-the-survivors) — purely to keep the common
+`/loop 5m /land` cadence tight; every other "stop the pass" exit (a 2b/lock_currency/mermaid
+machine-fault stop, an internal `$STATE_DIR` assertion failure) relies on the staleness reclaim rather
+than its own release call, a deliberate, bounded tradeoff (an aborted pass can hold the lock for up to
+`LAND_LOCK_STALE_SECONDS` before the next tick proceeds) — see the script's own header for the full
+reasoning.
+
 Before doing anything else, take the local lock. If another `/land` is still running on this machine
 (a long pass overrunning a `/loop` tick), **skip this tick cleanly and exit 0** — do not queue, do
 not run in parallel:
 
 ```bash
-LOCK="$(rtk git rev-parse --git-dir)/land.lock"   # under .git/ — per-machine, never committed
-if ! ( set -o noclobber; printf '%s\n' "$$ $(hostname) $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; then
-  # Lock exists. Reclaim only if its owner PID is dead (a crashed prior land), else skip.
-  OWNER_PID=$(awk '{print $1}' "$LOCK" 2>/dev/null)
-  if [ -n "$OWNER_PID" ] && kill -0 "$OWNER_PID" 2>/dev/null; then
-    echo "land: another /land (pid $OWNER_PID) is still running — skipping this tick."; exit 0
-  fi
-  echo "land: clearing stale lock from dead pid $OWNER_PID"; rm -f "$LOCK"
-  ( set -o noclobber; printf '%s\n' "$$ $(hostname) $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null \
-    || { echo "land: lost lock race — skipping this tick."; exit 0; }
-fi
-trap 'rm -f "$LOCK"' EXIT   # always release, including on error/escalate exit
+rtk scripts/land-lock.sh acquire || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
 ```
 
-`set -o noclobber` makes the `>` redirect fail atomically if the file already exists, so two ticks
-can't both think they own it. The `trap` releases the lock on **every** exit path. **Convention:**
-run the `/land` loop on **one machine only** — the local lock does not cross machines.
+**Convention:** run the `/land` loop on **one machine only** — the local lock does not cross
+machines.
 
 ---
 
@@ -146,8 +161,14 @@ the label, not a status, is the queue):
 rtk bd list --label ready-for-land --status in_progress --json
 ```
 
-If the queue is empty, there is nothing to land: release the lock and stop. Otherwise process the
-batch.
+If the queue is empty, there is nothing to land: release the lock and stop —
+
+```bash
+rtk scripts/land-lock.sh release   # empty queue -- normal completion, release now rather than
+exit 0                              # waiting out the staleness window for no reason
+```
+
+— otherwise process the batch.
 
 ---
 
@@ -1251,6 +1272,9 @@ git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | whi
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
   git branch -D "$BR" 2>/dev/null || true
 done
+
+rtk scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
+                                     # the staleness window (lode-aps3; see Section 0)
 ```
 
 `bd close` unblocks dependents — that is *why* the lander closes (the producer never does): a closed
