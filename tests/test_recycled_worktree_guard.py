@@ -1,4 +1,4 @@
-"""Tests for scripts/recycled-worktree-guard.sh (lode-ivth).
+"""Tests for scripts/recycled-worktree-guard.sh (lode-ivth, lode-isl3).
 
 The recycled-worktree guard (lode-nt98) used to be a ~15-line inline bash
 block duplicated at FOUR sites (.claude/agents/coding.md x2,
@@ -9,11 +9,22 @@ four copies had already started to drift from each other (lode-qv5t added a
 not the third). This extracts the guard to one script so it is covered by
 `nox -s shellcheck` and this suite.
 
+lode-isl3: the guard's predicate and remedy now read `origin/trunk`, never
+bare (local) `trunk`. Worktrees share `refs/heads/`, so bare `trunk` is the
+MAIN CHECKOUT's local `trunk` branch -- and `/land` leaves that ref carrying
+un-pushed, un-gated `--no-ff` merges for the entire window between its merge
+loop and its push, on the HEALTHY path, not just a crash path. Every repo
+built here therefore gets a real `origin` remote (a bare repo in `tmp_path`)
+so local `trunk` and `origin/trunk` can be made to diverge exactly the way a
+live `/land` pass diverges them -- tests that only ever pushed immediately
+could not exercise the residue window this ticket is about at all.
+
 All tests run the ACTUAL `scripts/recycled-worktree-guard.sh` against real
-git repositories (with real `git worktree add` checkouts) built in
-`tmp_path` -- no fake git, no mocked subprocess -- sabotage-provable per the
-lode-verb bar: reverting the script's `case` guard, its ancestor check, or
-its rescue-branch line directly would turn the corresponding test here red.
+git repositories (with real `git worktree add` checkouts and a real `origin`
+remote) built in `tmp_path` -- no fake git, no mocked subprocess --
+sabotage-provable per the lode-verb bar: reverting the script's `case` guard,
+its ancestor check, its `origin/trunk` reads, or its rescue-branch line
+directly would turn the corresponding test here red.
 """
 
 from __future__ import annotations
@@ -40,33 +51,69 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    """A throwaway repo with one commit on `trunk`, isolated user config."""
+    """A throwaway repo with a real `origin` remote and one commit on
+    `trunk`, pushed, isolated user config. `origin/trunk` is the ref the
+    guard now reads (lode-isl3); tests that need a residue window advance
+    local `trunk` without pushing, exactly as a live `/land` pass does."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "trunk", str(origin)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "trunk")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "test")
+    _git(repo, "remote", "add", "origin", str(origin))
     (repo / "f.txt").write_text("base\n")
     _git(repo, "add", "f.txt")
     _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "push", "-q", "-u", "origin", "trunk")
     return repo
+
+
+def _push_trunk(repo: Path) -> None:
+    """Advance `origin/trunk` to match local `trunk` -- the moment `/land`'s
+    Section 4 push happens, closing the residue window."""
+    _git(repo, "push", "-q", "origin", "trunk")
+
+
+def _advance_local_trunk_without_pushing(
+    repo: Path, filename: str, message: str
+) -> None:
+    """Commit directly onto local `trunk` in the main checkout WITHOUT
+    pushing -- models the un-pushed, un-gated residue `/land` leaves on
+    local `trunk` for the entire window between its merge loop and its
+    push (lode-isl3), whether from a healthy in-flight pass or a crash."""
+    _git(repo, "checkout", "-q", "trunk")
+    (repo / filename).write_text(f"{message}\n")
+    _git(repo, "add", filename)
+    _git(repo, "commit", "-q", "-m", message)
 
 
 def _add_worktree(
     repo: Path, rel_path: str, branch: str, *, foreign_commit: bool = False
 ) -> Path:
-    """A real `git worktree add`, branched off `trunk`.
+    """A real `git worktree add`, branched off `origin/trunk` -- matching
+    `worktree.baseRef: "fresh"` (lode-jzbz), what a genuinely fresh launch
+    worktree actually branches from.
 
     With `foreign_commit=True`, one extra commit is made in the new worktree
     -- simulating a previous ticket's build branch that had already
     committed work. That is exactly what makes `HEAD` fail
-    `git merge-base --is-ancestor HEAD trunk`: trunk doesn't contain the
-    extra commit, matching the production shape (lode-eshl) of a recycled
-    worktree still sitting on a foreign ticket's branch.
+    `git merge-base --is-ancestor HEAD origin/trunk`: `origin/trunk` doesn't
+    contain the extra commit, matching the production shape (lode-eshl) of a
+    recycled worktree still sitting on a foreign ticket's branch.
     """
     wt = repo / rel_path
     wt.parent.mkdir(parents=True, exist_ok=True)
-    _git(repo, "worktree", "add", "-q", str(wt), "-b", branch, "trunk")
+    _git(repo, "worktree", "add", "-q", str(wt), "-b", branch, "origin/trunk")
     if foreign_commit:
         (wt / "foreign.txt").write_text("someone else's ticket\n")
         _git(wt, "add", "foreign.txt")
@@ -104,8 +151,8 @@ def test_wrong_argument_count_exits_2(tmp_path: Path, script_args: list[str]) ->
 
 
 def test_clean_worktree_at_trunk_head_is_a_noop(tmp_path: Path) -> None:
-    """HEAD == trunk exactly (a genuinely fresh launch worktree): exit 0,
-    nothing rescued, nothing reset."""
+    """HEAD == origin/trunk exactly (a genuinely fresh launch worktree): exit
+    0, nothing rescued, nothing reset."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/fresh", "worktree-agent-fresh")
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
@@ -118,17 +165,15 @@ def test_clean_worktree_at_trunk_head_is_a_noop(tmp_path: Path) -> None:
     assert branches.strip() == ""
 
 
-def test_worktree_merely_behind_trunk_is_still_a_noop(tmp_path: Path) -> None:
-    """`trunk` advancing after the worktree was created (a normal fan-out
-    race) must NOT trip the guard: HEAD is still an ancestor of the new
-    trunk tip."""
+def test_worktree_merely_behind_origin_trunk_is_still_a_noop(tmp_path: Path) -> None:
+    """`origin/trunk` advancing after the worktree was created (a normal
+    fan-out race, or an ordinary `/land` push) must NOT trip the guard: HEAD
+    is still an ancestor of the new `origin/trunk` tip."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/behind", "worktree-agent-behind")
-    # Advance trunk in the main checkout after the worktree was branched.
-    _git(repo, "checkout", "-q", "trunk")
-    (repo / "g.txt").write_text("trunk moved on\n")
-    _git(repo, "add", "g.txt")
-    _git(repo, "commit", "-q", "-m", "trunk advances")
+    # Advance trunk in the main checkout AND push -- origin/trunk moves too.
+    _advance_local_trunk_without_pushing(repo, "g.txt", "trunk advances")
+    _push_trunk(repo)
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
     result = _run(wt)
@@ -137,11 +182,85 @@ def test_worktree_merely_behind_trunk_is_still_a_noop(tmp_path: Path) -> None:
     assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
 
 
-def test_contaminated_worktree_is_rescued_reset_and_cleaned(tmp_path: Path) -> None:
+def test_genuinely_fresh_worktree_is_a_noop_even_mid_land_residue_window(
+    tmp_path: Path,
+) -> None:
+    """lode-isl3's OTHER half -- the false-positive axis. The ticket's stated
+    expectation is that "the guard's verdict should not depend on whether a
+    `/land` pass happens to be mid-flight", which cuts both ways: the two
+    sibling tests pin that a CONTAMINATED verdict is reached correctly during
+    the residue window, and this one pins that a CLEAN verdict is left alone
+    by it. A genuinely fresh worktree sitting at `origin/trunk` while local
+    `trunk` carries un-pushed merges must stay an exact no-op -- no rescue
+    ref, no reset, nothing.
+
+    This is the single most common real state during the window this ticket
+    is about (a `/code` producer dispatched while `/land` is mid-pass, which
+    happens by design under the shared concurrency cap), and without it
+    nothing here would catch a future "hardening" that made the predicate
+    stricter than ancestry -- e.g. requiring `HEAD == origin/trunk`, or
+    re-introducing a comparison against local `trunk` -- which would nuke and
+    rescue-tag every healthy worktree dispatched during a land."""
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo, ".claude/worktrees/fresh-mid-land", "worktree-agent-fresh2"
+    )
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    # A live /land pass has merged into local trunk but not yet pushed.
+    _advance_local_trunk_without_pushing(
+        repo, "residue.txt", "unpushed --no-ff merge, land still in flight"
+    )
+    assert _git(repo, "rev-parse", "trunk").stdout.strip() != head_before
+
+    result = _run(wt)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "CONTAMINATED" not in result.stderr
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    assert _git(repo, "branch", "--list", "rescue/*").stdout.strip() == ""
+    assert not (wt / "residue.txt").exists()
+
+
+def test_unresolvable_origin_trunk_exits_2_without_accusing_the_worktree(
+    tmp_path: Path,
+) -> None:
+    """Reading a remote-tracking ref adds a failure mode bare `trunk` never
+    had: the ref may not resolve at all. `git merge-base --is-ancestor` exits
+    non-zero for both "not an ancestor" and "no such ref", and `if !` consumes
+    that status -- so without the explicit up-front check this fell into the
+    remediation branch, printed the CONTAMINATED banner about a perfectly
+    clean worktree, left a stray `rescue/recycled-<sha>` ref behind, and only
+    then died on `git reset --hard`'s own error (exit 128).
+
+    Required behaviour is lode-9i2p's: the machine could not be checked, so
+    say exactly that (exit 2) and make no claim about the content. This test
+    goes red if the `git rev-parse --verify origin/trunk` pre-check is
+    removed."""
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(repo, ".claude/worktrees/no-origin", "worktree-agent-no-origin")
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    # Drop the remote entirely -- origin/trunk no longer resolves anywhere.
+    _git(repo, "remote", "remove", "origin")
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/trunk")
+
+    result = _run(wt)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GUARD COULD NOT RUN" in result.stderr
+    # Must NOT accuse the worktree of carrying foreign commits...
+    assert "CONTAMINATED" not in result.stderr
+    # ...and must leave it exactly as found: no rescue ref, no reset.
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    assert _git(repo, "branch", "--list", "rescue/*").stdout.strip() == ""
+
+
+def test_contaminated_worktree_is_rescued_reset_onto_origin_trunk_and_cleaned(
+    tmp_path: Path,
+) -> None:
     """The core repro (lode-nt98/lode-eshl): a launch worktree recycled onto
     a foreign ticket's build branch. Must: tag the foreign HEAD as
-    rescue/recycled-<sha>, reset HEAD to trunk, and remove untracked
-    leftovers (git clean -fd)."""
+    rescue/recycled-<sha>, reset HEAD to origin/trunk (never bare local
+    trunk -- lode-isl3), and remove untracked leftovers (git clean -fd)."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(
         repo,
@@ -157,18 +276,109 @@ def test_contaminated_worktree_is_rescued_reset_and_cleaned(tmp_path: Path) -> N
     result = _run(wt)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    trunk_sha = _git(repo, "rev-parse", "trunk").stdout.strip()
-    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == trunk_sha
+    origin_trunk_sha = _git(repo, "rev-parse", "origin/trunk").stdout.strip()
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == origin_trunk_sha
     # The rescue tag is the durable pointer to the foreign commit -- it must
     # exist and resolve to exactly the commit HEAD was on before the reset,
-    # never to trunk.
+    # never to origin/trunk.
     rescue_sha = _git(
         repo, "rev-parse", f"rescue/recycled-{foreign_sha_short}"
     ).stdout.strip()
     assert rescue_sha == foreign_sha_full
-    assert rescue_sha != trunk_sha
+    assert rescue_sha != origin_trunk_sha
     assert not (wt / "leftover.tmp").exists()
-    assert not (wt / "foreign.txt").exists()  # trunk never had this file
+    assert not (wt / "foreign.txt").exists()  # origin/trunk never had this file
+
+
+def test_contaminated_worktree_resets_onto_origin_trunk_not_unpushed_local_residue(
+    tmp_path: Path,
+) -> None:
+    """lode-isl3 failure mode 1 (the reset-onto-residue hole): a genuinely
+    recycled worktree must be reset onto `origin/trunk`, not onto local
+    `trunk` while a `/land` pass has it carrying un-pushed, un-gated merges
+    of OTHER tickets. Resetting onto that residue would plant foreign,
+    un-gated commits into this build -- the exact contamination this guard
+    exists to prevent, arriving THROUGH the guard. This test would go red if
+    the script's remedy reverted to bare `git reset --hard trunk`."""
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo,
+        ".claude/worktrees/recycled-during-land",
+        "worktree-agent-other-ticket-2",
+        foreign_commit=True,
+    )
+    origin_trunk_sha_before = _git(repo, "rev-parse", "origin/trunk").stdout.strip()
+    # A live /land pass merges some OTHER ticket's branch into local trunk
+    # but has not yet reached its Section 4 push -- the residue window.
+    _advance_local_trunk_without_pushing(
+        repo, "residue.txt", "unpushed --no-ff merge of some other ticket"
+    )
+    local_trunk_sha = _git(repo, "rev-parse", "trunk").stdout.strip()
+    assert local_trunk_sha != origin_trunk_sha_before  # the window is open
+
+    result = _run(wt)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    reset_head = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    assert reset_head == origin_trunk_sha_before  # reset onto origin/trunk...
+    assert reset_head != local_trunk_sha  # ...never onto the un-pushed residue
+    assert not (
+        wt / "residue.txt"
+    ).exists()  # the other ticket's commit never landed here
+
+
+def test_worktree_recycled_onto_land_branch_merged_but_not_pushed_is_still_caught(
+    tmp_path: Path,
+) -> None:
+    """lode-isl3 failure mode 2 (the false-negative hole): a worktree
+    recycled onto a `land/<id>` branch that a live `/land` pass has already
+    merged into LOCAL trunk, but not yet pushed, must still be flagged as
+    contaminated -- `origin/trunk` has not advanced yet, so HEAD is not an
+    ancestor of it. Under the old bare-`trunk` predicate this passed
+    trivially (silent, no rescue, no reset) the moment local trunk absorbed
+    the merge; this test would go red if the predicate reverted to bare
+    `trunk`."""
+    repo = _init_repo(tmp_path)
+    # A previous ticket's build, pushed to origin as land/lode-x -- built in
+    # its OWN worktree (not the main checkout: git refuses to have the same
+    # branch checked out in two worktrees at once, and the main checkout
+    # must stay on trunk throughout, exactly like the real /land pass this
+    # models).
+    build_wt = _add_worktree(
+        repo, ".claude/worktrees/lode-x-build", "land/lode-x", foreign_commit=True
+    )
+    _git(build_wt, "push", "-q", "origin", "land/lode-x")
+    land_x_sha = _git(build_wt, "rev-parse", "land/lode-x").stdout.strip()
+    land_x_sha_short = _git(build_wt, "rev-parse", "--short", "HEAD").stdout.strip()
+    _git(repo, "worktree", "remove", "--force", str(build_wt))
+
+    # The harness recycles a launch worktree still checked out on land/lode-x.
+    wt = repo / ".claude/worktrees/recycled-onto-land-branch"
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    _git(repo, "worktree", "add", "-q", str(wt), "land/lode-x")
+
+    origin_trunk_sha_before = _git(repo, "rev-parse", "origin/trunk").stdout.strip()
+
+    # A live /land pass merges land/lode-x into local trunk -- but has not
+    # yet reached its Section 4 push. origin/trunk has NOT moved.
+    _git(repo, "checkout", "-q", "trunk")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge land/lode-x", "land/lode-x")
+    assert (
+        _git(repo, "rev-parse", "origin/trunk").stdout.strip()
+        == origin_trunk_sha_before
+    )
+
+    result = _run(wt)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Must have been flagged and repaired -- NOT a silent no-op.
+    assert "CONTAMINATED LAUNCH WORKTREE" in result.stderr
+    reset_head = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    assert reset_head == origin_trunk_sha_before
+    rescue_sha = _git(
+        repo, "rev-parse", f"rescue/recycled-{land_x_sha_short}"
+    ).stdout.strip()
+    assert rescue_sha == land_x_sha
 
 
 def test_reported_reason_names_lode_nt98_and_the_context_message(
@@ -178,7 +388,7 @@ def test_reported_reason_names_lode_nt98_and_the_context_message(
     wt = _add_worktree(
         repo,
         ".claude/worktrees/recycled2",
-        "worktree-agent-other-ticket-2",
+        "worktree-agent-other-ticket-3",
         foreign_commit=True,
     )
 
@@ -216,20 +426,23 @@ def test_dirt_axis_gap_closed_worktree_recycled_onto_an_already_landed_branch_st
     tmp_path: Path,
 ) -> None:
     """Pins the lode-3v1p fix: a worktree recycled onto a `land/<id>` branch
-    that has SINCE LANDED has a HEAD that is already an ancestor of trunk
-    (trunk fast-forwarded past it), so the ancestor check trivially passes
-    and the reset/rescue-branch remediation never runs -- exactly as it
-    would for a genuinely fresh worktree (harmless on the ancestry axis;
-    matches /land's own reclaim predicate). But `git clean -fd` now runs
+    that has SINCE LANDED (merged into trunk AND pushed to origin -- a
+    completed land, not merely an in-flight one) has a HEAD that is already
+    an ancestor of `origin/trunk`, so the ancestor check trivially passes and
+    the reset/rescue-branch remediation never runs -- exactly as it would for
+    a genuinely fresh worktree (harmless on the ancestry axis; matches
+    `/land`'s own reclaim predicate). But `git clean -fd` now runs
     unconditionally right after the check either way, so any untracked
     leftover from that prior build is still swept -- this test exists so
     nobody silently reintroduces the old dirt-axis gap by moving `clean -fd`
     back inside the `if` block."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/landed", "worktree-agent-landed-ticket")
-    # Simulate that ticket's branch having landed: fast-forward trunk to it.
+    # Simulate that ticket's branch having FULLY landed: fast-forward local
+    # trunk to it AND push -- origin/trunk advances too.
     _git(repo, "checkout", "-q", "trunk")
     _git(repo, "merge", "-q", "--ff-only", "worktree-agent-landed-ticket")
+    _push_trunk(repo)
     (wt / "leftover.tmp").write_text("dirt that must not survive the ancestry check\n")
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
