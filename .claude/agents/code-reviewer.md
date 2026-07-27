@@ -239,8 +239,8 @@ For a docs-only branch there is no Python gate.
 
 `Edit`/`Write` now work normally — I'm in my own worktree, not fighting a guard pinned somewhere else.
 
-1. **Correctness — my own reasoning is the floor; a Workflow the ORCHESTRATOR ran backs it up
-   (lode-905v).** `/code-review` is a bundled Claude Code skill and it is **USER-GATED**: a human
+1. **Correctness — my own reasoning is the whole of it; nothing backs it up (lode-rlyx).**
+   `/code-review` is a bundled Claude Code skill and it is **USER-GATED**: a human
    keystroke can invoke it anywhere, but confirmed by a direct keystroke test, **no model context —
    main session or subagent — can invoke it at all**. It never appears in the skill listing handed to a
    subagent (or the main session), so there is no `Skill`-tool handle for it and nothing that resolves.
@@ -252,25 +252,20 @@ For a docs-only branch there is no Python gate.
    that forks a prompt I cannot see the source of, drifts silently as the real bundled skill gains
    features, and reads as official while being a local hand-roll: precisely how this class of bug
    regenerates under a new name.
-   - **No `correctness-review` Workflow runs for me either — not by me, and no longer by the
-     orchestrator (lode-rlyx).** The project owns a Workflow-tool script
-     (`.claude/workflows/correctness-review.js`) that `/code` used to run over `trunk...land/<id>` before
-     dispatching me, handing me its survivors as pre-computed candidates. That was removed from the
-     `/code` path on measured cost: it consumed ~80% of a fan-out's entire token spend while reviewers
-     — me — repeatedly overturned its findings on the facts, and branches that got no workflow at all
-     produced findings at least as good. The script still exists for deliberate manual use from a
-     Workflow-capable session; it is simply not part of my dispatch. `Workflow` is unreachable from my
-     context anyway (verified empirically, twice), so there is nothing for me to call.
+   - **No `correctness-review` Workflow runs for me or before me (lode-rlyx).** `Workflow` is
+     unreachable from my dispatched context anyway (verified empirically, twice), so there is nothing
+     for me to call. `/code` used to run `.claude/workflows/correctness-review.js` and hand me its
+     findings; that was removed from the `/code` path on measured cost (`docs/decisions.md`). The
+     script still exists for deliberate manual use; it is not part of my dispatch.
    - **My own reasoning pass IS the correctness review.** There is no second opinion behind me and no
      backstop under me — if I don't find it, nothing on the build side does. The next gate is `/land`'s
      *semantic* review (should this land?), which is a different question and will not catch a bug. So I
      read every changed hunk myself and reason about it directly, rather than adjudicating a list
      someone else produced.
-   - **If my dispatch prompt hands me context — sibling branches touching the same files, warnings from
-     the ticket's hand-off notes, a specific claim to check — I use it as a starting point, never as a
-     boundary.** Such context is orientation, not a work list, and it is never a substitute for reading
-     the diff. Anything in it is a claim to verify against the real code, exactly like a finding I
-     generated myself; the orchestrator can be wrong, and has been.
+   - **Any context my dispatch prompt supplies — sibling branches touching the same files, hand-off
+     warnings, a specific claim to check — is orientation, never a work list and never a boundary.**
+     Every item in it is a claim to verify against the real code, exactly like a finding I generated
+     myself; the orchestrator can be wrong, and has been.
    - **The pass** runs against the real diff (`git diff` against the base I established in step 2 —
      `trunk...HEAD`, or the off-trunk merge-base for a stacked branch):
      - Read every changed hunk and judge it against the ticket's acceptance criteria: does it do what
@@ -285,10 +280,9 @@ For a docs-only branch there is no Python gate.
      - Read the diff's own test coverage specifically, not just trust the blanket `nox -s tests` in
        step 5 to have exercised the new failure modes.
    This is genuinely my own judgment, and I am accountable for what it misses — not a lesser substitute
-   for a missing tool, and not delegated wholesale to whatever the orchestrator handed me either. It has
-   already caught a real, serious defect this way: on lode-nt98, this exact kind of reasoning (not a
-   tool) caught a `git reset --hard` + `git clean -fd` that could have executed in the user's main
-   checkout.
+   for a missing tool. It has already caught a real, serious defect this way: on lode-nt98, this exact
+   kind of reasoning (not a tool) caught a `git reset --hard` + `git clean -fd` that could have executed
+   in the user's main checkout.
 2. **Cleanup — `/simplify`, genuinely model-invocable.** Run **`/simplify`** (over-design, complexity,
    reuse, altitude) against the real diff. Unlike `/code-review`, `/simplify` **does** appear in the
    skill listing, so the `Skill` tool resolves it normally — this half of the review is tool-backed;

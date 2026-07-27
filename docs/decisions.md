@@ -492,6 +492,10 @@ are catalogued in [configuration.md](configuration.md).
   "Tools: All tools" label for both subagent types is not a reliable guide to their actual runtime tool
   surface.
 
+  > **SUPERSEDED (lode-rlyx, 2026-07-27) — `/code` no longer invokes the workflow at all. Everything
+  > from here down to the lode-rlyx update at the end of this thread is the record of a design that was
+  > shipped and then removed; read that update before relying on any of it.**
+
   **Rescoped design (shipped): the orchestrator runs the workflow, the reviewer consumes its output as
   input.** `.claude/workflows/correctness-review.js` (FIND — one agent per correctness dimension:
   logic/edge cases, error handling, concurrency/ordering, API/contract misuse, test adequacy, sensitive
@@ -552,7 +556,9 @@ are catalogued in [configuration.md](configuration.md).
   single-pass recall caveat **lode-p5gf**.
 
   **The decision: parity with `/code-review` is NO LONGER the bar — this supersedes the paragraph
-  above.** correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
+  above.** *(Itself since SUPERSEDED by the lode-rlyx update at the end of this thread — the wiring
+  described in this paragraph no longer exists; "supersedes the paragraph above" was not terminal.)*
+  correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
   the reviewer's dispatch as pre-computed candidates, and the `code-reviewer`'s own hand-reasoned pass
   runs regardless of whether the workflow ran, errored, or returned nothing. A recall miss therefore
   *degrades the backstop on that run; it can never suppress the reviewer's own review*. So the honest
@@ -714,7 +720,12 @@ are catalogued in [configuration.md](configuration.md).
   longer runs it before dispatching a reviewer; the `code-reviewer`'s own reasoned pass **is** the
   correctness review, not a backstop to one.
 
-  **Why — measured, not asserted.** The 2026-07-26 fan-out (16 tickets dispatched) ran four workflow
+  **Why — measured, not asserted.** *Provenance of the figures below: the harness's per-agent token
+  accounting as reported in that invocation's task notifications, read by the orchestrating session as
+  the batch ran. They are not reproducible from anything in this repo and no artifact of them was
+  persisted — treat them as a faithful contemporaneous record, not as a citation a later reader can
+  independently check. The orders of magnitude are what the decision rests on, not the third digit.*
+  The 2026-07-26 fan-out (16 tickets dispatched) ran four workflow
   passes. They consumed **~8.1M subagent tokens, roughly 80% of the entire invocation's spend**, against
   ~1.6M for eleven builders and ~0.4M for five reviewers *combined*. That exhausted the operator's
   session limit in about twenty minutes, killing four in-flight reviewers mid-work and stranding more
@@ -745,7 +756,19 @@ are catalogued in [configuration.md](configuration.md).
   the fan-out was buying volume rather than accuracy. **Do not reintroduce it to the `/code` path
   without new evidence that it beats the reviewer's own pass per token** — the bar is comparative, not
   "does it ever find something real." It does find real things; so does the reviewer, for ~5% of the
-  cost.
+  cost. **What would actually meet that bar:** the head-to-head runbooks already written for exactly
+  this question — `specs/11-correctness-review-live-benchmark.md` (workflow vs. a real review on the
+  same diff) and `specs/12-correctness-review-recall-validation.md` (recall against known-seeded bugs)
+  — re-run with per-side token cost recorded alongside the findings, showing findings-per-token in the
+  workflow's favour on diffs the reviewer alone had already passed. Absent that, an argument that it
+  "would have caught X" is not evidence: the reviewer has to have *missed* X first.
+
+  **Enforcement is instruction-only, deliberately.** By the lode-kt6g rule (below), an
+  irreversible-and-public act earns a mechanical fence and a local-and-recoverable one earns
+  instruction — a stray workflow run costs only tokens. More decisively, a `PreToolUse` hook *could not
+  work here*: the forbidden call (inside `/code` Phase 2) and the deliberately retained one (a manual
+  one-off, or `specs/11`–`specs/13`) are the same tool, the same `scriptPath`, from the same main
+  session, so any deny broad enough to stop the first would destroy the second. Don't build one.
 
   **Consequences for dependent tickets.** `lode-arx1` (gate the workflow on diff content) was built and
   pushed before this decision and is now moot — a gate on a call that no longer happens. `lode-lgvv`
@@ -753,6 +776,21 @@ are catalogued in [configuration.md](configuration.md).
   guard) and `lode-dwtp` (make the unverified path demonstrable) all remain *correct* descriptions of
   real defects in a script that is now off the hot path; all five are **deferred rather than closed**, so
   nothing is discarded if the workflow is ever revived for manual use at scale.
+
+  **`lode-arx1`'s built branch is deliberately left on origin, and its stale `ready-for-code-review`
+  label was removed (lode-rlyx's technical review).** `origin/land/lode-arx1` (`157e44b`) edits the very
+  `/code` Phase 2 block this ticket deletes, so it can never merge cleanly again and must not be landed
+  as-is; if the workflow is ever revived, that branch is a design reference, not a mergeable change.
+  Deferring the ticket keeps it off `/land` (which queues on the `ready-for-land` label) and off
+  `/code`'s stranded-review sweep (which filters `--status in_progress`), but the ticket was still
+  carrying `ready-for-code-review` — inert only because of that status filter, and armed the moment
+  anyone moved it back to `in_progress` to un-defer it, at which point a reviewer would have been
+  dispatched at a moot branch and pushed it to `ready-for-land`. The label is gone; the deferred status
+  is now the single thing holding it. Two residues are accepted, not bugs: `/land` §1a enumerates
+  **every** `origin/land/*` ref for its stacked-branch graph, so a parked branch adds pairwise
+  merge-base work to every pass forever (bounded, and the graph is only consulted for branches actually
+  in the queue), and `/sweep` will list the five deferred tickets report-only each pass, which is the
+  intended visibility.
 
   **Update (lode-vs7g): eliminating the collision (lode-em6v, above) closed the *invisible*-worktree
   half of the leak, but not the *proactive-cleanup* half.** lode-em6v's own acceptance criterion 1 —

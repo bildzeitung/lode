@@ -418,27 +418,18 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    dispatches the reviewer directly once the hand-off verifies. The reviewer's own reasoned correctness
    pass **is** the correctness review — not a backstop to one.
 
-   This is a reversal of the earlier design (lode-905v), made on measured cost. In the 2026-07-26
-   fan-out, four workflow runs consumed **~8.1M subagent tokens — about 80% of the entire invocation's
-   spend** — against ~1.6M for eleven builders and ~0.4M for five reviewers combined, and exhausted the
-   operator's session limit in roughly twenty minutes, stranding more work than the batch landed. The
-   workflow was also single-flight (its per-dimension fan-out competes for the same memory budget
-   `CODE_MAX_CONCURRENT_AGENTS` protects, lode-2cf), so it serialized every reviewer dispatch behind it.
+   **The measure** (2026-07-26 fan-out): four workflow runs consumed **~8.1M subagent tokens, about 80%
+   of the entire invocation's spend** — against ~1.6M for eleven builders and ~0.4M for five reviewers
+   combined — exhausted the session limit in roughly twenty minutes, killed four in-flight reviewers,
+   and, being single-flight, serialized every reviewer dispatch behind them. Reviewers then repeatedly
+   **overturned** its findings on facts it had not checked, and the two branches that got no workflow
+   produced findings at least as good. Those figures come from that run's harness task notifications and
+   are not reproducible from this repo; the per-ticket evidence, their provenance, and the bar for ever
+   reinstating this live in `docs/decisions.md` (lode-rlyx).
 
-   What that spend actually bought did not justify it. Reviewers routinely **overturned** the workflow on
-   the facts: `lode-wtwb`'s reviewer refuted a four-finding cluster by checking the persisted artifacts of
-   the crash that motivated it, and rejected a `falsePositiveRate` finding outright; `lode-hwbm`'s
-   reviewer falsified its ticket's whole premise with two `bd list` calls. Meanwhile the two branches that
-   got **no** workflow at all (`lode-cs5u.1`, `lode-k9ef`) produced findings at least as good. Near-
-   duplicate survivors (nine entries for four bugs on one branch) also meant the reviewer had to
-   de-duplicate before it could even start. The signal was coming from the Opus reviewer's reasoning, not
-   from the fan-out.
-
-   `.claude/workflows/correctness-review.js` is **kept on disk** and remains manually invocable from a
-   Workflow-capable session — the `specs/11`–`specs/13` runbooks still reference it, and a deliberate
-   one-off review of a hairy diff is a reasonable use. It is simply no longer on the automatic `/code`
-   path. Nothing here should reintroduce it without new evidence that it beats the reviewer's own pass
-   per token.
+   `.claude/workflows/correctness-review.js` is **kept on disk** for deliberate manual use — the
+   `specs/11`–`specs/13` runbooks reference it — but is off the automatic `/code` path. Do not put it
+   back without new evidence that it beats the reviewer's own pass per token.
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
    **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
@@ -467,8 +458,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 
    Give the reviewer whatever *context* is genuinely useful — which sibling branches in this fan-out
    touch the same files, what the ticket's own hand-off notes warn about, any specific claim worth
-   checking. That is cheap and it demonstrably helps. What it must not be given is a fan-out's worth of
-   pre-computed findings to adjudicate.
+   checking. That is cheap. What it must not be given is a fan-out's worth of pre-computed findings to
+   adjudicate.
 
    **Reclaim its launch worktree the moment it returns — either outcome (lode-vs7g).** Run [step 0's
    reclaim block](#reclaim) with `ID` set to this ticket, right after collecting the reviewer's result
@@ -482,8 +473,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 5. **Relay each result to the user.** Agent final messages aren't shown to the user — surface what
    matters per ticket across **both** phases: that the build gates passed and the technical review +
    re-gate passed, the **`land/<id>`** branch and head SHA, and that it reached **`ready-for-land`**
-   (so `/land` can pick it up). If a
-   **builder** escalated, say so — it reverted to green, pushed,
+   (so `/land` can pick it up). If a **builder** escalated, say so — it reverted to green, pushed,
    applied `land-escalated`, did **not** hand off, and a human owes a build decision. If a **reviewer**
    escalated, likewise — green branch pushed, `land-escalated` set, not landable until the human
    decides. For a fan-out, give a per-ticket roll-up: which reached ready-for-land, which are still in
@@ -523,11 +513,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   `ready-for-code-review` — never in parallel with its own build. Don't dispatch a reviewer for a
   ticket that escalated at build time.
 - **Phase 2 runs NO `correctness-review` Workflow — the reviewer's own reasoned pass is the whole
-  correctness review (lode-rlyx).** This reverses lode-905v on measured cost: four workflow runs took
-  ~80% of one fan-out's entire token spend while reviewers repeatedly overturned their findings, and the
-  two branches that got no workflow produced findings at least as good. The script stays on disk for
+  correctness review (lode-rlyx, reversing lode-905v on measured cost).** The script stays on disk for
   deliberate manual use; it is off the automatic path. Rationale and numbers:
-  [the Phase 2 note above](#no-correctness-workflow) and `docs/decisions.md`.
+  [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
   checked out on a previous ticket's build branch, rather than a fresh one off `trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
