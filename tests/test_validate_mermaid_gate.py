@@ -136,14 +136,27 @@ def _assert_gate_could_not_run(
 ) -> None:
     """Assert the shared contract of every gate-could-not-run exit: code 2, so
     it can never be read as exit 1's "invalid mermaid"; the GATE COULD NOT RUN
-    banner; and — the whole point — not one per-doc FAIL line, because a broken
-    tool must never be mistakable for broken content."""
+    banner; this gate's own advisory trailer; and — the whole point — not one
+    per-doc FAIL line, because a broken tool must never be mistakable for
+    broken content.
+
+    The advisory assertion is load-bearing since lode-090f moved that trailer
+    out of the (structurally unskippable) function body and into a
+    GATE_ADVISORY array the script sets at file scope: a call site added ABOVE
+    that assignment still exits 2 with a correct banner, but silently emits
+    HALF the contract, and nothing else in the toolchain sees it -- not `set
+    -u` (the array is validly declared-empty), not shellcheck (SC2034 is
+    suppressed at the assignment), and not tests/test_gate_lib.py (which
+    exercises the library under its own controlled orderings, never a real
+    caller's). This assertion is the only thing that does. All three of this
+    script's call sites route through here, so it covers every one."""
     assert result.returncode == 2, (
         f"expected exit 2 (gate could not run), got {result.returncode}\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
     )
     assert "GATE COULD NOT RUN" in result.stderr
     assert says in result.stderr
+    assert "not a mermaid syntax error" in result.stderr
     assert "FAIL" not in result.stdout
     assert "FAIL" not in result.stderr
 
