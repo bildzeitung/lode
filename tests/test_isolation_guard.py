@@ -32,8 +32,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "isolation-guard.sh"
 

@@ -25,7 +25,7 @@
 # instead of stopping, which is the exact behavior this script forecloses).
 #
 # This closes the gap the same way lode-ivth closed lode-nt98's: a single,
-# shellcheck'd, unit-tested precondition, run as the FIRST executable action
+# lint-checked, unit-tested precondition, run as the FIRST executable action
 # of the cycle -- before bd show, before EnterWorktree is even considered,
 # before anything else.
 #
