@@ -169,16 +169,45 @@ I do **not** `git worktree add`, and I do **not** call `EnterWorktree`
 worktree from a subagent with a cwd override", and its `path` form rejects a cwd that "is the
 repository root"). Neither is needed: the harness already put me here.
 
+**Isolation guard (lode-ska2 / lode-jk44) — assert I actually landed inside a worktree at all,
+before touching anything, including checking my own branch name.** `isolation: "worktree"` has been
+observed handing a dispatched **`code-reviewer`** agent NO worktree whatsoever — cwd pinned to the
+main checkout at the repo root, on `trunk` — a DIFFERENT, more severe failure than the recycled-worktree
+case below (a worktree, just the wrong one). Both documented self-rescue routes were refused by the
+harness (`EnterWorktree(name=…)`: "cannot create a worktree from a subagent with a cwd override";
+`EnterWorktree(path=…)`: "the current working directory is the repository root, not an isolated
+worktree"), and nothing mechanical then stopped that dispatch from running `Edit`/`Write`/`nox -t fix`
+against the main checkout on trunk — only the English "if my cwd is trunk, stop" instruction held, and
+even then the incident's own agent invented an unsanctioned `git worktree add` + `git -C` workaround
+rather than actually stopping. This is the FIRST executable action of my cycle, ahead of even reading
+my own branch name, via `scripts/isolation-guard.sh` (lode-ska2), shellcheck'd and unit-tested the
+same way `scripts/recycled-worktree-guard.sh` (lode-ivth) is:
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+ISOGUARD="$TOP/scripts/isolation-guard.sh"
+rtk "$ISOGUARD" || {
+  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
+    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
+```
+
+**On a failure here, I stop — full stop.** I do **not** attempt `EnterWorktree` a second time, I do
+**not** attempt `git worktree add` + `git -C` as a self-rescue, and I do not run `Edit`/`Write`/`nox`
+against whatever checkout I landed in. This is a deliberate, documented decision (lode-ska2), not an
+oversight: `git worktree add` from a non-isolated cwd would mutate the *main checkout's* worktree
+registry — shared state I have no business touching — and auto-recovering from a broken dispatch would
+hide a harness bug an operator needs to see, in exchange for masking exactly the kind of silent damage
+this ticket exists to prevent. I stop and report the exact diagnostic the script printed; a human
+decides whether to retry the dispatch.
+
 I note my branch once — I need it nowhere except to confirm I'm off `trunk`; my push target is the
 derived `land/<id>` ref, not this branch name — then work entirely **in-cwd with plain git**:
 
 ```bash
 rtk git rev-parse --abbrev-ref HEAD     # my worktree branch; cwd IS the worktree, no -C needed
 ```
-
-**Safety check:** if `pwd` is the repo root (`…/lode`) instead of a path under `.claude/worktrees/`,
-I was launched without an isolated worktree — I **stop and report that** rather than edit on `trunk`.
-The main checkout is never mine to touch — not for editing, not for landing.
 
 **Recycled-worktree guard (lode-nt98) — assert I actually started at `trunk` HEAD, don't just trust
 the branch name.** The harness's `isolation: "worktree"` hand-off has been observed handing a
@@ -210,13 +239,14 @@ executable — report and stop) from the script *running* and legitimately exiti
 isolated worktree — the script has already printed that diagnostic itself; the `exit 1` here just
 propagates it).
 
-**The script's `case "$TOP" in */.claude/worktrees/*)` guard is the executable form of the pwd safety
-check above, placed in the same block as the destructive command it protects** — an English
-instruction upstream can be skipped or hand-waved under load; a `case` that `exit 1`s cannot. It also
-covers a broader precondition than the prose check above it (which only tests whether `pwd` is the
-repo root): a cwd that is neither the repo root nor a worktree — a subdirectory of the main checkout,
-say — passes that prose check as literally written but fails this `case`, so the destructive
-remediation below still never reaches the main checkout. Every other call site of this same script
+**The script's `case "$TOP" in */.claude/worktrees/*)` guard is placed in the same block as the
+destructive command it protects** — a `case` that `exit 1`s cannot be skipped or hand-waved under
+load the way an English instruction can. It is the same predicate `scripts/isolation-guard.sh` just
+asserted above, applied here a second time as the precondition for a *destructive* remediation
+(reset + clean) rather than a pure stop — belt and suspenders, not redundant: `isolation-guard.sh`
+already refused to let me get this far if I weren't in a worktree at all, but this `case` is what
+keeps the reset/clean below from ever reaching a cwd that is neither the repo root nor a proper
+worktree — a subdirectory of the main checkout, say. Every other call site of this same script
 (`code-reviewer.md`, `land-review.md`, and this file's own Rebase pickup cycle below) relies on the
 identical `case` guard inside the script — there is exactly one copy of this logic now, not four.
 
@@ -532,7 +562,27 @@ never kicked back), I stop and report — nothing to pick up.
 
 ### 2. Fetch `land/<id>` and check it out into my own launch worktree — never `EnterWorktree`, never the old build worktree
 
-**Recycled-worktree guard (lode-nt98) — first thing, before the fetch below.** The same harness
+**Isolation guard (lode-ska2 / lode-jk44) — before even the recycled-worktree guard below.** The same
+harness `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been
+observed handing a dispatched agent NO worktree at all — cwd pinned to the main checkout at the repo
+root, on `trunk` — a distinct, more severe failure than the recycled-worktree case below. This is the
+first executable action of this cycle too, via `scripts/isolation-guard.sh` (lode-ska2):
+
+```bash
+TOP=$(rtk git rev-parse --show-toplevel)
+ISOGUARD="$TOP/scripts/isolation-guard.sh"
+rtk "$ISOGUARD" || {
+  [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
+    "checkout may predate the script landing on trunk. STOP and report; do not proceed."
+  exit 1
+}
+```
+
+On a failure here I stop — full stop, same as the fresh-build cycle: no `EnterWorktree` retry, no
+`git worktree add` self-rescue, no fetch. See the fresh-build cycle's write-up of this same script for
+the full rationale (lode-ska2); it doesn't repeat here.
+
+**Recycled-worktree guard (lode-nt98) — next, before the fetch below.** The same harness
 `isolation: "worktree"` hand-off this cycle's own launch worktree came through has been observed
 handing a dispatched agent a **recycled** worktree still checked out on a *previous* ticket's build
 branch, carrying that ticket's commits, instead of a fresh branch off `origin/trunk` HEAD — confirmed in
@@ -556,8 +606,9 @@ rtk "$GUARD" "before my own fetch+checkout" || {
 ```
 
 **Both preconditions inside the script are load-bearing.** The `case` is what keeps
-`reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — this cycle
-has no `pwd` safety check of its own above it, unlike the fresh-build cycle. The `rescue/` branch
+`reset --hard`/`clean -fd` off the user's main checkout if isolation ever fails to take — belt and
+suspenders alongside the `isolation-guard.sh` call just above, which already refused to let this cycle
+get this far if cwd weren't inside a worktree at all. The `rescue/` branch
 keeps another ticket's unpushed commits recoverable, since the ref being rewound is *theirs*, not mine
 (see the fresh-build cycle above). The script's `git clean -fd` now runs unconditionally right after
 the `case`/ancestor check, not just on a failed one (lode-3v1p) — so a recycled worktree whose HEAD
@@ -794,12 +845,16 @@ own guidance); the cycle above already applies them, but the *why*:
   my own past-tense account destroys the only record of what was actually asked for, silently
   (lode-6fc). Check with `bd show <id> --json | jq -r '.[0].design // empty'` first — empty only.
 - **Working on `trunk`, or committing on any branch but my task's worktree branch.**
-- **Skipping `scripts/recycled-worktree-guard.sh`, or treating my launch worktree's branch name as
-  proof it's clean.** A `worktree-agent-…`-named branch can still carry a previous ticket's
-  unreviewed commits (lode-nt98) — run the guard before touching a file (fresh build) or before my
-  own fetch+checkout (rebase pickup), not just the branch name or `pwd`. Also: treating a missing or
-  non-executable guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of
-  stopping and reporting it.
+- **Skipping `scripts/isolation-guard.sh` or `scripts/recycled-worktree-guard.sh`, or treating my
+  launch worktree's branch name (or my `pwd`) as proof it's clean.** `isolation: "worktree"` has been
+  observed handing a dispatched agent no worktree at all (lode-ska2 — cwd pinned to the main checkout
+  on `trunk`) as well as a **recycled** worktree still on a previous ticket's build branch (lode-nt98)
+  — a `worktree-agent-…`-named branch can carry either fault and still *look* fine. Run
+  `isolation-guard.sh` first, `recycled-worktree-guard.sh` second, before touching a file (fresh
+  build) or before my own fetch+checkout (rebase pickup). Also: treating a missing or non-executable
+  guard script as license to proceed unguarded (lode-ivth's bootstrap gap) instead of stopping and
+  reporting it, and — specific to `isolation-guard.sh` — treating its exit 1 as an invitation to retry
+  `EnterWorktree` or invent a `git worktree add` self-rescue instead of actually stopping (lode-ska2).
 - **Pushing or handing off on a failing gate.**
 - **Recording an architectural decision in a bd note or memory instead of `docs/`.**
 - **Expanding a task's scope silently** instead of filing a follow-up issue.
@@ -838,6 +893,7 @@ own guidance); the cycle above already applies them, but the *why*:
 | Default branch | `trunk` (never edit, never land directly — the lander owns it) |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured); I **keep mine on disk** (the reviewer no longer drives it in place — it checks `land/<id>` out into its own worktree instead — and reclaiming it is `/land`'s job: its backstop sweep takes it once the ticket lands, lode-h1vn; not auto-removed) |
 | Worktree lock | `git worktree lock` it before step 4 (first action inside the worktree), `git worktree unlock` right after my first commit (end of step 6) — closes the pre-first-commit gap where a zero-divergence worktree reads as "merged into trunk" to `/land`'s backstop sweep (lode-oqr) |
+| Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST executable action, before even the recycled-worktree guard — the harness has handed a dispatched agent NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before touching anything (fresh-build step 3) or before my own fetch+checkout (rebase-pickup step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | My output | a green branch pushed to **`origin/land/<id>`** + the ticket marked **`ready-for-code-review`** (the code-reviewer then swaps it to `ready-for-land`) |
 | Review context | head SHA (`review_head`) is the only metadata field the hand-off writes — `review_worktree`/`review_branch` are retired (lode-2m89: nobody read them) (bd metadata, read via `bd show --json`) |

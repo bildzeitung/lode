@@ -297,9 +297,9 @@ flowchart TD
     T2 --> DISP
 
     DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off origin/trunk HEAD ·<br>baseRef: fresh, can lag local trunk)"]
-    WT --> GUARD{"pwd is repo root?"}
-    GUARD -->|"yes"| BAIL["STOP & report —<br>never write on trunk"]
-    GUARD -->|"no, in worktree"| RGUARD{"HEAD ancestor<br>of trunk?"}
+    WT --> GUARD{"isolation-guard.sh:<br>under .claude/worktrees/?<br>(lode-ska2)"}
+    GUARD -->|"no — no worktree<br>at all"| BAIL["Hard stop & report —<br>never EnterWorktree/<br>worktree add self-rescue"]
+    GUARD -->|"yes, in worktree"| RGUARD{"HEAD ancestor<br>of trunk?"}
     RGUARD -->|"no — recycled worktree,<br>foreign commits (lode-nt98)"| RESET["git reset --hard trunk<br>+ git clean -fd · report it"]
     RESET --> CLAIM
     RGUARD -->|"yes — clean"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
@@ -485,10 +485,12 @@ understood:
   and `coding.md`'s fresh-build site (step 3) each invoke the same
   `scripts/recycled-worktree-guard.sh`, which wraps its remediation in an explicit
   `case "$TOP" in */.claude/worktrees/*) ;; ... esac` on `git rev-parse --show-toplevel`, in the same
-  block as the destructive command. The fresh-build site additionally keeps the prose `pwd` safety
-  check a dozen lines above it as a first, human-readable line of defense, but the `case` is what
-  actually stops an agent whose `isolation: "worktree"` dispatch silently failed from letting
-  `reset --hard`/`clean -fd` reach the user's **main checkout** — which is what would turn a
+  block as the destructive command. Every call site also runs `scripts/isolation-guard.sh` (lode-ska2,
+  below) immediately before it — a mechanical, script-backed precondition, not the prose `pwd` check
+  this section used to describe here (that prose has since been replaced; see [Isolation guard
+  (lode-ska2 / lode-jk44)](#isolation-guard-lode-ska2--lode-jk44), below, for why). Either script's
+  `case` is what actually stops an agent whose `isolation: "worktree"` dispatch silently failed from
+  letting `reset --hard`/`clean -fd` reach the user's **main checkout** — which is what would turn a
   contamination guard into the more damaging bug.
 - **It records a `rescue/recycled-<sha>` branch before rewinding.** `git reset --hard` moves the
   *checked-out branch ref*, and in a recycled worktree that ref belongs to another ticket (the
@@ -592,6 +594,109 @@ guard-triggered `git reset --hard trunk` — across many `/code` and `/land` pas
   file a follow-up to retire the lode-nt98 guard family and revisit `worktree.baseRef: "head"`.
 - **If it keeps firing:** 2.1.216 did not address lode-nt98 for this repo's same-project case; the
   `baseRef` hypothesis (above) stands, and the guards stay.
+
+### Isolation guard (lode-ska2 / lode-jk44)
+
+**A DIFFERENT, more severe harness failure from the recycled-worktree guard above — a distinct
+sibling, deliberately not folded into `lode-nt98`.** That guard defends against a dispatched agent
+getting a *wrong* worktree (recycled, still on a previous ticket's branch — a worktree, just not this
+ticket's). This one defends against a dispatched agent getting **no worktree at all**.
+
+**The incident.** Discovered while technically reviewing `lode-b2bf`: a dispatched `code-reviewer`
+subagent's cwd was pinned to the **main checkout at the repo root**, checked out on `trunk` — not
+inside any worktree. `code-reviewer.md`'s own non-negotiable ("if my cwd is the repo root / `trunk`,
+stop and report") is an **English instruction**, not a mechanism, and nothing mechanical backed it:
+had the reviewer followed its documented happy path, it would have run `Edit`/`Write`/`nox -t fix`
+directly against the main checkout, on `trunk` — exactly what `CLAUDE.md`'s top-of-file rule forbids.
+Both documented self-rescue routes were refused by the harness itself: `EnterWorktree(name=…)` →
+"cannot create a worktree from a subagent with a cwd override"; `EnterWorktree(path=…)` → "the current
+working directory is the repository root, not an isolated worktree — switching is only available to
+sessions whose working directory is inside a worktree." The reviewer could not self-rescue into a
+worktree through any documented tool. It instead invented `git worktree add` + driving the new
+worktree via `git -C` and absolute paths mid-flight — an unsanctioned workaround, not a mechanism —
+and, this one time, completed the review correctly (`trunk` was never written). A second incidence
+(**lode-jk44**) reached the identical fault through a different route: a `code-reviewer` dispatched by
+`/code`'s **step-1 stranded-review sweep** (picking up a `ready-for-code-review` re-entry left by a
+human resolving a prior escalation — see `code/SKILL.md`'s step 1) rather than a normal Phase 2
+dispatch. `lode-jk44`
+is tracked as a **duplicate** of `lode-ska2` by human decision at land time (not closed by this
+ticket's own builder) — both are the same underlying fault, reached by two different dispatch paths,
+and `lode-jk44`'s one distinguishing acceptance criterion (cover the step-1-sweep-vs-Phase-2 question
+below) is folded into this write-up rather than built as a second, parallel fix.
+
+**Escalation from the same `/code` fan-out this incident came from: it silently disarms `/simplify`
+too.** The `Skill` tool executes in the agent's cwd. Under this fault that cwd is the main checkout on
+`trunk` — a clean tree with an **empty** diff. `/simplify` therefore analyzes nothing and returns a
+confident "nothing to change," indistinguishable from a genuine clean pass (this is `lode-k5e` reached
+by a second route). It also carries an apply-fixes mandate, so on the happy path it would have
+**written** to the main checkout, on `trunk`. Any review completed under this fault has had only half
+its mandate performed while still reading `ready-for-land`. Incidence that same invocation: **6 of 6**
+`code-reviewer` dispatches came up with no isolation worktree (`lode-k9ef`, `lode-sfnb`, `lode-6874`,
+`lode-3dlt`, `lode-b2bf`, `lode-u709`) — not a one-off.
+
+**Root cause: not determinable from this repo.** `isolation: "worktree"` is a harness feature
+implemented outside this codebase; nothing in `lode`'s own source, skills, or agent definitions
+controls whether the harness actually provisions a worktree before handing control to a dispatched
+subagent. What *is* determinable from this repo: **the step-1 stranded-review sweep and the normal
+Phase 2 dispatch pass identical `Agent`-tool parameters.** `code/SKILL.md`'s step 1 dispatches its
+stranded re-entries "exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, `isolation:
+"worktree"`, same prompt shape…)" (`code/SKILL.md`, step 1) — there is no branch in this repo's own
+dispatch logic that requests isolation differently between the two paths, and both incidents (`lode-ska2`
+via Phase 2, `lode-jk44` via the step-1 sweep) drew from the same code path in that regard. That rules
+out "lode's own skill forgets to pass `isolation: "worktree"` on one of the two paths" as the cause; it
+does not rule out (and this repo cannot rule in or out) a harness-side race or resource-pressure
+condition under concurrent fan-out that intermittently fails to provision the worktree regardless of
+which caller requested it. Given 6-of-6 in one invocation, "intermittent" undersells it — at minimum
+this incident's fan-out saw it as the *rule*, not the exception; whether that generalizes is unmeasured.
+
+**The decision this ticket had to make: is `git worktree add` + `git -C` the sanctioned recovery, or
+must the agent hard-stop and escalate?** `lode-ska2`'s own incident answered this empirically by
+accident — its reviewer invented the workaround mid-flight and it worked, that one time. **Decision:
+hard-stop, never self-provision.** Per `CLAUDE.md`'s "simplest solution first," and for three concrete
+reasons beyond just preferring the simpler option:
+
+1. **Auto-recovery hides a harness bug an operator needs to see.** A dispatch that silently limps along
+   on an improvised worktree looks, from the outside, identical to one that worked correctly — the
+   6-of-6 incidence above would have gone unnoticed indefinitely if every affected reviewer had quietly
+   self-provisioned and moved on. A hard stop forces the fault into a bd ticket and a human's attention
+   every time it happens, which is the only way an intermittent-at-best, unmeasured-at-worst harness
+   fault ever gets tracked, let alone fixed upstream.
+2. **`git worktree add` from a non-isolated cwd mutates shared state that isn't the agent's to touch.**
+   It writes into the **main checkout's** `.git/worktrees` registry — exactly the kind of main-checkout
+   mutation `CLAUDE.md`'s top-of-file rule exists to prevent, even though creating the worktree itself
+   is not directly destructive. An agent that has already established it cannot trust its own dispatch
+   is not the agent to be improvising further main-checkout writes.
+3. **A self-provisioned worktree is orphaned state nobody owns cleaning up.** Every worktree this fleet
+   creates through the documented paths (`isolation: "worktree"`, `EnterWorktree`) is reclaimed by
+   `/land`'s end-of-pass backstop sweep or `/code`'s own reclaim block, both keyed off conventions
+   (`.claude/worktrees/`, ticket-id-derived branch names) those paths guarantee. A `git worktree add`
+   invented ad hoc under fan-out pressure is not guaranteed to fit those conventions, risking either a
+   name collision with a concurrently-dispatched sibling or a worktree that never gets GC'd at all.
+
+**What ships:** `scripts/isolation-guard.sh` (lode-ska2), a sibling to
+`scripts/recycled-worktree-guard.sh`, shellcheck'd (`nox -s shellcheck`) and unit-tested
+(`tests/test_isolation_guard.py`) the same way `lode-ivth` covered the recycled-worktree guard. It
+asserts the single precondition "is cwd inside `.claude/worktrees/` at all" — the logically *prior*
+question to the recycled-worktree guard's "is it the *right* worktree" — and, unlike that guard, never
+repairs anything on failure: there is no safe way to fabricate an isolated worktree from a
+non-isolated context, so its only two outcomes are exit 0 (proceed) or exit 1 (a diagnostic that
+explicitly forecloses `EnterWorktree` and `git worktree add` as next steps, not just reports the
+problem). It runs as the **first executable action** of `coding.md`'s fresh-build cycle (step 3),
+`coding.md`'s rebase-pickup cycle (step 2, ahead of the recycled-worktree guard there too),
+`code-reviewer.md`'s step 2 (ahead of its recycled-worktree guard), and `land-review.md`'s first
+action — before `EnterWorktree` is even considered, closing the window in which the `lode-ska2`
+incident's reviewer improvised its workaround. Full call sites:
+[coding.md](../.claude/agents/coding.md), [code-reviewer.md](../.claude/agents/code-reviewer.md),
+[land-review.md](../.claude/agents/land-review.md).
+
+**What "mechanical, not by reading an instruction" means in practice here, honestly stated.** No
+component in this repo can force a dispatched LLM subagent to stop — that ceiling is real, and this
+fix does not pretend otherwise. What it changes: the *detection* is now a tested script rather than
+the model eyeballing its own `pwd`, and the calling docs no longer leave the agent a live decision
+point to fill with improvisation on failure — they name the one sanctioned response (stop, report) and
+explicitly rule out the two the `lode-ska2` incident's agent reached for instead. This is the same bar
+`lode-nt98`/`lode-ivth` shipped at and was accepted on; it is not a stronger guarantee than that
+precedent, and this doc does not claim it is.
 
 ### Concurrency cap (lode-2cf)
 
@@ -1172,6 +1277,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Default branch | `trunk` — **never** edit directly *and never landed by a producer*; `/land` owns every write to it |
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
+| Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
 | Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
