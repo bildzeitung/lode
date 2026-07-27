@@ -84,7 +84,9 @@ def _push_trunk(repo: Path) -> None:
     _git(repo, "push", "-q", "origin", "trunk")
 
 
-def _advance_local_trunk_without_pushing(repo: Path, filename: str, message: str) -> None:
+def _advance_local_trunk_without_pushing(
+    repo: Path, filename: str, message: str
+) -> None:
     """Commit directly onto local `trunk` in the main checkout WITHOUT
     pushing -- models the un-pushed, un-gated residue `/land` leaves on
     local `trunk` for the entire window between its merge loop and its
@@ -248,7 +250,9 @@ def test_contaminated_worktree_resets_onto_origin_trunk_not_unpushed_local_resid
     reset_head = _git(wt, "rev-parse", "HEAD").stdout.strip()
     assert reset_head == origin_trunk_sha_before  # reset onto origin/trunk...
     assert reset_head != local_trunk_sha  # ...never onto the un-pushed residue
-    assert not (wt / "residue.txt").exists()  # the other ticket's commit never landed here
+    assert not (
+        wt / "residue.txt"
+    ).exists()  # the other ticket's commit never landed here
 
 
 def test_worktree_recycled_onto_land_branch_merged_but_not_pushed_is_still_caught(
@@ -290,7 +294,10 @@ def test_worktree_recycled_onto_land_branch_merged_but_not_pushed_is_still_caugh
     # yet reached its Section 4 push. origin/trunk has NOT moved.
     _git(repo, "checkout", "-q", "trunk")
     _git(repo, "merge", "-q", "--no-ff", "-m", "merge land/lode-x", "land/lode-x")
-    assert _git(repo, "rev-parse", "origin/trunk").stdout.strip() == origin_trunk_sha_before
+    assert (
+        _git(repo, "rev-parse", "origin/trunk").stdout.strip()
+        == origin_trunk_sha_before
+    )
 
     result = _run(wt)
 
