@@ -64,12 +64,23 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 `land-escalated` query (it should never carry that label, but cheap insurance costs nothing):
 
 ```bash
-ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --json \
+ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
   | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)"')
 
 HUMAN=$(rtk bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
 ```
+
+**`--limit 0` on every `bd list` in this skill — the canonical reason, referenced from §2/§2a/§4.**
+`bd list --help` documents `--limit` with a default of 50 ("use 0 for unlimited"), and bd emits **no**
+truncation signal — it neither errors nor marks a short result. But measured on bd 1.1.0, the cap is
+applied only when `--limit` is passed *explicitly*; an omitted flag returns the full set (a bare
+`bd list --status closed --json` returns hundreds of rows, well past 50). So these queries are **not**
+truncating today — `--limit 0` pins the documented "unlimited" semantics so they stay correct if a
+later bd starts enforcing its own documented default. It matters most here: §6 rewrites the digest
+**wholesale** from `$CURRENT`, so a capped source query would drop items 51+ from the durable record,
+read as resolved, and re-notify as "new" on a later pass — §5's hard precondition in reverse.
+(`bd human list` exposes no `--limit` flag at all, so `$HUMAN` cannot be pinned the same way.)
 
 **Why `(. // [])` and not a bare `.[]`:** an *empty* `bd` result serializes as literal `null`, not
 `[]` (seen most often on `bd human list` when no `human` ticket is open). A bare `jq '.[]'` on that
@@ -110,9 +121,11 @@ while IFS=$'\t' read -r e TITLE; do
   # epics, which is why it reads fine in a one-epic spot check).
   CLOSABLE="${CLOSABLE}${ROW}
 "
-done < <(rtk bd list --type=epic --label epic-audited --status open --json \
+done < <(rtk bd list --type=epic --label epic-audited --status open --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 ```
+
+`--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
 
 ## 2a. Collect deferred tickets (report-only — never touches the digest or notify path)
 
@@ -129,11 +142,10 @@ DEFERRED=$(rtk bd list --status deferred --limit 0 --json \
 Same `(. // [])` null-empty guard as §1/§2 — and the same `@tsv` as §2, which escapes a tab or
 newline embedded in a title instead of letting it break the row.
 
-**`--limit 0` is load-bearing, not noise.** `bd list` defaults to `--limit 50` and that cap applies
-to `--json` too, with **no** truncation signal — bd neither errors nor marks the result short. Since
-this section promises the deferred list "in full, with no dedup" every pass, a default-capped query
-would silently under-report past 50 while the §8 count read as the true total. `0` means unlimited.
-(§1/§2/§4 carry the same unbounded pattern — out of scope here, tracked in `lode-hwbm`.)
+**`--limit 0` — same reason as §1.** The stake specific to this section: it promises the deferred list
+"in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8 count
+still read as the true total. (Other skills — and `scripts/epic-children-closed.sh`, called from §2
+above — still carry unbounded `bd list` calls; audited separately in `lode-2gun`.)
 
 **Deliberately excluded from everything else in this skill:**
 
@@ -161,9 +173,15 @@ scratchpad state file was explicitly rejected during design because it re-notifi
 from a second machine. The digest issue is found by a **reserved label**, not a remembered ID:
 
 ```bash
-DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --json)
+DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --limit 0 --json)
 N=$(echo "$DIGEST_ROWS" | jq '(. // []) | length')   # `(. // [])` for the same null-serializes-empty reason as §1
 ```
+
+**`--limit 0` here is uniformity, not a guard against a reachable failure.** A cap could not hide a
+duplicate digest even if it applied: truncation yields `N = min(actual, 50)`, so `N == 1` implies
+`actual == 1`, and ≥51 digest rows would read as `N == 50` and still trip the `N > 1` path below. The
+flag is passed anyway so every `bd list` in this skill reads the same way and none looks like an
+oversight a later edit should "tidy" away.
 
 - **`N == 0`** — bootstrap. Only create it if `$CURRENT` is non-empty (an empty queue with no prior
   digest is a clean no-op — nothing to bootstrap, nothing to write). Create it with a **placeholder
