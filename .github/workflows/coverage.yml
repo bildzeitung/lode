@@ -13,7 +13,7 @@ name: coverage
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
 # narrowed to trunk + land/** so this workflow (as heavy as tests.yml: a full
-# `-e .[dev]` install plus reranker/embedder weights, running the full suite
+# dependency install plus reranker/embedder weights, running the full suite
 # a second time) doesn't also fire on a v* tag push or other non-push refs.
 # No tags-ignore needed -- defining only `branches` already excludes tag
 # pushes; see docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
@@ -58,24 +58,15 @@ jobs:
         # it isn't there, so a bare `pip install -e '.[dev]'` would leave
         # `nox -s coverage` below aborting on every run.
         #
-        # Installs from the committed, hash-verified requirements.lock, same
-        # as tests.yml, rather than resolving fresh (`--unlocked`) —
-        # `lode-7byn`: this workflow's own founding commit (lode-qxdn.3)
-        # states the design intent as running "the SAME full suite nox -s
-        # tests certifies... so the coverage number describes the suite the
-        # tests badge backs, not a narrower one" — i.e. parity with tests.yml
-        # was the goal from day one. It predates requirements.lock by one day
-        # (lode-g274.1) and used a fresh resolve only because there was no
-        # lock yet to install from; that was never a deliberate choice to
-        # measure a different dependency set, and coverage.yml was later left
-        # alone when the lock landed purely on scope grounds (`lode-g274.6`'s
-        # commit message: "report-only... neither is in this ticket's
-        # scope"), not because fresh-resolve was decided as correct for
-        # coverage. Locking this leg restores that original parity intent —
-        # see docs/stack.md's dependency-locking section for the full
-        # history. The GITHUB_PATH line then puts the venv ahead of the
-        # ambient interpreter for the `python`/`nox` steps below, exactly as
-        # tests.yml does.
+        # No `--unlocked`: this leg installs the committed, hash-verified
+        # requirements.lock, exactly as tests.yml does, so the coverage number
+        # describes the same dependency set the tests badge backs and is
+        # reproducible from committed bytes. That parity is a decision
+        # (lode-7byn), not an accident -- for why this leg resolved fresh
+        # until then, and what the lock does and does not cover here, see
+        # docs/stack.md#dependency-locking-lode-g2741. The GITHUB_PATH line
+        # then puts the venv ahead of the ambient interpreter for the
+        # `python`/`nox` steps below, exactly as tests.yml does.
         run: |
           ./scripts/python-init.sh
           echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"

@@ -137,9 +137,8 @@ Two files, two jobs — **never pin the same thing in both**:
   fails loudly instead if the project venv (or the tool inside it) is missing. Because it fails
   closed, **any CI workflow running one of those sessions must build `./venv` first** — installing
   the dev extra into the runner's ambient interpreter is no longer enough, which is why
-  `coverage.yml` calls `scripts/python-init.sh` (no flag) instead of `pip install -e '.[dev]'`,
-  same as `tests.yml`. Deliberately **not**
-  applied to the `build` session, which shells out to ambient `python -m build` on purpose —
+  `coverage.yml` calls `scripts/python-init.sh` instead of `pip install -e '.[dev]'`. Deliberately
+  **not** applied to the `build` session, which shells out to ambient `python -m build` on purpose —
   `build.yml`/`release.yml` run it with no `./venv` at all, since packaging resolves its own
   isolated PEP 517 env and never touches the dev-extra/lock tools this guarantee exists to pin —
   nor to `lock_currency`, which resolves `uv` itself (a separate, system-wide tool never installed
@@ -153,6 +152,27 @@ step can't silently re-resolve — and un-pin — what step one just hash-verifi
 extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and resolves everything
 fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
 regenerating the lock or probing an upstream bump before committing to it.
+
+**Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
+`tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
+It landed a day *before* `requirements.lock` existed (`lode-qxdn.3`), so its fresh
+`pip install -e '.[dev]'` was the only option there was, never a decision to measure a different
+dependency set — that commit's stated goal was parity with `nox -s tests` on *which tests run*
+("no marker filter, slow tests included … the suite the tests badge backs, not a narrower one"),
+and it said nothing either way about dependencies. `lode-g274.6` then left the leg alone on scope
+grounds ("report-only … neither is in this ticket's scope"), and `lode-0yfn`'s review preserved the
+fresh resolve deliberately rather than decide it. With no affirmative reason anywhere on record for
+the coverage number to describe a *different* dependency set than the tests badge, `lode-7byn`
+dropped `--unlocked`: both legs now run the identical install, so a coverage percentage is
+reproducible from committed bytes instead of from whatever resolved on the day it ran.
+
+**What that parity does not cover.** The lock is the runtime set only, so both legs still resolve
+`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (step three above) — `lode-7byn` pinned
+the code under measurement, not the tools doing the measuring. The counter-case for resolving fresh
+here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
+toothless on this leg: `coverage.yml` enforces no threshold, so such a drift fails nothing and
+attributes nothing, and the runtime-set drift signal that *does* fire is the `lock-currency` job
+below.
 
 ### Ruff's lint rule set (settled `lode-cs5u`)
 
@@ -204,11 +224,9 @@ own copy of the `uv pip compile` command string:
   `pyproject.toml` constraint forces it — an upstream release alone reproduces the committed lock
   byte-for-byte, and `git diff --exit-code requirements.lock` catches any real drift. `build.yml`
   never installs lode's runtime deps at all (`python -m build` resolves in its own isolated env), so
-  this job doesn't apply there. `coverage.yml` also doesn't run this `lock-currency` verification job
-  itself (it stays `tests.yml`-only) — but `coverage.yml`'s own install step *does* install from
-  `requirements.lock` (`lode-7byn`), same as `tests.yml`'s `tests` job, so the coverage number
-  describes the same dependency set the tests badge does; see the "Dependency locking" section above
-  for the history of why that wasn't always true.
+  the lock is irrelevant there. `coverage.yml` installs *from* the lock (`lode-7byn`) but does not
+  re-verify its currency: being report-only (`lode-qxdn.3`, no merge-gate status), it leaves that to
+  the single `lock-currency` job here — one commit, one currency check.
 - **Local pre-flight (`lode-sys4`):** `nox -s lock_currency` (`noxfile.py`) is the same check,
   runnable on any dev machine — it seeds a scratch copy with the committed lock (mirroring CI's
   in-place recompile so the preference-seeding behaves identically), recompiles it via
