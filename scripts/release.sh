@@ -63,31 +63,29 @@ if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; the
   exit 1
 fi
 
-# SemVer monotonicity: $1 > $2, both bare X.Y.Z (no leading 'v').
-version_gt() {
-  local -a a b
-  IFS=. read -ra a <<< "$1"
-  IFS=. read -ra b <<< "$2"
-  for i in 0 1 2; do
-    if [ "${a[i]}" -gt "${b[i]}" ]; then return 0; fi
-    if [ "${a[i]}" -lt "${b[i]}" ]; then return 1; fi
-  done
-  return 1
-}
-
-LATEST=""
-for t in $(git tag -l 'v*'); do
-  tv="${t#v}"
-  case "$tv" in
-    [0-9]*.[0-9]*.[0-9]*) ;;
-    *) continue ;;
-  esac
-  if [ -z "$LATEST" ] || version_gt "$tv" "$LATEST"; then
-    LATEST="$tv"
+# SemVer monotonicity gate, via the shared scripts/release-latest-tag.sh
+# (lode-b2bf) -- this used to be an inline tag-selection loop + version_gt()
+# comparator duplicated (and free to drift) between this file and
+# .claude/skills/release/SKILL.md; see that script's header comment for the
+# full extraction rationale.
+#
+# NOTE: this is deliberately `if scripts/... ; then : ; else ... fi`, never
+# `if ! scripts/... ; then`. Negating the condition with `!` would still
+# branch correctly, but `!` collapses EVERY non-zero status to 0, so `$?`
+# inside the branch reads 0 whether the script really exited 1 or 2 --
+# verified by hand -- making it impossible to tell "does not exceed" (exit 1)
+# apart from "machine fault" (exit 2) once inside the branch. The empty
+# `then :` arm is what lets the real status survive into `else`.
+if scripts/release-latest-tag.sh --gt "$VERSION"; then
+  :
+else
+  status=$?
+  if [ "$status" -eq 2 ]; then
+    echo "release.sh: scripts/release-latest-tag.sh could not run -- see its stderr above" >&2
+    exit 1
   fi
-done
-if [ -n "$LATEST" ] && ! version_gt "$VERSION" "$LATEST"; then
-  echo "release.sh: $VERSION does not exceed latest existing tag v$LATEST" >&2
+  LATEST="$(scripts/release-latest-tag.sh)"
+  echo "release.sh: $VERSION does not exceed latest existing tag $LATEST" >&2
   exit 1
 fi
 
