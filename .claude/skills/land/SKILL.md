@@ -157,11 +157,10 @@ the label, not a status, is the queue):
 rtk bd list --label ready-for-land --status in_progress --limit 0 --json
 ```
 
-**`--limit 0` is load-bearing, not noise.** `bd list --help` documents a default cap of 50 on
-`--json` output with no truncation signal (bd neither errors nor marks a short result) — same fact
-`lode-hwbm` pinned in `/sweep`. Here a truncated read wouldn't lose a branch outright (an
-unprocessed item just waits for next pass), but it would silently under-report and under-land a
-large backlog every pass with nothing in this section's own output saying so. `0` means unlimited.
+**`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
+hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
+truncated read wouldn't lose a branch outright (an unprocessed item just waits for the next pass), but
+it would silently under-report and under-land a large backlog, every pass.
 
 If the queue is empty, there is nothing to land: release the lock and stop —
 

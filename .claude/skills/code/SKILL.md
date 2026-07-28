@@ -121,10 +121,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    rtk bd list --label needs-rebase --status in_progress --limit 0 --json
    ```
 
-   **`--limit 0` is load-bearing, not noise** — `bd list --help` documents a default cap of 50 on
-   `--json` output with no truncation signal, same fact `lode-hwbm` pinned in `/sweep`. A capped read
-   here would silently strand kick-backs past the 50th every invocation, with nothing in this step's
-   own output saying so. `0` means unlimited.
+   **`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
+   hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
+   capped read would silently strand kick-backs past the 50th, every invocation.
 
    For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
    "worktree"`** — required for the same reason as Phase 1 below: a subagent is pinned at the repo

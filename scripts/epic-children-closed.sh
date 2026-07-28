@@ -45,10 +45,10 @@ epic_id="${1:?usage: epic-children-closed.sh <epic-id>}"
 # CLOSED child -- i.e. exactly the children that make an epic complete -- turning
 # this into a check that never fires.
 #
-# --limit 0 is load-bearing, not noise (lode-2gun, same fact lode-hwbm pinned in
-# /sweep's SKILL.md): `bd list --help` documents a default cap of 50 on --json
-# output with no truncation signal. This site is worse than most: the jq check
-# below is `all(.[]; .status == "closed")` over whatever rows come back, so an
+# --limit 0 is load-bearing, not noise (lode-2gun). The canonical reason, the bd
+# 1.1.0 measurements, and why this is HARDENING rather than a live fix all live
+# in /sweep's SKILL.md (lode-hwbm). The stake is highest at this site: the jq
+# check below is `all(.[]; .status == "closed")` over whatever rows come back, so an
 # epic with >50 children whose 51st-and-later child is still OPEN would read a
 # silently truncated first-50 window and report "true" -- a false "all closed"
 # that flags the epic ready-to-audit (or ready-to-close) while real work is
