@@ -97,6 +97,7 @@ import asyncio
 import importlib.util
 import ipaddress
 import logging
+import os
 import socket
 import sys
 import time
@@ -109,6 +110,39 @@ from textual.pilot import Pilot
 
 import lode
 from lode.config import model_cache_dir
+
+#: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module gets a chance to
+#: import ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
+#: ``console`` docstring, and lode-xgaa). rich's ``Console()`` freezes its ``is_terminal`` /
+#: ``no_color`` / ``is_interactive`` decision at CONSTRUCTION -- for those module-level
+#: singletons that is IMPORT time -- so an ambient ``FORCE_COLOR`` (or similar) sitting in the
+#: shell that launched pytest silently reddens every test that asserts plain, uncoloured CLI
+#: output, on an otherwise-unmodified tree (OBSERVED landing a real /land pass, lode-kq4v).
+#:
+#: This MUST be plain top-level module code, not an autouse fixture: a fixture runs at test
+#: SETUP, strictly after collection has already imported every test module -- which is the exact
+#: no-op trap lode-xgaa already documented for ``monkeypatch.setenv("NO_COLOR", "1")`` after
+#: import. conftest.py for a directory is always imported before any test module in that
+#: directory (pytest's own collection order), which is what makes plain module-level code here
+#: early enough -- including once per ``pytest-xdist`` worker process, each of which imports this
+#: file fresh before importing any test module of its own.
+#:
+#: Verified against the installed rich (``rich/console.py``, 15.0.0) by direct source
+#: inspection: ``FORCE_COLOR`` and ``TTY_COMPATIBLE`` can each force ``is_terminal`` on
+#: regardless of pytest's captured (non-tty) stdout; ``TTY_INTERACTIVE`` forces
+#: ``is_interactive`` the same way; ``NO_COLOR`` forces colour off (harmless to this suite
+#: either way -- scrubbed anyway so the decision is deterministic rather than
+#: environment-dependent in either direction). Those four are the ONLY env vars
+#: ``Console.__init__``/``is_terminal`` read directly for this decision.
+#: ``CLICOLOR_FORCE`` -- named explicitly in lode-kq4v's audit requirement -- is NOT read by
+#: this rich version at all (confirmed by grepping ``rich/console.py``): there is nothing for it
+#: to force, so it is deliberately not scrubbed. ``COLORTERM``/``TERM`` are read only to pick a
+#: colour *system* once ``is_terminal`` is already ``True``; with the vars above cleared,
+#: ``is_terminal`` reliably reads ``False`` under pytest's captured stdout, so that branch is
+#: never reached and those two need no scrubbing.
+for _color_env_var in ("FORCE_COLOR", "NO_COLOR", "TTY_COMPATIBLE", "TTY_INTERACTIVE"):
+    os.environ.pop(_color_env_var, None)
+del _color_env_var
 
 #: Root of the checkout that owns *this* conftest — the anchor guard 0 compares
 #: against. Deliberately derived from ``__file__`` rather than ``Path.cwd()``:

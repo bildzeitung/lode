@@ -267,16 +267,26 @@ own copy of the `uv pip compile` command string:
   and a reachable PyPI on **every** invocation. CI's `lock-currency` job installs `uv` itself first,
   so the uv-absent path only bites a developer machine or `/land`'s local pre-flight — the public CI
   badge still catches a stale lock in that case, just later.
-- **Attribution needs a baseline, not just an exit code (`lode-sys4`).** `/land`'s isolation-replay
-  loop finds a culprit by merging the accepted branches one at a time and blaming the one that turns
-  the gate red. That is sound for `nox -s tests`, which asks a question about the tree alone. It is
-  *not* sound for `lock_currency`, which asks whether the committed lock is a fixed point of the tree
-  **plus the ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a
-  `uv` release that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`,
-  so the lander's resolver can differ from the one that produced the committed lock). So `/land` runs
-  the gate once on bare `origin/trunk` before entering the loop: red there means the staleness
-  predates every branch in the set and is not attributable to any of them — stop the pass, don't
-  isolate.
+- **Attribution needs a baseline, not just an exit code (`lode-sys4`, extended to `nox -s tests` by
+  `lode-kq4v`).** `/land`'s isolation-replay loop finds a culprit by merging the accepted branches
+  one at a time and blaming the one that turns the gate red. That is **not** sound for either gate
+  taken unconditionally — `nox -s tests` does *not* ask a question about the tree alone, despite
+  once being recorded here as if it did: it is sensitive to ambient env vars a landing session's own
+  shell can carry, and `lode-kq4v` observed exactly that in production — an ambient `FORCE_COLOR=3`
+  in the landing session's environment (never set anywhere in this repo) froze rich's `Console()`
+  colour detection at import (`lode-xgaa`'s mechanism) and reddened 6 CLI tests on a bare, unmodified
+  `origin/trunk` with no branch involved at all. `lock_currency` fails the same soundness test for a
+  different reason: it asks whether the committed lock is a fixed point of the tree **plus the
+  ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a `uv` release
+  that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`, so the
+  lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  **both** gates once on bare `origin/trunk` before entering the loop: red on either one there means
+  the failure predates every branch in the set and is not attributable to any of them — stop the
+  pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars
+  rich reads — `FORCE_COLOR`/`NO_COLOR`/`TTY_COMPATIBLE`/`TTY_INTERACTIVE` — at collection time for
+  every pytest invocation, closing the root cause `lode-kq4v` found; the baseline here is the
+  independent blast-radius fix, so `/land` stays safe even against a *different* source of
+  tree-alone-defying redness nobody has scrubbed yet.)
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
