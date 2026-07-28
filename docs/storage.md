@@ -1263,9 +1263,10 @@ persist nothing, so a revision change there alters ranking/gating going forward 
 the stored index; they are out of scope for a manifest. The enrichment LLM *is* in the
 epic's scope for the same DB-invalidation reason the embedder is, but is tracked separately
 ([decided, lode-g274.5](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
-— it collapses to a `docs/configuration.md` edit because Anthropic's model aliases (the only
-provider when this was decided, 2026-07-21) have no dated per-revision identity to pin against, so
-it needs no schema work here.
+— it collapses to a `docs/configuration.md` edit because enrichment provenance is recorded per-row
+from the configured model id and drift is detected from it, with nothing per-revision pinned, so it
+needs no schema work here. (Whether a dated-snapshot form even *exists* to pin against varies per
+model — configuration.md owns that, along with the open question it raises; see the link above.)
 
 This section settles the two axes `lode-g274.4`/`lode-g274.7` were both blocked on. They are
 **orthogonal**, not one decision — conflating them (as the epic originally did) is exactly what

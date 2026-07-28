@@ -2327,6 +2327,23 @@ are catalogued in [configuration.md](configuration.md).
   gains an explicit pinned-SHA source of truth, which — unlike the runtime-only DETECT manifest —
   *would* become a genuine git-committed build constant, parallel to `_MODEL_CACHE_IDENTITY`).
 
+- **Enrichment LLM: does its default having a dated-snapshot form reopen PIN-vs-DETECT?
+  (lode-sdjb).** `lode-g274.5`'s enrichment-LLM decision ([configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
+  assumed no PIN axis existed here, because no current-generation Anthropic ID had a dated-snapshot
+  form to pin against. That premise is false for `enrichment_llm`'s own default:
+  `claude-haiku-4-5-20251001` exists (verified against the `claude-api` skill's model catalog),
+  unlike the Q&A tiers' current defaults, which have none. So a pinnable identifier does exist for
+  the model whose output actually persists into the DB. Corrected at the source; **unowned, not
+  decided here.** Whether to adopt PIN for `enrichment_llm` (recording and verifying the dated
+  snapshot rather than just the bare id) is a real design question now that a lever demonstrably
+  exists. Note the embedder-pinning entry above defers for a cost that does **not** transfer — lode
+  never downloads an Anthropic model, so there is no download path to take ownership of — but a
+  nearer one does: a dated snapshot is retired on the vendor's schedule, so pinning one means owning
+  that migration, and dated-snapshot availability is not itself stable enough to build a permanent
+  mechanism on (a future model swap could remove the option again).
+  **Revisit if:** enrichment silent-drift is ever observed in practice (mirrors the embedder entry's
+  own revisit trigger), or when `enrichment_llm`'s default model next changes.
+
 - **2026-07-23 (lode-568v.1) — LLMProvider vendor-neutral seam pinned; design-first ahead of any
   provider code.** Full write-up: [stack.md — LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1).
   Settled so `lode-568v.2` (Anthropic behind the seam) and `lode-568v.3` (OpenAI-via-Azure) build
