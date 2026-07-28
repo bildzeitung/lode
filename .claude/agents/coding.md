@@ -275,7 +275,8 @@ below invokes the same script, with a different context message (lode-ivth). The
 internals now fold in lode-3v1p's fix too: `git clean -fd` runs unconditionally right after the
 `case`/ancestor check, not just inside the failed-ancestor-check branch, so a worktree recycled onto
 a `land/<other-id>` that has *since landed* — whose `HEAD` is already an ancestor of `origin/trunk`,
-passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the script's own header comment and
+passing the check trivially — still gets its untracked leftovers swept. Full reasoning lives in the
+script's own header comment and
 [docs/decisions.md](../../docs/decisions.md) (search "lode-3v1p") — one place, not duplicated
 across every call site, which is the whole point of the extraction.
 

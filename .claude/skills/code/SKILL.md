@@ -522,8 +522,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   builder pushed a foreign, unreviewed ticket's commit riding along on `land/lode-eshl`). The shipped
   mitigation is defensive and lives in the agents, not here: both `coding.md` and `code-reviewer.md`
   now assert `git merge-base --is-ancestor HEAD origin/trunk` (never bare local `trunk` — lode-isl3)
-  before doing any work in-worktree and
-  self-repair on a mismatch, reporting it explicitly rather than silently building on contamination.
+  before doing any work in-worktree, and self-repair on a mismatch, reporting it explicitly rather
+  than silently building on contamination.
   Full account:
   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
   (lode-nt98). **This is a mitigation, not a root-cause fix, and the root cause is still open** — see

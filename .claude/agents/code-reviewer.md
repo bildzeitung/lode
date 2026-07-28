@@ -503,7 +503,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   later fan-out can dispatch a builder onto work that isn't buildable yet (lode-c0t3). Use `blocks`
   when the follow-up can't be built until the reviewed ticket lands; note the discovery provenance in
   the new ticket's text instead, since bd allows only one dependency type per pair.
-- **Assuming my launch worktree started clean off `trunk` HEAD, or started as a worktree at all, just
+- **Assuming my launch worktree started clean off `origin/trunk` HEAD, or started as a worktree at all, just
   because that's how it's supposed to work.** The harness has handed a dispatched reviewer a recycled
   worktree still on a *previous* ticket's branch (lode-nt98), and separately has handed a dispatched
   reviewer NO worktree at all — cwd on the main checkout, on `trunk` (lode-ska2) — run
