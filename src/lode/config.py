@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lode.llm_provider import ModelTier
+from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER, ModelTier
 from lode.lock import lock_path
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
@@ -575,6 +575,42 @@ class Settings(BaseModel):
             raise ValueError(
                 "azure_openai_api_version is required when azure_openai_endpoint is set"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _reasoning_effort_legal_for_provider(self) -> Settings:
+        """Fail loudly at load if a tier's reasoning_effort isn't legal for llm_provider.
+
+        All three model tiers (``enrichment_llm`` / ``qa_llm`` /
+        ``qa_think_harder_llm``) are ``Kind.RUNTIME`` and come from a static
+        ``config.toml``, so a typo'd ``reasoning_effort`` is 100% deterministic
+        and knowable at load -- before this validator, it instead surfaced at
+        the first API call, inside :class:`AnthropicProvider`/
+        :class:`OpenAIProvider`'s pre-flight value check
+        (``_anthropic_effort_kwargs``/``_openai_effort_kwargs``). On the
+        enrichment path that meant a config typo was misclassified as
+        *transient* by ``worker.run_one``'s generic exception arm -- it
+        charged an attempt, backed off, and dead-lettered the job after
+        ``retry_max_attempts`` rather than refusing to start (lode-tvps).
+
+        Structurally identical to ``_azure_api_version_required_with_endpoint``
+        above: a cross-field ``@model_validator(mode="after")`` checking
+        legality against another field's already-resolved value. This checks
+        the effort *value* against the *configured* ``llm_provider``'s legal
+        set only -- the value/model *pairing* stays deliberately unpredicted
+        (lode-3dlt option 1, reaffirmed by lode-90o7); a rejected pairing still
+        surfaces as a clean ``LLMProviderError`` at the seam, not here.
+        """
+        legal_levels = EFFORT_LEVELS_BY_PROVIDER[self.llm_provider]
+        for tier_name in ("enrichment_llm", "qa_llm", "qa_think_harder_llm"):
+            tier: ModelTier = getattr(self, tier_name)
+            effort = tier.reasoning_effort
+            if effort is not None and effort not in legal_levels:
+                raise ValueError(
+                    f"{tier_name}.reasoning_effort={effort!r} is not legal for "
+                    f"llm_provider={self.llm_provider!r} -- must be one of "
+                    f"{list(legal_levels)}"
+                )
         return self
 
 

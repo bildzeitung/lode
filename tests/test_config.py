@@ -262,6 +262,76 @@ def test_azure_openai_api_version_alone_is_fine() -> None:
     assert s.azure_openai_endpoint == ""
 
 
+# --- reasoning_effort validated against llm_provider at load (lode-tvps) ----
+
+
+def test_reasoning_effort_illegal_value_for_anthropic_fails_at_load() -> None:
+    with pytest.raises(ValidationError, match="enrichment_llm.*bogus-effort"):
+        Settings(
+            llm_provider="anthropic",
+            enrichment_llm={
+                "model": "claude-haiku-4-5",
+                "reasoning_effort": "bogus-effort",
+            },
+        )
+
+
+def test_reasoning_effort_illegal_value_for_openai_fails_at_load() -> None:
+    with pytest.raises(ValidationError, match="qa_llm.*bogus-effort"):
+        Settings(
+            llm_provider="openai",
+            qa_llm={"model": "gpt-5.5", "reasoning_effort": "bogus-effort"},
+        )
+
+
+def test_reasoning_effort_legal_for_openai_rejected_under_anthropic() -> None:
+    # "minimal" is a legal `reasoning.effort` value for OpenAI
+    # (_OPENAI_EFFORT_LEVELS) but is not in Anthropic's legal set
+    # (_ANTHROPIC_EFFORT_LEVELS) -- must be rejected when llm_provider is
+    # "anthropic", the value's own legality under some *other* provider is
+    # not enough.
+    with pytest.raises(ValidationError, match="enrichment_llm.*minimal"):
+        Settings(
+            llm_provider="anthropic",
+            enrichment_llm={"model": "claude-haiku-4-5", "reasoning_effort": "minimal"},
+        )
+
+
+def test_reasoning_effort_legal_value_constructs_under_anthropic() -> None:
+    s = Settings(
+        llm_provider="anthropic",
+        qa_llm={"model": "claude-sonnet-4-6", "reasoning_effort": "high"},
+    )
+    assert s.qa_llm.reasoning_effort == "high"
+
+
+def test_reasoning_effort_legal_value_constructs_under_openai() -> None:
+    s = Settings(
+        llm_provider="openai",
+        qa_llm={"model": "gpt-5.5", "reasoning_effort": "minimal"},
+    )
+    assert s.qa_llm.reasoning_effort == "minimal"
+
+
+def test_reasoning_effort_unset_is_always_fine_regardless_of_provider() -> None:
+    Settings(llm_provider="anthropic")
+    Settings(llm_provider="openai")
+
+
+def test_reasoning_effort_checked_on_all_three_tiers() -> None:
+    for tier_name in ("enrichment_llm", "qa_llm", "qa_think_harder_llm"):
+        with pytest.raises(ValidationError, match=f"{tier_name}.*bogus-effort"):
+            Settings(
+                llm_provider="anthropic",
+                **{
+                    tier_name: {
+                        "model": "claude-haiku-4-5",
+                        "reasoning_effort": "bogus-effort",
+                    }
+                },
+            )
+
+
 def test_load_settings_malformed_config_toml_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
