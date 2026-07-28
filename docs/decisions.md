@@ -4,6 +4,16 @@
 when the build reaches the feature that forces it. The tunable parameters several of these reference
 are catalogued in [configuration.md](configuration.md).
 
+**This file is a dated log, not a living doc — an entry is never edited in place when later work
+makes it stale.** An entry records a decision (or a finding) as it stood at the time; when something
+later invalidates part of it, the correction is a **new entry, or a marker appended to the existing
+one**, never a silent rewrite of the original text. Every such marker uses one fixed, greppable
+shape: **`Update (<id>[, <date>]) — <what changed>.`** — `grep -n '\*\*Update (' docs/decisions.md`
+finds every stale claim in this file; nothing here should use any other shape. Contrast this with an
+*operational* doc like [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md), which
+describes current behavior and so *is* corrected in place — there is no history to preserve there,
+while erasing it here would lose the record of what was believed, and when.
+
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
@@ -368,10 +378,11 @@ are catalogued in [configuration.md](configuration.md).
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
   `metadata.review_worktree` is now vestigial for the reviewer and the rebase pickup — neither opens it
   — but it is **not** removed from the hand-off: `/land`'s worktree GC still keys off it to reclaim the
-  builder's local worktree after a clean land, so the builder keeps recording it. **(Superseded by
-  lode-h1vn, below: that GC loop is deleted, so `review_worktree` is now vestigial outright — recorded
-  by the builder, read by nobody. The builder's worktree is still reclaimed after a clean land, but by
-  the backstop sweep, which discovers it from `git worktree list` instead.)** `/code`'s step-1
+  builder's local worktree after a clean land, so the builder keeps recording it. **Update (lode-h1vn)
+  — superseded, below: that GC loop is deleted, so `review_worktree` is now vestigial outright —
+  recorded by the builder, read by nobody. The builder's worktree is still reclaimed after a clean
+  land, but by the backstop sweep, which discovers it from `git worktree list` instead.** `/code`'s
+  step-1
   stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
   actually consumes). (3) Uncommitted work left in the builder's worktree is now structurally invisible
   to the reviewer (it never opens that worktree at all) — accepted because the builder's hand-off
@@ -492,9 +503,9 @@ are catalogued in [configuration.md](configuration.md).
   "Tools: All tools" label for both subagent types is not a reliable guide to their actual runtime tool
   surface.
 
-  > **SUPERSEDED (lode-rlyx, 2026-07-27) — `/code` no longer invokes the workflow at all. Everything
-  > from here down to the lode-rlyx update at the end of this thread is the record of a design that was
-  > shipped and then removed; read that update before relying on any of it.**
+  **Update (lode-rlyx, 2026-07-27) — superseded: `/code` no longer invokes the workflow at all.
+  Everything from here down to the lode-rlyx update at the end of this thread is the record of a
+  design that was shipped and then removed; read that update before relying on any of it.**
 
   **Rescoped design (shipped): the orchestrator runs the workflow, the reviewer consumes its output as
   input.** `.claude/workflows/correctness-review.js` (FIND — one agent per correctness dimension:
@@ -556,8 +567,8 @@ are catalogued in [configuration.md](configuration.md).
   single-pass recall caveat **lode-p5gf**.
 
   **The decision: parity with `/code-review` is NO LONGER the bar — this supersedes the paragraph
-  above.** *(Itself since SUPERSEDED by the lode-rlyx update at the end of this thread — the wiring
-  described in this paragraph no longer exists; "supersedes the paragraph above" was not terminal.)*
+  above.** **Update (lode-rlyx) — superseded: the wiring described in this paragraph no longer
+  exists; "supersedes the paragraph above" was not terminal.**
   correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
   the reviewer's dispatch as pre-computed candidates, and the `code-reviewer`'s own hand-reasoned pass
   runs regardless of whether the workflow ran, errored, or returned nothing. A recall miss therefore
@@ -823,9 +834,9 @@ are catalogued in [configuration.md](configuration.md).
   not just the last one, and it removes the trust boundary (and the path-validation guard that boundary
   would otherwise need). It cannot touch the **builder's** worktree: that is branch-named
   `worktree-agent-*`, never `land/<id>--*`, so the filter skips it by construction and `/land`'s
-  `review_worktree` GC still finds it. **(Superseded by lode-h1vn, below: `/land` reclaims the
-  builder's worktree via its backstop sweep now — the `review_worktree`-keyed loop is deleted. The
-  guarantee is unchanged; only the mechanism is.)**
+  `review_worktree` GC still finds it. **Update (lode-h1vn) — superseded, below: `/land` reclaims
+  the builder's worktree via its backstop sweep now — the `review_worktree`-keyed loop is deleted.
+  The guarantee is unchanged; only the mechanism is.**
 
   Two `git` behaviours this depends on, both verified live: `rtk` reformats `worktree list --porcelain`
   and breaks the field parse, so the reclaim uses **plain `git`** (same hazard as lode-9j7); and the
@@ -1438,8 +1449,8 @@ are catalogued in [configuration.md](configuration.md).
   present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
   design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
   `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
-  exemptions) is unchanged. **Superseded for the matching *shape* (not the `jq` question) by the
-  `lode-9mbt` entry below**, which inverts that surface from a denylist to an allowlist.
+  exemptions) is unchanged. **Update (lode-9mbt) — supersedes the matching *shape* (not the `jq`
+  question), below**, which inverts that surface from a denylist to an allowlist.
 
 - **The `bd create --deps blocks:` guard collapses backslash-continuations, and deliberately
   OVER-matches on `;`/`&`/`|` (lode-m6px, portability fix lode-9gm2).** The guard's regex is
@@ -2156,10 +2167,11 @@ are catalogued in [configuration.md](configuration.md).
   prevent. Documented in
   [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
   and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
-- **The "qualifies by construction" / "no dedicated cleanup" claim above is falsified by lode-nt98,
-  and lode-qv5t (2026-07-20) closes the gap it left open.** Everything above this entry reasoned about
-  `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated
-  dispatch could dirty the lander's tree) but rested the *worktree-GC* claim ("HEAD never diverges …
+- **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
+  cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
+  entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
+  (correctness — a non-isolated dispatch could dirty the lander's tree) but rested the *worktree-GC*
+  claim ("HEAD never diverges …
   qualifies by construction") on an assumption lode-nt98 falsified after this entry was written: the
   harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk`
   HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
