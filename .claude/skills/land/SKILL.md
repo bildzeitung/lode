@@ -348,6 +348,13 @@ per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, wi
 tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
+# STATE_DIR is the same $STATE_DIR Section 3a formalizes below (`.git/land-state`) -- this runs
+# FIRST in the pass, ahead of 3a's own `rm -rf "$STATE_DIR" && mkdir -p ...`, so create the
+# subdirectory here rather than assume 3a already has (lode-rfon).
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+CONFLICTS_DIR="$STATE_DIR/conflicts"
+mkdir -p "$CONFLICTS_DIR"
+
 # A command substitution inside an `if` condition is exempt from `set -e` —
 # unlike a bare `VAR=$(cmd)` assignment, which would abort the shell on a
 # non-zero exit before `rc=$?` is ever reached. Same idiom the snippet this
@@ -357,12 +364,34 @@ if CONFLICTS=$(rtk scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); t
 else
   rc=$?
 fi
+
+# $CONFLICTS does NOT survive to the "Needs rebase -- kick back" block below -- that block is a
+# SEPARATE Bash invocation and this shell variable dies with this one (lode-rfon, the same defect
+# class as lode-sfnb's $MSG/$ACCEPTED/$LANDED). Persist it to disk now, at the only point this
+# block actually holds it; the kick-back block reads it back from the file, never from $CONFLICTS.
+#
+# An `if`, NOT `[ "$rc" = 1 ] && printf ...`. As this block's LAST command that AND-list makes the
+# whole invocation exit 1 whenever rc is 0 -- so the COMMON clean path would report failure and a
+# real conflict would report success, INVERTING the only signal this block gives the agent at all
+# (it prints nothing on any path). That is exactly the "non-zero exit, completely empty stdout AND
+# stderr" shape lode-sfnb documents in 3a below as the silent failure this file exists to remove.
+# Testing `= 1` and not `!= 0` is also load-bearing: a machine fault (rc=2) leaves $CONFLICTS empty,
+# and must NOT leave a file behind for a later kick-back to read as a conflict record.
+if [ "$rc" = 1 ]; then
+  printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/<id>"
+fi
 ```
 
 - **`rc=0`** → clean — proceed to the semantic gate (2c). (Prints nothing.)
-- **`rc=1`** → textual conflict. `$CONFLICTS` holds exactly the conflicting path(s), one per line —
-  no tree OID, no chatter. → needs-rebase kick-back (see "Needs rebase — kick back"): skip
-  `land-review`, leave the merge set.
+- **`rc=1`** → textual conflict. `$CONFLICTS` (now also persisted to `$STATE_DIR/conflicts/<id>`,
+  since the file — not the shell variable — is what the kick-back block actually reads) holds
+  exactly the conflicting path(s), one per line — no tree OID, no chatter. → needs-rebase kick-back
+  (see "Needs rebase — kick back"): skip `land-review`, leave the merge set. **Do that kick-back now,
+  for this branch, while still in Section 2** — not batched up for later. [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent)'s
+  `rm -rf "$STATE_DIR"` wipes the file this block just wrote, so a kick-back deferred past it finds
+  nothing and aborts loudly instead of kicking back at all. (Nothing else needs saying: 3a already
+  computes `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching
+  3a un-kicked-back is out of order on its own terms.)
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
   `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
   `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
@@ -618,8 +647,16 @@ reset intact — which is exactly why `STATE_DIR` lives there and not in the wor
 ```bash
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"    # under .git/ -- survives a later `git reset
 MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only resets the index+worktree)
-rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR"    # fresh per pass -- no stale message or accepted set from
-                                               # an earlier /land tick can leak into this one
+CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
+                                                         # conflict's paths for the kick-back block
+                                                         # below to read (lode-rfon)
+rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # fresh per pass -- no stale message,
+                                                         # accepted set, or conflicts record from an
+                                                         # earlier /land tick can leak into this one.
+                                                         # (2b's own conflicts writes, if any, already
+                                                         # ran and were consumed by the per-branch
+                                                         # kick-back before Section 2 finished -- this
+                                                         # wipe cannot race them.)
 
 # Capture the accepted set to a file HERE, at the one moment I actually hold it (2c's land-review
 # verdicts, in the order 3a just established). Every later block RE-READS this file instead of having
@@ -692,7 +729,7 @@ lode-9i2p):
 ```bash
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
-                                                         # except the FILES 3a wrote under $STATE_DIR
+CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
 
 # Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
 # would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
@@ -726,6 +763,11 @@ for id in $ACCEPTED; do
       # below, with $CONFLICTS), NOT a land. It never reaches the `0)` arm, so it is never appended
       # to $STATE_DIR/landed and Section 4 cannot close or GC it -- what used to rely on the agent
       # remembering to exclude it from a hand-restated $LANDED is now structural.
+      #
+      # Persist the conflicting paths now, while this loop actually holds them: the kick-back block
+      # that writes the bd note is a SEPARATE Bash invocation and cannot see this loop's $CONFLICTS
+      # once it exits (lode-rfon).
+      printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
       #
       # 3a INVARIANT: this branch just LEFT the merge set -- so drop it AND its dependents (1a's full
       # relation, transitively; scripts/blocks-dependents.sh derives the `blocks` edges) and leave
@@ -808,6 +850,7 @@ machine. A red gate is content; exit 2 is the machine.
   rtk git reset --hard origin/trunk
   STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
+  CONFLICTS_DIR="$STATE_DIR/conflicts"
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
     "Landing nothing." >&2; exit 1; }
@@ -850,6 +893,10 @@ machine. A red gate is content; exit 2 is the machine.
         # rc=1: real textual conflict against an earlier survivor merged this pass: needs-rebase
         # kick-back (see below, with $CONFLICTS), not a bounce — its content wasn't judged bad, it
         # just needs to replay onto the new trunk. Continue with the rest.
+        #
+        # Persist the conflicting paths, identically to the first-pass loop above and for the same
+        # reason -- see its comment (lode-rfon).
+        printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
         continue
         ;;
     esac
@@ -1434,9 +1481,23 @@ A **needs-rebase** is the outcome of the [2b precheck](#2b-cheap-conflict-preche
 was never judged bad — I never ran `land-review` on it. It is a **third outcome, distinct from bounce
 and escalate**: not a rebuild (nothing is wrong with the work), not a human decision (there's nothing
 to decide — it just needs to replay onto where `trunk` moved). So I keep everything and hand it
-straight back to the producer:
+straight back to the producer.
+
+**This block is its own, separate Bash invocation from whichever producer detected the conflict
+(2b's `merge-precheck.sh` call, or one of Section 3's two merge loops) — none of that block's shell
+state, including `$CONFLICTS`, survives to here (lode-rfon, the same defect class as lode-sfnb's
+`$MSG`/`$ACCEPTED`/`$LANDED`).** Read the conflicting paths back from the file the producer wrote
+under `$STATE_DIR/conflicts/<id>` instead, and refuse — loudly — rather than kick back with a blank
+paths section if that file is missing or empty:
 
 ```bash
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
+CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>" 2>/dev/null)  # FILE under $STATE_DIR is what survived,
+                                                            # never a bash variable
+[ -n "$CONFLICTS" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/conflicts/<id> is missing or empty --" \
+  "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
+  "conflicting paths. Refusing to kick back with a blank paths section." >&2; exit 1; }
+
 rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
 Conflicting paths:
