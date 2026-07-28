@@ -16,12 +16,9 @@ from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# scripts/ is a plain directory of standalone scripts, not an installed
-# package (nothing else in the repo imports from it) -- load the module
-# straight from its file path via the shared helper (tests/conftest.py).
-# check_links.py has a frozen @dataclass, which is exactly why that helper
-# registers the module in sys.modules before executing it -- see its
-# docstring.
+# scripts/ isn't an installed package, so load by file path via the shared
+# helper (tests/conftest.py) -- check_links.py's frozen @dataclass is the
+# case its sys.modules registration exists for; see its docstring.
 check_links = load_module_from_path(
     "check_links", REPO_ROOT / "scripts" / "check_links.py"
 )

@@ -19,11 +19,9 @@ from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# scripts/ is a plain directory of standalone scripts, not an installed
-# package -- load the module straight from its file path via the shared
-# helper (tests/conftest.py), same pattern as tests/test_check_links.py. The
-# filename has hyphens, so it can't be imported as `model-cache-key` -- give
-# the loaded module a valid name.
+# scripts/ isn't an installed package, so load by file path via the shared
+# helper (tests/conftest.py). The filename has hyphens, so it could never be
+# imported as `model-cache-key` -- the loaded module gets a valid name here.
 model_cache_key = load_module_from_path(
     "model_cache_key", REPO_ROOT / "scripts" / "model-cache-key.py"
 )
