@@ -233,10 +233,10 @@ oversight a later edit should "tidy" away.
   rtk bd update "$DIGEST_ID" --claim
   ```
 - **`N == 1`** — steady state. Nothing to do here — §5 and §6 each re-derive `$DIGEST_ID` themselves
-  (`rtk bd list --label sweep-digest --all --limit 0 --json | jq -r '.[0].id'`) rather than reusing
-  this block's own `$DIGEST_ROWS`/`$N`, since neither survives into a later block (fresh Bash
-  invocation each time; cheap and deterministic once the digest exists, so re-deriving beats
-  persisting it to a file).
+  via `scripts/sweep-digest-id.sh`, rather than reusing this block's own `$DIGEST_ROWS`/`$N`, since
+  neither survives into a later block (fresh Bash invocation each time). **That script re-asserts
+  `N == 1` itself**: this branch of this block is not a guard those blocks inherit, so it is
+  re-checked there rather than trusted, immediately before the read (§5) and the write (§6).
 - **`N > 1`** — anomaly. Do **not** guess which is authoritative and do **not** write anything.
   Report the duplicate IDs plainly in the final report (below) and stop the write path for this
   pass; the human consolidates by hand (keep one, strip the label off the rest).
@@ -248,9 +248,11 @@ designed to be trivially re-parseable):
 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
-# Re-derive DIGEST_ID -- cheap and deterministic once the digest exists (§4), so re-running this
-# query beats persisting an id to a file here.
-DIGEST_ID=$(rtk bd list --label sweep-digest --all --limit 0 --json | jq -r '.[0].id')
+# Re-derive DIGEST_ID -- cheap and deterministic, so re-running the query beats persisting an id.
+# The script refuses unless exactly one digest exists; a bare `.[0].id` would silently pick the
+# first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
+# `N == 0`). Quote its stderr rather than re-deriving a cause of my own.
+DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
 CURRENT="$(cat "$SWEEP_TMP/current")" || {
   echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
   exit 1
@@ -312,7 +314,9 @@ Where each section lists its `CURRENT` rows for that kind (`land-escalated`/`hum
 survives), so both are established here, not reused from an earlier one:
 
 ```bash
-DIGEST_ID=$(rtk bd list --label sweep-digest --all --limit 0 --json | jq -r '.[0].id')
+# Same refusal as §5, and load-bearing for a stronger reason: this block WRITES. Under §4's
+# `N > 1` anomaly a bare `.[0].id` would overwrite whichever duplicate sorted first.
+DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
 BODY_FILE="$(mktemp)"
 # …write the digest body (format above) into "$BODY_FILE"…
 rtk bd update "$DIGEST_ID" --body-file "$BODY_FILE"

@@ -56,11 +56,12 @@ exits 0 is indistinguishable from a clean pass that had nothing to do.
 [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
 — that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
 `/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
-regression to this file or any other skill's markdown. This file is currently excluded from that
-gate's own coverage (not yet fully clean — see the doc section above for what remains, including the
-`$CONFLICTS` instance a few sections below, tracked separately by `lode-rfon`) — so, unlike every
-other skill, a regression here is **not yet** caught mechanically. Hold the line by hand until
-`lode-p1r3` (the follow-up that removes this file from the gate's `_SKIPPED_FILES`) lands.
+regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
+newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
+individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
+land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
+`$CONFLICTS` (a few sections below, genuinely broken, fixed on `lode-rfon`'s branch) — both tracked
+by `lode-p1r3`. Everything else in this file is gated mechanically.
 
 ---
 

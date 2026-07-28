@@ -85,7 +85,7 @@ over-flagging gate gets its findings suppressed or its allowlist bloated with
 non-bugs, which is how this exact rot restarts (per the ticket that added this
 gate, lode-x495).
 
-## Scope: repo-wide, with a small, reasoned allowlist -- and `land/SKILL.md` excluded
+## Scope: EVERY skill file, with a small, per-variable allowlist
 
 lode-x495 explicitly permitted either scoping this gate to `land/SKILL.md` only and
 widening later, or shipping repo-wide with an allowlist. This gate ships **repo-wide**
@@ -93,34 +93,30 @@ widening later, or shipping repo-wide with an allowlist. This gate ships **repo-
 land-local (per the ticket's own title) and `/sweep` and `/release` already carried
 real, confirmed instances that a land-only gate would leave silently uncovered.
 
-**`land/SKILL.md` itself is excluded from this gate's file coverage for now**
-(`_SKIPPED_FILES` below), not merely allowlisted variable-by-variable. That file
-already went through one thorough remediation (`lode-sfnb`: `$MSG` converted to a
-per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful merge
-appends to `$STATE_DIR/landed` in the SAME block that merges it -- and read back with an
-assert-on-load by a later block). It is the single skill that writes `trunk` -- the
-highest blast radius of any file this gate could touch. A full audit while building this
-ticket found it is NOT yet clean: beyond `$CONFLICTS` (a known sibling collision this
-ticket's own dispatch named explicitly -- tracked by `lode-rfon`, not this ticket's to
-fix; this branch does not merge `trunk` in, so whether `lode-rfon` has already landed a
-fix is not re-verified here, see `lode-p1r3`), there is also `$ACCEPTED` (Section 3a: the
-ordered, land-review-verdict-derived accepted set is computed by the agent's own
-reasoning across Sections 2c/3a, never by any single deterministic bash command in the
-file, so unlike `$MSG`/`$LANDED` there is nothing upstream in this file's own bash to
-re-derive or persist `$ACCEPTED` FROM -- the same shape as `release/SKILL.md`'s
-`$PROPOSED` below). Auditing and fixing (or precisely allowlisting) every remaining
-instance in a ~2000-line file that is the sole writer of `trunk` is out of THIS ticket's
-risk budget; it is filed separately as `lode-p1r3` rather than rushed. The one small,
-purely-notational fix this ticket
-DOES make in that file (`$id`/`$B` -> `<id>`/`<B>` in the Section 3a "HELD" note
-template, matching the file's own established `<...>` convention already used two
-sections later) is exempt from needing this because it stops being a `$`-reference at
-all, not because it is allowlisted.
+**There is deliberately no whole-file escape hatch** -- not even for `land/SKILL.md`,
+which was initially skipped file-wide. The reasoning for that decision and against it
+lives in `docs/agents-workflow.md`'s section above ("There is no whole-file escape
+hatch, deliberately"); `test_every_skill_file_is_covered` pins the outcome. Measured
+while making the call, and recorded here because it is evidence rather than rationale:
+across `trunk`, this branch, and all five in-flight sibling branches touching the file,
+the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing else -- no false
+positive, and no sibling introduces a new instance.
 
-`challenge/SKILL.md` and `code/SKILL.md` carry no fenced ```bash/```sh blocks at all
-(verified: zero matches). `epic-audit/SKILL.md` carries six and is clean -- every
-value it shows is either a real same-block assignment or an angle-bracket `<epic>`/
-`<child>` template placeholder, never a `$`-prefixed cross-block reference.
+That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
+to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
+merge appends to `$STATE_DIR/landed` in the SAME block that merges it -- and read back
+with an assert-on-load by a later block). The one small, purely-notational fix this
+ticket makes in it (`$id`/`$B` -> `<id>`/`<B>` in the Section 3a "HELD" note template,
+matching the file's own established `<...>` convention already used two sections later)
+needs no allowlist entry because it stops being a `$`-reference at all.
+
+`challenge/SKILL.md` carries no fenced ```bash/```sh blocks at all. `code/SKILL.md`
+carries five and `epic-audit/SKILL.md` six, all clean. Note that every one of
+`code/SKILL.md`'s fences is INDENTED (nested under a list item), so a scanner anchored
+at column 0 -- `line.startswith("```")`, the shape `tests/test_land_lock.py` still uses
+and `lode-ovgs` was filed against -- sees zero blocks there and would report the file
+as carrying no bash at all. `_bash_blocks` strips each line before testing, so it sees
+all five; this docstring previously recorded the column-0 answer as fact.
 """
 
 from __future__ import annotations
@@ -149,6 +145,13 @@ _KNOWN_ENV_VARS = {
 # (path relative to SKILLS_DIR, variable name) -> reason a human can audit. An entry
 # with no reason is exactly how this bug class was allowed to rot in the first place
 # (lode-x495) -- never add one without a specific, checkable justification.
+#
+# Scope of an entry is FILE-WIDE, not block-scoped: allowlisting ($ACCEPTED, land) also
+# excuses a NEW block that references $ACCEPTED cross-block (verified by sabotage). That
+# is the deliberate trade -- a (file, block_index, var) key would be more precise but
+# would break every time anyone inserted a block earlier in the file, failing on
+# unrelated edits until someone "fixed" it by widening the entry. Keep entries rare and
+# keep the names specific; a generic name here is much costlier than a specific one.
 ALLOWLIST: dict[tuple[str, str], str] = {
     ("release/SKILL.md", "PROPOSED"): (
         "The human-confirmed version string from Section 3's confirmation dialogue. "
@@ -159,25 +162,27 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "persist from; the agent supplies the literal confirmed version at Section 4's "
         "invocation site, the same way it fills in a `<...>` template placeholder."
     ),
-}
-
-# Whole files excluded from this gate's coverage. Each entry needs the same kind of
-# reason as an ALLOWLIST entry.
-_SKIPPED_FILES: dict[str, str] = {
-    "land/SKILL.md": (
-        "Confirmed NOT clean by a full audit while building this gate (lode-x495), "
-        "beyond the one instance ($CONFLICTS) the ticket already knew about and "
-        "explicitly assigned to lode-rfon (this branch does not merge trunk in, so "
-        "whether lode-rfon has since landed a fix is not re-verified here -- see "
-        "lode-p1r3). Also flags $ACCEPTED (Section 3a): an agent-reasoned value with "
-        "nothing upstream in this file's own bash to re-derive or persist from -- the "
-        "same shape as release/SKILL.md's $PROPOSED, unlike $MSG (a per-id file under "
-        "$MSG_DIR) or $LANDED (built up incrementally, appended in the same block that "
-        "merges each id, read back with an assert-on-load) which lode-sfnb already made "
-        "genuinely cross-block-safe. This file is the sole writer of `trunk` -- "
-        "auditing and fixing (or precisely allowlisting) its remaining instances "
-        "belongs in its own dedicated follow-up (lode-p1r3), not rushed inside this "
-        "ticket's risk budget."
+    ("land/SKILL.md", "ACCEPTED"): (
+        "Section 3a's ordered, land-review-verdict-derived accepted set -- the same "
+        "shape as release/SKILL.md's $PROPOSED above: computed by the agent's own "
+        "reasoning across Sections 2c (dispatched land-review verdicts) and 3a "
+        "(stacked-branch ordering), never by any single deterministic bash command in "
+        "the file, so there is nothing upstream in this file's own bash to re-derive or "
+        "persist it FROM. Note the block that uses it immediately persists it onward "
+        "($STATE_DIR/accepted), which every later block reads back -- so the cross-block "
+        "hop this gate exists to catch is already closed downstream; only the initial "
+        "hand-off from the agent's reasoning into bash remains. Removing this entry "
+        "needs a genuine mechanical source for the set: lode-p1r3."
+    ),
+    ("land/SKILL.md", "CONFLICTS"): (
+        "The 'Needs rebase -- kick back' block interpolates the conflicting paths that "
+        "Section 2b's merge-precheck (or Section 3's merge loop) captured -- a real, "
+        "confirmed instance of this bug class, already tracked and fixed by lode-rfon "
+        "($STATE_DIR/conflicts/<id>). Allowlisted rather than fixed here only because "
+        "that fix belongs to lode-rfon's branch and this one does not merge trunk in; "
+        "verified against origin/land/lode-rfon, whose land/SKILL.md no longer trips "
+        "this. The entry goes inert the moment lode-rfon lands and should then be "
+        "deleted (lode-p1r3)."
     ),
 }
 
@@ -246,17 +251,24 @@ def _used_vars(block: str) -> set[str]:
 
 # ---- ASSIGNMENT extraction --------------------------------------------------------
 # A statement boundary: start of line, after a separator, or after a keyword that
-# introduces a new command (optionally negated with `!`, e.g. `if ! DEPS=$(...); then`).
+# introduces a new command. Shared by both assignment regexes below -- they were
+# written with two hand-copied alternations, and the copy had silently lost
+# `else|elif|if|while|until`, so `else declare -a Q` read as unassigned while the
+# equivalent `else X=1` did not (lode-x495 review; pinned by
+# test_declare_after_else_is_an_assignment).
+_STMT_BOUNDARY = r"(?:^|[;&|(]|\b(?:then|do|else|elif|if|while|until)\b)\s*"
+
+# `(?:!\s*)?` for a negated command, e.g. `if ! DEPS=$(...); then`.
+# `(?!=)` so a `==` comparison is never read as an assignment.
 _ASSIGN_STMT = re.compile(
-    r"(?:^|[;&|(]|\bthen\b|\bdo\b|\belse\b|\belif\b|\bif\b|\bwhile\b|\buntil\b)\s*"
-    r"(?:!\s*)?"
+    _STMT_BOUNDARY + r"(?:!\s*)?"
     r"(?:export\s+|local\s+|readonly\s+|declare\s+(?:-[A-Za-z]+\s+)*)?"
     r"([A-Za-z_][A-Za-z0-9_]*)\+?=(?!=)"
 )
 # A bare `declare -A VAR` / `local -a VAR` (no `=`) -- still a real assignment/declaration.
 _ASSIGN_DECLARE_NOEQ = re.compile(
-    r"(?:^|[;&|(]|\bthen\b|\bdo\b)\s*"
-    r"(?:local|declare|readonly)\s+(?:-[A-Za-z]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\b(?!=)"
+    _STMT_BOUNDARY
+    + r"(?:local|declare|readonly)\s+(?:-[A-Za-z]+\s+)+([A-Za-z_][A-Za-z0-9_]*)\b(?!=)"
 )
 _ASSIGN_MAPFILE = re.compile(
     r"\b(?:mapfile|readarray)\s+(?:-[A-Za-z]+\s+)*([A-Za-z_][A-Za-z0-9_]*)\b"
@@ -399,28 +411,26 @@ def test_special_parameters_are_never_flagged() -> None:
 def test_comment_only_reference_is_not_a_use() -> None:
     """Regression pin for the land/SKILL.md false positives this gate's development
     found (lode-x495): heavy inline prose routinely quotes a variable name while
-    describing history or a rejected design -- that must never count as a real use."""
-    block = "echo hi\n# a hand-restated $LANDED is now structural\n"
+    describing history or a rejected design -- that must never count as a real use.
+    Indented, because a real comment inside a loop body is."""
+    block = 'true\n  #   grep -vxF "$dropped" "$STATE_DIR/accepted" > tmp\n'
     assert _violations_in_block(block) == set()
 
 
-def test_comment_only_pseudocode_is_not_scanned() -> None:
-    block = 'true\n#   grep -vxF "$dropped" "$STATE_DIR/accepted" > tmp\n'
-    assert _violations_in_block(block) == set()
+def test_parameter_expansion_hash_is_not_a_comment_start() -> None:
+    """`${VAR#pattern}` / `${#ARR[@]}` -- the `#` is a parameter-expansion operator,
+    not a comment, because nothing whitespace precedes it.
 
-
-def test_parameter_expansion_length_operator_is_not_a_comment() -> None:
-    """`${#VAR}` -- the `#` here is bash's length operator, immediately after `{`
-    with no preceding whitespace, and must not be misread as a comment start."""
-    block = 'ARR=(a b c)\necho "${#ARR[@]}"\n'
-    assert _violations_in_block(block) == set()
-
-
-def test_pattern_substitution_hash_is_not_a_comment() -> None:
-    """`${VAR#pattern}` -- no whitespace before `#`, so it is parameter expansion,
-    not a comment start."""
-    block = 'VAR="foo.txt"\necho "${VAR#*.}"\n'
-    assert _violations_in_block(block) == set()
+    The fixture is deliberately UNQUOTED. Two earlier pins for this rule wrote the
+    `#` inside `"..."`, which made both vacuous: with the rule mutated to "any `#`
+    starts a comment" the truncated line left no unassigned use either way, so
+    neither test could fail (verified by mutation -- dropping the whitespace rule
+    AND the quote tracking together killed zero tests). Here, truncating at the `#`
+    would also swallow the `&& C=1` that follows, so the mutant reports `C` as
+    unassigned and the test fails.
+    """
+    block = 'A=${B#x} && C=1\necho "$A $B $C"\n'
+    assert _violations_in_block(block) == {"B"}
 
 
 def test_if_assignment_with_negation_counts() -> None:
@@ -431,17 +441,50 @@ def test_if_assignment_with_negation_counts() -> None:
     assert _violations_in_block(block) == set()
 
 
-def test_case_insensitive_equality_comparison_is_not_an_assignment() -> None:
-    """`[ "$X" == "$Y" ]` must never register X or Y as ASSIGNED (it's a comparison,
-    not a write) -- if it did, a real missing assignment right next to a comparison
-    could be masked."""
-    block = 'echo "$X"\n[ "$X" == "$Y" ] && echo match\n'
-    assert _violations_in_block(block) == {"X", "Y"}
+def test_equality_comparison_is_not_an_assignment() -> None:
+    """`==` is a comparison, not a write, and must never register X as ASSIGNED --
+    otherwise a real missing assignment sitting next to a comparison is masked.
+
+    `((X==1))` and not `[ "$X" == "$Y" ]`: in the bracketed form the char before
+    `==` is a quote, so no identifier abuts the `=` and `_ASSIGN_STMT` cannot match
+    with OR without its `(?!=)` guard -- the earlier pin here was vacuous (verified:
+    deleting `(?!=)` killed zero tests). The arithmetic form has the identifier
+    directly against the `==`, so it is what actually exercises the guard.
+    """
+    block = 'echo "$X"\nif ((X==1)); then echo hi; fi\n'
+    assert _violations_in_block(block) == {"X"}
 
 
 def test_declare_dash_a_without_initializer_is_an_assignment() -> None:
     block = 'declare -A MSG\nMSG[foo]=bar\necho "${MSG[foo]}"\n'
     assert _violations_in_block(block) == set()
+
+
+def test_declare_after_else_is_an_assignment() -> None:
+    """`_ASSIGN_DECLARE_NOEQ` used to carry its own hand-copied, narrower boundary
+    alternation (`^|[;&|(]|then|do`), so a bare `declare` after `else`/`if`/`while`
+    read as unassigned while the equivalent `else X=1` did not. Both regexes now
+    share `_STMT_BOUNDARY`; this fails if they are split again."""
+    assert (
+        _violations_in_block('if x; then y; else declare -a Q; fi\necho "${Q[@]}"\n')
+        == set()
+    )
+
+
+def test_mapfile_and_readarray_assign_their_target() -> None:
+    """No block in the corpus uses these today, so nothing else would notice if
+    `_ASSIGN_MAPFILE` were deleted as dead -- it is not dead, it is unexercised."""
+    assert _violations_in_block('mapfile -t ARR < f\necho "${ARR[0]}"\n') == set()
+    assert _violations_in_block('readarray LINES < f\necho "$LINES"\n') == set()
+
+
+def test_c_style_for_with_spaces_around_equals() -> None:
+    """`for ((i = 0; ...))` is legal bash and is caught ONLY by `_ASSIGN_FOR_C` --
+    `_ASSIGN_STMT` needs the `=` to abut the identifier. (Conversely `for ((i+=2))`
+    is caught only by `_ASSIGN_STMT`.) They look redundant and are not."""
+    assert (
+        _violations_in_block("for (( i = 0; i<3; i++ )); do echo $i; done\n") == set()
+    )
 
 
 def test_export_and_local_prefixed_assignment() -> None:
@@ -464,6 +507,18 @@ def test_sh_fence_is_scanned_the_same_as_bash() -> None:
     assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
 
 
+def test_indented_fence_is_still_a_fence_the_lode_ovgs_shape() -> None:
+    """A fence nested under a list item is indented, and a scanner anchored at column 0
+    (`line.startswith("```")` -- what `tests/test_land_lock.py` does, which `lode-ovgs`
+    was filed against) is blind to it. Every one of `code/SKILL.md`'s five bash blocks
+    opens with an indented fence, so this is not hypothetical: a column-0 scanner reports
+    that file as carrying no bash at all. `_bash_blocks` must strip first."""
+    markdown = '1. Step one:\n\n   ```bash\n   echo "$UNASSIGNED"\n   ```\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
 def test_two_separate_blocks_are_returned_separately() -> None:
     markdown = '```bash\nFOO=1\n```\nprose in between\n```bash\necho "$FOO"\n```\n'
     blocks = _bash_blocks(markdown)
@@ -480,19 +535,29 @@ def test_two_separate_blocks_are_returned_separately() -> None:
 def test_allowlist_entries_all_have_a_reason() -> None:
     for key, reason in ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {key} has an empty reason"
-    for key, reason in _SKIPPED_FILES.items():
-        assert reason.strip(), f"skipped-file entry {key} has an empty reason"
+
+
+def test_every_skill_file_is_covered() -> None:
+    """No file-level escape hatch exists, deliberately (lode-x495 review). A whole-file
+    skip would leave NEW cross-block variables in that file unguarded too, not just the
+    known ones -- and the file it was first reached for, `land/SKILL.md`, is the sole
+    writer of `trunk`. Per-variable allowlisting keeps every other block in the file
+    covered. This pins that: every skill carrying bash blocks is actually parsed."""
+    scanned = [
+        str(p.relative_to(SKILLS_DIR))
+        for p in sorted(SKILLS_DIR.glob("*/SKILL.md"))
+        if _bash_blocks(p.read_text(encoding="utf-8"))
+    ]
+    assert "land/SKILL.md" in scanned, scanned
 
 
 def test_no_cross_block_shell_state_outside_the_allowlist() -> None:
-    """The actual gate. Every `.claude/skills/*/SKILL.md` except the ones named in
-    `_SKIPPED_FILES` is parsed; any (block, variable) violation not covered by
-    `ALLOWLIST` fails this test with enough detail to find and fix it."""
+    """The actual gate. EVERY `.claude/skills/*/SKILL.md` is parsed; any (block,
+    variable) violation not covered by `ALLOWLIST` fails this test with enough detail
+    to find and fix it."""
     failures: list[str] = []
     for skill_md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
         rel = str(skill_md.relative_to(SKILLS_DIR))
-        if rel in _SKIPPED_FILES:
-            continue
         for block_index, var in find_violations(skill_md):
             if (rel, var) in ALLOWLIST:
                 continue

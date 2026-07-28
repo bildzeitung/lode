@@ -138,11 +138,18 @@ publishes that body as the GitHub release notes.
    version line (the script owns the tag subject). A **fixed** path under the repo's own `.git/`
    (not `$(mktemp)`, whose random path can't be re-derived by a later block — the same reasoning as
    `.claude/skills/land/SKILL.md`'s `$STATE_DIR`) so Section 4 can read it back without depending on
-   this section's own shell state having survived:
+   this section's own shell state having survived.
+
+   **Wipe the directory first, exactly as `$STATE_DIR` does — fresh per release.** A fixed path
+   outlives the run that wrote it, so the previous release's `notes.md` is still sitting there. If
+   this step is skipped or its write fails, Section 4 finds a *non-empty* file and hands the last
+   release's notes to `scripts/release.sh`, which embeds them as this tag's body — and the script's
+   own `[ ! -s ]` guard cannot tell stale content from fresh. `$(mktemp)` was immune to that by
+   construction; a fixed path is only immune if it starts empty:
 
    ```bash
-   NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
-   mkdir -p "$(dirname "$NOTES_FILE")"
+   NOTES_FILE="$(rtk git rev-parse --git-dir)/release-state/notes.md"
+   rm -rf "$(dirname "$NOTES_FILE")" && mkdir -p "$(dirname "$NOTES_FILE")"
    # …write the itemized list into "$NOTES_FILE"…
    ```
 
@@ -191,18 +198,19 @@ operator needs to decide on, not a passive export to throw away.
 
 ```bash
 # Re-derive NOTES_FILE (fixed path, Section 2a step 4 already wrote the content there) -- a fresh
-# Bash invocation, nothing from Section 2a's shell survives. $PROPOSED is NOT a shell variable
-# anywhere in this file: it is the version string Section 3 just confirmed IN CONVERSATION, with no
-# preceding bash computing it (Section 2's scripts/release-bump.sh only classifies breaking/feat/
-# fix/none, never the actual X.Y.Z arithmetic) -- fill in the literal confirmed version here, the
-# same way a `<...>` template placeholder gets filled in elsewhere in this skill.
-NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
+# Bash invocation, nothing from Section 2a's shell survives.
+# $PROPOSED is the literal version confirmed in Section 3, filled in here like a `<...>` placeholder
+# -- no bash in this file computes it (allowlisted in tests/test_skill_bash_state.py, which carries
+# the full reason).
+NOTES_FILE="$(rtk git rev-parse --git-dir)/release-state/notes.md"
 scripts/release.sh "$PROPOSED" "$NOTES_FILE"   # bare X.Y.Z, no leading 'v' — the script adds it
 ```
 
 The notes file rides along as the second argument; the script embeds it as the annotated tag's
 body (subject stays `lode vX.Y.Z`) and refuses a missing/empty file — so a confirmed release
-always carries its compiled notes.
+always carries its compiled notes. That refusal covers *absent*, not *stale*: it is §2a step 4's
+`rm -rf` of the directory that makes a skipped write show up here as a missing file rather than as
+the previous release's notes.
 
 I do **not** run `nox` myself first, and I do **not** re-implement the clean-tree / on-`trunk` /
 up-to-date-with-`origin/trunk` / tag-monotonicity checks — `scripts/release.sh` already gates all of
