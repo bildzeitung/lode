@@ -57,7 +57,7 @@ from lode.embedding import embed
 from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
-from lode.jobs import enqueue_derive_jobs
+from lode.jobs import enqueue_derive_jobs, now_iso
 from lode.llm_provider import AnthropicProvider
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
@@ -5191,6 +5191,37 @@ def _noop_embed_registry() -> dict:
     return {"embed": lambda conn, tv, db, s: None}
 
 
+def _insert_job_now(
+    conn: sqlite3.Connection, job_type: str, target_version: str
+) -> None:
+    """Insert a job row with an explicit, ratchet-sourced ``next_attempt_at``.
+
+    Omitting ``next_attempt_at`` falls back to the ``jobs`` table's own SQL
+    ``strftime('now')`` default (``schema.sql``) -- a clock reading taken
+    INDEPENDENTLY of ``worker._claim_one``'s ``next_attempt_at <= now``
+    comparison, which reads :func:`lode.jobs.now_iso` (a forward-ratcheted
+    monotonic clock -- lode-t1y). Confirmed on this host (lode-t1y's own
+    repro harness): under real clock skew those two independent readings can
+    diverge enough that a freshly inserted row's default timestamp lands
+    AHEAD of the ratcheted "now", so the claim predicate spuriously rejects
+    an already-eligible job and strands it for that drain pass -- the exact
+    "drained 2 job(s)" (not 3) symptom lode-t1y diagnosed for this test and
+    its siblings, and that recurred here (lode-4e48) since the SQL-default
+    call sites were never migrated off the un-ratcheted clock.
+    ``next_attempt_at`` read here comes from the SAME clock
+    ``_claim_one`` compares against, so by that clock's own monotonicity
+    guarantee (never decreases within a process) this row is provably
+    eligible by the time ``drain()`` reads its own, later, ``now_iso()`` --
+    no race, regardless of real wall-clock jitter in between. Mirrors
+    ``tests/test_worker.py``'s own ``_insert_job`` helper, which already
+    threads jobs through this same clock and has never exhibited this flake.
+    """
+    conn.execute(
+        "INSERT INTO jobs (type, target_version, next_attempt_at) VALUES (?, ?, ?)",
+        (job_type, target_version, now_iso()),
+    )
+
+
 def test_work_drains_pending_embed_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5205,12 +5236,12 @@ def test_work_drains_pending_embed_jobs(
     conn = init_db(db_path)
     try:
         with conn:
-            # Insert three embed jobs directly (no version row needed for noop handler).
+            # Insert three embed jobs directly (no version row needed for noop
+            # handler) -- via _insert_job_now, not a bare INSERT, so
+            # next_attempt_at comes from the same ratcheted clock drain()'s
+            # claim predicate reads (lode-4e48).
             for i in range(3):
-                conn.execute(
-                    "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                    ("embed", f"ver-{i}"),
-                )
+                _insert_job_now(conn, "embed", f"ver-{i}")
     finally:
         conn.close()
 
@@ -5301,10 +5332,10 @@ def test_work_prints_per_job_embed_outcome_line(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            # _insert_job_now, not a bare INSERT -- see its docstring (lode-4e48):
+            # a bare INSERT's SQL-default next_attempt_at races drain()'s
+            # ratcheted claim clock under real clock skew.
+            _insert_job_now(conn, "embed", "ver-1")
     finally:
         conn.close()
 
@@ -5342,10 +5373,8 @@ def test_work_prints_jira_401_outcome_naming_source_and_reason(
                 "VALUES (?, ?, ?)",
                 ("ABC-401", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
             )
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ABC-401"),
-            )
+            # _insert_job_now, not a bare INSERT -- see its docstring (lode-4e48).
+            _insert_job_now(conn, "refresh", "ABC-401")
     finally:
         conn.close()
 
