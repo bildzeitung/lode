@@ -78,6 +78,17 @@ fi
 # synchronously, so read from a short-lived cache refreshed in the background.
 # We cache ALL open issues (one call) and count by stage: in_progress = build,
 # then the workflow labels. Zero-count stages are omitted.
+#
+# `--limit 0` (lode-9bbq): this site was missed by lode-2gun's grep-based audit
+# (`-C "$cwd"` sits between `bd` and `list`, so a literal 'bd list' grep never
+# matched it). Pinned rather than left capped -- unlike lode-2gun's other sites,
+# this one is genuinely latency-sensitive (comment above), but that argument
+# only bites a SYNCHRONOUS call; this read is already backgrounded behind the
+# TTL cache below (the foreground render only ever reads the cache file), so
+# --limit 0 adds no latency the user can feel. It also isn't hypothetical: this
+# repo's open-issue count is already past bd's documented default of 50, so a
+# future bd that starts enforcing that default would misreport the fleet
+# counters TODAY, not just eventually.
 pipeline_part=""
 if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     cache="${TMPDIR:-/tmp}/lode-statusline-bd.cache"
@@ -89,7 +100,7 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
         # Reset mtime first so the next few renders (within the ~0.85s bd takes)
         # don't each spawn their own refresh; then refresh detached.
         touch "$cache"
-        ( if bd -C "$cwd" list --json 2>/dev/null > "$cache.new" \
+        ( if bd -C "$cwd" list --limit 0 --json 2>/dev/null > "$cache.new" \
               && mv -f "$cache.new" "$cache"; then :; else rm -f "$cache.new"; fi ) >/dev/null 2>&1 &
     fi
     if [ -s "$cache" ]; then
