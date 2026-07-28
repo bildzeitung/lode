@@ -32,6 +32,7 @@ this repo use (see tests/test_merge_precheck.py's own header).
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,35 @@ def test_clean_merge_exits_0_and_uses_the_precomputed_message(
     assert (repo / "a.txt").read_text() == "from A\n"
     status = _git(repo, "status", "--porcelain")
     assert status.stdout == ""
+
+
+def test_clean_merge_heartbeats_the_single_lander_lock(tmp_path: Path) -> None:
+    """lode-m87j: every call to this script must re-stamp the single-lander
+    lock (scripts/land-lock.sh heartbeat), because this script is the sole
+    call site that covers BOTH of /land Section 3's merge loops (the first
+    pass and the isolation-replay copy) -- a dropped heartbeat here silently
+    reintroduces the acquisition-age exposure the ticket exists to close.
+    Behavioural, not a source grep: seeds a lock file that LOOKS old, then
+    asserts its recorded epoch actually advanced after the script ran."""
+    repo = _init_repo(tmp_path)
+    _branch_from(repo, "trunk", "origin/land/lode-hb")
+    _commit_file(repo, "hb.txt", "from HB\n", "HB adds hb.txt")
+    msg_dir = tmp_path / "msgs"
+    _write_msg(msg_dir, "lode-hb", "Merge land/lode-hb: heartbeat check (lode-hb)")
+
+    lock = repo / ".git" / "land.lock"
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    result = _run("lode-hb", msg_dir, repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert lock.exists(), "the heartbeat call must not delete the lock file"
+    new_epoch = int(lock.read_text().split()[2])
+    assert new_epoch > old_epoch, (
+        "scripts/land-merge-one.sh did not heartbeat scripts/land-lock.sh -- "
+        "the lock's recorded epoch was not refreshed (lode-m87j)"
+    )
 
 
 def test_missing_message_file_exits_2_loud_never_empty_message_merge(
