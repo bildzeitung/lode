@@ -8,29 +8,23 @@ locking the exact real-world case that motivated the gate.
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
+from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # scripts/ is a plain directory of standalone scripts, not an installed
 # package (nothing else in the repo imports from it) -- load the module
-# straight from its file path rather than relying on pytest's rootdir ending
-# up on sys.path, which is not guaranteed under the default "prepend" import
-# mode with no tests/__init__.py.
-_spec = importlib.util.spec_from_file_location(
+# straight from its file path via the shared helper (tests/conftest.py).
+# check_links.py has a frozen @dataclass, which is exactly why that helper
+# registers the module in sys.modules before executing it -- see its
+# docstring.
+check_links = load_module_from_path(
     "check_links", REPO_ROOT / "scripts" / "check_links.py"
 )
-check_links = importlib.util.module_from_spec(_spec)
-# check_links.py has a frozen @dataclass -- dataclasses looks its own module
-# up via sys.modules during class creation, so the module must be registered
-# there *before* exec_module runs it, not just returned from module_from_spec.
-sys.modules[_spec.name] = check_links
-_spec.loader.exec_module(check_links)
 check = check_links.check
 github_slug = check_links.github_slug
 

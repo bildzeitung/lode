@@ -94,6 +94,7 @@ says what it means.
 """
 
 import asyncio
+import importlib.util
 import ipaddress
 import logging
 import socket
@@ -101,6 +102,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from textual.pilot import Pilot
@@ -549,6 +551,46 @@ def _cache_cross_encoder_model_load():
     patcher.setattr(FastEmbedCrossEncoder, "_load", _cached_load)
     yield
     patcher.undo()
+
+
+# --- Load a repo-root script/module by explicit file path (lode-7ed9) ------
+#
+# scripts/ is a plain directory of standalone scripts, not an installed
+# package, and noxfile.py isn't on sys.path either (it lives one level above
+# tests/) -- both need loading straight from their file path rather than
+# relying on pytest's rootdir-insertion import mode to have put them on
+# sys.path, which is not guaranteed under the default "prepend" mode with no
+# tests/__init__.py.
+#
+# Three call sites (tests/test_check_links.py, tests/test_model_cache_key_
+# script.py, tests/test_noxfile_venv_tool.py) had independently reimplemented
+# this exact spec_from_file_location -> module_from_spec -> exec_module
+# sequence, and had already drifted: the first two agreed on registering the
+# loaded module in sys.modules BEFORE exec_module runs it -- required for
+# check_links.py, whose frozen @dataclass looks its own module up via
+# sys.modules during class creation -- but test_noxfile_venv_tool.py's copy
+# omitted that registration entirely (noxfile.py happens not to need it
+# today), and it alone asserted spec/spec.loader are not None. This helper
+# takes the union of both: the sys.modules registration always (harmless for
+# a module that doesn't need it, load-bearing for one that does) plus the
+# defensive assert, so the next repo-root script loaded this way gets both
+# protections for free instead of depending on whoever copies the pattern
+# next to remember either one.
+
+
+def load_module_from_path(name: str, path: Path) -> ModuleType:
+    """Load the script/module at ``path`` under module name ``name``.
+
+    Registers the module in ``sys.modules`` before executing it -- required
+    for a module defining a dataclass (``dataclasses`` looks its own module
+    up via ``sys.modules`` during class creation), harmless otherwise.
+    """
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
