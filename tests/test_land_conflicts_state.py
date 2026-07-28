@@ -68,7 +68,11 @@ def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
     pre-dates lode-sfnb, runs on every branch every pass, and the ticket is
     explicit that a fix covering only Section 3 misses the frequent case."""
     site = next(
-        (b for b in _skill_blocks() if 'merge-precheck.sh origin/trunk "origin/land/<id>"' in b),
+        (
+            b
+            for b in _skill_blocks()
+            if 'merge-precheck.sh origin/trunk "origin/land/<id>"' in b
+        ),
         None,
     )
     assert site is not None, "could not find 2b's merge-precheck.sh fenced block"
