@@ -70,11 +70,13 @@ chain) rather than being swallowed as just another job failure:
 
 **Escape hatch (explicit, greppable): ``@pytest.mark.network``** (registered in
 ``pyproject.toml``) lifts *both* guards for a test that deliberately needs real
-Anthropic-SDK / network access — currently
-``tests/test_eval_live.py::test_eval_golden_set_live``,
-``tests/test_models_smoke.py`` (real HF Hub downloads), and two
-``tests/test_auth.py`` cases that construct a real ``anthropic.Anthropic()`` on
-purpose to test ``lode.auth.build_client``'s own credential-resolution wrapping.
+network access **or** — the more common case — a real, un-mocked
+``anthropic.Anthropic()`` construction that never opens a socket, which guard 1
+cannot tell apart from a mock that broke. For the current set, grep rather than
+trusting a list here (a hand-maintained inventory silently goes stale, and a
+wrong count is worse than no count)::
+
+    grep -rn "@pytest.mark.network" tests/
 
 ``@pytest.mark.slow`` additionally lifts *only* guard 2 (not guard 1): the
 real-reranker-model-load tier (lode-pql/lode-gmo, see above) may need one HF Hub

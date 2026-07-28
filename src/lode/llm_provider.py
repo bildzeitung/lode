@@ -341,23 +341,20 @@ def _anthropic_error_from_exception(
     equivalent ``openai.APIStatusError``. ``context`` names what was being
     attempted.
 
-    On the three submit sites, most reachably this converts the 400 that
-    :func:`_anthropic_effort_kwargs` cannot predict -- ``reasoning_effort``
-    set to a legal *value* on a tier whose *model* does not support it (e.g.
-    any effort on Haiku 4.5/Sonnet 4.5, or ``xhigh``/``max`` below Opus 4.7)
-    -- into a diagnosable seam-level error instead of a raw SDK exception
-    escaping past code that only expects :class:`LLMProviderError`.
-
-    On the two polling sites, no ``reasoning_effort`` pairing 400 can arise --
-    there is nothing left to predict -- but a 429/5xx/404 while polling
-    should not escape past this seam's contract either (lode-i7yr):
-    ``enrich.collect_enrich_batch`` calls :meth:`collect_batch` with no
-    ``try`` of its own, so its caller only expects ``LLMProviderError``.
+    Most reachably this converts the 400 that :func:`_anthropic_effort_kwargs`
+    cannot predict -- ``reasoning_effort`` set to a legal *value* on a tier
+    whose *model* does not support it (e.g. any effort on Haiku 4.5/Sonnet
+    4.5, or ``xhigh``/``max`` below Opus 4.7) -- into a diagnosable seam-level
+    error instead of a raw SDK exception escaping past code that only expects
+    :class:`LLMProviderError`. That one is submit-only; see
+    :meth:`AnthropicProvider.collect_batch` for why the polling pair is
+    wrapped too.
 
     **Not** the non-status ``anthropic.APIError`` subclasses
     (``APITimeoutError``, ``APIConnectionError``): a timeout is not a
     rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
-    surfacing raw today.
+    surfacing raw today. Nor a failure raised while *streaming* a batch's
+    JSONL results -- see :meth:`AnthropicProvider.collect_batch` (lode-3gtu).
     """
     _log.error(
         "Anthropic call failed (%s, status_code=%s request_id=%s): %s",
@@ -634,9 +631,9 @@ class AnthropicProvider:
 
         # These two SDK calls carry no `reasoning_effort`, so no pairing 400
         # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
-        # must not escape as a raw anthropic exception past this seam's
-        # LLMProviderError contract (lode-i7yr). Same wrap, same shape as the
-        # three request-submitting call sites above.
+        # must not escape raw (lode-i7yr): `enrich.collect_enrich_batch` calls
+        # this with no `try` of its own, so its caller only ever expects
+        # LLMProviderError.
         try:
             batch = self._client.beta.messages.batches.retrieve(
                 handle, timeout=timeout_s
@@ -657,6 +654,15 @@ class AnthropicProvider:
                 exc, context=f"batches.results handle={handle}"
             ) from exc
 
+        # The loop below is deliberately OUTSIDE that wrap. `batches.results`
+        # resolves the HTTP status before it builds the decoder it returns, so
+        # an `APIStatusError` can only ever come from the call above, never
+        # from iterating -- widening the `try` would catch nothing more. What
+        # the decoder *does* defer is the body: it streams lazily
+        # (`http_response.iter_bytes`) and json-decodes each line as the loop
+        # pulls it, so a truncated stream or a malformed line surfaces here as
+        # a raw `httpx`/`json` error -- outside any `anthropic` type, so no
+        # `except anthropic.*` clause would reach it. Tracked as lode-3gtu.
         results: list[BatchResult] = []
         for result in batch_results:
             if result.result.type == "succeeded":
