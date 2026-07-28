@@ -407,15 +407,16 @@ only ever fetches and diffs by ref, so a recycled worktree's foreign commits are
 that half of lode-nt98's exposure was, and remains, nil for this agent); this is purely a worktree-leak
 defect, distinct from and not to be conflated with the correctness question. The fix:
 `land-review.md`'s own frontmatter role now carries the same recycled-worktree guard `coding.md` and
-`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff
-work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — see
+`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk`
+— lode-isl3 — asserted before any fetch/diff work; a failure rescues the rewound ref and resets onto
+`origin/trunk` HEAD) — see
 [`land-review.md`](../../agents/land-review.md) and
 [docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
 way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
 about Section 4 itself needed to change. That survives the guard's own detection blind spot (the
 check cannot recognize a worktree recycled onto a `land/<other-id>` that has *since landed*, since its
-`HEAD` is by then genuinely an ancestor of `trunk`) intact, since what the guard fails to notice
+`HEAD` is by then genuinely an ancestor of `origin/trunk`) intact, since what the guard fails to notice
 already satisfies that predicate. **lode-3v1p** closed the sweep's *other* arm too: in the blind-spot
 case, the remediation's `git clean -fd` used to run only inside the failed-check branch, so it never
 fired there, and the recycled worktree's untracked leftovers survived to trip the
