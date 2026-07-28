@@ -297,22 +297,26 @@ model does not support the level you ask for still reaches the API and gets
 rejected. A model→capability predicate to predict this ahead of time was
 deliberately rejected again as a moving target (lode-3dlt's option 1,
 reaffirmed by lode-90o7) — **set `reasoning_effort` only alongside a model
-that supports it** is still the operative guidance. What changed: every
-`anthropic.APIStatusError` any `AnthropicProvider` call site can raise
-(`structured_call`'s two branches, `submit_batch`) is now caught and
-converted to `LLMProviderError` — status code and request id preserved — via
-`_anthropic_error_from_exception`, instead of a raw
-`anthropic.BadRequestError` escaping the seam. `OpenAIProvider` already had
-this "wrap every SDK exception" guarantee for its own `responses.create` call
-(`OpenAIProvider._error_from_exception`, predates this ticket) — what it was
-missing, and now has too, is the pre-flight *value* check: `_openai_effort_kwargs` /
-`_OPENAI_EFFORT_LEVELS` reject an unsupported effort *value* before any
-request is sent, mirroring `_anthropic_effort_kwargs` exactly (its own legal
-set — `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` — is pinned to the
-installed SDK's own `Reasoning.effort` Literal, not hand-typed, the same
-"ladder can grow" guard `_ANTHROPIC_EFFORT_LEVELS` already has). Neither
-provider predicts the value/model *pairing* ahead of time — both now fail the
-same clean way when the API rejects one.
+that supports it** is still the operative guidance. What changed: a request
+the API *rejects* now surfaces as `LLMProviderError`, status code and request
+id preserved, on both providers — `AnthropicProvider` gained that wrap at its
+three request-submitting call sites, and `OpenAIProvider` already had it. (A
+*timeout* is not a rejected request and is not covered: `anthropic`'s
+non-status errors still surface raw — see `qa.MAX_TOKENS`.) `OpenAIProvider`
+also gained the pre-flight *value* check `AnthropicProvider` already had; its
+legal set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, derived
+from the installed SDK's own `Reasoning.effort` Literal rather than
+hand-typed.
+
+**What lode-90o7 deliberately did NOT do: validate at config load.** Both
+providers check the effort *value* at the seam, on the first call — not when
+`config.toml` is parsed. So a plain typo (`reasoning_effort = "LOW"`) starts
+clean but fails at first use, and on the enrichment path that failure is
+classified as *transient* by `worker.run_one`: it charges an attempt, backs
+off, and dead-letters the job after `retry_max_attempts`, rather than
+refusing to start. A `Settings` validator (the shape
+`_azure_api_version_required_with_endpoint` already uses) would move that to
+startup; it is filed as lode-tvps, not done here.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort

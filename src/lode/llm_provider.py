@@ -39,17 +39,12 @@ against exactly; read that first for the *why*. This module owns the *what*:
   ``anthropic.BadRequestError``. That check is on the *value* only, not on the
   value/model *pairing* -- see :class:`AnthropicProvider`'s own docstring for
   what that leaves reachable, and for the ``thinking``-interaction note.
-  **lode-90o7** closes the reachable gap this left: an unsupported
-  value/model *pairing* still is not predicted ahead of time, but the
-  ``anthropic.APIStatusError`` it produces is now caught at every
-  ``AnthropicProvider`` call site and converted to :class:`LLMProviderError`
-  (:func:`_anthropic_error_from_exception`) instead of escaping raw. The same
-  ticket adds the symmetric pre-flight *value* check to
-  :class:`OpenAIProvider` (:func:`_openai_effort_kwargs` /
-  :data:`_OPENAI_EFFORT_LEVELS`) -- its ``responses.create`` call already
-  wrapped any SDK exception into :class:`LLMProviderError`
-  (:meth:`OpenAIProvider._error_from_exception`), so only the value-level
-  pre-flight gate was missing there, not the clean-failure guarantee itself.
+  **lode-90o7** closes the reachable gap that left: the *pairing* is still not
+  predicted, but the rejection it produces is now converted to
+  :class:`LLMProviderError` on both providers -- see
+  :class:`AnthropicProvider`'s docstring for the Anthropic half (and for what
+  it deliberately does *not* cover) and :func:`_openai_effort_kwargs` for the
+  OpenAI half.
 - **The batch handle stays the bare Anthropic ``batch.id`` string** (identical
   to ``submit_enrich_batch`` today) -- schema information never needs to
   survive to :meth:`collect_batch` because :class:`BatchResult.parsed` holds
@@ -337,19 +332,25 @@ def _anthropic_error_from_exception(
 ) -> LLMProviderError:
     """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7).
 
-    Every ``AnthropicProvider`` call site that reaches the API funnels its
-    ``anthropic.APIStatusError`` here -- the same "log + wrap, preserve
-    status_code/request_id" shape :class:`OpenAIProvider._error_from_exception`
+    The three call sites that *submit* a request -- ``messages.create``,
+    ``messages.parse``, ``batches.create`` -- funnel their
+    ``anthropic.APIStatusError`` here, in the same "log + wrap, preserve
+    status_code/request_id" shape :meth:`OpenAIProvider._error_from_exception`
     already uses for the equivalent ``openai.APIStatusError``. Most reachably
     this converts the 400 that :func:`_anthropic_effort_kwargs` cannot
     predict -- ``reasoning_effort`` set to a legal *value* on a tier whose
     *model* does not support it (e.g. any effort on Haiku 4.5/Sonnet 4.5, or
     ``xhigh``/``max`` below Opus 4.7) -- into a diagnosable seam-level error
     instead of a raw SDK exception escaping past code that only expects
-    :class:`LLMProviderError`. ``context`` names what was being attempted
-    (a single model for the immediate paths, or the batch shape for
-    :meth:`AnthropicProvider.submit_batch`, which submits many requests --
-    possibly spanning several models -- in one API call).
+    :class:`LLMProviderError`. ``context`` names what was being attempted.
+
+    **Not** the two polling calls in :meth:`AnthropicProvider.collect_batch`
+    (``batches.retrieve`` / ``batches.results``), which carry no
+    ``reasoning_effort`` and are left raw by lode-90o7 -- tracked as a separate
+    seam-coherence gap (lode-i7yr). Nor the non-status ``anthropic.APIError``
+    subclasses (``APITimeoutError``, ``APIConnectionError``): a timeout is not
+    a rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
+    surfacing raw today.
     """
     _log.error(
         "Anthropic call failed (%s, status_code=%s request_id=%s): %s",
@@ -451,17 +452,15 @@ class AnthropicProvider:
     = Haiku 4.5, ``qa_llm`` = Sonnet 4.6 -- so e.g.
     ``enrichment_llm = {model = "claude-haiku-4-5", reasoning_effort = "low"}``
     reaches the API and gets rejected, where before this change that would
-    have been a raw ``anthropic.BadRequestError`` escaping the seam (before
-    lode-wnz1 the effort was silently dropped instead -- also not what you
-    want). A model->capability predicate was deliberately rejected as a moving
-    target (lode-3dlt option 1, reaffirmed by lode-90o7), so this is not
-    predicted ahead of time; every ``anthropic.APIStatusError`` any call site
-    below raises -- including this one -- is instead caught and converted to
+    have been a raw ``anthropic.BadRequestError`` escaping the seam. A
+    model->capability predicate was deliberately rejected as a moving target
+    (lode-3dlt option 1, reaffirmed by lode-90o7), so this is not predicted
+    ahead of time; the rejection is instead caught at each of the three
+    request-submitting call sites below and converted to
     :class:`LLMProviderError` via :func:`_anthropic_error_from_exception`,
     with ``status_code``/``request_id`` preserved for diagnosis. Setting
     ``reasoning_effort`` still requires pointing the tier at a model that
-    supports the level you ask for; getting that wrong now fails loud and
-    clean rather than loud and raw.
+    supports the level you ask for.
     """
 
     def __init__(self, client: anthropic.Anthropic) -> None:
@@ -480,11 +479,7 @@ class AnthropicProvider:
         tool_name: str | None = None,
         tool_description: str | None = None,
     ) -> BaseModelT:
-        # Deferred -- lode-4q97; APIStatusError is caught below (lode-90o7).
-        # By the time a caller holds an AnthropicProvider, `anthropic` is
-        # already imported (auth.build_client did it to construct the
-        # client), so this is a cheap sys.modules lookup, not a fresh cost.
-        import anthropic
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
         # reasoning_effort -> output_config.effort (lode-wnz1): validated up
         # front, then splatted -- empty when unset, so the kwarg is absent
@@ -512,10 +507,8 @@ class AnthropicProvider:
                     **effort_kwargs,
                 )
             except anthropic.APIStatusError as exc:
-                # lode-90o7: most reachably, `reasoning_effort` set to a legal
-                # value on a tier whose model doesn't support it (e.g. any
-                # effort on the Haiku 4.5 enrichment default) -- see
-                # `_anthropic_error_from_exception` and the class docstring.
+                # lode-90o7 -- see `_anthropic_error_from_exception` and the
+                # class docstring.
                 raise _anthropic_error_from_exception(
                     exc, context=f"model={model}"
                 ) from exc
@@ -544,8 +537,7 @@ class AnthropicProvider:
                 **effort_kwargs,
             )
         except anthropic.APIStatusError as exc:
-            # lode-90o7 -- see the forced-tool-use branch above and
-            # `_anthropic_error_from_exception`.
+            # lode-90o7 -- see the forced-tool-use branch above.
             raise _anthropic_error_from_exception(
                 exc, context=f"model={model}"
             ) from exc
@@ -612,20 +604,16 @@ class AnthropicProvider:
             )
             api_requests.append({"custom_id": req.custom_id, "params": params})
 
-        # Deferred -- lode-4q97; APIStatusError is caught below (lode-90o7).
-        import anthropic
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
 
         try:
             batch = self._client.beta.messages.batches.create(
                 requests=api_requests, timeout=timeout_s
             )
         except anthropic.APIStatusError as exc:
-            # lode-90o7: a single `batches.create` call submits every request
-            # in `requests` atomically, so a rejected effort/model pairing on
-            # any one of them fails the whole submission -- see
-            # `_anthropic_error_from_exception`. No single `model` to name
-            # here (unlike the immediate structured_call path), so the
-            # context names the batch shape instead.
+            # lode-90o7: one `batches.create` submits every request atomically,
+            # so a rejected effort/model pairing on any one of them fails the
+            # whole submission -- hence a batch-shaped `context`, not a model.
             models = sorted({req.model for req in requests})
             raise _anthropic_error_from_exception(
                 exc, context=f"batch of {len(requests)} request(s), models={models}"
@@ -635,6 +623,11 @@ class AnthropicProvider:
     def collect_batch(
         self, handle: str, *, timeout_s: float
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
+        # These two SDK calls are deliberately NOT wrapped by lode-90o7 -- they
+        # carry no `reasoning_effort`, so no pairing 400 can arise here. A
+        # 429/5xx from either still escapes as a raw anthropic exception past a
+        # seam whose contract says callers see LLMProviderError; that gap is
+        # tracked as lode-i7yr, not widened here.
         batch = self._client.beta.messages.batches.retrieve(handle, timeout=timeout_s)
         if batch.processing_status != "ended":
             return ("pending", None)
@@ -738,14 +731,10 @@ def _extract_content_filter(body: object) -> object | None:
     return error.get("content_filter_result")
 
 
-# The legal `reasoning.effort` values (lode-90o7) -- mirrors the installed
-# SDK's own `openai.types.shared.reasoning_effort.ReasoningEffort` Literal
-# exactly, including order. Deliberately NOT hand-typed from any external
-# doc: `test_openai_effort_levels_match_the_installed_sdk_literal` pins this
-# tuple to that Literal, the same "ladder can grow" guard
-# `test_effort_levels_match_the_installed_sdk_literal` already gives
-# `_ANTHROPIC_EFFORT_LEVELS` -- so a value OpenAI adds or drops upstream
-# can't silently desync from what lode accepts.
+# The legal `reasoning.effort` values (lode-90o7) -- mirrors the installed SDK's
+# own `Reasoning.effort` Literal, including order, and is pinned to it by
+# `test_openai_effort_levels_match_the_installed_sdk_literal`. Same "ladder can
+# grow" rationale as `_ANTHROPIC_EFFORT_LEVELS` above.
 _OPENAI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
@@ -759,18 +748,13 @@ def _openai_effort_kwargs(
     so :meth:`OpenAIProvider._call_responses_raw` can splat it unconditionally
     with no ``None`` ever reaching the wire.
 
-    Validates against :data:`_OPENAI_EFFORT_LEVELS` so an invalid value fails
-    clearly and immediately -- via :class:`LLMProviderError`, before any
-    request is sent -- rather than only being caught after a wasted round
-    trip. This closes the pre-flight gap :class:`OpenAIProvider` had relative
-    to :class:`AnthropicProvider`: an unsupported *value* now fails the same
-    way on both providers. Note this checks the *value* only, not the
-    value/``model`` *pairing* -- same limitation, same rationale, as
-    :func:`_anthropic_effort_kwargs` (a model->capability predicate was
-    rejected as a moving target, lode-3dlt option 1). An unsupported pairing
-    still reaches the API and comes back as a clean :class:`LLMProviderError`
-    regardless, via :meth:`OpenAIProvider._error_from_exception`, which
-    already wraps every exception ``responses.create`` can raise.
+    Validates against :data:`_OPENAI_EFFORT_LEVELS` before any request is sent,
+    closing the pre-flight gap :class:`OpenAIProvider` had relative to
+    :class:`AnthropicProvider`. Value-only, not the value/``model``
+    *pairing* -- same limitation and rationale as
+    :func:`_anthropic_effort_kwargs`; a rejected pairing still comes back as a
+    clean :class:`LLMProviderError` via
+    :meth:`OpenAIProvider._error_from_exception`.
     """
     if reasoning_effort is None:
         return {}

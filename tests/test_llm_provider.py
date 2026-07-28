@@ -73,9 +73,7 @@ def _fake_tool_use_client(payload: dict) -> mock.MagicMock:
     return client
 
 
-def _anthropic_bad_request(
-    message: str = "effort not supported for this model",
-) -> object:
+def _anthropic_bad_request() -> object:
     """A real ``anthropic.BadRequestError`` (lode-90o7) -- the shape the SDK
     actually raises for a legal ``reasoning_effort`` *value* on a model that
     doesn't support it, the reachable gap this ticket closes. A real instance
@@ -86,6 +84,7 @@ def _anthropic_bad_request(
     import anthropic
     import httpx
 
+    message = "effort not supported for this model"
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     response = httpx.Response(
         400,
@@ -675,14 +674,29 @@ def _fake_responses_client(
     return client
 
 
+def _openai_bad_request() -> object:
+    """A real ``openai.BadRequestError`` -- the OpenAI sibling of
+    :func:`_anthropic_bad_request`; see that helper for why a real instance
+    rather than a duck-typed fake.
+    """
+    import httpx
+    import openai
+
+    message = "reasoning.effort is not supported for this model"
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"x-request-id": "req-test-2"},
+        json={"error": {"message": message}},
+    )
+    return openai.BadRequestError(message, response=response, body=response.json())
+
+
 def test_openai_effort_levels_match_the_installed_sdk_literal() -> None:
-    # `_OPENAI_EFFORT_LEVELS` claims to mirror the installed SDK's own effort
-    # Literal exactly (lode-90o7) -- pin that claim mechanically, the same
-    # "ladder can grow" guard `_ANTHROPIC_EFFORT_LEVELS` already has via
-    # test_effort_levels_match_the_installed_sdk_literal above. The ticket
-    # this level set came from claimed a stale 4-value set
-    # (minimal/low/medium/high); deriving from the SDK's own Literal instead
-    # of hand-typing that claim is exactly what this test exists to enforce.
+    # The ticket this level set came from claimed a stale 4-value set
+    # (minimal/low/medium/high); deriving from the SDK's own Literal instead of
+    # hand-typing that claim is exactly what this test exists to enforce.
     import typing
 
     from openai.types.shared_params.reasoning import Reasoning
@@ -720,30 +734,14 @@ def test_openai_structured_call_rejects_an_invalid_effort_value(
 
 
 def test_openai_structured_call_wraps_a_bad_request_from_unsupported_pairing() -> None:
-    # lode-90o7: a legal *value* on a model that doesn't support it -- the
-    # pairing lode does not predict ahead of time on either provider -- still
-    # reaches the API and comes back as openai.BadRequestError.
-    # OpenAIProvider._error_from_exception already wraps every SDK exception
-    # from responses.create (predates this ticket); this pins that guarantee
-    # specifically for the reasoning_effort pairing failure mode the ticket
-    # exists to close, with a real SDK exception rather than a duck-typed fake
-    # (see test_openai_structured_call_maps_sdk_exception_diagnostics below
-    # for the generic version of this coverage).
-    import httpx
-    import openai
-
-    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
-    response = httpx.Response(
-        400,
-        request=request,
-        headers={"x-request-id": "req-test-2"},
-        json={"error": {"message": "reasoning.effort is not supported for this model"}},
-    )
-    bad_request = openai.BadRequestError(
-        "reasoning.effort is not supported for this model",
-        response=response,
-        body=response.json(),
-    )
+    # lode-90o7 AC: "tests cover the unsupported-pairing path for BOTH
+    # providers". OpenAIProvider._error_from_exception already wrapped every
+    # SDK exception from responses.create (predates this ticket) -- this pins
+    # that guarantee for the reasoning_effort pairing specifically, so the
+    # OpenAI half of the ticket's claim can't silently regress.
+    # test_openai_structured_call_maps_sdk_exception_diagnostics below covers
+    # the same wrap generically.
+    bad_request = _openai_bad_request()
     client = mock.MagicMock()
     client.responses.create.side_effect = bad_request
     provider = OpenAIProvider(client)
