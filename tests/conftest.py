@@ -94,6 +94,7 @@ says what it means.
 """
 
 import asyncio
+import importlib.util
 import ipaddress
 import logging
 import socket
@@ -101,6 +102,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from textual.pilot import Pilot
@@ -549,6 +551,55 @@ def _cache_cross_encoder_model_load():
     patcher.setattr(FastEmbedCrossEncoder, "_load", _cached_load)
     yield
     patcher.undo()
+
+
+# --- Load a repo-root script/module by explicit file path (lode-7ed9) ------
+#
+# scripts/ is a plain directory of standalone scripts, not an installed
+# package, and noxfile.py sits one level above tests/ -- neither is reachable
+# by a name-based import, so both are loaded straight from their file path.
+#
+# Three call sites (tests/test_check_links.py, tests/test_model_cache_key_
+# script.py, tests/test_noxfile_venv_tool.py) had independently reimplemented
+# this spec_from_file_location -> module_from_spec -> exec_module sequence,
+# and had already drifted: the first two registered the loaded module in
+# sys.modules BEFORE exec_module and the third did not, while only the third
+# narrowed the Optional spec. This helper is the union, so a fourth call site
+# gets both without whoever writes it having to know about either.
+
+
+def load_module_from_path(name: str, path: Path) -> ModuleType:
+    """Load the script/module at ``path`` under module name ``name``.
+
+    Registers the module in ``sys.modules`` before executing it. That is
+    load-bearing, not defensive: a module defining a dataclass fails outright
+    without it, because ``dataclasses`` looks the class's own module up via
+    ``sys.modules`` during class creation. scripts/check_links.py has a frozen
+    ``@dataclass`` and dies with ``AttributeError: 'NoneType' object has no
+    attribute '__dict__'`` if it is executed unregistered.
+
+    The registration is permanent for the session -- nothing evicts it -- so
+    ``name`` must not be a name anything else imports: a hypothetical
+    scripts/build.py loaded as ``"build"`` would displace the real ``build``
+    distribution for every later test in that worker. The assert below does
+    NOT catch that; the module being displaced is typically not yet resident
+    when the load happens. It catches the collision that always *is*
+    detectable -- loading the same name a second time -- which is a genuine
+    hazard for any caller whose module has import-time side effects.
+    """
+    assert name not in sys.modules, (
+        f"{name!r} is already in sys.modules -- loading {path} under that "
+        f"name would replace it for the rest of the session"
+    )
+    spec = importlib.util.spec_from_file_location(name, path)
+    # Type-narrowing only, not a real failure mode: spec_from_file_location
+    # returns None only when no loader claims the suffix, which cannot happen
+    # for the .py paths this is called with.
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
