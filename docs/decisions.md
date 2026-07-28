@@ -2068,7 +2068,17 @@ are catalogued in [configuration.md](configuration.md).
   were written (`code/SKILL.md`) and have not produced this failure. Adding `isolation: worktree` to
   their frontmatter too is not ruled out, but nothing about this decision obligates it, and doing so
   speculatively would be scope this ticket never asked for. Revisit only if a comparable incident shows
-  up on one of those dispatches. Documented in [`land-review.md`](../.claude/agents/land-review.md),
+  up on one of those dispatches.
+
+  **Superseded, and deliberately left as-written.** `lode-ojsr` (2026-07-27, below) added the
+  `isolation:` frontmatter key to both `coding.md` and `code-reviewer.md`, so "what they lack" above
+  no longer describes `trunk`'s current state. This entry is kept exactly as it read when written —
+  this file is a chronological log, and the entry below is the correction, not an edit to this one.
+  The identical claim in [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate)
+  *was* updated in place on that same branch, which is different treatment for the same fact — but
+  not an unexplained inconsistency: that file documents current operational behavior and must stay
+  accurate to *now*, where this one is a dated record of a decision as it stood at the time.
+  Documented in [`land-review.md`](../.claude/agents/land-review.md),
   [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
   [agents-workflow.md — Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 - **The "revisit only if a comparable incident shows up" trigger above fired: `lode-ska2` (6-of-6
@@ -2105,9 +2115,17 @@ are catalogued in [configuration.md](configuration.md).
   runs from the main checkout on `trunk`, so **the frontmatter must already be merged to `trunk` before
   that probe can mean anything**, and `CLAUDE.md` forbids editing it there directly. That is the
   concrete reason the frontmatter belongs on *this* branch rather than deferred into `lode-09td` —
-  deferring it would deadlock the follow-up. `lode-09td` should confirm the resolution rule first;
-  if definitions turn out to resolve from the dispatching cwd, a nested probe becomes valid after all
-  and the ticket gets much cheaper.
+  deferring it would deadlock the follow-up. **The resolution rule does not rescue a nested probe
+  either way — if anything, it runs the other direction.** If definitions resolve from the
+  *dispatching cwd* instead of the main checkout, this second reason dissolves — `lode-ojsr`'s two
+  "frontmatter now present" dispatches genuinely had the key live — but that only reruns the primary
+  finding above with a confirmed-live mechanism, and the outcome was still identical to the
+  zero-mechanism control. That is a *more* conclusive invalidation of a nested probe, not a
+  validation of one: it shows nesting defeats the frontmatter even when the frontmatter is real, not
+  that a nested probe becomes viable. `lode-09td`'s top-level probe is required regardless of which
+  way the resolution rule resolves; confirming it only tells you whether `lode-ojsr`'s specific probe
+  was invalid once over or twice over, not whether some future nested probe could substitute for
+  `lode-09td`.
 
   **What shipped anyway, and what didn't.** The frontmatter addition ships, and **not** on the strength
   of the probe: the trigger this entry itself recorded — "revisit only if a comparable incident shows up
