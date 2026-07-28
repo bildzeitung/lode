@@ -22,6 +22,34 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
+# Producers push land/<id> ~2-3x per ticket (builder, code-reviewer, sometimes a
+# rebase), and each push fires a fresh, heavy run. Nothing in the landing loop
+# reads these check results -- /land re-gates locally and never consults
+# GitHub Actions (docs/release.md) -- so a superseded run on an older commit
+# of the same ref has zero consumers; cancelling it cannot lose information
+# (lode-2ouz, mirrored from tests.yml/build.yml). Applies MORE strongly here
+# than in either sibling: this leg is explicitly report-only (fail_ci_if_error:
+# false below) with no merge-gate status at all. The README's Codecov badge
+# reads Codecov's own dashboard for the `trunk` branch, not GitHub Actions
+# status, and /land's single-lander lock (lode-aps3) already serializes pushes
+# to trunk, so cancelling a superseded run here can at most leave the badge one
+# trunk-push behind until the next push's coverage run completes -- not stuck
+# or wrong.
+#
+# Safe to cancel mid-run without persisting a torn-off model-weights cache,
+# unlike the split-step precaution tests.yml takes (see that workflow's own
+# comment on `!cancelled()`): the single `actions/cache@v4` step below (as
+# opposed to tests.yml's actions/cache/restore + actions/cache/save) is a
+# composite action whose save (post) step ships with `post-if: success()` in
+# actions/cache's own action.yml -- success() evaluates false on both a
+# genuine failure AND a cancellation, so a run cancelled by this concurrency
+# group never reaches the save phase and can never persist a partial
+# $LODE_HOME/models under an immutable cache key. Verified against upstream
+# actions/cache's action.yml, not assumed (lode-s1ia).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Point LODE_HOME at a workspace-local path (rather than leaving it at the
   # default ~/.lode) so the model-weights cache below lives at a path that
@@ -40,6 +68,14 @@ env:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    # Well below GitHub's 360-minute default -- a hung model download (the
+    # exact failure the weights cache exists to mitigate) would otherwise burn
+    # six hours producing nothing, same rationale as tests.yml. Not lower:
+    # coverage instrumentation runs the full suite a second time, slower than
+    # bare `nox -s tests` -- recent green runs (`gh run list --workflow
+    # coverage.yml`) all land at ~2m20s-2m45s warm-cache, so 30 is ~12x
+    # headroom (lode-s1ia).
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
