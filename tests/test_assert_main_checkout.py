@@ -206,6 +206,29 @@ def test_unsupported_layout_is_a_machine_fault_not_a_location_verdict(
     assert "MACHINE FAULT" in result.stderr
 
 
+def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
+    tmp_path: Path,
+) -> None:
+    """cwd outside any git repository at all -- `git rev-parse` fails, and the
+    script must convert that into its own documented exit 2 with a lode-pcee
+    diagnostic, NOT let `set -e` propagate git's raw 128.
+
+    This is the same class of harness misdispatch that motivated
+    `scripts/isolation-guard.sh` (lode-ska2), so it is reachable, not
+    hypothetical. 128 is outside the 0/1/2 contract the header promises, and
+    a caller that only distinguishes those three cannot tell it apart from a
+    location verdict -- exactly the machine-vs-content confusion lode-9i2p's
+    exit-2 convention exists to prevent.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run(outside)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+
+
 def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
     """This script only asserts; it never redirects or repairs. Confirm HEAD,
     branches, and the working tree are untouched on a refusal."""
@@ -237,15 +260,34 @@ def _fenced_bash(markdown: str) -> str:
     from what is merely described. Same helper shape as
     tests/test_land_lock.py's `_fenced_bash`.
     """
+    return "\n".join(_fenced_bash_blocks(markdown))
+
+
+def _fenced_bash_blocks(markdown: str) -> list[str]:
+    """The ```bash fences kept SEPARATE, one string per block.
+
+    Block boundaries are load-bearing here in a way they are not for
+    `_fenced_bash`: per land/SKILL.md's governing rule (lode-sfnb) each fence
+    is executed as its own Bash invocation, so two commands are guaranteed to
+    share a shell -- and therefore `||` short-circuiting -- only if they are
+    in the same block. A pin that flattens the blocks first cannot tell
+    "guarded" from "merely preceded somewhere in the document".
+    """
     blocks: list[str] = []
+    current: list[str] = []
     in_bash = False
     for line in markdown.splitlines():
         if line.startswith("```"):
+            if in_bash:
+                blocks.append("\n".join(current))
+                current = []
             in_bash = not in_bash and line.strip() in {"```bash", "```sh"}
             continue
         if in_bash:
-            blocks.append(line)
-    return "\n".join(blocks)
+            current.append(line)
+    if in_bash and current:  # unterminated final fence
+        blocks.append("\n".join(current))
+    return blocks
 
 
 def test_land_skill_section1_calls_the_script() -> None:
@@ -257,6 +299,66 @@ def test_land_skill_section1_calls_the_script() -> None:
         "land/SKILL.md Section 1 never calls scripts/assert-main-checkout.sh -- "
         "the main-checkout identity check is not wired up (lode-pcee)"
     )
+
+
+def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
+    """The guard must be the first line of the SAME fenced block as every
+    mutation it protects -- not merely present, and not merely earlier in the
+    document.
+
+    This is the property the whole ticket turns on. Per `land/SKILL.md`'s own
+    governing rule (lode-sfnb), each fenced block is executed as a SEPARATE
+    Bash invocation with no shell state carried between them, so a guard
+    sitting in its own block can only `exit` that block's shell -- whether the
+    destructive block runs next is then an agent's judgment call made while
+    reading prose. Sharing one block is what makes `|| exit 1` mechanical:
+    `git reset --hard origin/trunk` becomes unreachable unless the assertion
+    passed, with no decision in between. Splitting the fences back apart, or
+    reordering within the block, restores exactly the defect lode-pcee fixed
+    -- an unrecoverable hard reset reached with nothing having established
+    where it is running. Both regressions are verified by mutation, and both
+    leave every other pin in this module green.
+    """
+    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+
+    # Anchor on the pass-start hard reset: it is the unrecoverable command, and
+    # it is unique to Section 1's block. Anchoring on a command instead of a
+    # section heading keeps the pin working when the surrounding prose is
+    # rewritten -- which it is, constantly, by concurrent tickets.
+    owning = [b for b in blocks if "git reset --hard origin/trunk" in b]
+    assert len(owning) == 1, (
+        "expected exactly one executed fence to run `git reset --hard "
+        f"origin/trunk`, found {len(owning)} -- land/SKILL.md's layout has "
+        "drifted and this pin needs re-anchoring, not deleting"
+    )
+    block = owning[0]
+
+    guard_at = block.find("scripts/assert-main-checkout.sh")
+    assert guard_at >= 0, (
+        "the fenced block that runs `git reset --hard origin/trunk` does not call "
+        "scripts/assert-main-checkout.sh at all (lode-pcee). A guard in a SEPARATE "
+        "block cannot stop this one -- per lode-sfnb each block is its own Bash "
+        f"invocation, so its `exit` ends only itself.\n\n{block}"
+    )
+
+    # ...and before every state-changing command sharing that block. `bd dolt
+    # pull` writes the local Dolt DB; the rest write git. Only `reset --hard` is
+    # unrecoverable, but a wrong-directory `checkout -f` is destructive too.
+    for mutation in (
+        "bd dolt pull",
+        "git checkout -f trunk",
+        "git fetch origin",
+        "git reset --hard origin/trunk",
+    ):
+        at = block.find(mutation)
+        assert at >= 0, (
+            f"{mutation!r} left Section 1's block -- if it moved somewhere "
+            "unguarded, that is the lode-pcee defect returning by another route"
+        )
+        assert guard_at < at, (
+            f"scripts/assert-main-checkout.sh runs AFTER `{mutation}` in the same "
+            f"block (lode-pcee) -- the assertion no longer protects it.\n\n{block}"
+        )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:

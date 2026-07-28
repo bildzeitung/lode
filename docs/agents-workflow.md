@@ -2187,6 +2187,20 @@ assumption would not have closed it.
   no `-C` anywhere — because the assertion is what guarantees cwd already *is* the main checkout,
   which a `-C` computed from cwd itself structurally cannot.
 
+  **The guard shares ONE fenced block with the commands it protects, and that is what makes it a
+  mechanism rather than an instruction.** Section 1's governing rule (lode-sfnb) runs every fenced
+  block as a *separate* Bash invocation with no state carried between them — so a guard in its own
+  block can only `exit` that block's shell, leaving "does the destructive block run next?" to the
+  lander's judgment while reading prose. That is the same strength of assurance the `-C` idiom
+  offered, and this ticket exists to delete it. As the first line of the *same* block, `|| exit 1`
+  makes `git reset --hard` **unreachable** unless the assertion passed, enforced by the shell with no
+  decision in between; nothing crosses a block boundary, so lode-sfnb is satisfied. Because
+  `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
+  `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
+  asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
+  (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
+  reordering within the block leave every other pin in that module green.
+
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 

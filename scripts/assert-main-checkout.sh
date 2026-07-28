@@ -44,11 +44,29 @@
 #           A diagnostic is already printed to stderr. STOP AND REPORT --
 #           /land is defined to run only in the main checkout; do not retry
 #           from here.
-# Exit 2 -- usage error, OR the repository layout is not the standard
-#           non-bare shape this script assumes (`--git-common-dir` not
-#           ending in `/.git`, e.g. a bare repo or an unusual $GIT_DIR).
-#           Caller bug or an unsupported layout, never a location verdict --
-#           do not treat this as "not the main checkout".
+# Exit 2 -- usage error; OR `git rev-parse` itself could not answer (cwd is
+#           not inside any repository, git is missing/too old for
+#           `--path-format`, the repo is unreadable); OR the repository
+#           layout is not the standard non-bare shape this script assumes
+#           (`--git-common-dir` not ending in `/.git`, e.g. a bare repo, a
+#           submodule, `--separate-git-dir`, or an unusual $GIT_DIR).
+#           Caller bug, machine fault, or an unsupported layout -- never a
+#           location verdict; do not treat this as "not the main checkout".
+#
+# Those three are the WHOLE contract: this script must never exit anything
+# else. Both `git rev-parse` calls below are therefore wrapped rather than
+# left to `set -e`, which would propagate git's own 128 -- an undocumented
+# status carrying a bare `fatal:` with no lode-pcee context, and, worse,
+# indistinguishable to the caller from the 0/1/2 it is told to expect. The
+# "not inside a repository" case is not hypothetical: it is the same class of
+# harness misdispatch that motivated `scripts/isolation-guard.sh` (lode-ska2).
+#
+# Not sourced from `scripts/gate-lib.sh`: that helper's "GATE COULD NOT RUN"
+# banner belongs to the CONTENT-verifying gates (validate-mermaid.sh,
+# merge-precheck.sh, release-bump.sh, release-latest-tag.sh), where exit 2
+# means "could not judge the content." This is a precondition GUARD, and it
+# matches its true siblings -- isolation-guard.sh and
+# recycled-worktree-guard.sh, neither of which sources gate-lib.sh either.
 
 set -euo pipefail
 
@@ -57,7 +75,14 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+if ! common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"; then
+  echo "assert-main-checkout: MACHINE FAULT -- 'git rev-parse --git-common-dir' failed" \
+       "(git's own error is above). cwd is most likely not inside any git repository at" \
+       "all, which is a harness/dispatch fault rather than a location verdict. STOP AND" \
+       "REPORT; do not treat this as 'not the main checkout'." >&2
+  exit 2
+fi
+
 case "$common_dir" in
   */.git)
     main_checkout="${common_dir%/.git}"
@@ -72,7 +97,13 @@ case "$common_dir" in
     ;;
 esac
 
-cwd_toplevel="$(git rev-parse --show-toplevel)"
+if ! cwd_toplevel="$(git rev-parse --show-toplevel)"; then
+  echo "assert-main-checkout: MACHINE FAULT -- 'git rev-parse --show-toplevel' failed" \
+       "(git's own error is above) even though --git-common-dir resolved to" \
+       "'$common_dir'. There is no work tree to compare against, so no location verdict" \
+       "is possible. STOP AND REPORT." >&2
+  exit 2
+fi
 
 if [ "$cwd_toplevel" != "$main_checkout" ]; then
   echo "NOT RUNNING IN THE MAIN CHECKOUT (lode-pcee): cwd resolves to '$cwd_toplevel'," \
