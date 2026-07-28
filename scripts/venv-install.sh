@@ -14,16 +14,26 @@
 # install_locked_venv LOCKFILE
 #   1. refresh uv itself, and pip inside the venv
 #   2. hash-verified runtime deps, from LOCKFILE
-#   3. the local package itself, editable, --no-deps (its runtime deps were
-#      already satisfied by step 2 -- --no-deps keeps this step from
-#      re-resolving them unhashed, which would defeat the lock)
-#   4. the dev extra, resolved FRESH from pyproject.toml -- deliberately NOT
-#      locked. Already-installed, hash-locked runtime deps satisfy
-#      pyproject.toml's ranges, so this step only resolves/installs the
-#      dev-only packages -- but it MUST repeat `-e`: a plain (non-editable)
-#      `.[dev]` here would silently overwrite step 3's editable install with
-#      a frozen build-time copy (the wrong-source-tree guard,
-#      tests/conftest.py, lode-jh80, exists to catch exactly that).
+#   3. the local package itself PLUS the dev extra, editable, resolved FRESH
+#      from pyproject.toml -- deliberately NOT locked. Already-installed,
+#      hash-locked runtime deps satisfy pyproject.toml's ranges, so this step
+#      only resolves/installs the dev-only packages on top -- but `-e` is
+#      REQUIRED: a plain (non-editable) `.[dev]` here would install a frozen
+#      build-time copy instead of the editable one (the wrong-source-tree
+#      guard, tests/conftest.py, lode-jh80, exists to catch exactly that).
+#
+#      An earlier revision ran `uv pip install -e . --no-deps` as its own
+#      step before this one, on the theory that skipping it might let this
+#      step re-resolve (and un-pin) the runtime deps step 2 just hash-
+#      verified. Reproduced and refuted (lode-xo99): with or without that
+#      extra step, the installed package set, versions, the lock's runtime
+#      pins, and the resolved `lode` source path came out byte-for-byte
+#      identical -- this step's own resolution already leaves already-
+#      installed, range-satisfying pins untouched, `--no-deps` or not, and
+#      it discards and rebuilds the editable `lode` install either way
+#      (visible in the install log as "Uninstalled 1 package" / "~ lode=="
+#      when the extra step ran first, vs "+ lode==" when it didn't). The
+#      separate step bought nothing but ~1.5s of dead work, so it's gone.
 #
 # && chained -- NOT relying on the caller's -e/errexit state -- so a failure
 # partway through is never masked by a later, unrelated command's exit
@@ -42,6 +52,5 @@ install_locked_venv() {
   pip install -U uv &&
     uv pip install -U pip &&
     uv pip install --require-hashes -r "$lockfile" &&
-    uv pip install -e . --no-deps &&
     uv pip install -e '.[dev]'
 }
