@@ -35,7 +35,6 @@ the corresponding test red, verified by hand while writing this suite.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -280,29 +279,3 @@ def test_mktemp_failure_is_a_machine_fault_not_a_conflict(tmp_path: Path) -> Non
     assert result.stdout == ""
     assert "GATE COULD NOT RUN" in result.stderr
     assert "not a branch conflict" in result.stderr
-
-
-def test_missing_gate_lib_fails_closed_exit_2(tmp_path: Path) -> None:
-    """lode-bss5, Finding B: MEASURED on trunk that a missing gate-lib.sh made
-    THIS exact script exit 1 on a bad-arity call and exit 127 on bad refs --
-    both are live verdicts elsewhere in this script's own 0/1/2 contract
-    (exit 1 is a REAL conflict), so either one is a false verdict that would
-    kick an innocent branch back needs-rebase. Reproduced by copying ONLY
-    this script (never gate-lib.sh) into an isolated directory, so
-    `. "$(dirname "$0")/gate-lib.sh"` resolves to a path that doesn't exist."""
-    isolated = tmp_path / "isolated"
-    isolated.mkdir()
-    copied = isolated / SCRIPT.name
-    shutil.copy2(SCRIPT, copied)
-
-    result = subprocess.run(
-        ["bash", str(copied)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "GATE COULD NOT RUN" in result.stderr
-    assert "gate-lib.sh is missing or unreadable" in result.stderr

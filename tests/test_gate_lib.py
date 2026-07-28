@@ -4,31 +4,117 @@ Why the shared `gate_could_not_run()` helper was extracted, and what the
 GATE_ADVISORY contract is: see that script's own header. It is the single
 source for both -- not restated here.
 
-These tests exercise the library directly, under `bash -c '...'` sourcing it
-the same way every real caller does (`. "$(dirname "$0")/gate-lib.sh"`),
-rather than through any one of the consuming scripts -- those each keep their
-own existing regression tests (tests/test_validate_mermaid_gate.py,
-tests/test_merge_precheck.py, tests/test_release_bump.py,
-tests/test_release_latest_tag.py, tests/test_land_merge_one.py), which double
-as this library's integration coverage. Deliberately no count here: the list
-grows as consumers migrate onto the library (lode-25xp added
-release-latest-tag.sh; lode-bss5 added land-merge-one.sh), and a hard-coded
-"three" just goes stale each time.
+The tests in the first half exercise the library directly, under `bash -c
+'...'` sourcing it the same way every real caller does
+(`. "$(dirname "$0")/gate-lib.sh"`), rather than through any one of the
+consuming scripts -- those each keep their own regression tests, which double
+as this library's integration coverage.
 
-Note what that division of labour does NOT cover: nothing here can see a
-consuming script setting GATE_ADVISORY *after* one of its own call sites,
-because these tests choose their own orderings. That ordering is pinned on
-the consumer side instead, by the advisory assertions in
-tests/test_validate_mermaid_gate.py and tests/test_merge_precheck.py.
+The SWEEPS in the second half are the other half of the division of labour,
+and they are deliberately not written per-consumer: they DISCOVER the consumer
+set at runtime (the `grep -l gate-lib.sh scripts/*.sh` that gate-lib.sh's own
+header names as the authoritative way to ask), so a script that starts
+sourcing the library tomorrow is covered the day it lands rather than the day
+someone remembers to write a sixth near-identical test. That distinction is
+not academic here: land-merge-one.sh spent its entire life as a stranded
+inline copy precisely because nothing enumerated the set, and it took a manual
+audit (lode-bss5) to notice. A test that hard-codes the list IS that list.
+
+Two invariants are swept, both of which were previously unenforceable
+mechanically and left to per-consumer convention:
+
+* every consumer GUARDS its source, so a missing/unreadable gate-lib.sh
+  exits 2 rather than falling through to 0/1/127 (lode-bss5, Finding B);
+* every consumer that sets GATE_ADVISORY sets it ABOVE all of its own
+  gate_could_not_run call sites -- the ordering hazard gate-lib.sh's header
+  describes, which emits half the contract and which `set -u`, shellcheck and
+  the library's own tests all structurally cannot see.
+
+NON-VACUITY (acceptance criterion): sabotaging either gate -- reverting a
+consumer's guard to the bare source it had before lode-bss5, or moving its
+GATE_ADVISORY below a call site -- must make the sweep fail. Both are proven
+below rather than asserted; a gate that cannot fail is not a gate.
 """
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GATE_LIB = REPO_ROOT / "scripts" / "gate-lib.sh"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+GATE_LIB = SCRIPTS_DIR / "gate-lib.sh"
+
+# The guard every consumer must carry, verbatim. Pinning the exact text (not
+# just "some guard exists") is what keeps the five copies from drifting -- the
+# duplication is irreducible, since the guard is what LOADS the library and so
+# cannot live inside it, but drift is not.
+GUARDED_SOURCE = """if ! . "$(dirname "$0")/gate-lib.sh"; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi"""
+
+# What it looked like before lode-bss5, and what the sabotage below restores.
+BARE_SOURCE = '. "$(dirname "$0")/gate-lib.sh"'
+
+
+def _consumers() -> list[Path]:
+    """Every scripts/*.sh that sources gate-lib.sh -- discovered, never listed."""
+    return sorted(
+        p
+        for p in SCRIPTS_DIR.glob("*.sh")
+        if p.name != "gate-lib.sh" and "gate-lib.sh" in p.read_text()
+    )
+
+
+CONSUMERS = _consumers()
+
+
+def _run_script(path: Path) -> subprocess.CompletedProcess:
+    """Execute directly (not `bash <path>`) so each script's own shebang flags
+    are honoured -- validate-mermaid.sh's `#!/bin/bash -e` is dropped entirely
+    under `bash <path>`, which would make this test run a shell that is not
+    the one the script actually ships with."""
+    return subprocess.run(
+        [str(path)], capture_output=True, text=True, timeout=30, check=False
+    )
+
+
+def _line_of(text: str, needle: str) -> int:
+    for n, line in enumerate(text.splitlines(), start=1):
+        if needle in line and not line.lstrip().startswith("#"):
+            return n
+    raise AssertionError(f"{needle!r} not found outside comments")
+
+
+def _check_advisory_precedes_call_sites(name: str, text: str) -> None:
+    """Raise AssertionError if any gate_could_not_run call sits above the
+    GATE_ADVISORY assignment. Shared by the sweep and its non-vacuity proof so
+    the proof exercises the real check rather than a copy of it."""
+    advisory_line = _line_of(text, "GATE_ADVISORY=(")
+    call_sites = _call_site_lines(text)
+    assert call_sites, f"{name} sets GATE_ADVISORY but never calls the helper"
+
+    assert min(call_sites) > advisory_line, (
+        f"{name}: gate_could_not_run is called at line {min(call_sites)}, "
+        f"above its GATE_ADVISORY assignment at line {advisory_line} -- that call "
+        f"emits the banner and cause lines but NOT the advisory trailer."
+    )
+
+
+def _call_site_lines(text: str) -> list[int]:
+    """1-based lines holding a real gate_could_not_run CALL. Comment lines are
+    skipped, which is what keeps the `# shellcheck disable=SC2034 # read by
+    gate_could_not_run()` note in three consumers from registering as a call."""
+    return [
+        n
+        for n, line in enumerate(text.splitlines(), start=1)
+        if "gate_could_not_run" in line and not line.lstrip().startswith("#")
+    ]
 
 
 def _run(script_body: str) -> subprocess.CompletedProcess:
@@ -99,3 +185,104 @@ def test_sourcing_under_nounset_does_not_error_on_unset_gate_advisory():
 
     assert result.returncode == 2
     assert "unbound variable" not in result.stderr
+
+
+def test_the_consumer_sweep_discovers_something():
+    """Guards the sweeps below against silently passing on an empty set -- a
+    glob that stops matching (renamed directory, changed suffix) would make
+    every parametrized test vanish rather than fail."""
+    assert CONSUMERS, "no gate-lib.sh consumers discovered under scripts/"
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_every_consumer_carries_the_verbatim_source_guard(script: Path):
+    """lode-bss5, Finding B. This is the sweep that covers consumer #6: a new
+    script sourcing gate-lib.sh bare fails here the day it lands, rather than
+    waiting for someone to notice (which for land-merge-one.sh took a manual
+    audit and a live exit-code inversion in /land's own merge step)."""
+    assert GUARDED_SOURCE in script.read_text(), (
+        f"{script.name} sources gate-lib.sh without the verbatim fail-closed "
+        f"guard. See gate-lib.sh's Usage section for the exact block."
+    )
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_every_consumer_exits_2_when_gate_lib_is_missing(script: Path, tmp_path: Path):
+    """The guard's behaviour, not just its presence. Reproduced the way the
+    defect was originally measured: copy ONLY this script (never gate-lib.sh)
+    into an isolated directory, so `$(dirname "$0")/gate-lib.sh` resolves to a
+    path that does not exist.
+
+    Run with no arguments: in every consumer the guard sits above all argument
+    parsing, so a bare invocation reaches it. That is itself worth pinning --
+    a consumer that parsed arguments first could exit 1 (a live CONTENT verdict
+    in merge-precheck.sh and validate-mermaid.sh) before ever reaching the
+    guard."""
+    copied = tmp_path / script.name
+    shutil.copy2(script, copied)
+
+    result = _run_script(copied)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    assert "gate-lib.sh is missing or unreadable" in result.stderr
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_missing_gate_lib_sweep_is_not_vacuous(script: Path, tmp_path: Path):
+    """NON-VACUITY for the test above: reverting THIS consumer's guard to the
+    bare source it carried before lode-bss5 must stop producing exit 2. Pins
+    each of the five copies separately -- the guard is duplicated per consumer,
+    so a single sabotage sample would leave four copies unproven."""
+    sabotaged = script.read_text().replace(GUARDED_SOURCE, BARE_SOURCE, 1)
+    assert sabotaged != script.read_text(), "sabotage did not apply"
+
+    copied = tmp_path / script.name
+    copied.write_text(sabotaged)
+    copied.chmod(0o755)
+
+    result = _run_script(copied)
+
+    assert result.returncode != 2, (
+        f"{script.name} still exits 2 with the guard removed, so the sweep "
+        f"above proves nothing about this consumer."
+    )
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_gate_advisory_is_set_above_every_call_site(script: Path):
+    """The ordering hazard gate-lib.sh's header describes: a call site placed
+    above its script's GATE_ADVISORY assignment still exits 2 with a correct
+    banner, but silently emits HALF the contract -- and `set -u`, shellcheck
+    and the library's own tests all structurally cannot see it.
+
+    The header states that only each consumer's own advisory assertions catch
+    it. They do, where they exist -- but that is opt-in per consumer, and the
+    consumer that most needed one (land-merge-one.sh) is exactly the one that
+    went unnoticed for a release. Enforced here for the whole discovered set
+    instead. Consumers that set no GATE_ADVISORY (release-bump.sh's shape)
+    have no contract to halve and are skipped."""
+    text = script.read_text()
+    if "GATE_ADVISORY=(" not in text:
+        pytest.skip(f"{script.name} sets no GATE_ADVISORY (no-advisory shape)")
+    _check_advisory_precedes_call_sites(script.name, text)
+
+
+def test_gate_advisory_ordering_sweep_is_not_vacuous():
+    """NON-VACUITY for the test above: moving a consumer's GATE_ADVISORY block
+    below its own call sites must make the identical check raise. Exercises
+    `_check_advisory_precedes_call_sites` itself, not a restatement of it --
+    a non-vacuity proof that re-implements the assertion proves only that the
+    copy works."""
+    advisory_setters = [p for p in CONSUMERS if "GATE_ADVISORY=(" in p.read_text()]
+    assert advisory_setters, "no advisory-setting consumer to sabotage"
+
+    script = advisory_setters[0]
+    text = script.read_text()
+    start = text.index("GATE_ADVISORY=(")
+    end = text.index(")\n", start) + 2
+    moved = text[:start] + text[end:] + "\n" + text[start:end]
+
+    with pytest.raises(AssertionError, match="above its GATE_ADVISORY"):
+        _check_advisory_precedes_call_sites(script.name, moved)

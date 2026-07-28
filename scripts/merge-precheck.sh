@@ -68,14 +68,10 @@
 set -uo pipefail   # deliberately NOT -e: this script's entire job is to
                    # inspect a command's exit code, which -e would short-circuit
 
-# The source itself must fail CLOSED (lode-bss5): an unguarded source that
-# fails here leaves gate_could_not_run undefined, and this script's own
-# call sites then resolve to a bash "command not found" that does NOT exit
-# 2 (measured: bad arity -> 1, bad refs -> 127) -- see gate-lib.sh's own
-# Usage section for the full measurement and why the guard can't depend on
-# the library it's loading.
+# The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
+# section for the measurement and why the guard can't use the library it loads.
 # shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+if ! . "$(dirname "$0")/gate-lib.sh"; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
   echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
@@ -83,10 +79,12 @@ fi
 
 # This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
 # KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed above
-# it still exits 2 with a correct banner but silently emits HALF the contract,
-# and nothing catches that -- not set -u, not shellcheck, not the library's own
-# tests. Only tests/test_merge_precheck.py's "not a branch conflict" assertions
-# do; keep them on any new exit-2 test.
+# it still exits 2 with a correct banner but silently emits HALF the contract --
+# invisible to set -u, to shellcheck, and to the library's own tests. Two tests
+# catch it: tests/test_gate_lib.py's ordering sweep (line order, every
+# discovered consumer) and tests/test_merge_precheck.py's "not a branch
+# conflict" assertions (the advisory TEXT on an exit-2 path, which the sweep
+# cannot see) -- keep those on any new exit-2 test.
 # shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
 GATE_ADVISORY=(
   "This is a machine fault a human must fix, not a branch conflict --"
