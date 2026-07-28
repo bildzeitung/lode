@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import ast
 import functools
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -37,6 +36,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOXFILE_PATH = REPO_ROOT / "noxfile.py"
@@ -46,9 +46,9 @@ NOXFILE_PATH = REPO_ROOT / "noxfile.py"
 def _load_noxfile() -> ModuleType:
     """Import the real ``noxfile.py`` by explicit path, once per test session.
 
-    Not on ``sys.path`` by default (it lives at the repo root, one level
-    above ``tests/``), so ``importlib`` loads it directly rather than relying
-    on pytest's rootdir-insertion import mode to have put it there.
+    It lives at the repo root, one level above ``tests/``, so it is not
+    reachable by name -- the shared helper (tests/conftest.py) loads it from
+    its file path instead.
 
     The cache is load-bearing, not a micro-optimization: executing the module
     runs its ``@nox.session`` decorators, which register into nox's *global*
@@ -56,14 +56,13 @@ def _load_noxfile() -> ModuleType:
     and nox emits ``FutureWarning: The session '<name>' has already been
     registered; this will be an error in a future version of nox`` -- i.e.
     an uncached loader would turn this file red on a future nox upgrade.
+    Removing the cache now fails immediately rather than waiting for that
+    release, because the shared helper asserts the name is not already
+    resident in ``sys.modules`` and a second load trips that first.
     Callers that mutate the module (``monkeypatch.setattr(noxfile, ...)``)
     are unaffected by sharing one instance: monkeypatch reverts per test.
     """
-    spec = importlib.util.spec_from_file_location("noxfile", NOXFILE_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_module_from_path("noxfile", NOXFILE_PATH)
 
 
 class _FakeSession:

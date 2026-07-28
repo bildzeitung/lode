@@ -11,23 +11,20 @@ must derive the same key from the same source).
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
+from conftest import load_module_from_path
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# scripts/ is a plain directory of standalone scripts, not an installed
-# package -- load the module straight from its file path, same pattern as
-# tests/test_check_links.py. The filename has hyphens, so it can't be
-# imported as `model-cache-key` -- give the loaded module a valid name.
-_spec = importlib.util.spec_from_file_location(
+# scripts/ isn't an installed package, so load by file path via the shared
+# helper (tests/conftest.py). The filename has hyphens, so it could never be
+# imported as `model-cache-key` -- the loaded module gets a valid name here.
+model_cache_key = load_module_from_path(
     "model_cache_key", REPO_ROOT / "scripts" / "model-cache-key.py"
 )
-model_cache_key = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = model_cache_key
-_spec.loader.exec_module(model_cache_key)
 
 
 def test_cache_key_matches_pinned_settings() -> None:

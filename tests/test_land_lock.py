@@ -8,8 +8,11 @@ wall-clock staleness token: see the header comment of scripts/land-lock.sh.
 That rationale is deliberately NOT restated here (the
 tests/test_blocks_dependents.py precedent) -- it lives next to the code it
 constrains, so it cannot drift out of sync with a second copy. The header
-also records the two known limits of the mechanism (the TTL measures
-acquisition age, not idle time; the reclaim path is not atomic).
+also records the mechanism's known limits (the stale-lock reclaim path is
+not atomic, CAVEAT 2) and the `heartbeat` subcommand (lode-m87j), which moves
+the TTL toward idle-time semantics over the two loops it brackets -- but not
+over the whole pass; CAVEAT 1 enumerates the three stretches that stay
+uncovered and why the 1800s default was therefore left alone.
 
 What this file adds on top of that is the regression gate, in two halves:
 
@@ -73,6 +76,7 @@ def _run(
         text=True,
         timeout=30,
         env=env,
+        check=False,
     )
 
 
@@ -145,6 +149,90 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Heartbeat -- turns the TTL from acquisition-age into idle-time (lode-m87j)
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_refreshes_an_existing_locks_timestamp(tmp_path: Path) -> None:
+    """The core new behaviour: a lock this pass already holds gets a fresh
+    epoch on every heartbeat call, without needing to go through `acquire`
+    again (which would just fail -- the lock is still fresh)."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    new_epoch = int(lock.read_text().split()[2])
+    assert new_epoch > old_epoch
+
+
+def test_heartbeat_on_a_missing_lock_creates_one(tmp_path: Path) -> None:
+    """Heartbeat is unconditional -- if the lock file is somehow already gone
+    (should not happen at either documented call site, but must not crash the
+    pass if it does), it creates a fresh one rather than erroring, since the
+    caller's intent ("the pass is still alive right now") is the same either
+    way as a normal refresh."""
+    repo = _init_repo(tmp_path)
+    assert not _lock_path(repo).exists()
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _lock_path(repo).exists()
+
+
+def test_stale_lock_refreshed_by_heartbeat_is_not_reclaimed(tmp_path: Path) -> None:
+    """The regression this subcommand exists to prevent: a lock old enough to
+    be judged stale under the TTL must NOT be reclaimed by a later `acquire`
+    once a `heartbeat` in between has re-stamped it fresh -- i.e. the TTL
+    genuinely measures idle time now, not the original acquire's age."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 1000
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    heartbeat = _run(
+        "heartbeat", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "500"}
+    )
+    assert heartbeat.returncode == 0, heartbeat.stdout + heartbeat.stderr
+
+    # Without the heartbeat above, this acquire would reclaim the lock (its
+    # original 1000s age exceeds the 500s threshold) -- see
+    # test_stale_lock_is_reclaimed below for that baseline behaviour.
+    second_acquire = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "500"}
+    )
+
+    assert second_acquire.returncode == 1, second_acquire.stdout + second_acquire.stderr
+    assert "skipping this tick" in second_acquire.stderr
+
+
+def test_heartbeat_write_failure_is_reported_but_never_crashes(
+    tmp_path: Path,
+) -> None:
+    """A heartbeat that cannot write (unwritable git dir) must exit 1 with a
+    clear diagnostic -- never a silent success, and never an uncaught
+    failure that could be mistaken for a script bug (lode-aps3's own "lock
+    was not held must be observable, never silent" standard, applied here to
+    the write path instead of the read path)."""
+    repo = _init_repo(tmp_path)
+    git_dir = repo / ".git"
+    original_mode = git_dir.stat().st_mode
+    git_dir.chmod(0o500)  # readable + traversable, not writable
+    try:
+        result = _run("heartbeat", repo=repo)
+    finally:
+        git_dir.chmod(original_mode)  # or tmp_path teardown fails
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "heartbeat could not write" in result.stderr
+    assert not _lock_path(repo).exists()
+
+
+# ---------------------------------------------------------------------------
 # Staleness reclaim -- the mechanism that replaces the dead-PID trap logic
 # ---------------------------------------------------------------------------
 
@@ -174,7 +262,7 @@ def test_fresh_lock_is_not_reclaimed_under_a_large_threshold(
     """A lock younger than the threshold must never be reclaimed. (This is
     not a boundary test: pinning `>=` against `>` would mean asserting on a
     one-second window that `date` can cross mid-test, and the two differ by
-    one second on a 1800s default -- operationally nothing.)"""
+    one second on the 1800s default -- operationally nothing.)"""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     recent_epoch = int(time.time())
@@ -228,7 +316,7 @@ def test_malformed_lock_file_is_treated_as_still_held_not_reclaimed(
 
 def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     """No env override: a lock a couple of minutes old must NOT be reclaimed
-    by the default threshold (1800s) -- a genuinely still-running /land pass
+    by the default threshold -- a genuinely still-running /land pass
     (dispatching several land-review subagents, then a combined re-gate) can
     easily take a few minutes between two Bash invocations."""
     repo = _init_repo(tmp_path)
@@ -239,6 +327,45 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     result = _run("acquire", repo=repo)
 
     assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
+    """Pin the DEFAULT itself, not just that it exceeds two minutes.
+
+    Every other test here passes LAND_LOCK_STALE_SECONDS explicitly, and the
+    test above passes for any default over 120s -- so before this pin, the one
+    number carrying the whole safety margin could be lowered with nothing going
+    red. It is not an arbitrary constant: lode-m87j's `heartbeat` bounds the
+    *dangerous* direction (a live pass reclaimed mid-merge), but the window
+    must still outlast the longest unheartbeated stretch, and the binding one
+    -- a single `land-review` Opus dispatch -- has never been measured. Agent
+    dispatches in this repo run to double-digit minutes, so a 600s window is
+    the same order as the gap rather than clear of it; the reduction lode-m87j
+    proposed was reverted for exactly that reason (see scripts/land-lock.sh,
+    CAVEAT 1). Lowering it is lode-cp4o's job, and requires the measurement.
+
+    Asserted behaviourally, from the outside: a lock 1799s old is still held,
+    a lock 1801s old is stale. Deliberately not a grep for the literal -- this
+    fails if the semantics change, not merely if the digits move.
+    """
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+
+    lock.write_text(f"12345 host {int(time.time()) - 1799} 2026-01-01T00:00:00Z\n")
+    just_inside = _run("acquire", repo=repo)
+    assert just_inside.returncode == 1, (
+        "a lock 1799s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
+        "below 1800s. That is lode-cp4o's decision to make, with measurements "
+        "(scripts/land-lock.sh, CAVEAT 1)."
+    )
+
+    lock.write_text(f"12345 host {int(time.time()) - 1801} 2026-01-01T00:00:00Z\n")
+    just_outside = _run("acquire", repo=repo)
+    assert just_outside.returncode == 0, (
+        "a lock 1801s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
+        "raised above 1800s, so an abandoned lock now blocks landing for longer "
+        f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +447,27 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
     )
 
 
+def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
+    """lode-m87j: the vet loop (Section 2a) heartbeats the lock as the first
+    action of every iteration, so the staleness window measures the gap since
+    the last ticket's dispatch rather than the whole pass's duration. A dropped
+    call site silently reintroduces the acquisition-age exposure this ticket
+    exists to close -- pinned the same way acquire and release are above.
+
+    Scope, stated so a reader does not over-trust it: this pins that the call
+    EXISTS (and its companion below, that it exists inside an executable
+    fence). Neither pins WHERE -- that it is in Section 2a, that it is first in
+    the loop body, or that the loop runs once per ticket. Markdown call sites
+    have no better mechanical gate available here; placement rests on review.
+    """
+    text = LAND_SKILL.read_text(encoding="utf-8")
+
+    assert "scripts/land-lock.sh heartbeat" in text, (
+        "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
+        "back to measuring acquisition age, not idle time (lode-m87j)"
+    )
+
+
 def _fenced_bash(markdown: str) -> str:
     """The ```bash fences only -- what an agent actually EXECUTES.
 
@@ -351,6 +499,12 @@ def test_land_skill_never_reintroduces_an_inline_lock() -> None:
     assert "land-lock.sh acquire" in executed, (
         "the acquire call is not inside an executable ```bash fence -- "
         "_fenced_bash() or the skill's layout has drifted"
+    )
+    assert "land-lock.sh heartbeat" in executed, (
+        "the heartbeat call (Section 2a) is not inside an executable ```bash "
+        "fence -- test_land_skill_heartbeats_the_lock_once_per_ticket_in_"
+        "section_2a found it in the file's prose but not where it is actually "
+        "EXECUTED (lode-m87j)"
     )
 
     offenders = [

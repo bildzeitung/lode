@@ -35,6 +35,12 @@
 # with no rescue and no reset. `origin/trunk` is never in an intermediate
 # state -- `/land` only advances it with an already-gated, already-pushed
 # `trunk` -- so both holes close by reading it instead everywhere below.
+# That premise is a property of `/land`'s step ORDER, enforced by an agent
+# following its skill rather than by any lock or assertion: see
+# `.claude/skills/land/SKILL.md` Section 1 (the pass-start reset) and
+# Section 4 (push before `bd close`). If a future edit ever reorders push
+# and gate, nothing here fails loudly -- this guard is load-bearing on that
+# discipline.
 #
 # AND IT DELIBERATELY DOES NOT FETCH FIRST (lode-isl3). `origin/trunk` is read
 # from the local ref cache, as of whenever this repo last fetched. That is not

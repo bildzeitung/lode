@@ -2161,25 +2161,26 @@ are catalogued in [configuration.md](configuration.md).
   `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated
   dispatch could dirty the lander's tree) but rested the *worktree-GC* claim ("HEAD never diverges …
   qualifies by construction") on an assumption lode-nt98 falsified after this entry was written: the
-  harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `trunk`
+  harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk`
   HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
   *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
-  worktree handed to it starts with `HEAD` already diverged from `trunk`, before `land-review` ever
+  worktree handed to it starts with `HEAD` already diverged from `origin/trunk`, before `land-review` ever
   runs — "never commits" only proves no *further* divergence, not a clean start. The existing
   worktree-GC backstop's ancestor predicate (lode-h1vn / lode-amif) therefore fails for it, and it
   leaks past every pass, indefinitely — the same symptom class lode-nt98 fixed for the builder and the
   reviewer, but lode-nt98 explicitly scoped `land-review` **out** (its correctness exposure is nil, so
   it read as no exposure at all — that conflation is exactly what lode-qv5t was filed to unpick).
   **Fix, mirroring lode-nt98 exactly:** `land-review.md`'s frontmatter role now carries the identical
-  guard (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
+  guard (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk` — lode-isl3,
+  asserted before any fetch/diff work; on failure,
   tag a `rescue/recycled-<sha>` branch — the rewound ref belongs to another ticket — then `git reset
-  --hard trunk && git clean -fd`, only ever inside `.claude/worktrees/`). Once that guard has run, the
+  --hard origin/trunk && git clean -fd`, only ever inside `.claude/worktrees/`). Once that guard has run, the
   worktree's `HEAD` **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims
   it under its unmodified predicate — Section 4 itself needed no change, and neither did the
   worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
   lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
   The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
-  is already an ancestor of `trunk` — tracked as lode-3v1p; observed live during lode-nt98's and
+  is already an ancestor of `origin/trunk` — tracked as lode-3v1p; observed live during lode-nt98's and
   lode-qv5t's own reviews). On the ancestry axis that is
   self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
   **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
@@ -2196,10 +2197,10 @@ are catalogued in [configuration.md](configuration.md).
   / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
 - **lode-3v1p (2026-07-20) closes the dirt-axis residual left open above: `git clean -fd` now runs
   unconditionally at all three recycled-worktree guard sites, not just inside the failed-ancestor-check
-  branch.** The gap: `merge-base --is-ancestor HEAD trunk` cannot recognize a worktree recycled onto a
-  `land/<other-id>` that has *since landed* — its `HEAD` is, by then, genuinely an ancestor of `trunk`,
+  branch.** The gap: `merge-base --is-ancestor HEAD origin/trunk` cannot recognize a worktree recycled onto a
+  `land/<other-id>` that has *since landed* — its `HEAD` is, by then, genuinely an ancestor of `origin/trunk`,
   so the check passes exactly as it would for a freshly branched worktree, and the remediation
-  (`git branch rescue/… && git reset --hard trunk && git clean -fd`) never runs. That's harmless on the
+  (`git branch rescue/… && git reset --hard origin/trunk && git clean -fd`) never runs. That's harmless on the
   **ancestry** axis (what the guard misses already satisfies `/land`'s reclaim predicate — the two
   cancel), but not on the **dirt** axis: the recycled worktree's untracked leftovers (from whatever the
   prior ticket's build/review left behind, uncommitted) survive, and the lode-9hgu dirty-tree guard in
@@ -2277,7 +2278,7 @@ are catalogued in [configuration.md](configuration.md).
 
   **Falsification test this sets up:** with the fleet now on (or moving onto) `>= 2.1.216`, watch
   whether the recycled-worktree guard ever fires again — any `rescue/recycled-<sha>` branch, any
-  guard-triggered `git reset --hard trunk` — across many `/code` and `/land` passes. If it **stops**
+  guard-triggered `git reset --hard origin/trunk` — across many `/code` and `/land` passes. If it **stops**
   firing over a sustained window, that's evidence an upstream fix (candidate: #2) addressed the
   mechanism despite the cross-project framing, and a follow-up should retire the lode-nt98 guard
   family and revisit `baseRef`. If it **keeps** firing, 2.1.216 did not address lode-nt98's
@@ -2325,6 +2326,23 @@ are catalogued in [configuration.md](configuration.md).
   DETECT to PIN is additive (the manifest/mismatch mechanism is unchanged, only the download path
   gains an explicit pinned-SHA source of truth, which — unlike the runtime-only DETECT manifest —
   *would* become a genuine git-committed build constant, parallel to `_MODEL_CACHE_IDENTITY`).
+
+- **Enrichment LLM: does its default having a dated-snapshot form reopen PIN-vs-DETECT?
+  (lode-sdjb).** `lode-g274.5`'s enrichment-LLM decision ([configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
+  assumed no PIN axis existed here, because no current-generation Anthropic ID had a dated-snapshot
+  form to pin against. That premise is false for `enrichment_llm`'s own default:
+  `claude-haiku-4-5-20251001` exists (verified against the `claude-api` skill's model catalog),
+  unlike the Q&A tiers' current defaults, which have none. So a pinnable identifier does exist for
+  the model whose output actually persists into the DB. Corrected at the source; **unowned, not
+  decided here.** Whether to adopt PIN for `enrichment_llm` (recording and verifying the dated
+  snapshot rather than just the bare id) is a real design question now that a lever demonstrably
+  exists. Note the embedder-pinning entry above defers for a cost that does **not** transfer — lode
+  never downloads an Anthropic model, so there is no download path to take ownership of — but a
+  nearer one does: a dated snapshot is retired on the vendor's schedule, so pinning one means owning
+  that migration, and dated-snapshot availability is not itself stable enough to build a permanent
+  mechanism on (a future model swap could remove the option again).
+  **Revisit if:** enrichment silent-drift is ever observed in practice (mirrors the embedder entry's
+  own revisit trigger), or when `enrichment_llm`'s default model next changes.
 
 - **2026-07-23 (lode-568v.1) — LLMProvider vendor-neutral seam pinned; design-first ahead of any
   provider code.** Full write-up: [stack.md — LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1).

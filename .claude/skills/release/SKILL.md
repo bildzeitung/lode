@@ -126,9 +126,15 @@ publishes that body as the GitHub release notes.
 
 3. **Group and categorize** — suitable categorization means:
    - **Child tickets group under their parent epic**, epic title as the heading; check
-     `bd list --status=closed --type=epic` for epics that closed in the window. An epic gets a
-     one-line summary, then its landed children as sub-items — don't re-list children as
+     `bd list --status=closed --type=epic --limit 0` for epics that closed in the window. An epic gets
+     a one-line summary, then its landed children as sub-items — don't re-list children as
      top-level bullets.
+     - **`--limit 0` is load-bearing, not noise** — canonical reason, and why this is hardening rather
+       than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). Two stakes are specific to this
+       query: it returns every closed epic *ever*, not just the release window, and `bd list` sorts
+       **priority-major, not by date** — so a cap would keep old P0 epics and drop recent
+       lower-priority ones, precisely the wrong half for a release window. Passing no `--json` is no
+       protection either: the human-readable form reports the *truncated* count as `Total: N issues`.
    - **Standalone tickets** categorize by type: **Features**, **Fixes**, and **Internal /
      workflow** (tasks, CI, agent/skill machinery) — in that order.
    - One line per item: what it delivers, phrased for a reader of the release page (not a commit

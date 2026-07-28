@@ -228,7 +228,7 @@ This unblocks `lode-g274.4` (embedder manifest + `lode status` check) and `lode-
 
 ### Model provenance: the enrichment LLM (decided, lode-g274.5)
 
-`lode-crh8`'s DB-invalidation scoping also covers the **enrichment LLM** (`enrichment_llm`, [Models](#models) above) — its output (tags, entities, summaries, inferred edges) persists into `annotations`/`edges` the same way the embedder's output persists into `embeddings`, so a silent model change is the same class of problem for enrichment as for embedding. Unlike the embedder, there is no PIN-vs-DETECT axis to decide: this model generation's Anthropic IDs (`claude-haiku-4-5`, `claude-sonnet-4-6`, `claude-opus-5`) have **no dated-snapshot form** — the bare/marketing ID *is* the complete stable identifier, and appending a date suffix 404s. There is nothing more specific to pin against, so the mechanism collapses to record + detect:
+`lode-crh8`'s DB-invalidation scoping also covers the **enrichment LLM** (`enrichment_llm`, [Models](#models) above) — its output (tags, entities, summaries, inferred edges) persists into `annotations`/`edges` the same way the embedder's output persists into `embeddings`, so a silent model change is the same class of problem for enrichment as for embedding. Whether a given Anthropic model ID has a **dated-snapshot form** to pin against varies per model and shifts as the lineup changes — check the authoritative catalog (Anthropic's `GET /v1/models/{id}`, or the `claude-api` skill's model table) rather than inferring it from a sibling model or an earlier generation. `enrichment_llm`'s own default has one: `claude-haiku-4-5-20251001`, a distinct pinnable identifier alongside the bare `claude-haiku-4-5`. So a pin target *does* exist for the one model whose output persists into the DB, and whether to use it is an open question, deliberately not settled here — see [decisions.md](decisions.md) (search "lode-sdjb") for the tracking entry. lode pins nothing today regardless — the mechanism is record + detect:
 
 - **Recorded per-row, already.** `annotations.model` (alongside `prompt_ver`) is populated from `settings.enrichment_llm.model` (the `ModelTier`'s bare model/deployment string, `lode-568v.2`) at every enrichment write (`src/lode/enrich.py::_write_enrichment`) — this predates this decision; it is the same per-row provenance shape [storage.md](storage.md#model-provenance-the-embedder-revision-manifest-decided-lode-crh81) records on `annotations` rows. The inferred **edges** a run also writes carry no `model` column of their own (`src/lode/schema.sql`), but a run writes its annotations and its edges from one `EnrichmentResult` under one model, so the `annotations` scan below captures which model produced a given run's edges too. No schema change and no new write path were needed here.
 - **No separate manifest.** As with the embedder, "the manifest" is an aggregate read over existing rows, not a new artifact: a `DISTINCT model` scan over `annotations WHERE source = 'ai'` answers "what did the enrichment store actually get built with," and detects a mix (e.g. after a mid-corpus `enrichment_llm` config change) with no additional bookkeeping. That mix is exactly what makes drift **detectable** — the acceptance bar this ticket is scoped to — and correcting it (a targeted re-enrich) is tracked separately, `lode-14jr` (not `lode-g274.7`, which built strictly to its own embedder-only scope — see [storage.md](storage.md#re-embedding-the-corpus-deliberately-lode-g2747)).
@@ -287,17 +287,36 @@ every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
 value outside the legal five raises `LLMProviderError` before any request is
 sent, instead of being silently dropped.
 
-**Caveat: the check is on the value, not on the value/model pairing.** Effort
-is not accepted by every model — it errors outright on Haiku 4.5 and Sonnet
-4.5, and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
+**Caveat: the check is on the value, not on the value/model pairing — but an
+unsupported pairing now fails clean, not raw (decided, lode-90o7).** Effort is
+not accepted by every model — it errors outright on Haiku 4.5 and Sonnet 4.5,
+and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
 `Kind.RUNTIME` and two default to affected models (`enrichment_llm` = Haiku
 4.5, `qa_llm` = Sonnet 4.6), so setting `reasoning_effort` on a tier whose
-model does not support the level you ask for produces an unhandled
-`anthropic.BadRequestError` — where before it was inert. **Set
-`reasoning_effort` only alongside a model that supports it.** A
-model→capability predicate was deliberately rejected as a moving target
-(lode-3dlt's option 1); how to fail cleanly instead is tracked as lode-90o7,
-which also covers the same unvalidated knob on `OpenAIProvider`.
+model does not support the level you ask for still reaches the API and gets
+rejected. A model→capability predicate to predict this ahead of time was
+deliberately rejected again as a moving target (lode-3dlt's option 1,
+reaffirmed by lode-90o7) — **set `reasoning_effort` only alongside a model
+that supports it** is still the operative guidance. What changed: a request
+the API *rejects* now surfaces as `LLMProviderError`, status code and request
+id preserved, on both providers — `AnthropicProvider` gained that wrap at its
+three request-submitting call sites, and `OpenAIProvider` already had it. (A
+*timeout* is not a rejected request and is not covered: `anthropic`'s
+non-status errors still surface raw — see `qa.MAX_TOKENS`.) `OpenAIProvider`
+also gained the pre-flight *value* check `AnthropicProvider` already had; its
+legal set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, derived
+from the installed SDK's own `Reasoning.effort` Literal rather than
+hand-typed.
+
+**What lode-90o7 deliberately did NOT do: validate at config load.** Both
+providers check the effort *value* at the seam, on the first call — not when
+`config.toml` is parsed. So a plain typo (`reasoning_effort = "LOW"`) starts
+clean but fails at first use, and on the enrichment path that failure is
+classified as *transient* by `worker.run_one`: it charges an attempt, backs
+off, and dead-letters the job after `retry_max_attempts`, rather than
+refusing to start. A `Settings` validator (the shape
+`_azure_api_version_required_with_endpoint` already uses) would move that to
+startup; it is filed as lode-tvps, not done here.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort

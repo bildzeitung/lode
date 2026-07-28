@@ -134,7 +134,7 @@ any other unlocked, clean worktree whose HEAD is an ancestor of `trunk`.
 
 **The dirt axis is now closed too (lode-3v1p), not just the ancestry axis.** The ancestor check alone
 can't detect a worktree recycled onto an already-landed `land/<other-id>` — its `HEAD` is already an
-ancestor of `trunk`, so the check passes trivially and the reset branch above never fires — yet it can
+ancestor of `origin/trunk`, so the check passes trivially and the reset branch above never fires — yet it can
 still carry that other ticket's untracked leftovers. `git clean -fd` now runs **unconditionally**
 right after the check (still gated by the `case` above, never reaching outside
 `.claude/worktrees/`), so that dirt is cleaned either way instead of surviving to make `/land`'s

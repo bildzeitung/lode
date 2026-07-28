@@ -45,6 +45,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
@@ -130,6 +131,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -146,6 +148,7 @@ def test_wrong_argument_count_exits_2(tmp_path: Path, script_args: list[str]) ->
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
 
@@ -411,6 +414,50 @@ def test_outside_isolated_worktree_refuses_and_leaves_everything_untouched(
     wt = _add_worktree(
         repo, "not-a-launch-worktree", "worktree-agent-elsewhere", foreign_commit=True
     )
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(wt)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "refusing to reset" in result.stderr
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    branches = _git(repo, "branch", "--list", "rescue/*").stdout
+    assert branches.strip() == ""
+
+
+@pytest.mark.parametrize(
+    "near_miss_dir",
+    [".claude/worktrees-stale/agent-abc123", "x.claude/worktrees/agent-abc123"],
+    ids=["trailing-anchor", "leading-anchor"],
+)
+def test_a_near_miss_directory_name_is_refused_not_repaired(
+    tmp_path: Path, near_miss_dir: str
+) -> None:
+    """The `case` glob must match the literal path SEGMENT `.claude/worktrees/`
+    -- BOTH its `/` anchors, not merely the substring between them. One
+    parameter per anchor, because each is the sole catcher of its own mutation:
+
+    - `.claude/worktrees-stale/...` pins the TRAILING `/` (the segment is
+      `worktrees-stale`, not `worktrees`). Relaxing the glob to
+      `*/.claude/worktrees*` -- or as far as `*/.claude/*` -- leaves every
+      other test in this module green.
+    - `x.claude/worktrees/...` pins the LEADING `/` (the segment is
+      `x.claude`, not `.claude`). Deleting the leading `*/` outright is caught
+      by the other tests here (they stop matching at all), but merely WEAKENING
+      it to `*` -- `*.claude/worktrees/*` -- leaves the entire rest of the
+      module green, so nothing but this parameter holds that anchor down.
+
+    All sabotage-verified. The contamination is deliberate
+    (`foreign_commit=True`): with the glob relaxed, this exact fixture does not
+    merely mis-classify -- it reaches `git reset --hard` and rewinds the
+    near-miss worktree's HEAD, so the refusal is proven precisely where the
+    destructive remediation would otherwise be warranted.
+
+    Ported from tests/test_isolation_guard.py's twin pin, which gained the
+    leading-anchor parameter in the same change (lode-v12j).
+    """
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(repo, near_miss_dir, "worktree-agent-stale", foreign_commit=True)
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
     result = _run(wt)

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 from lode.config import Settings
 from lode.llm_provider import (
     _ANTHROPIC_EFFORT_LEVELS,
+    _OPENAI_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
     LLMAuthError,
@@ -70,6 +71,28 @@ def _fake_tool_use_client(payload: dict) -> mock.MagicMock:
     client = mock.MagicMock()
     client.messages.create.return_value = response
     return client
+
+
+def _anthropic_bad_request() -> object:
+    """A real ``anthropic.BadRequestError`` (lode-90o7) -- the shape the SDK
+    actually raises for a legal ``reasoning_effort`` *value* on a model that
+    doesn't support it, the reachable gap this ticket closes. A real instance
+    (not a duck-typed fake) proves the ``except anthropic.APIStatusError``
+    clauses in ``AnthropicProvider`` actually match the SDK's own exception
+    class, not just something that happens to have the right attributes.
+    """
+    import anthropic
+    import httpx
+
+    message = "effort not supported for this model"
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"request-id": "req-test-1"},
+        json={"error": {"type": "invalid_request_error", "message": message}},
+    )
+    return anthropic.BadRequestError(message, response=response, body=response.json())
 
 
 def test_structured_call_forces_tool_use_when_tool_name_given() -> None:
@@ -225,6 +248,62 @@ def test_structured_call_wraps_a_schema_validation_failure() -> None:
     assert "_Widget" in str(excinfo.value)
     assert excinfo.value.provider == "anthropic"
     assert isinstance(excinfo.value.__cause__, ValidationError)
+
+
+def test_structured_call_wraps_a_bad_request_from_the_forced_tool_use_branch() -> None:
+    # lode-90o7: the reachable gap lode-wnz1 left open -- reasoning_effort set
+    # to a legal *value* on a tier whose *model* doesn't support it (e.g. any
+    # effort on the Haiku 4.5 enrichment default) reaches the API and comes
+    # back as anthropic.BadRequestError. Must not escape raw -- callers of
+    # this seam only expect LLMProviderError.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.messages.create.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-haiku-4-5",
+            reasoning_effort="low",
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert err.request_id == "req-test-1"
+    assert err.__cause__ is bad_request
+
+
+def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
+    # Same failure mode as the forced-tool-use test above, on the Q&A branch.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.messages.parse.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-sonnet-4-6",
+            reasoning_effort="low",
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert err.request_id == "req-test-1"
+    assert err.__cause__ is bad_request
 
 
 def test_structured_call_sends_effort_on_the_messages_parse_branch() -> None:
@@ -459,6 +538,28 @@ def test_submit_batch_rejects_an_invalid_effort_value() -> None:
     client.beta.messages.batches.create.assert_not_called()
 
 
+def test_submit_batch_wraps_a_bad_request_from_batches_create() -> None:
+    # lode-90o7: a single `batches.create` call submits the whole batch
+    # atomically, so a rejected effort/model pairing on any one request fails
+    # the whole submission -- must surface as LLMProviderError, not raw.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.create.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.submit_batch(
+            [_batch_request(model="claude-haiku-4-5", reasoning_effort="low")],
+            timeout_s=30.0,
+        )
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "claude-haiku-4-5" in str(err)
+    assert err.__cause__ is bad_request
+
+
 def test_collect_batch_returns_pending_when_not_ended() -> None:
     client = mock.MagicMock()
     client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
@@ -571,6 +672,96 @@ def _fake_responses_client(
     client = mock.MagicMock()
     client.responses.create.return_value = response
     return client
+
+
+def _openai_bad_request() -> object:
+    """A real ``openai.BadRequestError`` -- the OpenAI sibling of
+    :func:`_anthropic_bad_request`; see that helper for why a real instance
+    rather than a duck-typed fake.
+    """
+    import httpx
+    import openai
+
+    message = "reasoning.effort is not supported for this model"
+    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx.Response(
+        400,
+        request=request,
+        headers={"x-request-id": "req-test-2"},
+        json={"error": {"message": message}},
+    )
+    return openai.BadRequestError(message, response=response, body=response.json())
+
+
+def test_openai_effort_levels_match_the_installed_sdk_literal() -> None:
+    # The ticket this level set came from claimed a stale 4-value set
+    # (minimal/low/medium/high); deriving from the SDK's own Literal instead of
+    # hand-typing that claim is exactly what this test exists to enforce.
+    import typing
+
+    from openai.types.shared_params.reasoning import Reasoning
+
+    effort_hint = typing.get_type_hints(Reasoning)["effort"]
+    # `effort: Optional[ReasoningEffort]` -- unwrap the Optional, then the Literal.
+    literal, _none = typing.get_args(effort_hint)
+    assert typing.get_args(literal) == _OPENAI_EFFORT_LEVELS
+
+
+@pytest.mark.parametrize("bad_effort", ["LOW", "extreme", "", "medium ", "effort"])
+def test_openai_structured_call_rejects_an_invalid_effort_value(
+    bad_effort: str,
+) -> None:
+    # lode-90o7: mirrors the pre-existing Anthropic pre-flight value check --
+    # an invalid effort value fails clearly (LLMProviderError, before any
+    # request is sent), closing OpenAIProvider's half of the asymmetry.
+    client = mock.MagicMock()
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="gpt-5.5",
+            reasoning_effort=bad_effort,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+    assert bad_effort in str(excinfo.value)
+    assert excinfo.value.provider == "openai"
+    client.responses.create.assert_not_called()
+
+
+def test_openai_structured_call_wraps_a_bad_request_from_unsupported_pairing() -> None:
+    # lode-90o7 AC: "tests cover the unsupported-pairing path for BOTH
+    # providers". OpenAIProvider._error_from_exception already wrapped every
+    # SDK exception from responses.create (predates this ticket) -- this pins
+    # that guarantee for the reasoning_effort pairing specifically, so the
+    # OpenAI half of the ticket's claim can't silently regress.
+    # test_openai_structured_call_maps_sdk_exception_diagnostics below covers
+    # the same wrap generically.
+    bad_request = _openai_bad_request()
+    client = mock.MagicMock()
+    client.responses.create.side_effect = bad_request
+    provider = OpenAIProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="gpt-5.5",
+            reasoning_effort="high",
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+    err = excinfo.value
+    assert err.provider == "openai"
+    assert err.status_code == 400
+    assert err.request_id == "req-test-2"
+    assert err.__cause__ is bad_request
 
 
 def test_openai_structured_call_builds_json_schema_format() -> None:
@@ -837,6 +1028,35 @@ def test_openai_submit_batch_captures_a_per_request_failure_as_errored() -> None
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
     assert result.error.provider == "openai"
+
+
+def test_openai_submit_batch_captures_an_invalid_effort_value_as_errored() -> None:
+    # lode-90o7: the pre-flight value check inside _call_responses_raw raises
+    # LLMProviderError before any request is sent; submit_batch's existing
+    # per-request `except LLMProviderError` turns that into an `errored`
+    # result the same way it already does for any other call failure.
+    client = mock.MagicMock()
+    provider = OpenAIProvider(client)
+
+    handle = provider.submit_batch(
+        [
+            _batch_request(
+                custom_id="ver-5",
+                tool_name="extract_widget",
+                reasoning_effort="not-a-real-level",
+            )
+        ],
+        timeout_s=30.0,
+    )
+    status, results = provider.collect_batch(handle, timeout_s=30.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-5"
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert "not-a-real-level" in str(result.error)
+    client.responses.create.assert_not_called()
 
 
 def test_openai_submit_batch_non_object_payload_does_not_poison_collect() -> None:

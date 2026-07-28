@@ -118,8 +118,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    label, so before resolving the requested task set, always check for stranded kick-backs:
 
    ```bash
-   rtk bd list --label needs-rebase --status in_progress --json
+   rtk bd list --label needs-rebase --status in_progress --limit 0 --json
    ```
+
+   **`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
+   hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
+   capped read would silently strand kick-backs past the 50th, every invocation.
 
    For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
    "worktree"`** — required for the same reason as Phase 1 below: a subagent is pinned at the repo
@@ -222,8 +226,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    (lode-t83). Check for it the same way as step 0:
 
    ```bash
-   rtk bd list --label ready-for-code-review --status in_progress --json
+   rtk bd list --label ready-for-code-review --status in_progress --limit 0 --json
    ```
+
+   **`--limit 0` is load-bearing, not noise — same reason as step 0's `needs-rebase` sweep above.**
+   A capped read would silently strand re-entries past the 50th, with nothing in this step's own
+   output saying so.
 
    Any hit here is, by construction, stranded from a **previous** invocation — this check runs before
    this invocation's own Phase 1 has built anything. For each hit, confirm the hand-off is actually
@@ -517,12 +525,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   deliberate manual use; it is off the automatic path. Rationale and numbers:
   [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
-  checked out on a previous ticket's build branch, rather than a fresh one off `trunk` HEAD** —
+  checked out on a previous ticket's build branch, rather than a fresh one off `origin/trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
   builder pushed a foreign, unreviewed ticket's commit riding along on `land/lode-eshl`). The shipped
   mitigation is defensive and lives in the agents, not here: both `coding.md` and `code-reviewer.md`
-  now assert `git merge-base --is-ancestor HEAD trunk` before doing any work in-worktree and
-  self-repair on a mismatch, reporting it explicitly rather than silently building on contamination.
+  now assert `git merge-base --is-ancestor HEAD origin/trunk` (never bare local `trunk` — lode-isl3)
+  before doing any work in-worktree, and self-repair on a mismatch, reporting it explicitly rather
+  than silently building on contamination.
   Full account:
   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
   (lode-nt98). **This is a mitigation, not a root-cause fix, and the root cause is still open** — see

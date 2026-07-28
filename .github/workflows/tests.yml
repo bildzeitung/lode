@@ -139,11 +139,13 @@ jobs:
 
       - name: Install dependencies (from requirements.lock)
         # Installs the same bytes a developer runs: the exact, hash-verified
-        # runtime set from requirements.lock, via the canonical 3-step
-        # locked install (scripts/python-init.sh, lode-g274.1) rather than a
-        # hand-copied duplicate of its steps in this YAML. Currency of the
-        # lock itself is the separate `lock-currency` job above, not this
-        # step -- this step trusts whatever lock was checked out.
+        # runtime set from requirements.lock, via the canonical locked
+        # install (scripts/python-init.sh -> scripts/venv-install.sh's
+        # install_locked_venv, lode-g274.1) rather than a hand-copied
+        # duplicate of its steps in this YAML -- see that script for the
+        # step-by-step breakdown. Currency of the lock itself is the
+        # separate `lock-currency` job above, not this step -- this step
+        # trusts whatever lock was checked out.
         run: |
           ./scripts/python-init.sh
           echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"

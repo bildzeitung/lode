@@ -30,9 +30,10 @@
 # before anything else.
 #
 # NOT a merge with recycled-worktree-guard.sh: that script's job is "is my
-# worktree the RIGHT one" (is HEAD an ancestor of trunk), and on failure it
-# performs a destructive REPAIR (reset + clean) because a wrong-but-real
-# worktree can safely be reset onto trunk. This script's job is the
+# worktree the RIGHT one" (is HEAD an ancestor of origin/trunk, never bare
+# local trunk -- lode-isl3), and on failure it performs a destructive REPAIR
+# (reset + clean) because a wrong-but-real worktree can safely be reset onto
+# origin/trunk. This script's job is the
 # logically prior question -- "do I have an isolated worktree AT ALL" -- and
 # it never repairs anything: there is no safe way to fabricate an isolated
 # worktree from inside a non-isolated context, so the only sanctioned
