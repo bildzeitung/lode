@@ -13,7 +13,7 @@ name: coverage
 #
 # push trigger convention (lode-bmvy, mirrored from build.yml/tests.yml) --
 # narrowed to trunk + land/** so this workflow (as heavy as tests.yml: a full
-# `-e .[dev]` install plus reranker/embedder weights, running the full suite
+# dependency install plus reranker/embedder weights, running the full suite
 # a second time) doesn't also fire on a v* tag push or other non-push refs.
 # No tags-ignore needed -- defining only `branches` already excludes tag
 # pushes; see docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
@@ -51,22 +51,24 @@ jobs:
         with:
           python-version-file: .python-version
 
-      - name: Install dependencies
+      - name: Install dependencies (from requirements.lock)
         # Must install into ./venv, NOT the runner's ambient interpreter:
         # noxfile.py's `coverage` session resolves `pytest` to an explicit
         # path under ./venv/bin (_venv_tool, lode-0yfn) and fails closed if
         # it isn't there, so a bare `pip install -e '.[dev]'` would leave
         # `nox -s coverage` below aborting on every run.
         #
-        # `--unlocked` keeps this leg's existing resolve-fresh-from-
-        # pyproject.toml semantics (tests.yml deliberately installs the
-        # hash-verified requirements.lock instead — see its own comment); the
-        # only thing changing here is WHERE those same deps land. The
-        # GITHUB_PATH line then puts the venv ahead of the ambient
-        # interpreter for the `python`/`nox` steps below, exactly as
-        # tests.yml does.
+        # No `--unlocked`: this leg installs the committed, hash-verified
+        # requirements.lock, exactly as tests.yml does, so the coverage number
+        # describes the same dependency set the tests badge backs and is
+        # reproducible from committed bytes. That parity is a decision
+        # (lode-7byn), not an accident -- for why this leg resolved fresh
+        # until then, and what the lock does and does not cover here, see
+        # docs/stack.md#dependency-locking-lode-g2741. The GITHUB_PATH line
+        # then puts the venv ahead of the ambient interpreter for the
+        # `python`/`nox` steps below, exactly as tests.yml does.
         run: |
-          ./scripts/python-init.sh --unlocked
+          ./scripts/python-init.sh
           echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
 
       - name: Resolve model cache key
