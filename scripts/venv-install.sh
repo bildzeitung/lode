@@ -22,18 +22,11 @@
 #      build-time copy instead of the editable one (the wrong-source-tree
 #      guard, tests/conftest.py, lode-jh80, exists to catch exactly that).
 #
-#      An earlier revision ran `uv pip install -e . --no-deps` as its own
-#      step before this one, on the theory that skipping it might let this
-#      step re-resolve (and un-pin) the runtime deps step 2 just hash-
-#      verified. Reproduced and refuted (lode-xo99): with or without that
-#      extra step, the installed package set, versions, the lock's runtime
-#      pins, and the resolved `lode` source path came out byte-for-byte
-#      identical -- this step's own resolution already leaves already-
-#      installed, range-satisfying pins untouched, `--no-deps` or not, and
-#      it discards and rebuilds the editable `lode` install either way
-#      (visible in the install log as "Uninstalled 1 package" / "~ lode=="
-#      when the extra step ran first, vs "+ lode==" when it didn't). The
-#      separate step bought nothing but ~1.5s of dead work, so it's gone.
+#      Do NOT re-add a separate `uv pip install -e . --no-deps` step before
+#      this one: measured as a pure no-op (lode-xo99) -- same package set,
+#      same runtime pins, same resolved source path with or without it,
+#      since this step discards and rebuilds the editable install either
+#      way. Full record: docs/stack.md#dependency-locking-lode-g2741.
 #
 # && chained -- NOT relying on the caller's -e/errexit state -- so a failure
 # partway through is never masked by a later, unrelated command's exit

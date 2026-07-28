@@ -143,11 +143,9 @@ jobs:
         # install (scripts/python-init.sh -> scripts/venv-install.sh's
         # install_locked_venv, lode-g274.1) rather than a hand-copied
         # duplicate of its steps in this YAML -- see that script for the
-        # actual step-by-step breakdown, so this comment doesn't carry a
-        # step count of its own to go stale (lode-xo99: an earlier "3-step"
-        # claim here drifted from the script it was describing). Currency of
-        # the lock itself is the separate `lock-currency` job above, not
-        # this step -- this step trusts whatever lock was checked out.
+        # step-by-step breakdown. Currency of the lock itself is the
+        # separate `lock-currency` job above, not this step -- this step
+        # trusts whatever lock was checked out.
         run: |
           ./scripts/python-init.sh
           echo "$(pwd)/venv/bin" >> "$GITHUB_PATH"
