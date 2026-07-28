@@ -9,6 +9,29 @@
 #
 # Usage: scripts/validate-mermaid.sh
 
+# AUDIT (lode-bss5, Finding D): the shebang's `-e` is kept here, unlike the
+# other gate scripts, which all deliberately run WITHOUT it because their
+# machine-fault-vs-content split lives in explicit exit-code inspection that
+# -e would short-circuit. This script's inspection instead lives entirely in
+# `if`/`else` arms (`if docker run ...; then ... else rc=$?; ... fi`), which
+# bash exempts from -e by its own rules -- so -e cannot short-circuit the
+# split the way it would in the siblings.
+#
+# But -e is NOT free here, and do not read the above as saying it is: a -e
+# abort exits with the FAILING COMMAND's status, and most commands fail with
+# 1 -- which in THIS script means "invalid mermaid". Every non-`if` command
+# is therefore a route from a machine fault to a fabricated content verdict,
+# the exact lode-9i2p inversion. Measured (bash 5.2, shebang honoured):
+# `mktemp -d` failing under -e exits 1. That one is now routed through
+# gate_could_not_run below; the remaining ones (the REPO= assignment, the
+# printf, both chmods) are pre-existing and tracked in lode-3xqb.
+#
+# What WAS missing, unlike every other consumer, was any top-level
+# `-u`/`pipefail`; added below for parity. Inert today: this script contains
+# no pipeline at all, and references no variable meant to expand unset. Note
+# `-u` firing also exits 1, i.e. onto the same route as above.
+set -uo pipefail
+
 IMAGE="minlag/mermaid-cli:latest"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -44,20 +67,27 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # The ONE owner of the gate-could-not-run contract: the banner callers key on,
 # the caller's cause lines, the standing instruction to a reader, and exit 2.
 # Callers supply only the cause — the part that genuinely differs. Sourced
-# from scripts/gate-lib.sh (lode-090f) so this contract cannot accidentally
-# drift out of sync with scripts/merge-precheck.sh / scripts/release-bump.sh —
-# all three, plus .claude/agents/coding.md, code-reviewer.md and
-# .claude/skills/land/SKILL.md, key on exactly this stderr shape.
+# from scripts/gate-lib.sh (lode-090f) so this contract cannot drift out of
+# sync with the other gate scripts — they, plus .claude/agents/coding.md,
+# code-reviewer.md and .claude/skills/land/SKILL.md, key on exactly this
+# stderr shape.
+# The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
+# section for the measurement and why the guard can't use the library it loads.
 # shellcheck source=gate-lib.sh
-. "$(dirname "$0")/gate-lib.sh"
+if ! . "$(dirname "$0")/gate-lib.sh"; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
 
 # This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
-# KEEP THIS ABOVE ALL THREE gate_could_not_run CALL SITES BELOW. A call placed
+# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed
 # above it still exits 2 with a correct banner but silently emits HALF the
-# contract, and nothing catches that -- not set -u, not shellcheck, not the
-# library's own tests. Only tests/test_validate_mermaid_gate.py's
-# _assert_gate_could_not_run advisory assertion does; route any new exit-2 test
-# through that helper.
+# contract -- invisible to set -u, to shellcheck, and to the library's own
+# tests. Two tests catch it: tests/test_gate_lib.py's ordering sweep (line
+# order, every discovered consumer) and tests/test_validate_mermaid_gate.py's
+# _assert_gate_could_not_run (the advisory TEXT on an exit-2 path, which the
+# sweep cannot see) -- route any new exit-2 test through that helper.
 # shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
 GATE_ADVISORY=(
   "This is a machine fault a human must fix, not a mermaid syntax error —"
@@ -82,7 +112,15 @@ fi
 # The image ships chromium at /usr/bin/chromium-browser, but puppeteer hunts for
 # its own download; point it at the bundled binary. --no-sandbox is required
 # because chromium cannot sandbox inside the container.
-CFG="$(mktemp -d)"
+# Guarded rather than left to -e: under -e a failing `mktemp -d` aborts with
+# mktemp's own exit 1, which is this script's CONTENT verdict ("invalid
+# mermaid") -- a machine fault blamed on a doc. Route it to exit 2 instead,
+# the same way scripts/merge-precheck.sh guards its own mktemp. (mktemp prints
+# its own error; suppress it so the diagnostic below is the authoritative one.)
+CFG="$(mktemp -d 2>/dev/null)" || gate_could_not_run \
+  "could not create a temporary directory (mktemp failed)" \
+  "Usual causes: TMPDIR points at a nonexistent, full, or read-only" \
+  "filesystem. Diagnose with: mktemp -d"
 trap 'rm -rf "$CFG"' EXIT
 printf '{"executablePath":"/usr/bin/chromium-browser","args":["--no-sandbox","--disable-setuid-sandbox"]}' \
   > "$CFG/puppeteer.json"
