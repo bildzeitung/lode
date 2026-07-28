@@ -154,8 +154,14 @@ Then read the queue — every ticket carrying the **`ready-for-land`** label (it
 the label, not a status, is the queue):
 
 ```bash
-rtk bd list --label ready-for-land --status in_progress --json
+rtk bd list --label ready-for-land --status in_progress --limit 0 --json
 ```
+
+**`--limit 0` is load-bearing, not noise.** `bd list --help` documents a default cap of 50 on
+`--json` output with no truncation signal (bd neither errors nor marks a short result) — same fact
+`lode-hwbm` pinned in `/sweep`. Here a truncated read wouldn't lose a branch outright (an
+unprocessed item just waits for next pass), but it would silently under-report and under-land a
+large backlog every pass with nothing in this section's own output saying so. `0` means unlimited.
 
 If the queue is empty, there is nothing to land: release the lock and stop —
 

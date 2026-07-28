@@ -50,10 +50,16 @@ An epic is **auditable** when ALL hold:
 
 ```bash
 # Fast path — epics /land flagged:
-rtk bd list --type=epic --label epic-ready-to-audit --status open --json
+rtk bd list --type=epic --label epic-ready-to-audit --status open --limit 0 --json
 # Safety net — any open epic whose children are all closed but which was never flagged:
-rtk bd list --type=epic --status open --exclude-label epic-audited --json
+rtk bd list --type=epic --status open --exclude-label epic-audited --limit 0 --json
 ```
+
+**`--limit 0` on both — load-bearing, not noise, same fact `lode-hwbm` pinned in `/sweep`.** `bd
+list --help` documents a default cap of 50 on `--json` output with no truncation signal. It matters
+most on the **safety net**: open epics accumulate over a project's life and this query is the only
+thing that ever catches one `/land` failed to flag, so a silent cap here would mean an epic past the
+50th never gets audited at all, indefinitely. `0` means unlimited.
 
 For each candidate, confirm the child-completion gate from live state (the label is not trusted on its own).
 `scripts/epic-children-closed.sh` is the shared check (also used by `/land` and `/sweep`) — it does

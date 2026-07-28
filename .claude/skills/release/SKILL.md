@@ -114,7 +114,11 @@ publishes that body as the GitHub release notes.
 
 3. **Group and categorize** — suitable categorization means:
    - **Child tickets group under their parent epic**, epic title as the heading; check
-     `bd list --status=closed --type=epic` for epics that closed in the window. An epic gets a
+     `bd list --status=closed --type=epic --limit 0` for epics that closed in the window (`--limit 0`
+     is load-bearing, not noise — `bd list --help` documents a default cap of 50 on `--json` output
+     with no truncation signal, same fact `lode-hwbm` pinned in `/sweep`; this query returns every
+     closed epic ever, not just the release window, and that population only grows over a project's
+     life, so an uncapped read is what keeps the later window-intersection correct). An epic gets a
      one-line summary, then its landed children as sub-items — don't re-list children as
      top-level bullets.
    - **Standalone tickets** categorize by type: **Features**, **Fixes**, and **Internal /
