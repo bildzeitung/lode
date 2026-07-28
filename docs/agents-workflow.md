@@ -2065,38 +2065,74 @@ assumption would not have closed it.
   stale-break) is the documented upgrade for true concurrent multi-machine landing — and the natural
   seam toward real CI.
 
-  **The guard is `scripts/land-lock.sh` (`acquire` / `release`), and its liveness signal is a
-  wall-clock staleness token — never a PID (lode-aps3).** Section 0 of `land/SKILL.md` used to manage
-  the lockfile inline, and it was **inert**: the release was a `trap … EXIT`, which fires when its own
-  fenced block's shell exits — *before Section 1 runs* — so the lock was held for one Bash call rather
-  than the pass (VERIFIED LIVE, 2026-07-27). It failed doubly open, because the stale-lock reclaim
-  checked `kill -0` on the recorded PID, and in this per-block-invocation architecture a PID recorded
-  by any earlier block is **always** already dead by the time a later block reads it — PID liveness
-  cannot tell "the pass is still running, just between blocks" from "the pass crashed". This is the
-  same defect class as lode-sfnb (cross-block shell state) in the one skill that writes `trunk`, which
-  is why the replacement is a file under `.git/` recording its acquire time, read back by the next
-  tick: no shell state, nothing that dies with a block. `LAND_LOCK_STALE_SECONDS` (env, default
-  **1800s/30min**) is the reclaim window. It is documented here rather than in
+  **The guard is `scripts/land-lock.sh` (`acquire` / `heartbeat` / `release`), and its liveness
+  signal is a wall-clock staleness token — never a PID (lode-aps3).** Section 0 of `land/SKILL.md`
+  used to manage the lockfile inline, and it was **inert**: the release was a `trap … EXIT`, which
+  fires when its own fenced block's shell exits — *before Section 1 runs* — so the lock was held for
+  one Bash call rather than the pass (VERIFIED LIVE, 2026-07-27). It failed doubly open, because the
+  stale-lock reclaim checked `kill -0` on the recorded PID, and in this per-block-invocation
+  architecture a PID recorded by any earlier block is **always** already dead by the time a later
+  block reads it — PID liveness cannot tell "the pass is still running, just between blocks" from "the
+  pass crashed". This is the same defect class as lode-sfnb (cross-block shell state) in the one skill
+  that writes `trunk`, which is why the replacement is a file under `.git/` recording its acquire
+  time, read back by the next tick: no shell state, nothing that dies with a block.
+  `LAND_LOCK_STALE_SECONDS` (env, default **1800s/30min** — see below for why the heartbeat did *not*
+  buy a reduction) is the reclaim window. It is documented here rather than in
   [configuration.md](configuration.md) per that page's scope note — dev-tooling for the landing loop,
   not an application knob.
 
   Two properties of the token are load-bearing and easy to misread, so they are stated here as well as
-  in the script's header. **First, the window measures the age of the *acquisition*, not idle time** —
-  nothing re-stamps it mid-pass, so it must exceed the *total* duration of the longest legitimate pass
-  (N `land-review` dispatches + a combined re-gate + per-branch isolation replay on red + docker
-  mermaid + a networked `lock_currency` resolve), not merely the longest gap between two Bash calls. A
-  pass that outruns the window has its own lock reclaimed by the next tick, mid-merge; that is the
-  dangerous direction, and it is why the default is not *reduced* — the opposite failure only delays
-  landing, which is not latency-critical. A heartbeat re-stamping the token as the pass progresses
-  would make a smaller window both safer and quicker to reclaim; deferred (lode-m87j). **Second,
-  `acquire` is atomic but the stale-lock *reclaim* is not** — `rm` then create, two steps, observed
-  admitting two winners at 8-way contention. Unreachable under the one-loop convention (a
-  still-running pass holds a *fresh* lock, so the reclaim branch is crash-recovery only), and deferred
-  rather than closed with a nested TTL that could wedge landing outright (lode-ao95). **Release
-  reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a latency
-  optimization; every other stop, *including the routine pass in which every branch was kicked back
-  `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
-  site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
+  in the script's header. **First, the window now measures IDLE time, not acquisition age, because of
+  the `heartbeat` subcommand (lode-m87j).** Originally nothing re-stamped the token mid-pass, so the
+  window had to exceed the *total* duration of the longest legitimate pass (N `land-review` dispatches
+  + a combined re-gate + per-branch isolation replay on red + docker mermaid + a networked
+  `lock_currency` resolve) — summed across the whole pass, not merely the longest gap between two Bash
+  calls. A pass that outran the window had its own lock reclaimed by the next tick, mid-merge — the
+  dangerous direction, and why the original 1800s default was never reduced. `heartbeat` re-stamps the
+  same record `acquire` wrote, with no atomicity contest of its own (overwriting is the point), from
+  **two** call sites chosen to be structurally periodic rather than dependent on a future editor adding
+  one per section: [Section 2a](../.claude/skills/land/SKILL.md#2a-re-validate-that-beads-and-git-havent-drifted)
+  (once per ticket, immediately before that ticket's `land-review` dispatch) and
+  `scripts/land-merge-one.sh` (on every invocation, covering both Section 3's first merge loop and its
+  isolation-replay copy from one call site). Both are pinned by tests the same way `acquire`/`release`
+  are (`tests/test_land_lock.py`, `tests/test_land_merge_one.py`) — a heartbeat call site that quietly
+  stops firing is exactly as dangerous as the original inert lock, just slower to notice.
+
+  **Those two sites bracket the two loops, not the pass — "a heartbeat exists" is not "the pass is
+  covered".** Three stretches still run unheartbeated, and lode-m87j's own design note named only the
+  second: (1) `acquire` → the first Section-2a heartbeat, i.e. all of Section 1 (networked `bd dolt
+  pull` + `git fetch`) and Section 1a's O(n²) stacked-branch graph — the one gap that *grows* with
+  queue size; (2) Section 3's single combined re-gate, measured at ~60s on the 2026-07-28 dev machine
+  and so not the binding constraint; (3) the last heartbeat → `release`, i.e. that re-gate **plus all
+  of Section 4** — `git push origin trunk`, a `bd close` and an `epic-completion-check.sh` per landed
+  ticket, a networked `bd-dolt-push.sh`, the branch deletes and the worktree-GC sweep. (3) is the one
+  that matters: it is the ordinary green path, it scales with the number of landed tickets, and it is
+  the stretch during which `trunk` is being written.
+
+  **So the default stays at 1800s** (lode-m87j proposed 600s; the technical review reverted it). The
+  heartbeat is the whole fix for "a long pass has its own lock reclaimed mid-merge", and at 1800s that
+  is now essentially unreachable — but it does not license a shorter window, because the two failure
+  directions are as asymmetric as ever: too low reclaims a *live* lock and puts two landers on `trunk`
+  (unbounded), too high only delays landing a few ticks (bounded, self-healing, not latency-critical).
+  The binding gap is the 2a→2a interval — one `land-review` Opus dispatch — and nothing has measured
+  it; what *is* measured is that agent dispatches here run minutes (lode-m87j's own builder took
+  14m10s), the same order as a 600s window rather than comfortably inside it. Re-deriving the number
+  against real dispatch-time data, or covering gaps (1) and (3), is **lode-cp4o**.
+
+  **Second, `acquire` is atomic but the stale-lock *reclaim* is not** — `rm`
+  then create, two steps, observed admitting two winners at 8-way contention. Unreachable under the
+  one-loop convention (a still-running pass holds a *fresh* lock, so the reclaim branch is
+  crash-recovery only), and deferred rather than closed with a nested TTL that could wedge landing
+  outright (lode-ao95). `heartbeat` does not check that it still *owns* the lock, so in that
+  two-winner state the pass that lost it keeps re-stamping the winner's record and the overlap becomes
+  self-concealing — it neither causes the overlap nor changes any verdict (no pass ever re-reads the
+  lock to confirm it holds it, before or after lode-m87j), but it erases the evidence a human would
+  spot one by; whichever of lode-ao95 or lode-cp4o lands second should add an owner token `heartbeat`
+  refuses to overwrite. **Release reaches only two sites** — Section 1's empty-queue exit and the end
+  of Section 4 — as a latency optimization; every other stop, *including the routine pass in which
+  every branch was kicked back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that
+  asks nothing of any exit site cannot rot as exits are added, the same reasoning as the pass-start
+  `reset --hard` below.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and

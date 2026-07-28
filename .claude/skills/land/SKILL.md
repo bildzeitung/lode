@@ -72,6 +72,15 @@ and the mechanism's two known limits, are in that script's header;
 bullet is the design home. `tests/test_land_lock.py` pins both the script's behaviour and these call
 sites, so this section cannot quietly go back to an inline lock.
 
+**The token is now a heartbeat, not a one-shot stamp (lode-m87j).** [Section
+2a](#2a-re-validate-that-beads-and-git-havent-drifted) re-stamps it once per ticket in the vet loop
+(right before that ticket's `land-review` dispatch) and `scripts/land-merge-one.sh` re-stamps it on
+every call, covering both Section 3 merge loops — so a pass no longer risks having its *own* lock
+reclaimed mid-merge just for running long. **That did not shorten the window below, and the two call
+sites do not cover the whole pass**: Section 1/1a before the first heartbeat, the combined re-gate,
+and all of Section 4 (where `trunk` is actually written) run unheartbeated. `scripts/land-lock.sh`'s
+header enumerates all three and explains why the default stays at 1800s; re-deriving it is lode-cp4o.
+
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
 of a full pass in [Section 4](#4-land-the-survivors). **Every other way a pass stops leaves the lock
@@ -306,7 +315,15 @@ writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`codi
 on every re-push. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
 was marked ready.
 
+**First action of every iteration of this loop: heartbeat the single-lander lock (lode-m87j).** This
+is the one call site (not per-section) that keeps the lock's staleness token measuring idle time
+rather than this pass's total duration — it fires once per ticket, right before that ticket's
+`land-review` Opus dispatch in 2c, so the gap the TTL has to outlast is one dispatch, not the sum
+across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoning; failure here is
+logged but never stops the pass (this is lock bookkeeping, not the vet itself):
+
 ```bash
+rtk scripts/land-lock.sh heartbeat || true
 rtk bd show <id> --json     # read metadata.land_head and metadata.land_summary
 rtk git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head

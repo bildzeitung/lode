@@ -47,7 +47,11 @@
 #        a silent empty-message merge" acceptance criterion -- refusing here
 #        is exactly what closes lode-sfnb's failure mode.
 #
-# Never touches bd, never pushes, never runs a gate -- purely the merge step.
+# Never touches bd, never pushes, never runs a gate -- purely the merge step,
+# plus one side effect: it heartbeats the single-lander lock (lode-m87j) via
+# `scripts/land-lock.sh heartbeat`, best-effort and non-fatal, so that a
+# lock's staleness check measures idle time rather than the whole pass's
+# duration -- see that script's own header for the full mechanism.
 # The caller (the /land skill) decides what a 1 or a 2 means for the pass.
 
 set -uo pipefail   # deliberately NOT -e: every branch below inspects an exit
@@ -82,6 +86,29 @@ if [ "$#" -ne 2 ]; then
 fi
 id="$1"
 msg_dir="$2"
+
+# Heartbeat the single-lander lock (lode-m87j). This script runs once per
+# accepted branch in /land's Section 3 first merge loop AND its
+# isolation-replay copy, so a single call site here re-stamps the lock every
+# branch-iteration of BOTH loops without a second call site in SKILL.md --
+# the token's age then reflects the gap since the last branch merged, not
+# since Section 0's original `acquire`. `$(dirname "$0")` resolves to the
+# real scripts/ dir regardless of how this script itself was invoked
+# (relative from the repo root in a normal /land pass, or an absolute test
+# path) -- same idiom scripts/merge-precheck.sh uses for gate-lib.sh.
+# Best-effort and non-fatal: a heartbeat write failure must never abort an
+# otherwise-clean merge (see scripts/land-lock.sh's own heartbeat comment for
+# why its exit 1 is not treated as fatal by its callers).
+#
+# STDOUT is redirected because this script's own stdout is the caller's
+# $CONFLICTS channel and must stay clean; STDERR deliberately is NOT. That
+# script's exit-1 contract is "log and continue -- a human should look if this
+# repeats every tick", and swallowing its diagnostic here would leave the
+# heartbeat silently dead at the one call site that fires on every merge --
+# the same "must be observable, never silent" standard lode-aps3 set for the
+# lock itself. Extra stderr is already normal on this path (the merge's own
+# error text goes there below).
+"$(dirname "$0")/land-lock.sh" heartbeat >/dev/null || true
 
 msg_file="$msg_dir/$id"
 if [ ! -s "$msg_file" ]; then
