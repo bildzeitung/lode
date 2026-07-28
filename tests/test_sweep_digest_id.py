@@ -55,7 +55,12 @@ def _run(tmp_path: Path, rows: object) -> subprocess.CompletedProcess[str]:
 
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     return subprocess.run(
-        [str(SCRIPT)], capture_output=True, text=True, env=env, cwd=REPO_ROOT
+        [str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=REPO_ROOT,
+        check=False,
     )
 
 
@@ -116,6 +121,7 @@ def test_arguments_are_rejected_as_a_machine_fault(tmp_path: Path) -> None:
         text=True,
         env=env,
         cwd=REPO_ROOT,
+        check=False,
     )
     assert r.returncode == 2
     assert r.stdout == ""
@@ -135,7 +141,12 @@ def test_bd_failure_is_exit_2_not_exit_1(tmp_path: Path) -> None:
     fake_bd.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
     r = subprocess.run(
-        [str(SCRIPT)], capture_output=True, text=True, env=env, cwd=REPO_ROOT
+        [str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=REPO_ROOT,
+        check=False,
     )
     assert r.returncode == 2
     assert r.stdout == ""

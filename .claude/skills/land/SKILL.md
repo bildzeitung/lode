@@ -60,8 +60,10 @@ regression to this file or any other skill's markdown. **This file is covered by
 newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
 individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
 land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
-`$CONFLICTS` (a few sections below, genuinely broken, fixed on `lode-rfon`'s branch) — both tracked
-by `lode-p1r3`. Everything else in this file is gated mechanically.
+`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
+which has since landed, so the entry is now inert rather than a live violation) — both tracked
+by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+mechanically.
 
 ---
 
