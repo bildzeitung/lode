@@ -14,16 +14,19 @@
 # install_locked_venv LOCKFILE
 #   1. refresh uv itself, and pip inside the venv
 #   2. hash-verified runtime deps, from LOCKFILE
-#   3. the local package itself, editable, --no-deps (its runtime deps were
-#      already satisfied by step 2 -- --no-deps keeps this step from
-#      re-resolving them unhashed, which would defeat the lock)
-#   4. the dev extra, resolved FRESH from pyproject.toml -- deliberately NOT
-#      locked. Already-installed, hash-locked runtime deps satisfy
-#      pyproject.toml's ranges, so this step only resolves/installs the
-#      dev-only packages -- but it MUST repeat `-e`: a plain (non-editable)
-#      `.[dev]` here would silently overwrite step 3's editable install with
-#      a frozen build-time copy (the wrong-source-tree guard,
-#      tests/conftest.py, lode-jh80, exists to catch exactly that).
+#   3. the local package itself PLUS the dev extra, editable, resolved FRESH
+#      from pyproject.toml -- deliberately NOT locked. Already-installed,
+#      hash-locked runtime deps satisfy pyproject.toml's ranges, so this step
+#      only resolves/installs the dev-only packages on top -- but `-e` is
+#      REQUIRED: a plain (non-editable) `.[dev]` here would install a frozen
+#      build-time copy instead of the editable one (the wrong-source-tree
+#      guard, tests/conftest.py, lode-jh80, exists to catch exactly that).
+#
+#      Do NOT re-add a separate `uv pip install -e . --no-deps` step before
+#      this one: measured as a pure no-op (lode-xo99) -- same package set,
+#      same runtime pins, same resolved source path with or without it,
+#      since this step discards and rebuilds the editable install either
+#      way. Full record: docs/stack.md#dependency-locking-lode-g2741.
 #
 # && chained -- NOT relying on the caller's -e/errexit state -- so a failure
 # partway through is never masked by a later, unrelated command's exit
@@ -42,6 +45,5 @@ install_locked_venv() {
   pip install -U uv &&
     uv pip install -U pip &&
     uv pip install --require-hashes -r "$lockfile" &&
-    uv pip install -e . --no-deps &&
     uv pip install -e '.[dev]'
 }

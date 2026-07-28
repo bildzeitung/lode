@@ -279,7 +279,12 @@ def test_m6px_bash_only_collapse_fails_under_dash_sabotage() -> None:
     )
 
     dash_proc = subprocess.run(
-        [SH, "-c", sabotaged], input=payload, capture_output=True, text=True, timeout=30
+        [SH, "-c", sabotaged],
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
     assert dash_proc.returncode != 0, (
         "expected the m6px bash-only collapse to fail under dash; it did not -- "
@@ -312,6 +317,7 @@ def test_m6px_bash_only_collapse_would_have_worked_under_bash() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, (
         f"expected the sabotaged hook to run cleanly under bash: {proc.stderr}"
@@ -336,6 +342,7 @@ def test_shipped_hook_runs_cleanly_under_dash_end_to_end() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, f"guard errored under dash: {proc.stderr}"
     assert "Bad substitution" not in proc.stderr

@@ -52,7 +52,7 @@ pytestmark = pytest.mark.skipif(
 
 def _fake_bd(tmp_path: Path, list_fixtures: dict[str, list[dict]]) -> Path:
     """A PATH dir holding a fake `bd` that serves `list_fixtures[<epic-id>]`
-    for `bd list --parent <epic-id> --all --json`."""
+    for `bd list --parent <epic-id> --all --limit 0 --json`."""
     list_path = tmp_path / "list_fixtures.json"
     list_path.write_text(json.dumps(list_fixtures))
 
@@ -66,7 +66,9 @@ def _fake_bd(tmp_path: Path, list_fixtures: dict[str, list[dict]]) -> Path:
             # Fake `bd list --parent` for testing epic-children-closed.sh.
             set -euo pipefail
             [ "$1" = "list" ] || {{ echo "unsupported: $*" >&2; exit 1; }}
-            # invoked as: bd list --parent <id> --all --json
+            # invoked as: bd list --parent <id> --all --limit 0 --json
+            # -- the id is $3, so a new flag must go AFTER it (inserting one
+            # before --parent shifts $3 and fails these tests loudly).
             parent="$3"
             jq -c --arg id "$parent" \\
               '.[$id] // error("no list fixture for \\($id)")' "{list_path}"
@@ -86,6 +88,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -157,6 +160,7 @@ def test_old_dependents_derivation_never_fires_even_when_fully_closed() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "SKIP", (

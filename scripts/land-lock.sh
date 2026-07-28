@@ -27,32 +27,96 @@
 # THE FIX: no trap, no PID-liveness check. Liveness is instead a wall-clock
 # STALENESS TOKEN -- the lock records when it was acquired, and a later
 # `acquire` reclaims it only once that timestamp is older than
-# LAND_LOCK_STALE_SECONDS (default 1800s / 30min). This staleness reclaim is
-# the SOLE mechanism that is guaranteed to release an abandoned lock: it
-# needs no cooperation from any particular exit site, so it cannot be
-# silently broken by a future editor adding a new "stop the pass" exit to
-# SKILL.md and forgetting to release. SKILL.md also calls `release`
-# explicitly at two sites (Section 1's empty-queue exit, the end of Section
-# 4) purely to keep the common `/loop 5m /land` cadence tight; MANY other
-# exits reach neither and wait out the TTL instead -- see the two caveats
-# below, and docs/agents-workflow.md's single-lander-lock bullet, which is
-# the design home for this mechanism and for LAND_LOCK_STALE_SECONDS.
+# LAND_LOCK_STALE_SECONDS (default 1800s / 30min -- see CAVEAT 1 for why the
+# `heartbeat` subcommand did NOT buy a reduction). This staleness reclaim is
+# the SOLE mechanism that is guaranteed to release an abandoned lock: it needs
+# no cooperation from any
+# particular exit site, so it cannot be silently broken by a future editor
+# adding a new "stop the pass" exit to SKILL.md and forgetting to release.
+# SKILL.md also calls `release` explicitly at two sites (Section 1's
+# empty-queue exit, the end of Section 4) purely to keep the common
+# `/loop 5m /land` cadence tight; MANY other exits reach neither and wait out
+# the TTL instead -- see the two caveats below, and
+# docs/agents-workflow.md's single-lander-lock bullet, which is the design
+# home for this mechanism and for LAND_LOCK_STALE_SECONDS.
 #
-# CAVEAT 1 -- the TTL measures the age of the ACQUISITION, not idle time.
-# Nothing refreshes the token mid-pass, so LAND_LOCK_STALE_SECONDS must
-# exceed the TOTAL wall-clock duration of the longest legitimate pass (N
-# land-review Opus dispatches, a combined re-gate, per-branch isolation
-# replay on red, `validate-mermaid.sh`'s docker run, `lock_currency`'s
-# network resolve) -- not merely the longest gap between two Bash calls. A
-# pass that genuinely runs longer than the window has its own lock judged
-# stale and reclaimed by the next tick, mid-`trunk`-merge. That is the
-# DANGEROUS direction, and it is why 1800s is not reduced: the opposite
-# failure (an abandoned lock blocking landing for up to 30min / ~6 skipped
-# ticks) only DELAYS landing, which is not latency-critical. A heartbeat
-# that re-stamps the token as the pass progresses lets the window be both
-# smaller and safer; it is not implemented on THIS branch, which was built
-# strictly against a trunk that had none. lode-m87j has since landed and
-# trunk now has one -- see the MERGE NOTE below before reconciling the two.
+# CAVEAT 1 -- the TTL measures IDLE time rather than acquisition age ACROSS
+# THE TWO LOOPS the `heartbeat` subcommand brackets (lode-m87j), and
+# acquisition age everywhere else. Read the gap list below before relying on
+# the idle-time reading. Previously nothing re-stamped the
+# token mid-pass, so the window had to exceed the TOTAL wall-clock duration of
+# the longest legitimate pass (N land-review Opus dispatches, a combined
+# re-gate, per-branch isolation replay on red, `validate-mermaid.sh`'s docker
+# run, `lock_currency`'s network resolve) -- summed across the WHOLE pass, not
+# merely the longest gap between two Bash calls. A pass that genuinely ran
+# longer than the window had its own lock reclaimed by the next tick,
+# mid-`trunk`-merge -- the dangerous direction -- which is why the window is
+# large (1800s) and has never been reduced.
+#
+# `heartbeat` re-stamps the SAME record `acquire` wrote, with no atomicity
+# contest (see its own comment below) -- so as long as SOMETHING calls it
+# periodically during a pass, the token's age never reflects more than the
+# GAP since the last call, not the pass's total duration. Two call sites make
+# that periodic, by construction rather than by a future editor remembering a
+# new one per section (the exact rot this design has avoided from the start):
+#   - `.claude/skills/land/SKILL.md` Section 2a (the top of the per-ticket
+#     "vet each branch" loop) -- fires once per ticket, immediately before
+#     that ticket's `land-review` Opus dispatch (2c), bounding that gap to
+#     roughly one dispatch's duration, not the sum of N.
+#   - `scripts/land-merge-one.sh` (lode-sfnb) -- fires on every invocation,
+#     which covers both Section 3's first merge loop (once per accepted
+#     branch) AND its isolation-replay copy (once per branch being re-tested
+#     after a red combined re-gate) with a single call site inside the
+#     script, needing no second SKILL.md edit for the replay loop.
+# Both are pinned by tests the same way `acquire`/`release` are (see
+# tests/test_land_lock.py and tests/test_land_merge_one.py) -- a heartbeat
+# call site that quietly stops being called is exactly as dangerous as the
+# original inert lock, just slower to notice.
+#
+# THREE stretches of a pass are still uncovered -- the two call sites bracket
+# the two LOOPS, not the pass. Do not read "heartbeat exists" as "the whole
+# pass is covered" (lode-m87j's technical review; the ticket's own design note
+# named only the second of these):
+#   1. `acquire` (Section 0) -> the FIRST Section-2a heartbeat: all of Section
+#      1 (`bd dolt pull` and `git fetch origin`, both networked) and all of
+#      Section 1a, whose stacked-branch graph is O(n^2) `git merge-base` work
+#      in the size of the ready-for-land queue -- the one uncovered stretch
+#      that GROWS with the queue.
+#   2. Section 3's single COMBINED re-gate (`nox -t fix && nox -s tests &&
+#      nox -s lock_currency`, plus `validate-mermaid.sh` on a docs change),
+#      which runs once, between the merge loop and the isolation-replay loop.
+#      MEASURED on the 2026-07-28 dev machine at ~60s total (tests ~50s, fix
+#      ~0.4s, lock_currency ~1s, mermaid ~10s) -- comfortably small, but it is
+#      wall-clock on one machine, not a bound.
+#   3. The LAST heartbeat -> `release` at the end of Section 4: the re-gate
+#      above PLUS the whole of Section 4 -- `git push origin trunk`, a
+#      `bd close` per landed ticket, `epic-completion-check.sh` per ticket,
+#      `scripts/bd-dolt-push.sh` (networked, with its own retry/backoff), a
+#      branch delete per landed ticket, and the worktree-GC sweep. This is the
+#      worst one: it is on the ordinary GREEN path, it scales with the number
+#      of landed tickets, and it is the stretch during which `trunk` is
+#      actually being written -- so a reclaim here is a reclaim at the exact
+#      moment two landers must not overlap.
+#
+# WHY THE DEFAULT STAYS AT 1800s. The heartbeat shrinks the exposure a lot: it
+# is the whole fix for "a long pass has its OWN lock reclaimed mid-merge", and
+# at 1800s that failure is now essentially unreachable. It does NOT license
+# lowering the window, because the two failure directions remain as asymmetric
+# as they were before it existed: too LOW reclaims a live lock and puts two
+# landers on `trunk` at once (unbounded damage), while too HIGH only delays
+# landing by a few `/loop 5m` ticks (bounded, self-healing, and explicitly not
+# latency-critical). Lowering trades the safe side for the dangerous one, and
+# nothing here measures the binding gap. That gap is NOT the re-gate above: it
+# is one `land-review` Opus dispatch (the 2a->2a interval) plus, on a bounce,
+# the lander's own `bd` bookkeeping. Agent dispatches in this repo are
+# routinely minutes long -- lode-m87j's own `coding` builder took 14m10s
+# (bd `started_at` 03:00:24Z -> `updated_at` 03:14:34Z, 2026-07-28) -- i.e.
+# the same order of magnitude as a 600s window, not comfortably under it. So
+# the reduction to 600s that this subcommand was expected to unlock is held
+# back until either the gaps above are covered or a real distribution of
+# `land-review` dispatch times exists to size it against; see lode-cp4o.
+# Overriding via the env var stays available for anyone who has measured
+# their own machine.
 #
 # CAVEAT 2 -- the stale-lock RECLAIM is now ATOMIC (lode-ao95; previously
 # `rm` then create, two steps, OBSERVED admitting two winners 3/40 rounds at
@@ -131,39 +195,48 @@
 #
 # A remaining, deliberately-accepted gap: this fix makes `acquire` alone
 # atomic, but says nothing about a WRITER that already thinks it holds the
-# lock and later re-stamps it blindly (the `heartbeat` subcommand, lode-m87j
-# -- see the MERGE NOTE below). If a pass's lock is ever reclaimed out from
-# under it by another racer, that original pass -- unaware it lost the lock
-# -- could still re-stamp the NEW holder's record, making a genuine overlap
-# look like one continuous, legitimate holder (self-concealing rather than
-# prevented). That is not hypothetical: in the stalled-gate-holder case
-# above, the surviving record names the DISPLACED holder, not the racer that
-# reclaimed after it -- the file already lies about who holds the lock, and
-# a blind heartbeat would keep it looking healthy indefinitely. Closing that
-# needs the re-stamping code to check an OWNER TOKEN before writing, not
-# just a timestamp. This script records one (5th record field, see
-# `lock_record` below) precisely so that check has something to compare
-# against; implementing the check is lode-q9pm.
+# lock and later re-stamps it (the `heartbeat` subcommand, lode-m87j -- see
+# the MERGE RESOLUTION note below). If a pass's lock is ever reclaimed out
+# from under it by another racer, that original pass -- unaware it lost the
+# lock -- could still re-stamp the NEW holder's record, making a genuine
+# overlap look like one continuous, legitimate holder (self-concealing
+# rather than prevented). That is not hypothetical: in the stalled-gate-
+# holder case above, the surviving record names the DISPLACED holder, not
+# the racer that reclaimed after it -- the file already lies about who
+# holds the lock. `heartbeat` (below) now PRESERVES the current record's
+# owner token rather than dropping or regenerating it on every call, so the
+# field itself stays meaningful across heartbeat calls -- but it does not
+# yet COMPARE that token against anything the calling pass remembers as its
+# own, so it still cannot refuse to overwrite a record it no longer owns.
+# This script records the token (5th record field, see `lock_record` below)
+# precisely so that comparison has something to check against; wiring the
+# actual ownership check is lode-q9pm.
 #
-# MERGE NOTE (read before resolving a conflict in this file). This branch was
-# built against a trunk with no `heartbeat`; lode-m87j has since LANDED, so
-# trunk now has one and this file conflicts with it. The conflict is
-# SEMANTIC, not just textual, and resolving it by taking either side wholesale
-# is wrong in a way no current test catches:
-#   * trunk's `heartbeat` calls `lock_record` with NO argument. This branch's
-#     `lock_record` reads the owner token from `$1`. Under `set -u` that call
-#     fails outright -- taking this side wholesale BREAKS heartbeat.
-#   * Taking trunk's 4-field `lock_record` wholesale drops the owner token and
-#     silently reverts the reclaim to the non-atomic `rm`-then-create form.
-#   * The correct resolution keeps this branch's reclaim gate AND trunk's
-#     `heartbeat`, and must make `heartbeat` PRESERVE the existing token
-#     rather than regenerate or blank it -- a heartbeat that mints a fresh
-#     token every tick destroys the one thing lode-q9pm needs to compare
-#     against, turning the field into decoration while looking correct.
-# Whoever resolves it: add a test pinning "a heartbeat leaves field 5
-# unchanged" in the same commit, or the invariant has no gate behind it.
+# MERGE RESOLUTION (lode-ao95 x lode-m87j). This branch was built against a
+# trunk with no `heartbeat`; lode-m87j landed on trunk afterward, and this
+# file conflicted with it on merge. The conflict was SEMANTIC, not just
+# textual -- taking either side wholesale would have been wrong in a way no
+# test caught at the time:
+#   * trunk's `heartbeat` called `lock_record` with NO argument. This
+#     branch's `lock_record` reads the owner token from `$1`. Under
+#     `set -u` that call fails outright, so taking this branch's side
+#     wholesale would have broken heartbeat -- loudly, against trunk's
+#     heartbeat tests. That loudness was deliberate: the mandatory
+#     positional is a merge tripwire, and it was NOT "fixed" with a default.
+#   * Taking trunk's 4-field `lock_record` wholesale would have silently
+#     dropped the owner token and reverted the reclaim to the non-atomic
+#     `rm`-then-create form.
+#   * The resolution kept this branch's reclaim gate AND trunk's
+#     `heartbeat`, and made `heartbeat` PRESERVE the existing token (via
+#     `token_of`, see below) rather than regenerate or blank it -- a
+#     heartbeat that minted a fresh token every tick would have destroyed
+#     the one thing lode-q9pm needs to compare against, turning the field
+#     into decoration while looking correct.
+#   `tests/test_land_lock.py::test_heartbeat_preserves_the_existing_owner_token`
+#   pins this.
 #
 # Usage: scripts/land-lock.sh acquire
+#        scripts/land-lock.sh heartbeat
 #        scripts/land-lock.sh release
 #
 # acquire: exit 0 -> lock acquired (fresh, or reclaimed from a stale prior
@@ -175,6 +248,16 @@
 #                     per the "single lander" convention) -- do not queue, do
 #                     not run in parallel. Diagnostic on STDERR.
 #          exit 2 -> usage error (a caller bug, never a lock verdict).
+# heartbeat: re-stamps the lock this pass already holds, so the staleness
+#            check measures idle time from the LAST heartbeat rather than the
+#            original `acquire` (CAVEAT 1). Call it periodically from inside
+#            a still-running pass -- never as a substitute for `acquire`.
+#            exit 0 -> re-stamped (or created fresh, if the file was somehow
+#                       already gone -- see the subcommand's own comment).
+#            exit 1 -> could not write the lock file. NOT fatal to the
+#                       caller's own step by itself (this is bookkeeping, not
+#                       the work) -- log and continue; a human should still
+#                       look if it repeats every tick. Diagnostic on STDERR.
 # release: always exit 0 -- `rm -f` is idempotent, and a caller that never
 #           held the lock (e.g. it just skipped the tick above) must be able
 #           to call this harmlessly too.
@@ -184,8 +267,9 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ] || { [ "$1" != "acquire" ] && [ "$1" != "release" ]; }; then
-  echo "usage: $0 acquire|release" >&2
+if [ "$#" -ne 1 ] \
+   || { [ "$1" != "acquire" ] && [ "$1" != "heartbeat" ] && [ "$1" != "release" ]; }; then
+  echo "usage: $0 acquire|heartbeat|release" >&2
   exit 2
 fi
 cmd="$1"
@@ -219,15 +303,18 @@ lock_record() {
   # field 5 (owner token) is new, appended rather than inserted, so nothing
   # that reads field 3 needs to change. Fields 1, 2 and 4 are for a human
   # reading the file by hand; field 5 is for a future consumer (lode-q9pm),
-  # not read back by anything in this script.
+  # not read back by anything else in this script, but IS read back and
+  # threaded straight through by `heartbeat` below (`token_of`), so the
+  # field survives repeated heartbeat calls unchanged.
   #
   # The token is a MANDATORY positional, and that is deliberate -- see the
-  # MERGE NOTE in the header. Defaulting it (`${1:-...}`) would let trunk's
-  # argument-less `heartbeat` call keep working through a merge while either
-  # blanking the token or minting a fresh one every tick, silently destroying
-  # the ownership continuity the field exists to provide, with trunk's five
-  # heartbeat tests still green. Requiring it makes that merge fail loudly
-  # instead. Do not "fix" this by adding a default.
+  # MERGE RESOLUTION note in the header. Defaulting it (`${1:-...}`) would
+  # have let trunk's original argument-less `heartbeat` call keep working
+  # through the merge while either blanking the token or minting a fresh one
+  # every tick, silently destroying the ownership continuity the field
+  # exists to provide, with trunk's five heartbeat tests still green.
+  # Requiring it makes that mistake fail loudly instead. Do not "fix" this
+  # by adding a default -- `heartbeat` below supplies its own via `token_of`.
   printf '%s %s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)" "$1"
 }
 
@@ -243,6 +330,18 @@ epoch_of() {
     ''|*[!0-9]*) ;;
     *) printf '%s' "$3" ;;
   esac
+}
+
+token_of() {
+  # Field 5 (owner token) of a lock record, empty if the record predates the
+  # field (four fields only, lode-aps3-era) or is otherwise malformed. Same
+  # word-split-in-a-function shape as `epoch_of`, and for the same reason --
+  # confines the split so it cannot clobber the script's own "$@" at top
+  # level. Used only by `heartbeat`, to PRESERVE whatever token is currently
+  # on disk rather than regenerate or blank it (see MERGE RESOLUTION above).
+  # shellcheck disable=SC2086  # deliberate word-split of the record
+  set -- $1
+  printf '%s' "${5:-}"
 }
 
 skip_lock_still_held() {
@@ -266,6 +365,50 @@ write_lock() {
 if [ "$cmd" = "release" ]; then
   rm -f "$LOCK"
   exit 0
+fi
+
+if [ "$cmd" = "heartbeat" ]; then
+  # Best-effort re-stamp of the SAME record `acquire` wrote -- refreshes the
+  # recorded time so a later tick's staleness check measures idle time since
+  # the LAST heartbeat, not the age of the original `acquire` (lode-m87j; see
+  # CAVEAT 1 above). Deliberately NOT `write_lock`'s atomic/noclobber create:
+  # overwriting the existing record is exactly the point here, and the
+  # documented one-lander-per-machine convention means no other WRITER should
+  # be touching this file while a pass holds it. Concurrent READERS are a
+  # different matter and are routine -- every `/loop 5m /land` tick's own
+  # `acquire` reads this file, and `>` truncates before it writes, so a reader
+  # CAN catch a half-written record. That is safe by construction, not by
+  # luck: the reclaim path below treats an unparseable record as "age unknown"
+  # and skips the tick rather than reclaiming. Keep that path conservative --
+  # making it guess an age would turn this benign interleaving into a reclaim
+  # of a live lock. If the file is somehow already gone (heartbeat called
+  # without ever acquiring -- should not happen at either documented call
+  # site), this creates it fresh rather than erroring: either way the caller's
+  # intent ("the pass is still alive right now") is the same.
+  #
+  # PRESERVES the owner token (field 5, lode-ao95) rather than regenerating or
+  # blanking it -- `lock_record`'s token positional is mandatory specifically
+  # so a heartbeat that forgot this would fail loudly under `set -u`, not
+  # silently mint a fresh token every tick (see the MERGE RESOLUTION note in
+  # the header). Reads whatever token is CURRENTLY on disk via `token_of` and
+  # threads it straight through; a record predating the field (four fields,
+  # no token) or a lock somehow already gone yields an empty `token_of` read,
+  # in which case this mints a fresh one -- matching `acquire`'s own shape,
+  # since there is no prior token left to preserve either way.
+  CUR_RECORD=""
+  read -r CUR_RECORD < "$LOCK" 2>/dev/null || true
+  CUR_TOKEN="$(token_of "$CUR_RECORD")"
+  if [ -z "$CUR_TOKEN" ]; then
+    CUR_TOKEN="$(new_token)"
+  fi
+  if lock_record "$CUR_TOKEN" > "$LOCK" 2>/dev/null; then
+    exit 0
+  fi
+  echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \
+    "dir, or no space). Not fatal to this step by itself -- the token simply" \
+    "ages from its last successful stamp -- but a human should check" \
+    "disk/permissions if this repeats every tick." >&2
+  exit 1
 fi
 
 # acquire

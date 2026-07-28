@@ -146,12 +146,18 @@ Two files, two jobs — **never pin the same thing in both**:
 
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
-`--require-hashes` are mutually exclusive in one pip/uv invocation, so the install is three steps:
-hash-verified runtime deps from the lock, then the local package editable (`--no-deps`, so this
-step can't silently re-resolve — and un-pin — what step one just hash-verified), then the `dev`
-extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and resolves everything
-fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
-regenerating the lock or probing an upstream bump before committing to it.
+`--require-hashes` are mutually exclusive in one pip/uv invocation, so the dependency install splits
+in two: a **lock step** (hash-verified runtime deps from `requirements.lock`), then a **dev-extra
+step** (the local package editable together with the `dev` extra, `-e '.[dev]'`, resolved fresh from
+`pyproject.toml`). The dev-extra step does re-resolve the whole graph, but the lock step's pins
+already satisfy `pyproject.toml`'s ranges and uv keeps an already-installed satisfying version — so
+it adds the dev-only packages on top without moving anything the lock step hash-verified. That was
+reproduced rather than argued (`lode-xo99`): a locked venv built with and without an extra
+`-e . --no-deps` step in between came out with the same package set, the same runtime pins, and the
+same resolved `lode` source path either way, so that step was deleted as dead work. `--unlocked`
+skips the lock and resolves everything fresh from `pyproject.toml` instead — the deliberate "what
+would we get today" escape hatch for regenerating the lock or probing an upstream bump before
+committing to it.
 
 **Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
 `tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
@@ -167,9 +173,9 @@ dropped `--unlocked`: both legs now run the identical install, so a coverage per
 reproducible from committed bytes instead of from whatever resolved on the day it ran.
 
 **What that parity does not cover.** The lock is the runtime set only, so both legs still resolve
-`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (step three above) — `lode-7byn` pinned
-the code under measurement, not the tools doing the measuring. The counter-case for resolving fresh
-here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
+`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (the dev-extra step above) — `lode-7byn`
+pinned the code under measurement, not the tools doing the measuring. The counter-case for resolving
+fresh here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
 toothless on this leg: `coverage.yml` enforces no threshold, so such a drift fails nothing and
 attributes nothing — and no CI signal fires on an upstream runtime release either way.
 [`lock-currency`](#the-lock-gen-command-is-derived-from-python-version-not-hard-coded-lode-sys4)
