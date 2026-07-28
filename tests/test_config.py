@@ -265,71 +265,80 @@ def test_azure_openai_api_version_alone_is_fine() -> None:
 # --- reasoning_effort validated against llm_provider at load (lode-tvps) ----
 
 
-def test_reasoning_effort_illegal_value_for_anthropic_fails_at_load() -> None:
-    with pytest.raises(ValidationError, match="enrichment_llm.*bogus-effort"):
+@pytest.mark.parametrize(
+    ("provider", "tier", "model", "effort"),
+    [
+        # An outright typo, on each tier in turn -- the validator must reach
+        # every ModelTier knob, not just the first one.
+        ("anthropic", "enrichment_llm", "claude-haiku-4-5", "bogus-effort"),
+        ("anthropic", "qa_llm", "claude-haiku-4-5", "bogus-effort"),
+        ("anthropic", "qa_think_harder_llm", "claude-haiku-4-5", "bogus-effort"),
+        ("openai", "qa_llm", "gpt-5.5", "bogus-effort"),
+        # "minimal" is a legal `reasoning.effort` value for OpenAI
+        # (_OPENAI_EFFORT_LEVELS) but is absent from Anthropic's legal set
+        # (_ANTHROPIC_EFFORT_LEVELS): legality is relative to the *configured*
+        # provider, so being legal under some other provider is not enough.
+        ("anthropic", "enrichment_llm", "claude-haiku-4-5", "minimal"),
+    ],
+)
+def test_illegal_reasoning_effort_rejected_at_load(
+    provider: str, tier: str, model: str, effort: str
+) -> None:
+    with pytest.raises(ValidationError, match=f"{tier}.*{effort}"):
         Settings(
-            llm_provider="anthropic",
-            enrichment_llm={
-                "model": "claude-haiku-4-5",
-                "reasoning_effort": "bogus-effort",
-            },
+            llm_provider=provider,
+            **{tier: {"model": model, "reasoning_effort": effort}},
         )
 
 
-def test_reasoning_effort_illegal_value_for_openai_fails_at_load() -> None:
-    with pytest.raises(ValidationError, match="qa_llm.*bogus-effort"):
-        Settings(
-            llm_provider="openai",
-            qa_llm={"model": "gpt-5.5", "reasoning_effort": "bogus-effort"},
-        )
-
-
-def test_reasoning_effort_legal_for_openai_rejected_under_anthropic() -> None:
-    # "minimal" is a legal `reasoning.effort` value for OpenAI
-    # (_OPENAI_EFFORT_LEVELS) but is not in Anthropic's legal set
-    # (_ANTHROPIC_EFFORT_LEVELS) -- must be rejected when llm_provider is
-    # "anthropic", the value's own legality under some *other* provider is
-    # not enough.
-    with pytest.raises(ValidationError, match="enrichment_llm.*minimal"):
-        Settings(
-            llm_provider="anthropic",
-            enrichment_llm={"model": "claude-haiku-4-5", "reasoning_effort": "minimal"},
-        )
-
-
-def test_reasoning_effort_legal_value_constructs_under_anthropic() -> None:
+@pytest.mark.parametrize(
+    ("provider", "model", "effort"),
+    [
+        ("anthropic", "claude-sonnet-4-6", "high"),
+        ("openai", "gpt-5.5", "minimal"),
+    ],
+)
+def test_legal_reasoning_effort_constructs(
+    provider: str, model: str, effort: str
+) -> None:
     s = Settings(
-        llm_provider="anthropic",
-        qa_llm={"model": "claude-sonnet-4-6", "reasoning_effort": "high"},
+        llm_provider=provider,
+        qa_llm={"model": model, "reasoning_effort": effort},
     )
-    assert s.qa_llm.reasoning_effort == "high"
+    assert s.qa_llm.reasoning_effort == effort
 
 
-def test_reasoning_effort_legal_value_constructs_under_openai() -> None:
-    s = Settings(
-        llm_provider="openai",
-        qa_llm={"model": "gpt-5.5", "reasoning_effort": "minimal"},
-    )
-    assert s.qa_llm.reasoning_effort == "minimal"
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_reasoning_effort_unset_is_always_fine_regardless_of_provider(
+    provider: str,
+) -> None:
+    # Unset is the default for every tier and what a bare-string
+    # `enrichment_llm = "..."` coerces to, so it must stay legal under either
+    # provider -- the seam treats None as "send no effort kwarg" rather than
+    # as a value needing a legal set.
+    s = Settings(llm_provider=provider)
+    assert [
+        t.reasoning_effort for t in (s.enrichment_llm, s.qa_llm, s.qa_think_harder_llm)
+    ] == [None, None, None]
 
 
-def test_reasoning_effort_unset_is_always_fine_regardless_of_provider() -> None:
-    Settings(llm_provider="anthropic")
-    Settings(llm_provider="openai")
+def test_effort_levels_mapping_covers_every_llm_provider_value() -> None:
+    # `EFFORT_LEVELS_BY_PROVIDER` is keyed by the same literal
+    # `Settings.llm_provider` is declared with, and the validator subscripts it
+    # unconditionally. Nothing else pins that: there is no mypy session in
+    # noxfile.py, so a third provider added to the Literal (and to
+    # build_provider) but not to the mapping would surface as a bare KeyError
+    # raised inside a @model_validator on *every* Settings construction --
+    # which `_resolve_settings` does not catch, so it prints a traceback rather
+    # than the one-line config error. Same meta-test idiom the two level tuples
+    # already use against their SDKs' own Literals (tests/test_llm_provider.py).
+    import typing
 
+    from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER
 
-def test_reasoning_effort_checked_on_all_three_tiers() -> None:
-    for tier_name in ("enrichment_llm", "qa_llm", "qa_think_harder_llm"):
-        with pytest.raises(ValidationError, match=f"{tier_name}.*bogus-effort"):
-            Settings(
-                llm_provider="anthropic",
-                **{
-                    tier_name: {
-                        "model": "claude-haiku-4-5",
-                        "reasoning_effort": "bogus-effort",
-                    }
-                },
-            )
+    declared = typing.get_args(Settings.model_fields["llm_provider"].annotation)
+    assert declared, "llm_provider is no longer a Literal -- update this pin"
+    assert set(EFFORT_LEVELS_BY_PROVIDER) == set(declared)
 
 
 def test_load_settings_malformed_config_toml_raises(

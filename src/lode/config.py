@@ -581,29 +581,26 @@ class Settings(BaseModel):
     def _reasoning_effort_legal_for_provider(self) -> Settings:
         """Fail loudly at load if a tier's reasoning_effort isn't legal for llm_provider.
 
-        All three model tiers (``enrichment_llm`` / ``qa_llm`` /
-        ``qa_think_harder_llm``) are ``Kind.RUNTIME`` and come from a static
-        ``config.toml``, so a typo'd ``reasoning_effort`` is 100% deterministic
-        and knowable at load -- before this validator, it instead surfaced at
-        the first API call, inside :class:`AnthropicProvider`/
-        :class:`OpenAIProvider`'s pre-flight value check
-        (``_anthropic_effort_kwargs``/``_openai_effort_kwargs``). On the
-        enrichment path that meant a config typo was misclassified as
-        *transient* by ``worker.run_one``'s generic exception arm -- it
-        charged an attempt, backed off, and dead-lettered the job after
-        ``retry_max_attempts`` rather than refusing to start (lode-tvps).
+        Every ``ModelTier`` knob is ``Kind.RUNTIME`` and comes from a static
+        ``config.toml``, so a typo'd ``reasoning_effort`` is knowable at load.
+        Left to the provider seam it instead surfaced at the first API call,
+        where ``worker.run_one``'s generic arm books it as *transient* and
+        dead-letters the job -- see ``docs/configuration.md`` for the full
+        rationale (lode-tvps). Checks the effort *value* only: the value/model
+        *pairing* stays deliberately unpredicted (lode-3dlt option 1), and a
+        rejected pairing still surfaces as an ``LLMProviderError`` at the seam,
+        not here.
 
-        Structurally identical to ``_azure_api_version_required_with_endpoint``
-        above: a cross-field ``@model_validator(mode="after")`` checking
-        legality against another field's already-resolved value. This checks
-        the effort *value* against the *configured* ``llm_provider``'s legal
-        set only -- the value/model *pairing* stays deliberately unpredicted
-        (lode-3dlt option 1, reaffirmed by lode-90o7); a rejected pairing still
-        surfaces as a clean ``LLMProviderError`` at the seam, not here.
+        Tiers are found by *type*, using the same ``isinstance(..., ModelTier)``
+        predicate :func:`knob_rows` uses, rather than by a hard-coded name list
+        -- so a tier added later is covered without touching this method, which
+        is exactly the drift that would silently reopen this bug for it.
         """
         legal_levels = EFFORT_LEVELS_BY_PROVIDER[self.llm_provider]
-        for tier_name in ("enrichment_llm", "qa_llm", "qa_think_harder_llm"):
-            tier: ModelTier = getattr(self, tier_name)
+        for tier_name in type(self).model_fields:
+            tier = getattr(self, tier_name)
+            if not isinstance(tier, ModelTier):
+                continue
             effort = tier.reasoning_effort
             if effort is not None and effort not in legal_levels:
                 raise ValueError(

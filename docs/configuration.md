@@ -312,26 +312,23 @@ hand-typed.
 lode-90o7 left the effort *value* check at the provider seam only — on the
 first API call, not when `config.toml` is parsed — so a plain typo
 (`reasoning_effort = "LOW"`) started clean but failed at first use; on the
-enrichment path that failure was classified as *transient* by
+enrichment path that failure was then classified as *transient* by
 `worker.run_one`, charging an attempt, backing off, and dead-lettering the
 job after `retry_max_attempts` rather than refusing to start. A `Settings`
-`@model_validator(mode="after")` — `_reasoning_effort_legal_for_provider`,
-structurally identical to `_azure_api_version_required_with_endpoint` above —
-now checks all three tiers' `reasoning_effort` against
-`EFFORT_LEVELS_BY_PROVIDER[llm_provider]` (the same `_ANTHROPIC_EFFORT_LEVELS`/
-`_OPENAI_EFFORT_LEVELS` tuples above, publicly re-exported keyed by the
-`llm_provider` literal) at `Settings` construction time, naming the offending
-tier and the legal set for the *configured* provider on failure. A value
-legal only under the *other* provider (e.g. `minimal`, OpenAI-only) is
-rejected the same as an outright typo — legality is always relative to the
-configured `llm_provider`, never to the value's legality anywhere else. The
-provider-seam value checks (`_anthropic_effort_kwargs`/`_openai_effort_kwargs`)
-stay in place unchanged — they are the guard for programmatic callers that
-construct a provider directly and bypass `Settings` entirely. Unchanged: the
-value/model *pairing* stays deliberately unpredicted (lode-3dlt option 1,
-reaffirmed by lode-90o7) — this validator checks the effort value against the
-provider's legal set only, not against what the specific `model` in the tier
-actually supports.
+`@model_validator(mode="after")` now checks **every `ModelTier` knob's**
+`reasoning_effort` against the legal set for the configured `llm_provider` at
+construction time, naming the offending tier and that set on failure. Since
+every CLI entry point and the TUI resolve settings through `load_settings()`,
+that surfaces as a one-line `invalid config file …` on stderr and exit 1
+before any work starts. Legality is always relative to the *configured*
+provider: a value legal only under the *other* one (e.g. `minimal`,
+OpenAI-only) is rejected exactly like an outright typo. The provider-seam
+value checks stay in place unchanged — they remain the guard for programmatic
+callers that construct a provider directly, bypassing `Settings`. Still
+deliberately unpredicted: the value/model *pairing* (lode-3dlt option 1,
+reaffirmed by lode-90o7) — the load-time check reads the effort value against
+the provider's legal set, never against what the tier's specific `model`
+supports.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort

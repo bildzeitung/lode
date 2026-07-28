@@ -44,15 +44,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
   :class:`LLMProviderError` on both providers -- see
   :class:`AnthropicProvider`'s docstring for the Anthropic half (and for what
   it deliberately does *not* cover) and :func:`_openai_effort_kwargs` for the
-  OpenAI half. **lode-tvps** closes a remaining *timing* gap: both providers'
-  value checks above fire at the first API call, not at config load, so a
-  typo in a static ``config.toml`` reasoning_effort used to dead-letter
-  enrichment work instead of failing at startup. :data:`EFFORT_LEVELS_BY_PROVIDER`
-  is the public re-export of the two per-provider legal sets that lets
-  ``lode.config.Settings`` validate all three tiers against the *configured*
-  ``llm_provider`` in a ``@model_validator(mode="after")``, at construction
-  time -- the pairing (value/model) stays deliberately unpredicted, same as
-  lode-90o7.
+  OpenAI half. Both of those value checks fire at the first API call;
+  :data:`EFFORT_LEVELS_BY_PROVIDER` re-exports the two legal sets so
+  ``lode.config.Settings`` can reject a typo at config load as well
+  (**lode-tvps** -- see that constant's own comment).
 - **The batch handle stays the bare Anthropic ``batch.id`` string** (identical
   to ``submit_enrich_batch`` today) -- schema information never needs to
   survive to :meth:`collect_batch` because :class:`BatchResult.parsed` holds
