@@ -57,7 +57,7 @@ from lode.embedding import embed
 from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
-from lode.jobs import enqueue_derive_jobs, now_iso
+from lode.jobs import enqueue_derive_jobs
 from lode.llm_provider import AnthropicProvider
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
@@ -5191,35 +5191,20 @@ def _noop_embed_registry() -> dict:
     return {"embed": lambda conn, tv, db, s: None}
 
 
-def _insert_job_now(
-    conn: sqlite3.Connection, job_type: str, target_version: str
-) -> None:
-    """Insert a job row with an explicit, ratchet-sourced ``next_attempt_at``.
-
-    Omitting ``next_attempt_at`` falls back to the ``jobs`` table's own SQL
-    ``strftime('now')`` default (``schema.sql``) -- a clock reading taken
-    INDEPENDENTLY of ``worker._claim_one``'s ``next_attempt_at <= now``
-    comparison, which reads :func:`lode.jobs.now_iso` (a forward-ratcheted
-    monotonic clock -- lode-t1y). Confirmed on this host (lode-t1y's own
-    repro harness): under real clock skew those two independent readings can
-    diverge enough that a freshly inserted row's default timestamp lands
-    AHEAD of the ratcheted "now", so the claim predicate spuriously rejects
-    an already-eligible job and strands it for that drain pass -- the exact
-    "drained 2 job(s)" (not 3) symptom lode-t1y diagnosed for this test and
-    its siblings, and that recurred here (lode-4e48) since the SQL-default
-    call sites were never migrated off the un-ratcheted clock.
-    ``next_attempt_at`` read here comes from the SAME clock
-    ``_claim_one`` compares against, so by that clock's own monotonicity
-    guarantee (never decreases within a process) this row is provably
-    eligible by the time ``drain()`` reads its own, later, ``now_iso()`` --
-    no race, regardless of real wall-clock jitter in between. Mirrors
-    ``tests/test_worker.py``'s own ``_insert_job`` helper, which already
-    threads jobs through this same clock and has never exhibited this flake.
-    """
-    conn.execute(
-        "INSERT INTO jobs (type, target_version, next_attempt_at) VALUES (?, ?, ?)",
-        (job_type, target_version, now_iso()),
-    )
+# Seed any job this cluster expects `lode work` to CLAIM via
+# lode.jobs.enqueue_derive_jobs, never a bare INSERT (lode-4e48). A bare INSERT
+# leaves next_attempt_at on the table's SQL strftime('now') default -- SQLite's
+# raw wall clock, not the ratcheted `now` that worker._claim_one's
+# `next_attempt_at <= now` predicate compares it against. enqueue_derive_jobs's
+# own docstring works that two-clock hazard through in full (lode-0dnk); these
+# test sites were simply never migrated with it, which is how the stranded-job
+# flake came back ("drained 2 job(s)", not 3). Seeding through the production
+# primitive is eliminative, not merely narrowing: runner.invoke runs the CLI
+# in-process, and that clock never decreases within a process.
+#
+# A bare INSERT stays fine -- and is used throughout this file -- for a row the
+# claim predicate never sees: one seeded non-pending, or of a type the patched
+# registry excludes (the ('refresh', 'ver-stuck') rows further down).
 
 
 def test_work_drains_pending_embed_jobs(
@@ -5236,12 +5221,9 @@ def test_work_drains_pending_embed_jobs(
     conn = init_db(db_path)
     try:
         with conn:
-            # Insert three embed jobs directly (no version row needed for noop
-            # handler) -- via _insert_job_now, not a bare INSERT, so
-            # next_attempt_at comes from the same ratcheted clock drain()'s
-            # claim predicate reads (lode-4e48).
+            # Three embed jobs (no version row needed for the noop handler).
             for i in range(3):
-                _insert_job_now(conn, "embed", f"ver-{i}")
+                enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
     finally:
         conn.close()
 
@@ -5282,10 +5264,7 @@ def test_work_exits_nonzero_with_actionable_message_on_auth_error(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5332,10 +5311,7 @@ def test_work_prints_per_job_embed_outcome_line(
     conn = init_db(db_path)
     try:
         with conn:
-            # _insert_job_now, not a bare INSERT -- see its docstring (lode-4e48):
-            # a bare INSERT's SQL-default next_attempt_at races drain()'s
-            # ratcheted claim clock under real clock skew.
-            _insert_job_now(conn, "embed", "ver-1")
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5373,8 +5349,7 @@ def test_work_prints_jira_401_outcome_naming_source_and_reason(
                 "VALUES (?, ?, ?)",
                 ("ABC-401", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
             )
-            # _insert_job_now, not a bare INSERT -- see its docstring (lode-4e48).
-            _insert_job_now(conn, "refresh", "ABC-401")
+            enqueue_derive_jobs(conn, "ABC-401", types=("refresh",))
     finally:
         conn.close()
 
@@ -5453,10 +5428,7 @@ def test_work_wait_exits_zero_once_queue_drains(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-0"),
-            )
+            enqueue_derive_jobs(conn, "ver-0", types=("embed",))
     finally:
         conn.close()
 
