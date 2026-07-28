@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from lode.config import Settings
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.capture import BODY_ID as CAPTURE_BODY_ID
@@ -46,6 +47,46 @@ class _FakeGuiBrowser:
     than relying on whatever browsers happen to be registered on the machine
     actually running the suite.
     """
+
+
+class _StubEmbedder:
+    """Deterministic offline stand-in for the related-notes query embedder (lode-fr3p).
+
+    These tests only exercise the Ctrl+N open-link binding; they never assert
+    on ``RelatedNotesPanel`` results. But ``EditScreen.on_mount`` sets the body
+    ``TextArea``'s ``.text`` to the just-loaded note (and the capture-screen
+    test sets it directly), and either one posts a real ``TextArea.Changed``
+    that arms the panel's debounce (:meth:`~lode.tui.widgets.related_notes_panel.
+    RelatedNotesPanel.update_draft`, default 500ms). Whether that timer fires
+    before ``await app.workers.wait_for_complete()`` is called is a wall-clock
+    race the test bodies do nothing to control -- under CPU contention (e.g. a
+    subprocess-heavy test file raising xdist worker contention) it tips more
+    often toward "already fired," so the worker (``RelatedNotesPanel.
+    _search_related``) starts, lazily constructs a real
+    :class:`~lode.embedding.FastEmbedEmbedder`, and its first embed call
+    resolves the fastembed ONNX model's revision over a live, unmocked HTTPS
+    call to huggingface.co (:func:`lode.embedding.resolve_model_revision`) --
+    unconditionally, regardless of whether the model is already cached on
+    disk. That is the network call ``tests/conftest.py``'s socket guard was
+    catching. Stubbing the embedder removes the network dependency outright
+    instead of trying to win the timing race -- the same pattern already used
+    for the identical hazard in ``tests/test_tui_edit_related_notes.py``,
+    ``tests/test_tui_app.py``, and ``tests/test_tui_capture_save_and_new.py``.
+    ``embed_query``/``embed_passages`` echo ``settings.embedding_vector_dim``
+    zeros rather than a fixed width -- a mismatched width would raise a
+    LanceDB "vector dimension mismatch" the first time ``vector_search``
+    lazily creates the (never-otherwise-written) table for these tests' db.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text
+        return [0.0] * self._dim
 
 
 def _insert_snapshot(
@@ -95,6 +136,9 @@ def test_edit_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    # lode-fr3p: EditScreen.on_mount loads the saved body into the TextArea,
+    # which arms RelatedNotesPanel's debounce -- see _StubEmbedder's docstring.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -142,6 +186,9 @@ def test_edit_screen_ctrl_n_with_generic_browser_controller_does_not_open_but_no
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: webbrowser.GenericBrowser("w3m"),
     )
+    # lode-fr3p: EditScreen.on_mount loads the saved body into the TextArea,
+    # which arms RelatedNotesPanel's debounce -- see _StubEmbedder's docstring.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -187,6 +234,9 @@ def test_edit_screen_ctrl_n_headless_notifies_without_opening(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    # lode-fr3p: EditScreen.on_mount loads the saved body into the TextArea,
+    # which arms RelatedNotesPanel's debounce -- see _StubEmbedder's docstring.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -225,6 +275,9 @@ def test_edit_screen_ctrl_n_with_no_link_under_cursor_notifies_clearly(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    # lode-fr3p: EditScreen.on_mount loads the saved body into the TextArea,
+    # which arms RelatedNotesPanel's debounce -- see _StubEmbedder's docstring.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
@@ -423,6 +476,9 @@ def test_capture_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    # lode-fr3p: setting text_area.text below arms RelatedNotesPanel's
+    # debounce -- see _StubEmbedder's docstring.
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
