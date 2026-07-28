@@ -1450,9 +1450,13 @@ def _enrichment_model_stale(
     Reads :func:`_stale_enrichment_heads` -- the identical, live-head-scoped
     query ``lode reenrich`` force-enqueues from -- and asks only "is that
     list non-empty." There is still no ``drift`` counterpart (unlike the
-    embedder): Claude's bare/marketing model IDs have no dated-snapshot form
-    to probe a fresh revision against, so the recorded value is the only
-    signal there is.
+    embedder): this codebase does not probe for a fresher dated-snapshot
+    revision the way it does for the embedder, so the recorded value is the
+    only signal there is. See docs/configuration.md's model-provenance
+    section (lode-g274.5) for the current per-model reasoning and its open
+    question (lode-sdjb) -- whether a given Anthropic model ID even has a
+    dated-snapshot form to probe against varies per model and isn't a fact
+    to restate here.
 
     Opens its own connection (mirroring :func:`_model_revision_status`'s
     independent LanceDB read below) rather than reusing ``status``'s early,
@@ -1494,8 +1498,9 @@ def status(
     what the cache currently resolves (lode-crh8.1), flag the enrichment
     store if any live head's AI annotations disagree with the currently
     configured enrichment_llm or the currently active provider
-    (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart, since Claude
-    model IDs have no dated-snapshot form to probe against), or an explicit
+    (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart; see
+    docs/configuration.md's model-provenance section, lode-g274.5/lode-sdjb,
+    for why and for the open question this raises), or an explicit
     "No action needed." if none of those apply. Dead-letter jobs get no hint
     -- they are already listed above with their errors, and won't be
     retried.
