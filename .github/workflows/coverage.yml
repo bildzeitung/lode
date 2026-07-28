@@ -22,30 +22,25 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Producers push land/<id> ~2-3x per ticket (builder, code-reviewer, sometimes a
-# rebase), and each push fires a fresh, heavy run. Nothing in the landing loop
-# reads these check results -- /land re-gates locally and never consults
-# GitHub Actions (docs/release.md) -- so a superseded run on an older commit
-# of the same ref has zero consumers; cancelling it cannot lose information
-# (lode-2ouz, mirrored from tests.yml/build.yml). Applies MORE strongly here
-# than in either sibling: this leg is explicitly report-only (fail_ci_if_error:
-# false below) with no merge-gate status at all. The README's Codecov badge
-# reads Codecov's own dashboard for the `trunk` branch, not GitHub Actions
-# status, and /land's single-lander lock (lode-aps3) already serializes pushes
-# to trunk, so cancelling a superseded run here can at most leave the badge one
-# trunk-push behind until the next push's coverage run completes -- not stuck
-# or wrong.
+# Same guard as tests.yml/build.yml, for the same reason (lode-2ouz): producers
+# push land/<id> ~2-3x per ticket, and a superseded run on an older commit of
+# the same ref has zero consumers, because nothing in the landing loop reads
+# these check results -- see
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request. The one
+# consumer this leg adds over its siblings is the README's Codecov badge, which
+# reads Codecov's dashboard for `trunk` rather than Actions status: a cancel
+# does skip that run's upload, but the push that cancelled it uploads in turn,
+# so the badge can lag one push and no more.
 #
-# Safe to cancel mid-run without persisting a torn-off model-weights cache,
-# unlike the split-step precaution tests.yml takes (see that workflow's own
-# comment on `!cancelled()`): the single `actions/cache@v4` step below (as
-# opposed to tests.yml's actions/cache/restore + actions/cache/save) is a
-# composite action whose save (post) step ships with `post-if: success()` in
-# actions/cache's own action.yml -- success() evaluates false on both a
-# genuine failure AND a cancellation, so a run cancelled by this concurrency
-# group never reaches the save phase and can never persist a partial
-# $LODE_HOME/models under an immutable cache key. Verified against upstream
-# actions/cache's action.yml, not assumed (lode-s1ia).
+# No need for the split-step precaution tests.yml takes (see its `!cancelled()`
+# comment): actions/cache@v4 declares its save (post) step `post-if: success()`
+# -- verified in upstream's action.yml -- so a cancelled run never reaches the
+# save and cannot pin a partial $LODE_HOME/models under an immutable key.
+# success() is false on a RED run too, so this single step likewise never saves
+# on failure -- the hazard that split exists to fix. Inert here ONLY because the
+# key is shared and byte-identical with tests.yml, whose split saves it anyway
+# under `!cancelled()`. Don't "fix" the asymmetry by splitting this step; do
+# revisit if those two keys ever diverge (lode-s1ia).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -70,11 +65,11 @@ jobs:
     runs-on: ubuntu-latest
     # Well below GitHub's 360-minute default -- a hung model download (the
     # exact failure the weights cache exists to mitigate) would otherwise burn
-    # six hours producing nothing, same rationale as tests.yml. Not lower:
-    # coverage instrumentation runs the full suite a second time, slower than
-    # bare `nox -s tests` -- recent green runs (`gh run list --workflow
-    # coverage.yml`) all land at ~2m20s-2m45s warm-cache, so 30 is ~12x
-    # headroom (lode-s1ia).
+    # six hours producing nothing. Same 30 as tests.yml: one cap for both heavy
+    # legs, which measure the same (coverage is within noise of tests, not
+    # slower). A hang catcher, not a perf budget -- warm runs land at ~2-4min,
+    # and cold is no different: tests.yml run 29783519618 populated the shared
+    # 958MB weights cache in 135s end to end (lode-s1ia).
     timeout-minutes: 30
     steps:
       - name: Checkout
