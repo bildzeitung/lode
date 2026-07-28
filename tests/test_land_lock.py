@@ -303,8 +303,7 @@ def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
         assert len(winners) == 1, (
             f"round {round_num}: {len(winners)} winners (expected exactly 1)\n"
             + "\n".join(
-                f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}"
-                for r in results
+                f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}" for r in results
             )
         )
 
