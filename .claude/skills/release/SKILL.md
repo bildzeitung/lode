@@ -66,6 +66,13 @@ and the concrete v1.2.0 case it produced, lode-905v). It is now an extracted, te
 "ungated inline shell in a SKILL.md rots silently" lesson as `scripts/merge-precheck.sh`, lode-mh9g:
 
 ```bash
+# Re-derive LATEST_TAG -- this is a fresh Bash invocation, separate from Section 1's; nothing
+# carries over (docs/agents-workflow.md's "Guard against cross-block shell state" rule). Cheap and
+# deterministic (a single git-tag lookup), so re-running it beats persisting it to a file here.
+LATEST_TAG="$(scripts/release-latest-tag.sh)" || {
+  echo "GATE COULD NOT RUN: scripts/release-latest-tag.sh failed" >&2
+  exit 1
+}
 BUMP="$(scripts/release-bump.sh "${LATEST_TAG}..HEAD")" || {
   echo "GATE COULD NOT RUN: scripts/release-bump.sh failed on range ${LATEST_TAG}..HEAD" >&2
   # The script exits 2 for a machine fault (unresolvable range, git failure)
@@ -99,6 +106,11 @@ publishes that body as the GitHub release notes.
    latest tag; the **whole history** when this is the first release:
 
    ```bash
+   # Re-derive LATEST_TAG again -- another fresh Bash invocation, same reasoning as Section 2 above.
+   LATEST_TAG="$(scripts/release-latest-tag.sh)" || {
+     echo "GATE COULD NOT RUN: scripts/release-latest-tag.sh failed" >&2
+     exit 1
+   }
    if [ -n "$LATEST_TAG" ]; then RANGE="${LATEST_TAG}..HEAD"; else RANGE="HEAD"; fi
    git log --first-parent --format='%s' "$RANGE"
    ```
@@ -122,11 +134,15 @@ publishes that body as the GitHub release notes.
    - One line per item: what it delivers, phrased for a reader of the release page (not a commit
      subject), with the ticket ID in parentheses.
 
-4. **Write the notes to a temp file** — body only, no `lode vX.Y.Z` heading, no version line (the
-   script owns the tag subject):
+4. **Write the notes to a fixed, re-derivable path** — body only, no `lode vX.Y.Z` heading, no
+   version line (the script owns the tag subject). A **fixed** path under the repo's own `.git/`
+   (not `$(mktemp)`, whose random path can't be re-derived by a later block — the same reasoning as
+   `.claude/skills/land/SKILL.md`'s `$STATE_DIR`) so Section 4 can read it back without depending on
+   this section's own shell state having survived:
 
    ```bash
-   NOTES_FILE="$(mktemp)"
+   NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
+   mkdir -p "$(dirname "$NOTES_FILE")"
    # …write the itemized list into "$NOTES_FILE"…
    ```
 
@@ -174,6 +190,13 @@ operator needs to decide on, not a passive export to throw away.
 ### 4. On confirm, invoke the script — nothing else
 
 ```bash
+# Re-derive NOTES_FILE (fixed path, Section 2a step 4 already wrote the content there) -- a fresh
+# Bash invocation, nothing from Section 2a's shell survives. $PROPOSED is NOT a shell variable
+# anywhere in this file: it is the version string Section 3 just confirmed IN CONVERSATION, with no
+# preceding bash computing it (Section 2's scripts/release-bump.sh only classifies breaking/feat/
+# fix/none, never the actual X.Y.Z arithmetic) -- fill in the literal confirmed version here, the
+# same way a `<...>` template placeholder gets filled in elsewhere in this skill.
+NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
 scripts/release.sh "$PROPOSED" "$NOTES_FILE"   # bare X.Y.Z, no leading 'v' — the script adds it
 ```
 

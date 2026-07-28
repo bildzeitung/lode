@@ -52,6 +52,16 @@ silent by default**, and this is the one skill that writes `trunk` — so any bl
 must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
 exits 0 is indistinguishable from a clean pass that had nothing to do.
 
+**This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
+— that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
+`/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
+regression to this file or any other skill's markdown. This file is currently excluded from that
+gate's own coverage (not yet fully clean — see the doc section above for what remains, including the
+`$CONFLICTS` instance a few sections below, tracked separately by `lode-rfon`) — so, unlike every
+other skill, a regression here is **not yet** caught mechanically. Hold the line by hand until
+`lode-p1r3` (the follow-up that removes this file from the gate's `_SKIPPED_FILES`) lands.
+
 ---
 
 ## 0. Single-lander lock — acquire FIRST, every tick
@@ -518,10 +528,10 @@ edges**, restricted to `$ACCEPTED`:
     pass:
 
     ```bash
-    rtk bd update "$id" --append-notes "HELD (/land, stacked-branch ordering): land/$id is stacked on
-    land/$B, which is not landing this pass ($B's own outcome: <bounced|escalated|needs-rebase|not yet
-    ready-for-land>). Re-evaluated automatically once $B lands or its own outcome resolves — no action
-    needed unless $B itself needs a human decision."
+    rtk bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
+    land/<B>, which is not landing this pass (<B>'s own outcome: <bounced|escalated|needs-rebase|not
+    yet ready-for-land>). Re-evaluated automatically once <B> lands or its own outcome resolves -- no
+    action needed unless <B> itself needs a human decision."
     ```
 
     (No `bd dolt push` needed here in isolation — this note rides along with the pass's other

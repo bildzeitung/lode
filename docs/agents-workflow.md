@@ -1324,6 +1324,76 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
+
+**No fenced `bash` block in a `SKILL.md` may depend on shell state from another.** An agent executing
+a skill runs each fenced `bash`-tagged block as its own, separate Bash tool invocation — nothing
+carries over between them: not variables, not arrays, not function definitions, not `trap`s, not `set -e` /
+`set -o pipefail`, not background jobs. Anything one block needs from an earlier one is either
+**re-derived** (cheap, deterministic — e.g. `$(git rev-parse --git-dir)`, or re-running a fast,
+idempotent script/query) or **persisted to a file** that a later block reads back and asserts it
+loaded. Logic shared by two call sites belongs in `scripts/`, never in a bash function defined in one
+block and called from another.
+
+This rule was first stated as `.claude/skills/land/SKILL.md`'s own governing rule (`lode-sfnb`); it
+lives here now, repo-wide, because the bug class is not land-local (`lode-x495`) — `land/SKILL.md`
+still states the rule at its own top, but points here as the source of truth rather than duplicating
+the rationale.
+
+**Why this needs a mechanism rather than an instruction.** `lode-sfnb`'s incident is the proof: Section
+3a of `land/SKILL.md` used to populate a `declare -A MSG` associative array that Section 3's merge
+loop, a separate fenced block, read back. By the time the loop ran, `MSG` was empty, and `git merge -m
+''` failed with **completely empty stdout and stderr** — no error message pointed at the cause
+(OBSERVED, 2026-07-26, landing lode-ns3r/lode-1q2i/lode-sys4). The rule was already written down in
+prose at the top of the file when this shipped; prose that isn't gated erodes, exactly the way
+`land/SKILL.md` itself admitted before `lode-x495`: "this `if`/escalate structure lives in this
+markdown file, so no automated test covers a regression to it." A markdown fence is invisible to every
+other gate in this repo (`nox -t fix`, `nox -s tests`, `mypy`, …) — none of them execute or parse
+skill prose — so nothing but a dedicated test catches a regression here.
+
+**The mechanism** — `tests/test_skill_bash_state.py`, run by `nox -s tests`. It parses every
+`bash`/`sh`-tagged fenced block in `.claude/skills/*/SKILL.md` and fails if a variable is referenced
+(`$VAR` or `${VAR...}`) in a block without also being assigned somewhere in that **same** block — the
+check is per-block, not file-wide, because a variable assigned in some *other* block is exactly the
+`$MSG` bug: real, present in the file, and still invisible to the block that uses it. Recognized as an
+assignment: `VAR=`/`VAR+=`, `export`/`local`/`readonly`/`declare` (with or without `=`), `read`'s own
+named arguments (including a `while IFS=... read -r a b; do` loop's variables), `mapfile`/`readarray`,
+and `for VAR in`/C-style `for ((VAR=...`. Comments are never scanned for either a use or an assignment
+— this codebase's skills carry heavy inline prose that routinely *quotes* a variable name while
+explaining history, which is not a use. Bash's own positional/special parameters (`$1`, `$@`, `$?`, …)
+and a short, explicitly-justified list of environment variables the skills legitimately expect to be
+set by the calling shell/operator (never by the skill's own bash) are excluded outright. Full parser
+precision notes, including the two real false positives a cruder prototype produced against
+`/sweep` (`TITLE`, `ROW` — both legitimately assigned and used within one block, missed by a
+scanner with no `read` support and no indentation tolerance) and the test pins that guard against
+reintroducing them, live in that file's own module docstring.
+
+**Categories this rule names, per the ticket that first stated it:** variables, arrays, functions,
+traps, and `set -e`/`set -o pipefail`. The gate above mechanically enforces the first category
+(variables — the one every incident so far has actually hit); the other four remain **prose-only**,
+enforced by the same discipline this rule states but with no automated check behind them yet — a
+narrower mechanism than the rule it backs, the same asymmetry `docs/conventions.md`'s "Derive
+identifiers, never retype them" fiat has relative to `sha-fabrication-guard.sh`'s 40-hex-only scope.
+
+**Scope and allowlist.** The gate covers `.claude/skills/*/SKILL.md` repo-wide (not scoped to
+`land/SKILL.md` alone — `lode-x495` found real, confirmed instances in `/sweep` and `/release` that a
+land-only gate would leave uncovered), with a small, per-`(file, variable)` allowlist for a value that
+is deliberately **not** amenable to either sanctioned remedy: one that is computed by the agent's own
+reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by any
+deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
+`release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before Section
+4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in the test
+file itself — an entry with no reason is how this exact rot restarted once already (a bug fixed once
+in `land/SKILL.md`, then found again, unfixed, in two other skills).
+
+`land/SKILL.md` itself is currently **excluded from this gate's file coverage** rather than allowlisted
+variable-by-variable: it is the sole writer of `trunk`, and a full audit while building this gate found
+it is not yet fully clean (`$CONFLICTS`, tracked separately by `lode-rfon` — this ticket's own branch
+does not merge `trunk` in, so whether `lode-rfon` has since landed a fix is not re-verified here;
+`$ACCEPTED`, an agent-reasoned value with the same "nothing upstream to re-derive from" shape as
+`$PROPOSED`). Auditing and fixing that ~2000-line file's remaining instances belongs in its own
+dedicated follow-up (`lode-p1r3`), not folded into the ticket that first shipped the gate.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
