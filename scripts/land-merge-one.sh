@@ -99,7 +99,16 @@ msg_dir="$2"
 # Best-effort and non-fatal: a heartbeat write failure must never abort an
 # otherwise-clean merge (see scripts/land-lock.sh's own heartbeat comment for
 # why its exit 1 is not treated as fatal by its callers).
-"$(dirname "$0")/land-lock.sh" heartbeat >/dev/null 2>&1 || true
+#
+# STDOUT is redirected because this script's own stdout is the caller's
+# $CONFLICTS channel and must stay clean; STDERR deliberately is NOT. That
+# script's exit-1 contract is "log and continue -- a human should look if this
+# repeats every tick", and swallowing its diagnostic here would leave the
+# heartbeat silently dead at the one call site that fires on every merge --
+# the same "must be observable, never silent" standard lode-aps3 set for the
+# lock itself. Extra stderr is already normal on this path (the merge's own
+# error text goes there below).
+"$(dirname "$0")/land-lock.sh" heartbeat >/dev/null || true
 
 msg_file="$msg_dir/$id"
 if [ ! -s "$msg_file" ]; then

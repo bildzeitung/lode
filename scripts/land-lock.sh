@@ -27,9 +27,10 @@
 # THE FIX: no trap, no PID-liveness check. Liveness is instead a wall-clock
 # STALENESS TOKEN -- the lock records when it was acquired, and a later
 # `acquire` reclaims it only once that timestamp is older than
-# LAND_LOCK_STALE_SECONDS (default 600s / 10min -- see CAVEAT 1 for why this
-# is no longer 1800s). This staleness reclaim is the SOLE mechanism that is
-# guaranteed to release an abandoned lock: it needs no cooperation from any
+# LAND_LOCK_STALE_SECONDS (default 1800s / 30min -- see CAVEAT 1 for why the
+# `heartbeat` subcommand did NOT buy a reduction). This staleness reclaim is
+# the SOLE mechanism that is guaranteed to release an abandoned lock: it needs
+# no cooperation from any
 # particular exit site, so it cannot be silently broken by a future editor
 # adding a new "stop the pass" exit to SKILL.md and forgetting to release.
 # SKILL.md also calls `release` explicitly at two sites (Section 1's
@@ -39,16 +40,18 @@
 # docs/agents-workflow.md's single-lander-lock bullet, which is the design
 # home for this mechanism and for LAND_LOCK_STALE_SECONDS.
 #
-# CAVEAT 1 -- the TTL now measures IDLE time, not acquisition age, because of
-# the `heartbeat` subcommand (lode-m87j). Previously nothing re-stamped the
+# CAVEAT 1 -- the TTL measures IDLE time rather than acquisition age ACROSS
+# THE TWO LOOPS the `heartbeat` subcommand brackets (lode-m87j), and
+# acquisition age everywhere else. Read the gap list below before relying on
+# the idle-time reading. Previously nothing re-stamped the
 # token mid-pass, so the window had to exceed the TOTAL wall-clock duration of
 # the longest legitimate pass (N land-review Opus dispatches, a combined
 # re-gate, per-branch isolation replay on red, `validate-mermaid.sh`'s docker
 # run, `lock_currency`'s network resolve) -- summed across the WHOLE pass, not
 # merely the longest gap between two Bash calls. A pass that genuinely ran
 # longer than the window had its own lock reclaimed by the next tick,
-# mid-`trunk`-merge -- the dangerous direction -- which is why the window used
-# to be large (1800s) and was never reduced.
+# mid-`trunk`-merge -- the dangerous direction -- which is why the window is
+# large (1800s) and has never been reduced.
 #
 # `heartbeat` re-stamps the SAME record `acquire` wrote, with no atomicity
 # contest (see its own comment below) -- so as long as SOMETHING calls it
@@ -70,23 +73,50 @@
 # call site that quietly stops being called is exactly as dangerous as the
 # original inert lock, just slower to notice.
 #
-# The one gap neither site covers: Section 3's single COMBINED re-gate
-# (`nox -t fix && nox -s tests && nox -s lock_currency`, plus
-# `validate-mermaid.sh` on a docs change) runs ONCE, after the merge loop and
-# before the isolation-replay loop, with no heartbeat of its own. Its
-# duration is comparable to a single per-branch gate run inside the replay
-# loop, not multiplied by N, so it fits the same margin the new default
-# already budgets for one branch's worth of gating; it was not judged worth a
-# third call site.
+# THREE stretches of a pass are still uncovered -- the two call sites bracket
+# the two LOOPS, not the pass. Do not read "heartbeat exists" as "the whole
+# pass is covered" (lode-m87j's technical review; the ticket's own design note
+# named only the second of these):
+#   1. `acquire` (Section 0) -> the FIRST Section-2a heartbeat: all of Section
+#      1 (`bd dolt pull` and `git fetch origin`, both networked) and all of
+#      Section 1a, whose stacked-branch graph is O(n^2) `git merge-base` work
+#      in the size of the ready-for-land queue -- the one uncovered stretch
+#      that GROWS with the queue.
+#   2. Section 3's single COMBINED re-gate (`nox -t fix && nox -s tests &&
+#      nox -s lock_currency`, plus `validate-mermaid.sh` on a docs change),
+#      which runs once, between the merge loop and the isolation-replay loop.
+#      MEASURED on the 2026-07-28 dev machine at ~60s total (tests ~50s, fix
+#      ~0.4s, lock_currency ~1s, mermaid ~10s) -- comfortably small, but it is
+#      wall-clock on one machine, not a bound.
+#   3. The LAST heartbeat -> `release` at the end of Section 4: the re-gate
+#      above PLUS the whole of Section 4 -- `git push origin trunk`, a
+#      `bd close` per landed ticket, `epic-completion-check.sh` per ticket,
+#      `scripts/bd-dolt-push.sh` (networked, with its own retry/backoff), a
+#      branch delete per landed ticket, and the worktree-GC sweep. This is the
+#      worst one: it is on the ordinary GREEN path, it scales with the number
+#      of landed tickets, and it is the stretch during which `trunk` is
+#      actually being written -- so a reclaim here is a reclaim at the exact
+#      moment two landers must not overlap.
 #
-# LAND_LOCK_STALE_SECONDS therefore only needs to comfortably exceed the
-# longest SINGLE gap between two heartbeats -- one `land-review` Opus
-# dispatch, or one branch's re-gate during isolation replay -- not the whole
-# pass. 600s (10min) is chosen as generous headroom over either of those in
-# the ordinary case, while cutting the "an abandoned lock blocks all landing"
-# exposure window from 30min (~6 skipped `/loop 5m /land` ticks) to 10min
-# (~2 skipped ticks) -- still overridable via the env var for a slower
-# machine or a pass with unusually large branches.
+# WHY THE DEFAULT STAYS AT 1800s. The heartbeat shrinks the exposure a lot: it
+# is the whole fix for "a long pass has its OWN lock reclaimed mid-merge", and
+# at 1800s that failure is now essentially unreachable. It does NOT license
+# lowering the window, because the two failure directions remain as asymmetric
+# as they were before it existed: too LOW reclaims a live lock and puts two
+# landers on `trunk` at once (unbounded damage), while too HIGH only delays
+# landing by a few `/loop 5m` ticks (bounded, self-healing, and explicitly not
+# latency-critical). Lowering trades the safe side for the dangerous one, and
+# nothing here measures the binding gap. That gap is NOT the re-gate above: it
+# is one `land-review` Opus dispatch (the 2a->2a interval) plus, on a bounce,
+# the lander's own `bd` bookkeeping. Agent dispatches in this repo are
+# routinely minutes long -- lode-m87j's own `coding` builder took 14m10s
+# (bd `started_at` 03:00:24Z -> `updated_at` 03:14:34Z, 2026-07-28) -- i.e.
+# the same order of magnitude as a 600s window, not comfortably under it. So
+# the reduction to 600s that this subcommand was expected to unlock is held
+# back until either the gaps above are covered or a real distribution of
+# `land-review` dispatch times exists to size it against; see lode-cp4o.
+# Overriding via the env var stays available for anyone who has measured
+# their own machine.
 #
 # CAVEAT 2 -- `acquire` is atomic, the RECLAIM path is not. `write_lock`'s
 # O_EXCL create genuinely admits one winner; the reclaim below is `rm` THEN
@@ -100,6 +130,17 @@
 # replaces, which admitted every overlap. Closing it properly needs a
 # nested TTL of its own (an O_EXCL reclaim token wedges landing permanently
 # if its holder dies in the two lines after creating it). See lode-ao95.
+#
+# `heartbeat` does not verify it still OWNS the lock -- it overwrites whatever
+# record is there. So in the two-winner state above, the pass that LOST the
+# lock goes on re-stamping the winner's record at its next call site, and the
+# overlap becomes self-concealing: the file looks continuously fresh and names
+# whichever pass wrote last. This does not create the overlap (only the
+# non-atomic reclaim does) and it changes no verdict -- neither pass ever
+# re-reads the lock to check it still holds it, before or after lode-m87j --
+# but it does erase the evidence a human would use to spot one. Whichever of
+# lode-ao95 (atomic reclaim) or lode-cp4o (re-derive the TTL) lands second
+# should give the record an owner token that `heartbeat` refuses to overwrite.
 #
 # Usage: scripts/land-lock.sh acquire
 #        scripts/land-lock.sh heartbeat
@@ -141,18 +182,23 @@ fi
 cmd="$1"
 
 LOCK="$(git rev-parse --git-dir)/land.lock"
-STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-600}"
+STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-1800}"
+
+lock_record() {
+  # The one definition of the record's shape, written identically by `acquire`
+  # and `heartbeat` -- keep it that way: field ORDER is load-bearing, since the
+  # reclaim path below reads field 3 (epoch) and nothing else. Fields 1, 2 and
+  # 4 (pid, host, ISO stamp) are only ever for a human reading the file by hand.
+  printf '%s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)"
+}
 
 write_lock() {
   # Atomic create: `set -o noclobber` makes the `>` redirect fail if the file
   # already exists, so two concurrent attempts can't both think they got it.
   # That guarantee covers THIS function only -- the reclaim path below calls
   # it after an `rm`, which is not atomic as a pair (header, caveat 2).
-  # Fields: pid and the ISO stamp are for a human reading the file by hand;
-  # only field 3 (epoch) is ever read back programmatically.
   ( set -o noclobber
-    printf '%s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)" \
-      > "$LOCK" ) 2>/dev/null
+    lock_record > "$LOCK" ) 2>/dev/null
 }
 
 if [ "$cmd" = "release" ]; then
@@ -166,14 +212,19 @@ if [ "$cmd" = "heartbeat" ]; then
   # the LAST heartbeat, not the age of the original `acquire` (lode-m87j; see
   # CAVEAT 1 above). Deliberately NOT `write_lock`'s atomic/noclobber create:
   # overwriting the existing record is exactly the point here, and the
-  # documented one-lander-per-machine convention means nothing else should be
-  # writing this file concurrently while a pass holds it. If the file is
-  # somehow already gone (heartbeat called without ever acquiring -- should
-  # not happen at either documented call site), this creates it fresh rather
-  # than erroring: either way the caller's intent ("the pass is still alive
-  # right now") is the same.
-  if printf '%s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)" \
-      > "$LOCK" 2>/dev/null; then
+  # documented one-lander-per-machine convention means no other WRITER should
+  # be touching this file while a pass holds it. Concurrent READERS are a
+  # different matter and are routine -- every `/loop 5m /land` tick's own
+  # `acquire` reads this file, and `>` truncates before it writes, so a reader
+  # CAN catch a half-written record. That is safe by construction, not by
+  # luck: the reclaim path below treats an unparseable record as "age unknown"
+  # and skips the tick rather than reclaiming. Keep that path conservative --
+  # making it guess an age would turn this benign interleaving into a reclaim
+  # of a live lock. If the file is somehow already gone (heartbeat called
+  # without ever acquiring -- should not happen at either documented call
+  # site), this creates it fresh rather than erroring: either way the caller's
+  # intent ("the pass is still alive right now") is the same.
+  if lock_record > "$LOCK" 2>/dev/null; then
     exit 0
   fi
   echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \

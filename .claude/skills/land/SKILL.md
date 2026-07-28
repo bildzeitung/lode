@@ -75,14 +75,16 @@ sites, so this section cannot quietly go back to an inline lock.
 **The token is now a heartbeat, not a one-shot stamp (lode-m87j).** [Section
 2a](#2a-re-validate-that-beads-and-git-havent-drifted) re-stamps it once per ticket in the vet loop
 (right before that ticket's `land-review` dispatch) and `scripts/land-merge-one.sh` re-stamps it on
-every call, covering both Section 3 merge loops — so the staleness window below only has to outlast
-the *gap* between two such calls, not the whole pass. See `scripts/land-lock.sh`'s own header for the
-full reasoning.
+every call, covering both Section 3 merge loops — so a pass no longer risks having its *own* lock
+reclaimed mid-merge just for running long. **That did not shorten the window below, and the two call
+sites do not cover the whole pass**: Section 1/1a before the first heartbeat, the combined re-gate,
+and all of Section 4 (where `trunk` is actually written) run unheartbeated. `scripts/land-lock.sh`'s
+header enumerates all three and explains why the default stays at 1800s; re-deriving it is lode-cp4o.
 
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
 of a full pass in [Section 4](#4-land-the-survivors). **Every other way a pass stops leaves the lock
-held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 600s/10min) — and that is not a
+held until it ages out** after `LAND_LOCK_STALE_SECONDS` (default 1800s/30min) — and that is not a
 short list of exotic machine faults: it includes a pass in which **every** branch was kicked back
 `needs-rebase` or bounced, which stops at [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s
 empty-`accepted` guard and never reaches Section 4. Such a pass is routine, so a following tick

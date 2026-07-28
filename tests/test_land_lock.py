@@ -9,8 +9,10 @@ That rationale is deliberately NOT restated here (the
 tests/test_blocks_dependents.py precedent) -- it lives next to the code it
 constrains, so it cannot drift out of sync with a second copy. The header
 also records the mechanism's known limits (the stale-lock reclaim path is
-not atomic, CAVEAT 2) and the `heartbeat` subcommand (lode-m87j) that turns
-the TTL from acquisition-age into idle-time semantics, CAVEAT 1.
+not atomic, CAVEAT 2) and the `heartbeat` subcommand (lode-m87j), which moves
+the TTL toward idle-time semantics over the two loops it brackets -- but not
+over the whole pass; CAVEAT 1 enumerates the three stretches that stay
+uncovered and why the 1800s default was therefore left alone.
 
 What this file adds on top of that is the regression gate, in two halves:
 
@@ -259,7 +261,7 @@ def test_fresh_lock_is_not_reclaimed_under_a_large_threshold(
     """A lock younger than the threshold must never be reclaimed. (This is
     not a boundary test: pinning `>=` against `>` would mean asserting on a
     one-second window that `date` can cross mid-test, and the two differ by
-    one second on a 1800s default -- operationally nothing.)"""
+    one second on the 1800s default -- operationally nothing.)"""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     recent_epoch = int(time.time())
@@ -313,7 +315,7 @@ def test_malformed_lock_file_is_treated_as_still_held_not_reclaimed(
 
 def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     """No env override: a lock a couple of minutes old must NOT be reclaimed
-    by the default threshold (1800s) -- a genuinely still-running /land pass
+    by the default threshold -- a genuinely still-running /land pass
     (dispatching several land-review subagents, then a combined re-gate) can
     easily take a few minutes between two Bash invocations."""
     repo = _init_repo(tmp_path)
@@ -324,6 +326,45 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     result = _run("acquire", repo=repo)
 
     assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
+    """Pin the DEFAULT itself, not just that it exceeds two minutes.
+
+    Every other test here passes LAND_LOCK_STALE_SECONDS explicitly, and the
+    test above passes for any default over 120s -- so before this pin, the one
+    number carrying the whole safety margin could be lowered with nothing going
+    red. It is not an arbitrary constant: lode-m87j's `heartbeat` bounds the
+    *dangerous* direction (a live pass reclaimed mid-merge), but the window
+    must still outlast the longest unheartbeated stretch, and the binding one
+    -- a single `land-review` Opus dispatch -- has never been measured. Agent
+    dispatches in this repo run to double-digit minutes, so a 600s window is
+    the same order as the gap rather than clear of it; the reduction lode-m87j
+    proposed was reverted for exactly that reason (see scripts/land-lock.sh,
+    CAVEAT 1). Lowering it is lode-cp4o's job, and requires the measurement.
+
+    Asserted behaviourally, from the outside: a lock 1799s old is still held,
+    a lock 1801s old is stale. Deliberately not a grep for the literal -- this
+    fails if the semantics change, not merely if the digits move.
+    """
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+
+    lock.write_text(f"12345 host {int(time.time()) - 1799} 2026-01-01T00:00:00Z\n")
+    just_inside = _run("acquire", repo=repo)
+    assert just_inside.returncode == 1, (
+        "a lock 1799s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
+        "below 1800s. That is lode-cp4o's decision to make, with measurements "
+        "(scripts/land-lock.sh, CAVEAT 1)."
+    )
+
+    lock.write_text(f"12345 host {int(time.time()) - 1801} 2026-01-01T00:00:00Z\n")
+    just_outside = _run("acquire", repo=repo)
+    assert just_outside.returncode == 0, (
+        "a lock 1801s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
+        "raised above 1800s, so an abandoned lock now blocks landing for longer "
+        f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -406,12 +447,18 @@ def test_land_skill_acquires_and_releases_through_this_script() -> None:
 
 
 def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
-    """lode-m87j: the vet loop (Section 2a) must heartbeat the lock as the
-    FIRST action of every iteration, so the staleness window measures the gap
-    since the last ticket's dispatch rather than the whole pass's duration.
-    A dropped call site here silently reintroduces the acquisition-age
-    exposure this ticket exists to close -- pinned the same way acquire and
-    release are above."""
+    """lode-m87j: the vet loop (Section 2a) heartbeats the lock as the first
+    action of every iteration, so the staleness window measures the gap since
+    the last ticket's dispatch rather than the whole pass's duration. A dropped
+    call site silently reintroduces the acquisition-age exposure this ticket
+    exists to close -- pinned the same way acquire and release are above.
+
+    Scope, stated so a reader does not over-trust it: this pins that the call
+    EXISTS (and its companion below, that it exists inside an executable
+    fence). Neither pins WHERE -- that it is in Section 2a, that it is first in
+    the loop body, or that the loop runs once per ticket. Markdown call sites
+    have no better mechanical gate available here; placement rests on review.
+    """
     text = LAND_SKILL.read_text(encoding="utf-8")
 
     assert "scripts/land-lock.sh heartbeat" in text, (

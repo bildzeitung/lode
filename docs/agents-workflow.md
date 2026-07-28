@@ -2076,8 +2076,8 @@ assumption would not have closed it.
   pass crashed". This is the same defect class as lode-sfnb (cross-block shell state) in the one skill
   that writes `trunk`, which is why the replacement is a file under `.git/` recording its acquire
   time, read back by the next tick: no shell state, nothing that dies with a block.
-  `LAND_LOCK_STALE_SECONDS` (env, default **600s/10min** — see below for why this is smaller than the
-  original 1800s) is the reclaim window. It is documented here rather than in
+  `LAND_LOCK_STALE_SECONDS` (env, default **1800s/30min** — see below for why the heartbeat did *not*
+  buy a reduction) is the reclaim window. It is documented here rather than in
   [configuration.md](configuration.md) per that page's scope note — dev-tooling for the landing loop,
   not an application knob.
 
@@ -2096,18 +2096,39 @@ assumption would not have closed it.
   `scripts/land-merge-one.sh` (on every invocation, covering both Section 3's first merge loop and its
   isolation-replay copy from one call site). Both are pinned by tests the same way `acquire`/`release`
   are (`tests/test_land_lock.py`, `tests/test_land_merge_one.py`) — a heartbeat call site that quietly
-  stops firing is exactly as dangerous as the original inert lock, just slower to notice. The one gap
-  neither site covers is Section 3's single combined re-gate itself (it runs once, not per branch), but
-  its duration is comparable to one branch's worth of gating, which the new default already budgets
-  for — not judged worth a third call site. With the window now bounded by a single dispatch or a
-  single branch's re-gate rather than the whole pass, 600s (10min) is generous headroom over either in
-  the ordinary case, while cutting the "an abandoned lock blocks all landing" exposure from 30min (~6
-  skipped `/loop 5m /land` ticks) to 10min (~2 skipped ticks) — see `scripts/land-lock.sh`'s own header
-  for the full derivation. **Second, `acquire` is atomic but the stale-lock *reclaim* is not** — `rm`
+  stops firing is exactly as dangerous as the original inert lock, just slower to notice.
+
+  **Those two sites bracket the two loops, not the pass — "a heartbeat exists" is not "the pass is
+  covered".** Three stretches still run unheartbeated, and lode-m87j's own design note named only the
+  second: (1) `acquire` → the first Section-2a heartbeat, i.e. all of Section 1 (networked `bd dolt
+  pull` + `git fetch`) and Section 1a's O(n²) stacked-branch graph — the one gap that *grows* with
+  queue size; (2) Section 3's single combined re-gate, measured at ~60s on the 2026-07-28 dev machine
+  and so not the binding constraint; (3) the last heartbeat → `release`, i.e. that re-gate **plus all
+  of Section 4** — `git push origin trunk`, a `bd close` and an `epic-completion-check.sh` per landed
+  ticket, a networked `bd-dolt-push.sh`, the branch deletes and the worktree-GC sweep. (3) is the one
+  that matters: it is the ordinary green path, it scales with the number of landed tickets, and it is
+  the stretch during which `trunk` is being written.
+
+  **So the default stays at 1800s** (lode-m87j proposed 600s; the technical review reverted it). The
+  heartbeat is the whole fix for "a long pass has its own lock reclaimed mid-merge", and at 1800s that
+  is now essentially unreachable — but it does not license a shorter window, because the two failure
+  directions are as asymmetric as ever: too low reclaims a *live* lock and puts two landers on `trunk`
+  (unbounded), too high only delays landing a few ticks (bounded, self-healing, not latency-critical).
+  The binding gap is the 2a→2a interval — one `land-review` Opus dispatch — and nothing has measured
+  it; what *is* measured is that agent dispatches here run minutes (lode-m87j's own builder took
+  14m10s), the same order as a 600s window rather than comfortably inside it. Re-deriving the number
+  against real dispatch-time data, or covering gaps (1) and (3), is **lode-cp4o**.
+
+  **Second, `acquire` is atomic but the stale-lock *reclaim* is not** — `rm`
   then create, two steps, observed admitting two winners at 8-way contention. Unreachable under the
   one-loop convention (a still-running pass holds a *fresh* lock, so the reclaim branch is
   crash-recovery only), and deferred rather than closed with a nested TTL that could wedge landing
-  outright (lode-ao95). **Release reaches only two sites** — Section 1's empty-queue exit and the end
+  outright (lode-ao95). `heartbeat` does not check that it still *owns* the lock, so in that
+  two-winner state the pass that lost it keeps re-stamping the winner's record and the overlap becomes
+  self-concealing — it neither causes the overlap nor changes any verdict (no pass ever re-reads the
+  lock to confirm it holds it, before or after lode-m87j), but it erases the evidence a human would
+  spot one by; whichever of lode-ao95 or lode-cp4o lands second should add an owner token `heartbeat`
+  refuses to overwrite. **Release reaches only two sites** — Section 1's empty-queue exit and the end
   of Section 4 — as a latency optimization; every other stop, *including the routine pass in which
   every branch was kicked back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that
   asks nothing of any exit site cannot rot as exits are added, the same reasoning as the pass-start
