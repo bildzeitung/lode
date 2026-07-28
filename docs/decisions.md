@@ -2327,25 +2327,22 @@ are catalogued in [configuration.md](configuration.md).
   gains an explicit pinned-SHA source of truth, which — unlike the runtime-only DETECT manifest —
   *would* become a genuine git-committed build constant, parallel to `_MODEL_CACHE_IDENTITY`).
 
-- **Enrichment LLM: does `claude-haiku-4-5` having a dated-snapshot form reopen PIN-vs-DETECT?
+- **Enrichment LLM: does its default having a dated-snapshot form reopen PIN-vs-DETECT?
   (lode-sdjb).** `lode-g274.5`'s enrichment-LLM decision ([configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745))
-  reasoned that there is no PIN-vs-DETECT axis for the enrichment LLM because Anthropic's
-  current-generation model IDs have no dated-snapshot form to pin against. That premise turned out
-  to be false specifically for `enrichment_llm`'s own default: `claude-haiku-4-5` *does* have one
-  (`claude-haiku-4-5-20251001`, verified against the `claude-api` skill's model catalog) — unlike
-  `qa_llm`/`qa_think_harder_llm`'s defaults (`claude-sonnet-4-6`, `claude-opus-5`), which genuinely
-  have none. So a pinnable identifier does exist for the model whose output actually persists into
-  the DB. **Unowned; not decided here** — corrected in place at the source
-  ([configuration.md](configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745)),
-  not re-litigated. Whether it's worth adopting PIN for `enrichment_llm` (recording/verifying the
-  dated snapshot rather than just the bare id) is a real design question precisely because a lever
-  now demonstrably exists — but it inherits the same cost objection the embedder-pinning entry above
-  raises (owning a pin means owning what happens when the pinned snapshot is eventually retired,
-  not just a one-time win), and dated-snapshot availability is itself not a stable property to build
-  a permanent mechanism on top of — a future model swap could just as easily remove the option again.
+  assumed no PIN axis existed here, because no current-generation Anthropic ID had a dated-snapshot
+  form to pin against. That premise is false for `enrichment_llm`'s own default:
+  `claude-haiku-4-5-20251001` exists (verified against the `claude-api` skill's model catalog),
+  unlike the Q&A tiers' current defaults, which have none. So a pinnable identifier does exist for
+  the model whose output actually persists into the DB. Corrected at the source; **unowned, not
+  decided here.** Whether to adopt PIN for `enrichment_llm` (recording and verifying the dated
+  snapshot rather than just the bare id) is a real design question now that a lever demonstrably
+  exists. Note the embedder-pinning entry above defers for a cost that does **not** transfer — lode
+  never downloads an Anthropic model, so there is no download path to take ownership of — but a
+  nearer one does: a dated snapshot is retired on the vendor's schedule, so pinning one means owning
+  that migration, and dated-snapshot availability is not itself stable enough to build a permanent
+  mechanism on (a future model swap could remove the option again).
   **Revisit if:** enrichment silent-drift is ever observed in practice (mirrors the embedder entry's
-  own revisit trigger), or if a future `enrichment_llm` default model's dated-snapshot status is
-  worth re-checking before assuming DETECT-only still applies.
+  own revisit trigger), or when `enrichment_llm`'s default model next changes.
 
 - **2026-07-23 (lode-568v.1) — LLMProvider vendor-neutral seam pinned; design-first ahead of any
   provider code.** Full write-up: [stack.md — LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1).

@@ -1449,14 +1449,11 @@ def _enrichment_model_stale(
 
     Reads :func:`_stale_enrichment_heads` -- the identical, live-head-scoped
     query ``lode reenrich`` force-enqueues from -- and asks only "is that
-    list non-empty." There is still no ``drift`` counterpart (unlike the
-    embedder): this codebase does not probe for a fresher dated-snapshot
-    revision the way it does for the embedder, so the recorded value is the
-    only signal there is. See docs/configuration.md's model-provenance
-    section (lode-g274.5) for the current per-model reasoning and its open
-    question (lode-sdjb) -- whether a given Anthropic model ID even has a
-    dated-snapshot form to probe against varies per model and isn't a fact
-    to restate here.
+    list non-empty." There is still no ``drift`` counterpart: unlike the
+    embedder, this code never probes for a fresher revision, so the recorded
+    value is the only signal there is. See
+    docs/configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745
+    and the open question it raises (lode-sdjb).
 
     Opens its own connection (mirroring :func:`_model_revision_status`'s
     independent LanceDB read below) rather than reusing ``status``'s early,
@@ -1499,8 +1496,8 @@ def status(
     store if any live head's AI annotations disagree with the currently
     configured enrichment_llm or the currently active provider
     (lode-14jr/lode-o9k3/lode-568v.6 -- no drift counterpart; see
-    docs/configuration.md's model-provenance section, lode-g274.5/lode-sdjb,
-    for why and for the open question this raises), or an explicit
+    docs/configuration.md#model-provenance-the-enrichment-llm-decided-lode-g2745
+    for why), or an explicit
     "No action needed." if none of those apply. Dead-letter jobs get no hint
     -- they are already listed above with their errors, and won't be
     retried.
