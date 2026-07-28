@@ -50,10 +50,16 @@ An epic is **auditable** when ALL hold:
 
 ```bash
 # Fast path — epics /land flagged:
-rtk bd list --type=epic --label epic-ready-to-audit --status open --json
+rtk bd list --type=epic --label epic-ready-to-audit --status open --limit 0 --json
 # Safety net — any open epic whose children are all closed but which was never flagged:
-rtk bd list --type=epic --status open --exclude-label epic-audited --json
+rtk bd list --type=epic --status open --exclude-label epic-audited --limit 0 --json
 ```
+
+**`--limit 0` on both — load-bearing, not noise** — canonical reason + measurements, and why this is
+hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake is highest
+on the **safety net**: open epics accumulate over a project's life and that query is the only thing
+that ever catches one `/land` failed to flag, so a silent cap would mean an epic past the 50th never
+gets audited at all, indefinitely.
 
 For each candidate, confirm the child-completion gate from live state (the label is not trusted on its own).
 `scripts/epic-children-closed.sh` is the shared check (also used by `/land` and `/sweep`) — it does
@@ -61,7 +67,8 @@ NOT read `bd show`'s `.dependents` array (populated only with the opt-in `--incl
 flag; without it `dependent_count` can be non-zero while `.dependents` is entirely absent, which is
 exactly what made this same check dead code in all three skills until lode-v4rk — see the script's
 own header for the full mechanism writeup, and tests/test_epic_children_closed.py for the
-regression tests). It derives children via `bd list --parent <epic-id> --all --json` instead.
+regression tests). It derives children via `bd list --parent <epic-id> --all --limit 0 --json`
+instead.
 
 Both candidate queries above already filter `--type=epic --status open`, so bd has *already*
 guaranteed those two fields — the child-completion answer is the whole verdict here, and there is

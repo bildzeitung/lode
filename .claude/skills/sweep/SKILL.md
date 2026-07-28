@@ -144,8 +144,8 @@ newline embedded in a title instead of letting it break the row.
 
 **`--limit 0` — same reason as §1.** The stake specific to this section: it promises the deferred list
 "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8 count
-still read as the true total. (Other skills — and `scripts/epic-children-closed.sh`, called from §2
-above — still carry unbounded `bd list` calls; audited separately in `lode-2gun`.)
+still read as the true total. (`lode-2gun` extended the same pin to `/land`, `/code`, `/epic-audit`,
+`/release` and to `scripts/epic-children-closed.sh`, called from §2 above.)
 
 **Deliberately excluded from everything else in this skill:**
 

@@ -163,8 +163,13 @@ Then read the queue — every ticket carrying the **`ready-for-land`** label (it
 the label, not a status, is the queue):
 
 ```bash
-rtk bd list --label ready-for-land --status in_progress --json
+rtk bd list --label ready-for-land --status in_progress --limit 0 --json
 ```
+
+**`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
+hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
+truncated read wouldn't lose a branch outright (an unprocessed item just waits for the next pass), but
+it would silently under-report and under-land a large backlog, every pass.
 
 If the queue is empty, there is nothing to land: release the lock and stop —
 

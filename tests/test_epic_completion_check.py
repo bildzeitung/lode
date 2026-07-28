@@ -59,8 +59,8 @@ def _fake_bd(
 ) -> Path:
     """A PATH dir holding a fake `bd` that serves `show_fixtures[<id>]` for
     `bd show <id> --json` and `list_fixtures[<parent-id>]` for
-    `bd list --parent <parent-id> --all --json`. Only `bd` is shimmed; the
-    real `jq` (used by both the fake `bd` and the script itself) still
+    `bd list --parent <parent-id> --all --limit 0 --json`. Only `bd` is shimmed;
+    the real `jq` (used by both the fake `bd` and the script itself) still
     resolves via the inherited PATH, which `_run` appends after this dir."""
     show_path = tmp_path / "show_fixtures.json"
     show_path.write_text(json.dumps(show_fixtures))
@@ -83,7 +83,9 @@ def _fake_bd(
                   '.[$id] // error("no show fixture for \\($id)")' "{show_path}"
                 ;;
               list)
-                # invoked as: bd list --parent <id> --all --json
+                # invoked as: bd list --parent <id> --all --limit 0 --json
+                # -- the id is $3, so a new flag must go AFTER it (inserting one
+                # before --parent shifts $3 and fails these tests loudly).
                 parent="$3"
                 jq -c --arg id "$parent" \\
                   '.[$id] // error("no list fixture for \\($id)")' "{list_path}"
