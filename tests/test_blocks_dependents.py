@@ -89,6 +89,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -194,6 +195,7 @@ def test_old_dependents_derivation_without_flag_never_fires() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == "", (

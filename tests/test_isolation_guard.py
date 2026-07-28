@@ -43,6 +43,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
@@ -75,6 +76,7 @@ def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 

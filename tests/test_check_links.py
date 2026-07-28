@@ -230,6 +230,7 @@ def test_cli_exits_nonzero_and_names_source_line_and_target_on_breakage(tmp_path
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 1
@@ -251,6 +252,7 @@ def test_cli_exits_zero_on_clean_tree(tmp_path):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 0

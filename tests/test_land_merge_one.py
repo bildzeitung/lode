@@ -66,6 +66,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
@@ -117,6 +118,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -240,6 +242,7 @@ def test_staged_jsonl_trap_is_retried_and_succeeds(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -290,6 +293,7 @@ def test_wrong_arg_count_is_exit_2_never_1(argv: list[str]) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr

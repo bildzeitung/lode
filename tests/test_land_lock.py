@@ -73,6 +73,7 @@ def _run(
         text=True,
         timeout=30,
         env=env,
+        check=False,
     )
 
 

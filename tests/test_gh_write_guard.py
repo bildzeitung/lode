@@ -310,6 +310,7 @@ def test_hook_is_syntactically_valid_shell() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, f"hook is not valid shell: {proc.stderr}"
 

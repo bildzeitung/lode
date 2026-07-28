@@ -67,6 +67,7 @@ def _run(env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
         text=True,
         timeout=30,
         env=env,
+        check=False,
     )
 
 

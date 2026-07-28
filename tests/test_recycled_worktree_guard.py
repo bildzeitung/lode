@@ -45,6 +45,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
@@ -130,6 +131,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -146,6 +148,7 @@ def test_wrong_argument_count_exits_2(tmp_path: Path, script_args: list[str]) ->
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
 

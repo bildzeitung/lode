@@ -84,6 +84,7 @@ def run_hook(
         text=True,
         timeout=30,
         env=None if path is None else {"PATH": path},
+        check=False,
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
