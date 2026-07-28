@@ -3,9 +3,9 @@
 Two entry points run by default, both required before any merge (CLAUDE.md):
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
-    nox -s tests    pytest                            (the test gate — the FULL suite,
-                                                         every test, no marker filter;
-                                                         this is what /land re-gates with)
+    nox -s tests    pytest                           (the test gate — the FULL suite,
+                                                        every test, no marker filter;
+                                                        this is what /land re-gates with)
 
 Plus four opt-in sessions that are **not** in the default set:
 

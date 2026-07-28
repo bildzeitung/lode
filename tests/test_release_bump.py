@@ -255,8 +255,8 @@ def test_scopeless_bang_prefix_yields_breaking(tmp_path: Path) -> None:
 def test_prefix_must_be_at_start_of_subject(tmp_path: Path) -> None:
     """The prefix regexes are anchored -- a subject that merely mentions
     "feat:" or "fix:" mid-line is not a conventional commit. Pins the `^`
-    anchor in release-bump.sh's `grep -qE` matching (subjects piped in via a
-    here-string)."""
+    anchor in release-bump.sh's `grep -qE` matching (subjects fed in via a
+    here-string, not a pipeline)."""
     repo = _init_repo(tmp_path)
     _git(repo, "tag", "v0.3.1")
     _commit(repo, "chore: revert the feat: add reranker commit")
