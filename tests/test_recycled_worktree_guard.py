@@ -422,6 +422,42 @@ def test_outside_isolated_worktree_refuses_and_leaves_everything_untouched(
     assert branches.strip() == ""
 
 
+def test_a_near_miss_directory_name_is_refused_not_repaired(tmp_path: Path) -> None:
+    """The `case` glob must match the literal path SEGMENT `.claude/worktrees/`,
+    not merely contain the substring. A worktree under a sibling directory whose
+    name only *starts* with the right string (`.claude/worktrees-stale/`) is not
+    an isolated launch worktree and must be refused -- not repaired.
+
+    Mirrors tests/test_isolation_guard.py::test_a_near_miss_directory_name_is_refused
+    (lode-v12j: this script's identical glob had no equivalent pin). The
+    contamination here is deliberate (`foreign_commit=True`): this proves the
+    refusal fires even when the destructive remediation would otherwise be
+    warranted, not merely when there is nothing to do -- exactly the case
+    isolation-guard.sh's own near-miss test does not need to cover, since that
+    script never repairs on failure at all.
+
+    Without the two `/` anchors, relaxing the glob to `*.claude/worktrees*`
+    leaves every other test in this module green -- verified by sabotage -- so
+    this is the assertion that actually pins them here too.
+    """
+    repo = _init_repo(tmp_path)
+    wt = _add_worktree(
+        repo,
+        ".claude/worktrees-stale/agent-abc123",
+        "worktree-agent-stale",
+        foreign_commit=True,
+    )
+    head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(wt)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "refusing to reset" in result.stderr
+    assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
+    branches = _git(repo, "branch", "--list", "rescue/*").stdout
+    assert branches.strip() == ""
+
+
 def test_dirt_axis_gap_closed_worktree_recycled_onto_an_already_landed_branch_still_gets_cleaned(
     tmp_path: Path,
 ) -> None:
