@@ -864,22 +864,24 @@ machine. A red gate is content; exit 2 is the machine.
                               # THIS loop actually keeps merged
 
   # BASELINE before attributing anything (lode-sys4, extended to cover `nox -s tests` by
-  # lode-kq4v). NEITHER gate asks a question about the tree alone — that claim about `nox -s
-  # tests` was the premise that licensed a real incident (lode-kq4v, OBSERVED landing a real pass):
-  # an ambient `FORCE_COLOR=3` sitting in the LANDING SESSION's own shell — not set anywhere in
-  # this repo — froze rich's `Console()` colour detection at IMPORT (lode-xgaa's mechanism) and
-  # reddened 6 `tests/test_cli.py` tests on a bare, unmodified `origin/trunk` with NOTHING merged.
-  # Trusting the old premise here would have bounced the first branch in `$ACCEPTED`: `bd
-  # supersede` closes its ticket, a rebuild ticket carries a FABRICATED "turned the gate red"
-  # finding, and `git push origin --delete land/<id>` destroys the reviewed branch — for a
-  # variable this repo does not set. `nox -s lock_currency` has the same exposure for a different
-  # reason: it asks whether the committed lock is a fixed point of the tree PLUS this machine's
-  # ambient uv PLUS today's PyPI — so it too can be red with no branch involved at all (a uv
-  # release that changes the emitted format, an upstream yank, a lock that went stale on trunk
-  # itself). Establish that bare `origin/trunk` is green on BOTH before entering the attribution
-  # loop; otherwise the loop blames — and deletes — whichever innocent branch happened to be
-  # merged first. Two separate gates, so `nox -t fix` (idempotent, not tree-order-sensitive) is
-  # not re-run here — only the two gates whose redness this loop is about to attribute per-branch.
+  # lode-kq4v). THE RULE, stated generally so a gate added here later inherits it instead of
+  # earning its own paragraph: NO gate this loop attributes is a pure function of the tree, so
+  # baseline EVERY one of them on bare `origin/trunk` before entering the attribution loop.
+  # Otherwise the loop blames — and deletes — whichever innocent branch happened to be merged
+  # first. This whole block is on the red/isolate path only, so a green pass never pays for it.
+  #
+  # `nox -s tests` used to be exempt, on the premise that it "asks a question about the tree
+  # alone". That premise licensed a real incident (lode-kq4v, OBSERVED landing a real pass): an
+  # ambient `FORCE_COLOR=3` in the LANDING SESSION's own shell — not set anywhere in this repo —
+  # fixed rich's colour decision at IMPORT (lode-xgaa's mechanism) and reddened 6
+  # `tests/test_cli.py` tests on a bare, unmodified `origin/trunk` with NOTHING merged. Trusting
+  # it would have bounced the first branch in `$ACCEPTED`: `bd supersede` closes its ticket, a
+  # rebuild ticket carries a FABRICATED "turned the gate red" finding, and `git push origin
+  # --delete land/<id>` destroys the reviewed branch — for a variable this repo does not set.
+  # `nox -s lock_currency` fails the same test for its own reason: it asks whether the committed
+  # lock is a fixed point of the tree PLUS this machine's ambient uv PLUS today's PyPI, so it too
+  # can be red with no branch involved at all (a uv release that changes the emitted format, an
+  # upstream yank, a lock that went stale on trunk itself).
   rtk nox -s tests
   #   exit 0 → attributable from here on for THIS gate: any later `nox -s tests` red IS caused by
   #            a merged branch. Continue.
