@@ -287,17 +287,32 @@ every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
 value outside the legal five raises `LLMProviderError` before any request is
 sent, instead of being silently dropped.
 
-**Caveat: the check is on the value, not on the value/model pairing.** Effort
-is not accepted by every model — it errors outright on Haiku 4.5 and Sonnet
-4.5, and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
+**Caveat: the check is on the value, not on the value/model pairing — but an
+unsupported pairing now fails clean, not raw (decided, lode-90o7).** Effort is
+not accepted by every model — it errors outright on Haiku 4.5 and Sonnet 4.5,
+and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
 `Kind.RUNTIME` and two default to affected models (`enrichment_llm` = Haiku
 4.5, `qa_llm` = Sonnet 4.6), so setting `reasoning_effort` on a tier whose
-model does not support the level you ask for produces an unhandled
-`anthropic.BadRequestError` — where before it was inert. **Set
-`reasoning_effort` only alongside a model that supports it.** A
-model→capability predicate was deliberately rejected as a moving target
-(lode-3dlt's option 1); how to fail cleanly instead is tracked as lode-90o7,
-which also covers the same unvalidated knob on `OpenAIProvider`.
+model does not support the level you ask for still reaches the API and gets
+rejected. A model→capability predicate to predict this ahead of time was
+deliberately rejected again as a moving target (lode-3dlt's option 1,
+reaffirmed by lode-90o7) — **set `reasoning_effort` only alongside a model
+that supports it** is still the operative guidance. What changed: every
+`anthropic.APIStatusError` any `AnthropicProvider` call site can raise
+(`structured_call`'s two branches, `submit_batch`) is now caught and
+converted to `LLMProviderError` — status code and request id preserved — via
+`_anthropic_error_from_exception`, instead of a raw
+`anthropic.BadRequestError` escaping the seam. `OpenAIProvider` already had
+this "wrap every SDK exception" guarantee for its own `responses.create` call
+(`OpenAIProvider._error_from_exception`, predates this ticket) — what it was
+missing, and now has too, is the pre-flight *value* check: `_openai_effort_kwargs` /
+`_OPENAI_EFFORT_LEVELS` reject an unsupported effort *value* before any
+request is sent, mirroring `_anthropic_effort_kwargs` exactly (its own legal
+set — `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max` — is pinned to the
+installed SDK's own `Reasoning.effort` Literal, not hand-typed, the same
+"ladder can grow" guard `_ANTHROPIC_EFFORT_LEVELS` already has). Neither
+provider predicts the value/model *pairing* ahead of time — both now fail the
+same clean way when the API rejects one.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort
