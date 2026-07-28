@@ -2089,10 +2089,36 @@ assumption would not have closed it.
   dangerous direction, and it is why the default is not *reduced* — the opposite failure only delays
   landing, which is not latency-critical. A heartbeat re-stamping the token as the pass progresses
   would make a smaller window both safer and quicker to reclaim; deferred (lode-m87j). **Second,
-  `acquire` is atomic but the stale-lock *reclaim* is not** — `rm` then create, two steps, observed
-  admitting two winners at 8-way contention. Unreachable under the one-loop convention (a
-  still-running pass holds a *fresh* lock, so the reclaim branch is crash-recovery only), and deferred
-  rather than closed with a nested TTL that could wedge landing outright (lode-ao95). **Release
+  the stale-lock *reclaim* is now ATOMIC (lode-ao95)** — it used to be `rm` then create, two separate
+  steps, OBSERVED admitting two winners (3/40 rounds at 8-way contention). The fix gates the
+  destructive part of a reclaim (`rm -f "$LOCK"` + a fresh write) behind an `mkdir`-based token,
+  `$LOCK.reclaiming`: `mkdir` is a single atomic syscall, so exactly one racer's `mkdir` can ever
+  succeed for that path. The obvious version of that (an O_EXCL token, once, no self-heal) is exactly
+  what CAVEAT 2 originally warned would wedge landing *permanently* if its winner died between
+  creating the gate and clearing it — the fix bounds that risk with its own, much smaller staleness
+  window scoped to the gate alone (a fixed 30s constant, not `LAND_LOCK_STALE_SECONDS`, since it only
+  needs to outlast a couple of shell builtins, never a whole pass): a later `acquire` that finds an
+  abandoned gate past that window clears it and retries the `mkdir` once. Every attempt's actual
+  decision is still a bare `mkdir`, so the self-heal cannot itself create a second winner — it can
+  only ever let a new single winner emerge after a crash. The gate's winner also re-reads `$LOCK`
+  fresh immediately before touching it, rather than trusting its own staleness observation from
+  before it entered the gate — otherwise a racer that wins the gate *after* a different racer already
+  completed an independent reclaim (through an earlier, already-cleared gate) would blindly destroy
+  that now-legitimately-fresh lock. `acquire`'s original fresh-lock path (`write_lock`'s `noclobber`
+  create) was always atomic and is unchanged. This still does not make a `heartbeat` that blindly
+  re-stamps the record safe on its own — see the owner token below.
+
+  **The lock record now carries an owner token (5th field, lode-ao95) that no code in this script yet
+  checks.** It exists so a future ownership check has something to compare against: even with an
+  atomic reclaim, a pass whose lock is reclaimed out from under it (still possible under the
+  documented crash-recovery scenario — atomicity guarantees exactly one winner, not that the original
+  holder learns it lost) can keep calling `heartbeat` and blindly re-stamp the new holder's record,
+  turning a genuine two-lander overlap *self-concealing* rather than merely non-atomic — the file
+  looks continuously fresh and names whichever pass wrote last, erasing the evidence a human would
+  spot one by. Wiring the actual check into `heartbeat` (reading the token, refusing to overwrite on
+  mismatch) is **lode-q9pm**, blocked on both this fix and `heartbeat` itself (lode-m87j) landing —
+  lode-ao95 built strictly against trunk (where `heartbeat` does not exist) per the sibling-branch
+  isolation convention, so it could add the token but not the code that checks it. **Release
   reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a latency
   optimization; every other stop, *including the routine pass in which every branch was kicked back
   `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit

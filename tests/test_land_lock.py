@@ -1,4 +1,4 @@
-"""Tests for scripts/land-lock.sh (lode-aps3).
+"""Tests for scripts/land-lock.sh (lode-aps3, lode-ao95).
 
 WHY the trap-and-PID design this replaces could not work -- an agent runs
 each fenced `bash` block of `.claude/skills/land/SKILL.md` as its own Bash
@@ -8,10 +8,12 @@ wall-clock staleness token: see the header comment of scripts/land-lock.sh.
 That rationale is deliberately NOT restated here (the
 tests/test_blocks_dependents.py precedent) -- it lives next to the code it
 constrains, so it cannot drift out of sync with a second copy. The header
-also records the two known limits of the mechanism (the TTL measures
-acquisition age, not idle time; the reclaim path is not atomic).
+also records the one remaining known limit of the mechanism (the TTL
+measures acquisition age, not idle time) and the deliberately-deferred gap
+(an ownership check in a future `heartbeat`, lode-q9pm) -- the reclaim path
+itself is no longer non-atomic; see lode-ao95's half of the tests below.
 
-What this file adds on top of that is the regression gate, in two halves:
+What this file adds on top of that is the regression gate, in three parts:
 
 1. Behavioural tests that run the ACTUAL script against a real, throwaway
    git repository in `tmp_path` (its only external dependency is
@@ -24,7 +26,15 @@ What this file adds on top of that is the regression gate, in two halves:
    Both mutations were run against this file and confirmed red (5 and 6
    failures of 14 respectively).
 
-2. Call-site pins against the SHIPPED `SKILL.md`. The defect lived in a
+2. A concurrency stress test (lode-ao95) reproducing the actual defect: many
+   rounds of N-way concurrent `acquire` calls against the SAME manually
+   crafted stale lock, asserting exactly one winner per round. Run against
+   the pre-fix script (`rm` then create, two steps) this reliably shows
+   multiple winners in some rounds -- matching the ticket's own measurement
+   of 3/40 at 8-way contention; against the fixed script it must never show
+   more than one, in any round.
+
+3. Call-site pins against the SHIPPED `SKILL.md`. The defect lived in a
    markdown fence, where no gate reaches it, so the behavioural tests above
    would all stay green while SKILL.md quietly went back to an inline trap
    and stopped calling this script at all. Same reasoning and same shape as
@@ -34,6 +44,7 @@ What this file adds on top of that is the regression gate, in two halves:
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import subprocess
 import time
@@ -95,9 +106,21 @@ def test_acquire_on_a_fresh_repo_succeeds_and_writes_a_lock_file(
     lock = _lock_path(repo)
     assert lock.exists()
     fields = lock.read_text().split()
-    assert len(fields) == 4, fields  # pid hostname epoch iso8601
+    assert len(fields) == 5, fields  # pid hostname epoch iso8601 owner-token
     assert fields[0].isdigit()  # pid, recorded for humans only (see header)
     assert fields[2].isdigit()  # epoch seconds -- the ONLY field acquire reads back
+    # Owner token (lode-ao95): opaque, non-empty, distinct across acquisitions
+    # -- not read back by anything in THIS script yet (see CAVEAT 2 / lode-q9pm)
+    # but must actually be present and vary, or a future ownership check has
+    # nothing to compare against.
+    assert fields[4], fields
+    second = _run("release", repo=repo)
+    assert second.returncode == 0
+    reacquired = _run("acquire", repo=repo)
+    assert reacquired.returncode == 0
+    assert lock.read_text().split()[4] != fields[4], (
+        "two separate acquisitions produced the SAME owner token"
+    )
 
 
 def test_second_acquire_without_release_is_skipped_while_fresh(
@@ -239,6 +262,121 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     result = _run("acquire", repo=repo)
 
     assert result.returncode == 1, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Atomic reclaim (lode-ao95) -- the mkdir-gated fix for the two-winner race
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
+    tmp_path: Path,
+) -> None:
+    """The regression this ticket fixes. Pre-fix (`rm` then create, two
+    separate steps), 3 of 40 rounds at 8-way contention against a stale lock
+    ended with two exit-0 winners (OBSERVED, lode-ao95's own description).
+    Run enough rounds at the same contention level that the old code would
+    almost certainly show at least one multi-winner round, and assert every
+    round has EXACTLY one -- reproducing the race and confirming the fix."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    rounds = 40
+    workers = 8
+
+    for round_num in range(rounds):
+        old_epoch = int(time.time()) - 100000
+        lock.write_text(f"12345 some-old-host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(
+                    _run,
+                    "acquire",
+                    repo=repo,
+                    env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"},
+                )
+                for _ in range(workers)
+            ]
+            results = [f.result() for f in futures]
+
+        winners = [r for r in results if r.returncode == 0]
+        assert len(winners) == 1, (
+            f"round {round_num}: {len(winners)} winners (expected exactly 1)\n"
+            + "\n".join(
+                f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}"
+                for r in results
+            )
+        )
+
+
+def test_a_gate_busy_with_a_live_reclaim_is_not_treated_as_abandoned(
+    tmp_path: Path,
+) -> None:
+    """A freshly-created reclaim gate (age well under
+    RECLAIM_GATE_STALE_SECONDS) must block a concurrent acquire outright --
+    it must NOT be cleared and retried, since a genuine reclaim could still
+    be in flight."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100000
+    lock.write_text(f"12345 some-old-host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    gate = repo / ".git" / "land.lock.reclaiming"
+    gate.mkdir()
+    (gate / "created").write_text(str(int(time.time())))
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    # Untouched: the gate holder (simulated here) is still the only one
+    # allowed to reclaim; the main lock file is exactly as it was.
+    assert lock.read_text().split()[2] == str(old_epoch)
+    assert gate.exists()
+
+
+def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> None:
+    """The no-wedge half of the fix: a reclaim gate left behind by a
+    reclaimer that crashed between winning it and clearing it (age well past
+    RECLAIM_GATE_STALE_SECONDS) must NOT block landing forever -- a later
+    acquire clears it and retries, successfully reclaiming the still-stale
+    main lock."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100000
+    lock.write_text(f"12345 some-old-host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    gate = repo / ".git" / "land.lock.reclaiming"
+    gate.mkdir()
+    (gate / "created").write_text(str(int(time.time()) - 1000))  # long abandoned
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not gate.exists(), "the abandoned gate must be cleared, not left behind"
+    new_fields = lock.read_text().split()
+    assert int(new_fields[2]) > old_epoch
+
+
+# NOTE on the gate-winner's internal re-validation (land-lock.sh's own
+# comment: "Re-validate before touching $LOCK"): there is deliberately no
+# SEPARATE deterministic unit test for "wins the gate, then discovers $LOCK
+# is now fresh, and aborts without touching it". That exact interleaving --
+# this racer's OWN initial pre-loop staleness check must see STALE, while a
+# DIFFERENT racer completes an entire reclaim cycle in the gap before this
+# racer's mkdir -- requires genuine concurrent timing that a single
+# sequential invocation cannot reproduce without mocking the script's
+# internals (which the rest of this file deliberately avoids -- see the
+# module docstring). It is covered probabilistically instead, by
+# test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner above:
+# removing the re-validation step reintroduces a second way for 8-way
+# contention to produce more than one winner (a later racer grabbing a gate
+# freed by an already-completed reclaimer and blindly re-reclaiming), so a
+# regression there is expected to eventually surface as that test's own
+# multi-winner assertion failing, across its 40 rounds.
 
 
 # ---------------------------------------------------------------------------
