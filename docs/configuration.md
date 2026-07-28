@@ -287,17 +287,36 @@ every tier's default, and what a bare-string `enrichment_llm = "…"` coerces to
 value outside the legal five raises `LLMProviderError` before any request is
 sent, instead of being silently dropped.
 
-**Caveat: the check is on the value, not on the value/model pairing.** Effort
-is not accepted by every model — it errors outright on Haiku 4.5 and Sonnet
-4.5, and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
+**Caveat: the check is on the value, not on the value/model pairing — but an
+unsupported pairing now fails clean, not raw (decided, lode-90o7).** Effort is
+not accepted by every model — it errors outright on Haiku 4.5 and Sonnet 4.5,
+and `xhigh`/`max` do not exist on the 4.6 generation. All three tiers are
 `Kind.RUNTIME` and two default to affected models (`enrichment_llm` = Haiku
 4.5, `qa_llm` = Sonnet 4.6), so setting `reasoning_effort` on a tier whose
-model does not support the level you ask for produces an unhandled
-`anthropic.BadRequestError` — where before it was inert. **Set
-`reasoning_effort` only alongside a model that supports it.** A
-model→capability predicate was deliberately rejected as a moving target
-(lode-3dlt's option 1); how to fail cleanly instead is tracked as lode-90o7,
-which also covers the same unvalidated knob on `OpenAIProvider`.
+model does not support the level you ask for still reaches the API and gets
+rejected. A model→capability predicate to predict this ahead of time was
+deliberately rejected again as a moving target (lode-3dlt's option 1,
+reaffirmed by lode-90o7) — **set `reasoning_effort` only alongside a model
+that supports it** is still the operative guidance. What changed: a request
+the API *rejects* now surfaces as `LLMProviderError`, status code and request
+id preserved, on both providers — `AnthropicProvider` gained that wrap at its
+three request-submitting call sites, and `OpenAIProvider` already had it. (A
+*timeout* is not a rejected request and is not covered: `anthropic`'s
+non-status errors still surface raw — see `qa.MAX_TOKENS`.) `OpenAIProvider`
+also gained the pre-flight *value* check `AnthropicProvider` already had; its
+legal set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, derived
+from the installed SDK's own `Reasoning.effort` Literal rather than
+hand-typed.
+
+**What lode-90o7 deliberately did NOT do: validate at config load.** Both
+providers check the effort *value* at the seam, on the first call — not when
+`config.toml` is parsed. So a plain typo (`reasoning_effort = "LOW"`) starts
+clean but fails at first use, and on the enrichment path that failure is
+classified as *transient* by `worker.run_one`: it charges an attempt, backs
+off, and dead-letters the job after `retry_max_attempts`, rather than
+refusing to start. A `Settings` validator (the shape
+`_azure_api_version_required_with_endpoint` already uses) would move that to
+startup; it is filed as lode-tvps, not done here.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort
