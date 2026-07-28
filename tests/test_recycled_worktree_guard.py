@@ -422,31 +422,39 @@ def test_outside_isolated_worktree_refuses_and_leaves_everything_untouched(
     assert branches.strip() == ""
 
 
-def test_a_near_miss_directory_name_is_refused_not_repaired(tmp_path: Path) -> None:
-    """The `case` glob must match the literal path SEGMENT `.claude/worktrees/`,
-    not merely contain the substring. A worktree under a sibling directory whose
-    name only *starts* with the right string (`.claude/worktrees-stale/`) is not
-    an isolated launch worktree and must be refused -- not repaired.
+@pytest.mark.parametrize(
+    "near_miss_dir",
+    [".claude/worktrees-stale/agent-abc123", "x.claude/worktrees/agent-abc123"],
+    ids=["trailing-anchor", "leading-anchor"],
+)
+def test_a_near_miss_directory_name_is_refused_not_repaired(
+    tmp_path: Path, near_miss_dir: str
+) -> None:
+    """The `case` glob must match the literal path SEGMENT `.claude/worktrees/`
+    -- BOTH its `/` anchors, not merely the substring between them. One
+    parameter per anchor, because each is the sole catcher of its own mutation:
 
-    Mirrors tests/test_isolation_guard.py::test_a_near_miss_directory_name_is_refused
-    (lode-v12j: this script's identical glob had no equivalent pin). The
-    contamination here is deliberate (`foreign_commit=True`): this proves the
-    refusal fires even when the destructive remediation would otherwise be
-    warranted, not merely when there is nothing to do -- exactly the case
-    isolation-guard.sh's own near-miss test does not need to cover, since that
-    script never repairs on failure at all.
+    - `.claude/worktrees-stale/...` pins the TRAILING `/` (the segment is
+      `worktrees-stale`, not `worktrees`). Relaxing the glob to
+      `*/.claude/worktrees*` -- or as far as `*/.claude/*` -- leaves every
+      other test in this module green.
+    - `x.claude/worktrees/...` pins the LEADING `/` (the segment is
+      `x.claude`, not `.claude`). Deleting the leading `*/` outright is caught
+      by the other tests here (they stop matching at all), but merely WEAKENING
+      it to `*` -- `*.claude/worktrees/*` -- leaves the entire rest of the
+      module green, so nothing but this parameter holds that anchor down.
 
-    Without the two `/` anchors, relaxing the glob to `*.claude/worktrees*`
-    leaves every other test in this module green -- verified by sabotage -- so
-    this is the assertion that actually pins them here too.
+    All sabotage-verified. The contamination is deliberate
+    (`foreign_commit=True`): with the glob relaxed, this exact fixture does not
+    merely mis-classify -- it reaches `git reset --hard` and rewinds the
+    near-miss worktree's HEAD, so the refusal is proven precisely where the
+    destructive remediation would otherwise be warranted.
+
+    Ported from tests/test_isolation_guard.py's twin pin, which gained the
+    leading-anchor parameter in the same change (lode-v12j).
     """
     repo = _init_repo(tmp_path)
-    wt = _add_worktree(
-        repo,
-        ".claude/worktrees-stale/agent-abc123",
-        "worktree-agent-stale",
-        foreign_commit=True,
-    )
+    wt = _add_worktree(repo, near_miss_dir, "worktree-agent-stale", foreign_commit=True)
     head_before = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
     result = _run(wt)
