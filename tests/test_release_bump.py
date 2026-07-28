@@ -43,6 +43,7 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
     return result
@@ -77,6 +78,7 @@ def _run(range_: str, repo: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -309,6 +311,7 @@ def test_usage_without_args_is_exit_2() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
@@ -321,6 +324,7 @@ def test_usage_with_two_args_is_also_exit_2() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr

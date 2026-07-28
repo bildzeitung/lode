@@ -86,6 +86,7 @@ def _run(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -157,6 +158,7 @@ def test_old_dependents_derivation_never_fires_even_when_fully_closed() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "SKIP", (
