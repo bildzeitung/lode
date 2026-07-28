@@ -9,7 +9,7 @@ Two entry points run by default, both required before any merge (CLAUDE.md):
 
 Plus four opt-in sessions that are **not** in the default set:
 
-    nox -s unit           pytest -m "not slow"                     (fast inner loop, lode-pql)
+    nox -s unit            pytest -m "not slow"                     (fast inner loop, lode-pql)
     nox -s eval            pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
     nox -s coverage        pytest --cov=lode --cov-report=xml ...   (coverage measurement, CI-only, lode-qxdn.3)
     nox -s lock_currency   verify requirements.lock is current      (local mirror of CI's lock-currency

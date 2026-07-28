@@ -1411,6 +1411,11 @@ notification per pass, only when something genuinely new appeared. The digest is
 write footprint — one self-owned bd row, Dolt-durable so the dedup state survives across machines and
 sessions the way the `ready-for-land` queue does.
 
+On a separate, independent track, each pass also lists every `deferred`-status ticket in its report
+(`bd list --status deferred --limit 0 --json`) — read-only, no dedup, and never touching the digest
+or the notification delta, so parked work stays visible without ever becoming a new human-decision
+item in its own right.
+
 **Topology — landing-side loops are a one-machine invariant.** `/land`, `/epic-audit`, and `/sweep`
 are all expected to run on **one** machine. This is not a new rule invented for `/sweep`: it is
 `/land`'s existing single-lander-lock convention ([below](#mechanics-decided)), stated explicitly now
