@@ -2161,6 +2161,32 @@ assumption would not have closed it.
   pass-start reset structurally cannot close that hole. Tracked separately as **lode-isl3**; it does not
   block this change.
 
+  **Section 1 refuses to start unless cwd is genuinely the main checkout, checked once up front, not
+  folded into a `-C` on any individual command (lode-pcee).** The block used to run only the
+  `checkout -f trunk` through `-C "$(git rev-parse --show-toplevel)"`, on the theory that this pinned
+  it to the main checkout. It does not: `--show-toplevel` resolves relative to **cwd**, so from the
+  main checkout the `-C` just re-states the directory you're already in (redundant, not wrong), and
+  from a worktree it resolves to *that worktree's own root* — it can never redirect a command to a
+  *different* directory than the one it's already running in, because the value it computes is
+  cwd-derived in the first place. That reads as a safety guard and is not one. Worse, the actually
+  destructive line — `git reset --hard origin/trunk`, two lines later — carried no `-C` at all, so
+  run from a worktree it would hard-reset *that worktree's own branch*, discarding uncommitted work
+  there that no `reflog` recovers (unlike the discarded-commits case the reset is otherwise designed
+  around, directly above). `/land` is defined to run only in the main checkout (see the top of
+  `land/SKILL.md`), so this was latent, not live, at the time it was filed — but a latent guard that
+  gives false assurance is worse than no guard, because it looks checked. The fix is an **identity
+  check**, not a redirect: `git rev-parse --git-common-dir` returns the one `.git` directory every
+  worktree of a repo shares (main checkout included), so **only the main checkout's own toplevel is
+  that directory's parent** — a linked worktree's toplevel never is. The check is
+  [`scripts/assert-main-checkout.sh`](../scripts/assert-main-checkout.sh) — extracted rather than left
+  inline, the same reasoning as `scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh`:
+  a shellcheck'd, unit-tested script beats prose in a markdown fence that no gate parses. It computes
+  both paths, compares them, and exits non-zero with a diagnostic before Section 1 touches `bd` or
+  `git` at all on a mismatch, rather than trying to make the commands below correct from the wrong
+  starting directory. Once that assertion has passed, every command in the block runs unqualified —
+  no `-C` anywhere — because the assertion is what guarantees cwd already *is* the main checkout,
+  which a `-C` computed from cwd itself structurally cannot.
+
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 
