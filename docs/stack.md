@@ -171,8 +171,11 @@ reproducible from committed bytes instead of from whatever resolved on the day i
 the code under measurement, not the tools doing the measuring. The counter-case for resolving fresh
 here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
 toothless on this leg: `coverage.yml` enforces no threshold, so such a drift fails nothing and
-attributes nothing, and the runtime-set drift signal that *does* fire is the `lock-currency` job
-below.
+attributes nothing — and no CI signal fires on an upstream runtime release either way.
+[`lock-currency`](#the-lock-gen-command-is-derived-from-python-version-not-hard-coded-lode-sys4)
+only catches a lock that has fallen *behind* a `pyproject.toml` constraint change, never one that has
+fallen behind PyPI — uv's preference seeding, described in that same section. Moving the runtime set
+forward is always a deliberate `scripts/update-deps.sh` run, never something CI notices on its own.
 
 ### Ruff's lint rule set (settled `lode-cs5u`)
 
@@ -396,11 +399,14 @@ passes `tool_name`:
 - **Q&A** passes no `tool_name` (`None`) → `AnthropicProvider` calls `messages.parse(output_format=
   output_schema)` exactly as `_request_claims()` does today.
 
-`reasoning_effort` is meaningful only under a reasoning-capable OpenAI/Azure deployment (§6);
-`AnthropicProvider` ignores it (Anthropic has no such axis). `OpenAIProvider` (`lode-568v.3`) has a
-single wire mechanism for structured output — the Responses API's `text.format`/json_schema (see the
-Azure/OpenAI routing note below) — so it can honor or ignore `tool_name` as it sees fit; the param is
-Anthropic-mechanism-selecting, not a cross-provider requirement.
+`reasoning_effort` reaches `AnthropicProvider` as `output_config.effort` on every wire mechanism
+(`lode-wnz1`), subject to the model-support caveat recorded in
+[configuration.md](configuration.md#reasoning_effort-wired-to-output_configeffort-decided-lode-wnz1)
+(some models reject `effort` outright, so this is a model choice, not just a level choice).
+`OpenAIProvider` (`lode-568v.3`) has a single wire mechanism for structured output — the Responses
+API's `text.format`/json_schema (see the Azure/OpenAI routing note below) — so it can honor or ignore
+`tool_name` as it sees fit; the param is Anthropic-mechanism-selecting, not a cross-provider
+requirement.
 
 **`lode-568v.2` note:** `timeout_s` is now threaded into *every* `structured_call` — including Q&A's,
 which pre-seam passed no client-side timeout to `messages.parse` at all (only the enrichment/batch
