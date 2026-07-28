@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from lode.config import Settings
 from lode.llm_provider import (
+    _ANTHROPIC_EFFORT_LEVELS,
     AnthropicProvider,
     BatchRequest,
     LLMAuthError,
@@ -226,10 +227,10 @@ def test_structured_call_wraps_a_schema_validation_failure() -> None:
     assert isinstance(excinfo.value.__cause__, ValidationError)
 
 
-def test_structured_call_ignores_reasoning_effort() -> None:
-    # reasoning_effort is not yet wired through to Anthropic's
-    # output_config.effort (lode-3dlt design notes) -- must not surface as a
-    # raw kwarg in the call.
+def test_structured_call_sends_effort_on_the_messages_parse_branch() -> None:
+    # lode-wnz1: reasoning_effort now reaches Anthropic as
+    # output_config.effort on the messages.parse branch. Must never surface
+    # as a raw `reasoning_effort` kwarg -- that's not a real SDK parameter.
     client = mock.MagicMock()
     client.messages.parse.return_value = SimpleNamespace(
         parsed_output=_Widget(name="w")
@@ -237,7 +238,7 @@ def test_structured_call_ignores_reasoning_effort() -> None:
     provider = AnthropicProvider(client)
 
     provider.structured_call(
-        model="m",
+        model="claude-opus-5",
         reasoning_effort="high",
         system="sys",
         user_prompt="p",
@@ -246,7 +247,118 @@ def test_structured_call_ignores_reasoning_effort() -> None:
         timeout_s=1.0,
     )
 
-    assert "reasoning_effort" not in client.messages.parse.call_args.kwargs
+    kwargs = client.messages.parse.call_args.kwargs
+    assert "reasoning_effort" not in kwargs
+    assert kwargs["output_config"] == {"effort": "high"}
+    # output_format must survive alongside output_config -- the SDK's own
+    # .parse() merges the two into {"format": ..., "effort": ...} internally;
+    # this asserts the wiring didn't drop or replace it.
+    assert kwargs["output_format"] is _Widget
+
+
+def test_structured_call_omits_output_config_when_reasoning_effort_is_none() -> None:
+    client = mock.MagicMock()
+    client.messages.parse.return_value = SimpleNamespace(
+        parsed_output=_Widget(name="w")
+    )
+    provider = AnthropicProvider(client)
+
+    provider.structured_call(
+        model="claude-sonnet-4-6",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="p",
+        output_schema=_Widget,
+        max_tokens=10,
+        timeout_s=1.0,
+    )
+
+    assert "output_config" not in client.messages.parse.call_args.kwargs
+
+
+def test_structured_call_sends_effort_on_the_forced_tool_use_branch() -> None:
+    # NOT the enrichment default (claude-haiku-4-5): effort errors outright on
+    # Haiku 4.5, and xhigh does not exist below Opus 4.7. lode validates the
+    # value, not the value/model pairing (lode-90o7), so a mock would happily
+    # accept that combination -- don't enshrine an illegal one as the example.
+    client = _fake_tool_use_client({"name": "widget", "count": 3})
+    provider = AnthropicProvider(client)
+
+    provider.structured_call(
+        model="claude-opus-5",
+        reasoning_effort="xhigh",
+        system="sys",
+        user_prompt="prompt",
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=42.0,
+        tool_name="extract_widget",
+        tool_description="Extract a widget.",
+    )
+
+    kwargs = client.messages.create.call_args.kwargs
+    assert kwargs["output_config"] == {"effort": "xhigh"}
+
+
+def test_structured_call_omits_output_config_on_forced_tool_use_when_unset() -> None:
+    client = _fake_tool_use_client({"name": "widget", "count": 3})
+    provider = AnthropicProvider(client)
+
+    provider.structured_call(
+        model="claude-haiku-4-5",
+        reasoning_effort=None,
+        system="sys",
+        user_prompt="prompt",
+        output_schema=_Widget,
+        max_tokens=100,
+        timeout_s=42.0,
+        tool_name="extract_widget",
+        tool_description="Extract a widget.",
+    )
+
+    assert "output_config" not in client.messages.create.call_args.kwargs
+
+
+@pytest.mark.parametrize("bad_effort", ["LOW", "extreme", "", "medium ", "effort"])
+def test_structured_call_rejects_an_invalid_effort_value(bad_effort: str) -> None:
+    # lode-wnz1 acceptance: an invalid/unsupported effort value fails clearly
+    # (LLMProviderError, before any request is sent) rather than being
+    # silently dropped or producing a raw anthropic.BadRequestError.
+    client = mock.MagicMock()
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=bad_effort,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=10,
+            timeout_s=1.0,
+        )
+
+    assert bad_effort in str(excinfo.value)
+    assert excinfo.value.provider == "anthropic"
+    client.messages.parse.assert_not_called()
+    client.messages.create.assert_not_called()
+
+
+def test_effort_levels_match_the_installed_sdk_literal() -> None:
+    # `_ANTHROPIC_EFFORT_LEVELS` claims to mirror the SDK's own effort Literal
+    # exactly. Pin that claim mechanically: the ladder has grown once already
+    # (xhigh arrived with Opus 4.7), and a sixth level shipping upstream would
+    # otherwise make lode reject a legal value with a spurious
+    # LLMProviderError, with nothing failing to say so. Order is asserted too,
+    # since the constant is what renders the error message's intensity ladder.
+    import typing
+
+    from anthropic.types.output_config_param import OutputConfigParam
+
+    effort_hint = typing.get_type_hints(OutputConfigParam)["effort"]
+    # `effort: Optional[Literal[...]]` -- unwrap the Optional, then the Literal.
+    literal, _none = typing.get_args(effort_hint)
+    assert typing.get_args(literal) == _ANTHROPIC_EFFORT_LEVELS
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +414,49 @@ def test_submit_batch_omits_tools_when_no_tool_name() -> None:
     (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
     assert "tools" not in req["params"]
     assert "tool_choice" not in req["params"]
+
+
+def test_submit_batch_sends_effort_when_reasoning_effort_is_set() -> None:
+    # lode-wnz1: the batch path gets the same output_config.effort wiring as
+    # the immediate structured_call path.
+    client = mock.MagicMock()
+    client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-3")
+    provider = AnthropicProvider(client)
+
+    # Override the Haiku 4.5 default model too -- effort errors on Haiku 4.5;
+    # see the forced-tool-use test above and lode-90o7.
+    provider.submit_batch(
+        [_batch_request(model="claude-opus-5", reasoning_effort="medium")],
+        timeout_s=30.0,
+    )
+
+    (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
+    assert req["params"]["output_config"] == {"effort": "medium"}
+
+
+def test_submit_batch_omits_output_config_when_reasoning_effort_is_none() -> None:
+    client = mock.MagicMock()
+    client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-4")
+    provider = AnthropicProvider(client)
+
+    provider.submit_batch([_batch_request(reasoning_effort=None)], timeout_s=30.0)
+
+    (req,) = client.beta.messages.batches.create.call_args.kwargs["requests"]
+    assert "output_config" not in req["params"]
+
+
+def test_submit_batch_rejects_an_invalid_effort_value() -> None:
+    client = mock.MagicMock()
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.submit_batch(
+            [_batch_request(reasoning_effort="not-a-real-level")], timeout_s=30.0
+        )
+
+    assert "not-a-real-level" in str(excinfo.value)
+    assert excinfo.value.provider == "anthropic"
+    client.beta.messages.batches.create.assert_not_called()
 
 
 def test_collect_batch_returns_pending_when_not_ended() -> None:
