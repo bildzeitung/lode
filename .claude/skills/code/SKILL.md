@@ -517,12 +517,13 @@ correctly **in order, build then review**, one task at a time, and relay what ca
   deliberate manual use; it is off the automatic path. Rationale and numbers:
   [the Phase 2 note above](#no-correctness-workflow).
 - **`isolation: "worktree"` has been observed handing a dispatched agent a *recycled* worktree still
-  checked out on a previous ticket's build branch, rather than a fresh one off `trunk` HEAD** —
+  checked out on a previous ticket's build branch, rather than a fresh one off `origin/trunk` HEAD** —
   confirmed for both a Phase 1 builder and a Phase 2 reviewer (lode-eshl's technical review; the eshl
   builder pushed a foreign, unreviewed ticket's commit riding along on `land/lode-eshl`). The shipped
   mitigation is defensive and lives in the agents, not here: both `coding.md` and `code-reviewer.md`
-  now assert `git merge-base --is-ancestor HEAD trunk` before doing any work in-worktree and
-  self-repair on a mismatch, reporting it explicitly rather than silently building on contamination.
+  now assert `git merge-base --is-ancestor HEAD origin/trunk` (never bare local `trunk` — lode-isl3)
+  before doing any work in-worktree, and self-repair on a mismatch, reporting it explicitly rather
+  than silently building on contamination.
   Full account:
   [`docs/agents-workflow.md`](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98)
   (lode-nt98). **This is a mitigation, not a root-cause fix, and the root cause is still open** — see

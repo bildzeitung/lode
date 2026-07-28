@@ -302,8 +302,8 @@ flowchart TD
     DISP --> WT["Starts ALREADY inside<br>.claude/worktrees/agent-&lt;hash&gt;<br>(branch off origin/trunk HEAD ·<br>baseRef: fresh, can lag local trunk)"]
     WT --> GUARD{"isolation-guard.sh:<br>under .claude/worktrees/?<br>(lode-ska2)"}
     GUARD -->|"no — no worktree<br>at all"| BAIL["Hard stop & report —<br>never EnterWorktree/<br>worktree add self-rescue"]
-    GUARD -->|"yes, in worktree"| RGUARD{"HEAD ancestor<br>of trunk?"}
-    RGUARD -->|"no — recycled worktree,<br>foreign commits (lode-nt98)"| RESET["git reset --hard trunk<br>+ git clean -fd · report it"]
+    GUARD -->|"yes, in worktree"| RGUARD{"HEAD ancestor<br>of origin/trunk?"}
+    RGUARD -->|"no — recycled worktree,<br>foreign commits (lode-nt98)"| RESET["git reset --hard origin/trunk<br>+ git clean -fd · report it"]
     RESET --> CLAIM
     RGUARD -->|"yes — clean"| CLAIM["claim (bd update --claim) —<br>idempotent backstop;<br>primary only on free-text path"]
 
@@ -350,7 +350,8 @@ commits instead of one — a different ticket's *unreviewed* changes riding alon
 wrong ticket. Had `lode-7abi` been bounced or escalated instead of eventually landing clean, `trunk`
 would have silently gained its unreviewed code the moment `land/lode-eshl` landed. The same
 `lode-eshl` review turned up corroborating evidence that it isn't builder-only: the **reviewer's own**
-launch worktree also started life checked out on `land/lode-7abi` rather than clean off `trunk` HEAD.
+launch worktree also started life checked out on `land/lode-7abi` rather than clean off `origin/trunk`
+HEAD.
 
 What ships here is a **defensive assertion** — a mitigation that makes each agent safe against the
 symptom. It is deliberately *not* a root-cause fix. At the time `lode-nt98` shipped,
@@ -459,7 +460,9 @@ with the staleness window stated plainly rather than implied away, wherever each
 Given that, the assertion is defence in depth rather than the answer. `coding.md` (both cycles),
 `code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
 they're in a worktree at all (never on `pwd` or the branch name alone — a recycled worktree's branch
-still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of local `trunk`. This
+still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of `origin/trunk` —
+never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole
+merge window (`lode-isl3`, below). This
 used to be a ~15-line inline bash block duplicated at all four call sites — already caught drifting
 from each other by the time a fourth copy landed — so it is now one script,
 `scripts/recycled-worktree-guard.sh` (lode-ivth), covered by `nox -s shellcheck` and
@@ -467,17 +470,34 @@ from each other by the time a fourth copy landed — so it is now one script,
 rather than carrying its own copy of the logic. The core of what it checks:
 
 ```bash
-git merge-base --is-ancestor HEAD trunk
+git merge-base --is-ancestor HEAD origin/trunk
 ```
 
-A worktree that is merely *behind* current `trunk` (because `trunk` advanced after this worktree was
-created — a normal race in a fan-out) still passes trivially, since being behind on the same line of
-history is exactly what "ancestor" means; only a worktree carrying commits `trunk` doesn't have —
-someone else's unreviewed work — fails it. The predicate reads the **commit graph only**: a recycled
-worktree whose HEAD happens to be an ancestor of `trunk` but whose *working tree* is dirty passes
-untouched, so this is not a general "is my tree clean" check.
+**Why `origin/trunk`, never bare local `trunk` (`lode-isl3`).** Worktrees share `refs/heads/`, so bare
+`trunk` is the *main checkout's* local `trunk` branch — and `/land` leaves that ref carrying
+un-pushed, un-gated `--no-ff` merges for the entire window between its merge loop and its push (a
+property of the healthy path, not just a crash path, since `/code` producers run concurrently with
+`/land` by design). Reading bare `trunk` here used to open two holes: a genuinely recycled worktree
+could get reset onto that residue, planting *other* tickets' un-pushed, un-gated commits into the
+build — the exact contamination this guard exists to prevent, arriving *through* the guard; and a
+worktree recycled onto a `land/<id>` branch a live `/land` pass had merged into local `trunk` (but not
+yet pushed) passed the ancestor check trivially, going silent with no rescue and no reset.
+`origin/trunk` is never in that intermediate state — `/land` only advances it with an already-gated,
+already-pushed `trunk` — so both holes close by reading it instead everywhere below. The guard
+deliberately does not fetch first: `worktree.baseRef: "fresh"` branches a launch worktree from exactly
+this ref, so comparing against it (without advancing it) asks precisely the right question. Fetching
+would only advance the test's *right-hand* side, which can flip it false→true but never the reverse —
+strictly more forgiving, which is the wrong direction for a guard. The script's header says the same
+at length; do not add a fetch there.
 
-On a failure the agent resets onto current local `trunk` HEAD (`git reset --hard trunk && git clean
+A worktree that is merely *behind* current `origin/trunk` (because `origin/trunk` advanced after this
+worktree was created — a normal race in a fan-out) still passes trivially, since being behind on the
+same line of history is exactly what "ancestor" means; only a worktree carrying commits
+`origin/trunk` doesn't have — someone else's unreviewed work — fails it. The predicate reads the
+**commit graph only**: a recycled worktree whose HEAD happens to be an ancestor of `origin/trunk` but
+whose *working tree* is dirty passes untouched, so this is not a general "is my tree clean" check.
+
+On a failure the agent resets onto `origin/trunk` HEAD (`git reset --hard origin/trunk && git clean
 -fd`) before doing anything else, and reports the fact explicitly in its hand-off — this is live
 evidence of a harness bug, not a routine hiccup to swallow silently. Two preconditions wrap that
 remediation, because it is destructive and fires exactly when the worktree's provenance is *not*
@@ -529,12 +549,13 @@ already diverged, before `land-review` ever runs), so a recycled `land-review` w
 sweep's ancestor predicate and leaks, pass after pass. That was tracked as a real but separate
 worktree-leak defect on its own ticket, **lode-qv5t**, rather than widened into this one — and it is
 now closed the same way: `land-review.md`'s own frontmatter role carries the identical guard described
-above (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; on failure,
-rescue the rewound ref and reset onto local `trunk` HEAD). The two halves stay distinct on purpose —
-the guard exists here for the **worktree-leak** reason, never because `land-review`'s judgment was
-ever at risk. That guard, as first shipped, closed the **ancestry** axis only: the check cannot detect
-a worktree recycled onto a `land/<other-id>` that has since landed (its `HEAD` is already an ancestor
-of `trunk`, so the check passes trivially), and since `git clean -fd` used to run only inside the
+above (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk`, asserted before any
+fetch/diff work; on failure, rescue the rewound ref and reset onto `origin/trunk` HEAD). The two
+halves stay distinct on purpose — the guard exists here for the **worktree-leak** reason, never
+because `land-review`'s judgment was ever at risk. That guard, as first shipped, closed the
+**ancestry** axis only: the check cannot detect a worktree recycled onto a `land/<other-id>` that has
+since landed (its `HEAD` is already an ancestor of `origin/trunk`, so the check passes trivially), and
+since `git clean -fd` used to run only inside the
 failed-check branch, that case's surviving untracked leftovers made the sweep keep the worktree anyway
 — tracked as **lode-3v1p**.
 
@@ -590,7 +611,7 @@ note's own verdict — keep every guard regardless of the `baseRef` value — is
 
 **Falsification test this sets up.** The fleet is now on, or moving onto, `>= 2.1.216`. Watch whether
 the recycled-worktree guard **ever fires** — any `rescue/recycled-<sha>` branch created, any
-guard-triggered `git reset --hard trunk` — across many `/code` and `/land` passes going forward:
+guard-triggered `git reset --hard origin/trunk` — across many `/code` and `/land` passes going forward:
 
 - **If it stops firing over a sustained window:** evidence that an upstream fix (candidate: #2)
   addressed the underlying recycling mechanism after all, despite the cross-project framing above —
@@ -1335,7 +1356,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
-| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto local `trunk` HEAD — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz) |
+| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
@@ -1763,7 +1784,7 @@ happens, not *what* it does. Since `land-review` never commits (no merge, no pus
 its own "What I don't do"), its scratch worktree's HEAD never diverges *further* once `land-review`
 starts running. That is not, on its own, "no dedicated cleanup needed" — it says nothing about where
 the worktree's HEAD *started*, and lode-nt98 established the harness's `isolation: "worktree"`
-hand-off does not reliably start a dispatched agent at `trunk` HEAD (it has handed out a **recycled**
+hand-off does not reliably start a dispatched agent at `origin/trunk` HEAD (it has handed out a **recycled**
 worktree still on a previous ticket's build branch, to a builder and to a `code-reviewer` alike).
 `land-review` gets the identical dispatch mechanism, so a recycled worktree handed to it starts
 already diverged from `trunk`, fails the worktree-GC backstop's ancestor predicate (lode-h1vn /
@@ -1771,19 +1792,27 @@ lode-amif, [above](#the-lander--land-drained-by-a-self-paced-loop)), and leaks p
 `land-review`'s own inaction doesn't prevent that, since the divergence predates its first action.
 This was a real gap (**lode-qv5t**), closed the same way lode-nt98 closed it for the builder and the
 reviewer: `land-review.md`'s frontmatter role now carries the identical recycled-worktree guard
-(`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff work; a failure rescues
-the rewound ref and resets onto local `trunk` HEAD — see
+(`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk`, asserted before any
+fetch/diff work; a failure rescues the rewound ref and resets onto `origin/trunk` HEAD — see
 [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98), above). Once that guard has run, the
 worktree's HEAD **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims it
 under its unmodified predicate — no change to Section 4 itself was needed. Note this argument does
 **not** inherit the guard's known detection blind spot (tracked as lode-3v1p: `merge-base
---is-ancestor HEAD trunk` cannot recognize a recycled worktree whose HEAD *is already* an ancestor of
-`trunk`, e.g. one recycled onto a `land/<other-id>` that has since landed — observed live during
-lode-nt98's and lode-qv5t's own reviews). It doesn't, because the
-guard's predicate **is** the sweep's trunk-arm predicate: any recycling the guard fails to detect is,
-by that very fact, already satisfying the reclaim condition. The blind spot is a *correctness* blind
+--is-ancestor HEAD origin/trunk` cannot recognize a recycled worktree whose HEAD *is already* an
+ancestor of `origin/trunk`, e.g. one recycled onto a `land/<other-id>` that has since landed —
+observed live during lode-nt98's and lode-qv5t's own reviews). It doesn't, because the guard's
+predicate **implies** the sweep's trunk-arm predicate: any recycling the guard fails to detect is, by
+that very fact, already satisfying the reclaim condition. The blind spot is a *correctness* blind
 spot (foreign content goes unnoticed), and `land-review`'s correctness exposure is nil regardless —
 so on the leak axis the two cancel.
+
+**Implies, not *is* (`lode-isl3`).** The two stopped being the identical check once the guard moved
+to `origin/trunk` while the sweep kept reading bare `trunk`. The entailment still holds under this
+repo's single-lander model: `/land` runs on ONE machine and hard-resets local `trunk` to
+`origin/trunk` at pass start (lode-k9ef), so local `trunk` is only ever `origin/trunk` plus that
+pass's own un-pushed merges — never *behind* it. Were it ever behind (a second machine pushing
+`trunk`, which this design does not do), the implication would fail in the benign direction: the
+worktree is simply not reclaimed on that pass, and the sweep re-runs every pass.
 
 **The other axis, dirt not ancestry, is now closed too (lode-3v1p).** The sweep's actual reclaim
 condition is `unlocked` **and** ancestry **and** a clean tree (the lode-9hgu dirty-tree guard, which
@@ -2189,13 +2218,15 @@ assumption would not have closed it.
   never-work-on-`trunk` rule already forbids the input. The printed `origin/trunk..trunk` line is the
   mitigation — it makes the event visible and the SHAs recoverable.
 
-  **`/land` is trunk's sole writer but not its sole *reader*.** `scripts/recycled-worktree-guard.sh`
-  reads bare `trunk` (the main checkout's local branch — worktrees share `refs/heads/`) for both its
-  contamination predicate and its `git reset --hard` remedy, on every `coding`/`code-reviewer`/
-  `land-review` dispatch. Local `trunk` carries un-pushed merges for the whole window between Section
-  3's merge loop and Section 4's push — on the **healthy** path too, not just the fault path — so a
-  pass-start reset structurally cannot close that hole. Tracked separately as **lode-isl3**; it does not
-  block this change.
+  **`/land` is trunk's sole writer but not its sole *reader* — since fixed (lode-isl3).** At the time
+  of this decision, `scripts/recycled-worktree-guard.sh` read bare `trunk` (the main checkout's local
+  branch — worktrees share `refs/heads/`) for both its contamination predicate and its `git reset
+  --hard` remedy, on every `coding`/`code-reviewer`/`land-review` dispatch. Local `trunk` carries
+  un-pushed merges for the whole window between Section 3's merge loop and Section 4's push — on the
+  **healthy** path too, not just the fault path — so a pass-start reset structurally could not close
+  that hole. It was tracked separately as **lode-isl3** and did not block this change; lode-isl3 has
+  since landed, and the guard now reads `origin/trunk` for both — see
+  [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98).
 
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).

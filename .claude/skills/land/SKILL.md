@@ -396,8 +396,8 @@ ran in the main checkout; one left `lode-2zj0`'s full diff staged, and the next 
 neither the merge step's jsonl-restore retry path (now `scripts/land-merge-one.sh`, lode-sfnb) nor its
 real-conflict path, and the failure silently
 read as an unretried conflict rather than what it was). Frontmatter `isolation: worktree` launches the
-reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk`
-HEAD — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
+reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from `origin/trunk`
+HEAD (`worktree.baseRef: "fresh"`, lode-jzbz) — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
 `code-reviewer` dispatches. Those two now carry the same `isolation: worktree` frontmatter key
 (`lode-ojsr`) **and** still request it at the call site: unlike `land-review`, they have no top-level
 probe confirming frontmatter alone suffices for them, so the call-site option is kept as
@@ -414,7 +414,7 @@ no `bd` writes), and the existing backstop sweep in [Section 4](#4-land-the-surv
 unlocked, clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — but "never
 commits" only proves the worktree's HEAD never *diverges further* once `land-review` starts; it says
 nothing about where that HEAD was when the agent was dispatched. lode-nt98 established the harness's
-`isolation: "worktree"` hand-off does not reliably start a dispatched agent at `trunk` HEAD — it has
+`isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk` HEAD — it has
 handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a *previous*
 ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled worktree
 handed to it starts with `HEAD` already **not** an ancestor of `trunk`, fails the sweep's ancestor
@@ -424,15 +424,15 @@ only ever fetches and diffs by ref, so a recycled worktree's foreign commits are
 that half of lode-nt98's exposure was, and remains, nil for this agent); this is purely a worktree-leak
 defect, distinct from and not to be conflated with the correctness question. The fix:
 `land-review.md`'s own frontmatter role now carries the same recycled-worktree guard `coding.md` and
-`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff
-work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — see
-[`land-review.md`](../../agents/land-review.md) and
+`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk`
+— lode-isl3 — asserted before any fetch/diff work; a failure rescues the rewound ref and resets onto
+`origin/trunk` HEAD) — see [`land-review.md`](../../agents/land-review.md) and
 [docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
 way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
 about Section 4 itself needed to change. That survives the guard's own detection blind spot (the
 check cannot recognize a worktree recycled onto a `land/<other-id>` that has *since landed*, since its
-`HEAD` is by then genuinely an ancestor of `trunk`) intact, since what the guard fails to notice
+`HEAD` is by then genuinely an ancestor of `origin/trunk`) intact, since what the guard fails to notice
 already satisfies that predicate. **lode-3v1p** closed the sweep's *other* arm too: in the blind-spot
 case, the remediation's `git clean -fd` used to run only inside the failed-check branch, so it never
 fired there, and the recycled worktree's untracked leftovers survived to trip the
