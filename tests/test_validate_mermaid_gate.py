@@ -217,6 +217,32 @@ def test_tool_failure_inside_loop_is_gate_could_not_run(fake_bin, run_exit):
     assert f"exit {run_exit}" in result.stderr
 
 
+def test_missing_gate_lib_fails_closed_exit_2(tmp_path: Path) -> None:
+    """lode-bss5, Finding B/D: this was the one consumer with NO top-level
+    `set` line at all (only the shebang's `-e`), so its missing-library
+    behaviour was never directly measured alongside the other four. Now
+    guarded the same way as every other consumer: reproduced by copying ONLY
+    this script (never gate-lib.sh) into an isolated directory, so
+    `. "$(dirname "$0")/gate-lib.sh"` resolves to a path that doesn't exist.
+    Fires before the docker pre-flight probe, so no fake docker is needed."""
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    copied = isolated / SCRIPT.name
+    shutil.copy2(SCRIPT, copied)
+
+    result = subprocess.run(
+        [str(copied)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    assert "gate-lib.sh is missing or unreadable" in result.stderr
+
+
 def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin):
     """`docker run` fails with mmdc's own exit code (1) — a real mermaid parse
     failure, not a tool one. This must stay on the exit-1, per-doc-FAIL path.

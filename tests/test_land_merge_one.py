@@ -31,6 +31,7 @@ this repo use (see tests/test_merge_precheck.py's own header).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -294,3 +295,30 @@ def test_wrong_arg_count_is_exit_2_never_1(argv: list[str]) -> None:
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
     _assert_machine_fault_contract(result.stderr)
+
+
+def test_missing_gate_lib_fails_closed_exit_2(tmp_path: Path) -> None:
+    """lode-bss5, Finding A/B: this script used to carry its OWN inline
+    gate_could_not_run() copy (stranded when scripts/gate-lib.sh was
+    extracted, lode-090f) and so was immune to a missing-library failure by
+    construction. Migrating it onto the shared library makes it exposed to
+    exactly the same hazard every other consumer has -- so it needs the same
+    guard and the same regression test. Reproduced by copying ONLY this
+    script (never gate-lib.sh) into an isolated directory, so
+    `. "$(dirname "$0")/gate-lib.sh"` resolves to a path that doesn't exist."""
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    copied = isolated / SCRIPT.name
+    shutil.copy2(SCRIPT, copied)
+
+    result = subprocess.run(
+        ["bash", str(copied), "lode-a", "msgdir"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    assert "gate-lib.sh is missing or unreadable" in result.stderr

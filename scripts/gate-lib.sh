@@ -2,9 +2,12 @@
 #
 # Shared gate_could_not_run() helper for the "exit 2 means the GATE could not
 # run, never that the CONTENT is bad" convention (lode-9i2p). Sourced by every
-# scripts/*.sh gate that draws this distinction -- scripts/validate-mermaid.sh,
-# scripts/merge-precheck.sh, scripts/release-bump.sh, and
-# scripts/release-latest-tag.sh -- the same way scripts/python-init.sh
+# scripts/*.sh gate that draws this distinction -- see the actual set with
+# `grep -l gate-lib.sh scripts/*.sh` rather than trusting a name list here: a
+# named list restales on every migration (lode-25xp added
+# release-latest-tag.sh; lode-bss5 added land-merge-one.sh and dropped this
+# list for that reason, the same way tests/test_gate_lib.py's header already
+# dropped its hard-coded consumer count) -- the same way scripts/python-init.sh
 # already sources scripts/venv-install.sh.
 #
 # Extracted per lode-090f: this exact function had reached three duplicated
@@ -17,9 +20,25 @@
 # copies, extract" precedent as scripts/epic-children-closed.sh and
 # scripts/recycled-worktree-guard.sh, both extracted for exactly that reason.
 #
-# Usage (from a sourcing script):
+# Usage (from a sourcing script) -- the source itself MUST be guarded so a
+# missing/unreadable gate-lib.sh fails CLOSED (exit 2), never falls through to
+# whatever happens next when gate_could_not_run is called but was never
+# defined. MEASURED (lode-bss5): a bare, unguarded
+# `. "$(dirname "$0")/gate-lib.sh"` under `set -uo pipefail` (no -e, the
+# convention every consumer uses) does NOT stop the script when the source
+# fails -- it just leaves gate_could_not_run undefined, and the first call
+# site then resolves to a bash "command not found" whose exit code is
+# whatever the surrounding logic happens to produce next: measured as 0, 1,
+# and 127 across two real consumers, never the required 2. The guard cannot
+# depend on this library (it doesn't exist yet at that point), so it is
+# small, plain bash, duplicated in every consumer:
+#
 #   # shellcheck source=gate-lib.sh
-#   . "$(dirname "$0")/gate-lib.sh"
+#   if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+#     echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+#     echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+#     exit 2
+#   fi
 #   gate_could_not_run "one-line summary" "cause line 1" "cause line 2" ...
 #
 # Prints "GATE COULD NOT RUN: <summary>" to stderr, then every remaining
@@ -55,8 +74,12 @@
 # SC2034 disable each caller needs, and this library's own tests choose their
 # own orderings. The ONLY thing that catches it is each consuming script's
 # tests asserting the advisory text on an exit-2 path -- so when you add a call
-# site, add or extend such an assertion (tests/test_merge_precheck.py and
-# tests/test_validate_mermaid_gate.py show the shape).
+# site IN A CONSUMER THAT SETS GATE_ADVISORY, add or extend such an assertion
+# (tests/test_merge_precheck.py and tests/test_validate_mermaid_gate.py show
+# the shape). For a NO-advisory consumer (release-bump.sh's shape -- no
+# GATE_ADVISORY set at all) there is nothing to assert here: half-a-contract
+# cannot go missing from a contract that was never more than the banner and
+# the caller's own cause lines to begin with.
 #
 # GATE_ADVISORY is declared here (as an empty array, if not already set) so
 # that referencing it below is safe under `set -u`: bash's `nounset` treats a

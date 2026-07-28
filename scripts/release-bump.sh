@@ -45,8 +45,16 @@
 
 set -uo pipefail
 
+# The source itself must fail CLOSED (lode-bss5): an unguarded source that
+# fails here leaves gate_could_not_run undefined and does NOT reliably exit
+# 2 -- see gate-lib.sh's own Usage section for the measurement and why the
+# guard can't depend on the library it's loading.
 # shellcheck source=gate-lib.sh
-. "$(dirname "$0")/gate-lib.sh"
+if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
 # No GATE_ADVISORY set here -- this gate carries no domain-specific trailer,
 # the same shape it always had (see gate-lib.sh's GATE_ADVISORY contract).
 

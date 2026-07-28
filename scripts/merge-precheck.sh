@@ -68,8 +68,18 @@
 set -uo pipefail   # deliberately NOT -e: this script's entire job is to
                    # inspect a command's exit code, which -e would short-circuit
 
+# The source itself must fail CLOSED (lode-bss5): an unguarded source that
+# fails here leaves gate_could_not_run undefined, and this script's own
+# call sites then resolve to a bash "command not found" that does NOT exit
+# 2 (measured: bad arity -> 1, bad refs -> 127) -- see gate-lib.sh's own
+# Usage section for the full measurement and why the guard can't depend on
+# the library it's loading.
 # shellcheck source=gate-lib.sh
-. "$(dirname "$0")/gate-lib.sh"
+if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
 
 # This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
 # KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed above

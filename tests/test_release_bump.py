@@ -29,6 +29,7 @@ tests/test_merge_precheck.py for the same house style).
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -323,4 +324,27 @@ def test_usage_with_two_args_is_also_exit_2() -> None:
         timeout=30,
     )
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "usage" in result.stderr
+
+
+def test_missing_gate_lib_fails_closed_exit_2(tmp_path: Path) -> None:
+    """lode-bss5, Finding B: a missing/unreadable scripts/gate-lib.sh must not
+    silently fall through to whatever the surrounding logic produces next --
+    it must exit 2, loud, never 0/1/127. Reproduced by copying ONLY this
+    script (never gate-lib.sh) into an isolated directory, so
+    `. "$(dirname "$0")/gate-lib.sh"` resolves to a path that doesn't exist."""
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    copied = isolated / SCRIPT.name
+    shutil.copy2(SCRIPT, copied)
+
+    result = subprocess.run(
+        ["bash", str(copied), "a..b"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert result.stdout == ""
+    assert "GATE COULD NOT RUN" in result.stderr
+    assert "gate-lib.sh is missing or unreadable" in result.stderr

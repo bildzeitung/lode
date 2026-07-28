@@ -55,22 +55,39 @@ set -uo pipefail   # deliberately NOT -e: every branch below inspects an exit
                    # this script exists to distinguish (retryable jsonl trap
                    # vs. real conflict vs. machine fault).
 
-# Byte-identical to the helper in scripts/merge-precheck.sh,
-# scripts/validate-mermaid.sh and scripts/release-bump.sh, so every exit-2
-# diagnostic in this repo opens with the same `GATE COULD NOT RUN:` banner and
-# closes with the same standing instruction (lode-9i2p). Emitting only half
-# that contract is exactly how a machine fault gets misread as a branch
-# verdict. Inlined rather than sourced only because the shared
-# scripts/gate-lib.sh extraction is still in flight on a sibling branch
-# (lode-090f); this becomes its fourth call site once that lands.
-gate_could_not_run() {
-  echo "GATE COULD NOT RUN: $1" >&2
-  shift
-  for line in "$@"; do echo "$line" >&2; done
-  echo "This is a machine fault a human must fix, not a branch conflict --" >&2
-  echo "do not kick this branch back needs-rebase in place of diagnosing it." >&2
+# The ONE owner of the gate-could-not-run contract (lode-9i2p): the banner
+# every exit-2 diagnostic in this repo opens with, this script's own
+# advisory trailer below, and the exit 2 itself. Migrated onto
+# scripts/gate-lib.sh per lode-090f/lode-bss5 -- this was the stranded 5th
+# consumer (merge-precheck.sh, validate-mermaid.sh, release-bump.sh and
+# release-latest-tag.sh already sourced it); this script's own extraction
+# had deliberately left it inline because gate-lib.sh's extraction was still
+# in flight on a sibling branch at the time, and the promised follow-up
+# migration never happened until now.
+#
+# The source itself must fail CLOSED (lode-bss5): an unguarded source that
+# fails here leaves gate_could_not_run undefined, and this script's own
+# call sites then resolve to a bash "command not found" that does NOT
+# reliably exit 2 -- see gate-lib.sh's own Usage section for the measurement
+# and why the guard can't depend on the library it's loading.
+# shellcheck source=gate-lib.sh
+if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
-}
+fi
+
+# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
+# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW -- a call placed
+# above it still exits 2 with a correct banner but silently emits HALF the
+# contract, and nothing catches that but this script's own tests asserting
+# the advisory text on an exit-2 path (tests/test_land_merge_one.py's
+# _assert_machine_fault_contract).
+# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
+GATE_ADVISORY=(
+  "This is a machine fault a human must fix, not a branch conflict --"
+  "do not kick this branch back needs-rebase in place of diagnosing it."
+)
 
 # Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`, whose exit 1
 # is exactly the CONFLICT code (same reasoning as merge-precheck.sh's header).

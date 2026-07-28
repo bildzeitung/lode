@@ -9,6 +9,23 @@
 #
 # Usage: scripts/validate-mermaid.sh
 
+# AUDIT (lode-bss5, Finding D): unlike merge-precheck.sh / release-bump.sh /
+# release-latest-tag.sh -- which all deliberately run WITHOUT -e, because
+# their machine-fault-vs-content split lives in explicit exit-code
+# inspection that -e would short-circuit -- this script's own exit-code
+# checks (the `if docker run ...; then ... else rc=$?; ... fi` below, and
+# the loop's own `rc=$?` after the per-doc `docker run`) all live inside
+# `if`/`else` arms, which bash's -e exempts from triggering by its own
+# rules. So the shebang's `-e` (kept, unlike the siblings) never collides
+# with that split -- it stays a fail-fast default for everything else in
+# this script (e.g. `CFG="$(mktemp -d)"` below aborting immediately, rather
+# than limping on with an empty $CFG, if mktemp itself fails). What WAS
+# missing, unlike every other consumer, was any top-level `-u`/`pipefail`;
+# added below for parity. Neither changes existing behaviour: this script
+# has no pipeline whose exit code matters and references no variable that
+# was ever meant to expand unset.
+set -uo pipefail
+
 IMAGE="minlag/mermaid-cli:latest"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -48,8 +65,19 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # drift out of sync with scripts/merge-precheck.sh / scripts/release-bump.sh —
 # all three, plus .claude/agents/coding.md, code-reviewer.md and
 # .claude/skills/land/SKILL.md, key on exactly this stderr shape.
+# The source itself must fail CLOSED (lode-bss5): an unguarded source that
+# fails here leaves gate_could_not_run undefined and does NOT reliably exit
+# 2 -- see gate-lib.sh's own Usage section for the measurement (on two other
+# consumers; this script's own missing-library behaviour was not directly
+# measured because it is the one consumer that lacked a top-level `set`
+# line at all -- see the AUDIT note near the top of this file) and why the
+# guard can't depend on the library it's loading.
 # shellcheck source=gate-lib.sh
-. "$(dirname "$0")/gate-lib.sh"
+if ! . "$(dirname "$0")/gate-lib.sh" 2>/dev/null; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
 
 # This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
 # KEEP THIS ABOVE ALL THREE gate_could_not_run CALL SITES BELOW. A call placed
