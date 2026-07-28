@@ -45,14 +45,7 @@ def _init_repo(tmp_path: Path) -> Path:
     guard now reads (lode-isl3); tests that need a residue window advance
     local `trunk` without pushing, exactly as a live `/land` pass does."""
     origin = tmp_path / "origin.git"
-    subprocess.run(
-        ["git", "init", "-q", "--bare", "-b", "trunk", str(origin)],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    _git(tmp_path, "init", "-q", "--bare", "-b", "trunk", str(origin))
 
     repo = tmp_path / "repo"
     repo.mkdir()

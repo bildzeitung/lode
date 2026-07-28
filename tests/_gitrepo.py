@@ -17,6 +17,12 @@ differences across modules -- a real `origin` remote vs none, branching off
 fixture file content and commit messages -- encode the different contracts of
 the script each module drives; flattening them into one parametrized helper
 would likely be a net loss (lode-863q). Each module keeps its own.
+
+One pair IS byte-identical -- `test_release_latest_tag.py` and
+`test_release_bump.py` -- and is left alone anyway: two copies of a fixture
+premise sits under the three-copy bar both precedents above fired at, and a
+helper imported by only 2 of the 6 modules would leave two different
+`_init_repo`s sharing one name across this directory.
 """
 
 from __future__ import annotations
