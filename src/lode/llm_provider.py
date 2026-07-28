@@ -330,26 +330,33 @@ def _anthropic_effort_kwargs(
 def _anthropic_error_from_exception(
     exc: anthropic.APIStatusError, *, context: str
 ) -> LLMProviderError:
-    """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7).
+    """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7, lode-i7yr).
 
-    The three call sites that *submit* a request -- ``messages.create``,
-    ``messages.parse``, ``batches.create`` -- funnel their
-    ``anthropic.APIStatusError`` here, in the same "log + wrap, preserve
-    status_code/request_id" shape :meth:`OpenAIProvider._error_from_exception`
-    already uses for the equivalent ``openai.APIStatusError``. Most reachably
-    this converts the 400 that :func:`_anthropic_effort_kwargs` cannot
-    predict -- ``reasoning_effort`` set to a legal *value* on a tier whose
-    *model* does not support it (e.g. any effort on Haiku 4.5/Sonnet 4.5, or
-    ``xhigh``/``max`` below Opus 4.7) -- into a diagnosable seam-level error
-    instead of a raw SDK exception escaping past code that only expects
-    :class:`LLMProviderError`. ``context`` names what was being attempted.
+    Used at all five ``AnthropicProvider`` SDK call sites: the three that
+    *submit* a request -- ``messages.create``, ``messages.parse``,
+    ``batches.create`` -- and the two that *poll* an existing batch in
+    :meth:`AnthropicProvider.collect_batch` -- ``batches.retrieve``,
+    ``batches.results``. Same "log + wrap, preserve status_code/request_id"
+    shape :meth:`OpenAIProvider._error_from_exception` already uses for the
+    equivalent ``openai.APIStatusError``. ``context`` names what was being
+    attempted.
 
-    **Not** the two polling calls in :meth:`AnthropicProvider.collect_batch`
-    (``batches.retrieve`` / ``batches.results``), which carry no
-    ``reasoning_effort`` and are left raw by lode-90o7 -- tracked as a separate
-    seam-coherence gap (lode-i7yr). Nor the non-status ``anthropic.APIError``
-    subclasses (``APITimeoutError``, ``APIConnectionError``): a timeout is not
-    a rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
+    On the three submit sites, most reachably this converts the 400 that
+    :func:`_anthropic_effort_kwargs` cannot predict -- ``reasoning_effort``
+    set to a legal *value* on a tier whose *model* does not support it (e.g.
+    any effort on Haiku 4.5/Sonnet 4.5, or ``xhigh``/``max`` below Opus 4.7)
+    -- into a diagnosable seam-level error instead of a raw SDK exception
+    escaping past code that only expects :class:`LLMProviderError`.
+
+    On the two polling sites, no ``reasoning_effort`` pairing 400 can arise --
+    there is nothing left to predict -- but a 429/5xx/404 while polling
+    should not escape past this seam's contract either (lode-i7yr):
+    ``enrich.collect_enrich_batch`` calls :meth:`collect_batch` with no
+    ``try`` of its own, so its caller only expects ``LLMProviderError``.
+
+    **Not** the non-status ``anthropic.APIError`` subclasses
+    (``APITimeoutError``, ``APIConnectionError``): a timeout is not a
+    rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
     surfacing raw today.
     """
     _log.error(
@@ -623,19 +630,35 @@ class AnthropicProvider:
     def collect_batch(
         self, handle: str, *, timeout_s: float
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
-        # These two SDK calls are deliberately NOT wrapped by lode-90o7 -- they
-        # carry no `reasoning_effort`, so no pairing 400 can arise here. A
-        # 429/5xx from either still escapes as a raw anthropic exception past a
-        # seam whose contract says callers see LLMProviderError; that gap is
-        # tracked as lode-i7yr, not widened here.
-        batch = self._client.beta.messages.batches.retrieve(handle, timeout=timeout_s)
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
+
+        # These two SDK calls carry no `reasoning_effort`, so no pairing 400
+        # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
+        # must not escape as a raw anthropic exception past this seam's
+        # LLMProviderError contract (lode-i7yr). Same wrap, same shape as the
+        # three request-submitting call sites above.
+        try:
+            batch = self._client.beta.messages.batches.retrieve(
+                handle, timeout=timeout_s
+            )
+        except anthropic.APIStatusError as exc:
+            raise _anthropic_error_from_exception(
+                exc, context=f"batches.retrieve handle={handle}"
+            ) from exc
         if batch.processing_status != "ended":
             return ("pending", None)
 
+        try:
+            batch_results = self._client.beta.messages.batches.results(
+                handle, timeout=timeout_s
+            )
+        except anthropic.APIStatusError as exc:
+            raise _anthropic_error_from_exception(
+                exc, context=f"batches.results handle={handle}"
+            ) from exc
+
         results: list[BatchResult] = []
-        for result in self._client.beta.messages.batches.results(
-            handle, timeout=timeout_s
-        ):
+        for result in batch_results:
             if result.result.type == "succeeded":
                 try:
                     tool_block = next(

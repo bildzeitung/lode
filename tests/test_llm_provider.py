@@ -574,6 +574,47 @@ def test_collect_batch_returns_pending_when_not_ended() -> None:
     client.beta.messages.batches.results.assert_not_called()
 
 
+def test_collect_batch_wraps_a_bad_request_from_batches_retrieve() -> None:
+    # lode-i7yr: the two polling calls carry no reasoning_effort (no pairing
+    # 400 can arise), but a 429/5xx/404 while polling must still surface as
+    # LLMProviderError, not escape raw -- same contract as the three
+    # request-submitting call sites above.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.retrieve.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+    client.beta.messages.batches.results.assert_not_called()
+
+
+def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
+    # lode-i7yr: same as above, for the second (results) polling call.
+    client = mock.MagicMock()
+    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
+        processing_status="ended"
+    )
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.results.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+
+
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
     tool_block = mock.MagicMock()
     tool_block.type = "tool_use"
