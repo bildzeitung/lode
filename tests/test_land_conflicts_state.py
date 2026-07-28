@@ -63,19 +63,40 @@ def _skill_blocks() -> list[str]:
     return _bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
 
 
+def _only_block_with(*needles: str, what: str) -> str:
+    """The single fenced block containing every needle.
+
+    Asserts there is EXACTLY one. `next(..., None)` would silently pin the
+    first of several near-identical blocks, which in this file is a live
+    hazard: Section 3's two merge loops are deliberately the same shape, so a
+    locator that stops at the first match would pin one loop and let the other
+    regress unseen -- the precise failure the Section-3 test exists to catch.
+    """
+    hits = [b for b in _skill_blocks() if all(n in b for n in needles)]
+    assert len(hits) == 1, (
+        f"expected exactly 1 fenced block for {what}, found {len(hits)} -- this "
+        "test's assumption about SKILL.md's structure has drifted; re-check by "
+        "hand before adjusting the locator"
+    )
+    return hits[0]
+
+
+def _kick_back_block() -> str:
+    return _only_block_with(
+        "--add-label needs-rebase",
+        "rtk bd update",
+        what="the needs-rebase kick-back",
+    )
+
+
 def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
     """Section 2b's merge-precheck.sh call is the COMMON producer path -- it
     pre-dates lode-sfnb, runs on every branch every pass, and the ticket is
     explicit that a fix covering only Section 3 misses the frequent case."""
-    site = next(
-        (
-            b
-            for b in _skill_blocks()
-            if 'merge-precheck.sh origin/trunk "origin/land/<id>"' in b
-        ),
-        None,
+    site = _only_block_with(
+        'merge-precheck.sh origin/trunk "origin/land/<id>"',
+        what="Section 2b's merge-precheck.sh call",
     )
-    assert site is not None, "could not find 2b's merge-precheck.sh fenced block"
     assert 'CONFLICTS_DIR="$STATE_DIR/conflicts"' in site, (
         "2b no longer derives CONFLICTS_DIR -- lode-rfon's fix regressed"
     )
@@ -83,6 +104,14 @@ def test_2b_precheck_persists_conflicts_to_the_state_dir() -> None:
         "2b's rc=1 branch no longer persists $CONFLICTS to disk -- the kick-back "
         "block (a separate Bash invocation) would see an empty variable again "
         "(lode-rfon)"
+    )
+    assert 'if [ "$rc" = 1 ]; then' in site, (
+        "2b's persist is no longer guarded by an `if`. It must NOT be written as "
+        '`[ "$rc" = 1 ] && printf ...`: as this block\'s LAST command that AND-list '
+        "makes the whole Bash invocation exit 1 on the COMMON clean path (rc=0) and "
+        "exit 0 on a real conflict -- inverting the block's exit status, which is the "
+        "only signal it gives the agent at all (it prints nothing on any path). "
+        "Verified empirically, with and without `set -e` (lode-rfon technical review)."
     )
 
 
@@ -113,16 +142,7 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
     block interpolated a bare $CONFLICTS into a bd --append-notes without ever
     setting it IN THAT SAME BLOCK. It is a separate Bash invocation from every
     producer above, so a bare $CONFLICTS there is always empty."""
-    site = next(
-        (
-            b
-            for b in _skill_blocks()
-            if "--add-label needs-rebase" in b and "rtk bd update" in b
-        ),
-        None,
-    )
-    assert site is not None, "could not find the needs-rebase kick-back fenced block"
-
+    site = _kick_back_block()
     assert 'CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>"' in site, (
         "the kick-back block no longer reads $CONFLICTS back from "
         "$STATE_DIR/conflicts/<id> -- it must not rely on a bash variable set in "
@@ -140,16 +160,7 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
 def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     """Acceptance criterion (lode-rfon): an empty/missing conflicts record
     must be LOUD, never a kick-back note with a blank paths section."""
-    site = next(
-        (
-            b
-            for b in _skill_blocks()
-            if "--add-label needs-rebase" in b and "rtk bd update" in b
-        ),
-        None,
-    )
-    assert site is not None
-
+    site = _kick_back_block()
     assert "GATE COULD NOT RUN" in site, (
         "the kick-back block has no loud failure message for a missing/empty "
         "conflicts record -- a blank $CONFLICTS could silently reach the "
