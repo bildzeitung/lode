@@ -1,28 +1,29 @@
-"""Guards docs/decisions.md's supersession-marker convention (lode-ur6o).
+r"""Guards docs/decisions.md's supersession-marker convention (lode-ur6o).
 
-docs/decisions.md is a dated, append-only log: an entry is never edited in
-place when later work makes it stale -- the correction is a new entry, or a
-marker appended to the existing one. That marker used to have FIVE different
-shapes across the file (a bolded "Update (<id>, <date>) - ..." lead-in, an
-inline "(Superseded by <id>, below: ...)" aside, a blockquoted "> **SUPERSEDED
-(<id>, <date>) - ...**", a "<claim> is falsified by <id>" sentence, and a
-"Superseded for the matching *shape* ... by <id>" sentence) -- and
-"grep 'Update (lode-'", the way a reader (or an agent) actually locates stale
-claims in this file, only ever found the first. lode-ur6o normalized every
-marker to the single dominant shape and stated the convention once in the
-file's own preamble; this test is the cheap regression guard the ticket asked
-for, in the same spirit as tests/test_isolation_guard.py pinning the agent
-frontmatter key -- a scan over the shipped file, not a reimplementation of
-its content.
+The convention itself is stated once, in that file's own preamble; this module
+deliberately does not restate it, so the two cannot drift. It pins two
+properties, because either alone leaves a hole:
 
-Deliberately narrow: it does not try to recognize every conceivable future
-phrasing of "this is stale" (that would be unfalsifiable prose-matching). It
-pins the exact off-pattern shapes lode-ur6o eliminated, so reintroducing any
-of them -- or reverting one of that ticket's normalizations -- goes red.
-Legitimate narrative use of the words "superseded" / "falsified" in ordinary,
-lowercase, non-marker prose (there is plenty in this file, describing a
-ticket's own history) is untouched by design: only the ALL-CAPS "SUPERSEDED"
-marker keyword and the specific removed sentence shapes are checked.
+*No off-pattern marker.* A stale-flag keyword opening a bold span, a
+blockquote, or a parenthetical, with no ``Update (`` on the line to make it
+greppable. The rule is structural rather than a list of the exact sentences
+lode-ur6o rewrote, so a NEW shape (``**(Retracted, lode-x)**``) goes red too,
+not only a verbatim revert of one of the six -- a denylist of removed
+phrasings would have left the very hole the ticket was filed about. Ordinary
+lowercase narrative use of "superseded"/"falsified" mid-sentence, of which
+this file has plenty describing a ticket's own history, is untouched by
+design.
+
+*No wrapped marker.* A marker whose id wraps onto the next markdown line is
+still invisible to the single-line grep the preamble documents: correct shape,
+useless result. lode-ur6o hit exactly this on two of its own six
+normalizations -- the fix for the ticket reintroducing the ticket's own
+defect. The off-pattern scan cannot see it (nothing off-pattern is present),
+so it is pinned separately.
+
+Both scans are module-level helpers taking their lines as a parameter, so the
+sabotage tests below can prove each actually fires on a violation rather than
+passing vacuously -- same shape as tests/test_keybindings_doc.py.
 """
 
 from __future__ import annotations
@@ -33,37 +34,57 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = REPO_ROOT / "docs" / "decisions.md"
 
-# The exact off-pattern shapes lode-ur6o normalized away. Each is a narrow,
-# literal signature of one of the five non-dominant marker shapes -- not a
-# general "does this look stale" heuristic.
 _OFF_PATTERNS: dict[str, re.Pattern[str]] = {
-    "ALL-CAPS 'SUPERSEDED' marker (blockquoted or bolded)": re.compile(
-        r"\bSUPERSEDED\b"
+    "stale-flag keyword opening a bold span, blockquote, or parenthetical": re.compile(
+        r"(?:\*\*|\(|^\s*>\s*\**)"
+        r"(?:Superseded|Falsified|Obsolete|Retracted|Outdated)\b"
     ),
-    "inline '(Superseded by <id>, below: ...)' aside": re.compile(r"\(Superseded by "),
+    "ALL-CAPS 'SUPERSEDED' marker keyword": re.compile(r"\bSUPERSEDED\b"),
     "'<claim> is falsified by <id>' sentence": re.compile(r"is falsified by lode-"),
-    "'Superseded for the matching *shape* ... by <id>' sentence": re.compile(
-        r"Superseded for the matching"
-    ),
 }
 
 
-def test_decisions_file_exists() -> None:
-    assert DECISIONS.is_file(), f"{DECISIONS} not found -- has docs/ moved?"
+def _off_pattern_markers(lines: list[str]) -> list[str]:
+    """Lines carrying a stale-flag marker in a shape the documented grep misses.
+
+    A line that already contains ``Update (`` is exempt whatever else it says:
+    the property under guard is greppability, not phrasing purity.
+    """
+    return [
+        f"  L{lineno} ({description}): {line.strip()}"
+        for lineno, line in enumerate(lines, start=1)
+        for description, pattern in _OFF_PATTERNS.items()
+        if pattern.search(line) and "Update (" not in line
+    ]
+
+
+def _wrapped_markers(lines: list[str]) -> list[str]:
+    """Canonical markers whose ``(<id>...)`` does not close on the same line."""
+    return [
+        f"  L{lineno}: {line.strip()}"
+        for lineno, line in enumerate(lines, start=1)
+        if "**Update (" in line and ")" not in line.split("**Update (", 1)[1]
+    ]
+
+
+def _decisions_lines() -> list[str]:
+    return DECISIONS.read_text(encoding="utf-8").splitlines()
 
 
 def test_preamble_states_the_supersession_convention_once() -> None:
-    """Acceptance criterion: the convention is stated once, in the preamble
-    -- not per-entry, and not left implicit in whichever entry happens to
-    need it first."""
+    """Acceptance criterion: the convention is stated once, in the preamble --
+    not per-entry, and not left implicit in whichever entry happens to need it
+    first."""
     text = DECISIONS.read_text(encoding="utf-8")
     # The preamble is everything before the log's first dated entry.
     preamble = text.split("\n- **", 1)[0]
 
-    assert "Update (<id>" in preamble, (
+    # The leading '**' is load-bearing: it is what the documented grep matches,
+    # so a spec that omits it teaches a shape the grep cannot find.
+    assert "**Update (<id>" in preamble, (
         "docs/decisions.md's preamble no longer states the supersession-marker "
-        "shape -- it must document 'Update (<id>[, <date>]) - ...' once, up "
-        "front (lode-ur6o)."
+        "shape -- it must document '**Update (<id>[, <date>])' once, up front, "
+        "asterisks included (lode-ur6o)."
     )
     assert "grep" in preamble.lower(), (
         "docs/decisions.md's preamble no longer tells a reader how to find "
@@ -72,20 +93,68 @@ def test_preamble_states_the_supersession_convention_once() -> None:
 
 
 def test_no_off_pattern_supersession_markers() -> None:
-    """Every marker that flags a claim elsewhere in this file as stale must
-    use the single, greppable 'Update (<id>[, <date>]) - ...' shape -- the
-    five shapes lode-ur6o normalized away must not come back."""
-    lines = DECISIONS.read_text(encoding="utf-8").splitlines()
-
-    offenders: list[str] = []
-    for lineno, line in enumerate(lines, start=1):
-        for description, pattern in _OFF_PATTERNS.items():
-            if pattern.search(line) and "Update (" not in line:
-                offenders.append(f"  L{lineno} ({description}): {line.strip()}")
+    """Every marker flagging a claim elsewhere in this file as stale must carry
+    the greppable ``**Update (<id>...)`` lead-in."""
+    offenders = _off_pattern_markers(_decisions_lines())
 
     assert not offenders, (
-        "docs/decisions.md has supersession marker(s) that don't match the "
-        "single dominant 'Update (<id>[, <date>]) - ...' shape, invisible to "
-        "the grep everyone uses to find stale claims (lode-ur6o):\n"
-        + "\n".join(offenders)
+        "docs/decisions.md has supersession marker(s) with no '**Update "
+        "(<id>...)' lead-in, so they are invisible to the grep everyone uses "
+        "to find stale claims (lode-ur6o):\n" + "\n".join(offenders)
     )
+
+
+def test_off_pattern_scan_catches_a_reintroduced_marker() -> None:
+    """Non-vacuity: the scan above must fire on each shape lode-ur6o removed,
+    and on a shape it never saw."""
+    reintroduced = [
+        "- **(Superseded by lode-zzzz, below: the inline aside.)**",
+        "  > **SUPERSEDED (lode-zzzz, 2026-01-01) - the blockquote.**",
+        "  the claim above is falsified by lode-zzzz, and the gap is closed.",
+        "  **Superseded for the matching *shape* by the lode-zzzz entry below.**",
+        "  *(Itself since SUPERSEDED by lode-zzzz -- the italic aside.)*",
+        "- **(Retracted, lode-zzzz: a shape lode-ur6o never encountered.)**",
+    ]
+    caught = _off_pattern_markers(reintroduced)
+
+    assert len(caught) >= len(reintroduced), (
+        "the off-pattern scan no longer flags every off-pattern shape -- it "
+        f"caught {len(caught)} of {len(reintroduced)}:\n" + "\n".join(caught)
+    )
+
+
+def test_off_pattern_scan_ignores_lowercase_narrative_prose() -> None:
+    """The other direction: describing a ticket's history in ordinary prose is
+    not a marker, and must not go red."""
+    narrative = [
+        "  counter carried across each supersede, escalating to `land-escalated`",
+        "  The first build attempt (superseded -- see below) wired the workflow",
+        "  `lode-hwbm`'s reviewer falsified its ticket's entire premise with two",
+        "  decision gets off, and is now **closed as superseded**, not built",
+        "  behind by a *previous*, already-superseded dispatch (the guard runs)",
+    ]
+
+    assert not _off_pattern_markers(narrative), (
+        "the off-pattern scan now false-positives on ordinary lowercase prose, "
+        "which would push authors toward marking non-markers (lode-ur6o)."
+    )
+
+
+def test_every_canonical_marker_resolves_on_one_line() -> None:
+    """A marker whose id wraps to the next line is still invisible to the
+    single-line grep the preamble documents."""
+    wrapped = _wrapped_markers(_decisions_lines())
+
+    assert not wrapped, (
+        "docs/decisions.md has supersession marker(s) whose '(<id>...)' wraps "
+        "to the next line, so `grep -n '\\*\\*Update ('` finds the marker but "
+        "not the ticket it points at -- keep '**Update (<id>...)' on one line "
+        "(lode-ur6o):\n" + "\n".join(wrapped)
+    )
+
+
+def test_wrap_scan_catches_a_line_wrapped_marker() -> None:
+    """Non-vacuity for the wrap scan, using the exact defect lode-ur6o's own
+    first pass shipped."""
+    assert _wrapped_markers(["  **Update (lode-", "  zzzz) - the wrapped id.**"])
+    assert not _wrapped_markers(["  **Update (lode-zzzz) - the same id, intact.**"])

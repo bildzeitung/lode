@@ -7,9 +7,13 @@ are catalogued in [configuration.md](configuration.md).
 **This file is a dated log, not a living doc — an entry is never edited in place when later work
 makes it stale.** An entry records a decision (or a finding) as it stood at the time; when something
 later invalidates part of it, the correction is a **new entry, or a marker appended to the existing
-one**, never a silent rewrite of the original text. Every such marker uses one fixed, greppable
-shape: **`Update (<id>[, <date>]) — <what changed>.`** — `grep -n '\*\*Update (' docs/decisions.md`
-finds every stale claim in this file; nothing here should use any other shape. Contrast this with an
+one**, never a silent rewrite. Every such marker opens with one fixed lead-in —
+`**Update (<id>[, <date>])`, asterisks included, the id never wrapped onto the next line — so
+`grep -n '\*\*Update (' docs/decisions.md` finds every stale claim in this file. What follows the
+lead-in is free prose; only the lead-in is load-bearing. Where no ticket owns the correction, the id
+slot takes whatever does (a bare date, or `maintainer decision`). The rule binds markers that point
+*backwards* at another entry; an entry narrating its own history in one pass ("settled X, then
+re-decided Y") is prose, not a marker, and is left alone. Contrast this with an
 *operational* doc like [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md), which
 describes current behavior and so *is* corrected in place — there is no history to preserve there,
 while erasing it here would lose the record of what was believed, and when.
@@ -382,8 +386,7 @@ while erasing it here would lose the record of what was believed, and when.
   — superseded, below: that GC loop is deleted, so `review_worktree` is now vestigial outright —
   recorded by the builder, read by nobody. The builder's worktree is still reclaimed after a clean
   land, but by the backstop sweep, which discovers it from `git worktree list` instead.** `/code`'s
-  step-1
-  stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
+  step-1 stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
   actually consumes). (3) Uncommitted work left in the builder's worktree is now structurally invisible
   to the reviewer (it never opens that worktree at all) — accepted because the builder's hand-off
   contract already requires a clean tree before recording `review_head` (lode-tpt); if that contract is
@@ -567,8 +570,9 @@ while erasing it here would lose the record of what was believed, and when.
   single-pass recall caveat **lode-p5gf**.
 
   **The decision: parity with `/code-review` is NO LONGER the bar — this supersedes the paragraph
-  above.** **Update (lode-rlyx) — superseded: the wiring described in this paragraph no longer
-  exists; "supersedes the paragraph above" was not terminal.**
+  above.** **Update (lode-rlyx) — superseded by the lode-rlyx update at the end of this thread: the
+  wiring described in this paragraph no longer exists; "supersedes the paragraph above" was not
+  terminal.**
   correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
   the reviewer's dispatch as pre-computed candidates, and the `code-reviewer`'s own hand-reasoned pass
   runs regardless of whether the workflow ran, errored, or returned nothing. A recall miss therefore
@@ -1449,8 +1453,9 @@ while erasing it here would lose the record of what was believed, and when.
   present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
   design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
   `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
-  exemptions) is unchanged. **Update (lode-9mbt) — supersedes the matching *shape* (not the `jq`
-  question), below**, which inverts that surface from a denylist to an allowlist.
+  exemptions) is unchanged. **Update (lode-9mbt) — superseded for the matching *shape* only, not for
+  the `jq` question.** The `lode-9mbt` entry below inverts that surface from a denylist to an
+  allowlist.
 
 - **The `bd create --deps blocks:` guard collapses backslash-continuations, and deliberately
   OVER-matches on `;`/`&`/`|` (lode-m6px, portability fix lode-9gm2).** The guard's regex is
@@ -2171,9 +2176,9 @@ while erasing it here would lose the record of what was believed, and when.
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
   (correctness — a non-isolated dispatch could dirty the lander's tree) but rested the *worktree-GC*
-  claim ("HEAD never diverges …
-  qualifies by construction") on an assumption lode-nt98 falsified after this entry was written: the
-  harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk`
+  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified
+  after this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably
+  start a dispatched agent at `origin/trunk`
   HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
   *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
   worktree handed to it starts with `HEAD` already diverged from `origin/trunk`, before `land-review` ever
