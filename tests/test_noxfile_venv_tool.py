@@ -36,7 +36,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from conftest import load_module_from_path
+from conftest import load_module_from_path, nox_session_nodes
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOXFILE_PATH = REPO_ROOT / "noxfile.py"
@@ -171,29 +171,6 @@ _DEV_EXTRA_TOOLS = frozenset({"ruff", "pytest", "shellcheck", "python", "python3
 _EXEMPT_SESSIONS = frozenset({"build", "lock_currency"})
 
 
-def _session_nodes() -> dict[str, ast.FunctionDef]:
-    """Every ``@nox.session``-decorated function in the real ``noxfile.py``.
-
-    Parsed rather than string-sliced: an earlier form of these tests located
-    each session by ``source.index("\\n@nox.session\\ndef <next-one>(")``,
-    which silently depended on the *order* sessions happen to appear in and
-    had to be updated whenever one moved. The AST asks the question directly.
-    """
-
-    def is_nox_session(dec: ast.expr) -> bool:
-        # Matches both ``@nox.session`` and ``@nox.session(tags=[...])``.
-        target = dec.func if isinstance(dec, ast.Call) else dec
-        return isinstance(target, ast.Attribute) and target.attr == "session"
-
-    tree = ast.parse(NOXFILE_PATH.read_text())
-    return {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and any(is_nox_session(dec) for dec in node.decorator_list)
-    }
-
-
 def _bare_tool_names(node: ast.FunctionDef) -> list[str]:
     """Dev-extra tools this session passes to ``session.run`` by bare name."""
     found = []
@@ -221,7 +198,7 @@ def test_no_session_shells_out_to_a_dev_extra_tool_by_bare_name() -> None:
     fail -- the guard would depend on the next author remembering it, which
     is precisely how the original bug survived as long as it did.
     """
-    sessions = _session_nodes()
+    sessions = nox_session_nodes(NOXFILE_PATH)
     # Guard the guard: a parser that silently matched nothing would make
     # every assertion below vacuously true.
     assert sessions, f"no @nox.session functions found in {NOXFILE_PATH}"
@@ -253,7 +230,7 @@ def test_exempt_sessions_deliberately_do_not_use_venv_tool(name: str) -> None:
     stay untouched -- if one starts using ``_venv_tool``, that is a real
     decision and this test should be updated alongside it, not silently.
     """
-    node = _session_nodes()[name]
+    node = nox_session_nodes(NOXFILE_PATH)[name]
     used = [
         n.id for n in ast.walk(node) if isinstance(n, ast.Name) and n.id == "_venv_tool"
     ]

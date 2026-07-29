@@ -93,6 +93,7 @@ about a real model load — use ``@pytest.mark.network``, which is greppable and
 says what it means.
 """
 
+import ast
 import asyncio
 import importlib.util
 import ipaddress
@@ -600,6 +601,56 @@ def load_module_from_path(name: str, path: Path) -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+# --- Read noxfile.py's session set without executing it (lode-dis6) --------
+#
+# The complement to load_module_from_path above: two test files ask "which
+# @nox.session functions exist?" and neither can answer it by importing
+# noxfile.py a second time -- load_module_from_path asserts the name is not
+# already resident, and executing the module twice re-registers every session
+# in nox's global registry (see test_noxfile_venv_tool.py's _load_noxfile).
+# Parsing is the way in, so the parser lives here once rather than as a copy
+# per caller -- the same drift lode-7ed9 removed from the loader above.
+#
+# Deliberately uncached: parsing a ~500-line file costs well under a
+# millisecond and the callers ask a handful of times per run, so a cache
+# would buy nothing measurable while handing every test in the session a
+# shared, mutable AST.
+
+
+def noxfile_tree(noxfile_path: Path) -> ast.Module:
+    """Parse ``noxfile_path``. The single read+parse both callers share, so
+    neither has to re-decide the encoding or the ``filename=`` a SyntaxError
+    is reported against."""
+    return ast.parse(
+        noxfile_path.read_text(encoding="utf-8"), filename=str(noxfile_path)
+    )
+
+
+def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
+    """Every top-level ``@nox.session``-decorated function in ``noxfile_path``.
+
+    Parsed rather than string-sliced: an earlier form of these tests located
+    each session by ``source.index("\\n@nox.session\\ndef <next-one>(")``,
+    which silently depended on the *order* sessions happen to appear in and
+    had to be updated whenever one moved. The AST asks the question directly.
+
+    Matches both ``@nox.session`` and ``@nox.session(tags=[...])``. Callers
+    that need the decorator itself (tags, ``name=``) read it off the returned
+    node's ``decorator_list``.
+    """
+
+    def is_nox_session(dec: ast.expr) -> bool:
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        return isinstance(target, ast.Attribute) and target.attr == "session"
+
+    return {
+        node.name: node
+        for node in noxfile_tree(noxfile_path).body
+        if isinstance(node, ast.FunctionDef)
+        and any(is_nox_session(dec) for dec in node.decorator_list)
+    }
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
