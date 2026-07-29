@@ -330,6 +330,15 @@ def _anthropic_effort_kwargs(
     return {"output_config": {"effort": reasoning_effort}}
 
 
+#: Shared tail for the three "the block I need isn't in ``content``" errors
+#: (:meth:`AnthropicProvider.structured_call`'s two branches and
+#: :meth:`AnthropicProvider.collect_batch`). All three have the same cause --
+#: thinking shares ``max_tokens`` with the payload, see
+#: :class:`AnthropicProvider` -- so they read identically in a log; single-
+#: sourced here because they are far apart and a reword would otherwise drift.
+_BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
+
+
 def _anthropic_error_from_exception(
     exc: anthropic.APIStatusError, *, context: str
 ) -> LLMProviderError:
@@ -425,18 +434,33 @@ class AnthropicProvider:
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
 
-    *The forced tool-use branch needs no equivalent change* -- it has never
-    sent ``thinking`` at all (lode-d1sr never touched it), so it already
-    follows this same "never explicitly disable" rule; no Fable-class 400 is
-    reachable there today. This is a property of the enrichment tier
-    (``enrichment_llm`` = Haiku 4.5 predates thinking-on-by-default), not of
-    forced tool use itself -- on the first-party Claude API a forced
-    ``tool_choice`` does not preclude thinking (only Amazon Bedrock requires an
-    explicit ``disabled`` alongside it), so a ``Kind.RUNTIME`` override to a
-    thinking-capable model would think there too, sharing its own (smaller,
-    unraised) ``max_tokens`` budget between thinking and the tool-call JSON --
-    a real but separate, currently-unreachable risk tracked as a follow-up
-    rather than fixed here (lode-3dlt's design notes).
+    *The forced tool-use branch never needed the Fable-class-400 fix* -- it
+    has never sent ``thinking`` at all (lode-d1sr never touched it), so it
+    already followed the "never explicitly disable" rule before this class
+    existed; no Fable-class 400 is reachable there. That is a property of the
+    enrichment tier's *default* (``enrichment_llm`` = Haiku 4.5 predates
+    thinking-on-by-default), not of forced tool use itself -- on the
+    first-party Claude API a forced ``tool_choice`` does not preclude thinking
+    (only Amazon Bedrock requires an explicit ``disabled`` alongside it), so a
+    ``Kind.RUNTIME`` override to a thinking-capable model runs adaptive
+    thinking here too, sharing ``max_tokens`` with the tool-call JSON --
+    lode-3dlt tracked this as a real but then-unreachable risk rather than
+    fixing it. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
+    raised (1024 -> 2048) for the same headroom reason
+    :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
+    symptom of running out of that budget -- a response whose whole
+    ``max_tokens`` was spent on thinking carries no ``tool_use`` block at
+    all, which used to escape as a raw ``StopIteration`` from an unguarded
+    ``next(...)``. It is now converted to :class:`LLMProviderError`, the same
+    treatment :meth:`structured_call`'s other branch gives its own
+    "budget spent on thinking" symptom (no text block, below).
+    :meth:`collect_batch` reaches the identical symptom by the identical route
+    -- ``enrich`` sends the same raised cap through both -- and in fact reaches
+    it *more* easily; see :data:`lode.enrich.MAX_TOKENS` for why the batch
+    route is bounded differently. It already degraded the one item to an
+    ``errored`` :class:`BatchResult` rather than failing the whole collection,
+    so no raw ``StopIteration`` ever escaped there; lode-jgus only gave its
+    message the same model/``stop_reason`` diagnosis this branch reports.
 
     **``reasoning_effort`` -> ``output_config.effort`` (lode-wnz1)** on every
     branch below; see :func:`_anthropic_effort_kwargs` for the wiring and
@@ -519,7 +543,23 @@ class AnthropicProvider:
                 raise _anthropic_error_from_exception(
                     exc, context=f"model={model}"
                 ) from exc
-            tool_block = next(b for b in response.content if b.type == "tool_use")
+            tool_block = next(
+                (b for b in response.content if b.type == "tool_use"), None
+            )
+            if tool_block is None:
+                # A response that spent its whole budget inside thinking
+                # carries no tool_use block at all; unguarded, `next()` with
+                # no default raised a raw StopIteration here instead of the
+                # LLMProviderError every caller of this seam expects
+                # (lode-jgus). Why that is now reachable: the class docstring.
+                raise LLMProviderError(
+                    f"Anthropic response contained no tool_use block to "
+                    f"decode into {output_schema.__name__} (model={model}, "
+                    f"max_tokens={max_tokens}, "
+                    f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
+                    f"{_BUDGET_EXHAUSTED_HINT}",
+                    provider="anthropic",
+                )
             return output_schema.model_validate(tool_block.input)
 
         # `thinking` is never sent here (lode-3dlt, superseding lode-d1sr's
@@ -576,8 +616,8 @@ class AnthropicProvider:
                 f"Anthropic response contained no text block to decode into "
                 f"{output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
-                f"stop_reason={getattr(response, 'stop_reason', None)!r}) -- "
-                f"typically the whole output budget was consumed by thinking",
+                f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
+                f"{_BUDGET_EXHAUSTED_HINT}",
                 provider="anthropic",
             )
         return parsed
@@ -674,13 +714,24 @@ class AnthropicProvider:
                         b for b in result.result.message.content if b.type == "tool_use"
                     )
                 except StopIteration:
+                    # Degrading the one item (rather than failing the whole
+                    # collection) is deliberate -- see the module docstring.
+                    # lode-jgus made this reachable, and reaches it more
+                    # easily here than on the immediate branch (class
+                    # docstring); name the same model/stop_reason that branch
+                    # does, or the failure is undiagnosable.
+                    message = result.result.message
                     results.append(
                         BatchResult(
                             custom_id=result.custom_id,
                             outcome="errored",
                             parsed=None,
                             error=LLMProviderError(
-                                "no tool_use block in batch result",
+                                f"no tool_use block in batch result "
+                                f"(model={getattr(message, 'model', None)!r}, "
+                                f"stop_reason="
+                                f"{getattr(message, 'stop_reason', None)!r}) "
+                                f"{_BUDGET_EXHAUSTED_HINT}",
                                 provider="anthropic",
                             ),
                         )

@@ -104,6 +104,45 @@ ENRICH_PROMPT_VER = "npx1-v3"
 #: Tool name used to force Haiku into structured output via tool-use calling.
 _TOOL_NAME = "extract_enrichment"
 
+#: Output cap for the forced tool-use extraction call -- shared by both routes
+#: (:func:`_call_haiku` and :func:`_build_batch_request`, which must send the
+#: byte-for-byte identical value, ``lode-568v.2``'s wire-equivalence bar).
+#: Raised 1024 -> 2048 (lode-jgus) for the same reason
+#: :data:`lode.qa.MAX_TOKENS` was raised 4096 -> 8192 (lode-3dlt): the forced
+#: tool-use branch of :meth:`~lode.llm_provider.AnthropicProvider.structured_call`
+#: never sends ``thinking`` at all -- a property it already had before
+#: lode-d1sr/lode-3dlt ever touched the ``messages.parse`` branch, so it never
+#: hit the Fable-class 400 that fix exists to dodge. But ``enrichment_llm`` is
+#: ``Kind.RUNTIME``, and omitting ``thinking`` does not disable it -- each
+#: model still runs its own default. A user override to a thinking-capable
+#: model (Opus 5, Sonnet 5, Fable-class) therefore runs adaptive thinking on
+#: this call too, sharing ``max_tokens`` with the forced tool-call JSON
+#: payload -- the identical truncation hazard lode-3dlt's Q&A fix exists to
+#: avoid, on a path lode-3dlt named as a real but then-unreachable follow-up
+#: (this ticket).
+#:
+#: **The two routes are bounded differently** -- neither by the Anthropic SDK's
+#: non-streaming timeout guard, which never applies here for the reason
+#: :data:`lode.qa.MAX_TOKENS` documents (it owns that claim; do not restate
+#: it). On the IMMEDIATE route :func:`_call_haiku` passes
+#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), so a runaway
+#: thinking budget there tends to surface as a timeout before it exhausts this
+#: cap. The BATCH route has no equivalent bound:
+#: :class:`~lode.llm_provider.BatchRequest` carries no per-item timeout (the
+#: ``timeout_s`` on ``submit_batch``/``collect_batch`` bounds only their own
+#: HTTP calls) and generation runs server-side, so this cap is the *only*
+#: thing bounding a batch item -- **truncation, not a timeout, is the
+#: realistic failure mode there.**
+#:
+#: Either way this value is headroom, not a hard truncation guarantee.
+#: Exhausting it raises :class:`~lode.llm_provider.LLMProviderError` from the
+#: provider: on the immediate route in place of a raw ``StopIteration``
+#: escaping the seam (the guard lode-jgus added), on the batch route as one
+#: ``errored`` :class:`~lode.llm_provider.BatchResult` rather than failing the
+#: whole collection. See :class:`~lode.llm_provider.AnthropicProvider`'s
+#: docstring for both.
+MAX_TOKENS = 2048
+
 _SYSTEM = (
     "You are a knowledge-extraction assistant. Extract structured information from "
     "personal notes concisely and accurately."
@@ -222,7 +261,7 @@ def _call_haiku(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=1024,
+        max_tokens=MAX_TOKENS,
         timeout_s=settings.llm_call_timeout_s,
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
@@ -554,7 +593,7 @@ def _build_batch_request(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=1024,
+        max_tokens=MAX_TOKENS,
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
     )
