@@ -40,7 +40,9 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
 - **Does not touch `.beads/issues.jsonl`.** `import.auto: false` is a hard invariant (lode-6ra) —
   I never `git add`, commit, or `bd import` it.
 - **Never claims work off `bd ready`** and needs no worktree — every step here is `bd` plumbing run
-  from wherever I'm invoked; I touch no `git` and write no repo files at all.
+  from wherever I'm invoked; I touch no `git` and write no repo files at all. (Scratch files under
+  `${TMPDIR:-/tmp}` that carry this pass's own intermediate state between fenced blocks — see §1 —
+  are neither: no git command, no path inside this repo's working tree.)
 - **Never promotes a ticket to a human-decision item *because* it is `deferred`.** §2a is
   visibility only: nothing it reads enters `$CURRENT`/`$NEW_IDS`, touches the digest, or fires a
   `PushNotification`. The converse is **not** guaranteed and this section does not claim it — §1
@@ -49,13 +51,21 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   is then listed twice in the report. Whether that intersection should be filtered is an open
   decision, tracked in `lode-o7ai` — not something this section silently settles.
 
-## 0. Setup — Dolt-authoritative
+## 0. Setup — Dolt-authoritative, fresh scratch state
 
 Same sync discipline as every other bd-writing loop leg: pull fresh state before reading, push
-after writing.
+after writing. I also run each fenced `bash` block below as its own, separate Bash tool invocation
+— nothing carries over between them (variables, arrays, functions — same governing rule
+`.claude/skills/land/SKILL.md` states and `docs/agents-workflow.md` records repo-wide, lode-sfnb /
+lode-x495). §1-§3's queue-building steps persist their results to files under a **fixed** scratch
+directory (`${TMPDIR:-/tmp}`, never this repo's `.git/` or working tree — see the "no repo files"
+non-goal above) so later blocks can read them back instead of relying on shell state that does not
+survive. Fresh per pass, so no stale queue data from an earlier tick can leak into this one:
 
 ```bash
 rtk bd dolt pull
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"
+rm -rf "$SWEEP_TMP" && mkdir -p "$SWEEP_TMP"
 ```
 
 ## 1. Collect the human-decision queue
@@ -64,11 +74,15 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 `land-escalated` query (it should never carry that label, but cheap insurance costs nothing):
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
 ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
   | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)"')
+printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
 HUMAN=$(rtk bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
+printf '%s' "$HUMAN" > "$SWEEP_TMP/human"
 ```
 
 **`--limit 0` on every `bd list` in this skill — the canonical reason, referenced from §2/§2a/§4.**
@@ -108,6 +122,8 @@ with the opt-in `--include-dependents` flag, and its absence made this exact che
 three skills until lode-v4rk):
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
 CLOSABLE=""
 # Pull id AND title in the ONE list read -- `bd list --json` rows already carry
 # `title`, so re-fetching it per epic with a second `bd show` would be a wasted
@@ -123,6 +139,7 @@ while IFS=$'\t' read -r e TITLE; do
 "
 done < <(rtk bd list --type=epic --label epic-audited --status open --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
+printf '%s' "$CLOSABLE" > "$SWEEP_TMP/closable"
 ```
 
 `--limit 0` for the same reason as §1 — same `$CURRENT`, same wholesale §6 rewrite.
@@ -161,7 +178,26 @@ and continue. See [Failure handling](#failure-handling--a-sub-step-fails-the-loo
 ## 3. Build the current queue (dedup on stable IDs)
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+# Load §1/§2's results back from disk and assert each one loaded -- a missing file means that
+# step never ran this pass, and continuing on a phantom-empty queue would risk deleting real
+# escalations from the digest (§5's hard precondition, in reverse).
+ESCALATED="$(cat "$SWEEP_TMP/escalated")" || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/escalated missing -- §1 did not run this pass" >&2
+  exit 1
+}
+HUMAN="$(cat "$SWEEP_TMP/human")" || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/human missing -- §1 did not run this pass" >&2
+  exit 1
+}
+CLOSABLE="$(cat "$SWEEP_TMP/closable")" || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/closable missing -- §2 did not run this pass" >&2
+  exit 1
+}
+
 CURRENT=$(printf '%s\n%s\n%s\n' "$ESCALATED" "$HUMAN" "$CLOSABLE" | sed '/^$/d' | sort -u -t$'\t' -k1,1)
+printf '%s' "$CURRENT" > "$SWEEP_TMP/current"
 ```
 
 Each line is `<id>\t<kind>\t<title>` — `<id>` is the dedup key throughout.
@@ -196,8 +232,11 @@ oversight a later edit should "tidy" away.
     --label=sweep-digest --description="(bootstrapping — /sweep fills this in on this same pass)" --silent)
   rtk bd update "$DIGEST_ID" --claim
   ```
-- **`N == 1`** — steady state. `DIGEST_ID=$(echo "$DIGEST_ROWS" | jq -r '.[0].id')`; update in place
-  (see step 6).
+- **`N == 1`** — steady state. Nothing to do here — §5 and §6 each re-derive `$DIGEST_ID` themselves
+  via `scripts/sweep-digest-id.sh`, rather than reusing this block's own `$DIGEST_ROWS`/`$N`, since
+  neither survives into a later block (fresh Bash invocation each time). **That script re-asserts
+  `N == 1` itself**: this branch of this block is not a guard those blocks inherit, so it is
+  re-checked there rather than trusted, immediately before the read (§5) and the write (§6).
 - **`N > 1`** — anomaly. Do **not** guess which is authoritative and do **not** write anything.
   Report the duplicate IDs plainly in the final report (below) and stop the write path for this
   pass; the human consolidates by hand (keep one, strip the label off the rest).
@@ -208,6 +247,17 @@ Read the prior digest body and extract its `SWEEP-ITEM` lines (the digest format
 designed to be trivially re-parseable):
 
 ```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+# Re-derive DIGEST_ID -- cheap and deterministic, so re-running the query beats persisting an id.
+# The script refuses unless exactly one digest exists; a bare `.[0].id` would silently pick the
+# first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
+# `N == 0`). Quote its stderr rather than re-deriving a cause of my own.
+DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+CURRENT="$(cat "$SWEEP_TMP/current")" || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
+  exit 1
+}
+
 LAST_BODY=$(rtk bd show "$DIGEST_ID" --json | jq -r '.[0].description')
 LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
 CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
@@ -259,9 +309,16 @@ SWEEP-ITEM <id> epic-ready-to-close <title>
 
 Where each section lists its `CURRENT` rows for that kind (`land-escalated`/`human` in the first,
 `epic-ready-to-close` in the second), or the literal `(none)` when a section is empty. Write it via
-`--body-file` (multi-line, avoids shell-quoting the body inline):
+`--body-file` (multi-line, avoids shell-quoting the body inline) — `BODY_FILE` and the re-derived
+`DIGEST_ID` are both real values only within THIS block (a fresh Bash invocation; nothing from §4/§5
+survives), so both are established here, not reused from an earlier one:
 
 ```bash
+# Same refusal as §5, and load-bearing for a stronger reason: this block WRITES. Under §4's
+# `N > 1` anomaly a bare `.[0].id` would overwrite whichever duplicate sorted first.
+DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+BODY_FILE="$(mktemp)"
+# …write the digest body (format above) into "$BODY_FILE"…
 rtk bd update "$DIGEST_ID" --body-file "$BODY_FILE"
 ```
 

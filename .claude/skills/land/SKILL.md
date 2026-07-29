@@ -52,6 +52,19 @@ silent by default**, and this is the one skill that writes `trunk` — so any bl
 must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
 exits 0 is indistinguishable from a clean pass that had nothing to do.
 
+**This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
+— that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
+`/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
+regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
+newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
+individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
+land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
+`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
+which has since landed, so the entry is now inert rather than a live violation) — both tracked
+by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+mechanically.
+
 ---
 
 ## 0. Single-lander lock — acquire FIRST, every tick
@@ -569,10 +582,10 @@ edges**, restricted to `$ACCEPTED`:
     pass:
 
     ```bash
-    rtk bd update "$id" --append-notes "HELD (/land, stacked-branch ordering): land/$id is stacked on
-    land/$B, which is not landing this pass ($B's own outcome: <bounced|escalated|needs-rebase|not yet
-    ready-for-land>). Re-evaluated automatically once $B lands or its own outcome resolves — no action
-    needed unless $B itself needs a human decision."
+    rtk bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
+    land/<B>, which is not landing this pass (<B>'s own outcome: <bounced|escalated|needs-rebase|not
+    yet ready-for-land>). Re-evaluated automatically once <B> lands or its own outcome resolves -- no
+    action needed unless <B> itself needs a human decision."
     ```
 
     (No `bd dolt push` needed here in isolation — this note rides along with the pass's other

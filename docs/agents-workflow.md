@@ -1345,6 +1345,93 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
+
+**No fenced `bash` block in a `SKILL.md` may depend on shell state from another.** An agent executing
+a skill runs each fenced `bash`-tagged block as its own, separate Bash tool invocation — nothing
+carries over between them: not variables, not arrays, not function definitions, not `trap`s, not `set -e` /
+`set -o pipefail`, not background jobs. Anything one block needs from an earlier one is either
+**re-derived** (cheap, deterministic — e.g. `$(git rev-parse --git-dir)`, or re-running a fast,
+idempotent script/query) or **persisted to a file** that a later block reads back. Logic shared by two
+call sites belongs in `scripts/`, never in a bash function defined in one block and called from
+another.
+
+**Persisting carries two obligations, and both have been forgotten at least once each.** A file path
+that a later block can re-derive is necessarily a *fixed* path, and a fixed path **outlives the run
+that wrote it** — so (a) **wipe it at the start of every pass** (`rm -rf "$DIR" && mkdir -p "$DIR"`,
+as `/land`'s `$STATE_DIR` and `/sweep`'s `$SWEEP_TMP` both do), or a skipped write silently serves the
+*previous* pass's data, which is worse than the crash it replaced; and (b) **assert on load** and
+abort loudly, because a zero-iteration loop over an empty file exits 0 and is indistinguishable from a
+clean pass with nothing to do. `lode-x495` shipped `/release`'s `NOTES_FILE` on a fixed path without
+(a), which would have let a skipped notes-write publish the last release's notes as this one's — the
+`[ ! -s ]` guard in `scripts/release.sh` catches *absent*, never *stale*.
+
+This rule was first stated as `.claude/skills/land/SKILL.md`'s own governing rule (`lode-sfnb`); it
+lives here now, repo-wide, because the bug class is not land-local (`lode-x495`) — `land/SKILL.md`
+still states the rule at its own top, but points here as the source of truth rather than duplicating
+the rationale.
+
+**Why this needs a mechanism rather than an instruction.** `lode-sfnb`'s incident is the proof: Section
+3a of `land/SKILL.md` used to populate a `declare -A MSG` associative array that Section 3's merge
+loop, a separate fenced block, read back. By the time the loop ran, `MSG` was empty, and `git merge -m
+''` failed with **completely empty stdout and stderr** — no error message pointed at the cause
+(OBSERVED, 2026-07-26, landing lode-ns3r/lode-1q2i/lode-sys4). The rule was already written down in
+prose at the top of the file when this shipped; prose that isn't gated erodes, exactly the way
+`land/SKILL.md` itself admitted before `lode-x495`: "this `if`/escalate structure lives in this
+markdown file, so no automated test covers a regression to it." A markdown fence is invisible to every
+other gate in this repo (`nox -t fix`, `nox -s tests`, `mypy`, …) — none of them execute or parse
+skill prose — so nothing but a dedicated test catches a regression here.
+
+**The mechanism** — `tests/test_skill_bash_state.py`, run by `nox -s tests`. It parses every
+`bash`/`sh`-tagged fenced block in `.claude/skills/*/SKILL.md` and fails if a variable is referenced
+(`$VAR` or `${VAR...}`) in a block without also being assigned somewhere in that **same** block — the
+check is per-block, not file-wide, because a variable assigned in some *other* block is exactly the
+`$MSG` bug: real, present in the file, and still invisible to the block that uses it. **What exactly
+counts as an assignment or a use is the parser's business, and is documented once, in that file's own
+module docstring** — deliberately not re-catalogued here, where nothing would gate the prose against
+the regexes it describes. Two scope decisions do belong here, because they are policy rather than
+implementation: comments are never scanned (this codebase's skills carry heavy inline prose that
+routinely *quotes* a variable name while explaining history, which is not a use), and bash's own
+positional/special parameters plus a short, individually-justified list of operator-set environment
+variables are excluded outright.
+
+**Categories this rule names, per the ticket that first stated it:** variables, arrays, functions,
+traps, and `set -e`/`set -o pipefail`. The gate above mechanically enforces the first **two** —
+variables, and arrays with them (`declare -A MSG` registers as an assignment and `${MSG[k]}` as a use,
+which is how the original `$MSG` incident is pinned). Functions, `trap`s and `set -e` reliance remain
+**prose-only**: none has a cheap static oracle (a cross-block function call is indistinguishable from
+any other bare command without a real shell parser, and reliance on an inherited `set -e` is
+undetectable by construction). That is a narrower mechanism than the rule it backs — the same
+asymmetry `docs/conventions.md`'s "Derive identifiers, never retype them" fiat has relative to
+`sha-fabrication-guard.sh`'s 40-hex-only scope. One partial exception worth knowing: `trap` *is* gated,
+but for `land/SKILL.md` only and by a different test (`tests/test_land_lock.py`).
+
+**Scope and allowlist.** The gate covers every `.claude/skills/*/SKILL.md` — not scoped to
+`land/SKILL.md` alone, since `lode-x495` found real, confirmed instances in `/sweep` and `/release`
+that a land-only gate would leave uncovered. It does **not** yet cover `.claude/agents/*.md`, whose
+fenced blocks an agent executes exactly the same way (`lode-x495`'s review measured 45 such blocks
+across `coding`/`code-reviewer`/`land-review`, all currently clean, so widening is free — tracked as
+its own ticket rather than folded in). Alongside the file scope there is a small, per-`(file,
+variable)` allowlist for a value that
+is deliberately **not** amenable to either sanctioned remedy: one that is computed by the agent's own
+reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by any
+deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
+`release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before Section
+4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in the test
+file itself — an entry with no reason is how this exact rot restarted once already (a bug fixed once
+in `land/SKILL.md`, then found again, unfixed, in two other skills).
+
+**There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
+on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
+ticket's risk budget. `lode-x495`'s technical review rejected that shape: it conflates *fixing* the file
+(genuinely risky, still deferred to `lode-p1r3`) with *covering* it, which costs two allowlist entries
+and not one byte of `land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves
+every **future** cross-block variable added to that file unguarded too, not just the known ones, in
+exactly the file the rule was written for. So the file is gated like every other skill, with
+`$ACCEPTED` (agent-reasoned, same "nothing upstream to re-derive from" shape as `$PROPOSED`) and
+`$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch — the entry goes inert when that lands)
+allowlisted individually, and its other 22 blocks covered. Removing those two entries is `lode-p1r3`.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
