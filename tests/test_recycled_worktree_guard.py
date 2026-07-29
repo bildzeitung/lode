@@ -33,22 +33,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "recycled-worktree-guard.sh"
-
-
-def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
-    return result
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -57,14 +45,7 @@ def _init_repo(tmp_path: Path) -> Path:
     guard now reads (lode-isl3); tests that need a residue window advance
     local `trunk` without pushing, exactly as a live `/land` pass does."""
     origin = tmp_path / "origin.git"
-    subprocess.run(
-        ["git", "init", "-q", "--bare", "-b", "trunk", str(origin)],
-        cwd=tmp_path,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    _git(tmp_path, "init", "-q", "--bare", "-b", "trunk", str(origin))
 
     repo = tmp_path / "repo"
     repo.mkdir()
