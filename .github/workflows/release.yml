@@ -15,14 +15,14 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    # Well below GitHub's 360-minute default -- this is the one workflow that
-    # PUBLISHES artifacts, so a hang here is the most expensive to leave
-    # unbounded and the most likely to go unnoticed for hours. build.yml
-    # (timeout-minutes: 15) is the closest analogue -- same checkout/setup/
-    # build steps -- plus this job's own network `gh release create`. All
-    # observed release runs (v0.0.0-rc1 through v1.2.0) completed in
-    # 14-30s, so 20 is still ~40x headroom over the worst case, not a round
-    # number (lode-w35h).
+    # Well below GitHub's 360-minute default -- caps the tail if a step hangs
+    # (a stalled PyPI fetch, or this job's own `gh release create`). Every
+    # release run to date finished in 14-30s of job time, so 20 is ~40x the
+    # worst observed: a trip means a hang, not a slow-but-healthy run. Sits
+    # above build.yml's cap and below tests.yml's on CONSEQUENCE, not runtime
+    # -- a false trip here fails a PUBLISH, where build.yml's fails an
+    # advisory check nothing in the landing loop reads (docs/release.md).
+    # (lode-w35h)
     timeout-minutes: 20
     steps:
       - name: Checkout
