@@ -163,15 +163,12 @@ newline embedded in a title instead of letting it break the row.
 "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8 count
 still read as the true total. (`lode-2gun` extended the same pin to `/land`, `/code`, `/epic-audit`,
 `/release` and to `scripts/epic-children-closed.sh`, called from §2 above; `lode-9bbq` added
-`.claude/statusline.sh`. **This roster is the human-readable inventory of pinned sites — keep it
-current when a site is added.** A grep is not a substitute: `statusline.sh` calls `bd -C "$cwd" list`,
-and the `-C` between `bd` and `list` is exactly what hid it from `lode-2gun`'s literal `bd list`
-search. `lode-200t` added the mechanical counterpart to this roster —
-`tests/test_bd_list_limit_gate.py` scans every `bd ... list` call site in
-`.claude/skills/*/SKILL.md` and `scripts/*.sh`/`.claude/*.sh` — fenced blocks and inline-backtick
-commands alike, tolerant of a global flag like `-C` between `bd` and `list` — and fails on a *new*
-unguarded site rather than trusting this list to stay current by itself; this roster is documentation
-for a human reader, that test is the actual gate.)
+`.claude/statusline.sh`. A grep is not a substitute for that roster: `statusline.sh` calls
+`bd -C "$cwd" list`, and the `-C` between `bd` and `list` is exactly what hid it from `lode-2gun`'s
+literal `bd list` search. **But the roster is no longer what enforces this** — `lode-200t` added
+`tests/test_bd_list_limit_gate.py`, which fails on a *new* unguarded call site rather than trusting
+this list to stay current by itself. That test owns the scan surface and the exclusions; this
+paragraph is documentation for a human reader, and deliberately does not restate them.)
 
 **Deliberately excluded from everything else in this skill:**
 
