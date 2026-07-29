@@ -40,20 +40,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "assert-main-checkout.sh"
-
-
-def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
-    return result
 
 
 def _init_repo(tmp_path: Path, name: str = "repo") -> Path:
@@ -83,6 +73,7 @@ def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -229,6 +220,30 @@ def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
     assert "MACHINE FAULT" in result.stderr
 
 
+def test_inside_the_git_dir_is_a_machine_fault_not_a_location_verdict(
+    tmp_path: Path,
+) -> None:
+    """The second wrapped `git rev-parse` -- the `--show-toplevel` one -- has
+    its own exit-2 path, and this is what reaches it: with cwd inside `.git/`,
+    `--git-common-dir` still answers happily but there is NO work tree, so
+    `--show-toplevel` fails with git's raw 128.
+
+    Reached only through that ordering, so it is not covered by the
+    not-inside-any-repository test above (which fails at the FIRST rev-parse).
+    Without this, the branch that converts 128 into the documented exit 2 is
+    the one arm of the 0/1/2 contract with no test at all -- and a regression
+    there would leak an undocumented status that a caller cannot distinguish
+    from a location verdict."""
+    repo = _init_repo(tmp_path)
+
+    result = _run(repo / ".git")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    # Specifically the show-toplevel arm, not the --git-common-dir one.
+    assert "--show-toplevel' failed" in result.stderr
+
+
 def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
     """This script only asserts; it never redirects or repairs. Confirm HEAD,
     branches, and the working tree are untouched on a refusal."""
@@ -257,8 +272,12 @@ def _fenced_bash(markdown: str) -> str:
     Scanning the whole file would match the prose that *explains* the old
     defect (it necessarily quotes the broken `-C "$(git rev-parse
     --show-toplevel)"` idiom), so the pin has to separate what is executed
-    from what is merely described. Same helper shape as
-    tests/test_land_lock.py's `_fenced_bash`.
+    from what is merely described.
+
+    Deliberately NOT the same shape as tests/test_land_lock.py's `_fenced_bash`,
+    which matches the fence marker at column 0 and is therefore blind to
+    indented fences (lode-ovgs). Unifying the four private copies of this
+    scanner is that ticket's job, not this one's.
     """
     return "\n".join(_fenced_bash_blocks(markdown))
 
@@ -272,22 +291,56 @@ def _fenced_bash_blocks(markdown: str) -> list[str]:
     share a shell -- and therefore `||` short-circuiting -- only if they are
     in the same block. A pin that flattens the blocks first cannot tell
     "guarded" from "merely preceded somewhere in the document".
+
+    The fence marker is matched on the STRIPPED line, never at column 0. Four
+    of land/SKILL.md's fences are indented under a markdown bullet, so a
+    `line.startswith("```")` scanner -- the shape `tests/test_land_lock.py`
+    still uses, which `lode-ovgs` was filed against -- sees 20 of this file's
+    24 bash blocks. That is not cosmetic for THIS module: one of the four it
+    misses is Section 3's isolation-replay block, which runs its own
+    `git reset --hard origin/trunk`. Under the column-0 shape the anchor below
+    found exactly one reset block and looked correct; it was simply blind to
+    the second. Measured on this file: 20 blocks vs 24, and 1 reset block vs 2.
     """
     blocks: list[str] = []
     current: list[str] = []
     in_bash = False
     for line in markdown.splitlines():
-        if line.startswith("```"):
+        stripped = line.strip()
+        if stripped.startswith("```"):
             if in_bash:
                 blocks.append("\n".join(current))
                 current = []
-            in_bash = not in_bash and line.strip() in {"```bash", "```sh"}
+            in_bash = not in_bash and stripped in {"```bash", "```sh"}
             continue
         if in_bash:
             current.append(line)
     if in_bash and current:  # unterminated final fence
         blocks.append("\n".join(current))
     return blocks
+
+
+def test_fence_scanner_sees_indented_fences() -> None:
+    """Regression pin on the scanner SHAPE (lode-ovgs). A fence nested under a
+    markdown bullet is indented, so a column-0 `line.startswith("```")` scanner
+    never enters it. Four of land/SKILL.md's 24 bash fences are indented, and
+    one of those is Section 3's isolation-replay block -- which runs its own
+    `git reset --hard origin/trunk`.
+
+    Without this pin, reverting `_fenced_bash_blocks` to the column-0 shape
+    silently restores a state where the anchor below finds ONE reset block
+    instead of two, and therefore looks correct while being blind to half the
+    question it is asking. That is the same false-assurance failure mode this
+    whole ticket exists to delete, so it gets a gate rather than a comment."""
+    blocks = _fenced_bash_blocks(
+        "1. Step one:\n\n   ```bash\n   echo indented\n   ```\n"
+    )
+
+    assert len(blocks) == 1, (
+        "an indented ```bash fence was not parsed as a block -- the scanner has "
+        "regressed to matching at column 0 (lode-ovgs)"
+    )
+    assert "echo indented" in blocks[0]
 
 
 def test_land_skill_section1_calls_the_script() -> None:
@@ -321,15 +374,30 @@ def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
     """
     blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
 
-    # Anchor on the pass-start hard reset: it is the unrecoverable command, and
-    # it is unique to Section 1's block. Anchoring on a command instead of a
-    # section heading keeps the pin working when the surrounding prose is
-    # rewritten -- which it is, constantly, by concurrent tickets.
-    owning = [b for b in blocks if "git reset --hard origin/trunk" in b]
+    # Anchor on the pass-start hard reset -- the unrecoverable command -- but it
+    # is NOT unique to Section 1: Section 3's isolation-replay block opens with
+    # its own `git reset --hard origin/trunk` before re-deriving $STATE_DIR.
+    # (An earlier column-0 fence scanner could not see that indented block and
+    # made this anchor look unique; see `_fenced_bash_blocks`.) Section 1 is
+    # identified by the PAIR -- only its block also runs `git checkout -f
+    # trunk`. Anchoring on commands rather than a section heading keeps the pin
+    # working when the surrounding prose is rewritten, which it is constantly,
+    # by concurrent tickets.
+    #
+    # Section 3's reset is genuinely unguarded and is the same exposure class
+    # one section over, but it is outside this ticket's stated scope (Section 1)
+    # and cannot be built until scripts/assert-main-checkout.sh exists on trunk.
+    # Tracked by lode-gczf, which blocks on lode-pcee.
+    owning = [
+        b
+        for b in blocks
+        if "git reset --hard origin/trunk" in b and "git checkout -f trunk" in b
+    ]
     assert len(owning) == 1, (
-        "expected exactly one executed fence to run `git reset --hard "
-        f"origin/trunk`, found {len(owning)} -- land/SKILL.md's layout has "
-        "drifted and this pin needs re-anchoring, not deleting"
+        "expected exactly one executed fence to run BOTH `git reset --hard "
+        f"origin/trunk` and `git checkout -f trunk`, found {len(owning)} -- "
+        "land/SKILL.md's layout has drifted and this pin needs re-anchoring, "
+        "not deleting"
     )
     block = owning[0]
 

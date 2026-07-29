@@ -12,13 +12,23 @@ as this library's integration coverage.
 
 The SWEEPS in the second half are the other half of the division of labour,
 and they are deliberately not written per-consumer: they DISCOVER the consumer
-set at runtime (the `grep -l gate-lib.sh scripts/*.sh` that gate-lib.sh's own
-header names as the authoritative way to ask), so a script that starts
-sourcing the library tomorrow is covered the day it lands rather than the day
-someone remembers to write a sixth near-identical test. That distinction is
-not academic here: land-merge-one.sh spent its entire life as a stranded
-inline copy precisely because nothing enumerated the set, and it took a manual
-audit (lode-bss5) to notice. A test that hard-codes the list IS that list.
+set at runtime, so a script that starts sourcing the library tomorrow is
+covered the day it lands rather than the day someone remembers to write a
+sixth near-identical test. That distinction is not academic here:
+land-merge-one.sh spent its entire life as a stranded inline copy precisely
+because nothing enumerated the set, and it took a manual audit (lode-bss5) to
+notice. A test that hard-codes the list IS that list.
+
+What "discover" MEANS is itself load-bearing, and a whole-file
+`grep -l gate-lib.sh scripts/*.sh` is not it (lode-pcee). That matches any
+MENTION of the library -- including a comment explaining why a script
+deliberately does not use it. scripts/assert-main-checkout.sh is exactly that
+case: a precondition guard whose header documents the decision not to route
+through gate-lib.sh. It was swept in as a phantom consumer and failed all
+three parametrized sweeps over a library it never sources, and the only way to
+stay green would have been to stop naming the library it was explaining it did
+not use. `_consumers()` therefore anchors on a real, non-comment SOURCE line,
+so what it computes matches the docstring it has always carried.
 
 Two invariants are swept, both of which were previously unenforceable
 mechanically and left to per-consumer convention:
@@ -62,12 +72,53 @@ fi"""
 BARE_SOURCE = '. "$(dirname "$0")/gate-lib.sh"'
 
 
+def _non_comment_lines(text: str) -> list[tuple[int, str]]:
+    """`(1-based line number, line)` for every line that is not a comment.
+
+    The single home for the skip-comments rule all three scans in this module
+    share (`_sources_gate_lib`, `_line_of`, `_call_site_lines`). It is the
+    load-bearing half of each of them -- it is what keeps
+    `# shellcheck disable=SC2034 # read by gate_could_not_run()` from
+    registering as a call site, and what keeps gate-lib.sh's quoted Usage block
+    from registering as a source. Three copies in one file is exactly the bar
+    the repo's other extractions fired at, and a refinement here (a trailing
+    `#` on a real line, say) has to hold for all three at once or discovery and
+    call-site accounting silently disagree.
+    """
+    return [
+        (n, line)
+        for n, line in enumerate(text.splitlines(), start=1)
+        if not line.lstrip().startswith("#")
+    ]
+
+
+def _sources_gate_lib(text: str) -> bool:
+    """True if `text` carries a real, non-comment line that SOURCES gate-lib.sh.
+
+    Anchored on BARE_SOURCE, never on GUARDED_SOURCE, and that is not a
+    stylistic preference: BARE_SOURCE is a substring of GUARDED_SOURCE's first
+    line, so this one predicate finds guarded and unguarded consumers alike.
+    Discovering by GUARDED_SOURCE instead would make
+    test_every_consumer_carries_the_verbatim_source_guard VACUOUS -- every
+    discovered script would satisfy it by construction, and the single thing
+    that sweep exists to catch (a NEW consumer sourcing the library bare) would
+    become invisible to it, silently restoring the lode-bss5 defect.
+
+    Comment lines are skipped for the same reason `_call_site_lines` skips
+    them, and here it is load-bearing rather than defensive: gate-lib.sh's own
+    header quotes the guard block verbatim as its Usage example, so a script
+    that copies that documentation into its own header would otherwise register
+    as a consumer of a library it never loads.
+    """
+    return any(BARE_SOURCE in line for _, line in _non_comment_lines(text))
+
+
 def _consumers() -> list[Path]:
     """Every scripts/*.sh that sources gate-lib.sh -- discovered, never listed."""
     return sorted(
         p
         for p in SCRIPTS_DIR.glob("*.sh")
-        if p.name != "gate-lib.sh" and "gate-lib.sh" in p.read_text()
+        if p.name != "gate-lib.sh" and _sources_gate_lib(p.read_text())
     )
 
 
@@ -85,8 +136,8 @@ def _run_script(path: Path) -> subprocess.CompletedProcess:
 
 
 def _line_of(text: str, needle: str) -> int:
-    for n, line in enumerate(text.splitlines(), start=1):
-        if needle in line and not line.lstrip().startswith("#"):
+    for n, line in _non_comment_lines(text):
+        if needle in line:
             return n
     raise AssertionError(f"{needle!r} not found outside comments")
 
@@ -110,11 +161,7 @@ def _call_site_lines(text: str) -> list[int]:
     """1-based lines holding a real gate_could_not_run CALL. Comment lines are
     skipped, which is what keeps the `# shellcheck disable=SC2034 # read by
     gate_could_not_run()` note in three consumers from registering as a call."""
-    return [
-        n
-        for n, line in enumerate(text.splitlines(), start=1)
-        if "gate_could_not_run" in line and not line.lstrip().startswith("#")
-    ]
+    return [n for n, line in _non_comment_lines(text) if "gate_could_not_run" in line]
 
 
 def _run(script_body: str) -> subprocess.CompletedProcess:
@@ -192,6 +239,41 @@ def test_the_consumer_sweep_discovers_something():
     glob that stops matching (renamed directory, changed suffix) would make
     every parametrized test vanish rather than fail."""
     assert CONSUMERS, "no gate-lib.sh consumers discovered under scripts/"
+
+
+def test_merely_naming_gate_lib_does_not_make_a_consumer():
+    """lode-pcee. Discovery must match a real SOURCE line, not any mention.
+    A script that names gate-lib.sh only to explain why it deliberately does
+    NOT use it (scripts/assert-main-checkout.sh, the repo's first such case)
+    was otherwise swept in as a phantom consumer and failed all three
+    parametrized sweeps over a library it never loads.
+
+    Exercises `_sources_gate_lib` on synthetic text rather than on the
+    discovered set, so it keeps proving the predicate no matter how any real
+    script's header is later reworded -- that comment belongs to the script,
+    not to this test.
+    """
+    assert not _sources_gate_lib(
+        "# Not sourced from `scripts/gate-lib.sh`: that helper's banner belongs\n"
+        "# to the content gates, and this is a precondition guard.\n"
+        "set -euo pipefail\n"
+    )
+
+    # gate-lib.sh's own header quotes the whole guard block as its Usage
+    # example; a script copying that documentation must not become a consumer.
+    commented_out = "\n".join(f"# {ln}" for ln in GUARDED_SOURCE.splitlines())
+    assert not _sources_gate_lib(commented_out + "\n")
+
+
+def test_an_unguarded_source_line_is_still_discovered():
+    """The other direction, and the reason the predicate anchors on
+    BARE_SOURCE rather than GUARDED_SOURCE: a consumer that sources the
+    library BARE must still be discovered, or
+    test_every_consumer_carries_the_verbatim_source_guard could never fail on
+    the newcomer it exists to catch (lode-bss5, Finding B) -- tightening
+    discovery onto the guard text would quietly vacate that sweep."""
+    assert _sources_gate_lib(f"set -uo pipefail\n{BARE_SOURCE}\n")
+    assert _sources_gate_lib(f"set -uo pipefail\n{GUARDED_SOURCE}\n")
 
 
 @pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
