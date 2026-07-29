@@ -1,4 +1,4 @@
-"""Tests for scripts/land-lock.sh (lode-aps3).
+"""Tests for scripts/land-lock.sh (lode-aps3, lode-ao95).
 
 WHY the trap-and-PID design this replaces could not work -- an agent runs
 each fenced `bash` block of `.claude/skills/land/SKILL.md` as its own Bash
@@ -8,13 +8,17 @@ wall-clock staleness token: see the header comment of scripts/land-lock.sh.
 That rationale is deliberately NOT restated here (the
 tests/test_blocks_dependents.py precedent) -- it lives next to the code it
 constrains, so it cannot drift out of sync with a second copy. The header
-also records the mechanism's known limits (the stale-lock reclaim path is
-not atomic, CAVEAT 2) and the `heartbeat` subcommand (lode-m87j), which moves
-the TTL toward idle-time semantics over the two loops it brackets -- but not
-over the whole pass; CAVEAT 1 enumerates the three stretches that stay
-uncovered and why the 1800s default was therefore left alone.
+also records the mechanism's known limits: the `heartbeat` subcommand
+(lode-m87j) moves the TTL toward idle-time semantics over the two loops it
+brackets -- but not over the whole pass; CAVEAT 1 enumerates the three
+stretches that stay uncovered and why the 1800s default was therefore left
+alone. The stale-lock reclaim path, formerly non-atomic (CAVEAT 2), is now
+atomic (lode-ao95; see that half of the tests below) via an mkdir-gated
+critical section, and the record's owner token (5th field) that a future
+ownership check in `heartbeat` will need is preserved across heartbeat calls
+but not yet verified against anything -- see lode-q9pm.
 
-What this file adds on top of that is the regression gate, in two halves:
+What this file adds on top of that is the regression gate, in three parts:
 
 1. Behavioural tests that run the ACTUAL script against a real, throwaway
    git repository in `tmp_path` (its only external dependency is
@@ -27,7 +31,17 @@ What this file adds on top of that is the regression gate, in two halves:
    Both mutations were run against this file and confirmed red (5 and 6
    failures of 14 respectively).
 
-2. Call-site pins against the SHIPPED `SKILL.md`. The defect lived in a
+2. A concurrency stress test (lode-ao95) reproducing the actual defect: many
+   rounds of N-way concurrent `acquire` calls against the SAME manually
+   crafted stale lock, asserting exactly one winner per round. Run against
+   the pre-fix script (`rm` then create, two steps) this reliably shows
+   multiple winners in some rounds; against the fixed script it must never
+   show more than one, in any round. The CONTENTION LEVEL is part of the
+   gate, not a free parameter -- 8-way reproduces the original two-step
+   defect but is blind to the narrower re-validation one that replaced it.
+   See that test's own docstring for the measurements.
+
+3. Call-site pins against the SHIPPED `SKILL.md`. The defect lived in a
    markdown fence, where no gate reaches it, so the behavioural tests above
    would all stay green while SKILL.md quietly went back to an inline trap
    and stopped calling this script at all. Same reasoning and same shape as
@@ -37,8 +51,11 @@ What this file adds on top of that is the regression gate, in two halves:
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
+import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -63,6 +80,25 @@ def _init_repo(tmp_path: Path) -> Path:
 
 def _lock_path(repo: Path) -> Path:
     return repo / ".git" / "land.lock"
+
+
+def _gate_path(repo: Path) -> Path:
+    """The reclaim gate, derived the same way the script derives it
+    (`RECLAIM_GATE="$LOCK.reclaiming"`) rather than hand-spelled -- so a
+    rename of the lock file cannot leave the gate tests pointing at a path
+    nothing creates any more, which would turn them green and vacuous."""
+    return _lock_path(repo).with_name(_lock_path(repo).name + ".reclaiming")
+
+
+def _write_stale_lock(repo: Path, *, age: int = 100_000) -> int:
+    """A lock record far past any plausible staleness threshold. Deliberately
+    FOUR fields: an old record predating the owner token must still parse, and
+    that back-compatibility is worth exercising rather than assuming."""
+    old_epoch = int(time.time()) - age
+    _lock_path(repo).write_text(
+        f"12345 some-old-host {old_epoch} 2020-01-01T00:00:00Z\n"
+    )
+    return old_epoch
 
 
 def _run(
@@ -99,9 +135,21 @@ def test_acquire_on_a_fresh_repo_succeeds_and_writes_a_lock_file(
     lock = _lock_path(repo)
     assert lock.exists()
     fields = lock.read_text().split()
-    assert len(fields) == 4, fields  # pid hostname epoch iso8601
+    assert len(fields) == 5, fields  # pid hostname epoch iso8601 owner-token
     assert fields[0].isdigit()  # pid, recorded for humans only (see header)
     assert fields[2].isdigit()  # epoch seconds -- the ONLY field acquire reads back
+    # Owner token (lode-ao95): opaque, non-empty, distinct across acquisitions
+    # -- not read back by anything in THIS script yet (see CAVEAT 2 / lode-q9pm)
+    # but must actually be present and vary, or a future ownership check has
+    # nothing to compare against.
+    assert fields[4], fields
+    second = _run("release", repo=repo)
+    assert second.returncode == 0
+    reacquired = _run("acquire", repo=repo)
+    assert reacquired.returncode == 0
+    assert lock.read_text().split()[4] != fields[4], (
+        "two separate acquisitions produced the SAME owner token"
+    )
 
 
 def test_second_acquire_without_release_is_skipped_while_fresh(
@@ -167,6 +215,60 @@ def test_heartbeat_refreshes_an_existing_locks_timestamp(tmp_path: Path) -> None
     assert result.returncode == 0, result.stdout + result.stderr
     new_epoch = int(lock.read_text().split()[2])
     assert new_epoch > old_epoch
+
+
+def test_heartbeat_preserves_the_existing_owner_token(tmp_path: Path) -> None:
+    """MERGE RESOLUTION pin (lode-ao95 x lode-m87j): `heartbeat` must PRESERVE
+    field 5 (the owner token) rather than regenerate or blank it -- a
+    heartbeat that mints a fresh token every tick would destroy the ownership
+    continuity a future check (lode-q9pm) needs to compare against, while
+    every other heartbeat test here (which only checks the epoch/timestamp)
+    would stay green regardless. This is the exact regression the MERGE NOTE
+    in scripts/land-lock.sh's header called out: reverting `heartbeat`'s
+    `lock_record "$CUR_TOKEN"` call back to trunk's original, argument-less
+    `lock_record` either crashes under `set -u` (the positional is mandatory)
+    or, if defaulted instead of reverted, changes the token -- either way
+    this test goes red.
+    """
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    original_token = "deadbeefcafef00d"
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z {original_token}\n")
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert len(fields) == 5, fields
+    assert fields[4] == original_token, (
+        "heartbeat changed the owner token -- it must PRESERVE field 5, "
+        "never regenerate or blank it (see MERGE RESOLUTION in "
+        "scripts/land-lock.sh's header)"
+    )
+    # The timestamp itself must still have refreshed -- this is not "heartbeat
+    # is a no-op" in disguise.
+    assert int(fields[2]) > old_epoch
+
+
+def test_heartbeat_on_a_pre_token_four_field_lock_mints_a_fresh_token(
+    tmp_path: Path,
+) -> None:
+    """Backward compatibility: a lock record predating the owner token
+    (lode-aps3-era, four fields) has nothing to preserve, so `heartbeat`
+    mints a fresh one -- matching `acquire`'s own shape for the same case --
+    rather than crashing or writing an empty 5th field."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = int(time.time()) - 100
+    lock.write_text(f"12345 host {old_epoch} 2020-01-01T00:00:00Z\n")
+
+    result = _run("heartbeat", repo=repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    fields = lock.read_text().split()
+    assert len(fields) == 5, fields
+    assert fields[4], "heartbeat left field 5 empty instead of minting a token"
 
 
 def test_heartbeat_on_a_missing_lock_creates_one(tmp_path: Path) -> None:
@@ -366,6 +468,180 @@ def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
         "raised above 1800s, so an abandoned lock now blocks landing for longer "
         f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Atomic reclaim (lode-ao95) -- the mkdir-gated fix for the two-winner race
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
+    tmp_path: Path,
+) -> None:
+    """The regression this ticket fixes: two concurrent `acquire` calls both
+    exiting 0 against one stale lock. Reproduce the race, then assert every
+    round has EXACTLY one winner.
+
+    CONTENTION IS LOAD-BEARING -- do not lower it. 8-way (where the original
+    `rm`-then-create defect was first measured) is NOT enough to cover the
+    fixed code: the gate closed the two-step race, but left a second,
+    narrower one in the gate-winner's re-validation, and that one is
+    invisible at 8 workers. Measured on the same machine, same harness:
+
+        8-way,  200 rounds -> 0 multi-winner   (the bug is INVISIBLE here)
+        32-way,  60 rounds -> 11 multi-winner  (~18%/round)
+
+    So a version of this test at 8-way would have passed against code that
+    still admitted two landers onto `trunk`. 32 workers x 40 rounds makes a
+    regression a near-certainty to surface (P(miss) ~ 0.8^40) and costs a
+    few seconds. The assertion is `== 1`, not `<= 1`, deliberately: a "fix"
+    that simply blocked every racer would wedge landing outright while
+    satisfying any check that only counted upwards.
+    """
+    repo = _init_repo(tmp_path)
+    gate = _gate_path(repo)
+    rounds = 40
+    workers = 32
+    # Hoisted, not per-round: a Barrier resets itself once all `workers`
+    # parties have tripped it, and every round trips it exactly once with
+    # exactly that many.
+    barrier = threading.Barrier(workers)
+
+    def _race() -> subprocess.CompletedProcess:
+        barrier.wait(timeout=30)
+        return _run(
+            "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+        )
+
+    for round_num in range(rounds):
+        # Reset BOTH pieces of state between rounds: a gate left behind by the
+        # previous round would make the next one skip instead of race, quietly
+        # reducing the effective sample size rather than failing.
+        shutil.rmtree(gate, ignore_errors=True)
+        _write_stale_lock(repo)
+
+        # Release every racer from the same barrier. Without it each thread
+        # reaches its own `subprocess.run` whenever the GIL and the fork storm
+        # let it, which staggers the starts by milliseconds -- enough to
+        # thin the interleaving badly: measured against a deliberately
+        # reverted re-validation, the un-barriered version detected the
+        # regression in only 4 of 6 runs, and a ~30% miss rate on a
+        # two-lander bug is not a gate. With the barrier it is 10 of 10.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_race) for _ in range(workers)]
+            results = [f.result() for f in futures]
+
+        winners = [r for r in results if r.returncode == 0]
+        assert len(winners) == 1, (
+            f"round {round_num}: {len(winners)} winners (expected exactly 1)\n"
+            + "\n".join(
+                f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}" for r in results
+            )
+        )
+
+
+def test_a_gate_busy_with_a_live_reclaim_is_not_treated_as_abandoned(
+    tmp_path: Path,
+) -> None:
+    """A freshly-created reclaim gate (age well under
+    RECLAIM_GATE_STALE_SECONDS) must block a concurrent acquire outright --
+    it must NOT be cleared and retried, since a genuine reclaim could still
+    be in flight."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = _write_stale_lock(repo)
+
+    gate = _gate_path(repo)
+    gate.mkdir()
+    (gate / "created").write_text(str(int(time.time())))
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    # Untouched: the gate holder (simulated here) is still the only one
+    # allowed to reclaim; the main lock file is exactly as it was.
+    assert lock.read_text().split()[2] == str(old_epoch)
+    assert gate.exists()
+
+
+def test_a_gate_with_no_creation_stamp_is_dated_rather_than_wedging(
+    tmp_path: Path,
+) -> None:
+    """A reclaimer killed between `mkdir "$LOCK.reclaiming"` and writing the
+    stamp inside it leaves a gate with no `created` file; treating that as
+    "still in progress" and skipping wedges landing PERMANENTLY, since
+    nothing else ever removes a gate and the abandoned-gate branch needs a
+    timestamp to age one out. The full argument is at the code it constrains
+    (scripts/land-lock.sh, the gate-taken branch).
+
+    So the acquire that finds an unstamped gate must DATE it. This test pins
+    that half; `test_an_abandoned_reclaim_gate_is_cleared_and_retried` pins
+    the other half (a dated gate does get cleared once past the window), and
+    together they are "no permanent wedge" -- without needing a 30s sleep in
+    the suite to observe it end-to-end.
+    """
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = _write_stale_lock(repo)
+
+    gate = _gate_path(repo)
+    gate.mkdir()  # no `created` inside: killed between mkdir and the stamp
+    assert not (gate / "created").exists()
+
+    before = int(time.time())
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    # This tick still skips -- it cannot know the gate is dead rather than
+    # microseconds old. What matters is that it left the gate DATABLE.
+    assert result.returncode == 1, result.stdout + result.stderr
+    stamp = (gate / "created").read_text().strip()
+    assert stamp.isdigit(), f"gate left undatable, landing wedges: {stamp!r}"
+    assert int(stamp) >= before
+    # The stale lock itself is untouched -- stamping is not reclaiming.
+    assert lock.read_text().split()[2] == str(old_epoch)
+
+
+def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> None:
+    """The no-wedge half of the fix: a reclaim gate left behind by a
+    reclaimer that crashed between winning it and clearing it (age well past
+    RECLAIM_GATE_STALE_SECONDS) must NOT block landing forever -- a later
+    acquire clears it and retries, successfully reclaiming the still-stale
+    main lock."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    old_epoch = _write_stale_lock(repo)
+
+    gate = _gate_path(repo)
+    gate.mkdir()
+    (gate / "created").write_text(str(int(time.time()) - 1000))  # long abandoned
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not gate.exists(), "the abandoned gate must be cleared, not left behind"
+    new_fields = lock.read_text().split()
+    assert int(new_fields[2]) > old_epoch
+
+
+# NOTE on the gate-winner's internal re-validation (land-lock.sh's own
+# comment: "Re-validate before touching $LOCK"). There is deliberately no
+# SEPARATE deterministic unit test for it. The interleaving it guards --
+# this racer's own pre-loop staleness check sees STALE, and by the time it
+# wins the gate another racer's reclaim is already in flight or complete --
+# cannot be staged from a single sequential invocation without mocking the
+# script's internals, which the rest of this file avoids on purpose (see the
+# module docstring). It is covered by the stress test above instead.
+#
+# That coverage is only as good as the CONTENTION, which is why `workers` is
+# pinned rather than left to taste -- measurements and the full argument are
+# in that test's own docstring. Lowering it to speed this file up deletes the
+# only gate that has ever caught a live two-lander bug in this script.
 
 
 # ---------------------------------------------------------------------------

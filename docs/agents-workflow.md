@@ -2240,20 +2240,62 @@ assumption would not have closed it.
   14m10s), the same order as a 600s window rather than comfortably inside it. Re-deriving the number
   against real dispatch-time data, or covering gaps (1) and (3), is **lode-cp4o**.
 
-  **Second, `acquire` is atomic but the stale-lock *reclaim* is not** — `rm`
-  then create, two steps, observed admitting two winners at 8-way contention. Unreachable under the
-  one-loop convention (a still-running pass holds a *fresh* lock, so the reclaim branch is
-  crash-recovery only), and deferred rather than closed with a nested TTL that could wedge landing
-  outright (lode-ao95). `heartbeat` does not check that it still *owns* the lock, so in that
-  two-winner state the pass that lost it keeps re-stamping the winner's record and the overlap becomes
-  self-concealing — it neither causes the overlap nor changes any verdict (no pass ever re-reads the
-  lock to confirm it holds it, before or after lode-m87j), but it erases the evidence a human would
-  spot one by; whichever of lode-ao95 or lode-cp4o lands second should add an owner token `heartbeat`
-  refuses to overwrite. **Release reaches only two sites** — Section 1's empty-queue exit and the end
-  of Section 4 — as a latency optimization; every other stop, *including the routine pass in which
-  every branch was kicked back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that
-  asks nothing of any exit site cannot rot as exits are added, the same reasoning as the pass-start
-  `reset --hard` below.
+  **Second, the stale-lock *reclaim* is now ATOMIC (lode-ao95)** — it used to be `rm` then create, two
+  separate steps, OBSERVED admitting two winners (3/40 rounds at 8-way contention). The fix gates the
+  destructive part of a reclaim (`rm -f "$LOCK"` + a fresh write) behind an `mkdir`-based token,
+  `$LOCK.reclaiming`: `mkdir` is a single atomic syscall, so exactly one racer's `mkdir` can ever
+  succeed for that path. The obvious version of that (an O_EXCL token, once, no self-heal) is exactly
+  what CAVEAT 2 originally warned would wedge landing *permanently* if its winner died between
+  creating the gate and clearing it — the fix bounds that risk with its own, much smaller staleness
+  window scoped to the gate alone (a fixed 30s constant, not `LAND_LOCK_STALE_SECONDS`, since it only
+  needs to outlast a couple of shell builtins, never a whole pass): a later `acquire` that finds an
+  abandoned gate past that window clears it and retries the `mkdir` once — and *dates* a gate it finds
+  with no timestamp, so a reclaimer killed in the one-syscall gap between `mkdir` and writing that
+  stamp cannot leave a gate nothing is able to age out (which would restore the permanent wedge in
+  full). The gate's winner also re-reads `$LOCK` immediately before touching it and reclaims **only on
+  positive proof** that it is still the same stale record — present, parseable, still past the window.
+  Treating an *absent* file as licence to proceed is itself a two-winner bug (an absent lock means a
+  reclaim is already in flight, and this racer's `rm` then destroys whichever record lands in the gap,
+  including a legitimate fresh-path acquire's): measured at 11/60 rounds at 32-way contention before
+  the check was made conservative. `acquire`'s original fresh-lock path (`write_lock`'s `noclobber`
+  create) was always atomic and is unchanged.
+
+  **What the gate does *not* close, and must not be described as closing.** The self-heal can still
+  admit two winners when a gate holder is *alive but stalled* past the 30s window between passing
+  re-validation and its `rm`+write: a later tick judges that gate abandoned, clears it, wins a new one,
+  re-validates (the lock is still the original stale record, since the stalled holder has not written
+  yet) and reclaims — then the stalled holder resumes and reclaims on top. Both exit 0; **observed, not
+  derived**. Re-validation cannot help, because the displaced holder passed it before stalling. This is
+  a bounded-risk tradeoff, and the price of self-healing at all: the alternative (never clear a gate) is
+  the permanent wedge, which is strictly worse because it needs no race to trigger. The 30s window is
+  deliberately generous — the guarded critical section is a handful of forks — and **must not be
+  reduced to "tighten" this**, since a smaller window makes displacing a live holder *more* likely.
+  Closing it properly needs the reclaimer to verify it still owns the gate immediately before the
+  destructive `rm` — the same owner-token check below.
+
+  **The lock record carries an owner token (5th field, lode-ao95) that `heartbeat` now preserves but
+  still does not verify.** It exists so a future ownership check has something to compare against: even
+  with an atomic reclaim, a pass whose lock is reclaimed out from under it (still possible under the
+  documented crash-recovery scenario — atomicity guarantees exactly one winner, not that the original
+  holder learns it lost) can keep calling `heartbeat` and re-stamp the new holder's record, turning a
+  genuine two-lander overlap *self-concealing* rather than merely non-atomic — the file looks
+  continuously fresh and names whichever pass wrote last, erasing the evidence a human would spot one
+  by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and re-stamps that SAME token
+  rather than regenerating or blanking it, so the field stays meaningful across heartbeat calls —
+  lode-ao95 was built strictly against a trunk with no `heartbeat`, so this preservation is what merging
+  the two branches had to add (see the MERGE NOTE in `scripts/land-lock.sh`'s header). What it does
+  **not** do is compare that token against anything the calling pass remembers as *its own* — so a pass
+  that lost the lock still has no way to notice and still cannot refuse to overwrite a record it no
+  longer owns. Wiring that ownership check — threading each pass's own token through to its own
+  `heartbeat`/`release` calls, and refusing to overwrite on mismatch — is **lode-q9pm**, still open. The
+  standing rule that outlives this merge: **`heartbeat` must PRESERVE field 5, never regenerate or blank
+  it** — a heartbeat that mints a fresh token each tick leaves the field looking healthy while
+  destroying the only thing an ownership check can compare against.
+
+  **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
+  latency optimization; every other stop, *including the routine pass in which every branch was kicked
+  back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
+  site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and

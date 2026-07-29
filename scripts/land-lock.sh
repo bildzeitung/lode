@@ -118,29 +118,122 @@
 # Overriding via the env var stays available for anyone who has measured
 # their own machine.
 #
-# CAVEAT 2 -- `acquire` is atomic, the RECLAIM path is not. `write_lock`'s
-# O_EXCL create genuinely admits one winner; the reclaim below is `rm` THEN
-# create, two steps, so two racers that both see the same stale lock can
-# both proceed (one deletes the fresh lock the other just wrote). OBSERVED,
-# not theoretical: 3 of 40 rounds at 8-way contention against a stale lock
-# ended with two winners. Unreachable under the documented operating
-# convention (ONE `/loop 5m /land` on one machine issues acquires serially,
-# and a still-running pass holds a FRESH lock, so the reclaim branch is
-# crash-recovery only) -- and strictly better than the inert lock this
-# replaces, which admitted every overlap. Closing it properly needs a
-# nested TTL of its own (an O_EXCL reclaim token wedges landing permanently
-# if its holder dies in the two lines after creating it). See lode-ao95.
+# CAVEAT 2 -- the stale-lock RECLAIM is now ATOMIC (lode-ao95; previously
+# `rm` then create, two steps, OBSERVED admitting two winners 3/40 rounds at
+# 8-way contention).
 #
-# `heartbeat` does not verify it still OWNS the lock -- it overwrites whatever
-# record is there. So in the two-winner state above, the pass that LOST the
-# lock goes on re-stamping the winner's record at its next call site, and the
-# overlap becomes self-concealing: the file looks continuously fresh and names
-# whichever pass wrote last. This does not create the overlap (only the
-# non-atomic reclaim does) and it changes no verdict -- neither pass ever
-# re-reads the lock to check it still holds it, before or after lode-m87j --
-# but it does erase the evidence a human would use to spot one. Whichever of
-# lode-ao95 (atomic reclaim) or lode-cp4o (re-derive the TTL) lands second
-# should give the record an owner token that `heartbeat` refuses to overwrite.
+# READ THE EXPOSURE FIRST, or the rest of this section will read as far more
+# urgent than it is. Under the documented operating convention -- ONE
+# `/loop 5m /land` on one machine -- acquires are issued SERIALLY, and a pass
+# that is still running holds a FRESH lock. So the reclaim branch is
+# crash-recovery only: reaching it concurrently at all needs two independent
+# /land invocations arriving within milliseconds of each other, 30+ minutes
+# after a crash. The contention figures quoted below (8-way, 32-way) are
+# STRESS-TEST conditions chosen to make a rare interleaving reproducible in
+# seconds -- they are not an observed production failure rate, and nothing
+# here should be read as "landing is losing races today". This is hardening
+# against the convention being violated, which is exactly why it is worth
+# keeping the mechanism as simple as it can be rather than as clever.
+#
+# The fix serializes the destructive part of a reclaim
+# (`rm -f "$LOCK"` + a fresh `write_lock`) behind an `mkdir`-based gate,
+# `$LOCK.reclaiming`: `mkdir` is a single atomic syscall, so exactly one
+# racer's `mkdir` can ever succeed for that path, no matter how many other
+# racers attempt it at once or how many earlier attempts preceded it. Only
+# the gate's winner ever touches `$LOCK` in the reclaim path, which is what
+# closes the original race.
+#
+# The OBVIOUS version of this (an O_EXCL token, once, no self-heal) wedges
+# landing PERMANENTLY if its winner dies between creating the gate and
+# clearing it: every later tick would see the gate already exists and skip
+# forever, since nothing ever removes it -- leaving landing no better off
+# than under the inert trap-based lock this whole script replaced. The fix
+# bounds that risk with a SECOND, much smaller staleness window scoped to
+# the gate itself (`RECLAIM_GATE_STALE_SECONDS`, a small constant, not an
+# env override -- it only needs to cover "the two lines of actual reclaim
+# work" plus scheduler jitter, not a whole /land pass): a later acquire that
+# finds an abandoned gate older than that window clears it and retries the
+# `mkdir` once. The gate-taken branch also DATES an untimestamped gate it
+# finds, so that a reclaimer killed in the gap between `mkdir` and writing
+# the stamp cannot leave behind a gate nothing is ever able to age out --
+# without that, the permanent wedge above returns through a one-syscall
+# window (OBSERVED: three consecutive ticks skipping, gate still present,
+# against a lock 100000s stale).
+#
+# The gate's winner also RE-VALIDATES `$LOCK` immediately before touching it,
+# and reclaims ONLY on positive proof that it is still the same stale record
+# (present, parseable, still past the window). Winning the gate guarantees
+# exclusivity among would-be reclaimers; it says nothing about whether
+# reclaiming is still the right call. Two readings in particular must abort
+# rather than proceed -- an ABSENT file (a reclaim already in flight) and an
+# UNPARSEABLE one -- and getting that backwards is itself a two-winner bug,
+# measured at 11 of 60 rounds at 32-way contention. The reasoning is at the
+# check itself, in the reclaim loop below; it is the subtlest part of this
+# script, so read it there before changing it.
+#
+# WHAT THIS DOES *NOT* CLOSE -- the gate self-heal can still admit two
+# winners, and the claim it cannot is false: OBSERVED, 2 winners, with a gate
+# holder that is ALIVE but stalled past RECLAIM_GATE_STALE_SECONDS between
+# passing re-validation and its `rm`+write. A later tick judges that gate
+# abandoned, clears it, wins a new one, re-validates (the lock is still the
+# original stale record -- the stalled holder has not written yet), and
+# reclaims; the stalled holder then resumes and completes its own reclaim on
+# top. Both exit 0. Re-validation cannot help: the displaced holder passed it
+# BEFORE stalling. This is a bounded-risk tradeoff, not a closed hole, and it
+# is the price of self-healing at all -- the alternative (never clear a gate)
+# is the permanent wedge above, which is strictly worse because it needs no
+# race to trigger. The window is deliberately generous: the guarded critical
+# section is a handful of forks, so 30s of stall means a machine already in
+# serious trouble. Do NOT reduce RECLAIM_GATE_STALE_SECONDS to "tighten" this
+# -- a smaller window makes displacing a live holder MORE likely, not less.
+# Closing it properly needs the reclaimer to verify it still owns the gate
+# immediately before the destructive `rm`, i.e. the same owner-token check
+# lode-q9pm exists to add (see below).
+#
+# `acquire`'s own O_EXCL create (the FRESH-lock path, not the reclaim path)
+# was always atomic and remains so, unchanged (`write_lock`'s `noclobber`).
+#
+# A remaining, deliberately-accepted gap: this fix makes `acquire` alone
+# atomic, but says nothing about a WRITER that already thinks it holds the
+# lock and later re-stamps it (the `heartbeat` subcommand, lode-m87j -- see
+# the MERGE RESOLUTION note below). If a pass's lock is ever reclaimed out
+# from under it by another racer, that original pass -- unaware it lost the
+# lock -- could still re-stamp the NEW holder's record, making a genuine
+# overlap look like one continuous, legitimate holder (self-concealing
+# rather than prevented). That is not hypothetical: in the stalled-gate-
+# holder case above, the surviving record names the DISPLACED holder, not
+# the racer that reclaimed after it -- the file already lies about who
+# holds the lock. `heartbeat` (below) now PRESERVES the current record's
+# owner token rather than dropping or regenerating it on every call, so the
+# field itself stays meaningful across heartbeat calls -- but it does not
+# yet COMPARE that token against anything the calling pass remembers as its
+# own, so it still cannot refuse to overwrite a record it no longer owns.
+# This script records the token (5th record field, see `lock_record` below)
+# precisely so that comparison has something to check against; wiring the
+# actual ownership check is lode-q9pm.
+#
+# MERGE RESOLUTION (lode-ao95 x lode-m87j). This branch was built against a
+# trunk with no `heartbeat`; lode-m87j landed on trunk afterward, and this
+# file conflicted with it on merge. The conflict was SEMANTIC, not just
+# textual -- taking either side wholesale would have been wrong in a way no
+# test caught at the time:
+#   * trunk's `heartbeat` called `lock_record` with NO argument. This
+#     branch's `lock_record` reads the owner token from `$1`. Under
+#     `set -u` that call fails outright, so taking this branch's side
+#     wholesale would have broken heartbeat -- loudly, against trunk's
+#     heartbeat tests. That loudness was deliberate: the mandatory
+#     positional is a merge tripwire, and it was NOT "fixed" with a default.
+#   * Taking trunk's 4-field `lock_record` wholesale would have silently
+#     dropped the owner token and reverted the reclaim to the non-atomic
+#     `rm`-then-create form.
+#   * The resolution kept this branch's reclaim gate AND trunk's
+#     `heartbeat`, and made `heartbeat` PRESERVE the existing token (via
+#     `token_of`, see below) rather than regenerate or blank it -- a
+#     heartbeat that minted a fresh token every tick would have destroyed
+#     the one thing lode-q9pm needs to compare against, turning the field
+#     into decoration while looking correct.
+#   `tests/test_land_lock.py::test_heartbeat_preserves_the_existing_owner_token`
+#   pins this.
 #
 # Usage: scripts/land-lock.sh acquire
 #        scripts/land-lock.sh heartbeat
@@ -184,21 +277,89 @@ cmd="$1"
 LOCK="$(git rev-parse --git-dir)/land.lock"
 STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-1800}"
 
+# The mkdir-based gate serializing a reclaim's destructive rm+write (CAVEAT
+# 2), and the small, fixed staleness bound on the GATE itself (never the
+# `LAND_LOCK_STALE_SECONDS` env var -- that window governs the MAIN lock and
+# must stay large; this one only has to outlast a couple of shell builtins).
+RECLAIM_GATE="$LOCK.reclaiming"
+RECLAIM_GATE_STALE_SECONDS=30
+
+new_token() {
+  # An opaque, effectively-unique identifier for THIS acquisition -- not a
+  # secret, just distinct across concurrent acquirers -- so a future
+  # ownership check (lode-q9pm) can tell "the record's current owner" from
+  # "was I the one who wrote it". /dev/urandom + od are both part of every
+  # base image this repo runs nox on, so there is no fallback branch: one
+  # that fired only where `od` is missing would hard-fail at the same
+  # `set -euo pipefail` anyway, while minting a SECOND token shape that
+  # lode-q9pm's comparison would then have to tolerate for no gain.
+  od -An -N8 -tx1 /dev/urandom | tr -d ' \n'
+}
+
 lock_record() {
-  # The one definition of the record's shape, written identically by `acquire`
-  # and `heartbeat` -- keep it that way: field ORDER is load-bearing, since the
-  # reclaim path below reads field 3 (epoch) and nothing else. Fields 1, 2 and
-  # 4 (pid, host, ISO stamp) are only ever for a human reading the file by hand.
-  printf '%s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)"
+  # The one definition of the record's shape. Field order is load-bearing:
+  # the reclaim path below reads field 3 (epoch) and nothing else, so fields
+  # 1-4 (pid, host, epoch, ISO stamp) keep their original positions -- only
+  # field 5 (owner token) is new, appended rather than inserted, so nothing
+  # that reads field 3 needs to change. Fields 1, 2 and 4 are for a human
+  # reading the file by hand; field 5 is for a future consumer (lode-q9pm),
+  # not read back by anything else in this script, but IS read back and
+  # threaded straight through by `heartbeat` below (`token_of`), so the
+  # field survives repeated heartbeat calls unchanged.
+  #
+  # The token is a MANDATORY positional, and that is deliberate -- see the
+  # MERGE RESOLUTION note in the header. Defaulting it (`${1:-...}`) would
+  # have let trunk's original argument-less `heartbeat` call keep working
+  # through the merge while either blanking the token or minting a fresh one
+  # every tick, silently destroying the ownership continuity the field
+  # exists to provide, with trunk's five heartbeat tests still green.
+  # Requiring it makes that mistake fail loudly instead. Do not "fix" this
+  # by adding a default -- `heartbeat` below supplies its own via `token_of`.
+  printf '%s %s %s %s %s\n' "$$" "$(hostname)" "$(date -u +%s)" "$(date -u +%FT%TZ)" "$1"
+}
+
+epoch_of() {
+  # Field 3 of a lock record if it is a legible epoch, empty otherwise
+  # ("age unknown"). Both readers below parse identically -- only their
+  # VERDICTS differ, and each keeps its own at its own call site. Confining
+  # the positional-param split to a function also keeps it from clobbering
+  # the script's own "$@" twice at top level.
+  # shellcheck disable=SC2086  # deliberate word-split of the record
+  set -- $1
+  case "${3:-}" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s' "$3" ;;
+  esac
+}
+
+token_of() {
+  # Field 5 (owner token) of a lock record, empty if the record predates the
+  # field (four fields only, lode-aps3-era) or is otherwise malformed. Same
+  # word-split-in-a-function shape as `epoch_of`, and for the same reason --
+  # confines the split so it cannot clobber the script's own "$@" at top
+  # level. Used only by `heartbeat`, to PRESERVE whatever token is currently
+  # on disk rather than regenerate or blank it (see MERGE RESOLUTION above).
+  # shellcheck disable=SC2086  # deliberate word-split of the record
+  set -- $1
+  printf '%s' "${5:-}"
+}
+
+skip_lock_still_held() {
+  # The lock is present and not (yet) reclaimable. One wording, two callers.
+  echo "land-lock: another /land appears to still be running on this machine" \
+    "(lock: $1) -- skipping this tick." >&2
+  exit 1
 }
 
 write_lock() {
   # Atomic create: `set -o noclobber` makes the `>` redirect fail if the file
-  # already exists, so two concurrent attempts can't both think they got it.
-  # That guarantee covers THIS function only -- the reclaim path below calls
-  # it after an `rm`, which is not atomic as a pair (header, caveat 2).
+  # already exists, so two concurrent FRESH attempts can't both think they
+  # got it. Takes the new owner token as $1. This guarantee covers THIS
+  # function only -- the reclaim path below never calls it without first
+  # winning the exclusive gate (CAVEAT 2), which is what extends the same
+  # single-winner property to the reclaim case.
   ( set -o noclobber
-    lock_record > "$LOCK" ) 2>/dev/null
+    lock_record "$1" > "$LOCK" ) 2>/dev/null
 }
 
 if [ "$cmd" = "release" ]; then
@@ -224,7 +385,23 @@ if [ "$cmd" = "heartbeat" ]; then
   # without ever acquiring -- should not happen at either documented call
   # site), this creates it fresh rather than erroring: either way the caller's
   # intent ("the pass is still alive right now") is the same.
-  if lock_record > "$LOCK" 2>/dev/null; then
+  #
+  # PRESERVES the owner token (field 5, lode-ao95) rather than regenerating or
+  # blanking it -- `lock_record`'s token positional is mandatory specifically
+  # so a heartbeat that forgot this would fail loudly under `set -u`, not
+  # silently mint a fresh token every tick (see the MERGE RESOLUTION note in
+  # the header). Reads whatever token is CURRENTLY on disk via `token_of` and
+  # threads it straight through; a record predating the field (four fields,
+  # no token) or a lock somehow already gone yields an empty `token_of` read,
+  # in which case this mints a fresh one -- matching `acquire`'s own shape,
+  # since there is no prior token left to preserve either way.
+  CUR_RECORD=""
+  read -r CUR_RECORD < "$LOCK" 2>/dev/null || true
+  CUR_TOKEN="$(token_of "$CUR_RECORD")"
+  if [ -z "$CUR_TOKEN" ]; then
+    CUR_TOKEN="$(new_token)"
+  fi
+  if lock_record "$CUR_TOKEN" > "$LOCK" 2>/dev/null; then
     exit 0
   fi
   echo "land-lock: heartbeat could not write $LOCK (unwritable or missing git" \
@@ -235,7 +412,9 @@ if [ "$cmd" = "heartbeat" ]; then
 fi
 
 # acquire
-if write_lock; then
+TOKEN="$(new_token)"
+if write_lock "$TOKEN"; then
+  echo "land-lock: acquired (token $TOKEN)"
   exit 0
 fi
 
@@ -261,27 +440,118 @@ fi
 # unknown" rather than crashing: stay conservative and skip rather than guess.
 RECORD=""
 read -r RECORD < "$LOCK" || true
-# shellcheck disable=SC2086  # deliberate word-split of the record into fields
-set -- $RECORD
-RECORDED_EPOCH="${3:-}"
-case "$RECORDED_EPOCH" in
-  ''|*[!0-9]*) RECORDED_EPOCH="" ;;
-esac
+RECORDED_EPOCH="$(epoch_of "$RECORD")"
 
-if [ -n "$RECORDED_EPOCH" ]; then
-  AGE=$(( $(date -u +%s) - RECORDED_EPOCH ))
-  if [ "$AGE" -ge "$STALE_SECONDS" ]; then
+if [ -z "$RECORDED_EPOCH" ]; then
+  skip_lock_still_held "$RECORD"
+fi
+
+AGE=$(( $(date -u +%s) - RECORDED_EPOCH ))
+if [ "$AGE" -lt "$STALE_SECONDS" ]; then
+  skip_lock_still_held "$RECORD"
+fi
+
+# Stale -- attempt an ATOMIC reclaim (CAVEAT 2). Exactly two attempts: once
+# outright, and once more after clearing a gate abandoned by a reclaimer that
+# crashed between winning it and finishing its rm+write. Every attempt's
+# actual decision is a bare `mkdir`, so no number of attempts by THIS racer
+# can produce a second winner alongside another racer that is keeping its
+# gate (the case that CAN, an alive-but-stalled holder, is the documented
+# residual in the header -- it is not created by retrying here).
+for _ in 1 2; do
+
+  if mkdir "$RECLAIM_GATE" 2>/dev/null; then
+    date -u +%s > "$RECLAIM_GATE/created" 2>/dev/null || true
+
+    # Re-validate before touching $LOCK: winning the gate only guarantees
+    # exclusivity among reclaimers, not that reclaiming is still CORRECT.
+    # Reclaim only on POSITIVE proof that $LOCK is still the same stale
+    # record this tick set out to reclaim -- present, parseable, and still
+    # past the window. Every other reading aborts, in the same conservative
+    # direction as the outer staleness check above:
+    #
+    #   * FILE ABSENT is NOT "nothing to protect" -- it means a reclaim is
+    #     already IN FLIGHT: some other racer's `rm -f "$LOCK"` has landed
+    #     and its `write_lock` has not. Proceeding here is not merely
+    #     redundant, it IS the two-winner bug: this racer's own `rm -f` then
+    #     deletes whichever record lands in that gap -- including the
+    #     legitimate one a top-level `write_lock` is creating at that very
+    #     moment, since the FRESH path needs no gate and is racing the same
+    #     window. That racer exits 0 believing it holds a lock this one has
+    #     already destroyed and overwritten. OBSERVED, not derived: 11 of 60
+    #     rounds at 32-way contention, traced to exactly this interleaving,
+    #     before this check was made conservative.
+    #   * UNPARSEABLE is the same "age unknown" the outer check refuses to
+    #     guess at. Holding the gate is not extra information about the
+    #     record's age, so it must not turn "unknown" into "safe to destroy".
+    CUR_RECORD=""
+    read -r CUR_RECORD < "$LOCK" 2>/dev/null || true
+    CUR_EPOCH="$(epoch_of "$CUR_RECORD")"
+    if [ -z "$CUR_EPOCH" ] \
+    || [ "$(( $(date -u +%s) - CUR_EPOCH ))" -lt "$STALE_SECONDS" ]; then
+      rm -rf "$RECLAIM_GATE" 2>/dev/null || true
+      echo "land-lock: the lock is no longer the stale record this tick set" \
+        "out to reclaim (now: ${CUR_RECORD:-<absent>}) -- another /land has" \
+        "reclaimed it or is mid-reclaim; skipping this tick." >&2
+      exit 1
+    fi
+
     echo "land-lock: reclaiming stale lock (age ${AGE}s >= ${STALE_SECONDS}s)," \
       "previously held by: $RECORD"
     rm -f "$LOCK"
-    if write_lock; then
+    if write_lock "$TOKEN"; then
+      rm -rf "$RECLAIM_GATE" 2>/dev/null || true
+      echo "land-lock: acquired via reclaim (token $TOKEN)"
       exit 0
     fi
+    rm -rf "$RECLAIM_GATE" 2>/dev/null || true
     echo "land-lock: lost the race reclaiming the lock -- skipping this tick." >&2
     exit 1
   fi
-fi
 
-echo "land-lock: another /land appears to still be running on this machine" \
-  "(lock: $RECORD) -- skipping this tick." >&2
+  # Gate already taken -- either a reclaim is genuinely in progress right now
+  # (near-instant; clears within microseconds under normal operation) or a
+  # prior reclaimer crashed between winning the gate and clearing it,
+  # abandoning it. Self-heal only once the gate itself is older than the
+  # small bound above.
+  GATE_EPOCH="$(cat "$RECLAIM_GATE/created" 2>/dev/null || true)"
+  case "$GATE_EPOCH" in
+    ''|*[!0-9]*) GATE_EPOCH="" ;;
+  esac
+  if [ -z "$GATE_EPOCH" ]; then
+    # No legible creation stamp. Either the winner has not written it yet
+    # (microseconds old -- the normal case) or it was killed in the gap
+    # between `mkdir` and that write and never will. Skipping outright would
+    # make the second case a PERMANENT WEDGE: nothing but this branch ever
+    # removes a gate, so every later tick would read the same missing stamp,
+    # skip again, and report "another /land appears to still be running"
+    # about a lock that is by then hours stale -- landing blocked until a
+    # human deletes .git/land.lock.reclaiming by hand. That is precisely the
+    # wedge this gate's staleness bound exists to rule out, so leaving one
+    # reachable here would defeat it (OBSERVED before this branch existed:
+    # three consecutive ticks, gate still present, stale lock untouched).
+    # Date it ourselves instead. A live winner finishes long before the
+    # window elapses and re-stamps it a moment later anyway (harmless); a
+    # dead one now leaves a gate that a later tick can age out normally.
+    date -u +%s > "$RECLAIM_GATE/created" 2>/dev/null || true
+    break
+  fi
+  GATE_AGE=$(( $(date -u +%s) - GATE_EPOCH ))
+  if [ "$GATE_AGE" -lt "$RECLAIM_GATE_STALE_SECONDS" ]; then
+    break
+  fi
+  rm -rf "$RECLAIM_GATE" 2>/dev/null || true
+  # loop back for the second (and final) attempt
+done
+
+# Fell out of the loop: the lock IS reclaimable, but another racer holds the
+# reclaim gate. Deliberately NOT the "another /land appears to still be
+# running" wording the two checks above use -- that names $LOCK, and an
+# operator who reads it while the real obstruction is a leftover
+# $LOCK.reclaiming goes and inspects the wrong file. lode-aps3's own rule:
+# "lock was not held" must be observable, never silent or misattributed.
+echo "land-lock: the lock is reclaimable (age ${AGE}s >= ${STALE_SECONDS}s)" \
+  "but another /land holds the reclaim gate $RECLAIM_GATE -- skipping this" \
+  "tick. If this repeats for more than ${RECLAIM_GATE_STALE_SECONDS}s the" \
+  "gate is abandoned and the next tick clears it automatically." >&2
 exit 1
