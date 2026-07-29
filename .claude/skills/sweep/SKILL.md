@@ -162,7 +162,10 @@ newline embedded in a title instead of letting it break the row.
 **`--limit 0` — same reason as §1.** The stake specific to this section: it promises the deferred list
 "in full, with no dedup" every pass, so a capped query would under-report past 50 while the §8 count
 still read as the true total. (`lode-2gun` extended the same pin to `/land`, `/code`, `/epic-audit`,
-`/release` and to `scripts/epic-children-closed.sh`, called from §2 above.)
+`/release` and to `scripts/epic-children-closed.sh`, called from §2 above; `lode-9bbq` added
+`.claude/statusline.sh`. **This roster is the inventory of pinned sites — keep it current when a site
+is added.** A grep is not a substitute: `statusline.sh` calls `bd -C "$cwd" list`, and the `-C` between
+`bd` and `list` is exactly what hid it from `lode-2gun`'s literal `bd list` search.)
 
 **Deliberately excluded from everything else in this skill:**
 

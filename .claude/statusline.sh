@@ -78,6 +78,19 @@ fi
 # synchronously, so read from a short-lived cache refreshed in the background.
 # We cache ALL open issues (one call) and count by stage: in_progress = build,
 # then the workflow labels. Zero-count stages are omitted.
+#
+# `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
+# bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
+# live in /sweep's SKILL.md (lode-hwbm), whose roster of pinned sites now lists
+# this one -- lode-2gun's audit missed it because `-C "$cwd"` sits between `bd`
+# and `list`, defeating a literal 'bd list' grep, so a roster rather than a grep
+# is what will find it next time. The latency note above is the one real
+# objection to pinning here, and it is answered rather than overridden: the bd
+# call is backgrounded and the foreground render only parses the cached JSON, so
+# pinning moves no work onto the render path. Capping deliberately was the
+# alternative, rejected because the trigger is already met -- the query below is
+# unfiltered by status, so it already returns well past bd's documented default
+# (63 rows when measured: 39 open + 18 in_progress + 6 deferred).
 pipeline_part=""
 if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     cache="${TMPDIR:-/tmp}/lode-statusline-bd.cache"
@@ -89,7 +102,7 @@ if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
         # Reset mtime first so the next few renders (within the ~0.85s bd takes)
         # don't each spawn their own refresh; then refresh detached.
         touch "$cache"
-        ( if bd -C "$cwd" list --json 2>/dev/null > "$cache.new" \
+        ( if bd -C "$cwd" list --limit 0 --json 2>/dev/null > "$cache.new" \
               && mv -f "$cache.new" "$cache"; then :; else rm -f "$cache.new"; fi ) >/dev/null 2>&1 &
     fi
     if [ -s "$cache" ]; then
