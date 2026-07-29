@@ -1936,6 +1936,44 @@ hazard — the leaked worktrees are clean, unlocked, and ancestors of `trunk`, s
 does reach Section 4 reclaims them under the same predicate — but the justification is "the backstop
 reclaims it, next pass at the latest," not "always this pass."
 
+### Worktree-GC widened to reclaim clean, not-yet-merged builder worktrees (lode-yrtu)
+
+The backstop sweep described above (`lode-h1vn`/`lode-amif`/`lode-9hgu`) only ever reclaimed a
+worktree whose `HEAD` had merged into `trunk` or was captured on `origin/land/<id>`. A builder's
+own `worktree-agent-*` branch is **never** pushed to origin, so once its ticket is abandoned,
+bounced, or its build simply dies before handing off, neither arm is ever satisfied again —
+nothing in the system ever revisits it, and its ~100MB worktree (dominated by a `venv/` that is
+mostly hardlinked, so `du -sh` on one worktree wildly overstates what removing it actually frees)
+leaks forever. Measured on the landing machine: 8 of 14–18 worktree directories in this bucket.
+Human decision, and the full measurement/verification trail: [docs/decisions.md](decisions.md)
+(search "lode-yrtu"). In short:
+
+- **Chosen: widen `/land`'s existing Section 4 sweep** (not a new `/gc` entry point, not `/sweep`
+  with a charter amendment — both considered and rejected, reasons in decisions.md).
+- A clean, **not-merged** `worktree-agent-*` worktree now has its **directory** reclaimed while its
+  **branch ref is kept** — `git worktree remove` without the paired `git branch -D`, so any commits
+  the build made stay reachable. lode-9hgu's dirty-tree guarantee is unchanged: a dirty worktree,
+  in this bucket or any other, is still never touched.
+- Guarded by an **age floor**, `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` (env, default **21600s/6h**),
+  on the worktree's last commit — not the lock start-token check used for the stale-lock detector
+  below, because that token only exists while the worktree is actually locked, and a build unlocks
+  right after its first commit (lode-oqr) while continuing, unlocked, for the rest of its cycle.
+  Documented here rather than in [configuration.md](configuration.md) per that page's scope note —
+  dev-tooling for the landing loop, not an application knob.
+- **The per-session lock-owner pid is confirmed stale-reclaimable too.** The harness/producer lock
+  is per-*session*: several worktrees can share one lock-owner pid, so a dead session left every
+  worktree it ever locked stuck behind the unconditional `locked` check forever. `scripts/worktree-
+  lock-stale.sh` (tested: `tests/test_worktree_lock_stale.py`) proves a lock's recorded pid is either
+  not running, or has been reused by a later process (via `/proc/<pid>/stat`'s own `starttime`,
+  matched against the token recorded at lock time) before treating it as unlocked; a lock it cannot
+  positively prove dead is left alone.
+- **The two bare-ref backstops (`land/*` and `worktree-agent-*` orphans) now report only deletions
+  that actually happened**, reading `git branch -D`'s real exit status instead of announcing one
+  ahead of the fact behind `|| true` — the same lode-bns3 treatment the main worktree loop already
+  had. Fixing the observability required switching both loops from a trailing pipe to process
+  substitution (`< <(...)`), since counters assigned inside the right side of a pipe die in that
+  subshell and never reach the summary line.
+
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
 The `/code` step-0 pickup **merges** `origin/trunk` into the kicked-back branch instead of rebasing

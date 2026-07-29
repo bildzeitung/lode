@@ -2641,3 +2641,117 @@ while erasing it here would lose the record of what was believed, and when.
   - **Not fixed here, and still worth fixing: lode-dj6m**, the product-side defect underneath
     (`FastEmbedEmbedder._load` resolves the HF revision eagerly even on query-only paths). This
     entry removes the *test*-side exposure only. The real `lode` binary still pays that round-trip.
+
+- **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
+  widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
+  while landing lode-25xp: `/land`'s backstop sweep reported `not-merged=8` out of 14–18 worktree
+  directories under `.claude/worktrees/`, and none of them were the single dirty-worktree residual
+  lode-9hgu already accepted.
+  - **The size motivation was inflated ~3x and re-measured.** Per-worktree `du -sh` counts `venv/`
+    bytes that are hardlinked across every worktree, the main venv, and the uv cache — removing one
+    worktree frees none of them. The only honest number is the sum of files with link count == 1
+    (bytes that actually disappear on `rm`): **~940MB** across the target class (clean, not-merged,
+    unlocked `worktree-agent-*`), not "the bulk of 2.2GB" as first measured. **Any future size claim
+    in this area must use the unshared-bytes method**, not per-dir `du -sh` (which overstated by
+    ~7x here) or even `du -sh --count-links` (which overstates the opposite direction by counting
+    shared bytes as if every worktree owned them outright). The real disk hog on this machine is
+    `~/.cache/uv` (3.1GB) and `~/.cache/pip` (1.0GB), which no worktree GC touches and which stayed
+    explicitly out of this ticket's scope.
+  - **Item-4 check, done FIRST as the note demanded, before widening anything:** three
+    clean+merged+unlocked worktrees flagged on 2026-07-28 as "the existing sweep should already
+    reclaim these" (`agent-a4b712b9130603520`/`land/lode-s1ia`, `agent-aa13e76dcfffb28f6`/
+    `land/lode-sdjb`, `agent-aa5d13f2d86731578`/`land/lode-rfon`) were **re-checked on 2026-07-29 and
+    are gone** — `git worktree list --porcelain` no longer lists any of them. Confirms this was a
+    timing gap (the sweep simply hadn't run since they merged), **not a live predicate bug** in the
+    existing merged-into-trunk reclaim path. Widening was safe to proceed with.
+  - **Three options were on the table; (a) was chosen:**
+    (a) widen `/land`'s existing Section 4 sweep to also reclaim clean, not-merged
+    `worktree-agent-*` worktrees; (b) a separate machine-local `/gc` entry point; (c) `/sweep`
+    surfaces the leak with a charter amendment. **(c) rejected**: `/sweep`'s own charter says
+    "surface only, never act" and its dedup is a durable **cross-machine** digest issue — but a
+    worktree leak is **machine-local**, a genuine design mismatch (a leak on machine A would surface
+    as a phantom item on every other machine's digest), not merely a scope question. **(b)
+    rejected**: a new entry point nobody runs automatically costs more than it buys when (a) is
+    available at near-zero marginal cost — `/land`'s Section 4 already enumerates every worktree and
+    already computes the bucket counts every pass, on the one machine that's the right machine to
+    run this. **(a) chosen**: smallest change, no new skill, no charter conflict, and the sweep
+    already runs unattended via `/loop 5m /land`.
+  - **Mechanism: reclaim the DIRECTORY, keep the branch REF.** `/land`'s existing sweep coupled
+    `git worktree remove --force` with `git branch -D` unconditionally; for a clean worktree those
+    are separable — any commits the build made stay reachable via the surviving
+    `worktree-agent-*` ref. Scoped via a `case "$BR" in worktree-agent-*)` guard in the loop's
+    not-merged branch (`.claude/skills/land/SKILL.md` Section 4) — every other not-merged shape (a
+    `land/<id>`-branched reviewer/rebase-pickup worktree, a detached worktree, anything else) is
+    completely unaffected.
+  - **Verified before shipping (acceptance criterion 3): removing the directory while keeping the
+    ref loses no reachable commits, INCLUDING the detached-HEAD case — by construction, not by
+    testing luck.** A detached worktree's porcelain `branch` field is always empty, and the `case`
+    pattern `worktree-agent-*)` can never match an empty string — so a detached worktree structurally
+    cannot enter this reclaim path at all; it always falls to the unchanged default arm (kept, dir
+    and all). The new path is therefore only ever reachable for a worktree that DOES have an
+    attached branch, which is exactly the case the "keep the ref" argument covers. No rescue-ref
+    dance is needed because the case that would need one is provably unreachable here.
+  - **Accepted residual: a dir-only-reclaimed branch ref persists indefinitely.** Nothing in this
+    design ever deletes it — an abandoned/bounced branch, by definition, never merges into `trunk`,
+    so the third bare-ref backstop's own `merged`-into-`trunk` guard (below) never fires for it
+    either. A lightweight ref costs near-nothing next to the ~100MB directory it used to anchor;
+    if the accumulation of such refs is ever material, a future ticket can add an explicit
+    age-based ref sweep for this specific case. Out of scope here.
+  - **Guard against eating an in-flight build: an AGE FLOOR on the worktree's last commit
+    (`LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS`, default 21600s/6h), not the lock start-token check.**
+    The ticket's own text suggested preferring the token check as "a stronger liveness signal than
+    age alone" — it is, but it is unavailable for exactly the case that matters here.
+    `.claude/agents/coding.md` unlocks its build worktree immediately after its FIRST commit
+    (lode-oqr), and the entire rest of a build's cycle — more edits, gates, more commits, push,
+    hand-off — runs UNLOCKED and NOT-MERGED from that point on. A `git worktree lock` reason (and
+    the pid/start token in it) exists ONLY while the worktree is actually locked; once unlocked,
+    that information is simply gone, so there is nothing left to compare a token against for the
+    entire window this widening targets. A worktree that is unlocked, not-merged, and momentarily
+    CLEAN (the instant between one commit and the build's next edit) is otherwise indistinguishable
+    from a genuinely abandoned one using anything `git worktree list --porcelain` exposes. Age of
+    the last commit is the only signal that remains, and it fails SAFE in the direction that
+    matters: a build still actively cycling has a recent `HEAD` commit almost by construction, so a
+    generous floor skips it every time — at the cost of a genuinely idle worktree waiting a few
+    extra hours to be reclaimed, which costs nothing since the branch ref (see above) is never lost
+    either way. 6 hours was chosen as comfortably longer than any single producer build-to-hand-off
+    cycle (typically well under an hour per `.claude/agents/coding.md`'s own cycle), while still
+    reclaiming space same-day.
+  - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
+    fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
+    raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28
+    measurement, 4 of 5) locked worktrees sharing ONE pid — the harness/session process, not a
+    per-agent one. Since `locked` is tested first, ahead of every other predicate, a dead session
+    leaked every worktree it had ever locked, forever. Fixed by `scripts/worktree-lock-stale.sh`
+    (tested: `tests/test_worktree_lock_stale.py`, 9 cases against real processes and real
+    `/proc/<pid>/stat` files, no mocking): a lock is treated as stale iff `kill -0 <pid>` fails, OR
+    the pid is alive but `/proc/<pid>/stat`'s own `starttime` (field 22, robustly extracted via the
+    LAST `)` in the line — `comm` can itself contain parens/spaces) no longer matches the `start
+    <token>` the harness recorded at lock time (pid reuse). This closes the reuse hazard that makes
+    plain `kill -0` alone unsafe, without resorting to a wall-clock window — unlike
+    `scripts/land-lock.sh`'s OWN staleness window, which exists because ITS recorded pid is a single
+    Bash tool sub-invocation, structurally always-dead by the time a later invocation reads it (pid
+    liveness is meaningless there); the pid recorded in a `git worktree lock` reason is the long-lived
+    session process, so liveness IS a meaningful signal once the reuse hole is closed. A lock this
+    script cannot positively prove dead is left alone (fail closed) — getting this wrong in the other
+    direction risks exactly what lode-oqr already cost once: destroying a live build's worktree. NOTE
+    on drift: the original 2026-07-28 measurement said "4 of 5 share one pid (1105248)"; that pid was
+    gone by 2026-07-29 (a different session), and the sharing was then 3-of-4 under a different pid.
+    The PATTERN held, the specific numbers did not — do not hard-code any pid or count.
+  - **Adjacent observability defect, also fixed here (folded into the same ticket per its own
+    scope): the two bare-ref backstops (`land/*` orphans and `worktree-agent-*` orphans) now report
+    only deletions that ACTUALLY happened.** OBSERVED live: a prior pass printed "backstop2: deleting
+    stale local ref land/lode-rlyx--agent-aad6b30a923856fb7" while the ref still existed afterward —
+    `git branch -D` had refused it (still checked out in a locked worktree) and the trailing `|| true`
+    swallowed that failure silently. Same class of bug lode-bns3 already fixed for the main worktree
+    loop (counting an attempt rather than the remove's real exit status), now applied to the two
+    backstops that had missed it. Fixing this also required switching both loops from a trailing pipe
+    (`git for-each-ref ... | while read -r BR; do ...; done`) to process substitution
+    (`< <(...)`) — a counter assigned on the right side of a pipe runs in a subshell and is lost the
+    moment the loop ends, so the old shape could never have reported real counts even with the exit-
+    status check added; the new shape (matching the main worktree loop's own already-correct
+    convention) makes the counters actually survive to the summary echo.
+  - **Full mechanism lives in code + tests, not restated at length here:**
+    `.claude/skills/land/SKILL.md` Section 4 (the widened loop + both backstop fixes),
+    `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
+    (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
+    (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).

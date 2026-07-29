@@ -1217,11 +1217,42 @@ done
 # past the locked gate into the `--force` below — precisely the "rip a worktree out from under a
 # running agent" harm the gate exists to prevent (the pre-lode-oqr disaster). Keeping `branch` last
 # makes its empty case a TRAILING delimiter, which `read` discards harmlessly ($BR="").
-RECLAIMED=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
+RECLAIMED=0; RECLAIMED_DIR_ONLY=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
+STALE_LOCKS_FOUND=0
+# lode-yrtu: minimum age (seconds) of a NOT-MERGED worktree-agent-*'s last commit before its
+# DIRECTORY (never its branch ref) becomes eligible for the new dir-only reclaim below -- see the
+# case arm's own comment for why an age floor is the guard here rather than the lock start-token
+# check used for the LOCKED bucket just below, and docs/agents-workflow.md's "Worktree-GC widened"
+# section for the tunable + default (documented there, not configuration.md, per that page's own
+# scope note: dev-tooling for the landing loop, not an application knob).
+MIN_AGE_SECONDS="${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"
 while IFS=$'\t' read -r WT SHA LOCKED BR; do
   if [ "$LOCKED" = "1" ]; then
-    SKIP_LOCKED=$((SKIP_LOCKED + 1))
-    continue
+    # lode-yrtu: the lock recorded here is PER-SESSION, not per-agent -- measured: several worktrees
+    # can share ONE lock-owner pid (the parent session process), so a DEAD session leaves every
+    # worktree it ever locked stuck at this check forever, since `locked` is tested before any other
+    # predicate. scripts/worktree-lock-stale.sh proves the recorded pid is either not running at all,
+    # or has been REUSED by an unrelated later process (via /proc/<pid>/stat's own starttime, matched
+    # against the token the harness recorded at lock time) -- see the script's header for the full
+    # mechanism and why plain `kill -0` alone cannot safely make this call. A lock the script cannot
+    # positively prove dead is left alone (fail closed) and skipped exactly as before.
+    LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" '
+      /^worktree / { path=$2; reason="" }
+      /^locked/    { reason=substr($0,8) }
+      /^$/         { if (path==want) { print reason; exit }; path="" }
+    ')
+    if scripts/worktree-lock-stale.sh "$LOCK_REASON"; then
+      STALE_LOCKS_FOUND=$((STALE_LOCKS_FOUND + 1))
+      # `git worktree remove` refuses a still-locked worktree even with `--force` -- that flag
+      # overrides "has modifications," never "is locked" (verified: dry-run against a fabricated
+      # repo, lode-yrtu). Proving the SESSION is dead is not the same as clearing git's own on-disk
+      # lock, so unlock it now, unconditionally, before falling through to the ancestor test and
+      # whichever reclaim path (full or dir-only) it leads to below.
+      git worktree unlock "$WT" 2>/dev/null || true
+    else
+      SKIP_LOCKED=$((SKIP_LOCKED + 1))
+      continue
+    fi
   fi
   # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
   # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
@@ -1253,9 +1284,63 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
   # (where it once destroyed two live builds, pre-lode-oqr). The dirty-tree guard immediately below
   # (lode-9hgu) is what makes this arm safe even for that exited-agent case: it still keeps a worktree
   # that has additional uncommitted content on top of a pushed tip, rather than reclaiming it.
-  git merge-base --is-ancestor "$SHA" trunk \
-    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
-    || { SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1)); continue; }
+  if git merge-base --is-ancestor "$SHA" trunk \
+    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; }; then
+    : # merged into trunk, or captured on origin -- fall through to the shared dirty-guard + reclaim below
+  else
+    # lode-yrtu: NOT-MERGED no longer means "leaked forever." A builder's OWN worktree-agent-*
+    # branch is never pushed to origin, by construction (coding.md) -- so BOTH ancestor arms above
+    # are PERMANENTLY false the instant its ticket is abandoned, bounced, or its build simply dies,
+    # and nothing else in the system ever revisits it (measured: 8 of 14 leaked worktree dirs on the
+    # landing machine, lode-yrtu). Reclaim the DIRECTORY ONLY for exactly this branch shape, keeping
+    # the branch REF so any commits the build made stay reachable -- verified (docs/decisions.md's
+    # lode-yrtu entry) that this loses nothing, INCLUDING the detached-HEAD case the ref argument
+    # does not itself cover: the `case` pattern below can only ever match a NON-EMPTY `$BR` (a
+    # detached worktree's `$BR` is always empty), so a detached worktree structurally can never enter
+    # this arm at all -- it always falls to the unchanged `*)` default below. Every OTHER not-merged
+    # shape (a `land/<id>`-branched reviewer/rebase-pickup worktree, a detached worktree, anything
+    # else) is UNCHANGED: still kept, full stop -- this widening is scoped to `worktree-agent-*` only.
+    case "$BR" in
+      worktree-agent-*)
+        # AGE GUARD, not the lock start-token check (docs/decisions.md's lode-yrtu entry has the full
+        # reasoning): a `git worktree lock`'s reason -- and the pid/start token in it -- exists ONLY
+        # while the worktree is actually locked. coding.md unlocks its build worktree right after its
+        # FIRST commit (lode-oqr), and everything from there through hand-off, review, and the whole
+        # ready-for-code-review/ready-for-land wait runs UNLOCKED and NOT-MERGED. So a genuinely
+        # still-in-progress build can be unlocked, not-merged, and momentarily CLEAN (the instant
+        # between one commit and its next edit) at the exact moment this sweep runs, with nothing left
+        # in `git worktree list --porcelain` to tell that state apart from a truly abandoned one -- the
+        # lock's own reason is already gone by then. Age of the last commit is the only signal still
+        # available, and it fails SAFE in the direction that matters: a build still actively cycling
+        # has a recent HEAD commit almost by definition, so a generous floor (default 6h,
+        # $MIN_AGE_SECONDS) skips it every time -- at the cost of a genuinely idle/abandoned worktree
+        # waiting a few extra hours to be reclaimed. Cheap: nothing is ever destroyed either way (the
+        # branch ref is always kept), so disk, not correctness, is what is at stake in that wait.
+        LAST_COMMIT_TS=$(git -C "$WT" log -1 --format=%ct 2>/dev/null) || LAST_COMMIT_TS=""
+        NOW=$(date +%s)
+        if [ -n "$LAST_COMMIT_TS" ] && [ $((NOW - LAST_COMMIT_TS)) -ge "$MIN_AGE_SECONDS" ]; then
+          # Same dirty-tree guard as the merged/captured path below (lode-9hgu) -- a dirty
+          # worktree-agent-* worktree is still NEVER reclaimed, in this bucket or any other.
+          if STATUS=$(git -C "$WT" status --porcelain -- . \
+               ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$STATUS" ]; then
+            if git worktree remove --force "$WT"; then
+              RECLAIMED_DIR_ONLY=$((RECLAIMED_DIR_ONLY + 1))   # ref intentionally KEPT -- no `git branch -D`
+            else
+              FAILED=$((FAILED + 1))
+            fi
+          else
+            SKIP_DIRTY=$((SKIP_DIRTY + 1))
+          fi
+        else
+          SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))   # too young (or commit ts unreadable) -- fail safe, keep
+        fi
+        ;;
+      *)
+        SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))
+        ;;
+    esac
+    continue
+  fi
   # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
   # Gates BOTH arms: a worktree captured on trunk or captured on origin but left dirty must still be
   # KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. Success and emptiness are
@@ -1310,8 +1395,8 @@ git worktree prune          # drop any now-stale worktree admin entries
 # lode-bns3 (observability): always emit one line. "reclaimed 0 of 0" (nothing to do) reads differently
 # from "reclaimed 0 of N" (everything was skipped — worth investigating), and the reason breakdown
 # makes a regression that silently zeroes out GC visible here instead of indistinguishable from idle.
-TOTAL=$((RECLAIMED + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
-echo "worktree GC: reclaimed $RECLAIMED of $TOTAL candidate(s) under .claude/worktrees/ (skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
+TOTAL=$((RECLAIMED + RECLAIMED_DIR_ONLY + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
+echo "worktree GC: reclaimed $((RECLAIMED + RECLAIMED_DIR_ONLY)) of $TOTAL candidate(s) under .claude/worktrees/ (full=$RECLAIMED, dir-only=$RECLAIMED_DIR_ONLY, stale-locks-treated-as-unlocked=$STALE_LOCKS_FOUND; skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
 
 # Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
 # worktree-GC loop above never even considered them) and no remote counterpart left (lode-r78). That
@@ -1343,10 +1428,24 @@ echo "worktree GC: reclaimed $RECLAIMED of $TOTAL candidate(s) under .claude/wor
 # so the first `--` is always the worktree-suffix delimiter.
 if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
   REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
-  git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
+  # lode-yrtu (lode-bns3 treatment): report only deletions that ACTUALLY happened, reading `git
+  # branch -D`'s own exit status rather than announcing one "before the fact" behind `|| true`.
+  # OBSERVED live (bd show lode-yrtu): this backstop once printed "deleting stale local ref
+  # land/lode-rlyx--agent-aad6b30a923856fb7" while the ref still existed afterward -- `git branch -D`
+  # had refused it (still checked out in a locked worktree) and the trailing `|| true` swallowed that
+  # failure silently. Same class of bug lode-bns3 already fixed for the WORKTREE loop above (counting
+  # an attempt rather than the remove's real exit status). Process substitution (`< <(...)`), not a
+  # pipe, so these counters survive past the loop instead of dying in a subshell.
+  B2_DELETED=0; B2_FAILED=0
+  while read -r BR; do
     printf '%s\n' "$REMOTE_LAND" | grep -qxF "${BR%%--*}" && continue   # remote still exists — keep
-    git branch -D "$BR" 2>/dev/null || true
-  done
+    if git branch -D "$BR" 2>/dev/null; then
+      B2_DELETED=$((B2_DELETED + 1))
+    else
+      B2_FAILED=$((B2_FAILED + 1))    # refused (e.g. still checked out somewhere) -- report it, don't claim success
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/land/*')
+  echo "bare-ref backstop2 (land/*): deleted $B2_DELETED stale local ref(s) (failed=$B2_FAILED)"
 fi
 
 # Third backstop: dangling local worktree-agent-* refs with no worktree attached at all
@@ -1371,11 +1470,19 @@ fi
 # from ever being a candidate in the first place.
 MERGED=$(git branch --merged trunk --format='%(refname:short)')
 CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
-git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | while read -r BR; do
+# lode-yrtu (lode-bns3 treatment): same fix as backstop 2 just above -- report only what `git branch
+# -D` actually did, and use process substitution rather than a pipe so these counters survive.
+B3_DELETED=0; B3_FAILED=0
+while read -r BR; do
   printf '%s\n' "$CHECKED_OUT" | grep -qxF "$BR" && continue   # still checked out somewhere — keep
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
-  git branch -D "$BR" 2>/dev/null || true
-done
+  if git branch -D "$BR" 2>/dev/null; then
+    B3_DELETED=$((B3_DELETED + 1))
+  else
+    B3_FAILED=$((B3_FAILED + 1))
+  fi
+done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
+echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
 rtk scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
                                      # the staleness window (lode-aps3; see Section 0)
