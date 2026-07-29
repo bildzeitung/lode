@@ -5191,6 +5191,22 @@ def _noop_embed_registry() -> dict:
     return {"embed": lambda conn, tv, db, s: None}
 
 
+# Seed any job this cluster expects `lode work` to CLAIM via
+# lode.jobs.enqueue_derive_jobs, never a bare INSERT (lode-4e48). A bare INSERT
+# leaves next_attempt_at on the table's SQL strftime('now') default -- SQLite's
+# raw wall clock, not the ratcheted `now` that worker._claim_one's
+# `next_attempt_at <= now` predicate compares it against. enqueue_derive_jobs's
+# own docstring works that two-clock hazard through in full (lode-0dnk); these
+# test sites were simply never migrated with it, which is how the stranded-job
+# flake came back ("drained 2 job(s)", not 3). Seeding through the production
+# primitive is eliminative, not merely narrowing: runner.invoke runs the CLI
+# in-process, and that clock never decreases within a process.
+#
+# A bare INSERT stays fine -- and is used throughout this file -- for a row the
+# claim predicate never sees: one seeded non-pending, or of a type the patched
+# registry excludes (the ('refresh', 'ver-stuck') rows further down).
+
+
 def test_work_drains_pending_embed_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5205,12 +5221,9 @@ def test_work_drains_pending_embed_jobs(
     conn = init_db(db_path)
     try:
         with conn:
-            # Insert three embed jobs directly (no version row needed for noop handler).
+            # Three embed jobs (no version row needed for the noop handler).
             for i in range(3):
-                conn.execute(
-                    "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                    ("embed", f"ver-{i}"),
-                )
+                enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
     finally:
         conn.close()
 
@@ -5251,10 +5264,7 @@ def test_work_exits_nonzero_with_actionable_message_on_auth_error(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5301,10 +5311,7 @@ def test_work_prints_per_job_embed_outcome_line(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5342,10 +5349,7 @@ def test_work_prints_jira_401_outcome_naming_source_and_reason(
                 "VALUES (?, ?, ?)",
                 ("ABC-401", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
             )
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ABC-401"),
-            )
+            enqueue_derive_jobs(conn, "ABC-401", types=("refresh",))
     finally:
         conn.close()
 
@@ -5424,10 +5428,7 @@ def test_work_wait_exits_zero_once_queue_drains(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-0"),
-            )
+            enqueue_derive_jobs(conn, "ver-0", types=("embed",))
     finally:
         conn.close()
 
