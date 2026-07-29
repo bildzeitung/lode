@@ -15,6 +15,15 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    # Well below GitHub's 360-minute default -- this is the one workflow that
+    # PUBLISHES artifacts, so a hang here is the most expensive to leave
+    # unbounded and the most likely to go unnoticed for hours. build.yml
+    # (timeout-minutes: 15) is the closest analogue -- same checkout/setup/
+    # build steps -- plus this job's own network `gh release create`. All
+    # observed release runs (v0.0.0-rc1 through v1.2.0) completed in
+    # 14-30s, so 20 is still ~40x headroom over the worst case, not a round
+    # number (lode-w35h).
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
