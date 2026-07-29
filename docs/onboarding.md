@@ -154,7 +154,10 @@ cache"](storage.md#rebuild-the-vector-cache-after-a-schema-mismatch-crash-lode-2
 ### 6. Run the dev loop (nox)
 
 [`noxfile.py`](../noxfile.py) runs **inside the already-built `./venv`**, not an isolated
-env, so activate first. Two sessions are the default set and the merge gate:
+env, so activate first. `nox -t fix` and `nox -s tests` are the two entry points REQUIRED
+before any merge (CLAUDE.md) — a narrower claim than "runs by default": a bare `nox`
+invocation also runs `nox -s shellcheck` and `nox -s linkcheck` (four sessions total; see
+[`noxfile.py`](../noxfile.py)'s module docstring for what those two check):
 
 ```bash
 nox -t fix         # ruff format + ruff check --fix
@@ -163,13 +166,15 @@ nox -s tests       # FULL suite, no marker filter — must be green before any m
 
 `nox -s tests` is what `/land` re-runs before trunk; nothing is ever skipped from it. A
 green run ending `Session tests was successful` is your "environment is wired up" signal.
-Three opt-in sessions sit outside the default set:
+Five opt-in sessions sit outside the default set:
 
 | Session | What it does |
 |---|---|
 | `nox -s unit` | `pytest -m "not slow"` — fast inner loop while iterating. Excludes only the handful of tests dominated by a real model load (the un-mocked `FastEmbedCrossEncoder` reranker). A convenience, **never** a substitute for `nox -s tests`. |
 | `nox -s build` | Builds a wheel + sdist and asserts the shipped package-data is present. |
-| `nox -s eval` | The live eval test (`tests/test_eval_live.py`). Needs `ANTHROPIC_API_KEY` **and** `LODE_RUN_LIVE_EVAL=1`, which only this session sets — so `tests` and `unit` stay offline even where a key is ambient. |
+| `nox -s eval` | The live eval test (`tests/test_eval_live.py`). Needs `ANTHROPIC_API_KEY` **and** `LODE_RUN_LIVE_EVAL=1`, which only this session sets — so `tests` and `unit` stay offline even where a key is ambient. CI-only. |
+| `nox -s coverage` | The FULL test suite under `pytest-cov`, emitting a coverage report — CI-only (lode-qxdn.3). |
+| `nox -s lock_currency` | Verifies `requirements.lock` is still what `pyproject.toml` resolves to — a local mirror of CI's lock-currency job (lode-sys4); `/land`'s re-gate runs this so a stale lock never lands. |
 
 Two pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
 is a collection error, not a silently-ignored no-op):

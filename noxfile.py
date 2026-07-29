@@ -1,13 +1,22 @@
 """Nox sessions for lode's dev loop.
 
-Two entry points run by default, both required before any merge (CLAUDE.md):
+Two entry points are REQUIRED before any merge (CLAUDE.md) -- a narrower claim
+than "runs by default": a bare ``nox`` invocation actually runs all FOUR
+sessions in ``nox.options.sessions`` below (``fix``, ``tests``, ``shellcheck``,
+``linkcheck``), but CLAUDE.md's merge gate only names these two:
 
     nox -t fix      ruff format + ruff check --fix   (the pre-merge fixer)
     nox -s tests    pytest                           (the test gate — the FULL suite,
                                                         every test, no marker filter;
                                                         this is what /land re-gates with)
 
-Plus four opt-in sessions that are **not** in the default set:
+The other two sessions in the default set, not required-before-merge by name
+but still part of a bare ``nox`` run:
+
+    nox -s shellcheck   lint every tracked shell script (--severity=warning)
+    nox -s linkcheck    verify every relative markdown link in docs/ and .claude/ resolves (lode-dkdg)
+
+Plus FIVE opt-in sessions that are **not** in the default set:
 
     nox -s unit            pytest -m "not slow"                     (fast inner loop, lode-pql)
     nox -s eval            pytest tests/test_eval_live.py           (the golden-set eval, CI-only)
@@ -15,6 +24,7 @@ Plus four opt-in sessions that are **not** in the default set:
     nox -s lock_currency   verify requirements.lock is current      (local mirror of CI's lock-currency
                                                                        job, lode-sys4 -- run by /land's
                                                                        re-gate so a stale lock never lands)
+    nox -s build           build a wheel + sdist, assert package-data ships (packaging, not a code gate)
 
 **Fast vs. full split (lode-pql).** ``pytest --durations`` profiling found a small
 set of tests dominate wall-clock: end-to-end CLI flows and skeleton-gate tests that
