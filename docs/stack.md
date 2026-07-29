@@ -146,12 +146,18 @@ Two files, two jobs — **never pin the same thing in both**:
 
 `./scripts/python-init.sh` installs from the lock by default, with `--require-hashes` so a hash
 mismatch **fails** the install rather than warning. `-e .` (the local package, editable) and
-`--require-hashes` are mutually exclusive in one pip/uv invocation, so the install is three steps:
-hash-verified runtime deps from the lock, then the local package editable (`--no-deps`, so this
-step can't silently re-resolve — and un-pin — what step one just hash-verified), then the `dev`
-extra resolved fresh from `pyproject.toml`. `--unlocked` skips the lock and resolves everything
-fresh from `pyproject.toml` instead — the deliberate "what would we get today" escape hatch for
-regenerating the lock or probing an upstream bump before committing to it.
+`--require-hashes` are mutually exclusive in one pip/uv invocation, so the dependency install splits
+in two: a **lock step** (hash-verified runtime deps from `requirements.lock`), then a **dev-extra
+step** (the local package editable together with the `dev` extra, `-e '.[dev]'`, resolved fresh from
+`pyproject.toml`). The dev-extra step does re-resolve the whole graph, but the lock step's pins
+already satisfy `pyproject.toml`'s ranges and uv keeps an already-installed satisfying version — so
+it adds the dev-only packages on top without moving anything the lock step hash-verified. That was
+reproduced rather than argued (`lode-xo99`): a locked venv built with and without an extra
+`-e . --no-deps` step in between came out with the same package set, the same runtime pins, and the
+same resolved `lode` source path either way, so that step was deleted as dead work. `--unlocked`
+skips the lock and resolves everything fresh from `pyproject.toml` instead — the deliberate "what
+would we get today" escape hatch for regenerating the lock or probing an upstream bump before
+committing to it.
 
 **Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
 `tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
@@ -167,9 +173,9 @@ dropped `--unlocked`: both legs now run the identical install, so a coverage per
 reproducible from committed bytes instead of from whatever resolved on the day it ran.
 
 **What that parity does not cover.** The lock is the runtime set only, so both legs still resolve
-`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (step three above) — `lode-7byn` pinned
-the code under measurement, not the tools doing the measuring. The counter-case for resolving fresh
-here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
+`pytest`/`pytest-cov`/`coverage` fresh from the `dev` extra (the dev-extra step above) — `lode-7byn`
+pinned the code under measurement, not the tools doing the measuring. The counter-case for resolving
+fresh here (an upstream runtime bump moving the coverage number before the lock is bumped) is real but
 toothless on this leg: `coverage.yml` enforces no threshold, so such a drift fails nothing and
 attributes nothing — and no CI signal fires on an upstream runtime release either way.
 [`lock-currency`](#the-lock-gen-command-is-derived-from-python-version-not-hard-coded-lode-sys4)
@@ -261,16 +267,26 @@ own copy of the `uv pip compile` command string:
   and a reachable PyPI on **every** invocation. CI's `lock-currency` job installs `uv` itself first,
   so the uv-absent path only bites a developer machine or `/land`'s local pre-flight — the public CI
   badge still catches a stale lock in that case, just later.
-- **Attribution needs a baseline, not just an exit code (`lode-sys4`).** `/land`'s isolation-replay
-  loop finds a culprit by merging the accepted branches one at a time and blaming the one that turns
-  the gate red. That is sound for `nox -s tests`, which asks a question about the tree alone. It is
-  *not* sound for `lock_currency`, which asks whether the committed lock is a fixed point of the tree
-  **plus the ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a
-  `uv` release that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`,
-  so the lander's resolver can differ from the one that produced the committed lock). So `/land` runs
-  the gate once on bare `origin/trunk` before entering the loop: red there means the staleness
-  predates every branch in the set and is not attributable to any of them — stop the pass, don't
-  isolate.
+- **Attribution needs a baseline, not just an exit code (`lode-sys4`, extended to `nox -s tests` by
+  `lode-kq4v`).** `/land`'s isolation-replay loop finds a culprit by merging the accepted branches
+  one at a time and blaming the one that turns the gate red. That is **not** sound for either gate
+  taken unconditionally — `nox -s tests` does *not* ask a question about the tree alone, despite
+  once being recorded here as if it did: it is sensitive to ambient env vars a landing session's own
+  shell can carry, and `lode-kq4v` observed exactly that in production — an ambient `FORCE_COLOR=3`
+  in the landing session's environment (never set anywhere in this repo) froze rich's `Console()`
+  colour detection at import (`lode-xgaa`'s mechanism) and reddened 6 CLI tests on a bare, unmodified
+  `origin/trunk` with no branch involved at all. `lock_currency` fails the same soundness test for a
+  different reason: it asks whether the committed lock is a fixed point of the tree **plus the
+  ambient `uv` plus today's PyPI** — an answer that can flip with no branch involved (a `uv` release
+  that changes the emitted format; `uv` is installed unpinned via `pip install -U uv`, so the
+  lander's resolver can differ from the one that produced the committed lock). So `/land` runs
+  **both** gates once on bare `origin/trunk` before entering the loop: red on either one there means
+  the failure predates every branch in the set and is not attributable to any of them — stop the
+  pass, don't isolate. (`tests/conftest.py` also scrubs the specific ambient colour/tty env vars
+  rich reads — `FORCE_COLOR`/`NO_COLOR`/`TTY_COMPATIBLE`/`TTY_INTERACTIVE` — at collection time for
+  every pytest invocation, closing the root cause `lode-kq4v` found; the baseline here is the
+  independent blast-radius fix, so `/land` stays safe even against a *different* source of
+  tree-alone-defying redness nobody has scrubbed yet.)
 
 The cache is never *required* in a backup — losing it costs a rebuild, never data. Optionally
 snapshot just the LLM tier of the cache to skip the dollars + hours of re-enrichment on restore
@@ -588,14 +604,22 @@ class LLMAuthError(LLMProviderError):
     """No credentials resolved for the active provider — raised by build_provider()."""
 ```
 
-Every `LLMProvider` implementation's failure paths raise `LLMProviderError` (or a subclass) rather
-than letting a raw SDK exception escape uncaught, so callers (`enrich.py`/`qa.py`'s existing
-retry/backoff logic) catch one exception type across providers, while `.status_code`/`.request_id` +
-the chained `__cause__` still expose whatever the underlying SDK/HTTP response carried. This
-generalizes today's credential-only "provider-appropriate error messaging" (§1) to *runtime* call
-failures too. The concrete OpenAI/Azure field-by-field mapping (which response fields populate
-`status_code`/`request_id` for a Responses API error, an Azure content-filter rejection, etc.) is
-`lode-568v.3`'s scope — only the shape is pinned here.
+Every `LLMProvider` implementation converts the SDK's **status** errors (4xx/5xx) into
+`LLMProviderError` (or a subclass) rather than letting them escape raw, so callers (`enrich.py`/
+`qa.py`'s existing retry/backoff logic) catch one exception type across providers, while
+`.status_code`/`.request_id` + the chained `__cause__` still expose whatever the underlying SDK/HTTP
+response carried. This generalizes today's credential-only "provider-appropriate error messaging"
+(§1) to *runtime* call failures too. The concrete OpenAI/Azure field-by-field mapping (which response
+fields populate `status_code`/`request_id` for a Responses API error, an Azure content-filter
+rejection, etc.) is `lode-568v.3`'s scope — only the shape is pinned here.
+
+**What still escapes raw.** `AnthropicProvider` wraps all five of its SDK calls — the three that
+submit (`lode-90o7`) and `collect_batch`'s two that poll (`lode-i7yr`) — but two classes remain:
+`anthropic`'s *non*-status errors (`APITimeoutError`, `APIConnectionError` — a timeout is not a
+rejected request; see `qa.MAX_TOKENS`), and a failure raised while *streaming* a batch's JSONL
+results, which arrives as a raw `httpx`/`json` exception outside any `anthropic` type at all
+(`lode-3gtu`, open). `OpenAIProvider` catches bare `Exception` around its single call and has
+neither gap.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 

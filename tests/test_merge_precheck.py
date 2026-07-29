@@ -38,20 +38,10 @@ import os
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "merge-precheck.sh"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
-    return result
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -86,6 +76,7 @@ def _run(base: str, branch: str, repo: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -235,6 +226,7 @@ def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
@@ -249,6 +241,7 @@ def test_usage_with_one_arg_is_also_exit_2() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
@@ -273,6 +266,7 @@ def test_mktemp_failure_is_a_machine_fault_not_a_conflict(tmp_path: Path) -> Non
         text=True,
         timeout=30,
         env={**os.environ, "TMPDIR": str(tmp_path / "does-not-exist")},
+        check=False,
     )
 
     assert result.returncode == 2, result.stdout + result.stderr

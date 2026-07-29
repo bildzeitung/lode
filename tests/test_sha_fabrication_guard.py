@@ -96,6 +96,7 @@ def _script_output(command: str, *, cwd: Path = REPO_ROOT) -> dict | None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
     if not proc.stdout.strip():
@@ -182,6 +183,7 @@ def test_script_always_exits_zero_even_when_denying() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0
 
@@ -365,6 +367,7 @@ def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
         text=True,
         timeout=30,
         env={"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": "/nonexistent-root"},
+        check=False,
     )
     assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
     assert proc.stdout.strip() == "", (

@@ -32,20 +32,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "release-bump.sh"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
-    return result
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -77,6 +67,7 @@ def _run(range_: str, repo: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -254,9 +245,9 @@ def test_scopeless_bang_prefix_yields_breaking(tmp_path: Path) -> None:
 
 def test_prefix_must_be_at_start_of_subject(tmp_path: Path) -> None:
     """The prefix regexes are anchored -- a subject that merely mentions
-    "feat:" or "fix:" mid-line is not a conventional commit. Pins the anchor
-    across the review's swap of the matching engine from `grep -E` to bash's
-    own `=~`."""
+    "feat:" or "fix:" mid-line is not a conventional commit. Pins the `^`
+    anchor in release-bump.sh's `grep -qE` matching (subjects fed in via a
+    here-string, not a pipeline)."""
     repo = _init_repo(tmp_path)
     _git(repo, "tag", "v0.3.1")
     _commit(repo, "chore: revert the feat: add reranker commit")
@@ -309,6 +300,7 @@ def test_usage_without_args_is_exit_2() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr
@@ -321,6 +313,7 @@ def test_usage_with_two_args_is_also_exit_2() -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert result.returncode == 2, result.stdout + result.stderr
     assert "usage" in result.stderr

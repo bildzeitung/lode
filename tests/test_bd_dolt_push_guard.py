@@ -147,6 +147,7 @@ def _run_guard(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -167,6 +168,7 @@ def _run_push(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     return result, call_log
 

@@ -52,6 +52,19 @@ silent by default**, and this is the one skill that writes `trunk` — so any bl
 must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
 exits 0 is indistinguishable from a clean pass that had nothing to do.
 
+**This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
+— that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
+`/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
+regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
+newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
+individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
+land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
+`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
+which has since landed, so the entry is now inert rather than a live violation) — both tracked
+by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+mechanically.
+
 ---
 
 ## 0. Single-lander lock — acquire FIRST, every tick
@@ -71,6 +84,15 @@ and the mechanism's two known limits, are in that script's header;
 [docs/agents-workflow.md](../../../docs/agents-workflow.md#mechanics-decided)'s single-lander-lock
 bullet is the design home. `tests/test_land_lock.py` pins both the script's behaviour and these call
 sites, so this section cannot quietly go back to an inline lock.
+
+**The token is now a heartbeat, not a one-shot stamp (lode-m87j).** [Section
+2a](#2a-re-validate-that-beads-and-git-havent-drifted) re-stamps it once per ticket in the vet loop
+(right before that ticket's `land-review` dispatch) and `scripts/land-merge-one.sh` re-stamps it on
+every call, covering both Section 3 merge loops — so a pass no longer risks having its *own* lock
+reclaimed mid-merge just for running long. **That did not shorten the window below, and the two call
+sites do not cover the whole pass**: Section 1/1a before the first heartbeat, the combined re-gate,
+and all of Section 4 (where `trunk` is actually written) run unheartbeated. `scripts/land-lock.sh`'s
+header enumerates all three and explains why the default stays at 1800s; re-deriving it is lode-cp4o.
 
 **What I need to know to run the pass:** the lock is released explicitly at exactly two sites below —
 the empty-queue exit in [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and the end
@@ -190,8 +212,13 @@ Then read the queue — every ticket carrying the **`ready-for-land`** label (it
 the label, not a status, is the queue):
 
 ```bash
-rtk bd list --label ready-for-land --status in_progress --json
+rtk bd list --label ready-for-land --status in_progress --limit 0 --json
 ```
+
+**`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
+hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
+truncated read wouldn't lose a branch outright (an unprocessed item just waits for the next pass), but
+it would silently under-report and under-land a large backlog, every pass.
 
 If the queue is empty, there is nothing to land: release the lock and stop —
 
@@ -342,7 +369,15 @@ writes it when swapping a ticket to `ready-for-land`, and a rebase pickup (`codi
 on every re-push. The SHA exists only to **detect drift**: a push onto the branch *after* the ticket
 was marked ready.
 
+**First action of every iteration of this loop: heartbeat the single-lander lock (lode-m87j).** This
+is the one call site (not per-section) that keeps the lock's staleness token measuring idle time
+rather than this pass's total duration — it fires once per ticket, right before that ticket's
+`land-review` Opus dispatch in 2c, so the gap the TTL has to outlast is one dispatch, not the sum
+across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoning; failure here is
+logged but never stops the pass (this is lock bookkeeping, not the vet itself):
+
 ```bash
+rtk scripts/land-lock.sh heartbeat || true
 rtk bd show <id> --json     # read metadata.land_head and metadata.land_summary
 rtk git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head
@@ -367,6 +402,13 @@ per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, wi
 tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
+# STATE_DIR is the same $STATE_DIR Section 3a formalizes below (`.git/land-state`) -- this runs
+# FIRST in the pass, ahead of 3a's own `rm -rf "$STATE_DIR" && mkdir -p ...`, so create the
+# subdirectory here rather than assume 3a already has (lode-rfon).
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+CONFLICTS_DIR="$STATE_DIR/conflicts"
+mkdir -p "$CONFLICTS_DIR"
+
 # A command substitution inside an `if` condition is exempt from `set -e` —
 # unlike a bare `VAR=$(cmd)` assignment, which would abort the shell on a
 # non-zero exit before `rc=$?` is ever reached. Same idiom the snippet this
@@ -376,12 +418,34 @@ if CONFLICTS=$(rtk scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); t
 else
   rc=$?
 fi
+
+# $CONFLICTS does NOT survive to the "Needs rebase -- kick back" block below -- that block is a
+# SEPARATE Bash invocation and this shell variable dies with this one (lode-rfon, the same defect
+# class as lode-sfnb's $MSG/$ACCEPTED/$LANDED). Persist it to disk now, at the only point this
+# block actually holds it; the kick-back block reads it back from the file, never from $CONFLICTS.
+#
+# An `if`, NOT `[ "$rc" = 1 ] && printf ...`. As this block's LAST command that AND-list makes the
+# whole invocation exit 1 whenever rc is 0 -- so the COMMON clean path would report failure and a
+# real conflict would report success, INVERTING the only signal this block gives the agent at all
+# (it prints nothing on any path). That is exactly the "non-zero exit, completely empty stdout AND
+# stderr" shape lode-sfnb documents in 3a below as the silent failure this file exists to remove.
+# Testing `= 1` and not `!= 0` is also load-bearing: a machine fault (rc=2) leaves $CONFLICTS empty,
+# and must NOT leave a file behind for a later kick-back to read as a conflict record.
+if [ "$rc" = 1 ]; then
+  printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/<id>"
+fi
 ```
 
 - **`rc=0`** → clean — proceed to the semantic gate (2c). (Prints nothing.)
-- **`rc=1`** → textual conflict. `$CONFLICTS` holds exactly the conflicting path(s), one per line —
-  no tree OID, no chatter. → needs-rebase kick-back (see "Needs rebase — kick back"): skip
-  `land-review`, leave the merge set.
+- **`rc=1`** → textual conflict. `$CONFLICTS` (now also persisted to `$STATE_DIR/conflicts/<id>`,
+  since the file — not the shell variable — is what the kick-back block actually reads) holds
+  exactly the conflicting path(s), one per line — no tree OID, no chatter. → needs-rebase kick-back
+  (see "Needs rebase — kick back"): skip `land-review`, leave the merge set. **Do that kick-back now,
+  for this branch, while still in Section 2** — not batched up for later. [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent)'s
+  `rm -rf "$STATE_DIR"` wipes the file this block just wrote, so a kick-back deferred past it finds
+  nothing and aborts loudly instead of kicking back at all. (Nothing else needs saying: 3a already
+  computes `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching
+  3a un-kicked-back is out of order on its own terms.)
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
   `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
   `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
@@ -415,8 +479,8 @@ ran in the main checkout; one left `lode-2zj0`'s full diff staged, and the next 
 neither the merge step's jsonl-restore retry path (now `scripts/land-merge-one.sh`, lode-sfnb) nor its
 real-conflict path, and the failure silently
 read as an unretried conflict rather than what it was). Frontmatter `isolation: worktree` launches the
-reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from local `trunk`
-HEAD — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
+reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from `origin/trunk`
+HEAD (`worktree.baseRef: "fresh"`, lode-jzbz) — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
 `code-reviewer` dispatches. Those two now carry the same `isolation: worktree` frontmatter key
 (`lode-ojsr`) **and** still request it at the call site: unlike `land-review`, they have no top-level
 probe confirming frontmatter alone suffices for them, so the call-site option is kept as
@@ -433,7 +497,7 @@ no `bd` writes), and the existing backstop sweep in [Section 4](#4-land-the-surv
 unlocked, clean worktree under `.claude/worktrees/` whose HEAD is an ancestor of `trunk` — but "never
 commits" only proves the worktree's HEAD never *diverges further* once `land-review` starts; it says
 nothing about where that HEAD was when the agent was dispatched. lode-nt98 established the harness's
-`isolation: "worktree"` hand-off does not reliably start a dispatched agent at `trunk` HEAD — it has
+`isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk` HEAD — it has
 handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a *previous*
 ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled worktree
 handed to it starts with `HEAD` already **not** an ancestor of `trunk`, fails the sweep's ancestor
@@ -443,15 +507,15 @@ only ever fetches and diffs by ref, so a recycled worktree's foreign commits are
 that half of lode-nt98's exposure was, and remains, nil for this agent); this is purely a worktree-leak
 defect, distinct from and not to be conflated with the correctness question. The fix:
 `land-review.md`'s own frontmatter role now carries the same recycled-worktree guard `coding.md` and
-`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD trunk`, asserted before any fetch/diff
-work; a failure rescues the rewound ref and resets onto local `trunk` HEAD) — see
-[`land-review.md`](../../agents/land-review.md) and
+`code-reviewer.md` carry (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk`
+— lode-isl3 — asserted before any fetch/diff work; a failure rescues the rewound ref and resets onto
+`origin/trunk` HEAD) — see [`land-review.md`](../../agents/land-review.md) and
 [docs/agents-workflow.md — Recycled-worktree guard](../../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98).
 Once that guard has run, the worktree's HEAD **is** an ancestor of `trunk`, whether it started that
 way or was just reset there — so the sweep's ancestry predicate reclaims it same as before; nothing
 about Section 4 itself needed to change. That survives the guard's own detection blind spot (the
 check cannot recognize a worktree recycled onto a `land/<other-id>` that has *since landed*, since its
-`HEAD` is by then genuinely an ancestor of `trunk`) intact, since what the guard fails to notice
+`HEAD` is by then genuinely an ancestor of `origin/trunk`) intact, since what the guard fails to notice
 already satisfies that predicate. **lode-3v1p** closed the sweep's *other* arm too: in the blind-spot
 case, the remediation's `git clean -fd` used to run only inside the failed-check branch, so it never
 fired there, and the recycled worktree's untracked leftovers survived to trip the
@@ -554,10 +618,10 @@ edges**, restricted to `$ACCEPTED`:
     pass:
 
     ```bash
-    rtk bd update "$id" --append-notes "HELD (/land, stacked-branch ordering): land/$id is stacked on
-    land/$B, which is not landing this pass ($B's own outcome: <bounced|escalated|needs-rebase|not yet
-    ready-for-land>). Re-evaluated automatically once $B lands or its own outcome resolves — no action
-    needed unless $B itself needs a human decision."
+    rtk bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
+    land/<B>, which is not landing this pass (<B>'s own outcome: <bounced|escalated|needs-rebase|not
+    yet ready-for-land>). Re-evaluated automatically once <B> lands or its own outcome resolves -- no
+    action needed unless <B> itself needs a human decision."
     ```
 
     (No `bd dolt push` needed here in isolation — this note rides along with the pass's other
@@ -637,8 +701,16 @@ reset intact — which is exactly why `STATE_DIR` lives there and not in the wor
 ```bash
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"    # under .git/ -- survives a later `git reset
 MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only resets the index+worktree)
-rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR"    # fresh per pass -- no stale message or accepted set from
-                                               # an earlier /land tick can leak into this one
+CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
+                                                         # conflict's paths for the kick-back block
+                                                         # below to read (lode-rfon)
+rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # fresh per pass -- no stale message,
+                                                         # accepted set, or conflicts record from an
+                                                         # earlier /land tick can leak into this one.
+                                                         # (2b's own conflicts writes, if any, already
+                                                         # ran and were consumed by the per-branch
+                                                         # kick-back before Section 2 finished -- this
+                                                         # wipe cannot race them.)
 
 # Capture the accepted set to a file HERE, at the one moment I actually hold it (2c's land-review
 # verdicts, in the order 3a just established). Every later block RE-READS this file instead of having
@@ -711,7 +783,7 @@ lode-9i2p):
 ```bash
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
-                                                         # except the FILES 3a wrote under $STATE_DIR
+CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
 
 # Load 3a's accepted set from disk, and REFUSE to continue if it did not load: iterating zero times
 # would land nothing while exiting 0, indistinguishable from a clean pass (governing rule, top).
@@ -745,6 +817,11 @@ for id in $ACCEPTED; do
       # below, with $CONFLICTS), NOT a land. It never reaches the `0)` arm, so it is never appended
       # to $STATE_DIR/landed and Section 4 cannot close or GC it -- what used to rely on the agent
       # remembering to exclude it from a hand-restated $LANDED is now structural.
+      #
+      # Persist the conflicting paths now, while this loop actually holds them: the kick-back block
+      # that writes the bd note is a SEPARATE Bash invocation and cannot see this loop's $CONFLICTS
+      # once it exits (lode-rfon).
+      printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
       #
       # 3a INVARIANT: this branch just LEFT the merge set -- so drop it AND its dependents (1a's full
       # relation, transitively; scripts/blocks-dependents.sh derives the `blocks` edges) and leave
@@ -827,6 +904,7 @@ machine. A red gate is content; exit 2 is the machine.
   rtk git reset --hard origin/trunk
   STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
+  CONFLICTS_DIR="$STATE_DIR/conflicts"
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
   [ -n "$ACCEPTED" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/accepted is missing or empty." \
     "Landing nothing." >&2; exit 1; }
@@ -834,13 +912,35 @@ machine. A red gate is content; exit 2 is the machine.
                               # start the replay's record from empty so Section 4 closes only what
                               # THIS loop actually keeps merged
 
-  # BASELINE before attributing anything (lode-sys4). `nox -s tests` asks a question about the tree
-  # alone, so pinning its red on "whichever branch was merged when it turned red" is sound. `nox -s
-  # lock_currency` does NOT: it asks whether the committed lock is a fixed point of the tree PLUS this
-  # machine's ambient uv PLUS today's PyPI — so it can be red with no branch involved at all (a uv
-  # release that changes the emitted format, an upstream yank, a lock that went stale on trunk itself).
-  # Establish that bare `origin/trunk` is green on it BEFORE entering the attribution loop; otherwise
-  # the loop blames — and deletes — whichever innocent branch happened to be merged first.
+  # BASELINE before attributing anything (lode-sys4, extended to cover `nox -s tests` by
+  # lode-kq4v). THE RULE, stated generally so a gate added here later inherits it instead of
+  # earning its own paragraph: NO gate this loop attributes is a pure function of the tree, so
+  # baseline EVERY one of them on bare `origin/trunk` before entering the attribution loop.
+  # Otherwise the loop blames — and deletes — whichever innocent branch happened to be merged
+  # first. This whole block is on the red/isolate path only, so a green pass never pays for it.
+  #
+  # `nox -s tests` used to be exempt, on the premise that it "asks a question about the tree
+  # alone". That premise licensed a real incident (lode-kq4v, OBSERVED landing a real pass): an
+  # ambient `FORCE_COLOR=3` in the LANDING SESSION's own shell — not set anywhere in this repo —
+  # fixed rich's colour decision at IMPORT (lode-xgaa's mechanism) and reddened 6
+  # `tests/test_cli.py` tests on a bare, unmodified `origin/trunk` with NOTHING merged. Trusting
+  # it would have bounced the first branch in `$ACCEPTED`: `bd supersede` closes its ticket, a
+  # rebuild ticket carries a FABRICATED "turned the gate red" finding, and `git push origin
+  # --delete land/<id>` destroys the reviewed branch — for a variable this repo does not set.
+  # `nox -s lock_currency` fails the same test for its own reason: it asks whether the committed
+  # lock is a fixed point of the tree PLUS this machine's ambient uv PLUS today's PyPI, so it too
+  # can be red with no branch involved at all (a uv release that changes the emitted format, an
+  # upstream yank, a lock that went stale on trunk itself).
+  rtk nox -s tests
+  #   exit 0 → attributable from here on for THIS gate: any later `nox -s tests` red IS caused by
+  #            a merged branch. Continue.
+  #   nonzero → the suite is red before any branch merged — not attributable to anything in
+  #            $ACCEPTED. Stop the pass, land nothing, surface as a human decision — and check the
+  #            landing shell's own environment for an ambient `FORCE_COLOR` / `NO_COLOR` /
+  #            `TTY_COMPATIBLE` / `TTY_INTERACTIVE` first (lode-kq4v; `tests/conftest.py` now
+  #            scrubs these for every pytest invocation it collects for, so a baseline red here
+  #            more likely means a genuine regression on `trunk` itself — still not attributable
+  #            to any branch in this pass, but worth a closer look before assuming "just env").
   rtk nox -s lock_currency
   #   exit 0 → attributable from here on: any later red IS caused by a merged branch. Continue.
   #   exit 1 → trunk's own lock is stale, before any branch merged. Not attributable to anything in
@@ -869,6 +969,10 @@ machine. A red gate is content; exit 2 is the machine.
         # rc=1: real textual conflict against an earlier survivor merged this pass: needs-rebase
         # kick-back (see below, with $CONFLICTS), not a bounce — its content wasn't judged bad, it
         # just needs to replay onto the new trunk. Continue with the rest.
+        #
+        # Persist the conflicting paths, identically to the first-pass loop above and for the same
+        # reason -- see its comment (lode-rfon).
+        printf '%s\n' "$CONFLICTS" > "$CONFLICTS_DIR/$id"
         continue
         ;;
     esac
@@ -1453,9 +1557,23 @@ A **needs-rebase** is the outcome of the [2b precheck](#2b-cheap-conflict-preche
 was never judged bad — I never ran `land-review` on it. It is a **third outcome, distinct from bounce
 and escalate**: not a rebuild (nothing is wrong with the work), not a human decision (there's nothing
 to decide — it just needs to replay onto where `trunk` moved). So I keep everything and hand it
-straight back to the producer:
+straight back to the producer.
+
+**This block is its own, separate Bash invocation from whichever producer detected the conflict
+(2b's `merge-precheck.sh` call, or one of Section 3's two merge loops) — none of that block's shell
+state, including `$CONFLICTS`, survives to here (lode-rfon, the same defect class as lode-sfnb's
+`$MSG`/`$ACCEPTED`/`$LANDED`).** Read the conflicting paths back from the file the producer wrote
+under `$STATE_DIR/conflicts/<id>` instead, and refuse — loudly — rather than kick back with a blank
+paths section if that file is missing or empty:
 
 ```bash
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
+CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>" 2>/dev/null)  # FILE under $STATE_DIR is what survived,
+                                                            # never a bash variable
+[ -n "$CONFLICTS" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/conflicts/<id> is missing or empty --" \
+  "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
+  "conflicting paths. Refusing to kick back with a blank paths section." >&2; exit 1; }
+
 rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
   --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
 Conflicting paths:
