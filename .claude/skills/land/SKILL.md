@@ -125,14 +125,50 @@ I am the heaviest bd **writer** in the system (many closes, plus bounce-ticket c
 with git merges and pushes), so I follow the bd-sync discipline strictly (see
 [bd-sync discipline](#bd-sync-discipline-non-negotiable) below). At the start of each pass:
 
+**Refuse to start unless I am actually in the main checkout (lode-pcee) — asserted once, up front,
+as a precondition of the whole block rather than as a `-C` bolted onto individual commands.**
+`--show-toplevel` resolves relative to
+**cwd**, so `-C "$(git rev-parse --show-toplevel)"` — the form this block used to run the `checkout
+-f trunk` through — is a no-op wherever it matters: in the main checkout it just re-states the cwd
+you're already in, and in a worktree it resolves to *that worktree's own root*, not the main
+checkout, so it can never redirect a command away from wherever you actually are. It reads as a
+safety guard and is not one — and the destructive `reset --hard` two lines later carried no `-C` at
+all, so from a worktree it would have hard-reset *that worktree's* branch, discarding any
+uncommitted work there with nothing in `reflog` to recover it. `--git-common-dir` is the mechanism
+that actually distinguishes the two: every worktree of a repo (main checkout included) shares one
+common `.git` directory, and only the **main checkout's own toplevel** is that directory's parent —
+a linked worktree's toplevel never is. The check is
+[`scripts/assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) — extracted rather than
+inlined so it is shellcheck'd and unit-tested against real worktree fixtures the same way
+`scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh` are (see its own header for the
+full mechanism and exit-code contract).
+
+**The guard is the FIRST LINE OF THE SAME fenced block as the commands it protects — never its own
+block, and this is the whole point.** Per the [governing rule](#governing-rule-no-fenced-block-may-depend-on-shell-state-from-another-lode-sfnb)
+above, every fenced block is a *separate* Bash invocation, so a guard in its own block can only
+`exit` **that** block's shell — whether the destructive block then runs is left to my judgment
+reading prose. That is exactly the strength of assurance lode-pcee exists to delete. Sharing one
+block makes `||` do the work instead: `git reset --hard` is **unreachable** unless the assertion
+passed, enforced by the shell, with no agent decision in between. Nothing here depends on state from
+another block, so the rule is satisfied — the guard is re-run from scratch, not carried forward:
+
 ```bash
+rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
 rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label/close state over refs/dolt/data
-rtk git -C "$(rtk git rev-parse --show-toplevel)" checkout -f trunk   # I land ON trunk, in the main checkout
+rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
 rtk git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
 rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
 ```
+
+**On a non-zero exit the pass stops there** — the script's own stderr already names cwd, the main
+checkout, and why (exit 1 = genuinely the wrong directory; exit 2 = a machine fault rather than a
+location verdict — `git rev-parse` could not answer at all, e.g. cwd is outside any repository, or
+the layout is one the derivation does not support such as a bare repo or a submodule; both stop the
+pass the same way, and neither is ever a reason to retry from here). Every command after it runs
+unqualified — no `-C` on any of them — because the assertion is what guarantees cwd already *is* the
+main checkout, which a `-C` derived from cwd itself never could.
 
 **Why a hard reset, not `pull --rebase` (lode-k9ef).** I am the only **agent** that writes `trunk`, so
 at pass start local `trunk` should already be bit-for-bit `origin/trunk`. The only way it legitimately

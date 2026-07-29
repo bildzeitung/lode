@@ -2362,6 +2362,46 @@ assumption would not have closed it.
   since landed, and the guard now reads `origin/trunk` for both — see
   [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98).
 
+  **Section 1 refuses to start unless cwd is genuinely the main checkout, checked once up front, not
+  folded into a `-C` on any individual command (lode-pcee).** The block used to run only the
+  `checkout -f trunk` through `-C "$(git rev-parse --show-toplevel)"`, on the theory that this pinned
+  it to the main checkout. It does not: `--show-toplevel` resolves relative to **cwd**, so from the
+  main checkout the `-C` just re-states the directory you're already in (redundant, not wrong), and
+  from a worktree it resolves to *that worktree's own root* — it can never redirect a command to a
+  *different* directory than the one it's already running in, because the value it computes is
+  cwd-derived in the first place. That reads as a safety guard and is not one. Worse, the actually
+  destructive line — `git reset --hard origin/trunk`, two lines later — carried no `-C` at all, so
+  run from a worktree it would hard-reset *that worktree's own branch*, discarding uncommitted work
+  there that no `reflog` recovers (unlike the discarded-commits case the reset is otherwise designed
+  around, directly above). `/land` is defined to run only in the main checkout (see the top of
+  `land/SKILL.md`), so this was latent, not live, at the time it was filed — but a latent guard that
+  gives false assurance is worse than no guard, because it looks checked. The fix is an **identity
+  check**, not a redirect: `git rev-parse --git-common-dir` returns the one `.git` directory every
+  worktree of a repo shares (main checkout included), so **only the main checkout's own toplevel is
+  that directory's parent** — a linked worktree's toplevel never is. The check is
+  [`scripts/assert-main-checkout.sh`](../scripts/assert-main-checkout.sh) — extracted rather than left
+  inline, the same reasoning as `scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh`:
+  a shellcheck'd, unit-tested script beats prose in a markdown fence that no gate parses. It computes
+  both paths, compares them, and exits non-zero with a diagnostic before Section 1 touches `bd` or
+  `git` at all on a mismatch, rather than trying to make the commands below correct from the wrong
+  starting directory. Once that assertion has passed, every command in the block runs unqualified —
+  no `-C` anywhere — because the assertion is what guarantees cwd already *is* the main checkout,
+  which a `-C` computed from cwd itself structurally cannot.
+
+  **The guard shares ONE fenced block with the commands it protects, and that is what makes it a
+  mechanism rather than an instruction.** Section 1's governing rule (lode-sfnb) runs every fenced
+  block as a *separate* Bash invocation with no state carried between them — so a guard in its own
+  block can only `exit` that block's shell, leaving "does the destructive block run next?" to the
+  lander's judgment while reading prose. That is the same strength of assurance the `-C` idiom
+  offered, and this ticket exists to delete it. As the first line of the *same* block, `|| exit 1`
+  makes `git reset --hard` **unreachable** unless the assertion passed, enforced by the shell with no
+  decision in between; nothing crosses a block boundary, so lode-sfnb is satisfied. Because
+  `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
+  `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
+  asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
+  (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
+  reordering within the block leave every other pin in that module green.
+
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
 

@@ -2,10 +2,14 @@
 #
 # Shared gate_could_not_run() helper for the "exit 2 means the GATE could not
 # run, never that the CONTENT is bad" convention (lode-9i2p). Sourced by every
-# scripts/*.sh gate that draws this distinction -- list the current set with
-# `grep -l gate-lib.sh scripts/*.sh` rather than naming them here, since a
-# named list goes stale on every migration -- the same way
-# scripts/python-init.sh already sources scripts/venv-install.sh.
+# scripts/*.sh gate that draws this distinction -- discover the current set
+# rather than naming it here, since a named list goes stale on every migration
+# -- the same way scripts/python-init.sh already sources
+# scripts/venv-install.sh. Ask for the SOURCE LINE, not the library's name:
+# `grep -l gate-lib.sh scripts/*.sh` also returns this file plus any script
+# that merely explains why it does NOT source the library (lode-pcee), so use
+#   grep -lE '^[^#]*\. "\$\(dirname "\$0"\)/gate-lib\.sh"' scripts/*.sh
+# which is the same question tests/test_gate_lib.py's `_sources_gate_lib` asks.
 #
 # Extracted per lode-090f: this exact function had reached three duplicated
 # literal copies (found technically reviewing lode-ns3r), free to drift --
