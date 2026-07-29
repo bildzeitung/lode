@@ -79,16 +79,18 @@ fi
 # We cache ALL open issues (one call) and count by stage: in_progress = build,
 # then the workflow labels. Zero-count stages are omitted.
 #
-# `--limit 0` (lode-9bbq): this site was missed by lode-2gun's grep-based audit
-# (`-C "$cwd"` sits between `bd` and `list`, so a literal 'bd list' grep never
-# matched it). Pinned rather than left capped -- unlike lode-2gun's other sites,
-# this one is genuinely latency-sensitive (comment above), but that argument
-# only bites a SYNCHRONOUS call; this read is already backgrounded behind the
-# TTL cache below (the foreground render only ever reads the cache file), so
-# --limit 0 adds no latency the user can feel. It also isn't hypothetical: this
-# repo's open-issue count is already past bd's documented default of 50, so a
-# future bd that starts enforcing that default would misreport the fleet
-# counters TODAY, not just eventually.
+# `--limit 0` is load-bearing, not noise (lode-9bbq). The canonical reason, the
+# bd 1.1.0 measurements, and why this is HARDENING rather than a live fix all
+# live in /sweep's SKILL.md (lode-hwbm), whose roster of pinned sites now lists
+# this one -- lode-2gun's audit missed it because `-C "$cwd"` sits between `bd`
+# and `list`, defeating a literal 'bd list' grep, so a roster rather than a grep
+# is what will find it next time. The latency note above is the one real
+# objection to pinning here, and it is answered rather than overridden: the bd
+# call is backgrounded and the foreground render only parses the cached JSON, so
+# pinning moves no work onto the render path. Capping deliberately was the
+# alternative, rejected because the trigger is already met -- the query below is
+# unfiltered by status, so it already returns well past bd's documented default
+# (63 rows when measured: 39 open + 18 in_progress + 6 deferred).
 pipeline_part=""
 if [ -n "$cwd" ] && [ -d "$cwd/.beads" ]; then
     cache="${TMPDIR:-/tmp}/lode-statusline-bd.cache"
