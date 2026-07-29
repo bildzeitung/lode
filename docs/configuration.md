@@ -308,15 +308,27 @@ legal set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, derived
 from the installed SDK's own `Reasoning.effort` Literal rather than
 hand-typed.
 
-**What lode-90o7 deliberately did NOT do: validate at config load.** Both
-providers check the effort *value* at the seam, on the first call — not when
-`config.toml` is parsed. So a plain typo (`reasoning_effort = "LOW"`) starts
-clean but fails at first use, and on the enrichment path that failure is
-classified as *transient* by `worker.run_one`: it charges an attempt, backs
-off, and dead-letters the job after `retry_max_attempts`, rather than
-refusing to start. A `Settings` validator (the shape
-`_azure_api_version_required_with_endpoint` already uses) would move that to
-startup; it is filed as lode-tvps, not done here.
+**`reasoning_effort` value is also validated at config load (decided, lode-tvps).**
+lode-90o7 left the effort *value* check at the provider seam only — on the
+first API call, not when `config.toml` is parsed — so a plain typo
+(`reasoning_effort = "LOW"`) started clean but failed at first use; on the
+enrichment path that failure was then classified as *transient* by
+`worker.run_one`, charging an attempt, backing off, and dead-lettering the
+job after `retry_max_attempts` rather than refusing to start. A `Settings`
+`@model_validator(mode="after")` now checks **every `ModelTier` knob's**
+`reasoning_effort` against the legal set for the configured `llm_provider` at
+construction time, naming the offending tier and that set on failure. Since
+every CLI entry point and the TUI resolve settings through `load_settings()`,
+that surfaces as a one-line `invalid config file …` on stderr and exit 1
+before any work starts. Legality is always relative to the *configured*
+provider: a value legal only under the *other* one (e.g. `minimal`,
+OpenAI-only) is rejected exactly like an outright typo. The provider-seam
+value checks stay in place unchanged — they remain the guard for programmatic
+callers that construct a provider directly, bypassing `Settings`. Still
+deliberately unpredicted: the value/model *pairing* (lode-3dlt option 1,
+reaffirmed by lode-90o7) — the load-time check reads the effort value against
+the provider's legal set, never against what the tier's specific `model`
+supports.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort

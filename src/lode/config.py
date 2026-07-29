@@ -33,7 +33,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lode.llm_provider import ModelTier
+from lode.llm_provider import EFFORT_LEVELS_BY_PROVIDER, ModelTier
 from lode.lock import lock_path
 
 # --- Atlassian connector credential env vars (lode-gpzn.1) --------------------
@@ -575,6 +575,39 @@ class Settings(BaseModel):
             raise ValueError(
                 "azure_openai_api_version is required when azure_openai_endpoint is set"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _reasoning_effort_legal_for_provider(self) -> Settings:
+        """Fail loudly at load if a tier's reasoning_effort isn't legal for llm_provider.
+
+        Every ``ModelTier`` knob is ``Kind.RUNTIME`` and comes from a static
+        ``config.toml``, so a typo'd ``reasoning_effort`` is knowable at load.
+        Left to the provider seam it instead surfaced at the first API call,
+        where ``worker.run_one``'s generic arm books it as *transient* and
+        dead-letters the job -- see ``docs/configuration.md`` for the full
+        rationale (lode-tvps). Checks the effort *value* only: the value/model
+        *pairing* stays deliberately unpredicted (lode-3dlt option 1), and a
+        rejected pairing still surfaces as an ``LLMProviderError`` at the seam,
+        not here.
+
+        Tiers are found by *type*, using the same ``isinstance(..., ModelTier)``
+        predicate :func:`knob_rows` uses, rather than by a hard-coded name list
+        -- so a tier added later is covered without touching this method, which
+        is exactly the drift that would silently reopen this bug for it.
+        """
+        legal_levels = EFFORT_LEVELS_BY_PROVIDER[self.llm_provider]
+        for tier_name in type(self).model_fields:
+            tier = getattr(self, tier_name)
+            if not isinstance(tier, ModelTier):
+                continue
+            effort = tier.reasoning_effort
+            if effort is not None and effort not in legal_levels:
+                raise ValueError(
+                    f"{tier_name}.reasoning_effort={effort!r} is not legal for "
+                    f"llm_provider={self.llm_provider!r} -- must be one of "
+                    f"{list(legal_levels)}"
+                )
         return self
 
 

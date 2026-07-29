@@ -44,7 +44,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
   :class:`LLMProviderError` on both providers -- see
   :class:`AnthropicProvider`'s docstring for the Anthropic half (and for what
   it deliberately does *not* cover) and :func:`_openai_effort_kwargs` for the
-  OpenAI half.
+  OpenAI half. Both of those value checks fire at the first API call;
+  :data:`EFFORT_LEVELS_BY_PROVIDER` re-exports the two legal sets so
+  ``lode.config.Settings`` can reject a typo at config load as well
+  (**lode-tvps** -- see that constant's own comment).
 - **The batch handle stays the bare Anthropic ``batch.id`` string** (identical
   to ``submit_enrich_batch`` today) -- schema information never needs to
   survive to :meth:`collect_batch` because :class:`BatchResult.parsed` holds
@@ -112,7 +115,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
@@ -736,6 +739,18 @@ def _extract_content_filter(body: object) -> object | None:
 # `test_openai_effort_levels_match_the_installed_sdk_literal`. Same "ladder can
 # grow" rationale as `_ANTHROPIC_EFFORT_LEVELS` above.
 _OPENAI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+# Public so `lode.config.Settings` can validate `reasoning_effort` against the
+# legal set for the *configured* `llm_provider` at Settings-construction time
+# (lode-tvps), not only at the first API call. Keyed by the same literal
+# `Settings.llm_provider` uses. The two per-provider tuples above stay the
+# source of truth (and stay pinned to their installed SDK's own `Literal` by
+# the meta-tests) -- this mapping is a thin, load-order-safe re-export, not a
+# second copy.
+EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ...]] = {
+    "anthropic": _ANTHROPIC_EFFORT_LEVELS,
+    "openai": _OPENAI_EFFORT_LEVELS,
+}
 
 
 def _openai_effort_kwargs(
