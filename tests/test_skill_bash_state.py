@@ -132,12 +132,14 @@ SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 _SPECIAL_VARS = {"?", "!", "$", "#", "@", "*", "-", "_"} | {str(i) for i in range(10)}
 
 # Environment variables this repo's skills legitimately rely on being set OUTSIDE any
-# fenced block -- by the calling shell, the operator, or (for LAND_LOCK_STALE_SECONDS)
-# an explicit override convention documented in docs/configuration.md. Each entry needs
-# a reason, same bar as the per-(file, var) allowlist below.
+# fenced block -- by the calling shell, the operator, or (for the two LAND_* knobs) an
+# explicit override convention documented in docs/agents-workflow.md, which is where
+# landing-loop dev-tooling knobs live rather than docs/configuration.md. Each entry
+# needs a reason, same bar as the per-(file, var) allowlist below.
 _KNOWN_ENV_VARS = {
     "LAND_LOCK_STALE_SECONDS",  # scripts/land-lock.sh's operator-settable staleness
-    # override; land/SKILL.md documents it, this repo's skills never assign it.
+    # override; land/SKILL.md and docs/agents-workflow.md document it, this repo's
+    # skills never assign it.
     "TMPDIR",  # standard POSIX env var; sweep/SKILL.md reads it only via `${TMPDIR:-/tmp}`
     # to place its own cross-block scratch state, and never assigns it.
     "LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS",  # (lode-yrtu) operator-settable age floor

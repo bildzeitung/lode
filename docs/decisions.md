@@ -2697,6 +2697,14 @@ while erasing it here would lose the record of what was believed, and when.
     either. A lightweight ref costs near-nothing next to the ~100MB directory it used to anchor;
     if the accumulation of such refs is ever material, a future ticket can add an explicit
     age-based ref sweep for this specific case. Out of scope here.
+  - **Corollary for an INTERRUPTED build whose commits were never pushed** (the shape this very
+    ticket's own build hit — a producer killed by three API 500s, `origin/land/<id>` nonexistent, bd
+    notes saying "DO NOT DELETE"): its worktree is a clean-or-dirty `worktree-agent-*` like any other,
+    so if it is clean and ages past the floor, the sweep reclaims the DIRECTORY out from under a
+    resume that was told to reuse it. Nothing is lost — the commits are on the kept ref — but the
+    recovery is not automatic and is worth stating once: re-materialize with
+    `git worktree add .claude/worktrees/<name> worktree-agent-<name>`, then resume in it. A build with
+    UNCOMMITTED work is never in this position at all; the dirty-tree guard keeps it (lode-9hgu).
   - **Guard against eating an in-flight build: an AGE FLOOR on the worktree's last commit
     (`LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS`, default 21600s/6h), not the lock start-token check.**
     The ticket's own text suggested preferring the token check as "a stronger liveness signal than
@@ -2715,7 +2723,12 @@ while erasing it here would lose the record of what was believed, and when.
     extra hours to be reclaimed, which costs nothing since the branch ref (see above) is never lost
     either way. 6 hours was chosen as comfortably longer than any single producer build-to-hand-off
     cycle (typically well under an hour per `.claude/agents/coding.md`'s own cycle), while still
-    reclaiming space same-day.
+    reclaiming space same-day. **The age floor is a stopgap, not the ceiling of what is possible** —
+    recorded so a future reader does not have to rediscover it. The deeper fix is a liveness marker
+    that outlives the lock: an agent (or the harness) touching a per-worktree heartbeat file for as
+    long as a session still holds it would let the sweep separate "idle 6h because abandoned" from
+    "idle 6h because between commits" exactly, instead of guessing from commit age. Not built here —
+    it touches the producer/harness session lifecycle, well outside `/land`.
   - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
     fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
     raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28
