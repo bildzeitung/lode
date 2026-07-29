@@ -233,10 +233,8 @@ design (`docs/decisions.md`):
 ./scripts/python-init.sh
 ```
 
-This builds `./venv` only — it does **not** activate it. Activation happens inside `scripts/nox.sh`
-(step 5) instead: the isolation guard refuses any command that sources a file
-(`. ./venv/bin/activate`), which made the old combined build+activate step unrunnable by a
-worktree-isolated agent (lode-6874). For a docs-only branch there is no Python gate.
+This builds `./venv` only — it does **not** activate it, and nothing later needs it to: step 5 calls
+the venv's `nox` by explicit path (lode-6874). For a docs-only branch there is no Python gate.
 
 ### 4. Technical review (the whole point)
 
@@ -337,39 +335,21 @@ files, `git commit --amend` the reformat in and re-run, until the gates are gree
 clean. Never gate a tree I then keep editing.
 
 ```bash
-if [ ! -x scripts/nox.sh ]; then rtk git checkout origin/trunk -- scripts/nox.sh; fi
-rtk scripts/nox.sh -t fix             # ruff format + lint (fixes in place)
-rtk scripts/nox.sh -s tests           # pytest
+rtk ./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
+rtk ./venv/bin/nox -s tests           # pytest
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
-# undo the restore above — keyed off HEAD, so it is a no-op unless I restored:
-if ! rtk git cat-file -e HEAD:scripts/nox.sh; then rtk git rm -f scripts/nox.sh; fi
 ```
 
-`scripts/nox.sh` activates **this checkout's own** venv (built in step 3) and execs `nox` as one
-plain, guard-friendly command (lode-6874) — never hand-roll the activation (`VIRTUAL_ENV=...
-PATH=...`, `./venv/bin/nox`, …); those either trip the same isolation guard or silently run against
-the wrong checkout's venv (lode-jh80).
-
-**Why the restore exists — my instructions and my tree come from different commits.** My agent
-definition is resolved from the dispatching `/code` session's checkout (on `trunk`), but step 2
-replaced my worktree's tree with the *branch's*. Any branch whose base predates `scripts/nox.sh` has
-no such file, so the gate command I was just handed would die with exit 127 before running a single
-check. The restore pulls it from the `trunk` I already fetched in step 2, and it gates *my* worktree
-rather than the checkout it came from because the wrapper anchors on its own on-disk path. Full
-mechanism: [docs/agents-workflow.md](../../docs/agents-workflow.md).
-
-**The undo line is keyed off `HEAD`, not off my memory, and that matters.** A wrapper this branch
-isn't landing must never ride along on it — and the clean-tree assertions in this step and step 8
-**cannot** catch that mistake: they check for *uncommitted* changes, so a wrongly-committed
-`scripts/nox.sh` leaves a perfectly clean tree and sails through. `git cat-file -e HEAD:scripts/nox.sh`
-asks what the branch actually committed, so the line removes the file only when I restored it and is
-a no-op on every branch that legitimately owns it.
-
-**Do not "fix" any of this by falling back to the old `. ./venv/bin/activate` + bare `nox`.** The
-isolation guard rejects a command *string* containing a `.` source — verified: it refuses even when
-the source sits in an `if` branch that would never execute — so such a fallback is refused wholesale
-and breaks the working path too, on every branch. That is strictly worse than the exit 127 it was
-meant to soften.
+**Call the venv's `nox` by explicit path — never `. ./venv/bin/activate`, and never a bare `nox`**
+(lode-6874). The isolation guard refuses any sourced command; `nox` isn't on `PATH` unactivated; and
+`noxfile.py`'s `_venv_tool()` (lode-0yfn) already resolves the tools under `./venv/bin` regardless of
+activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
+`./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` (step 3) and re-gate.
+On a branch whose base predates lode-0yfn, `-s tests` instead dies with `Program pytest not found`
+(no `_venv_tool()` yet) — run `rtk ./venv/bin/pytest` directly, which is equally guard-friendly.
+**This overrides CLAUDE.md's Python-environment section**, which shows the activation form for a
+human at a terminal — correct there, refused here. Full mechanism:
+[docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
 
 **Run both `nox` invocations in the FOREGROUND, in the same turn, and read their output before doing
 anything else.** No `run_in_background`, no `Monitor`, no ending the turn on a pending gate — see the
@@ -533,7 +513,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Technical review | correctness = **my own reasoning** against the diff, backed by `correctness-review` Workflow findings the **orchestrator** computed and handed me (I never invoke `Workflow` myself, lode-905v; `/code-review` is separately user-gated and unreachable from any model context, lode-axyq); cleanup = **`/simplify`** (genuinely tool-backed); re-gate, keep last green; escalate only on a clarifying decision or "making it worse" |
 | Coding conventions | style fiats in [`docs/conventions.md`](../../docs/conventions.md) (Typer never argparse, one Screen/Widget per module, …) — `@import`'d into my context via CLAUDE.md; flag violations |
 | Applying fixes | via **`Edit`/`Write`**, directly — my own worktree, no guard to work around |
-| Gates | `scripts/nox.sh -t fix`, `scripts/nox.sh -s tests` — the wrapper activates this checkout's own venv in one guard-friendly command (lode-6874); if the checked-out branch predates it, `rtk git checkout origin/trunk -- scripts/nox.sh` and `rtk git rm -f` it before committing — never fall back to `. ./venv/bin/activate` (the guard refuses that string even in a dead `if` branch) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
+| Gates | `./venv/bin/nox -t fix`, `./venv/bin/nox -s tests` — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
 | Shell | prefix with `rtk` |
