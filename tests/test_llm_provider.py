@@ -574,6 +574,105 @@ def test_collect_batch_returns_pending_when_not_ended() -> None:
     client.beta.messages.batches.results.assert_not_called()
 
 
+def test_collect_batch_wraps_a_bad_request_from_batches_retrieve() -> None:
+    # lode-i7yr: a failure while polling must surface as LLMProviderError.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.retrieve.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+    client.beta.messages.batches.results.assert_not_called()
+
+
+def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
+    # lode-i7yr: same as above, for the second (results) polling call.
+    client = mock.MagicMock()
+    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
+        processing_status="ended"
+    )
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.results.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+
+
+# lifts conftest's autouse real-client-construction guard (lode-85q); the mock
+# transport answers in-process, so no socket is ever opened.
+@pytest.mark.network
+def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> None:
+    """Pins the SDK-internals property `collect_batch`'s loop comment rests on.
+
+    The two ``MagicMock`` tests above raise from the call by construction, so
+    they cannot see *when* the SDK resolves status. This one drives a real
+    client over an ``httpx.MockTransport`` and so fails if a future SDK ever
+    defers the status check into iteration, silently reopening the gap.
+
+    The 200 ``retrieve`` leg is load-bearing: ``batches.results`` retrieves the
+    batch itself first, so a transport that errored on *every* path would
+    assert against that call instead of the decoder-returning one.
+    """
+    import anthropic
+    import httpx
+
+    results_url = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
+    # Only the fields the SDK's own MessageBatch model requires.
+    batch_body = {
+        "id": "batch-1",
+        "type": "message_batch",
+        "processing_status": "ended",
+        "results_url": results_url,
+        "created_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2026-01-02T00:00:00Z",
+        "request_counts": {
+            "canceled": 0,
+            "errored": 0,
+            "expired": 0,
+            "processing": 0,
+            "succeeded": 1,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/results"):
+            return httpx.Response(
+                429,
+                headers={"request-id": "req-test-2"},
+                json={"error": {"type": "rate_limit_error", "message": "slow down"}},
+            )
+        return httpx.Response(200, json=batch_body)
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,  # keep the SDK's own retry ladder out of the assertion
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 429
+    assert err.request_id == "req-test-2"
+    assert isinstance(err.__cause__, anthropic.APIStatusError)
+
+
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
     tool_block = mock.MagicMock()
     tool_block.type = "tool_use"

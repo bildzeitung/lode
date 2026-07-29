@@ -604,14 +604,22 @@ class LLMAuthError(LLMProviderError):
     """No credentials resolved for the active provider — raised by build_provider()."""
 ```
 
-Every `LLMProvider` implementation's failure paths raise `LLMProviderError` (or a subclass) rather
-than letting a raw SDK exception escape uncaught, so callers (`enrich.py`/`qa.py`'s existing
-retry/backoff logic) catch one exception type across providers, while `.status_code`/`.request_id` +
-the chained `__cause__` still expose whatever the underlying SDK/HTTP response carried. This
-generalizes today's credential-only "provider-appropriate error messaging" (§1) to *runtime* call
-failures too. The concrete OpenAI/Azure field-by-field mapping (which response fields populate
-`status_code`/`request_id` for a Responses API error, an Azure content-filter rejection, etc.) is
-`lode-568v.3`'s scope — only the shape is pinned here.
+Every `LLMProvider` implementation converts the SDK's **status** errors (4xx/5xx) into
+`LLMProviderError` (or a subclass) rather than letting them escape raw, so callers (`enrich.py`/
+`qa.py`'s existing retry/backoff logic) catch one exception type across providers, while
+`.status_code`/`.request_id` + the chained `__cause__` still expose whatever the underlying SDK/HTTP
+response carried. This generalizes today's credential-only "provider-appropriate error messaging"
+(§1) to *runtime* call failures too. The concrete OpenAI/Azure field-by-field mapping (which response
+fields populate `status_code`/`request_id` for a Responses API error, an Azure content-filter
+rejection, etc.) is `lode-568v.3`'s scope — only the shape is pinned here.
+
+**What still escapes raw.** `AnthropicProvider` wraps all five of its SDK calls — the three that
+submit (`lode-90o7`) and `collect_batch`'s two that poll (`lode-i7yr`) — but two classes remain:
+`anthropic`'s *non*-status errors (`APITimeoutError`, `APIConnectionError` — a timeout is not a
+rejected request; see `qa.MAX_TOKENS`), and a failure raised while *streaming* a batch's JSONL
+results, which arrives as a raw `httpx`/`json` exception outside any `anthropic` type at all
+(`lode-3gtu`, open). `OpenAIProvider` catches bare `Exception` around its single call and has
+neither gap.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 
