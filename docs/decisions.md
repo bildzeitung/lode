@@ -2539,3 +2539,55 @@ while erasing it here would lose the record of what was believed, and when.
     still read "disagree with the currently configured enrichment_llm" — accurate as shorthand for
     "enrichment identity," and changing it risked nothing but test churn for no behavioral gain; the
     docstrings on both functions spell out the provider leg for anyone reading the code.
+
+- **2026-07-29 (lode-sx17) — the test network guard stopped depending on luck; `HF_HUB_OFFLINE`
+  declined, `HF_HUB_DISABLE_TELEMETRY` adopted.** `tests/conftest.py`'s autouse guard (lode-85q)
+  failed a test that touched the network by raising `pytest.fail()`, whose `_pytest.outcomes.Failed`
+  is a `BaseException`. That choice was made deliberately, to clear `lode.worker.run_one`'s
+  `except Exception` — but it was *also* doing unplanned work: clearing third-party best-effort
+  swallows it was never designed for. `huggingface_hub`'s `utils/_detect_agent.py` fetches an
+  agent-harness registry from the Hub while building the headers for **every** Hub request, and
+  wraps the load in `except Exception` (with a second one inside the fetch), on the stated contract
+  that "detection must never make a process fail". A `BaseException` clears both today; nothing
+  obliges them to keep it that way, and one `except BaseException` on their side would have made
+  that egress permanently **invisible** rather than merely non-failing.
+  - **Decided: two independent layers, not one.** Cutting the known egress site and hardening the
+    guard are different jobs — the first removes an egress, the second removes the *class* of
+    silent failure — and doing only the first would have left the next such library site to be
+    discovered the same way this one was (by reading an installed package, off the back of an
+    unrelated review).
+  - **Layer 1, source cut — `HF_HUB_DISABLE_TELEMETRY=1`, adopted.** Set **process-wide**, at
+    `tests/conftest.py` module level, so it lands before anything imports the hub.
+    `@pytest.mark.network` deliberately does **not** lift it, for two reasons: it *cannot* (the hub
+    freezes the env into a module constant at import, so a per-test `monkeypatch.setenv` is a no-op
+    against an already-imported hub — the same import-time-freeze trap as rich's `Console`,
+    lode-kq4v), and it need not — the var suppresses telemetry, not Hub access, so a `network`-marked
+    test that genuinely needs a Hub call still works with it set.
+  - **`HF_HUB_OFFLINE=1` — declined.** It would also stop the registry fetch, but it disables the
+    Hub outright, breaking two things that reach it legitimately: the `@pytest.mark.slow` reranker
+    tier's one-time cold-cache weights download (the deliberate exception `tests/conftest.py`'s
+    module docstring records, lode-gmo/lode-pql) and any `@pytest.mark.network` test needing a real
+    Hub call. `HF_HUB_DISABLE_TELEMETRY` costs nothing functional by comparison: verified against
+    the installed huggingface_hub 1.24.0, it is read in exactly two places — the user-agent
+    enrichment and a fire-and-forget telemetry ping.
+  - **Layer 2, the actual fix — record, then raise.** Both guards now append the violation (plus the
+    stack captured at interception) to a process-global list *before* calling `pytest.fail`, and the
+    autouse fixture's teardown fails the test on anything left unconsumed. The raise still gives the
+    immediate, well-placed traceback; the record is what survives a caller that swallows it. This is
+    strictly a *reporting* fix — the connect was always blocked either way.
+  - **It also closes a limit this file's predecessor prose called permanent.** `tests/conftest.py`
+    claimed a connect made off the main thread "prevents the call but cannot itself fail the test",
+    and that "lode makes no such calls today". The second half was already false when written
+    (lode-fr3p/lode-7ypf: a Textual worker reaching `asyncio.to_thread` in the related-notes panel),
+    and the first is no longer true — the teardown check reads the record regardless of which thread
+    appended it. Corrected in place there and in [`onboarding.md`](onboarding.md). A **subprocess**
+    connect remains out of reach, and is now the only stated limit.
+  - **Residual, accepted: attribution, not detection.** A record appended after its own test's
+    teardown — a straggler worker outliving the test that started it — is blamed on whichever test
+    is running when it is next checked. Every message therefore carries the interception-time stack,
+    and says in as many words to trust that stack over the test name. Detection is not affected;
+    only the label on it is.
+  - **`@pytest.mark.trips_network_guard`** (new) is how a test that trips a guard *on purpose*
+    consumes its own record. It is checked in **both** directions — a marked test that trips nothing
+    fails too, because a marker that has stopped being needed silently disables the backstop for
+    that test.
