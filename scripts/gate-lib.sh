@@ -45,16 +45,12 @@
 #   fi
 #   gate_could_not_run "one-line summary" "cause line 1" "cause line 2" ...
 #
-# and a consumer with NO advisory trailer passes the literal sentinel
-# `--no-advisory` instead of nothing (see GATE_ADVISORY below for why "nothing"
-# is unsafe):
+# A consumer with NO advisory trailer writes the identical block with the
+# literal sentinel `--no-advisory` in place of the advisory strings --
+# never with nothing there (see GATE_ADVISORY below for why "nothing" is
+# unsafe):
 #
 #   if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
-#     echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
-#     echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
-#     exit 2
-#   fi
-#   gate_could_not_run "one-line summary" "cause line 1" "cause line 2" ...
 #
 # NOTE the deliberate absence of `2>/dev/null` on that source: bash's own
 # message ("No such file or directory", or a syntax error with a line number
@@ -98,16 +94,25 @@
 #
 # A DIFFERENT discipline replaces it, smaller in scope (once per consumer
 # FILE, not once per call site, and mechanically swept the same way the
-# fail-closed source guard above already is) -- verified empirically, bash
-# 5.2: `source file` with NO extra tokens after the filename does NOT clear
-# $@ inside file, it inherits the CALLING script's CURRENT positional
-# parameters unchanged. Every consumer here is itself invoked with its own
-# CLI arguments, so a bare `. "$(dirname "$0")/gate-lib.sh"` -- no advisory
-# strings, no sentinel -- would silently leak the CONSUMER's OWN argv into
-# GATE_ADVISORY, printed as if it were a fixed advisory trailer on every GATE
-# COULD NOT RUN exit. A consumer that wants no advisory trailer must
-# therefore pass the literal sentinel `--no-advisory`, never nothing (see
-# release-bump.sh / release-latest-tag.sh). tests/test_gate_lib.py's
+# fail-closed source guard above already is) -- documented bash behaviour,
+# re-verified empirically on 5.2: "If any arguments are supplied, they become
+# the positional parameters when filename is executed. Otherwise the
+# positional parameters are unchanged." So `source file` with NO trailing
+# tokens does NOT clear $@ inside file, it inherits the CALLING script's
+# CURRENT positional parameters. A bare `. "$(dirname "$0")/gate-lib.sh"` --
+# no advisory strings, no sentinel -- therefore folds the CONSUMER's OWN argv
+# into GATE_ADVISORY, printed as if it were a fixed advisory trailer on every
+# GATE COULD NOT RUN exit. A consumer that wants no advisory trailer must
+# pass the literal sentinel `--no-advisory`, never nothing (see
+# release-bump.sh / release-latest-tag.sh).
+#
+# DO NOT rely on that leak to announce a forgotten sentinel -- it only shows
+# up when the consumer happens to be holding CLI arguments at the moment it
+# sources. A consumer invoked with NO arguments (validate-mermaid.sh takes
+# none at all; release-latest-tag.sh's bare form takes none) leaves $# at 0,
+# so a bare source yields an empty GATE_ADVISORY that is silently
+# indistinguishable from a correct `--no-advisory`. What actually enforces
+# this for every consumer, argv or not, is STATIC: tests/test_gate_lib.py's
 # discovered sweep asserts every consumer's source line supplies either
 # advisory strings or the sentinel -- never a bare source with zero trailing
 # tokens -- so a NEW consumer that forgets this is caught the day it lands,

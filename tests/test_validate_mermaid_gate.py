@@ -142,13 +142,10 @@ def _assert_gate_could_not_run(
 
     The advisory assertion is load-bearing since lode-090f moved that trailer
     out of the (structurally unskippable) function body and into a
-    GATE_ADVISORY array. Before lode-ysr6, that array was a separate
-    file-scope assignment a call site could accidentally sit above, silently
-    emitting HALF the contract; GATE_ADVISORY is now bound at source time
-    (see gate-lib.sh's GATE_ADVISORY contract), so there is no such
-    assignment left to misorder. This assertion still pins the advisory TEXT
-    itself, which a structural sweep cannot see -- and still covers all three
-    of this script's call sites, which route through here."""
+    GATE_ADVISORY array, now bound at source time (see gate-lib.sh's
+    GATE_ADVISORY contract). This assertion pins the advisory TEXT itself,
+    which no structural sweep can see, and covers all three of this script's
+    call sites, which route through here."""
     assert result.returncode == 2, (
         f"expected exit 2 (gate could not run), got {result.returncode}\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"

@@ -70,13 +70,11 @@ set -uo pipefail   # deliberately NOT -e: this script's entire job is to
 
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
-# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract)
-# is passed on THIS source line, at source time (lode-ysr6) -- gate-lib.sh
-# assigns GATE_ADVISORY from "$@" before returning, so it is now structurally
-# impossible to place a call site above it: there is no separate assignment
-# statement left in this file to misorder. tests/test_merge_precheck.py's
-# "not a branch conflict" assertions still pin the advisory TEXT on an exit-2
-# path, which a static sweep cannot see.
+# This gate's own advisory trailer, bound at source time (lode-ysr6; see
+# gate-lib.sh's GATE_ADVISORY contract for the mechanism and why it is not a
+# separate assignment). tests/test_merge_precheck.py's "not a branch conflict"
+# assertions pin the advisory TEXT below on an exit-2 path, which no static
+# sweep can see -- keep those on any new exit-2 test.
 # shellcheck source=gate-lib.sh
 if ! . "$(dirname "$0")/gate-lib.sh" \
      "This is a machine fault a human must fix, not a branch conflict --" \

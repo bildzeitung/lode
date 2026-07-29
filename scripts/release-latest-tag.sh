@@ -55,12 +55,10 @@ set -uo pipefail
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
 # --no-advisory (lode-ysr6): this gate carries no domain-specific trailer, the
-# same shape as scripts/release-bump.sh -- but the sentinel must be passed
-# explicitly, not omitted. `source file` with no trailing tokens inherits THIS
-# SCRIPT's own $@ instead of clearing it (verified, bash 5.2), which at this
-# point in the script is this script's own arguments (`--gt VERSION`, or
-# nothing) below; omitting the sentinel would leak them into GATE_ADVISORY.
-# See gate-lib.sh's GATE_ADVISORY contract for the full mechanism.
+# same shape as scripts/release-bump.sh -- but the sentinel is REQUIRED, never
+# omitted. Omitting it would fold this script's own `--gt VERSION` arguments
+# into GATE_ADVISORY instead; see gate-lib.sh's GATE_ADVISORY contract for why
+# the bare `scripts/release-latest-tag.sh` form would NOT make that visible.
 # shellcheck source=gate-lib.sh
 if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2

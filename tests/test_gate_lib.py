@@ -36,18 +36,14 @@ and, for the second one, must reproduce the actual leak on the real script.
 Both are proven below rather than asserted; a gate that cannot fail is not a
 gate.
 
-WHY THE OLD "GATE_ADVISORY ORDERING" SWEEP IS GONE (lode-ysr6): before this
-ticket, a consumer that wanted an advisory trailer wrote a SEPARATE
-`GATE_ADVISORY=(...)` statement after sourcing gate-lib.sh, and a
-`gate_could_not_run` call site placed ABOVE that statement still exited 2
-with a correct banner but silently emitted HALF the contract -- an ordering
-CONVENTION, swept here by comparing line numbers. lode-ysr6 made this
-category of bug impossible rather than swept: GATE_ADVISORY is now assigned
-by gate-lib.sh itself, at source time, from the positional arguments on the
-source line -- there is no longer a separate assignment statement for a call
-site to sit above, so a "which line comes first" sweep has nothing left to
-compare. What replaces it is a DIFFERENT, narrower discipline (below), and a
-new sweep for it.
+WHY THE OLD "GATE_ADVISORY ORDERING" SWEEP IS GONE (lode-ysr6): it compared
+the line number of a consumer's separate `GATE_ADVISORY=(...)` statement
+against its `gate_could_not_run` call sites. No consumer has such a statement
+any more -- gate-lib.sh binds GATE_ADVISORY itself, at source time -- so the
+sweep has nothing left to compare and was deleted rather than rewritten. The
+hazard it swept for, and why it is now unrepresentable, is recorded once in
+gate-lib.sh's own header. The narrower discipline that replaces it is swept
+below.
 """
 
 from __future__ import annotations
@@ -63,13 +59,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 GATE_LIB = SCRIPTS_DIR / "gate-lib.sh"
 
-# The three fixed lines every consumer's guard prints/does on a missing
-# library -- unchanged by lode-ysr6, still byte-identical across all five
-# consumers. What now VARIES per consumer is the source line's own trailing
-# arguments (advisory strings, or the `--no-advisory` sentinel), which is why
-# this is no longer one single verbatim constant covering the whole block --
-# GUARD_TAIL is the fixed part, folded into GUARD_RE below rather than
-# duplicated as a second copy of the same text.
+# The fixed part of every consumer's guard -- the three lines it prints/does
+# on a missing library, still byte-identical across all five consumers. What
+# VARIES per consumer is only the source line's own trailing arguments
+# (advisory strings, or the `--no-advisory` sentinel), so the guard is pinned
+# as this literal plus the small argument grammar in GUARD_RE below, rather
+# than as one verbatim constant covering the whole block.
 GUARD_TAIL = (
     'echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2\n'
     '  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2\n'
@@ -79,15 +74,17 @@ GUARD_TAIL = (
 
 # Matches the whole guarded-source block, capturing (group 1) the inner
 # `. "$(dirname "$0")/gate-lib.sh" ...` command -- including whatever
-# trailing arguments (advisory strings, `--no-advisory`, or nothing) follow,
-# possibly spread across backslash-continued lines. group(1) is what a
-# BARE, unguarded source would have looked like before lode-bss5: dropping
-# the `if ! `/`; then`/`fi` wrapper and the three echo/exit lines (GUARD_TAIL)
-# around it, while preserving whatever the consumer passes gate-lib.sh.
+# trailing arguments (advisory strings, `--no-advisory`, or nothing) follow.
+# Each argument is a double-quoted string or the literal sentinel, optionally
+# preceded by a backslash line continuation, so the two formattings in use
+# (one continued argument per line; a single argument on the source line) are
+# the same rule rather than two. group(1) is what a BARE, unguarded source
+# would have looked like before lode-bss5: dropping the `if ! `/`; then`/`fi`
+# wrapper and the three echo/exit lines (GUARD_TAIL) around it, while
+# preserving whatever the consumer passes gate-lib.sh.
 GUARD_RE = re.compile(
     r'if ! (\. "\$\(dirname "\$0"\)/gate-lib\.sh"'
-    r"(?:[ \t]*\\\n[ \t]*\"[^\"]*\")*"  # optional backslash-continued "arg" lines
-    r'(?:[ \t]+(?:"[^"]*"|--no-advisory))?)'  # optional single-line trailing arg
+    r'(?:[ \t]*(?:\\\n[ \t]*)?(?:"[^"\n]*"|--no-advisory))*)'
     r"; then\n  " + re.escape(GUARD_TAIL),
 )
 
@@ -103,14 +100,19 @@ def _consumers() -> list[Path]:
 
 CONSUMERS = _consumers()
 
+# The subset that passes the `--no-advisory` sentinel rather than advisory
+# strings. Only these can have the sentinel stripped, so only these can prove
+# the leak it prevents -- see the non-vacuity test at the bottom of the file.
+NO_ADVISORY_CONSUMERS = [p for p in CONSUMERS if "--no-advisory" in p.read_text()]
 
-def _run_script(path: Path) -> subprocess.CompletedProcess:
+
+def _run_script(path: Path, *args: str) -> subprocess.CompletedProcess:
     """Execute directly (not `bash <path>`) so each script's own shebang flags
     are honoured -- validate-mermaid.sh's `#!/bin/bash -e` is dropped entirely
     under `bash <path>`, which would make this test run a shell that is not
     the one the script actually ships with."""
     return subprocess.run(
-        [str(path)], capture_output=True, text=True, timeout=30, check=False
+        [str(path), *args], capture_output=True, text=True, timeout=30, check=False
     )
 
 
@@ -123,21 +125,43 @@ def _guard_match(text: str) -> re.Match[str]:
     return m
 
 
-def _run(script_body: str) -> subprocess.CompletedProcess:
+def _run(
+    script_body: str, *source_args: str, prelude: str = ""
+) -> subprocess.CompletedProcess:
     """Run `script_body` under `bash -uo pipefail -c`, after sourcing
-    gate-lib.sh -- `-u` (nounset) matches how merge-precheck.sh/release-bump.sh
-    actually run, and is the regime the unset-array bug below only reproduces
-    under. No extra args follow the `-c` command string, so $# is genuinely 0
-    at the top level -- gate-lib.sh's own source-time logic then defaults
-    GATE_ADVISORY to an empty array, matching every test below that doesn't
-    care about the source-time mechanism itself."""
+    gate-lib.sh with `source_args` on the source line -- `-u` (nounset)
+    matches how merge-precheck.sh/release-bump.sh actually run, and is the
+    regime the unbound-array bug below only reproduces under.
+
+    `prelude` is emitted ABOVE the source line, which is the only way to give
+    the sourcing shell its own positional parameters (`set -- ...`) before
+    gate-lib.sh reads them. With no prelude and no source_args, $# is
+    genuinely 0 at the top level and gate-lib.sh's source-time logic defaults
+    GATE_ADVISORY to an empty array -- what every test that does not care
+    about the source-time mechanism itself wants."""
+    # Quoting is stripped by the shell at parse time, so a quoted
+    # "--no-advisory" reaches gate-lib.sh as the same $1 the real consumers
+    # pass unquoted -- no special case needed here (verified).
+    args = "".join(f' "{a}"' for a in source_args)
     return subprocess.run(
-        ["bash", "-uo", "pipefail", "-c", f'. "{GATE_LIB}"\n{script_body}'],
+        [
+            "bash",
+            "-uo",
+            "pipefail",
+            "-c",
+            f'{prelude}. "{GATE_LIB}"{args}\n{script_body}',
+        ],
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
     )
+
+
+def _stderr_lines(result: subprocess.CompletedProcess) -> list[str]:
+    """Non-empty stderr lines -- gate_could_not_run writes the banner, the
+    caller's cause lines and the advisory trailer there, one per line."""
+    return [ln for ln in result.stderr.splitlines() if ln]
 
 
 def test_banner_and_cause_lines_go_to_stderr_with_exit_2():
@@ -156,8 +180,7 @@ def test_no_gate_advisory_set_means_no_trailer_at_all():
     result = _run('gate_could_not_run "summary" "only cause line"')
 
     assert result.returncode == 2
-    lines = [ln for ln in result.stderr.splitlines() if ln]
-    assert lines == ["GATE COULD NOT RUN: summary", "only cause line"]
+    assert _stderr_lines(result) == ["GATE COULD NOT RUN: summary", "only cause line"]
 
 
 def test_gate_advisory_set_once_is_appended_after_every_calls_cause_lines():
@@ -174,8 +197,7 @@ def test_gate_advisory_set_once_is_appended_after_every_calls_cause_lines():
     )
 
     assert result.returncode == 2
-    lines = [ln for ln in result.stderr.splitlines() if ln]
-    assert lines == [
+    assert _stderr_lines(result) == [
         "GATE COULD NOT RUN: summary",
         "cause line",
         "advisory line one",
@@ -183,14 +205,15 @@ def test_gate_advisory_set_once_is_appended_after_every_calls_cause_lines():
     ]
 
 
-def test_sourcing_under_nounset_does_not_error_on_unset_gate_advisory():
-    """Regression test for gate-lib.sh always assigning GATE_ADVISORY at
-    source time (either from "$@" or to an empty array for the --no-advisory
-    sentinel) -- see that assignment's comment for why bash's nounset would
-    otherwise make this necessary. Every real caller runs under `set -u`, so
-    sourcing the library and calling gate_could_not_run with no advisory
-    lines passed must not blow up with "unbound variable" before reaching the
-    exit-2 path."""
+def test_sourcing_under_nounset_survives_an_empty_gate_advisory():
+    """Every real caller runs under `set -u`, and bash's nounset treats a
+    never-declared array as an unbound-variable error on `${arr[@]}` (unlike
+    a scalar's more forgiving `${var:-}` default). gate-lib.sh therefore
+    assigns GATE_ADVISORY unconditionally at source time -- from "$@", or to
+    an empty array for the --no-advisory sentinel -- so the `for line in
+    "${GATE_ADVISORY[@]}"` loop in gate_could_not_run is always safe. Sourcing
+    and then calling with no advisory lines must reach the exit-2 path rather
+    than blowing up on the way."""
     result = _run('gate_could_not_run "summary" "cause"')
 
     assert result.returncode == 2
@@ -201,23 +224,10 @@ def test_source_with_advisory_args_populates_gate_advisory_at_source_time():
     """The mechanism itself (lode-ysr6): positional arguments on the SOURCE
     line become GATE_ADVISORY before the sourcing script's own next line runs
     -- no separate assignment statement needed or possible."""
-    result = subprocess.run(
-        [
-            "bash",
-            "-uo",
-            "pipefail",
-            "-c",
-            f'. "{GATE_LIB}" "src-line-1" "src-line-2"\n'
-            'gate_could_not_run "summary" "cause"',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    result = _run('gate_could_not_run "summary" "cause"', "src-line-1", "src-line-2")
+
     assert result.returncode == 2
-    lines = [ln for ln in result.stderr.splitlines() if ln]
-    assert lines == [
+    assert _stderr_lines(result) == [
         "GATE COULD NOT RUN: summary",
         "cause",
         "src-line-1",
@@ -226,22 +236,10 @@ def test_source_with_advisory_args_populates_gate_advisory_at_source_time():
 
 
 def test_source_with_no_advisory_sentinel_gives_empty_gate_advisory():
-    result = subprocess.run(
-        [
-            "bash",
-            "-uo",
-            "pipefail",
-            "-c",
-            f'. "{GATE_LIB}" --no-advisory\ngate_could_not_run "summary" "cause"',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    result = _run('gate_could_not_run "summary" "cause"', "--no-advisory")
+
     assert result.returncode == 2
-    lines = [ln for ln in result.stderr.splitlines() if ln]
-    assert lines == ["GATE COULD NOT RUN: summary", "cause"]
+    assert _stderr_lines(result) == ["GATE COULD NOT RUN: summary", "cause"]
 
 
 def test_bare_source_with_no_args_leaks_the_callers_own_ambient_positional_params():
@@ -260,26 +258,15 @@ def test_bare_source_with_no_args_leaks_the_callers_own_ambient_positional_param
     --no-advisory design depends on, so a bash version change or a
     misunderstanding of this behaviour is caught here directly rather than
     only as a symptom in some future consumer."""
-    result = subprocess.run(
-        [
-            "bash",
-            "-uo",
-            "pipefail",
-            "-c",
-            f'set -- "callers-own-arg1" "callers-own-arg2"\n'
-            f'. "{GATE_LIB}"\n'
-            'gate_could_not_run "summary" "cause"',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
+    result = _run(
+        'gate_could_not_run "summary" "cause"',
+        prelude='set -- "callers-own-arg1" "callers-own-arg2"\n',
     )
+
     assert result.returncode == 2
-    lines = [ln for ln in result.stderr.splitlines() if ln]
     # The two leaked ambient args show up as if they were advisory lines --
     # this IS the bug the sentinel exists to prevent, reproduced directly.
-    assert lines == [
+    assert _stderr_lines(result) == [
         "GATE COULD NOT RUN: summary",
         "cause",
         "callers-own-arg1",
@@ -295,21 +282,13 @@ def test_positional_params_restored_after_source_with_advisory_args():
     consumer's own arg-count check runs AFTER the source line, so this is
     what makes those checks see their own real CLI arguments, unaffected by
     the advisory strings just passed to gate-lib.sh."""
-    result = subprocess.run(
-        [
-            "bash",
-            "-uo",
-            "pipefail",
-            "-c",
-            'set -- "own-arg1" "own-arg2"\n'
-            f'. "{GATE_LIB}" "advisory-a" "advisory-b"\n'
-            'printf "%s %s %s\\n" "$1" "$2" "$#"',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
+    result = _run(
+        'printf "%s %s %s\\n" "$1" "$2" "$#"',
+        "advisory-a",
+        "advisory-b",
+        prelude='set -- "own-arg1" "own-arg2"\n',
     )
+
     assert result.returncode == 0
     assert result.stdout.strip() == "own-arg1 own-arg2 2"
 
@@ -381,8 +360,12 @@ def test_missing_gate_lib_sweep_is_not_vacuous(script: Path, tmp_path: Path):
     duplicated per consumer, so a single sabotage sample would leave four
     copies unproven."""
     text = script.read_text()
-    inner_source = _guard_match(text).group(1)
-    sabotaged = GUARD_RE.sub(inner_source, text, count=1)
+    match = _guard_match(text)
+    inner_source = match.group(1)
+    # str.replace, not GUARD_RE.sub: the replacement is a chunk of shell that
+    # can contain backslashes, and re.sub would interpret those as template
+    # escapes rather than literal text.
+    sabotaged = text.replace(match.group(0), inner_source, 1)
     assert sabotaged != text, "sabotage did not apply"
 
     copied = tmp_path / script.name
@@ -397,11 +380,19 @@ def test_missing_gate_lib_sweep_is_not_vacuous(script: Path, tmp_path: Path):
     )
 
 
-@pytest.mark.parametrize(
-    "script",
-    [p for p in CONSUMERS if "--no-advisory" in p.read_text()],
-    ids=lambda p: p.name,
-)
+def test_a_no_advisory_consumer_exists_to_sabotage():
+    """Guards the non-vacuity proof below against silently reducing to zero
+    cases -- the day both no-advisory consumers gain advisory trailers, that
+    parametrized test would vanish rather than fail, taking the only proof
+    that the sentinel sweep is non-vacuous with it. Same role
+    test_the_consumer_sweep_discovers_something plays for CONSUMERS."""
+    assert NO_ADVISORY_CONSUMERS, (
+        "no --no-advisory consumer left to sabotage -- the non-vacuity proof "
+        "below is now vacuous and needs a synthetic consumer instead."
+    )
+
+
+@pytest.mark.parametrize("script", NO_ADVISORY_CONSUMERS, ids=lambda p: p.name)
 def test_stripping_the_no_advisory_sentinel_leaks_the_consumers_own_argv(
     script: Path, tmp_path: Path
 ):
@@ -415,7 +406,13 @@ def test_stripping_the_no_advisory_sentinel_leaks_the_consumers_own_argv(
     gate-lib.sh itself is copied alongside the sabotaged script (unlike the
     missing-library sweep above) -- the leak can only be observed if sourcing
     actually SUCCEEDS; a missing gate-lib.sh would hit the fail-closed guard
-    first and mask the leak entirely."""
+    first and mask the leak entirely.
+
+    Note the deliberate argument on the invocation below: the leak only
+    exists when the consumer is holding argv at the moment it sources, so a
+    zero-argument run of the same sabotaged script would pass silently. That
+    is exactly why the sweep this proves is STATIC rather than a runtime
+    check -- see gate-lib.sh's GATE_ADVISORY contract."""
     text = script.read_text()
     inner_source = _guard_match(text).group(1)
     assert inner_source.endswith("--no-advisory")
@@ -429,9 +426,7 @@ def test_stripping_the_no_advisory_sentinel_leaks_the_consumers_own_argv(
     shutil.copy2(GATE_LIB, tmp_path / "gate-lib.sh")
 
     marker = "leak-marker-xyz-123"
-    result = subprocess.run(
-        [str(copied), marker], capture_output=True, text=True, timeout=30, check=False
-    )
+    result = _run_script(copied, marker)
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert marker in result.stderr, (

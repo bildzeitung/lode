@@ -228,15 +228,11 @@ def test_usage_without_args_is_exit_2_not_a_conflict() -> None:
     Reverting the explicit arity check back to `${1:?...}` makes this exit 1
     and fails the assertion (defect: usage error colliding with exit 1).
 
-    This is also the call site that would have been most exposed to
-    lode-090f's ordering hazard before lode-ysr6 made it structurally
-    impossible: the header insists the arity check come FIRST, which used to
-    be exactly the edit that could move it above a separate
-    `GATE_ADVISORY=(...)` assignment and silently drop half the contract.
-    GATE_ADVISORY is now bound at source time (see gate-lib.sh's Usage
-    section), so there is no such assignment left to misorder -- this
-    assertion still pins the advisory TEXT itself, which a structural sweep
-    cannot see."""
+    The advisory assertion below pins the advisory TEXT, which no structural
+    sweep can see. It used to carry a second job -- catching this call site
+    (which the header insists come FIRST) being moved above the script's
+    separate `GATE_ADVISORY=(...)` assignment -- but lode-ysr6 removed that
+    assignment entirely, so only the text check remains."""
     result = subprocess.run(
         ["bash", str(SCRIPT)],
         capture_output=True,
