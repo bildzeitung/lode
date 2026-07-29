@@ -1,5 +1,6 @@
-"""Gate: no fenced ```bash/```sh block in a `.claude/skills/*/SKILL.md` may reference a
-shell variable that isn't ALSO assigned somewhere within that SAME block (lode-x495).
+"""Gate: no fenced ```bash/```sh block in a `.claude/skills/*/SKILL.md` (lode-x495) or
+a `.claude/agents/*.md` (lode-lv04) may reference a shell variable that isn't ALSO
+assigned somewhere within that SAME block.
 
 ## The bug class
 
@@ -97,23 +98,23 @@ real, confirmed instances that a land-only gate would leave silently uncovered.
 files whose fenced bash an agent executes exactly the same way, block by block, under
 the same harness rule; the bug class is not skills-specific either. At the time of
 widening the shipped parser reported ZERO violations across all three agent files
-(`coding.md` 31 fenced bash blocks, `code-reviewer.md` 11, `land-review.md` 3),
-re-verified by hand with a sabotaged copy of `coding.md` (an injected cross-block
-`$SABOTAGE_VAR` was flagged as expected, then reverted before shipping) -- so
+(`coding.md` 31 fenced bash blocks, `code-reviewer.md` 11, `land-review.md` 3), so
 widening needed no allowlist entry and no fix to any agent file, only a change to
-which paths are globbed. Both roots share **one** `ALLOWLIST`, keyed by a path
-relative to `.claude/` (not to either root) precisely so a key can never be ambiguous
-about which side of the tree it names -- e.g. `skills/land/SKILL.md` vs. a
-hypothetical `agents/land.md`.
+which paths are globbed. That the widened gate actually *catches* an agent-file
+regression is pinned permanently rather than checked once by hand, by
+`test_sabotaged_agent_file_is_caught_by_find_violations`. Both roots share **one**
+`ALLOWLIST`, keyed by a path relative to `.claude/` (not to either root) precisely so
+a key can never be ambiguous about which side of the tree it names -- e.g.
+`skills/land/SKILL.md` vs. a hypothetical `agents/land.md`.
 
 **There is deliberately no whole-file escape hatch** -- not even for `land/SKILL.md`,
 which was initially skipped file-wide. The reasoning for that decision and against it
 lives in `docs/agents-workflow.md`'s section above ("There is no whole-file escape
-hatch, deliberately"); `test_every_skill_and_agent_file_is_covered` pins the outcome. Measured
-while making the call, and recorded here because it is evidence rather than rationale:
-across `trunk`, this branch, and all five in-flight sibling branches touching the file,
-the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing else -- no false
-positive, and no sibling introduces a new instance.
+hatch, deliberately"); `test_every_skill_and_agent_file_is_covered` pins the outcome.
+Measured while making the call, and recorded here because it is evidence rather than
+rationale: across `trunk`, this branch, and all five in-flight sibling branches
+touching the file, the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing
+else -- no false positive, and no sibling introduces a new instance.
 
 That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
 to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
@@ -555,7 +556,7 @@ def test_two_separate_blocks_are_returned_separately() -> None:
 
 
 # =====================================================================================
-# The gate itself, against the real, shipped skill files.
+# The gate itself, against the real, shipped skill AND agent files.
 # =====================================================================================
 
 
@@ -603,29 +604,32 @@ def test_no_cross_block_shell_state_outside_the_allowlist() -> None:
     assert not failures, "\n".join(failures)
 
 
-def test_sabotaged_agent_file_is_caught_by_find_violations() -> None:
+def test_sabotaged_agent_file_is_caught_by_find_violations(tmp_path: Path) -> None:
     """lode-lv04's sabotage verification, kept as a permanent regression pin rather
     than a one-off manual check: a cross-block variable injected into a REAL agent
-    file's fenced bash (the exact `.claude/agents/coding.md` regression shape --
-    a variable set in one ```bash block and read in a separate later one) must be
-    caught by `find_violations`, the same primitive `test_no_cross_block_shell_state_
-    outside_the_allowlist` runs over every skill and agent file. This does not touch
-    the file on disk -- it mutates the text in memory the same way `_bash_blocks`
-    would see it if the sabotage were real."""
-    real_text = (AGENTS_DIR / "coding.md").read_text(encoding="utf-8")
-    sabotaged = real_text.replace(
-        "## Non-negotiables",
-        '```bash\nSABOTAGE_VAR=1\n```\n\n```bash\necho "$SABOTAGE_VAR"\n```\n\n'
-        "## Non-negotiables",
-        1,
+    file's fenced bash (the exact `.claude/agents/coding.md` regression shape -- a
+    variable set in one ```bash block and read in a separate later one) must be
+    caught by `find_violations`, the same primitive
+    `test_no_cross_block_shell_state_outside_the_allowlist` runs over every skill and
+    agent file.
+
+    Routed through `find_violations` on a COPY under `tmp_path`; the real file on
+    disk is never written. Calling that primitive rather than re-implementing its
+    loop is what makes this a pin at all: an inlined copy of the loop body still
+    passes with `find_violations` itself mutated to the file-global reading this
+    module's "Why per-block, not file-global" section rejects, since under that
+    reading `SABOTAGE_VAR` IS assigned somewhere in the file. Verified by mutation
+    during lode-lv04's review, where the inlined form was what shipped.
+
+    Note this also depends on `.claude/agents/*.md` being globbed at all, which is
+    `test_every_skill_and_agent_file_is_covered`'s job, not this test's -- reverting
+    the widening fails there, not here.
+    """
+    sabotaged = tmp_path / "coding.md"
+    sabotaged.write_text(
+        (AGENTS_DIR / "coding.md").read_text(encoding="utf-8")
+        + '\n```bash\nSABOTAGE_VAR=1\n```\n\n```bash\necho "$SABOTAGE_VAR"\n```\n',
+        encoding="utf-8",
     )
-    assert sabotaged != real_text, (
-        "coding.md no longer has a '## Non-negotiables' anchor"
-    )
-    violations: list[tuple[int, str]] = []
-    for i, block in enumerate(_bash_blocks(sabotaged)):
-        used = _used_vars(block) - _KNOWN_ENV_VARS
-        assigned = _assigned_vars(block)
-        for var in sorted(used - assigned):
-            violations.append((i, var))
+    violations = find_violations(sabotaged)
     assert "SABOTAGE_VAR" in {v for _, v in violations}, violations
