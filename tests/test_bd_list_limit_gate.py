@@ -120,7 +120,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 # `test_skill_bash_state.py` would otherwise fail the same import).
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
-import test_skill_bash_state as _skill_bash_state  # noqa: E402
+import test_skill_bash_state as _skill_bash_state
 
 _bash_blocks = _skill_bash_state._bash_blocks
 _strip_comment = _skill_bash_state._strip_comment
@@ -172,7 +172,7 @@ SKIP_LIST: dict[tuple[str, str], str] = {
     ): (
         "A diagnostic string for a FAILED bd invocation, quoting the command name for "
         "a human reading stderr -- not a second invocation. The real call two lines "
-        "above (`if ! rows=\"$(bd list --label sweep-digest --all --limit 0 --json "
+        'above (`if ! rows="$(bd list --label sweep-digest --all --limit 0 --json '
         '2>/dev/null)"; then`) already carries --limit 0.'
     ),
     (
@@ -331,7 +331,10 @@ def test_limit_present_on_line_is_not_a_violation() -> None:
 
 
 def test_limit_absent_on_line_is_a_violation() -> None:
-    assert _line_snippet("rtk bd list --label foo --json") == "rtk bd list --label foo --json"
+    assert (
+        _line_snippet("rtk bd list --label foo --json")
+        == "rtk bd list --label foo --json"
+    )
 
 
 def test_comment_line_is_never_a_violation() -> None:
@@ -346,15 +349,13 @@ def test_bd_human_list_line_is_never_a_violation() -> None:
 
 
 def test_fenced_block_without_limit_is_flagged() -> None:
-    markdown = '```bash\nrtk bd list --label foo --json\n```\n'
-    path_text_violations = [
-        s for s, _ in _skill_md_violations_from_text(markdown)
-    ]
+    markdown = "```bash\nrtk bd list --label foo --json\n```\n"
+    path_text_violations = [s for s, _ in _skill_md_violations_from_text(markdown)]
     assert "rtk bd list --label foo --json" in path_text_violations
 
 
 def test_fenced_block_with_limit_is_clean() -> None:
-    markdown = '```bash\nrtk bd list --label foo --limit 0 --json\n```\n'
+    markdown = "```bash\nrtk bd list --label foo --limit 0 --json\n```\n"
     assert _skill_md_violations_from_text(markdown) == []
 
 
@@ -398,7 +399,7 @@ def test_inline_backtick_span_inside_a_fence_is_not_double_scanned() -> None:
 
 
 def test_non_bash_fence_is_never_scanned() -> None:
-    markdown = '```text\nbd list --json\n```\n'
+    markdown = "```text\nbd list --json\n```\n"
     assert _skill_md_violations_from_text(markdown) == []
 
 
@@ -477,7 +478,7 @@ def test_no_unguarded_bd_list_call_sites() -> None:
         f"(no --limit): {snippet!r}. Either add --limit 0 (see "
         f".claude/skills/sweep/SKILL.md's canonical rationale), or -- only if this "
         f"is a confirmed non-operative mention -- add "
-        f"(\"{path}\", {snippet!r}) to SKIP_LIST in tests/test_bd_list_limit_gate.py "
+        f'("{path}", {snippet!r}) to SKIP_LIST in tests/test_bd_list_limit_gate.py '
         f"with a specific reason."
         for path, snippet, lineno in violations
     )
@@ -512,7 +513,9 @@ def test_sabotage_statusline_sh_real_site() -> None:
     assert any('bd -C "$cwd" list --json' in v for v, _ in violations)
 
 
-def _skill_md_violations_after_skip_list(rel: str, markdown: str) -> list[tuple[str, int]]:
+def _skill_md_violations_after_skip_list(
+    rel: str, markdown: str
+) -> list[tuple[str, int]]:
     """Test-only: `_skill_md_violations_from_text`, filtered through SKIP_LIST the
     same way `find_violations` filters a real file -- so a sabotage test against a
     REAL file (which legitimately carries known prose false positives elsewhere in
@@ -565,9 +568,7 @@ def test_sabotage_release_skill_inline_backtick_site() -> None:
     )
     assert sabotaged != real_text, "sabotage replacement found no match -- site moved"
     violations = _skill_md_violations_after_skip_list(rel, sabotaged)
-    assert any(
-        "bd list --status=closed --type=epic" in v for v, _ in violations
-    )
+    assert any("bd list --status=closed --type=epic" in v for v, _ in violations)
 
 
 def test_sabotage_epic_children_closed_sh_real_site() -> None:
