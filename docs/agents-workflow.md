@@ -1408,18 +1408,24 @@ but for `land/SKILL.md` only and by a different test (`tests/test_land_lock.py`)
 
 **Scope and allowlist.** The gate covers every `.claude/skills/*/SKILL.md` — not scoped to
 `land/SKILL.md` alone, since `lode-x495` found real, confirmed instances in `/sweep` and `/release`
-that a land-only gate would leave uncovered. It does **not** yet cover `.claude/agents/*.md`, whose
-fenced blocks an agent executes exactly the same way (`lode-x495`'s review measured 45 such blocks
-across `coding`/`code-reviewer`/`land-review`, all currently clean, so widening is free — tracked as
-its own ticket rather than folded in). Alongside the file scope there is a small, per-`(file,
+that a land-only gate would leave uncovered — **and**, since `lode-lv04`, every `.claude/agents/*.md`
+too: the bug class is not skills-specific, and an agent's markdown instructions execute fenced bash
+exactly the same way, block by block, under the same harness rule. Widening was free: the shipped
+parser reported zero violations across all three agent files at the time
+(`coding.md` 31 fenced bash blocks, `code-reviewer.md` 11, `land-review.md` 3), confirmed by a
+sabotage check that a freshly-injected cross-block variable in an agent file *is* caught — pinned as
+a permanent regression test (`test_sabotaged_agent_file_is_caught_by_find_violations`), not just a
+one-off manual check. Both roots share **one** allowlist, keyed by a path relative to `.claude/`
+(not to either root) — e.g. `skills/land/SKILL.md`, `agents/coding.md` — so a key is never ambiguous
+about which side of the tree it names. Alongside the file scope there is a small, per-`(file,
 variable)` allowlist for a value that
 is deliberately **not** amenable to either sanctioned remedy: one that is computed by the agent's own
 reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by any
 deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
-`release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before Section
-4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in the test
-file itself — an entry with no reason is how this exact rot restarted once already (a bug fixed once
-in `land/SKILL.md`, then found again, unfixed, in two other skills).
+`skills/release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before
+Section 4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in
+the test file itself — an entry with no reason is how this exact rot restarted once already (a bug
+fixed once in `land/SKILL.md`, then found again, unfixed, in two other skills).
 
 **There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
 on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
