@@ -27,6 +27,7 @@ from lode.config import Settings
 from lode.curation import delete_annotation, delete_edge
 from lode.enrich import (
     ENRICH_PROMPT_VER,
+    MAX_TOKENS,
     EnrichmentResult,
     InferredEdge,
     collect_enrich_batch,
@@ -34,7 +35,7 @@ from lode.enrich import (
     format_enrich_outcome,
     submit_enrich_batch,
 )
-from lode.llm_provider import AnthropicProvider
+from lode.llm_provider import AnthropicProvider, ModelTier
 from lode.reconcile import _enrich_gap_step
 from lode.storage import init_db
 
@@ -416,6 +417,44 @@ def test_enrich_version_passes_anthropic_call_timeout_to_create(
 
     create_kwargs = client.messages.create.call_args.kwargs
     assert create_kwargs["timeout"] == 42.0
+
+
+def test_enrich_version_uses_the_raised_max_tokens(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """The immediate Haiku call sends enrich.MAX_TOKENS (lode-jgus), not a
+    stale inline 1024 -- headroom for a thinking-capable enrichment_llm
+    override to share the budget with the forced tool-call JSON.
+    """
+    _insert_note(conn)
+    result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
+    client = _fake_client(result)
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+
+    create_kwargs = client.messages.create.call_args.kwargs
+    assert create_kwargs["max_tokens"] == MAX_TOKENS
+    assert MAX_TOKENS > 1024  # the raise this ticket exists to make
+
+
+def test_enrich_version_with_thinking_capable_override_omits_thinking(
+    conn: sqlite3.Connection,
+) -> None:
+    """A Kind.RUNTIME override of enrichment_llm to a thinking-capable model
+    (lode-jgus) still never sends `thinking` on the forced tool-use branch --
+    that rule is a property of the branch, not of the model (see the
+    AnthropicProvider class docstring) -- and still uses the raised
+    MAX_TOKENS headroom rather than the old inline 1024.
+    """
+    _insert_note(conn)
+    settings = Settings(enrichment_llm=ModelTier(model="claude-opus-5"))
+    result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
+    client = _fake_client(result)
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+
+    create_kwargs = client.messages.create.call_args.kwargs
+    assert create_kwargs["model"] == "claude-opus-5"
+    assert create_kwargs["max_tokens"] == MAX_TOKENS
+    assert "thinking" not in create_kwargs
 
 
 def test_enrich_version_full_provenance(
@@ -1247,6 +1286,26 @@ def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
 
     create_kwargs = client.beta.messages.batches.create.call_args.kwargs
     assert create_kwargs["timeout"] == 42.0
+
+
+def test_submit_enrich_batch_uses_the_raised_max_tokens(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """The batch request's per-item params send enrich.MAX_TOKENS (lode-jgus)
+    -- the same raised value the immediate path uses, per _build_batch_request's
+    byte-for-byte-with-_call_haiku contract (lode-568v.2).
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn)
+
+    client = _fake_batch_client(batch_id="batch-xyz")
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
+
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    (request,) = create_kwargs["requests"]
+    assert request["params"]["max_tokens"] == MAX_TOKENS
 
 
 def test_submit_enrich_batch_stores_batch_handle(

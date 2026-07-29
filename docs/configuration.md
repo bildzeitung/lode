@@ -266,14 +266,54 @@ behavior exactly); **Opus 5** (`qa_think_harder_llm` default) now runs adaptive
 thinking instead of disabled thinking, a deliberate change; **Fable-class**
 overrides now work.
 
-**The enrichment forced-tool-use branch needed no code change** — it has never
-sent `thinking` at all (`lode-d1sr` never touched it), so it already follows
-the same "never explicitly disable" rule and cannot hit this 400 today. A
-related but separate and currently-unreachable risk — a `Kind.RUNTIME`
-override of `enrichment_llm` to a thinking-capable model would share its own
-(smaller, unraised) `max_tokens=1024` between thinking and the forced
-tool-call JSON — is tracked as a follow-up rather than fixed here, since it
-needs its own tuning pass once someone actually wants that override.
+**The enrichment forced-tool-use branch needed no code change to avoid the
+400** — it has never sent `thinking` at all (`lode-d1sr` never touched it),
+so it already follows the same "never explicitly disable" rule and cannot hit
+this 400. The separate risk named at the time — a `Kind.RUNTIME` override of
+`enrichment_llm` to a thinking-capable model sharing its own (smaller,
+unraised) `max_tokens=1024` between thinking and the forced tool-call JSON —
+was then unreachable and tracked as a follow-up; it is now closed, see
+[below](#enrichment_llm-max_tokens-headroom-for-a-thinking-capable-override-decided-lode-jgus).
+
+### enrichment_llm max_tokens headroom for a thinking-capable override (decided, lode-jgus)
+
+`lode-3dlt` named a real but then-unreachable risk on the enrichment
+forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
+[Models](#models) above): that branch never sends `thinking` at all — a
+property of the *default* tier (Haiku 4.5 predates thinking-on-by-default),
+not of forced tool use itself, since a forced `tool_choice` on the
+first-party Claude API does not preclude thinking (only Amazon Bedrock
+requires pairing it with an explicit `disabled`). A `Kind.RUNTIME` override
+of `enrichment_llm` to a thinking-capable model (Opus 5, Sonnet 5,
+Fable-class) therefore runs adaptive thinking on this call too, sharing the
+same `max_tokens` budget between thinking and the forced tool-call JSON — the
+identical truncation hazard `lode-3dlt`'s Q&A fix exists to avoid, on a path
+that predates thinking, so nobody had sized headroom for it: the
+immediate/batch enrichment calls both sent a hardcoded `max_tokens = 1024`.
+
+**Fixed the same way `qa.MAX_TOKENS` was** — a new named constant,
+`enrich.MAX_TOKENS`, replaces the two identical inline `1024` literals in
+`_call_haiku` and `_build_batch_request` (which must stay byte-for-byte equal
+per `lode-568v.2`'s wire-equivalence bar), raised `1024 -> 2048`: headroom
+for adaptive thinking to share the budget with the tool-call payload, not a
+hard truncation guarantee. As with `qa.MAX_TOKENS`, what bounds this call in
+practice is [`llm_call_timeout_s`](#async-work-queue) (120s), not the
+Anthropic SDK's non-streaming timeout guard — that guard is skipped outright
+whenever an explicit `timeout` is passed, and the provider seam always passes
+one.
+
+The raised cap is headroom, not a guarantee, so `AnthropicProvider`'s forced
+tool-use branch now also *handles* running out of it: a response that spends
+its whole budget inside thinking carries no `tool_use` block at all, which
+previously escaped as a raw `StopIteration` from an unguarded `next(...)` —
+the identical failure shape (and identical fix) as the `messages.parse`
+branch's "no text block" guard `lode-3dlt` added. Both now raise
+`LLMProviderError`.
+
+No config-load validation, model→capability predicate, or different
+mitigation was chosen — same rationale `lode-3dlt` gave for the Q&A branch:
+raising the cap is the simplest option, needs no new capability-detection
+surface, and works on every model regardless of whether it thinks.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 
