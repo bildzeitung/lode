@@ -14,27 +14,13 @@
 # install_locked_venv LOCKFILE
 #   1. refresh uv itself, and pip inside the venv
 #
-#      The pip refresh (`uv pip install -U pip`) is NOT dead work like the
-#      step lode-xo99 deleted from step 3 below -- unlike that no-op, this
-#      one DOES change what's installed (pip's own version: e.g. 26.1.1 ->
-#      26.1.2 from ensurepip's bundle was the only diff in an otherwise
-#      byte-identical `uv pip list --format=freeze` with vs. without it,
-#      lode-hfaz, reproduced). Nothing downstream ever calls the venv's pip
-#      again -- no `venv/bin/pip` / `python -m pip` invocation anywhere in
-#      scripts/, noxfile.py, or any workflow -- so the ONLY beneficiary is
-#      pip's own self-emitted "a new release is available" console notice on
-#      a LATER `pip install -U uv`. Every path that creates the venv FRESH --
-#      python-init.sh's first run, every CI leg (no `./venv` is cached
-#      across runs, only the model-weights cache is), and update-deps.sh's
-#      rebuild_venv (always `rm -rf ./venv` first) -- starts from
-#      ensurepip's bundled pip regardless of whether this step ran before,
-#      so the notice fires there either way and this step buys nothing on
-#      any of those paths. It only pays off re-running python-init.sh a
-#      SECOND time against a `./venv` that survived from a prior run:
-#      verified directly -- `python -m venv` on an EXISTING venv directory
-#      does not reset an already-upgraded pip back to the bundled version, so
-#      a prior run's upgrade is what suppresses the notice on that repeat.
-#      Narrow, but real -- kept. Full record:
+#      Do NOT delete the pip refresh (`uv pip install -U pip`) as dead work
+#      like the step lode-xo99 removed: it is cosmetic, not dead (lode-hfaz)
+#      -- it does bump the venv's own pip, which suppresses pip's "a new
+#      release is available" notice the next time this step's own opening
+#      `pip install -U uv` runs. That pays off only on a repeat
+#      python-init.sh against a surviving ./venv; every from-scratch venv
+#      starts from ensurepip's bundle regardless. Full record:
 #      docs/stack.md#dependency-locking-lode-g2741.
 #   2. hash-verified runtime deps, from LOCKFILE
 #   3. the local package itself PLUS the dev extra, editable, resolved FRESH

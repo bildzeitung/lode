@@ -159,20 +159,22 @@ skips the lock and resolves everything fresh from `pyproject.toml` instead — t
 would we get today" escape hatch for regenerating the lock or probing an upstream bump before
 committing to it.
 
-**The pip-refresh half of that same install (`uv pip install -U pip`) is different — reproduced as
-real, not dead (`lode-hfaz`).** Unlike the deleted `-e . --no-deps` step above, this one measurably
-changes the installed package set: it bumps the venv's own pip (26.1.1 → 26.1.2 from ensurepip's
-bundle in the reproduction run), the one difference in an otherwise byte-identical `uv pip list
---format=freeze` with vs. without it. Nothing downstream ever calls the venv's pip again (no
-`venv/bin/pip` / `python -m pip` invocation anywhere in `scripts/`, `noxfile.py`, or any workflow),
-so its only effect is suppressing pip's own "a new release is available" notice on a *later* `pip
-install -U uv`. Every venv-creation path starts from ensurepip's bundled pip regardless of history —
-first-time `python-init.sh`, every CI leg (no `./venv` is cached across runs, only the model-weights
-cache is), and `update-deps.sh`'s `rebuild_venv` (`rm -rf ./venv` first, every time) — so the notice
-fires there either way and this step buys nothing on any of those paths. It only pays off re-running
-`python-init.sh` a second time against a `./venv` that survived from a prior run: verified directly,
-`python -m venv` on an *existing* venv directory does not reset an already-upgraded pip back to the
-ensurepip-bundled version. Narrow, but real — kept.
+**The pip-refresh half of that same install (`uv pip install -U pip`) is different — cosmetic, but
+not dead (`lode-hfaz`).** Unlike the deleted `-e . --no-deps` step above, it measurably changes the
+installed package set: it bumps the venv's own pip (26.1.1 → 26.1.2 from ensurepip's bundle in the
+reproduction run), the one difference in an otherwise byte-identical `uv pip list --format=freeze`
+with vs. without it. That holds only while ensurepip's bundle trails the current pip release — the
+usual state, not a guaranteed one, so a re-run finding *no* difference means the window closed, not
+that the method was wrong. Nothing ever installs *through* the upgraded pip: the venv's pip is
+invoked in exactly one place, the `pip install -U uv` that opens this same sequence (and its
+`--unlocked` twin in `python-init.sh`, kept for the same reason), so the upgrade's only effect is
+suppressing pip's own "a new release is available" notice the next time that opening command runs.
+Everything that builds `./venv` builds it from scratch — a first-time `python-init.sh`, both CI legs
+that call it (`tests.yml` and `coverage.yml`; neither caches `./venv`), and `update-deps.sh`'s
+`rebuild_venv` (`rm -rf ./venv` first, every time) — and so starts from ensurepip's bundle regardless
+of history, buying nothing there. It only pays off re-running `python-init.sh` a second time against
+a `./venv` that survived from a prior run: verified directly, `python -m venv` on an *existing* venv
+directory does not reset an already-upgraded pip. Narrow, but real — kept.
 
 **Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
 `tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
