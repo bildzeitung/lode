@@ -97,6 +97,7 @@ import asyncio
 import importlib.util
 import ipaddress
 import logging
+import os
 import socket
 import sys
 import time
@@ -109,6 +110,69 @@ from textual.pilot import Pilot
 
 import lode
 from lode.config import model_cache_dir
+
+#: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
+#: ``lode.cli`` and construct its shared ``console``/``err_console`` (see that module's
+#: ``console`` docstring, and lode-xgaa). An ambient ``FORCE_COLOR`` in the shell that launched
+#: pytest silently reddens every test asserting plain, uncoloured CLI output, on an
+#: otherwise-unmodified tree -- OBSERVED landing a real /land pass (lode-kq4v).
+#:
+#: MECHANISM -- verified by execution against the installed rich (15.0.0), and stated precisely
+#: because the loose version ("``Console()`` freezes its TTY check at construction") invites
+#: exactly the wrong simplification. ``is_terminal`` is NOT frozen: it is a live property
+#: (``rich/console.py``:931) that re-reads ``os.environ`` on every access. What IS frozen is
+#: ``_color_system`` -- computed once in ``Console.__init__`` (:708-712) FROM ``is_terminal``,
+#: surfaced by the ``color_system`` property (:909) -- and ``color_system`` is what gates whether
+#: any ANSI is emitted at all. ``no_color`` and ``is_interactive`` are frozen too, as plain
+#: instance attributes.
+#:
+#: THAT is why this must be top-level module code and NOT an autouse fixture. A fixture runs at
+#: test SETUP, after collection has already imported every test module. Scrubbing there does
+#: flip ``console.is_terminal`` back to ``False`` -- which is precisely the trap: it LOOKS like
+#: it worked, while ``console.color_system`` stays pinned at ``truecolor`` from import and ANSI
+#: keeps flowing. Same shape as the ``monkeypatch.setenv("NO_COLOR", "1")`` no-op lode-xgaa
+#: documented. ``conftest.py`` is always imported before any test module in its directory
+#: (pytest's collection order), including once per ``pytest-xdist`` worker process -- which is
+#: what makes module level early enough (verified under ``-n 8``, the landing gate's config).
+#:
+#: ORDERING CONSTRAINT, for whoever edits the import block above: ruff keeps imports first, so
+#: this scrub necessarily sits below them, and is early enough only while nothing imported above
+#: constructs a rich ``Console``. True today -- neither ``lode``, ``lode.config`` nor
+#: ``textual.pilot`` reaches ``lode.cli`` or ``rich.console``. Adding an import that does would
+#: silently half-disable this scrub; ``tests/test_conftest_color_scrub.py`` is what would catch
+#: it.
+#:
+#: ``CLICOLOR_FORCE`` -- named in lode-kq4v's audit requirement -- is read nowhere in this rich
+#: version, so there is nothing for it to force and it is deliberately not scrubbed.
+#: ``COLORTERM``/``TERM`` only choose a colour *system* once ``is_terminal`` is already ``True``,
+#: so they need no scrubbing either.
+#:
+#: NOT CLOSED BY THIS SCRUB, deliberately (lode-kq4v acceptance A.3): ``pytest -s`` /
+#: ``--capture=no`` from a REAL terminal. stdout is then a genuine tty, so ``is_terminal`` is
+#: ``True`` at import with none of these four set -- confirmed under a pty -- and the same tests
+#: fail. ``docs/stack.md``'s ``rich`` row already records that constraint. Left unfixed ON
+#: PURPOSE: the only way to force colour off is to SET ``NO_COLOR=1`` rather than clear it, which
+#: would make ``test_config_output_has_no_ansi_when_piped`` vacuous -- it would then pass because
+#: colour was forced off, not because the pipe was detected, which is the one thing it exists to
+#: assert. ``nox -s tests`` (the landing gate) never passes ``-s``, so no gate is exposed; only a
+#: human running pytest by hand is.
+#:
+#: What each of the four does, and why all four: ``FORCE_COLOR`` forces ``is_terminal`` True over
+#: captured (non-tty) stdout -- the one that actually caused lode-kq4v; ``TTY_COMPATIBLE`` forces
+#: it True on ``"1"`` and False on ``"0"``; ``TTY_INTERACTIVE`` forces ``is_interactive``.
+#: ``NO_COLOR`` forces colour OFF, so it could not have caused lode-kq4v; it is cleared anyway so
+#: the decision is deterministic in BOTH directions rather than ambient -- not because any test
+#: here wants colour on.
+#:
+#: Kept as four straight ``pop`` calls rather than a loop over a tuple: commenting them out is
+#: then the whole sabotage recipe ``tests/test_conftest_color_scrub.py`` documents for proving
+#: itself non-vacuous. (A loop needed a ``del`` of its own control variable, and deleting only
+#: the loop body left that ``del`` raising ``NameError`` -- which broke conftest import outright
+#: instead of disabling the scrub, so the recipe demonstrated nothing.)
+os.environ.pop("FORCE_COLOR", None)
+os.environ.pop("TTY_COMPATIBLE", None)
+os.environ.pop("TTY_INTERACTIVE", None)
+os.environ.pop("NO_COLOR", None)
 
 #: Root of the checkout that owns *this* conftest — the anchor guard 0 compares
 #: against. Deliberately derived from ``__file__`` rather than ``Path.cwd()``:
