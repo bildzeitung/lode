@@ -115,7 +115,7 @@ def _run_gate(
     so a docker-absent PATH can be simulated by simply not putting one there.
     ``inherit_path=True`` (the in-loop tests): ``path_dir`` is *prepended* to the
     real PATH. Those tests run past the pre-flight guard and need real
-    ``mktemp``/``chmod``/``grep``/``basename`` to reach the per-doc loop, which
+    ``mktemp``/``chmod``/``grep``/``rm`` to reach the per-doc loop, which
     ``fake_bin`` (just ``dirname``) doesn't carry. The fake docker still wins the
     PATH search because it comes first.
     """
@@ -148,8 +148,16 @@ def _assert_gate_could_not_run(
     -u` (the array is validly declared-empty), not shellcheck (SC2034 is
     suppressed at the assignment), and not tests/test_gate_lib.py (which
     exercises the library under its own controlled orderings, never a real
-    caller's). This assertion is the only thing that does. All three of this
-    script's call sites route through here, so it covers every one."""
+    caller's). This assertion is the only thing that does. Every one of this
+    script's gate_could_not_run call sites routes through here -- stated
+    without a count on purpose, since the count restales on every ticket that
+    adds a guard (it read "three" while the script had four, then seven).
+
+    One caller is not a call site: the REPO= fallback runs before gate-lib.sh
+    is sourced and hardcodes its own exit 2, so what this helper pins there is
+    that the hardcoded copy still says machine-fault-not-content. It does not,
+    and cannot, prove that copy carries the advisory trailer -- it does not
+    (lode-dyq0)."""
     assert result.returncode == 2, (
         f"expected exit 2 (gate could not run), got {result.returncode}\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
@@ -238,10 +246,13 @@ def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin
 
 
 # ---------------------------------------------------------------------------
-# lode-3xqb: the remaining non-`if` commands the shebang's `-e` could route
-# to exit 1 (this script's CONTENT verdict) on a pure machine fault, guarded
-# one at a time -- the mktemp -d guard above was already fixed in lode-bss5's
-# review pass; these four are the rest (REPO=, the printf, and both chmods).
+# lode-3xqb: the non-`if` commands the shebang's `-e` could route to exit 1
+# (this script's CONTENT verdict) on a pure machine fault, guarded one at a
+# time. The mktemp -d guard above was already fixed in lode-bss5's review
+# pass; four more are covered here (REPO=, the printf, both chmods), plus the
+# EXIT trap, which lode-3xqb's own review found still able to overwrite all of
+# them. The remaining deliberately-unguarded `echo`s, and whether -e should
+# just be deleted, are argued in the AUDIT comment atop the script (lode-6znq).
 # ---------------------------------------------------------------------------
 
 
@@ -276,13 +287,16 @@ def test_repo_root_resolution_failure_is_gate_could_not_run(fake_bin):
 
 
 def _add_real_rm(bin_dir: Path) -> None:
-    """Symlinks the real ``rm`` into the fake PATH. Needed by every test past
-    the mktemp -d line: the script's own ``trap 'rm -rf "$CFG"' EXIT`` fires
-    on the guard's ``exit 2`` too, and if `rm` is not found the trap itself
-    fails (127) -- which, since the trap runs no further `exit`, becomes the
-    PROCESS's own exit status per bash's trap semantics, silently clobbering
-    the 2 the guard just set. Not needed by the REPO= test above: that guard
-    fires before the trap is ever registered."""
+    """Symlinks the real ``rm`` into the fake PATH, so the script's own
+    ``trap 'rm -rf "$CFG" || :' EXIT`` really removes $CFG and these tests
+    don't litter /tmp. Not needed by the REPO= test above: that guard fires
+    before the trap is ever registered.
+
+    It used to be load-bearing for a second reason -- a `rm` missing from PATH
+    made the trap itself fail, which under -e clobbered the exit status the
+    guard had just set. That is now fixed IN THE SCRIPT (the trap's ``|| :``),
+    and pinned by test_temp_dir_cleanup_failure_cannot_rewrite_the_exit_code
+    below rather than worked around here."""
     real_rm = shutil.which("rm")
     assert real_rm, "rm not found — cannot build a hermetic PATH"
     (bin_dir / "rm").symlink_to(real_rm)
@@ -318,15 +332,59 @@ def test_puppeteer_config_write_failure_is_gate_could_not_run(fake_bin, tmp_path
     assert "puppeteer.json" in result.stderr
 
 
-def _add_chmod_that_fails_on_mode(
-    bin_dir: Path, real_chmod: str, fail_mode: str
-) -> None:
+def test_temp_dir_cleanup_failure_cannot_rewrite_the_exit_code(
+    fake_bin, tmp_path: Path
+):
+    """The EXIT trap is the one command no guard below it can reach, and under
+    -e it outranks all of them.
+
+    MEASURED (bash 5.2): when a command fails inside an EXIT trap under -e, the
+    shell exits with THAT command's status. So an unguarded ``rm -rf "$CFG"``
+    silently rewrites every exit decided below it -- a guard's correct 2 and a
+    clean run's 0 alike -- into rm's own 1, which in this script means "invalid
+    mermaid". Guarding the individual commands is not the same as guarding the
+    SHELL, and this is the route that survived both previous audit passes
+    (lode-bss5, then lode-3xqb) because it is spelled as a trap, not a command.
+
+    The fixture is the printf test's, plus one file inside $CFG: that makes
+    ``rm -rf`` have something it must unlink from a directory it cannot write,
+    so cleanup fails on the very fault the printf guard was written for ($CFG's
+    filesystem read-only). Without the trap's ``|| :`` this test sees exit 1.
+    """
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    cfg_dir = tmp_path / "readonly-cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "occupant").touch()  # rm -rf must have something to fail on
+    cfg_dir.chmod(0o500)  # readable + traversable, not writable
+    _add_fixed_readonly_mktemp(fake_bin, cfg_dir)
+
+    try:
+        result = _run_gate(fake_bin)
+    finally:
+        cfg_dir.chmod(0o700)  # let pytest reclaim tmp_path
+
+    # Self-check: if the fixture ever stops making cleanup fail, this test
+    # would pass for a reason unrelated to the guard it exists to pin.
+    assert "rm: cannot remove" in result.stderr, (
+        f"fixture no longer makes the EXIT trap's rm fail; the assertion below "
+        f"would be vacuous\nstderr={result.stderr!r}"
+    )
+    _assert_gate_could_not_run(result, says="could not write")
+
+
+def _add_chmod_that_fails_on_mode(bin_dir: Path, fail_mode: str) -> None:
     """A fake ``chmod`` that behaves normally for every mode except
     ``fail_mode``, which it always fails -- lets a test target ONE of the
     script's two chmod calls (755 on $CFG, 644 on puppeteer.json) without the
     other one masking it: a blanket-broken chmod would fail on whichever call
     comes first regardless of which guard's test is running, proving nothing
-    about the second one."""
+    about the second one.
+
+    Resolves the real chmod itself, like _add_real_rm/_add_real_mktemp do for
+    theirs, so neither caller repeats the which()-plus-assert."""
+    real_chmod = shutil.which("chmod")
+    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
     shim = bin_dir / "chmod"
     shim.write_text(
         "#!/bin/bash\n"
@@ -354,9 +412,7 @@ def test_cfg_dir_chmod_failure_is_gate_could_not_run(fake_bin):
     _add_docker_with_run_exit(fake_bin, 0)
     _add_real_rm(fake_bin)
     _add_real_mktemp(fake_bin)
-    real_chmod = shutil.which("chmod")
-    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
-    _add_chmod_that_fails_on_mode(fake_bin, real_chmod, "755")
+    _add_chmod_that_fails_on_mode(fake_bin, "755")
 
     result = _run_gate(fake_bin)
 
@@ -373,9 +429,7 @@ def test_puppeteer_config_chmod_failure_is_gate_could_not_run(fake_bin):
     _add_docker_with_run_exit(fake_bin, 0)
     _add_real_rm(fake_bin)
     _add_real_mktemp(fake_bin)
-    real_chmod = shutil.which("chmod")
-    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
-    _add_chmod_that_fails_on_mode(fake_bin, real_chmod, "644")
+    _add_chmod_that_fails_on_mode(fake_bin, "644")
 
     result = _run_gate(fake_bin)
 
