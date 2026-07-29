@@ -37,11 +37,20 @@ reports "this test touched the network":
   real, billed Haiku/Sonnet call goes out.
 
 ``_block_unmocked_network_and_llm_access`` below closes both gaps with two
-independent guards, each raising ``pytest.fail(...)`` — which raises
-``_pytest.outcomes.Failed``, a ``BaseException`` (**not** an ``Exception``)
-subclass, so it is guaranteed to blow straight through ``run_one``'s
-``except Exception`` (and any other broad ``except Exception`` in the call
-chain) rather than being swallowed as just another job failure:
+independent guards. Each one **records** the violation to a process-global list
+*and* raises ``pytest.fail(...)``, and an autouse teardown check fails the test
+if anything was left on that list. The two halves are deliberately redundant;
+the redundancy is the whole point (lode-sx17), so read them as one mechanism:
+
+* The **raise** stops the test where it happens, with a traceback pointing at
+  the offending line. ``pytest.fail`` raises ``_pytest.outcomes.Failed``, a
+  ``BaseException`` (**not** an ``Exception``) subclass, chosen so it blows
+  straight through ``run_one``'s ``except Exception`` rather than being
+  swallowed as just another job failure.
+* The **record** is what makes the guard hold when the raise never reaches
+  pytest at all — see "Why the raise alone is not enough" below.
+
+The two guards:
 
 1. **LLM-client construction** — patches ``anthropic.Anthropic.__init__``
    (+ ``AsyncAnthropic`` if present) to fail unconditionally, before the SDK's own
@@ -62,11 +71,52 @@ chain) rather than being swallowed as just another job failure:
    socket first and only then wraps it in TLS, so ``ssl.SSLSocket.connect`` is
    never reached).
 
-   Known limits, accepted: a connect made in a **subprocess** is out of reach
-   (separate interpreter), and one made in a **thread** prevents the call but
-   cannot itself fail the test (``pytest.fail`` in a non-main thread does not
-   propagate to the test). lode makes no such calls today; the guard is a net
-   for *accidents*, not an adversary.
+**Why the raise alone is not enough (lode-sx17).** Until this ticket the guard
+rested entirely on ``Failed`` being a ``BaseException``, and that turned out to
+be luck rather than design in two distinct ways:
+
+1. **A third-party best-effort swallow.** ``huggingface_hub``'s
+   ``utils/_detect_agent.py`` fetches an agent-harness registry from the Hub
+   while *building the headers for every Hub request*
+   (``utils/_headers.py``'s ``build_hf_headers`` ->
+   ``_http_user_agent``), and wraps the whole load in ``except Exception`` —
+   its module docstring states outright that "detection must never make a
+   process fail" — with a *second* ``except Exception`` inside the fetch
+   itself. A ``BaseException`` clears both today, but nothing on their side is
+   load-bearing for us: that library is one ``except BaseException`` away from
+   making the egress permanently **invisible** rather than merely non-failing,
+   and so is any other dependency with a broad best-effort handler. lode does
+   not get to pick their except clauses. (That *particular* egress is also cut
+   at its source now — see ``HF_HUB_DISABLE_TELEMETRY`` below — but cutting one
+   known site is not a mechanism, and the next one will not be announced.)
+2. **A connect made off the main thread.** ``pytest.fail`` in a non-main thread
+   does not propagate to the test, so the raise prevents the call but reports
+   nothing. lode **does** make such calls — this docstring previously claimed
+   it did not, which was already false when written: a Textual worker reaching
+   ``asyncio.to_thread`` in the related-notes panel produced exactly this, a
+   bare "Task exception was never retrieved" block on stderr that failed no
+   test (lode-fr3p, lode-7ypf).
+
+The record closes both: it is appended at the moment ``connect`` is
+intercepted, before anything downstream can decide what to do with the
+exception, and the teardown check reads it regardless of which thread appended
+it or what swallowed the raise.
+
+   Known limits, still accepted: a connect made in a **subprocess** is out of
+   reach (separate interpreter, separate list). And a record appended *after*
+   its own test's teardown — a straggler worker outliving the test that started
+   it — is attributed to whichever test is running when it is next checked, so
+   every recorded message carries the stack captured at interception time; read
+   that stack, not the test name, to find the caller. The guard is a net for
+   *accidents*, not an adversary.
+
+**Deliberately tripping the guard: ``@pytest.mark.trips_network_guard``.** A
+test that *asserts on the guard's own behaviour* (tests/test_network_guard.py)
+trips it on purpose and catches the raise, which would otherwise leave a record
+and fail in teardown. That marker consumes the record. It is checked for
+staleness in both directions: a marked test that records **nothing** also
+fails, because a marker that has stopped being needed silently disables the
+teardown backstop for that test.
 
 **Escape hatch (explicit, greppable): ``@pytest.mark.network``** (registered in
 ``pyproject.toml``) lifts *both* guards for a test that deliberately needs real
@@ -93,6 +143,23 @@ which load a real model on purpose) and by guard 1 still covering every one of
 them. Do not reach for ``slow`` as a way to quiet guard 2 on a test that is not
 about a real model load — use ``@pytest.mark.network``, which is greppable and
 says what it means.
+
+**Two known egress sources are also cut at the source, so the guard never has
+to catch them.** Neither is a substitute for the guard: removing an egress
+beats catching it, and the guard still fails anything either one misses.
+
+1. **``HF_HUB_DISABLE_TELEMETRY`` (lode-sx17)** — set process-wide at module
+   level below, killing huggingface_hub's agent-harness registry fetch. See
+   that assignment's comment for why this env var and not ``HF_HUB_OFFLINE``,
+   and why process-wide rather than inside the autouse fixture.
+2. **The autouse offline query embedder (lode-7ypf)** —
+   :func:`_stub_the_query_embedder_offline` replaces
+   :class:`lode.embedding.FastEmbedEmbedder` for every test the socket guard
+   polices. The real one resolves its HuggingFace revision over the network on
+   first ``embed_query``, warm cache or not, and the related-notes panel
+   constructs it from a debounced background worker — so any TUI test that put
+   text in a body ``TextArea`` without stubbing armed a live call that outlived
+   its own test. ``@pytest.mark.real_embedder`` opts back out.
 """
 
 import ast
@@ -103,8 +170,10 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
-from collections.abc import Callable
+import traceback
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -176,6 +245,47 @@ os.environ.pop("FORCE_COLOR", None)
 os.environ.pop("TTY_COMPATIBLE", None)
 os.environ.pop("TTY_INTERACTIVE", None)
 os.environ.pop("NO_COLOR", None)
+
+#: lode-sx17: cut huggingface_hub's agent-harness registry fetch at its SOURCE, so the guard below
+#: never has to catch it. ``utils/_headers.py``'s ``_http_user_agent()`` -- reached from
+#: ``build_hf_headers()``, i.e. while building the headers for EVERY Hub request -- calls
+#: ``detect_agent()``, and on a cold 24h-TTL cache that
+#: is a live ``GET {ENDPOINT}/api/agent-harnesses`` (``utils/_detect_agent.py``). On lode's path
+#: (``FastEmbedEmbedder._load`` -> ``resolve_model_revision`` -> ``huggingface_hub.model_info``) that
+#: fetch is the FIRST socket the guard sees, ahead of ``model_info``'s own. ``http_user_agent`` skips
+#: ``detect_agent()`` entirely when this is set, so the fetch never happens.
+#:
+#: WHY THIS VAR AND NOT ``HF_HUB_OFFLINE=1``, which would also stop it: ``HF_HUB_OFFLINE`` disables
+#: the Hub outright, which breaks two things that legitimately reach it -- the ``@pytest.mark.slow``
+#: reranker tier's one-time cold-cache weights download (see ``$LODE_HOME/models`` above), and any
+#: ``@pytest.mark.network`` test that needs a real Hub call. ``HF_HUB_DISABLE_TELEMETRY`` costs
+#: nothing functional: verified against the installed huggingface_hub (1.24.0) it is read in three
+#: places, of which two are functional -- ``_headers.py``'s user-agent enrichment (the torch version
+#: and the agent tag) and ``_telemetry.py``'s fire-and-forget ping -- and the third,
+#: ``_runtime.py``'s ``dump_environment_info``, only prints it in the ``huggingface-cli env``
+#: bug-report dump. None is an API lode or fastembed depends on. The count is stated exactly so a
+#: future auditor re-running the grep matches it instead of having to re-derive whether the
+#: justification still holds.
+#:
+#: WHY PROCESS-WIDE RATHER THAN INSIDE THE AUTOUSE GUARD (so ``@pytest.mark.network`` could lift it):
+#: it CANNOT be lifted per-test even if we wanted to. ``huggingface_hub.constants`` reads the
+#: environment ONCE, at import, into a module constant (``constants.py``: ``HF_HUB_DISABLE_TELEMETRY
+#: = _is_true(os.environ.get(...)) or ...``), so a ``monkeypatch.setenv`` in a fixture is a no-op
+#: against an already-imported hub -- the same import-time-freeze trap as the rich ``Console`` below.
+#: And nothing wants it lifted: it suppresses telemetry, not Hub access, so a ``network``-marked test
+#: that needs the Hub still works with it set.
+#:
+#: SAME ORDERING CONSTRAINT AS THE SCRUB ABOVE: this is early enough only while nothing in the import
+#: block imports ``huggingface_hub`` (true today -- verified that ``lode``, ``lode.config`` and
+#: ``textual.pilot`` pull in neither it nor ``fastembed``). If that changes, the constant freezes at
+#: ``False`` before this line runs; ``tests/test_network_guard.py``'s
+#: ``test_hub_telemetry_is_disabled_and_skips_the_agent_registry_fetch`` is what would catch it.
+#:
+#: Assigned, not ``setdefault``-ed: the value is then deterministic rather than ambient, matching the
+#: scrub above. ``DISABLE_TELEMETRY`` / ``DO_NOT_TRACK`` are the same knob's other spellings and are
+#: deliberately left alone -- setting one is enough, and setting three invites the reader to think
+#: they do different things.
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 #: Root of the checkout that owns *this* conftest — the anchor guard 0 compares
 #: against. Deliberately derived from ``__file__`` rather than ``Path.cwd()``:
@@ -269,6 +379,85 @@ def pytest_configure(config: pytest.Config) -> None:
 #: egress.
 _EGRESS_FAMILIES = frozenset({socket.AF_INET, socket.AF_INET6})
 
+#: Every guard violation intercepted since the last teardown check, as a ready-to-print
+#: block (the operator message plus the stack captured at interception time). Read and
+#: cleared by :func:`_block_unmocked_network_and_llm_access`'s teardown.
+#:
+#: Module-level, not fixture-local, and that is the whole design (lode-sx17): a violation
+#: can be appended from a *thread* — or from inside a third-party ``except Exception`` —
+#: that the raising half of the guard cannot report from. Under ``pytest-xdist`` each
+#: worker is its own process, so "process-global" is per-worker, which is exactly the
+#: scope wanted: a worker only ever runs one test at a time.
+#:
+#: Deliberately NOT cleared at test *setup*. A record appended between one test's teardown
+#: and the next test's setup — a straggler worker outliving the test that started it — must
+#: still be reported by someone, even though the someone will be the wrong test. The
+#: captured stack in the message is what identifies the real caller.
+_GUARD_VIOLATIONS: list[str] = []
+
+#: Guards the list above. ``list.append`` is atomic under CPython's GIL, so this is
+#: belt-and-braces for the append — but the teardown check's read-then-clear is genuinely
+#: two operations, and the appends it races against come from threads by design.
+_GUARD_VIOLATIONS_LOCK = threading.Lock()
+
+
+def _record_and_fail(message: str) -> None:
+    """Record a guard violation, then fail the current test with ``message``.
+
+    The single door both guards go through, so recording can never drift out of
+    sync with failing: there is no way to write a guard that raises without
+    recording.
+
+    ``traceback.format_stack()`` is captured *here*, at interception, because by
+    the time the teardown check reads the list the offending frames are long
+    gone — and in the swallow/thread cases that stack is the only thing that
+    identifies the caller. Its last entry (this function's own frame) is
+    dropped so the trace ends at the guard, not inside the recorder.
+    """
+    stack = "".join(traceback.format_stack()[:-1])
+    with _GUARD_VIOLATIONS_LOCK:
+        _GUARD_VIOLATIONS.append(f"{message}\n\nintercepted at:\n{stack}")
+    pytest.fail(message)
+
+
+def _unconsumed_violations_message(
+    recorded: list[str], *, expected: bool
+) -> str | None:
+    """The teardown verdict on what the guards recorded during one test.
+
+    Returns the operator-facing message when the test must fail, or ``None``
+    when it is clean. A pure function for the same reason
+    :func:`_wrong_source_tree_message` is one — the fixture teardown that calls
+    it can otherwise only be exercised by running pytest under pytest.
+
+    ``expected`` is "this test carries ``@pytest.mark.trips_network_guard``",
+    i.e. it trips a guard on purpose and catches the raise itself. That marker
+    is checked in **both** directions: a marked test that recorded nothing is
+    also a failure, because the marker disables this backstop for that test and
+    a marker nobody needs any more disables it for nothing.
+    """
+    if expected:
+        if recorded:
+            return None
+        return (
+            "test is marked @pytest.mark.trips_network_guard but tripped no "
+            "guard -- the marker is stale, and while it is present the "
+            "swallowed-violation backstop is disabled for this test. Remove it "
+            "(tests/conftest.py)."
+        )
+    if not recorded:
+        return None
+    return (
+        f"{len(recorded)} network/LLM-guard violation(s) were intercepted during "
+        "this test, but no failure reached pytest -- something in the call chain "
+        "swallowed it, or it was raised off the main thread where pytest.fail() "
+        "cannot propagate. The call was still BLOCKED; what failed is the "
+        "reporting, which is why this fires in teardown instead (lode-sx17).\n\n"
+        "If the stack below names a test other than this one, it is a straggler "
+        "from an earlier test's background worker -- trust the stack, not the "
+        "test name.\n\n" + "\n\n".join(recorded)
+    )
+
 
 def _is_loopback(address: object) -> bool:
     """Is this ``connect()`` destination the local machine?
@@ -305,7 +494,7 @@ def _make_guarded_connect(method_name: str):
         self: socket.socket, address: object, *args: object, **kwargs: object
     ) -> object:
         if self.family in _EGRESS_FAMILIES and not _is_loopback(address):
-            pytest.fail(
+            _record_and_fail(
                 f"test attempted a real outbound network connection to "
                 f"{address!r} (socket.{method_name}) -- no fake was installed "
                 "for it. If this test genuinely needs live network access, opt "
@@ -475,18 +664,154 @@ def forget_sdk_imports(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.setattr(pkg, attr, getattr(pkg, attr))
 
 
+def _egress_guard_applies(node: pytest.Item) -> bool:
+    """Does guard 2 (outbound socket egress) police this test?
+
+    ``@pytest.mark.network`` lifts it outright; ``@pytest.mark.slow``
+    additionally lifts it for the real-model tier (see the module docstring).
+
+    A named predicate rather than the condition inlined twice, because
+    :func:`_stub_the_query_embedder_offline` below must install its stub over
+    **exactly** this set and no other (lode-7ypf) — the stub exists only to
+    remove egress this guard would otherwise block, so the day the two
+    conditions disagree, one of them is wrong.
+    """
+    return (
+        node.get_closest_marker("network") is None
+        and node.get_closest_marker("slow") is None
+    )
+
+
+class _OfflineQueryEmbedder:
+    """Offline stand-in for :class:`lode.embedding.FastEmbedEmbedder` (lode-7ypf).
+
+    Zero vectors of the configured width — the same shape as the ``_StubEmbedder``
+    six test modules had each written for themselves before this fixture existed
+    (tests/test_tui_app.py, tests/test_tui_capture_save_and_new.py,
+    tests/test_tui_edit_related_notes.py, tests/test_tui_open_link.py,
+    tests/test_cli.py, tests/test_skeleton_gate.py). Those local stubs are
+    deliberately left in place: several of them count constructions or record
+    calls, which is the point of the test they belong to, and a test's own
+    ``monkeypatch.setattr`` runs after this fixture's and so still wins.
+
+    ``embedding_vector_dim``-wide, not a fixed length: a query vector of the
+    wrong width is a LanceDB error, not an empty result, so reading the width
+    from the settings handed in is what keeps this a *stand-in* rather than a
+    second failure mode.
+
+    It mirrors the real class's whole **duck-typed** surface, not just the two
+    :class:`~lode.embedding.Embedder` protocol methods, because lode probes the
+    rest by ``hasattr``: ``warm()`` is what ``lode models pull`` calls
+    (``cli.py``), and ``model_revision()`` is what ``embedding.py``'s
+    ``_embedder_model_revision`` duck-types on to stamp provenance on written
+    vectors. Omitting either does not fail loudly — it silently routes the code
+    under test down the *absent-method* branch, which is a different path from
+    production. ``None`` is the honest revision for a stub, and is exactly what
+    that helper already documents an absent method to mean.
+    """
+
+    def __init__(self, settings: object) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text
+        return [0.0] * self._dim
+
+    def warm(self) -> None:
+        return None
+
+    def model_revision(self) -> str | None:
+        return None
+
+
+#: Every binding of ``FastEmbedEmbedder`` a test can reach at call time. Two, not
+#: one, and both are load-bearing:
+#:
+#: * ``lode.embedding`` is what the deferred imports resolve against —
+#:   ``RelatedNotesPanel._ensure_embedder`` (the actual lode-7ypf leak) and
+#:   ``lode.cli``'s ``ask``/``models pull`` paths all import it *inside* the
+#:   function, so patching the attribute reaches them.
+#: * ``lode.tui.services.related`` holds its own import-time binding, used by
+#:   ``find_related_notes``'s ``embedder or FastEmbedEmbedder(settings)``
+#:   fallback. No test reaches it today (every direct caller passes an embedder,
+#:   and the rest return early on the enabled/min-chars/missing-db gates), but it
+#:   is a live production path one test away from leaking exactly as the panel
+#:   did. Patching one binding and not the other is the half-fix that gets
+#:   rediscovered.
+#:
+#: A module that binds the name at *import* time and is imported before the
+#: fixture runs — tests/test_capture_lag_diagnosis.py, the lag spike that wants
+#: the real ONNX model — keeps its own reference and is untouched. That is the
+#: correct outcome, and it is why that file needs no opt-out marker (it is also
+#: skipped unless ``LODE_DIAGNOSE_LAG=1``).
+_FASTEMBED_BINDINGS = ("lode.embedding", "lode.tui.services.related")
+
+
+@pytest.fixture(autouse=True)
+def _stub_the_query_embedder_offline(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the real ONNX query embedder out of every guarded test (lode-7ypf).
+
+    :class:`~lode.embedding.FastEmbedEmbedder`'s first ``embed_query`` resolves
+    the HuggingFace model revision over the network, unconditionally, warm cache
+    or not (``embedding.py``'s ``resolve_model_revision``; the product-side
+    defect is lode-dj6m). Any test that lets that run reaches huggingface.co.
+
+    The path that made this a real problem is
+    :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel._ensure_embedder`:
+    a debounced background worker constructs the embedder lazily, so **any** TUI
+    test that puts text in a body ``TextArea`` and does not stub it arms a live
+    network call — one that outlives the test's own app teardown and fires
+    whenever the CPU gets to it. ~40 such call sites across five files had each
+    to remember to stub, and most did not; the six that did wrote the same
+    ``_StubEmbedder`` six times. This is that stub, once, on by default.
+
+    **Scoped to exactly** :func:`_egress_guard_applies` — the tests where the
+    socket guard is live. That is not a coincidence of convenience: the stub's
+    whole job is to remove egress the guard would block, so a test allowed to
+    reach the network (``@pytest.mark.network``) or to load a real model
+    (``@pytest.mark.slow``) must get the real class. Sharing one predicate is
+    what keeps that true without anyone maintaining two lists.
+
+    ``@pytest.mark.real_embedder`` is the third way out, for a test that is
+    neither of those and still wants the genuine class: today exactly one, the
+    canary that pins the *installed* fastembed's exhausted-sources error string
+    (tests/test_cli.py). It is hermetic — ``HF_HUB_OFFLINE=1`` against a cold
+    ``$LODE_HOME`` — so it must keep the socket guard, which rules out
+    ``slow``/``network``, and it is worthless against a stub, since the whole
+    point is what the real package raises.
+    """
+    if not _egress_guard_applies(request.node):
+        return
+    if request.node.get_closest_marker("real_embedder") is not None:
+        return
+    for module in _FASTEMBED_BINDINGS:
+        monkeypatch.setattr(
+            f"{module}.FastEmbedEmbedder", _OfflineQueryEmbedder, raising=True
+        )
+
+
 @pytest.fixture(autouse=True)
 def _block_unmocked_network_and_llm_access(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> Iterator[None]:
     """Fail loudly, not silently, if a test reaches real network/LLM access.
 
     See the module docstring ("A network-touching test must FAIL...", lode-85q)
     for the full rationale. ``@pytest.mark.network`` lifts both guards below;
     ``@pytest.mark.slow`` additionally lifts guard 2 only.
+
+    The teardown half is the swallowed-violation backstop (lode-sx17): both
+    guards record before they raise, and a record that survives to teardown
+    means the raise never reached pytest. It runs for **every** test, marker or
+    not — a lifted guard records nothing, so there is nothing to skip, and a
+    straggler from an earlier test must still be reported by someone.
     """
     marked_network = request.node.get_closest_marker("network") is not None
-    marked_slow = request.node.get_closest_marker("slow") is not None
 
     # Guard 1: real anthropic.Anthropic()/AsyncAnthropic() construction.
     # Unconditional regardless of ANTHROPIC_API_KEY -- it fires before the SDK's
@@ -497,7 +822,7 @@ def _block_unmocked_network_and_llm_access(
         import anthropic
 
         def _blocked_init(self: object, *args: object, **kwargs: object) -> None:
-            pytest.fail(
+            _record_and_fail(
                 "test constructed a real anthropic.Anthropic client -- no fake "
                 "was installed for it. If this test genuinely needs live "
                 "Anthropic access, opt in with @pytest.mark.network "
@@ -515,7 +840,7 @@ def _block_unmocked_network_and_llm_access(
         import openai
 
         def _blocked_openai_init(self: object, *args: object, **kwargs: object) -> None:
-            pytest.fail(
+            _record_and_fail(
                 "test constructed a real openai.OpenAI/AzureOpenAI client -- "
                 "no fake was installed for it. If this test genuinely needs "
                 "live OpenAI/Azure access, opt in with @pytest.mark.network "
@@ -539,11 +864,39 @@ def _block_unmocked_network_and_llm_access(
     # would leave the guard failing *open* on the latter -- and a guard that
     # silently misses is worse than no guard, because it licenses false
     # confidence.
-    if not marked_network and not marked_slow:
+    if _egress_guard_applies(request.node):
         for _method in ("connect", "connect_ex"):
             monkeypatch.setattr(
                 socket.socket, _method, _make_guarded_connect(_method), raising=True
             )
+
+    yield
+
+    with _GUARD_VIOLATIONS_LOCK:
+        recorded = list(_GUARD_VIOLATIONS)
+        _GUARD_VIOLATIONS.clear()
+    message = _unconsumed_violations_message(
+        recorded,
+        expected=request.node.get_closest_marker("trips_network_guard") is not None,
+    )
+    if message is not None:
+        pytest.fail(message)
+
+
+@pytest.fixture
+def guard_violations() -> list[str]:
+    """The live record list both guards append to, for tests that assert on it.
+
+    Handed out as a fixture rather than imported from this module by name, so
+    the one place that decides what "the record" is stays here — a test that did
+    ``from conftest import _GUARD_VIOLATIONS`` would silently bind a stale
+    object the day this list is ever rebound rather than mutated.
+
+    Only ``@pytest.mark.trips_network_guard`` tests have any business asking for
+    it; anyone else finds it empty, since the autouse fixture drains it at every
+    teardown.
+    """
+    return _GUARD_VIOLATIONS
 
 
 @pytest.fixture(scope="session", autouse=True)

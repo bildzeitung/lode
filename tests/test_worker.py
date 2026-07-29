@@ -2400,6 +2400,12 @@ def test_job_type_is_registered_by_default(job_type: str) -> None:
 
 
 def _stub_embedder_returning(monkeypatch, vector: list[float]) -> None:
+    # A FUNCTION-LOCAL import, so this resolves lode.embedding's attribute at CALL
+    # time -- which tests/conftest.py's autouse fixture has already replaced with its
+    # offline stub (lode-7ypf). So what the two setattrs below patch is that stub, not
+    # the real class. Behaviour is unchanged either way (the lambdas dominate whichever
+    # class they land on), and the setattrs are still needed: the stub returns
+    # zero vectors, and this helper's whole job is to pin a SPECIFIC vector.
     from lode.embedding import FastEmbedEmbedder
 
     monkeypatch.setattr(
@@ -2407,10 +2413,12 @@ def _stub_embedder_returning(monkeypatch, vector: list[float]) -> None:
         "embed_passages",
         lambda self, texts: [vector for _ in texts],
     )
-    # embed() also duck-type-probes model_revision() (lode-g274.4) -- real
-    # FastEmbedEmbedder.model_revision() calls the (unpatched) _load(), which
-    # would otherwise both download the real ONNX model and hit the network
-    # for the revision probe. Stub it offline like embed_passages above.
+    # embed() also duck-type-probes model_revision() (lode-g274.4). On the REAL class
+    # that probe calls the unpatched _load(), which would both download the ONNX model
+    # and hit the network -- the reason this line was originally added. That is now
+    # belt-and-braces rather than the load-bearing thing it was: the autouse stub above
+    # already implements model_revision() offline. Kept so the helper stays correct on
+    # its own terms, independent of that fixture (lode-sx17 land-review).
     monkeypatch.setattr(FastEmbedEmbedder, "model_revision", lambda self: None)
 
 

@@ -176,17 +176,23 @@ Five opt-in sessions sit outside the default set:
 | `nox -s coverage` | The FULL test suite under `pytest-cov`, emitting a coverage report — CI-only (lode-qxdn.3). |
 | `nox -s lock_currency` | Verifies `requirements.lock` is still what `pyproject.toml` resolves to — a local mirror of CI's lock-currency job (lode-sys4); `/land`'s re-gate runs this so a stale lock never lands. |
 
-Two pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
+Four pytest markers are registered in `pyproject.toml` under `--strict-markers` (a typo'd marker
 is a collection error, not a silently-ignored no-op):
 
 | Marker | Meaning |
 |---|---|
 | `slow` | Real model-load cost (the `FastEmbedCrossEncoder` reranker, or the live eval Q&A leg) — excluded from `nox -s unit`, always included in `nox -s tests`. Also relaxes the guard's *socket* half (only), so a cold model cache can pull its weights down; the Anthropic-client half still applies. Do **not** reach for `slow` to quiet the guard on a test that is not about a real model load — use `network`, which says what it means. |
 | `network` | The **sole sanctioned** escape hatch from `tests/conftest.py`'s autouse network/LLM-client guard (lode-85q): this test deliberately reaches real, un-mocked Anthropic-SDK / network machinery. Every other test fails **loudly**, not silently, when it falls through to a real `anthropic.Anthropic()` construction, or to a real network call (`slow` excepted, above). |
+| `trips_network_guard` | **Not** an escape hatch — the opposite. This test trips the guard *on purpose* and catches the raise itself (`tests/test_network_guard.py`), so it consumes the violation the guard records instead of failing on it in teardown (lode-sx17). The call is still blocked. A marked test that trips nothing also fails, so the marker cannot go stale unnoticed. |
+| `real_embedder` | Opts out of the autouse **offline query-embedder stub** (lode-7ypf) — `tests/conftest.py` replaces `lode.embedding.FastEmbedEmbedder` for every test the socket guard polices, because the real one resolves its HuggingFace revision over the network on first `embed_query`, warm cache or not, and the related-notes panel builds it from a debounced background worker. Use only for a test asserting on what the installed fastembed/huggingface_hub itself does; it does **not** relax the socket guard, so the test must be hermetic by other means. One user today. |
 
-The guard is a net for *accidents*, not an adversary — it cannot reach a connect made in a
-subprocess, and one made off the main thread it can prevent but not fail. `tests/conftest.py`'s
-module docstring is the full account.
+The guard is a net for *accidents*, not an adversary — but it no longer depends on nobody
+swallowing its `pytest.fail`. Both halves record the violation before raising, and an autouse
+teardown check fails the test on anything left unconsumed, so a connect made **off the main
+thread**, or inside a third-party `except Exception` (huggingface_hub's agent-harness registry
+fetch was the case that surfaced this — lode-sx17), is now caught rather than merely blocked. Still
+out of reach: a connect made in a **subprocess**. `tests/conftest.py`'s module docstring is the full
+account.
 
 Both `tests` and `unit` run under `pytest-xdist` (`-n 8` by default — `LODE_TEST_WORKERS`
 overrides, including back to `-n auto`; see `noxfile.py`'s module docstring and
