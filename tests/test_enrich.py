@@ -442,8 +442,7 @@ def test_enrich_version_with_thinking_capable_override_omits_thinking(
     """A Kind.RUNTIME override of enrichment_llm to a thinking-capable model
     (lode-jgus) still never sends `thinking` on the forced tool-use branch --
     that rule is a property of the branch, not of the model (see the
-    AnthropicProvider class docstring) -- and still uses the raised
-    MAX_TOKENS headroom rather than the old inline 1024.
+    AnthropicProvider class docstring).
     """
     _insert_note(conn)
     settings = Settings(enrichment_llm=ModelTier(model="claude-opus-5"))
@@ -453,7 +452,6 @@ def test_enrich_version_with_thinking_capable_override_omits_thinking(
 
     create_kwargs = client.messages.create.call_args.kwargs
     assert create_kwargs["model"] == "claude-opus-5"
-    assert create_kwargs["max_tokens"] == MAX_TOKENS
     assert "thinking" not in create_kwargs
 
 
@@ -1291,9 +1289,9 @@ def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
 def test_submit_enrich_batch_uses_the_raised_max_tokens(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
-    """The batch request's per-item params send enrich.MAX_TOKENS (lode-jgus)
-    -- the same raised value the immediate path uses, per _build_batch_request's
-    byte-for-byte-with-_call_haiku contract (lode-568v.2).
+    """The batch request's per-item params send the same enrich.MAX_TOKENS the
+    immediate path does (lode-568v.2's byte-for-byte bar). The raise itself is
+    pinned by test_enrich_version_uses_the_raised_max_tokens.
     """
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)

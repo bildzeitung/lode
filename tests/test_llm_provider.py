@@ -284,15 +284,10 @@ def test_structured_call_wraps_a_bad_request_from_the_forced_tool_use_branch() -
 def test_structured_call_raises_when_the_forced_tool_use_response_has_no_tool_use_block() -> (
     None
 ):
-    # lode-jgus: the forced tool-use branch never sends `thinking`, but that
-    # does not disable it on a model that runs it by default (Kind.RUNTIME
-    # override of enrichment_llm to a thinking-capable model). A response
-    # that spends its whole max_tokens budget inside thinking carries no
-    # tool_use block at all -- unguarded, `next()` with no default would
-    # raise a raw StopIteration here instead of the LLMProviderError every
-    # caller of this seam expects. Mirrors
-    # test_structured_call_raises_when_the_response_has_no_text_block above,
-    # on the forced-tool-use branch instead of messages.parse.
+    # Mirrors test_structured_call_raises_when_the_response_has_no_text_block
+    # above, on the forced-tool-use branch: unguarded, `next()` with no
+    # default would raise a raw StopIteration instead of LLMProviderError
+    # (lode-jgus).
     thinking_block = mock.MagicMock()
     thinking_block.type = "thinking"
     response = mock.MagicMock()
@@ -783,6 +778,8 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     bad.custom_id = "ver-3"
     bad.result.type = "succeeded"
     bad.result.message.content = []
+    bad.result.message.model = "claude-opus-5"
+    bad.result.message.stop_reason = "max_tokens"
     client.beta.messages.batches.results.return_value = iter([bad])
     provider = AnthropicProvider(client)
 
@@ -793,6 +790,17 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     assert result.outcome == "errored"
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
+    # lode-jgus: this is the route where a thinking-capable enrichment_llm
+    # override is MOST likely to exhaust `max_tokens` (nothing bounds a batch
+    # item's generation but its own cap -- no per-item timeout), so the
+    # diagnosis has to survive to the log, exactly as on the immediate branch.
+    # Assert `stop_reason=` and not a bare "max_tokens": this message carries
+    # no max_tokens FIELD, so a bare substring would pass on the stop_reason
+    # VALUE alone and keep passing if the diagnosis were dropped.
+    message = str(result.error)
+    assert "no tool_use block" in message
+    assert "claude-opus-5" in message
+    assert "stop_reason='max_tokens'" in message
 
 
 # ---------------------------------------------------------------------------

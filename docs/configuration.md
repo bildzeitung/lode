@@ -296,24 +296,51 @@ immediate/batch enrichment calls both sent a hardcoded `max_tokens = 1024`.
 `_call_haiku` and `_build_batch_request` (which must stay byte-for-byte equal
 per `lode-568v.2`'s wire-equivalence bar), raised `1024 -> 2048`: headroom
 for adaptive thinking to share the budget with the tool-call payload, not a
-hard truncation guarantee. As with `qa.MAX_TOKENS`, what bounds this call in
-practice is [`llm_call_timeout_s`](#async-work-queue) (120s), not the
-Anthropic SDK's non-streaming timeout guard — that guard is skipped outright
-whenever an explicit `timeout` is passed, and the provider seam always passes
-one.
+hard truncation guarantee.
 
-The raised cap is headroom, not a guarantee, so `AnthropicProvider`'s forced
-tool-use branch now also *handles* running out of it: a response that spends
-its whole budget inside thinking carries no `tool_use` block at all, which
-previously escaped as a raw `StopIteration` from an unguarded `next(...)` —
-the identical failure shape (and identical fix) as the `messages.parse`
-branch's "no text block" guard `lode-3dlt` added. Both now raise
-`LLMProviderError`.
+**The two routes are bounded differently, and that matters for which failure
+mode to expect.** Neither is bounded by the Anthropic SDK's non-streaming
+timeout guard — that guard is skipped outright whenever an explicit `timeout`
+is passed, and the provider seam always passes one. Beyond that they diverge:
+the *immediate* call passes [`llm_call_timeout_s`](#async-work-queue) (120s),
+as `qa.MAX_TOKENS`'s own path does, so a runaway thinking budget there tends to
+surface as a timeout before it exhausts the cap. The *batch* call has no
+equivalent bound — a `BatchRequest` carries no per-item timeout (the `timeout_s`
+on `submit_batch`/`collect_batch` bounds only their own HTTP calls) and
+generation runs server-side — so `enrich.MAX_TOKENS` is the only thing bounding
+a batch item, and **truncation, not a timeout, is the realistic failure mode
+there**. That is the route the raised ceiling has to actually be sufficient for.
+
+The raised cap is headroom, not a guarantee, so `AnthropicProvider` also
+*handles* running out of it on both routes. A response that spends its whole
+budget inside thinking carries no `tool_use` block at all. On the immediate
+route that previously escaped as a raw `StopIteration` from an unguarded
+`next(...)` — the identical failure shape (and identical fix) as the
+`messages.parse` branch's "no text block" guard `lode-3dlt` added; it now
+raises `LLMProviderError`. On the batch route `collect_batch` already caught
+it, degrading the one item to an `errored` `BatchResult` rather than failing
+the whole collection — correct, but its message named nothing, so the same
+raise that makes this reachable there also made it undiagnosable; it now
+carries the model and `stop_reason` the immediate branch reports.
 
 No config-load validation, model→capability predicate, or different
 mitigation was chosen — same rationale `lode-3dlt` gave for the Q&A branch:
 raising the cap is the simplest option, needs no new capability-detection
 surface, and works on every model regardless of whether it thinks.
+
+**A fourth option — make the budget itself a knob — was considered during
+technical review and deferred (`lode-d70n`).** It is worth recording because
+the batch-route finding above sharpens it: `enrichment_llm` is `Kind.RUNTIME`,
+so a user can pick a model whose budget needs differ, but `enrich.MAX_TOKENS`
+is a source constant, so they cannot adjust the budget to match — and on the
+batch route, where truncation is the realistic failure mode, they have no
+escape hatch at all. The named `LLMProviderError` tells them exactly what
+happened with no user-side remedy but editing source. The natural home is
+`ModelTier`, which already pairs `(model, reasoning_effort)` precisely because
+those co-vary per surface; `max_tokens` co-varies with the same choice. It is
+deferred rather than done here because it touches the `Settings` schema, both
+`qa.MAX_TOKENS` and `enrich.MAX_TOKENS`, and needs a defaults decision —
+and doing it for enrichment alone would leave the Q&A tier asymmetric.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 

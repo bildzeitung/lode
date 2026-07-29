@@ -121,16 +121,26 @@ _TOOL_NAME = "extract_enrichment"
 #: avoid, on a path lode-3dlt named as a real but then-unreachable follow-up
 #: (this ticket).
 #:
-#: What bounds this call in practice is
-#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), NOT the Anthropic
-#: SDK's non-streaming timeout guard: that guard is skipped outright whenever
-#: an explicit ``timeout`` is passed, and the provider seam always passes one
-#: (same corrected claim :data:`lode.qa.MAX_TOKENS`'s own docstring carries).
-#: So this value is headroom, not a hard truncation guarantee; exhausting it
-#: raises :class:`~lode.llm_provider.LLMProviderError` from the provider
-#: rather than a raw ``StopIteration`` escaping the seam -- see
-#: :class:`~lode.llm_provider.AnthropicProvider`'s docstring for the guard
-#: this now relies on.
+#: **The two routes are bounded differently** -- neither by the Anthropic SDK's
+#: non-streaming timeout guard, which never applies here for the reason
+#: :data:`lode.qa.MAX_TOKENS` documents (it owns that claim; do not restate
+#: it). On the IMMEDIATE route :func:`_call_haiku` passes
+#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), so a runaway
+#: thinking budget there tends to surface as a timeout before it exhausts this
+#: cap. The BATCH route has no equivalent bound:
+#: :class:`~lode.llm_provider.BatchRequest` carries no per-item timeout (the
+#: ``timeout_s`` on ``submit_batch``/``collect_batch`` bounds only their own
+#: HTTP calls) and generation runs server-side, so this cap is the *only*
+#: thing bounding a batch item -- **truncation, not a timeout, is the
+#: realistic failure mode there.**
+#:
+#: Either way this value is headroom, not a hard truncation guarantee.
+#: Exhausting it raises :class:`~lode.llm_provider.LLMProviderError` from the
+#: provider: on the immediate route in place of a raw ``StopIteration``
+#: escaping the seam (the guard lode-jgus added), on the batch route as one
+#: ``errored`` :class:`~lode.llm_provider.BatchResult` rather than failing the
+#: whole collection. See :class:`~lode.llm_provider.AnthropicProvider`'s
+#: docstring for both.
 MAX_TOKENS = 2048
 
 _SYSTEM = (
