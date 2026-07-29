@@ -159,6 +159,21 @@ skips the lock and resolves everything fresh from `pyproject.toml` instead — t
 would we get today" escape hatch for regenerating the lock or probing an upstream bump before
 committing to it.
 
+**The pip-refresh half of that same install (`uv pip install -U pip`) is different — reproduced as
+real, not dead (`lode-hfaz`).** Unlike the deleted `-e . --no-deps` step above, this one measurably
+changes the installed package set: it bumps the venv's own pip (26.1.1 → 26.1.2 from ensurepip's
+bundle in the reproduction run), the one difference in an otherwise byte-identical `uv pip list
+--format=freeze` with vs. without it. Nothing downstream ever calls the venv's pip again (no
+`venv/bin/pip` / `python -m pip` invocation anywhere in `scripts/`, `noxfile.py`, or any workflow),
+so its only effect is suppressing pip's own "a new release is available" notice on a *later* `pip
+install -U uv`. Every venv-creation path starts from ensurepip's bundled pip regardless of history —
+first-time `python-init.sh`, every CI leg (no `./venv` is cached across runs, only the model-weights
+cache is), and `update-deps.sh`'s `rebuild_venv` (`rm -rf ./venv` first, every time) — so the notice
+fires there either way and this step buys nothing on any of those paths. It only pays off re-running
+`python-init.sh` a second time against a `./venv` that survived from a prior run: verified directly,
+`python -m venv` on an *existing* venv directory does not reset an already-upgraded pip back to the
+ensurepip-bundled version. Narrow, but real — kept.
+
 **Both CI legs that install lode's deps install from the lock (`lode-7byn`).** `tests.yml`'s
 `tests` job has since `lode-g274.6`; `coverage.yml` was the holdout, for historical reasons only.
 It landed a day *before* `requirements.lock` existed (`lode-qxdn.3`), so its fresh
