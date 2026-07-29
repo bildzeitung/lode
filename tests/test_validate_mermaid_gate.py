@@ -235,3 +235,149 @@ def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin
     )
     assert "GATE COULD NOT RUN" not in result.stderr
     assert "FAIL" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# lode-3xqb: the remaining non-`if` commands the shebang's `-e` could route
+# to exit 1 (this script's CONTENT verdict) on a pure machine fault, guarded
+# one at a time -- the mktemp -d guard above was already fixed in lode-bss5's
+# review pass; these four are the rest (REPO=, the printf, and both chmods).
+# ---------------------------------------------------------------------------
+
+
+def _add_broken_dirname(bin_dir: Path) -> None:
+    """A fake ``dirname`` that always reports a path with no existing parent.
+
+    REPO= (``cd "$(dirname "$0")/.." && pwd``) is the very first thing in the
+    script that calls dirname -- ahead of even the gate-lib.sh source guard
+    -- so breaking dirname unconditionally is enough to isolate that one call
+    site: nothing before it in the script touches docker, mktemp, or
+    gate-lib.sh, so there is nothing else on the fake PATH to shadow."""
+    shim = bin_dir / "dirname"
+    shim.unlink()
+    shim.write_text('#!/bin/bash\necho "/nonexistent-repo-root-for-lode-3xqb-test"\n')
+    shim.chmod(0o755)
+
+
+def test_repo_root_resolution_failure_is_gate_could_not_run(fake_bin):
+    """REPO= runs BEFORE gate-lib.sh is sourced, so gate_could_not_run is not
+    yet defined when it could fail -- it carries its own hardcoded fallback
+    instead, mirroring the source guard immediately below it in the script
+    (same chicken-and-egg reason). Removing that fallback lets a failing `cd`
+    fall through to -e's own abort with the FAILING COMMAND's exit status
+    (bash's own 1 here), which in this script means "invalid mermaid" --
+    exactly the lode-9i2p inversion, at the very first line that can trigger
+    it."""
+    _add_broken_dirname(fake_bin)
+
+    result = _run_gate(fake_bin)
+
+    _assert_gate_could_not_run(result, says="could not resolve the repo root")
+
+
+def _add_real_rm(bin_dir: Path) -> None:
+    """Symlinks the real ``rm`` into the fake PATH. Needed by every test past
+    the mktemp -d line: the script's own ``trap 'rm -rf "$CFG"' EXIT`` fires
+    on the guard's ``exit 2`` too, and if `rm` is not found the trap itself
+    fails (127) -- which, since the trap runs no further `exit`, becomes the
+    PROCESS's own exit status per bash's trap semantics, silently clobbering
+    the 2 the guard just set. Not needed by the REPO= test above: that guard
+    fires before the trap is ever registered."""
+    real_rm = shutil.which("rm")
+    assert real_rm, "rm not found — cannot build a hermetic PATH"
+    (bin_dir / "rm").symlink_to(real_rm)
+
+
+def _add_fixed_readonly_mktemp(bin_dir: Path, fixed_dir: Path) -> None:
+    """A fake ``mktemp`` that returns a caller-prepared, already-created
+    directory instead of creating a fresh one -- lets a test pre-chmod that
+    directory read-only so the printf into it fails deterministically,
+    without needing to predict mktemp's randomized suffix or race a
+    permission change against script timing."""
+    shim = bin_dir / "mktemp"
+    shim.write_text(f'#!/bin/bash\necho "{fixed_dir}"\n')
+    shim.chmod(0o755)
+
+
+def test_puppeteer_config_write_failure_is_gate_could_not_run(fake_bin, tmp_path: Path):
+    """The printf into $CFG/puppeteer.json: a write failure here (TMPDIR's
+    filesystem full, or gone read-only after mktemp created $CFG) must not
+    fall through to -e's own exit 1. Docker's pre-flight probe must pass
+    (info succeeds) so the script actually reaches this line; `docker run`
+    is never invoked since the failure happens before the per-doc loop."""
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    cfg_dir = tmp_path / "readonly-cfg"
+    cfg_dir.mkdir()
+    cfg_dir.chmod(0o500)  # readable + traversable, not writable
+    _add_fixed_readonly_mktemp(fake_bin, cfg_dir)
+
+    result = _run_gate(fake_bin)
+
+    _assert_gate_could_not_run(result, says="could not write")
+    assert "puppeteer.json" in result.stderr
+
+
+def _add_chmod_that_fails_on_mode(
+    bin_dir: Path, real_chmod: str, fail_mode: str
+) -> None:
+    """A fake ``chmod`` that behaves normally for every mode except
+    ``fail_mode``, which it always fails -- lets a test target ONE of the
+    script's two chmod calls (755 on $CFG, 644 on puppeteer.json) without the
+    other one masking it: a blanket-broken chmod would fail on whichever call
+    comes first regardless of which guard's test is running, proving nothing
+    about the second one."""
+    shim = bin_dir / "chmod"
+    shim.write_text(
+        "#!/bin/bash\n"
+        f'if [ "$1" = "{fail_mode}" ]; then\n'
+        '  echo "chmod: fake failure for test" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        f'exec "{real_chmod}" "$@"\n'
+    )
+    shim.chmod(0o755)
+
+
+def _add_real_mktemp(bin_dir: Path) -> None:
+    """Symlinks the real ``mktemp`` into the fake PATH -- needed by the two
+    chmod-failure tests below, which want $CFG created for real (so the
+    printf and, where applicable, the first chmod call succeed exactly as in
+    a normal run) and only the TARGETED chmod call to fail."""
+    real_mktemp = shutil.which("mktemp")
+    assert real_mktemp, "mktemp not found — cannot build a hermetic PATH"
+    (bin_dir / "mktemp").symlink_to(real_mktemp)
+
+
+def test_cfg_dir_chmod_failure_is_gate_could_not_run(fake_bin):
+    """chmod 755 "$CFG" -- the first of the two chmod calls."""
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    _add_real_mktemp(fake_bin)
+    real_chmod = shutil.which("chmod")
+    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
+    _add_chmod_that_fails_on_mode(fake_bin, real_chmod, "755")
+
+    result = _run_gate(fake_bin)
+
+    _assert_gate_could_not_run(result, says="could not chmod")
+    assert "to 755" in result.stderr
+
+
+def test_puppeteer_config_chmod_failure_is_gate_could_not_run(fake_bin):
+    """chmod 644 "$CFG/puppeteer.json" -- the second chmod call, distinct
+    from the 755 one above: the fake chmod here passes mode 755 through to
+    the real binary (so $CFG's own chmod succeeds, same as a normal run) and
+    only fails on 644, proving this is the SECOND guard firing, not the
+    first one masking it."""
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    _add_real_mktemp(fake_bin)
+    real_chmod = shutil.which("chmod")
+    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
+    _add_chmod_that_fails_on_mode(fake_bin, real_chmod, "644")
+
+    result = _run_gate(fake_bin)
+
+    _assert_gate_could_not_run(result, says="could not chmod")
+    assert "to 644" in result.stderr

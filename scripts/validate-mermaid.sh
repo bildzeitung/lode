@@ -22,9 +22,12 @@
 # 1 -- which in THIS script means "invalid mermaid". Every non-`if` command
 # is therefore a route from a machine fault to a fabricated content verdict,
 # the exact lode-9i2p inversion. Measured (bash 5.2, shebang honoured):
-# `mktemp -d` failing under -e exits 1. That one is now routed through
-# gate_could_not_run below; the remaining ones (the REPO= assignment, the
-# printf, both chmods) are pre-existing and tracked in lode-3xqb.
+# `mktemp -d` failing under -e exits 1, and so do the REPO= assignment, the
+# printf into $CFG/puppeteer.json, and both chmod calls below. All five are
+# now routed to exit 2 -- REPO= carries its own pre-library fallback (it
+# runs before gate-lib.sh is sourced, so gate_could_not_run isn't defined
+# yet, same reason the source guard just below is hardcoded too); the other
+# four go through gate_could_not_run (lode-bss5, lode-3xqb).
 #
 # What WAS missing, unlike every other consumer, was any top-level
 # `-u`/`pipefail`; added below for parity. Inert today: this script contains
@@ -33,7 +36,20 @@
 set -uo pipefail
 
 IMAGE="minlag/mermaid-cli:latest"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# Guarded rather than left to -e (lode-3xqb): a failing `cd`/`pwd` here --
+# this script's own checkout moved or was deleted out from under it after it
+# started running -- would otherwise abort with -e's own exit 1, which in
+# this script means "invalid mermaid", blaming a fabricated content verdict
+# on a checkout/machine fault. This runs BEFORE gate-lib.sh is sourced below,
+# so gate_could_not_run is not yet defined -- same chicken-and-egg reason the
+# source guard immediately below hardcodes its own fallback instead of
+# calling it.
+REPO="$(cd "$(dirname "$0")/.." && pwd)" || {
+  echo "GATE COULD NOT RUN: could not resolve the repo root from \"\$0\" ($0)" >&2
+  echo "-- its parent directory is missing or inaccessible. This is a" >&2
+  echo "machine/checkout fault, not a mermaid syntax error." >&2
+  exit 2
+}
 
 # `command -v docker` is a PROXY — it only proves some binary named `docker`
 # is on PATH. When Docker Desktop's engine is stopped (e.g. Resource Saver
@@ -122,11 +138,24 @@ CFG="$(mktemp -d 2>/dev/null)" || gate_could_not_run \
   "Usual causes: TMPDIR points at a nonexistent, full, or read-only" \
   "filesystem. Diagnose with: mktemp -d"
 trap 'rm -rf "$CFG"' EXIT
+# Guarded rather than left to -e (lode-3xqb): a write failure here (disk
+# full, or $CFG's filesystem gone read-only after mktemp created it) would
+# otherwise abort with -e's own exit 1 -- this script's CONTENT verdict.
 printf '{"executablePath":"/usr/bin/chromium-browser","args":["--no-sandbox","--disable-setuid-sandbox"]}' \
-  > "$CFG/puppeteer.json"
+  > "$CFG/puppeteer.json" || gate_could_not_run \
+  "could not write $CFG/puppeteer.json" \
+  "Usual causes: the filesystem backing \$TMPDIR is full or went" \
+  "read-only after mktemp created \$CFG. Diagnose with: df -h $CFG"
 # tempfile dirs are 0700; the container's non-root user must read the mount.
-chmod 755 "$CFG"
-chmod 644 "$CFG/puppeteer.json"
+# Both chmods guarded for the same reason as the printf above.
+chmod 755 "$CFG" || gate_could_not_run \
+  "could not chmod $CFG to 755" \
+  "the container's non-root user needs read+traverse access to the" \
+  "mounted config dir. Diagnose with: ls -ld $CFG"
+chmod 644 "$CFG/puppeteer.json" || gate_could_not_run \
+  "could not chmod $CFG/puppeteer.json to 644" \
+  "the container's non-root user needs read access to the mounted" \
+  "config file. Diagnose with: ls -l $CFG/puppeteer.json"
 
 # THIS is where the invariant "a broken tool is never mistakable for broken
 # content" is enforced. The partition is drawn around mmdc's ONE content
