@@ -21,6 +21,7 @@ has become a no-op and the guard is back to resting on ``pytest.fail`` raising a
 ``BaseException`` that no caller happens to swallow.
 """
 
+import asyncio
 import os
 import socket
 import sqlite3
@@ -30,12 +31,25 @@ from pathlib import Path
 
 import anthropic
 import pytest
-from conftest import _unconsumed_violations_message
+from conftest import _OfflineQueryEmbedder, _unconsumed_violations_message
 
+from lode import embedding as embedding_module
 from lode.config import Settings
 from lode.storage import init_db
+from lode.tui.app import LodeApp
+from lode.tui.screens.capture import BODY_ID
+from lode.tui.services import related as related_module
+from lode.tui.widgets.related_notes_panel import RelatedNotesPanel
 from lode.worker import claim_and_run_one
 
+# Imported at MODULE scope, not inside the tests that use them, and that is
+# load-bearing for the lode-7ypf tests at the bottom of this file (it is how
+# they were caught being order-dependent). The autouse stub patches an
+# *attribute on a module object*, so a module first imported inside a test body
+# binds the already-patched value from `lode.embedding` and the assertion passes
+# whether or not the fixture ever touched that module. Importing here binds at
+# collection, before any fixture runs, which is the only ordering under which
+# reading the attribute back proves anything.
 _TESTS_DIR = Path(__file__).resolve().parent
 
 
@@ -386,4 +400,94 @@ def test_swallowed_violation_fails_the_run_in_teardown(tmp_path: Path) -> None:
     )
     assert "93.184.216.34" in output, (
         f"the failure did not carry the recorded violation:\n{output}"
+    )
+
+
+# --- lode-7ypf: the autouse offline query-embedder stub --------------------
+#
+# Lives here rather than in a TUI test module because what is under test is a
+# tests/conftest.py fixture, and because its scope is DEFINED by the socket
+# guard's scope (one shared predicate, _egress_guard_applies) -- the coupling
+# these tests pin is the same coupling this file is about.
+
+
+def test_the_query_embedder_is_stubbed_offline_by_default() -> None:
+    """Both call-time bindings of ``FastEmbedEmbedder`` resolve to the stub.
+
+    Two assertions, not one: ``lode.embedding`` is what the deferred imports in
+    ``RelatedNotesPanel._ensure_embedder`` and ``lode.cli`` resolve against,
+    while ``lode.tui.services.related`` holds a separate import-time binding
+    used by ``find_related_notes``'s own fallback. Patching one and not the
+    other is the half-fix, so both are pinned.
+    """
+    assert embedding_module.FastEmbedEmbedder is _OfflineQueryEmbedder
+    assert related_module.FastEmbedEmbedder is _OfflineQueryEmbedder
+
+
+@pytest.mark.real_embedder
+def test_real_embedder_marker_hands_back_the_genuine_class() -> None:
+    """The opt-out actually opts out -- otherwise it is decoration.
+
+    Deliberately does not *construct* it: the genuine class would resolve the
+    HF revision on first embed, which the socket guard (still active here, the
+    marker does not lift it) would rightly block. Identity is the whole claim.
+    """
+    assert embedding_module.FastEmbedEmbedder is not _OfflineQueryEmbedder
+    assert embedding_module.FastEmbedEmbedder.__name__ == "FastEmbedEmbedder"
+
+
+def test_the_stub_mirrors_the_duck_typed_surface_lode_probes() -> None:
+    """``warm``/``model_revision`` are probed by ``hasattr``, so an omission
+    would not fail -- it would silently route the code under test down the
+    absent-method branch, which production never takes."""
+    embedder = _OfflineQueryEmbedder(Settings())
+
+    assert len(embedder.embed_query("anything")) == Settings().embedding_vector_dim
+    assert (
+        embedder.embed_passages(["a", "b"])
+        == [[0.0] * Settings().embedding_vector_dim] * 2
+    )
+    assert embedder.warm() is None
+    assert embedder.model_revision() is None
+
+
+def test_related_notes_panel_never_reaches_the_real_embedder(
+    tmp_path: Path, guard_violations: list[str]
+) -> None:
+    """The lode-7ypf leak itself, pinned end to end.
+
+    Reproduces the shape that leaked -- text into a body ``TextArea``, the real
+    debounce timer, the real Textual worker, and **no local stub of any kind**
+    -- and asserts the pass completes having touched nothing real. ~40 call
+    sites across five TUI test files have this shape; before the autouse
+    fixture each had to remember to stub, and most did not.
+
+    The identity assertions above would stay green if
+    ``_ensure_embedder`` were changed to bind ``FastEmbedEmbedder`` at import
+    time instead of inside the method -- which would silently reinstate the
+    leak, since the fixture patches a module attribute. Only driving the real
+    widget catches that, which is what this pays a pilot run for.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    settings = Settings(related_notes_debounce_ms=1, related_notes_min_chars=0)
+    app = LodeApp(db_path=db_path, settings=settings)
+    resolved: list[object] = []
+
+    async def _drive() -> None:
+        async with app.run_test() as pilot:
+            app.screen.query_one(f"#{BODY_ID}").text = "a draft long enough to search"
+            await pilot.pause(0.1)
+            await app.workers.wait_for_complete()
+            resolved.append(app.screen.query_one(RelatedNotesPanel)._embedder)
+
+    asyncio.run(_drive())
+
+    assert isinstance(resolved[0], _OfflineQueryEmbedder), (
+        "the related-notes panel constructed something other than the autouse "
+        "offline stub -- the lode-7ypf leak is back"
+    )
+    assert guard_violations == [], (
+        "the related-notes pass attempted real egress despite the stub"
     )

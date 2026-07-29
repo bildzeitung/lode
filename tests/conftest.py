@@ -144,13 +144,22 @@ them. Do not reach for ``slow`` as a way to quiet guard 2 on a test that is not
 about a real model load — use ``@pytest.mark.network``, which is greppable and
 says what it means.
 
-**One known egress is also cut at its source: ``HF_HUB_DISABLE_TELEMETRY``
-(lode-sx17).** Set process-wide at module level below. It is not a substitute
-for the guard — it removes an egress the guard would otherwise have to catch,
-which is strictly better than catching it, and the guard still fails any test
-that reaches a Hub API without the marker. See that assignment's comment for
-why this env var and not ``HF_HUB_OFFLINE``, and why process-wide rather than
-inside the autouse fixture.
+**Two known egress sources are also cut at the source, so the guard never has
+to catch them.** Neither is a substitute for the guard: removing an egress
+beats catching it, and the guard still fails anything either one misses.
+
+1. **``HF_HUB_DISABLE_TELEMETRY`` (lode-sx17)** — set process-wide at module
+   level below, killing huggingface_hub's agent-harness registry fetch. See
+   that assignment's comment for why this env var and not ``HF_HUB_OFFLINE``,
+   and why process-wide rather than inside the autouse fixture.
+2. **The autouse offline query embedder (lode-7ypf)** —
+   :func:`_stub_the_query_embedder_offline` replaces
+   :class:`lode.embedding.FastEmbedEmbedder` for every test the socket guard
+   polices. The real one resolves its HuggingFace revision over the network on
+   first ``embed_query``, warm cache or not, and the related-notes panel
+   constructs it from a debounced background worker — so any TUI test that put
+   text in a body ``TextArea`` without stubbing armed a live call that outlived
+   its own test. ``@pytest.mark.real_embedder`` opts back out.
 """
 
 import ast
@@ -651,6 +660,137 @@ def forget_sdk_imports(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.setattr(pkg, attr, getattr(pkg, attr))
 
 
+def _egress_guard_applies(node: pytest.Item) -> bool:
+    """Does guard 2 (outbound socket egress) police this test?
+
+    ``@pytest.mark.network`` lifts it outright; ``@pytest.mark.slow``
+    additionally lifts it for the real-model tier (see the module docstring).
+
+    A named predicate rather than the condition inlined twice, because
+    :func:`_stub_the_query_embedder_offline` below must install its stub over
+    **exactly** this set and no other (lode-7ypf) — the stub exists only to
+    remove egress this guard would otherwise block, so the day the two
+    conditions disagree, one of them is wrong.
+    """
+    return (
+        node.get_closest_marker("network") is None
+        and node.get_closest_marker("slow") is None
+    )
+
+
+class _OfflineQueryEmbedder:
+    """Offline stand-in for :class:`lode.embedding.FastEmbedEmbedder` (lode-7ypf).
+
+    Zero vectors of the configured width — the same shape as the ``_StubEmbedder``
+    six test modules had each written for themselves before this fixture existed
+    (tests/test_tui_app.py, tests/test_tui_capture_save_and_new.py,
+    tests/test_tui_edit_related_notes.py, tests/test_tui_open_link.py,
+    tests/test_cli.py, tests/test_skeleton_gate.py). Those local stubs are
+    deliberately left in place: several of them count constructions or record
+    calls, which is the point of the test they belong to, and a test's own
+    ``monkeypatch.setattr`` runs after this fixture's and so still wins.
+
+    ``embedding_vector_dim``-wide, not a fixed length: a query vector of the
+    wrong width is a LanceDB error, not an empty result, so reading the width
+    from the settings handed in is what keeps this a *stand-in* rather than a
+    second failure mode.
+
+    It mirrors the real class's whole **duck-typed** surface, not just the two
+    :class:`~lode.embedding.Embedder` protocol methods, because lode probes the
+    rest by ``hasattr``: ``warm()`` is what ``lode models pull`` calls
+    (``cli.py``), and ``model_revision()`` is what ``embedding.py``'s
+    ``_embedder_model_revision`` duck-types on to stamp provenance on written
+    vectors. Omitting either does not fail loudly — it silently routes the code
+    under test down the *absent-method* branch, which is a different path from
+    production. ``None`` is the honest revision for a stub, and is exactly what
+    that helper already documents an absent method to mean.
+    """
+
+    def __init__(self, settings: object) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text
+        return [0.0] * self._dim
+
+    def warm(self) -> None:
+        return None
+
+    def model_revision(self) -> str | None:
+        return None
+
+
+#: Every binding of ``FastEmbedEmbedder`` a test can reach at call time. Two, not
+#: one, and both are load-bearing:
+#:
+#: * ``lode.embedding`` is what the deferred imports resolve against —
+#:   ``RelatedNotesPanel._ensure_embedder`` (the actual lode-7ypf leak) and
+#:   ``lode.cli``'s ``ask``/``models pull`` paths all import it *inside* the
+#:   function, so patching the attribute reaches them.
+#: * ``lode.tui.services.related`` holds its own import-time binding, used by
+#:   ``find_related_notes``'s ``embedder or FastEmbedEmbedder(settings)``
+#:   fallback. No test reaches it today (every direct caller passes an embedder,
+#:   and the rest return early on the enabled/min-chars/missing-db gates), but it
+#:   is a live production path one test away from leaking exactly as the panel
+#:   did. Patching one binding and not the other is the half-fix that gets
+#:   rediscovered.
+#:
+#: A module that binds the name at *import* time and is imported before the
+#: fixture runs — tests/test_capture_lag_diagnosis.py, the lag spike that wants
+#: the real ONNX model — keeps its own reference and is untouched. That is the
+#: correct outcome, and it is why that file needs no opt-out marker (it is also
+#: skipped unless ``LODE_DIAGNOSE_LAG=1``).
+_FASTEMBED_BINDINGS = ("lode.embedding", "lode.tui.services.related")
+
+
+@pytest.fixture(autouse=True)
+def _stub_the_query_embedder_offline(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the real ONNX query embedder out of every guarded test (lode-7ypf).
+
+    :class:`~lode.embedding.FastEmbedEmbedder`'s first ``embed_query`` resolves
+    the HuggingFace model revision over the network, unconditionally, warm cache
+    or not (``embedding.py``'s ``resolve_model_revision``; the product-side
+    defect is lode-dj6m). Any test that lets that run reaches huggingface.co.
+
+    The path that made this a real problem is
+    :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel._ensure_embedder`:
+    a debounced background worker constructs the embedder lazily, so **any** TUI
+    test that puts text in a body ``TextArea`` and does not stub it arms a live
+    network call — one that outlives the test's own app teardown and fires
+    whenever the CPU gets to it. ~40 such call sites across five files had each
+    to remember to stub, and most did not; the six that did wrote the same
+    ``_StubEmbedder`` six times. This is that stub, once, on by default.
+
+    **Scoped to exactly** :func:`_egress_guard_applies` — the tests where the
+    socket guard is live. That is not a coincidence of convenience: the stub's
+    whole job is to remove egress the guard would block, so a test allowed to
+    reach the network (``@pytest.mark.network``) or to load a real model
+    (``@pytest.mark.slow``) must get the real class. Sharing one predicate is
+    what keeps that true without anyone maintaining two lists.
+
+    ``@pytest.mark.real_embedder`` is the third way out, for a test that is
+    neither of those and still wants the genuine class: today exactly one, the
+    canary that pins the *installed* fastembed's exhausted-sources error string
+    (tests/test_cli.py). It is hermetic — ``HF_HUB_OFFLINE=1`` against a cold
+    ``$LODE_HOME`` — so it must keep the socket guard, which rules out
+    ``slow``/``network``, and it is worthless against a stub, since the whole
+    point is what the real package raises.
+    """
+    if not _egress_guard_applies(request.node):
+        return
+    if request.node.get_closest_marker("real_embedder") is not None:
+        return
+    for module in _FASTEMBED_BINDINGS:
+        monkeypatch.setattr(
+            f"{module}.FastEmbedEmbedder", _OfflineQueryEmbedder, raising=True
+        )
+
+
 @pytest.fixture(autouse=True)
 def _block_unmocked_network_and_llm_access(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
@@ -668,7 +808,6 @@ def _block_unmocked_network_and_llm_access(
     straggler from an earlier test must still be reported by someone.
     """
     marked_network = request.node.get_closest_marker("network") is not None
-    marked_slow = request.node.get_closest_marker("slow") is not None
 
     # Guard 1: real anthropic.Anthropic()/AsyncAnthropic() construction.
     # Unconditional regardless of ANTHROPIC_API_KEY -- it fires before the SDK's
@@ -721,7 +860,7 @@ def _block_unmocked_network_and_llm_access(
     # would leave the guard failing *open* on the latter -- and a guard that
     # silently misses is worse than no guard, because it licenses false
     # confidence.
-    if not marked_network and not marked_slow:
+    if _egress_guard_applies(request.node):
         for _method in ("connect", "connect_ex"):
             monkeypatch.setattr(
                 socket.socket, _method, _make_guarded_connect(_method), raising=True

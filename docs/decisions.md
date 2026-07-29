@@ -2591,3 +2591,49 @@ while erasing it here would lose the record of what was believed, and when.
     consumes its own record. It is checked in **both** directions — a marked test that trips nothing
     fails too, because a marker that has stopped being needed silently disables the backstop for
     that test.
+
+- **2026-07-29 (lode-7ypf) — the unstubbed-`FastEmbedEmbedder` leak class closed with ONE autouse
+  stub, scoped by the socket guard's own predicate.** Not planned for this branch: it was forced by
+  the lode-sx17 entry above. The moment the network guard stopped depending on nobody swallowing its
+  raise, this leak stopped being stderr noise and became an intermittent gate failure — 3 of 3
+  full-suite runs under artificial CPU load went red, and 1 of 2 on an idle machine, in
+  `test_tui_browse_screen.py`, `test_tui_quit.py`, `test_tui_capture_save_and_new.py` and
+  `test_tui_reconcile_screen.py`. The captured interception stack named the path every time:
+  `RelatedNotesPanel._search_related` → `asyncio.to_thread` → `find_related_notes` → `embed_query`
+  → `_load` → `resolve_model_revision` → `huggingface_hub.model_info` → httpx → `socket.connect`,
+  from a `concurrent.futures` worker thread. So lode-sx17 could not land without it.
+  - **Decided: an autouse stub, not ~40 hand-patched call sites.** lode-7ypf's own acceptance left
+    the choice open and asked for one or the other, deliberately, not both. Six test modules had
+    already written the same `_StubEmbedder` for themselves and ~35 more call sites had not; a
+    convention that must be remembered at every new `TextArea` test is the thing that failed here.
+    The local stubs are **left in place** — several count constructions or record calls, which is
+    the point of the test they belong to, and a test's own `monkeypatch.setattr` runs after the
+    fixture's and so still wins.
+  - **Scope = `_egress_guard_applies`, a predicate now shared with guard 2**, rather than a second
+    marker list that could drift. The stub exists only to remove egress the socket guard would
+    otherwise block, so the set of tests it covers *must* be the set that guard polices: a test
+    allowed to reach the network (`network`) or to load a real model (`slow`) gets the real class.
+    One predicate is what makes that true by construction instead of by two lists agreeing.
+  - **Both call-time bindings are patched**, `lode.embedding` (what the deferred imports in
+    `RelatedNotesPanel._ensure_embedder` and `lode.cli` resolve against) and
+    `lode.tui.services.related` (its own import-time binding, used by `find_related_notes`'s
+    `embedder or FastEmbedEmbedder(settings)` fallback). No test reaches the second today; it is a
+    live production path one test away from leaking the same way, and patching one binding but not
+    the other is the half-fix that gets rediscovered.
+  - **`@pytest.mark.real_embedder` (new) is the opt-out, with exactly one user:** the canary that
+    pins the *installed* fastembed's exhausted-sources error string (`tests/test_cli.py`). It
+    deliberately does **not** reach for `slow`/`network` — it is hermetic via `HF_HUB_OFFLINE=1`
+    against a cold `$LODE_HOME`, and the socket guard staying on is part of what it asserts.
+  - **The stub mirrors the whole duck-typed surface, not just the two `Embedder` protocol methods.**
+    lode probes `warm()` (`lode models pull`) and `model_revision()` (`_embedder_model_revision`,
+    for vector provenance) by `hasattr`. Omitting either does not fail loudly — it silently routes
+    the code under test down the *absent-method* branch, which production never takes.
+  - **Verified:** 5 consecutive full-suite runs under the same 20-spinner CPU load that had produced
+    3 of 3 failures, all green, no "Task exception was never retrieved". Pinned by four tests in
+    `tests/test_network_guard.py` (kept there because the stub's scope is *defined by* the guard's),
+    each proven against a sabotage. Two of those tests were themselves caught being order-dependent
+    by their own sabotage — a module first imported *inside* a test body binds the already-patched
+    value and asserts nothing — and now import at module scope so collection binds them first.
+  - **Not fixed here, and still worth fixing: lode-dj6m**, the product-side defect underneath
+    (`FastEmbedEmbedder._load` resolves the HF revision eagerly even on query-only paths). This
+    entry removes the *test*-side exposure only. The real `lode` binary still pays that round-trip.

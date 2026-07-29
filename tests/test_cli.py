@@ -6152,6 +6152,7 @@ def test_models_pull_unmatched_value_error_still_propagates(
     assert str(result.exception) == "some unrelated ValueError"
 
 
+@pytest.mark.real_embedder
 def test_fastembed_still_raises_the_exhausted_sources_signature(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -6171,6 +6172,13 @@ def test_fastembed_still_raises_the_exhausted_sources_signature(
     Hermetic and offline: ``HF_HUB_OFFLINE=1`` against a cold ``$LODE_HOME``
     makes fastembed force ``local_files_only=True`` throughout, so it never
     touches the network -- it exhausts its sources locally and raises.
+
+    ``@pytest.mark.real_embedder`` (lode-7ypf) opts out of tests/conftest.py's
+    autouse offline embedder stub -- this test is the one place in the suite
+    that is *about* the installed package's own behaviour, so a stand-in would
+    make it assert on a string this repo wrote. It deliberately does NOT reach
+    for ``network``/``slow``: the socket guard stays on, because the offline
+    claim above is part of what is being asserted.
     """
     from lode.cli import _FASTEMBED_EXHAUSTED_SOURCES
     from lode.embedding import FastEmbedEmbedder
