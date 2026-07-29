@@ -1234,8 +1234,9 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
     # predicate. scripts/worktree-lock-stale.sh proves the recorded pid is either not running at all,
     # or has been REUSED by an unrelated later process (via /proc/<pid>/stat's own starttime, matched
     # against the token the harness recorded at lock time) -- see the script's header for the full
-    # mechanism and why plain `kill -0` alone cannot safely make this call. A lock the script cannot
-    # positively prove dead is left alone (fail closed) and skipped exactly as before.
+    # mechanism and why a plain PID-liveness probe (signal 0) alone cannot safely make this call. A
+    # lock the script cannot positively prove dead is left alone (fail closed) and skipped exactly
+    # as before.
     LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" '
       /^worktree / { path=$2; reason="" }
       /^locked/    { reason=substr($0,8) }

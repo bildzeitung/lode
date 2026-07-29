@@ -81,7 +81,9 @@ def test_dead_pid_is_stale() -> None:
     dead_pid = proc.pid
     # Best-effort race guard: immediately re-check it is indeed not running
     # (kill -0 from THIS test, not the script) before trusting the fixture.
-    check = subprocess.run(["kill", "-0", str(dead_pid)], capture_output=True)
+    check = subprocess.run(
+        ["kill", "-0", str(dead_pid)], capture_output=True, check=False
+    )
     assert check.returncode != 0, "fixture pid unexpectedly still alive"
 
     result = _run([f"claude agent agent-x (pid {dead_pid} start 123456)"])
@@ -155,14 +157,14 @@ def test_comm_field_with_unusual_characters_does_not_misalign_fields() -> None:
     # containing a paren + space -- if the platform doesn't support this
     # rename, the test still exercises a real process, just without the
     # adversarial comm; either way the field split must succeed.
-    proc = subprocess.Popen(
-        ["bash", "-c", 'exec -a "weird (name) here" sleep 5']
-    )
+    proc = subprocess.Popen(["bash", "-c", 'exec -a "weird (name) here" sleep 5'])
     try:
         time.sleep(0.2)  # let exec -a take effect before reading /proc
         token = _real_starttime(proc.pid)
         result = _run([f"claude agent agent-x (pid {proc.pid} start {token})"])
-        assert result.returncode == 1, result.stdout + result.stderr  # still live, matched
+        assert result.returncode == 1, (
+            result.stdout + result.stderr
+        )  # still live, matched
     finally:
         proc.terminate()
         proc.wait()

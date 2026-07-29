@@ -140,6 +140,10 @@ _KNOWN_ENV_VARS = {
     # override; land/SKILL.md documents it, this repo's skills never assign it.
     "TMPDIR",  # standard POSIX env var; sweep/SKILL.md reads it only via `${TMPDIR:-/tmp}`
     # to place its own cross-block scratch state, and never assigns it.
+    "LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS",  # (lode-yrtu) operator-settable age floor
+    # for Section 4's clean-not-merged worktree-agent-* dir-only reclaim; read only via
+    # `${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}`, documented in
+    # docs/agents-workflow.md, never assigned by any skill's own bash.
 }
 
 # (path relative to SKILLS_DIR, variable name) -> reason a human can audit. An entry
