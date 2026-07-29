@@ -31,10 +31,25 @@
 # small, plain bash, duplicated verbatim in every consumer -- and pinned
 # byte-for-byte across all of them by tests/test_gate_lib.py's sweep, which
 # discovers the consumer set rather than listing it, so a NEW consumer that
-# sources this library bare is caught the day it lands:
+# sources this library bare is caught the day it lands. GATE_ADVISORY (below)
+# is passed on this SAME source line, at source time -- a consumer with
+# advisory lines writes:
 #
 #   # shellcheck source=gate-lib.sh
-#   if ! . "$(dirname "$0")/gate-lib.sh"; then
+#   if ! . "$(dirname "$0")/gate-lib.sh" \
+#        "advisory line 1" \
+#        "advisory line 2"; then
+#     echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+#     echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+#     exit 2
+#   fi
+#   gate_could_not_run "one-line summary" "cause line 1" "cause line 2" ...
+#
+# and a consumer with NO advisory trailer passes the literal sentinel
+# `--no-advisory` instead of nothing (see GATE_ADVISORY below for why "nothing"
+# is unsafe):
+#
+#   if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
 #     echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
 #     echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
 #     exit 2
@@ -60,55 +75,54 @@
 # correctly (e.g. release-bump.sh's `read_log() { ...; } ... || exit $?`
 # propagation out of its own command-substitution subshell).
 #
-# GATE_ADVISORY (optional): a bash array a sourcing script may set BEFORE
-# calling gate_could_not_run, to append fixed, domain-specific advisory lines
-# after every caller-supplied cause -- e.g. merge-precheck.sh's "do not kick
-# this branch back needs-rebase in place of diagnosing it." Set it ONCE, near
-# the top of the sourcing script (after sourcing this file); every call site
-# in that script then gets it automatically, so the advisory is never
-# repeated per call site. Leave it unset (the default) for no trailer at all
-# -- release-bump.sh's shape, which carries none.
+# GATE_ADVISORY (lode-ysr6): a bash array of fixed, domain-specific advisory
+# lines appended after every caller-supplied cause on a gate_could_not_run
+# call -- e.g. merge-precheck.sh's "do not kick this branch back needs-rebase
+# in place of diagnosing it." SET STRUCTURALLY, at source time, from the
+# positional arguments passed on the source line itself (see Usage above):
+# this file assigns GATE_ADVISORY from "$@" before returning control to the
+# sourcing script, i.e. before a single line of that script beyond the source
+# line itself has run. There is no longer a separate assignment statement for
+# a call site to accidentally sit above.
 #
-# THE COST OF THAT CONVENIENCE, and the one thing to get right when adding a
-# call site: this used to be structural. The advisory lived inside the function
-# body, so a call could not exist without emitting it. Now it is an ORDERING
-# CONVENTION -- a call site placed above its script's GATE_ADVISORY assignment
-# still exits 2 with a correct banner, but silently emits HALF the contract,
-# which is precisely how lode-9i2p's machine-vs-content confusion gets back in.
-# An accidentally-empty GATE_ADVISORY is byte-identical to release-bump.sh's
-# deliberately-empty one, so nothing in the LANGUAGE can tell them apart:
-# `set -u` sees a validly declared-empty array, shellcheck's view is suppressed
-# by the SC2034 disable each caller needs, and this library's own tests choose
-# their own orderings.
+# THIS USED TO BE AN ORDERING CONVENTION, not a structural property: the
+# advisory lived in a separate `GATE_ADVISORY=(...)` statement a sourcing
+# script wrote itself, and a call site placed above that assignment still
+# exited 2 with a correct banner but silently emitted HALF the contract --
+# invisible to `set -u` (a validly declared-empty array), to shellcheck (the
+# SC2034 disable every caller needed suppressed its view), and to this
+# library's own tests (which chose their own orderings). That hazard is now
+# categorically impossible: the assignment is this line, and this line runs
+# as part of sourcing, which necessarily precedes everything else in the file
+# that sources it.
 #
-# It is nonetheless enforced, in two places (lode-bss5):
+# A DIFFERENT discipline replaces it, smaller in scope (once per consumer
+# FILE, not once per call site, and mechanically swept the same way the
+# fail-closed source guard above already is) -- verified empirically, bash
+# 5.2: `source file` with NO extra tokens after the filename does NOT clear
+# $@ inside file, it inherits the CALLING script's CURRENT positional
+# parameters unchanged. Every consumer here is itself invoked with its own
+# CLI arguments, so a bare `. "$(dirname "$0")/gate-lib.sh"` -- no advisory
+# strings, no sentinel -- would silently leak the CONSUMER's OWN argv into
+# GATE_ADVISORY, printed as if it were a fixed advisory trailer on every GATE
+# COULD NOT RUN exit. A consumer that wants no advisory trailer must
+# therefore pass the literal sentinel `--no-advisory`, never nothing (see
+# release-bump.sh / release-latest-tag.sh). tests/test_gate_lib.py's
+# discovered sweep asserts every consumer's source line supplies either
+# advisory strings or the sentinel -- never a bare source with zero trailing
+# tokens -- so a NEW consumer that forgets this is caught the day it lands,
+# the same enforcement shape as the source guard sweep above.
 #
-#   * tests/test_gate_lib.py sweeps the DISCOVERED consumer set and asserts
-#     that every advisory-setting consumer assigns GATE_ADVISORY above all of
-#     its own call sites. This covers consumers nobody wrote a bespoke test
-#     for, including ones added after this comment.
-#   * each consuming script's own tests assert the advisory TEXT on an exit-2
-#     path, which the sweep cannot do (it reads line order, not output). When
-#     you add a call site IN A CONSUMER THAT SETS GATE_ADVISORY, add or extend
-#     such an assertion (tests/test_merge_precheck.py and
-#     tests/test_validate_mermaid_gate.py show the shape).
-#
-# For a NO-advisory consumer (release-bump.sh's shape -- no GATE_ADVISORY set
-# at all) there is nothing to assert either way: half-a-contract cannot go
-# missing from a contract that was never more than the banner and the caller's
-# own cause lines to begin with. The sweep skips those consumers explicitly.
-#
-# GATE_ADVISORY is declared here (as an empty array, if not already set) so
-# that referencing it below is safe under `set -u`: bash's `nounset` treats a
-# never-declared array as an unbound-variable error on `${arr[@]}` (verified
-# empirically, bash 5.2), unlike a scalar's more forgiving `${var:-}` default.
-#
-# Do NOT "tidy" this into `[[ -v GATE_ADVISORY ]] || GATE_ADVISORY=()`. The two
-# are not equivalent: `-v` on an array tests element 0, so it reports FALSE for
-# an array that is declared but empty, and the `||` would then reinitialize a
-# caller's deliberately-empty GATE_ADVISORY (measured, bash 5.2). `declare -p`
-# tests declaration, which is the actual question here.
-declare -p GATE_ADVISORY >/dev/null 2>&1 || GATE_ADVISORY=()
+# `source file arg1 arg2` sets $1.. inside file for the duration of the
+# source command, then restores the CALLER's own $1.. to exactly what they
+# were the instant the source command returns (verified, bash 5.2) -- so a
+# consumer's own arg-count check below the source line sees precisely what it
+# would have seen without any of this.
+if [ "$#" -eq 1 ] && [ "$1" = "--no-advisory" ]; then
+  GATE_ADVISORY=()
+else
+  GATE_ADVISORY=("$@")
+fi
 
 gate_could_not_run() {
   echo "GATE COULD NOT RUN: $1" >&2

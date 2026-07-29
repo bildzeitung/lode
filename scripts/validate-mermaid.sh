@@ -73,26 +73,21 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # stderr shape.
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
+# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract)
+# is passed on THIS source line, at source time (lode-ysr6) -- gate-lib.sh
+# assigns GATE_ADVISORY from "$@" before returning, so it is now structurally
+# impossible to place a call site above it: there is no separate assignment
+# statement left in this file to misorder. tests/test_validate_mermaid_gate.py's
+# _assert_gate_could_not_run still pins the advisory TEXT on an exit-2 path,
+# which a static sweep cannot see -- route any new exit-2 test through it.
 # shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh"; then
+if ! . "$(dirname "$0")/gate-lib.sh" \
+     "This is a machine fault a human must fix, not a mermaid syntax error —" \
+     "do not hand-verify diagrams or hand off in place of this gate."; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
   echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
 fi
-
-# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
-# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed
-# above it still exits 2 with a correct banner but silently emits HALF the
-# contract -- invisible to set -u, to shellcheck, and to the library's own
-# tests. Two tests catch it: tests/test_gate_lib.py's ordering sweep (line
-# order, every discovered consumer) and tests/test_validate_mermaid_gate.py's
-# _assert_gate_could_not_run (the advisory TEXT on an exit-2 path, which the
-# sweep cannot see) -- route any new exit-2 test through that helper.
-# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
-GATE_ADVISORY=(
-  "This is a machine fault a human must fix, not a mermaid syntax error —"
-  "do not hand-verify diagrams or hand off in place of this gate."
-)
 
 if ! docker info >/dev/null 2>&1; then
   if command -v docker >/dev/null 2>&1; then
