@@ -1,5 +1,6 @@
-"""Gate: no fenced ```bash/```sh block in a `.claude/skills/*/SKILL.md` may reference a
-shell variable that isn't ALSO assigned somewhere within that SAME block (lode-x495).
+"""Gate: no fenced ```bash/```sh block in a `.claude/skills/*/SKILL.md` (lode-x495) or
+a `.claude/agents/*.md` (lode-lv04) may reference a shell variable that isn't ALSO
+assigned somewhere within that SAME block.
 
 ## The bug class
 
@@ -85,7 +86,7 @@ over-flagging gate gets its findings suppressed or its allowlist bloated with
 non-bugs, which is how this exact rot restarts (per the ticket that added this
 gate, lode-x495).
 
-## Scope: EVERY skill file, with a small, per-variable allowlist
+## Scope: EVERY skill file AND every agent file, with a small, per-variable allowlist
 
 lode-x495 explicitly permitted either scoping this gate to `land/SKILL.md` only and
 widening later, or shipping repo-wide with an allowlist. This gate ships **repo-wide**
@@ -93,14 +94,27 @@ widening later, or shipping repo-wide with an allowlist. This gate ships **repo-
 land-local (per the ticket's own title) and `/sweep` and `/release` already carried
 real, confirmed instances that a land-only gate would leave silently uncovered.
 
+`lode-lv04` widened the same gate to `.claude/agents/*.md` -- markdown instruction
+files whose fenced bash an agent executes exactly the same way, block by block, under
+the same harness rule; the bug class is not skills-specific either. At the time of
+widening the shipped parser reported ZERO violations across all three agent files
+(`coding.md` 31 fenced bash blocks, `code-reviewer.md` 11, `land-review.md` 3), so
+widening needed no allowlist entry and no fix to any agent file, only a change to
+which paths are globbed. That the widened gate actually *catches* an agent-file
+regression is pinned permanently rather than checked once by hand, by
+`test_sabotaged_agent_file_is_caught_by_find_violations`. Both roots share **one**
+`ALLOWLIST`, keyed by a path relative to `.claude/` (not to either root) precisely so
+a key can never be ambiguous about which side of the tree it names -- e.g.
+`skills/land/SKILL.md` vs. a hypothetical `agents/land.md`.
+
 **There is deliberately no whole-file escape hatch** -- not even for `land/SKILL.md`,
 which was initially skipped file-wide. The reasoning for that decision and against it
 lives in `docs/agents-workflow.md`'s section above ("There is no whole-file escape
-hatch, deliberately"); `test_every_skill_file_is_covered` pins the outcome. Measured
-while making the call, and recorded here because it is evidence rather than rationale:
-across `trunk`, this branch, and all five in-flight sibling branches touching the file,
-the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing else -- no false
-positive, and no sibling introduces a new instance.
+hatch, deliberately"); `test_every_skill_and_agent_file_is_covered` pins the outcome.
+Measured while making the call, and recorded here because it is evidence rather than
+rationale: across `trunk`, this branch, and all five in-flight sibling branches
+touching the file, the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing
+else -- no false positive, and no sibling introduces a new instance.
 
 That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
 to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
@@ -125,7 +139,9 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
+CLAUDE_DIR = REPO_ROOT / ".claude"
+SKILLS_DIR = CLAUDE_DIR / "skills"
+AGENTS_DIR = CLAUDE_DIR / "agents"
 
 # Bash's own positional/special parameters -- never "assigned" by any skill's own code,
 # so a use of one is never a finding.
@@ -142,8 +158,11 @@ _KNOWN_ENV_VARS = {
     # to place its own cross-block scratch state, and never assigns it.
 }
 
-# (path relative to SKILLS_DIR, variable name) -> reason a human can audit. An entry
-# with no reason is exactly how this bug class was allowed to rot in the first place
+# (path relative to CLAUDE_DIR, variable name) -> reason a human can audit. Relative
+# to `.claude/`, not to either SKILLS_DIR or AGENTS_DIR (lode-lv04 widened this gate to
+# both roots), so a key can never be ambiguous about which side of the tree it names --
+# e.g. "skills/land/SKILL.md" vs. a hypothetical "agents/land.md". An entry with no
+# reason is exactly how this bug class was allowed to rot in the first place
 # (lode-x495) -- never add one without a specific, checkable justification.
 #
 # Scope of an entry is FILE-WIDE, not block-scoped: allowlisting ($ACCEPTED, land) also
@@ -153,7 +172,7 @@ _KNOWN_ENV_VARS = {
 # unrelated edits until someone "fixed" it by widening the entry. Keep entries rare and
 # keep the names specific; a generic name here is much costlier than a specific one.
 ALLOWLIST: dict[tuple[str, str], str] = {
-    ("release/SKILL.md", "PROPOSED"): (
+    ("skills/release/SKILL.md", "PROPOSED"): (
         "The human-confirmed version string from Section 3's confirmation dialogue. "
         "Never computed by any bash in this file -- Section 2's scripts/release-bump.sh "
         "only classifies breaking/feat/fix/none, the actual X.Y.Z arithmetic (or an "
@@ -162,7 +181,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "persist from; the agent supplies the literal confirmed version at Section 4's "
         "invocation site, the same way it fills in a `<...>` template placeholder."
     ),
-    ("land/SKILL.md", "ACCEPTED"): (
+    ("skills/land/SKILL.md", "ACCEPTED"): (
         "Section 3a's ordered, land-review-verdict-derived accepted set -- the same "
         "shape as release/SKILL.md's $PROPOSED above: computed by the agent's own "
         "reasoning across Sections 2c (dispatched land-review verdicts) and 3a "
@@ -174,7 +193,7 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "hand-off from the agent's reasoning into bash remains. Removing this entry "
         "needs a genuine mechanical source for the set: lode-p1r3."
     ),
-    ("land/SKILL.md", "CONFLICTS"): (
+    ("skills/land/SKILL.md", "CONFLICTS"): (
         "The 'Needs rebase -- kick back' block interpolates the conflicting paths that "
         "Section 2b's merge-precheck (or Section 3's merge loop) captured -- a real, "
         "confirmed instance of this bug class, already tracked and fixed by lode-rfon "
@@ -313,6 +332,15 @@ def find_violations(path: Path) -> list[tuple[int, str]]:
         for var in sorted(used - assigned):
             violations.append((i, var))
     return violations
+
+
+def _source_files() -> list[Path]:
+    """Every file this gate parses: each skill's SKILL.md, plus every agent
+    definition under `.claude/agents/*.md` (lode-lv04) -- both execute fenced bash
+    the same way, block by block, under the same harness rule. `ALLOWLIST` keys are
+    relative to `CLAUDE_DIR`, computed the same way at each call site, so a key can
+    never be ambiguous about which of the two roots it names."""
+    return sorted(SKILLS_DIR.glob("*/SKILL.md")) + sorted(AGENTS_DIR.glob("*.md"))
 
 
 # =====================================================================================
@@ -528,7 +556,7 @@ def test_two_separate_blocks_are_returned_separately() -> None:
 
 
 # =====================================================================================
-# The gate itself, against the real, shipped skill files.
+# The gate itself, against the real, shipped skill AND agent files.
 # =====================================================================================
 
 
@@ -537,28 +565,30 @@ def test_allowlist_entries_all_have_a_reason() -> None:
         assert reason.strip(), f"allowlist entry {key} has an empty reason"
 
 
-def test_every_skill_file_is_covered() -> None:
+def test_every_skill_and_agent_file_is_covered() -> None:
     """No file-level escape hatch exists, deliberately (lode-x495 review). A whole-file
     skip would leave NEW cross-block variables in that file unguarded too, not just the
     known ones -- and the file it was first reached for, `land/SKILL.md`, is the sole
     writer of `trunk`. Per-variable allowlisting keeps every other block in the file
-    covered. This pins that: every skill carrying bash blocks is actually parsed."""
+    covered. This pins that: every skill AND every agent file carrying bash blocks is
+    actually parsed (lode-lv04 added the `.claude/agents/*.md` half)."""
     scanned = [
-        str(p.relative_to(SKILLS_DIR))
-        for p in sorted(SKILLS_DIR.glob("*/SKILL.md"))
+        str(p.relative_to(CLAUDE_DIR))
+        for p in _source_files()
         if _bash_blocks(p.read_text(encoding="utf-8"))
     ]
-    assert "land/SKILL.md" in scanned, scanned
+    assert "skills/land/SKILL.md" in scanned, scanned
+    assert "agents/coding.md" in scanned, scanned
 
 
 def test_no_cross_block_shell_state_outside_the_allowlist() -> None:
-    """The actual gate. EVERY `.claude/skills/*/SKILL.md` is parsed; any (block,
-    variable) violation not covered by `ALLOWLIST` fails this test with enough detail
-    to find and fix it."""
+    """The actual gate. EVERY `.claude/skills/*/SKILL.md` and every
+    `.claude/agents/*.md` is parsed (lode-lv04); any (block, variable) violation not
+    covered by `ALLOWLIST` fails this test with enough detail to find and fix it."""
     failures: list[str] = []
-    for skill_md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
-        rel = str(skill_md.relative_to(SKILLS_DIR))
-        for block_index, var in find_violations(skill_md):
+    for source_md in _source_files():
+        rel = str(source_md.relative_to(CLAUDE_DIR))
+        for block_index, var in find_violations(source_md):
             if (rel, var) in ALLOWLIST:
                 continue
             failures.append(
@@ -572,3 +602,34 @@ def test_no_cross_block_shell_state_outside_the_allowlist() -> None:
                 f"this file with a specific reason."
             )
     assert not failures, "\n".join(failures)
+
+
+def test_sabotaged_agent_file_is_caught_by_find_violations(tmp_path: Path) -> None:
+    """lode-lv04's sabotage verification, kept as a permanent regression pin rather
+    than a one-off manual check: a cross-block variable injected into a REAL agent
+    file's fenced bash (the exact `.claude/agents/coding.md` regression shape -- a
+    variable set in one ```bash block and read in a separate later one) must be
+    caught by `find_violations`, the same primitive
+    `test_no_cross_block_shell_state_outside_the_allowlist` runs over every skill and
+    agent file.
+
+    Routed through `find_violations` on a COPY under `tmp_path`; the real file on
+    disk is never written. Calling that primitive rather than re-implementing its
+    loop is what makes this a pin at all: an inlined copy of the loop body still
+    passes with `find_violations` itself mutated to the file-global reading this
+    module's "Why per-block, not file-global" section rejects, since under that
+    reading `SABOTAGE_VAR` IS assigned somewhere in the file. Verified by mutation
+    during lode-lv04's review, where the inlined form was what shipped.
+
+    Note this also depends on `.claude/agents/*.md` being globbed at all, which is
+    `test_every_skill_and_agent_file_is_covered`'s job, not this test's -- reverting
+    the widening fails there, not here.
+    """
+    sabotaged = tmp_path / "coding.md"
+    sabotaged.write_text(
+        (AGENTS_DIR / "coding.md").read_text(encoding="utf-8")
+        + '\n```bash\nSABOTAGE_VAR=1\n```\n\n```bash\necho "$SABOTAGE_VAR"\n```\n',
+        encoding="utf-8",
+    )
+    violations = find_violations(sabotaged)
+    assert "SABOTAGE_VAR" in {v for _, v in violations}, violations

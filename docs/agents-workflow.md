@@ -1446,7 +1446,8 @@ other gate in this repo (`nox -t fix`, `nox -s tests`, `mypy`, …) — none of 
 skill prose — so nothing but a dedicated test catches a regression here.
 
 **The mechanism** — `tests/test_skill_bash_state.py`, run by `nox -s tests`. It parses every
-`bash`/`sh`-tagged fenced block in `.claude/skills/*/SKILL.md` and fails if a variable is referenced
+`bash`/`sh`-tagged fenced block in `.claude/skills/*/SKILL.md` and `.claude/agents/*.md` (see
+**Scope and allowlist** below for the second root) and fails if a variable is referenced
 (`$VAR` or `${VAR...}`) in a block without also being assigned somewhere in that **same** block — the
 check is per-block, not file-wide, because a variable assigned in some *other* block is exactly the
 `$MSG` bug: real, present in the file, and still invisible to the block that uses it. **What exactly
@@ -1471,18 +1472,23 @@ but for `land/SKILL.md` only and by a different test (`tests/test_land_lock.py`)
 
 **Scope and allowlist.** The gate covers every `.claude/skills/*/SKILL.md` — not scoped to
 `land/SKILL.md` alone, since `lode-x495` found real, confirmed instances in `/sweep` and `/release`
-that a land-only gate would leave uncovered. It does **not** yet cover `.claude/agents/*.md`, whose
-fenced blocks an agent executes exactly the same way (`lode-x495`'s review measured 45 such blocks
-across `coding`/`code-reviewer`/`land-review`, all currently clean, so widening is free — tracked as
-its own ticket rather than folded in). Alongside the file scope there is a small, per-`(file,
-variable)` allowlist for a value that
-is deliberately **not** amenable to either sanctioned remedy: one that is computed by the agent's own
-reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by any
-deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
-`release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before Section
-4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in the test
-file itself — an entry with no reason is how this exact rot restarted once already (a bug fixed once
-in `land/SKILL.md`, then found again, unfixed, in two other skills).
+that a land-only gate would leave uncovered — **and**, since `lode-lv04`, every `.claude/agents/*.md`
+too: the bug class is not skills-specific, and an agent's markdown instructions execute fenced bash
+exactly the same way, block by block, under the same harness rule. Widening was free — every agent
+file was already clean, so it cost no allowlist entry and not one byte of any agent file — and that
+the widened gate actually *catches* an agent-file regression is pinned by a permanent sabotage test
+rather than checked once by hand. The per-file measurement behind "free" lives with the parser, in
+the test module's own docstring, for the same reason the assignment/use rules do. Both roots share
+**one** allowlist, keyed by a path relative to `.claude/` (not to either root) — e.g.
+`skills/land/SKILL.md`, `agents/coding.md` — so a key is never ambiguous about which side of the
+tree it names. Alongside the file scope there is a small, per-`(file, variable)` allowlist for a
+value that is deliberately **not** amenable to either sanctioned remedy: one that is computed by the
+agent's own reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by
+any deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
+`skills/release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before
+Section 4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in
+the test file itself — an entry with no reason is how this exact rot restarted once already (a bug
+fixed once in `land/SKILL.md`, then found again, unfixed, in two other skills).
 
 **There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
 on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
