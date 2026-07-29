@@ -5972,6 +5972,7 @@ def test_models_pull_is_listed_under_models_help() -> None:
     assert "pull" in result.stdout
 
 
+@pytest.mark.real_embedder
 def test_real_model_wrappers_expose_warm() -> None:
     """The three real wrappers expose the public warm() seam 'models pull' calls.
 
@@ -5979,6 +5980,17 @@ def test_real_model_wrappers_expose_warm() -> None:
     even if the real classes lost warm() -- this pins the contract against the
     genuine articles. Constructing a wrapper only stores the model name (no
     fastembed import, no download), so this stays offline.
+
+    ``@pytest.mark.real_embedder`` is load-bearing HERE for a reason worth stating,
+    because the marker's usual justification does not apply and the omission is
+    silent (lode-sx17 land-review): the import below is *function-local*, so it
+    reads ``lode.embedding``'s attribute at CALL time -- which the autouse offline
+    stub has replaced (lode-7ypf). Without the marker this asserts ``callable`` on
+    a ``warm()`` that tests/conftest.py wrote, i.e. it becomes precisely the
+    fake-wrapper vacuity the docstring above says it exists to prevent, while
+    still passing. The other two wrappers are unaffected (nothing stubs them), so
+    only the ``FastEmbedEmbedder`` leg was hollow -- which is exactly why nothing
+    failed to give it away.
     """
     from lode.embedding import FastEmbedEmbedder
     from lode.faithfulness import FastEmbedEntailmentScorer

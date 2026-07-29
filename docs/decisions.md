@@ -2568,8 +2568,12 @@ while erasing it here would lose the record of what was believed, and when.
     tier's one-time cold-cache weights download (the deliberate exception `tests/conftest.py`'s
     module docstring records, lode-gmo/lode-pql) and any `@pytest.mark.network` test needing a real
     Hub call. `HF_HUB_DISABLE_TELEMETRY` costs nothing functional by comparison: verified against
-    the installed huggingface_hub 1.24.0, it is read in exactly two places — the user-agent
-    enrichment and a fire-and-forget telemetry ping.
+    the installed huggingface_hub 1.24.0, it is read in three places, of which two are functional —
+    the user-agent enrichment and a fire-and-forget telemetry ping — the third being
+    `_runtime.py`'s `dump_environment_info`, which only prints it in the `huggingface-cli env`
+    bug-report dump. (Stated exactly so re-running the grep matches the claim: an earlier draft
+    said "exactly two", which would have sent a future auditor re-deriving the whole
+    justification to find out the claim was merely imprecise rather than stale.)
   - **Layer 2, the actual fix — record, then raise.** Both guards now append the violation (plus the
     stack captured at interception) to a process-global list *before* calling `pytest.fail`, and the
     autouse fixture's teardown fails the test on anything left unconsumed. The raise still gives the

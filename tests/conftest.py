@@ -259,9 +259,13 @@ os.environ.pop("NO_COLOR", None)
 #: the Hub outright, which breaks two things that legitimately reach it -- the ``@pytest.mark.slow``
 #: reranker tier's one-time cold-cache weights download (see ``$LODE_HOME/models`` above), and any
 #: ``@pytest.mark.network`` test that needs a real Hub call. ``HF_HUB_DISABLE_TELEMETRY`` costs
-#: nothing functional: verified against the installed huggingface_hub (1.24.0) it is read in exactly
-#: two places -- ``_headers.py``'s user-agent enrichment (the torch version and the agent tag) and
-#: ``_telemetry.py``'s fire-and-forget ping. Neither is an API lode or fastembed depends on.
+#: nothing functional: verified against the installed huggingface_hub (1.24.0) it is read in three
+#: places, of which two are functional -- ``_headers.py``'s user-agent enrichment (the torch version
+#: and the agent tag) and ``_telemetry.py``'s fire-and-forget ping -- and the third,
+#: ``_runtime.py``'s ``dump_environment_info``, only prints it in the ``huggingface-cli env``
+#: bug-report dump. None is an API lode or fastembed depends on. The count is stated exactly so a
+#: future auditor re-running the grep matches it instead of having to re-derive whether the
+#: justification still holds.
 #:
 #: WHY PROCESS-WIDE RATHER THAN INSIDE THE AUTOUSE GUARD (so ``@pytest.mark.network`` could lift it):
 #: it CANNOT be lifted per-test even if we wanted to. ``huggingface_hub.constants`` reads the
