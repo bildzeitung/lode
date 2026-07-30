@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from lode.config import Settings
 from lode.storage import init_db
 from lode.tui.app import LodeApp
 from lode.tui.screens.capture import BODY_ID as CAPTURE_BODY_ID
@@ -46,6 +47,54 @@ class _FakeGuiBrowser:
     than relying on whatever browsers happen to be registered on the machine
     actually running the suite.
     """
+
+
+class _StubEmbedder:
+    """Deterministic offline stand-in for the related-notes query embedder (lode-fr3p).
+
+    These tests only exercise the Ctrl+N open-link binding and never assert on
+    ``RelatedNotesPanel`` results -- but they cannot simply ignore the panel.
+    ``EditScreen.on_mount`` sets the body ``TextArea``'s ``.text`` to the
+    just-loaded note (and the capture-screen test sets it directly), and either
+    one posts a real ``TextArea.Changed`` that arms the panel's debounce
+    (:meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel.update_draft`,
+    default 500ms). Whether that timer fires before a test finishes is a
+    wall-clock race the test bodies do not control; when it does fire, the
+    worker (``RelatedNotesPanel._search_related``) lazily constructs a real
+    :class:`~lode.embedding.FastEmbedEmbedder`, whose first embed resolves the
+    ONNX model's revision over a live HTTPS call to huggingface.co
+    (:func:`lode.embedding.resolve_model_revision`) -- unconditionally, whether
+    or not the model is already cached on disk. That is the call
+    ``tests/conftest.py``'s socket guard was catching, and the reason a green
+    local run is *not* evidence this stub is unnecessary.
+
+    Only ``embed_query`` is exercised; the width follows ``settings`` so the
+    query vector matches the LanceDB table that ``vector_search`` lazily creates
+    for these tests' otherwise-never-written db.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._dim = settings.embedding_vector_dim
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        del text
+        return [0.0] * self._dim
+
+
+def _stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Swap the default ONNX embedder for :class:`_StubEmbedder` (no network).
+
+    Called by every test below that reaches ``EditScreen`` or sets
+    ``CaptureScreen``'s body text -- i.e. exactly the ones that arm the
+    related-notes debounce. The ``VersionViewScreen``/``SnapshotViewerScreen``
+    tests compose no ``RelatedNotesPanel`` and deliberately do not call it, so
+    the presence of this call is itself the signal for which screens surface
+    related notes.
+    """
+    monkeypatch.setattr("lode.embedding.FastEmbedEmbedder", _StubEmbedder)
 
 
 def _insert_snapshot(
@@ -95,6 +144,7 @@ def test_edit_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    _stub_embedder(monkeypatch)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -142,6 +192,7 @@ def test_edit_screen_ctrl_n_with_generic_browser_controller_does_not_open_but_no
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: webbrowser.GenericBrowser("w3m"),
     )
+    _stub_embedder(monkeypatch)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -187,6 +238,7 @@ def test_edit_screen_ctrl_n_headless_notifies_without_opening(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    _stub_embedder(monkeypatch)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:
@@ -225,6 +277,7 @@ def test_edit_screen_ctrl_n_with_no_link_under_cursor_notifies_clearly(
         "lode.tui.screens._link_open.webbrowser.open",
         lambda url: opened.append(url),
     )
+    _stub_embedder(monkeypatch)
 
     async def _drive() -> bool:
         async with app.run_test() as pilot:
@@ -423,6 +476,7 @@ def test_capture_screen_ctrl_n_on_a_link_opens_it(
         "lode.tui.screens._link_open.webbrowser.get",
         lambda *a, **kw: _FakeGuiBrowser(),
     )
+    _stub_embedder(monkeypatch)
 
     async def _drive() -> None:
         async with app.run_test() as pilot:

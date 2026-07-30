@@ -97,6 +97,8 @@ timeout = 120
 markers = [
     "slow: real model-load cost (the FastEmbedCrossEncoder reranker or the live eval Q&A leg), not just more assertions — excluded from the fast inner-loop (`nox -s unit` / `pytest -m 'not slow'`), always included in the full suite (`nox -s tests`, the landing gate).",
     "network: this test deliberately reaches real, un-mocked Anthropic SDK / network machinery (lode-85q) — the explicit, greppable escape hatch from tests/conftest.py's autouse network+LLM-client guard. Every other test fails loudly, not silently, if it ever falls through to a real network call or a real anthropic.Anthropic() construction.",
+    "trips_network_guard: this test TRIPS tests/conftest.py's network/LLM-client guard on purpose and catches the raise itself, so it consumes the recorded violation instead of failing on it in teardown (lode-sx17). NOT an escape hatch — the guard still fires and still blocks the call; use @pytest.mark.network for a test that needs the call to actually go out. Checked for staleness in both directions: a marked test that trips nothing also fails.",
+    "real_embedder: this test needs the genuine lode.embedding.FastEmbedEmbedder, not tests/conftest.py's autouse offline stub (lode-7ypf) — for a test asserting on what the installed fastembed/huggingface_hub itself does. Does NOT relax the socket guard: use it for a test that is hermetic by other means (e.g. HF_HUB_OFFLINE=1 against a cold $LODE_HOME); reach for network/slow if the call must actually go out.",
 ]
 
 [tool.setuptools_scm]

@@ -4,6 +4,20 @@
 when the build reaches the feature that forces it. The tunable parameters several of these reference
 are catalogued in [configuration.md](configuration.md).
 
+**This file is a dated log, not a living doc — an entry is never edited in place when later work
+makes it stale.** An entry records a decision (or a finding) as it stood at the time; when something
+later invalidates part of it, the correction is a **new entry, or a marker appended to the existing
+one**, never a silent rewrite. Every such marker opens with one fixed lead-in —
+`**Update (<id>[, <date>])`, asterisks included, the id never wrapped onto the next line — so
+`grep -n '\*\*Update (' docs/decisions.md` finds every stale claim in this file. What follows the
+lead-in is free prose; only the lead-in is load-bearing. Where no ticket owns the correction, the id
+slot takes whatever does (a bare date, or `maintainer decision`). The rule binds markers that point
+*backwards* at another entry; an entry narrating its own history in one pass ("settled X, then
+re-decided Y") is prose, not a marker, and is left alone. Contrast this with an
+*operational* doc like [`.claude/skills/land/SKILL.md`](../.claude/skills/land/SKILL.md), which
+describes current behavior and so *is* corrected in place — there is no history to preserve there,
+while erasing it here would lose the record of what was believed, and when.
+
 - **External refresh: on-access revalidation vs. scheduled background refresh.** Leaning
   **on-access with a short TTL cache** for a single instance with finite API quota — but it's
   really a per-source judgment (a closed ticket changes rarely; an active PR changes hourly).
@@ -368,11 +382,11 @@ are catalogued in [configuration.md](configuration.md).
   rebuilds one every review — a few extra seconds per review, not a correctness issue. (2)
   `metadata.review_worktree` is now vestigial for the reviewer and the rebase pickup — neither opens it
   — but it is **not** removed from the hand-off: `/land`'s worktree GC still keys off it to reclaim the
-  builder's local worktree after a clean land, so the builder keeps recording it. **(Superseded by
-  lode-h1vn, below: that GC loop is deleted, so `review_worktree` is now vestigial outright — recorded
-  by the builder, read by nobody. The builder's worktree is still reclaimed after a clean land, but by
-  the backstop sweep, which discovers it from `git worktree list` instead.)** `/code`'s step-1
-  stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
+  builder's local worktree after a clean land, so the builder keeps recording it. **Update (lode-h1vn)
+  — superseded, below: that GC loop is deleted, so `review_worktree` is now vestigial outright —
+  recorded by the builder, read by nobody. The builder's worktree is still reclaimed after a clean
+  land, but by the backstop sweep, which discovers it from `git worktree list` instead.** `/code`'s
+  step-1 stranded-review guard is re-keyed onto `metadata.review_head` instead (the field the reviewer
   actually consumes). (3) Uncommitted work left in the builder's worktree is now structurally invisible
   to the reviewer (it never opens that worktree at all) — accepted because the builder's hand-off
   contract already requires a clean tree before recording `review_head` (lode-tpt); if that contract is
@@ -492,9 +506,9 @@ are catalogued in [configuration.md](configuration.md).
   "Tools: All tools" label for both subagent types is not a reliable guide to their actual runtime tool
   surface.
 
-  > **SUPERSEDED (lode-rlyx, 2026-07-27) — `/code` no longer invokes the workflow at all. Everything
-  > from here down to the lode-rlyx update at the end of this thread is the record of a design that was
-  > shipped and then removed; read that update before relying on any of it.**
+  **Update (lode-rlyx, 2026-07-27) — superseded: `/code` no longer invokes the workflow at all.
+  Everything from here down to the lode-rlyx update at the end of this thread is the record of a
+  design that was shipped and then removed; read that update before relying on any of it.**
 
   **Rescoped design (shipped): the orchestrator runs the workflow, the reviewer consumes its output as
   input.** `.claude/workflows/correctness-review.js` (FIND — one agent per correctness dimension:
@@ -556,8 +570,9 @@ are catalogued in [configuration.md](configuration.md).
   single-pass recall caveat **lode-p5gf**.
 
   **The decision: parity with `/code-review` is NO LONGER the bar — this supersedes the paragraph
-  above.** *(Itself since SUPERSEDED by the lode-rlyx update at the end of this thread — the wiring
-  described in this paragraph no longer exists; "supersedes the paragraph above" was not terminal.)*
+  above.** **Update (lode-rlyx) — superseded by the lode-rlyx update at the end of this thread: the
+  wiring described in this paragraph no longer exists; "supersedes the paragraph above" was not
+  terminal.**
   correctness-review is wired as an **additive backstop**: Phase 2 folds its survivors into
   the reviewer's dispatch as pre-computed candidates, and the `code-reviewer`'s own hand-reasoned pass
   runs regardless of whether the workflow ran, errored, or returned nothing. A recall miss therefore
@@ -823,9 +838,9 @@ are catalogued in [configuration.md](configuration.md).
   not just the last one, and it removes the trust boundary (and the path-validation guard that boundary
   would otherwise need). It cannot touch the **builder's** worktree: that is branch-named
   `worktree-agent-*`, never `land/<id>--*`, so the filter skips it by construction and `/land`'s
-  `review_worktree` GC still finds it. **(Superseded by lode-h1vn, below: `/land` reclaims the
-  builder's worktree via its backstop sweep now — the `review_worktree`-keyed loop is deleted. The
-  guarantee is unchanged; only the mechanism is.)**
+  `review_worktree` GC still finds it. **Update (lode-h1vn) — superseded, below: `/land` reclaims
+  the builder's worktree via its backstop sweep now — the `review_worktree`-keyed loop is deleted.
+  The guarantee is unchanged; only the mechanism is.**
 
   Two `git` behaviours this depends on, both verified live: `rtk` reformats `worktree list --porcelain`
   and breaks the field parse, so the reclaim uses **plain `git`** (same hazard as lode-9j7); and the
@@ -1438,8 +1453,9 @@ are catalogued in [configuration.md](configuration.md).
   present.** This decision is scoped to the `jq`-availability question only, per the ticket's own
   design text ("Do not change lode-o29m's regex or its guard's matching logic") — the settled
   `lode-o29m` deny/allow surface (tracker-write verbs, the implicit-POST fields, the read-only
-  exemptions) is unchanged. **Superseded for the matching *shape* (not the `jq` question) by the
-  `lode-9mbt` entry below**, which inverts that surface from a denylist to an allowlist.
+  exemptions) is unchanged. **Update (lode-9mbt) — superseded for the matching *shape* only, not for
+  the `jq` question.** The `lode-9mbt` entry below inverts that surface from a denylist to an
+  allowlist.
 
 - **The `bd create --deps blocks:` guard collapses backslash-continuations, and deliberately
   OVER-matches on `;`/`&`/`|` (lode-m6px, portability fix lode-9gm2).** The guard's regex is
@@ -2156,12 +2172,13 @@ are catalogued in [configuration.md](configuration.md).
   prevent. Documented in
   [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
   and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
-- **The "qualifies by construction" / "no dedicated cleanup" claim above is falsified by lode-nt98,
-  and lode-qv5t (2026-07-20) closes the gap it left open.** Everything above this entry reasoned about
-  `land-review`'s scratch worktree correctly on the axis it was checking (correctness — a non-isolated
-  dispatch could dirty the lander's tree) but rested the *worktree-GC* claim ("HEAD never diverges …
-  qualifies by construction") on an assumption lode-nt98 falsified after this entry was written: the
-  harness's `isolation: "worktree"` hand-off does not reliably start a dispatched agent at `origin/trunk`
+- **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
+  cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
+  entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
+  (correctness — a non-isolated dispatch could dirty the lander's tree) but rested the *worktree-GC*
+  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified
+  after this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably
+  start a dispatched agent at `origin/trunk`
   HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
   *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
   worktree handed to it starts with `HEAD` already diverged from `origin/trunk`, before `land-review` ever
@@ -2522,3 +2539,232 @@ are catalogued in [configuration.md](configuration.md).
     still read "disagree with the currently configured enrichment_llm" — accurate as shorthand for
     "enrichment identity," and changing it risked nothing but test churn for no behavioral gain; the
     docstrings on both functions spell out the provider leg for anyone reading the code.
+
+- **2026-07-29 (lode-sx17) — the test network guard stopped depending on luck; `HF_HUB_OFFLINE`
+  declined, `HF_HUB_DISABLE_TELEMETRY` adopted.** `tests/conftest.py`'s autouse guard (lode-85q)
+  failed a test that touched the network by raising `pytest.fail()`, whose `_pytest.outcomes.Failed`
+  is a `BaseException`. That choice was made deliberately, to clear `lode.worker.run_one`'s
+  `except Exception` — but it was *also* doing unplanned work: clearing third-party best-effort
+  swallows it was never designed for. `huggingface_hub`'s `utils/_detect_agent.py` fetches an
+  agent-harness registry from the Hub while building the headers for **every** Hub request, and
+  wraps the load in `except Exception` (with a second one inside the fetch), on the stated contract
+  that "detection must never make a process fail". A `BaseException` clears both today; nothing
+  obliges them to keep it that way, and one `except BaseException` on their side would have made
+  that egress permanently **invisible** rather than merely non-failing.
+  - **Decided: two independent layers, not one.** Cutting the known egress site and hardening the
+    guard are different jobs — the first removes an egress, the second removes the *class* of
+    silent failure — and doing only the first would have left the next such library site to be
+    discovered the same way this one was (by reading an installed package, off the back of an
+    unrelated review).
+  - **Layer 1, source cut — `HF_HUB_DISABLE_TELEMETRY=1`, adopted.** Set **process-wide**, at
+    `tests/conftest.py` module level, so it lands before anything imports the hub.
+    `@pytest.mark.network` deliberately does **not** lift it, for two reasons: it *cannot* (the hub
+    freezes the env into a module constant at import, so a per-test `monkeypatch.setenv` is a no-op
+    against an already-imported hub — the same import-time-freeze trap as rich's `Console`,
+    lode-kq4v), and it need not — the var suppresses telemetry, not Hub access, so a `network`-marked
+    test that genuinely needs a Hub call still works with it set.
+  - **`HF_HUB_OFFLINE=1` — declined.** It would also stop the registry fetch, but it disables the
+    Hub outright, breaking two things that reach it legitimately: the `@pytest.mark.slow` reranker
+    tier's one-time cold-cache weights download (the deliberate exception `tests/conftest.py`'s
+    module docstring records, lode-gmo/lode-pql) and any `@pytest.mark.network` test needing a real
+    Hub call. `HF_HUB_DISABLE_TELEMETRY` costs nothing functional by comparison: verified against
+    the installed huggingface_hub 1.24.0, it is read in three places, of which two are functional —
+    the user-agent enrichment and a fire-and-forget telemetry ping — the third being
+    `_runtime.py`'s `dump_environment_info`, which only prints it in the `huggingface-cli env`
+    bug-report dump. (Stated exactly so re-running the grep matches the claim: an earlier draft
+    said "exactly two", which would have sent a future auditor re-deriving the whole
+    justification to find out the claim was merely imprecise rather than stale.)
+  - **Layer 2, the actual fix — record, then raise.** Both guards now append the violation (plus the
+    stack captured at interception) to a process-global list *before* calling `pytest.fail`, and the
+    autouse fixture's teardown fails the test on anything left unconsumed. The raise still gives the
+    immediate, well-placed traceback; the record is what survives a caller that swallows it. This is
+    strictly a *reporting* fix — the connect was always blocked either way.
+  - **It also closes a limit this file's predecessor prose called permanent.** `tests/conftest.py`
+    claimed a connect made off the main thread "prevents the call but cannot itself fail the test",
+    and that "lode makes no such calls today". The second half was already false when written
+    (lode-fr3p/lode-7ypf: a Textual worker reaching `asyncio.to_thread` in the related-notes panel),
+    and the first is no longer true — the teardown check reads the record regardless of which thread
+    appended it. Corrected in place there and in [`onboarding.md`](onboarding.md). A **subprocess**
+    connect remains out of reach, and is now the only stated limit.
+  - **Residual, accepted: attribution, not detection.** A record appended after its own test's
+    teardown — a straggler worker outliving the test that started it — is blamed on whichever test
+    is running when it is next checked. Every message therefore carries the interception-time stack,
+    and says in as many words to trust that stack over the test name. Detection is not affected;
+    only the label on it is.
+  - **`@pytest.mark.trips_network_guard`** (new) is how a test that trips a guard *on purpose*
+    consumes its own record. It is checked in **both** directions — a marked test that trips nothing
+    fails too, because a marker that has stopped being needed silently disables the backstop for
+    that test.
+
+- **2026-07-29 (lode-7ypf) — the unstubbed-`FastEmbedEmbedder` leak class closed with ONE autouse
+  stub, scoped by the socket guard's own predicate.** Not planned for this branch: it was forced by
+  the lode-sx17 entry above. The moment the network guard stopped depending on nobody swallowing its
+  raise, this leak stopped being stderr noise and became an intermittent gate failure — 3 of 3
+  full-suite runs under artificial CPU load went red, and 1 of 2 on an idle machine, in
+  `test_tui_browse_screen.py`, `test_tui_quit.py`, `test_tui_capture_save_and_new.py` and
+  `test_tui_reconcile_screen.py`. The captured interception stack named the path every time:
+  `RelatedNotesPanel._search_related` → `asyncio.to_thread` → `find_related_notes` → `embed_query`
+  → `_load` → `resolve_model_revision` → `huggingface_hub.model_info` → httpx → `socket.connect`,
+  from a `concurrent.futures` worker thread. So lode-sx17 could not land without it.
+  - **Decided: an autouse stub, not ~40 hand-patched call sites.** lode-7ypf's own acceptance left
+    the choice open and asked for one or the other, deliberately, not both. Six test modules had
+    already written the same `_StubEmbedder` for themselves and ~35 more call sites had not; a
+    convention that must be remembered at every new `TextArea` test is the thing that failed here.
+    The local stubs are **left in place** — several count constructions or record calls, which is
+    the point of the test they belong to, and a test's own `monkeypatch.setattr` runs after the
+    fixture's and so still wins.
+  - **Scope = `_egress_guard_applies`, a predicate now shared with guard 2**, rather than a second
+    marker list that could drift. The stub exists only to remove egress the socket guard would
+    otherwise block, so the set of tests it covers *must* be the set that guard polices: a test
+    allowed to reach the network (`network`) or to load a real model (`slow`) gets the real class.
+    One predicate is what makes that true by construction instead of by two lists agreeing.
+  - **Both call-time bindings are patched**, `lode.embedding` (what the deferred imports in
+    `RelatedNotesPanel._ensure_embedder` and `lode.cli` resolve against) and
+    `lode.tui.services.related` (its own import-time binding, used by `find_related_notes`'s
+    `embedder or FastEmbedEmbedder(settings)` fallback). No test reaches the second today; it is a
+    live production path one test away from leaking the same way, and patching one binding but not
+    the other is the half-fix that gets rediscovered.
+  - **`@pytest.mark.real_embedder` (new) is the opt-out, with exactly one user:** the canary that
+    pins the *installed* fastembed's exhausted-sources error string (`tests/test_cli.py`). It
+    deliberately does **not** reach for `slow`/`network` — it is hermetic via `HF_HUB_OFFLINE=1`
+    against a cold `$LODE_HOME`, and the socket guard staying on is part of what it asserts.
+  - **The stub mirrors the whole duck-typed surface, not just the two `Embedder` protocol methods.**
+    lode probes `warm()` (`lode models pull`) and `model_revision()` (`_embedder_model_revision`,
+    for vector provenance) by `hasattr`. Omitting either does not fail loudly — it silently routes
+    the code under test down the *absent-method* branch, which production never takes.
+  - **Verified:** 5 consecutive full-suite runs under the same 20-spinner CPU load that had produced
+    3 of 3 failures, all green, no "Task exception was never retrieved". Pinned by four tests in
+    `tests/test_network_guard.py` (kept there because the stub's scope is *defined by* the guard's),
+    each proven against a sabotage. Two of those tests were themselves caught being order-dependent
+    by their own sabotage — a module first imported *inside* a test body binds the already-patched
+    value and asserts nothing — and now import at module scope so collection binds them first.
+  - **Not fixed here, and still worth fixing: lode-dj6m**, the product-side defect underneath
+    (`FastEmbedEmbedder._load` resolves the HF revision eagerly even on query-only paths). This
+    entry removes the *test*-side exposure only. The real `lode` binary still pays that round-trip.
+
+- **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
+  widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
+  while landing lode-25xp: `/land`'s backstop sweep reported `not-merged=8` out of 14–18 worktree
+  directories under `.claude/worktrees/`, and none of them were the single dirty-worktree residual
+  lode-9hgu already accepted.
+  - **The size motivation was inflated ~3x and re-measured.** Per-worktree `du -sh` counts `venv/`
+    bytes that are hardlinked across every worktree, the main venv, and the uv cache — removing one
+    worktree frees none of them. The only honest number is the sum of files with link count == 1
+    (bytes that actually disappear on `rm`): **~940MB** across the target class (clean, not-merged,
+    unlocked `worktree-agent-*`), not "the bulk of 2.2GB" as first measured. **Any future size claim
+    in this area must use the unshared-bytes method**, not per-dir `du -sh` (which overstated by
+    ~7x here) or even `du -sh --count-links` (which overstates the opposite direction by counting
+    shared bytes as if every worktree owned them outright). The real disk hog on this machine is
+    `~/.cache/uv` (3.1GB) and `~/.cache/pip` (1.0GB), which no worktree GC touches and which stayed
+    explicitly out of this ticket's scope.
+  - **Item-4 check, done FIRST as the note demanded, before widening anything:** three
+    clean+merged+unlocked worktrees flagged on 2026-07-28 as "the existing sweep should already
+    reclaim these" (`agent-a4b712b9130603520`/`land/lode-s1ia`, `agent-aa13e76dcfffb28f6`/
+    `land/lode-sdjb`, `agent-aa5d13f2d86731578`/`land/lode-rfon`) were **re-checked on 2026-07-29 and
+    are gone** — `git worktree list --porcelain` no longer lists any of them. Confirms this was a
+    timing gap (the sweep simply hadn't run since they merged), **not a live predicate bug** in the
+    existing merged-into-trunk reclaim path. Widening was safe to proceed with.
+  - **Three options were on the table; (a) was chosen:**
+    (a) widen `/land`'s existing Section 4 sweep to also reclaim clean, not-merged
+    `worktree-agent-*` worktrees; (b) a separate machine-local `/gc` entry point; (c) `/sweep`
+    surfaces the leak with a charter amendment. **(c) rejected**: `/sweep`'s own charter says
+    "surface only, never act" and its dedup is a durable **cross-machine** digest issue — but a
+    worktree leak is **machine-local**, a genuine design mismatch (a leak on machine A would surface
+    as a phantom item on every other machine's digest), not merely a scope question. **(b)
+    rejected**: a new entry point nobody runs automatically costs more than it buys when (a) is
+    available at near-zero marginal cost — `/land`'s Section 4 already enumerates every worktree and
+    already computes the bucket counts every pass, on the one machine that's the right machine to
+    run this. **(a) chosen**: smallest change, no new skill, no charter conflict, and the sweep
+    already runs unattended via `/loop 5m /land`.
+  - **Mechanism: reclaim the DIRECTORY, keep the branch REF.** `/land`'s existing sweep coupled
+    `git worktree remove --force` with `git branch -D` unconditionally; for a clean worktree those
+    are separable — any commits the build made stay reachable via the surviving
+    `worktree-agent-*` ref. Scoped via a `case "$BR" in worktree-agent-*)` guard in the loop's
+    not-merged branch (`.claude/skills/land/SKILL.md` Section 4) — every other not-merged shape (a
+    `land/<id>`-branched reviewer/rebase-pickup worktree, a detached worktree, anything else) is
+    completely unaffected.
+  - **Verified before shipping (acceptance criterion 3): removing the directory while keeping the
+    ref loses no reachable commits, INCLUDING the detached-HEAD case — by construction, not by
+    testing luck.** A detached worktree's porcelain `branch` field is always empty, and the `case`
+    pattern `worktree-agent-*)` can never match an empty string — so a detached worktree structurally
+    cannot enter this reclaim path at all; it always falls to the unchanged default arm (kept, dir
+    and all). The new path is therefore only ever reachable for a worktree that DOES have an
+    attached branch, which is exactly the case the "keep the ref" argument covers. No rescue-ref
+    dance is needed because the case that would need one is provably unreachable here.
+  - **Accepted residual: a dir-only-reclaimed branch ref persists indefinitely.** Nothing in this
+    design ever deletes it — an abandoned/bounced branch, by definition, never merges into `trunk`,
+    so the third bare-ref backstop's own `merged`-into-`trunk` guard (below) never fires for it
+    either. A lightweight ref costs near-nothing next to the ~100MB directory it used to anchor;
+    if the accumulation of such refs is ever material, a future ticket can add an explicit
+    age-based ref sweep for this specific case. Out of scope here.
+  - **Corollary for an INTERRUPTED build whose commits were never pushed** (the shape this very
+    ticket's own build hit — a producer killed by three API 500s, `origin/land/<id>` nonexistent, bd
+    notes saying "DO NOT DELETE"): its worktree is a clean-or-dirty `worktree-agent-*` like any other,
+    so if it is clean and ages past the floor, the sweep reclaims the DIRECTORY out from under a
+    resume that was told to reuse it. Nothing is lost — the commits are on the kept ref — but the
+    recovery is not automatic and is worth stating once: re-materialize with
+    `git worktree add .claude/worktrees/<name> worktree-agent-<name>`, then resume in it. A build with
+    UNCOMMITTED work is never in this position at all; the dirty-tree guard keeps it (lode-9hgu).
+  - **Guard against eating an in-flight build: an AGE FLOOR on the worktree's last commit
+    (`LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS`, default 21600s/6h), not the lock start-token check.**
+    The ticket's own text suggested preferring the token check as "a stronger liveness signal than
+    age alone" — it is, but it is unavailable for exactly the case that matters here.
+    `.claude/agents/coding.md` unlocks its build worktree immediately after its FIRST commit
+    (lode-oqr), and the entire rest of a build's cycle — more edits, gates, more commits, push,
+    hand-off — runs UNLOCKED and NOT-MERGED from that point on. A `git worktree lock` reason (and
+    the pid/start token in it) exists ONLY while the worktree is actually locked; once unlocked,
+    that information is simply gone, so there is nothing left to compare a token against for the
+    entire window this widening targets. A worktree that is unlocked, not-merged, and momentarily
+    CLEAN (the instant between one commit and the build's next edit) is otherwise indistinguishable
+    from a genuinely abandoned one using anything `git worktree list --porcelain` exposes. Age of
+    the last commit is the only signal that remains, and it fails SAFE in the direction that
+    matters: a build still actively cycling has a recent `HEAD` commit almost by construction, so a
+    generous floor skips it every time — at the cost of a genuinely idle worktree waiting a few
+    extra hours to be reclaimed, which costs nothing since the branch ref (see above) is never lost
+    either way. 6 hours was chosen as comfortably longer than any single producer build-to-hand-off
+    cycle (typically well under an hour per `.claude/agents/coding.md`'s own cycle), while still
+    reclaiming space same-day. **The age floor is a stopgap, not the ceiling of what is possible** —
+    recorded so a future reader does not have to rediscover it. The deeper fix is a liveness marker
+    that outlives the lock: an agent (or the harness) touching a per-worktree heartbeat file for as
+    long as a session still holds it would let the sweep separate "idle 6h because abandoned" from
+    "idle 6h because between commits" exactly, instead of guessing from commit age. Not built here —
+    it touches the producer/harness session lifecycle, well outside `/land`.
+  - **Criterion 6 answered: the lock IS per-session, not per-agent, and the resulting leak class is
+    fixed here, folded in per the human note (not split into a separate ticket).** Confirmed live:
+    raw `.git/worktrees/<name>/locked` reasons showed 3 of 4 (and, in the original 2026-07-28
+    measurement, 4 of 5) locked worktrees sharing ONE pid — the harness/session process, not a
+    per-agent one. Since `locked` is tested first, ahead of every other predicate, a dead session
+    leaked every worktree it had ever locked, forever. Fixed by `scripts/worktree-lock-stale.sh`
+    (tested: `tests/test_worktree_lock_stale.py`, 9 cases against real processes and real
+    `/proc/<pid>/stat` files, no mocking): a lock is treated as stale iff `kill -0 <pid>` fails, OR
+    the pid is alive but `/proc/<pid>/stat`'s own `starttime` (field 22, robustly extracted via the
+    LAST `)` in the line — `comm` can itself contain parens/spaces) no longer matches the `start
+    <token>` the harness recorded at lock time (pid reuse). This closes the reuse hazard that makes
+    plain `kill -0` alone unsafe, without resorting to a wall-clock window — unlike
+    `scripts/land-lock.sh`'s OWN staleness window, which exists because ITS recorded pid is a single
+    Bash tool sub-invocation, structurally always-dead by the time a later invocation reads it (pid
+    liveness is meaningless there); the pid recorded in a `git worktree lock` reason is the long-lived
+    session process, so liveness IS a meaningful signal once the reuse hole is closed. A lock this
+    script cannot positively prove dead is left alone (fail closed) — getting this wrong in the other
+    direction risks exactly what lode-oqr already cost once: destroying a live build's worktree. NOTE
+    on drift: the original 2026-07-28 measurement said "4 of 5 share one pid (1105248)"; that pid was
+    gone by 2026-07-29 (a different session), and the sharing was then 3-of-4 under a different pid.
+    The PATTERN held, the specific numbers did not — do not hard-code any pid or count.
+  - **Adjacent observability defect, also fixed here (folded into the same ticket per its own
+    scope): the two bare-ref backstops (`land/*` orphans and `worktree-agent-*` orphans) now report
+    only deletions that ACTUALLY happened.** OBSERVED live: a prior pass printed "backstop2: deleting
+    stale local ref land/lode-rlyx--agent-aad6b30a923856fb7" while the ref still existed afterward —
+    `git branch -D` had refused it (still checked out in a locked worktree) and the trailing `|| true`
+    swallowed that failure silently. Same class of bug lode-bns3 already fixed for the main worktree
+    loop (counting an attempt rather than the remove's real exit status), now applied to the two
+    backstops that had missed it. Fixing this also required switching both loops from a trailing pipe
+    (`git for-each-ref ... | while read -r BR; do ...; done`) to process substitution
+    (`< <(...)`) — a counter assigned on the right side of a pipe runs in a subshell and is lost the
+    moment the loop ends, so the old shape could never have reported real counts even with the exit-
+    status check added; the new shape (matching the main worktree loop's own already-correct
+    convention) makes the counters actually survive to the summary echo.
+  - **Full mechanism lives in code + tests, not restated at length here:**
+    `.claude/skills/land/SKILL.md` Section 4 (the widened loop + both backstop fixes),
+    `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
+    (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
+    (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).

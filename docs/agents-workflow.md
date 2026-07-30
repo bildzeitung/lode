@@ -286,6 +286,10 @@ stopped (a build- or review-time escalation) and why.
 > worktree's own venv (`./scripts/python-init.sh` from inside it) rather than reusing the main
 > checkout's — the preflight is a backstop for the times that rule gets forgotten, not a
 > replacement for following it.
+>
+> **Activating that venv is a separate problem again** — the isolation guard refuses the sourced
+> `. ./venv/bin/activate` outright, so agents gate by explicit path instead. See
+> [Gating from an isolated worktree](#gating-from-an-isolated-worktree-lode-6874) below.
 
 ```mermaid
 flowchart TD
@@ -336,6 +340,65 @@ flowchart TD
     class BAIL,FIX,RESET bad;
     class MARKL,DONE good;
 ```
+
+### Gating from an isolated worktree (lode-6874)
+
+**Agents gate with `rtk ./venv/bin/nox -t fix` / `-s tests`, and never activate the venv at all.**
+The isolation guard refuses any command that sources a file (`. ./venv/bin/activate` — "runs a
+string through `.`, which can't be verified to stay inside the worktree"), so the once-documented
+`./scripts/python-init.sh && . ./venv/bin/activate` was unrunnable by the very agents the docs
+address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
+none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
+refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+
+**Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
+for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
+activation used to be what pointed ruff/pytest at this checkout rather than another's (the lode-jh80
+hazard above). `_venv_tool()` now resolves ruff/pytest/shellcheck/python under the `./venv/bin`
+beside `noxfile.py` itself, so pytest imports *this* checkout's `src` whatever `PATH` holds —
+enforced by `tests/test_noxfile_venv_tool.py`, not left to convention.
+
+**Verified empirically from a worktree-isolated dispatch, not inferred** — the question had already
+survived two review attempts on inference alone. The guard *accepts* `rtk ./venv/bin/nox …` and
+*refuses* `. ./venv/bin/activate`; un-activated `-s tests` runs 2096 tests green with
+`tests/conftest.py`'s lode-jh80 guard 0 satisfied; `-t fix` resolves the venv's ruff over a stale
+ambient `~/.local/bin/ruff` that sat ahead of it on `PATH`.
+
+**A missing or half-built venv already fails unmistakably, so the lode-9i2p exit contract needs no
+extra machinery here.** A `./venv/bin/nox` that does not exist exits **127** naming the missing path
+— a code no content failure produces, so it cannot be mistaken for a verdict on a branch — and
+naming the *binary* rather than `venv/bin/activate` is what makes the half-built case fail too
+(`scripts/python-init.sh` writes `activate` first and installs nox, the unlocked `dev` extra, several
+steps later). Once `nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries the contract. Either
+way the remedy is one command the agent can run itself: `./scripts/python-init.sh`.
+
+**One residual skew, verified and deliberately not papered over.** A branch whose base predates
+lode-0yfn has a `noxfile.py` without `_venv_tool()`, so `rtk ./venv/bin/nox -s tests` on it dies with
+`Program pytest not found` — measured, not inferred, on this ticket's own branch. It fails *loudly*
+and cannot produce a false PASS, which is the property that matters; the set is also shrinking, since
+every new worktree branches from `origin/trunk` and so always carries `_venv_tool()`. The
+guard-friendly fallback for such a branch is `rtk ./venv/bin/pytest` directly — a plain command, and
+`tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
+base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
+not the general problem, which is lode-828x's subject.
+
+**Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
+grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
+falls to the explicit-path form above. The "cd to the checkout root" value that looked like a residue
+is nil too: the wrapper would have been invoked as `rtk scripts/nox.sh`, a relative path presupposing
+exactly the cwd it was meant to establish. What a committed wrapper *does* add is a base-skew problem
+with a long tail — every branch already in flight predates the new file, so the documented gate
+command exits 127 on all of them, which then needs a restore/undo dance in both agent files whose
+undo rests on a `HEAD` oracle a red-gate commit loop can poison. Paying that to improve an error
+message on a condition that already exits 127 is a bad trade, so the wrapper was dropped.
+
+**`CLAUDE.md` keeps the activation form on purpose, and the agent files say so.** Its
+Python-environment section addresses a human at a terminal and the main session — neither is
+worktree-isolated — so `. ./venv/bin/activate` plus a bare `nox` is correct there and stays. But
+`CLAUDE.md` is loaded into every dispatched subagent's context too, so an isolated agent holds both
+forms at once; rather than hoist an agent-only rule into the project-wide file, `coding.md` and
+`code-reviewer.md` each state outright that their explicit-path rule **overrides** that section. The
+audience split is the reason the two texts differ, not an oversight in either.
 
 ### Recycled-worktree guard (lode-nt98)
 
@@ -1345,6 +1408,99 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
+
+**No fenced `bash` block in a `SKILL.md` may depend on shell state from another.** An agent executing
+a skill runs each fenced `bash`-tagged block as its own, separate Bash tool invocation — nothing
+carries over between them: not variables, not arrays, not function definitions, not `trap`s, not `set -e` /
+`set -o pipefail`, not background jobs. Anything one block needs from an earlier one is either
+**re-derived** (cheap, deterministic — e.g. `$(git rev-parse --git-dir)`, or re-running a fast,
+idempotent script/query) or **persisted to a file** that a later block reads back. Logic shared by two
+call sites belongs in `scripts/`, never in a bash function defined in one block and called from
+another.
+
+**Persisting carries two obligations, and both have been forgotten at least once each.** A file path
+that a later block can re-derive is necessarily a *fixed* path, and a fixed path **outlives the run
+that wrote it** — so (a) **wipe it at the start of every pass** (`rm -rf "$DIR" && mkdir -p "$DIR"`,
+as `/land`'s `$STATE_DIR` and `/sweep`'s `$SWEEP_TMP` both do), or a skipped write silently serves the
+*previous* pass's data, which is worse than the crash it replaced; and (b) **assert on load** and
+abort loudly, because a zero-iteration loop over an empty file exits 0 and is indistinguishable from a
+clean pass with nothing to do. `lode-x495` shipped `/release`'s `NOTES_FILE` on a fixed path without
+(a), which would have let a skipped notes-write publish the last release's notes as this one's — the
+`[ ! -s ]` guard in `scripts/release.sh` catches *absent*, never *stale*.
+
+This rule was first stated as `.claude/skills/land/SKILL.md`'s own governing rule (`lode-sfnb`); it
+lives here now, repo-wide, because the bug class is not land-local (`lode-x495`) — `land/SKILL.md`
+still states the rule at its own top, but points here as the source of truth rather than duplicating
+the rationale.
+
+**Why this needs a mechanism rather than an instruction.** `lode-sfnb`'s incident is the proof: Section
+3a of `land/SKILL.md` used to populate a `declare -A MSG` associative array that Section 3's merge
+loop, a separate fenced block, read back. By the time the loop ran, `MSG` was empty, and `git merge -m
+''` failed with **completely empty stdout and stderr** — no error message pointed at the cause
+(OBSERVED, 2026-07-26, landing lode-ns3r/lode-1q2i/lode-sys4). The rule was already written down in
+prose at the top of the file when this shipped; prose that isn't gated erodes, exactly the way
+`land/SKILL.md` itself admitted before `lode-x495`: "this `if`/escalate structure lives in this
+markdown file, so no automated test covers a regression to it." A markdown fence is invisible to every
+other gate in this repo (`nox -t fix`, `nox -s tests`, `mypy`, …) — none of them execute or parse
+skill prose — so nothing but a dedicated test catches a regression here.
+
+**The mechanism** — `tests/test_skill_bash_state.py`, run by `nox -s tests`. It parses every
+`bash`/`sh`-tagged fenced block in `.claude/skills/*/SKILL.md` and `.claude/agents/*.md` (see
+**Scope and allowlist** below for the second root) and fails if a variable is referenced
+(`$VAR` or `${VAR...}`) in a block without also being assigned somewhere in that **same** block — the
+check is per-block, not file-wide, because a variable assigned in some *other* block is exactly the
+`$MSG` bug: real, present in the file, and still invisible to the block that uses it. **What exactly
+counts as an assignment or a use is the parser's business, and is documented once, in that file's own
+module docstring** — deliberately not re-catalogued here, where nothing would gate the prose against
+the regexes it describes. Two scope decisions do belong here, because they are policy rather than
+implementation: comments are never scanned (this codebase's skills carry heavy inline prose that
+routinely *quotes* a variable name while explaining history, which is not a use), and bash's own
+positional/special parameters plus a short, individually-justified list of operator-set environment
+variables are excluded outright.
+
+**Categories this rule names, per the ticket that first stated it:** variables, arrays, functions,
+traps, and `set -e`/`set -o pipefail`. The gate above mechanically enforces the first **two** —
+variables, and arrays with them (`declare -A MSG` registers as an assignment and `${MSG[k]}` as a use,
+which is how the original `$MSG` incident is pinned). Functions, `trap`s and `set -e` reliance remain
+**prose-only**: none has a cheap static oracle (a cross-block function call is indistinguishable from
+any other bare command without a real shell parser, and reliance on an inherited `set -e` is
+undetectable by construction). That is a narrower mechanism than the rule it backs — the same
+asymmetry `docs/conventions.md`'s "Derive identifiers, never retype them" fiat has relative to
+`sha-fabrication-guard.sh`'s 40-hex-only scope. One partial exception worth knowing: `trap` *is* gated,
+but for `land/SKILL.md` only and by a different test (`tests/test_land_lock.py`).
+
+**Scope and allowlist.** The gate covers every `.claude/skills/*/SKILL.md` — not scoped to
+`land/SKILL.md` alone, since `lode-x495` found real, confirmed instances in `/sweep` and `/release`
+that a land-only gate would leave uncovered — **and**, since `lode-lv04`, every `.claude/agents/*.md`
+too: the bug class is not skills-specific, and an agent's markdown instructions execute fenced bash
+exactly the same way, block by block, under the same harness rule. Widening was free — every agent
+file was already clean, so it cost no allowlist entry and not one byte of any agent file — and that
+the widened gate actually *catches* an agent-file regression is pinned by a permanent sabotage test
+rather than checked once by hand. The per-file measurement behind "free" lives with the parser, in
+the test module's own docstring, for the same reason the assignment/use rules do. Both roots share
+**one** allowlist, keyed by a path relative to `.claude/` (not to either root) — e.g.
+`skills/land/SKILL.md`, `agents/coding.md` — so a key is never ambiguous about which side of the
+tree it names. Alongside the file scope there is a small, per-`(file, variable)` allowlist for a
+value that is deliberately **not** amenable to either sanctioned remedy: one that is computed by the
+agent's own reasoning (a human confirmation, a set of dispatched subagent verdicts) rather than by
+any deterministic bash in the file, so there is nothing upstream to re-derive or persist from — e.g.
+`skills/release/SKILL.md`'s `$PROPOSED`, the version string a human confirms in conversation before
+Section 4 invokes `scripts/release.sh`. Every allowlist entry carries a specific, checkable reason in
+the test file itself — an entry with no reason is how this exact rot restarted once already (a bug
+fixed once in `land/SKILL.md`, then found again, unfixed, in two other skills).
+
+**There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
+on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
+ticket's risk budget. `lode-x495`'s technical review rejected that shape: it conflates *fixing* the file
+(genuinely risky, still deferred to `lode-p1r3`) with *covering* it, which costs two allowlist entries
+and not one byte of `land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves
+every **future** cross-block variable added to that file unguarded too, not just the known ones, in
+exactly the file the rule was written for. So the file is gated like every other skill, with
+`$ACCEPTED` (agent-reasoned, same "nothing upstream to re-derive from" shape as `$PROPOSED`) and
+`$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch — the entry goes inert when that lands)
+allowlisted individually, and its other 22 blocks covered. Removing those two entries is `lode-p1r3`.
+
 ### Invariants the coding loop never breaks
 
 A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents/coding.md) and
@@ -1849,6 +2005,44 @@ hazard — the leaked worktrees are clean, unlocked, and ancestors of `trunk`, s
 does reach Section 4 reclaims them under the same predicate — but the justification is "the backstop
 reclaims it, next pass at the latest," not "always this pass."
 
+### Worktree-GC widened to reclaim clean, not-yet-merged builder worktrees (lode-yrtu)
+
+The backstop sweep described above (`lode-h1vn`/`lode-amif`/`lode-9hgu`) only ever reclaimed a
+worktree whose `HEAD` had merged into `trunk` or was captured on `origin/land/<id>`. A builder's
+own `worktree-agent-*` branch is **never** pushed to origin, so once its ticket is abandoned,
+bounced, or its build simply dies before handing off, neither arm is ever satisfied again —
+nothing in the system ever revisits it, and its ~100MB worktree (dominated by a `venv/` that is
+mostly hardlinked, so `du -sh` on one worktree wildly overstates what removing it actually frees)
+leaks forever. Measured on the landing machine: 8 of 14–18 worktree directories in this bucket.
+Human decision, and the full measurement/verification trail: [docs/decisions.md](decisions.md)
+(search "lode-yrtu"). In short:
+
+- **Chosen: widen `/land`'s existing Section 4 sweep** (not a new `/gc` entry point, not `/sweep`
+  with a charter amendment — both considered and rejected, reasons in decisions.md).
+- A clean, **not-merged** `worktree-agent-*` worktree now has its **directory** reclaimed while its
+  **branch ref is kept** — `git worktree remove` without the paired `git branch -D`, so any commits
+  the build made stay reachable. lode-9hgu's dirty-tree guarantee is unchanged: a dirty worktree,
+  in this bucket or any other, is still never touched.
+- Guarded by an **age floor**, `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` (env, default **21600s/6h**),
+  on the worktree's last commit — not the lock start-token check used for the stale-lock detector
+  below, because that token only exists while the worktree is actually locked, and a build unlocks
+  right after its first commit (lode-oqr) while continuing, unlocked, for the rest of its cycle.
+  Documented here rather than in [configuration.md](configuration.md) per that page's scope note —
+  dev-tooling for the landing loop, not an application knob.
+- **The per-session lock-owner pid is confirmed stale-reclaimable too.** The harness/producer lock
+  is per-*session*: several worktrees can share one lock-owner pid, so a dead session left every
+  worktree it ever locked stuck behind the unconditional `locked` check forever. `scripts/worktree-
+  lock-stale.sh` (tested: `tests/test_worktree_lock_stale.py`) proves a lock's recorded pid is either
+  not running, or has been reused by a later process (via `/proc/<pid>/stat`'s own `starttime`,
+  matched against the token recorded at lock time) before treating it as unlocked; a lock it cannot
+  positively prove dead is left alone.
+- **The two bare-ref backstops (`land/*` and `worktree-agent-*` orphans) now report only deletions
+  that actually happened**, reading `git branch -D`'s real exit status instead of announcing one
+  ahead of the fact behind `|| true` — the same lode-bns3 treatment the main worktree loop already
+  had. Fixing the observability required switching both loops from a trailing pipe to process
+  substitution (`< <(...)`), since counters assigned inside the right side of a pipe die in that
+  subshell and never reach the summary line.
+
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
 The `/code` step-0 pickup **merges** `origin/trunk` into the kicked-back branch instead of rebasing
@@ -2153,20 +2347,62 @@ assumption would not have closed it.
   14m10s), the same order as a 600s window rather than comfortably inside it. Re-deriving the number
   against real dispatch-time data, or covering gaps (1) and (3), is **lode-cp4o**.
 
-  **Second, `acquire` is atomic but the stale-lock *reclaim* is not** — `rm`
-  then create, two steps, observed admitting two winners at 8-way contention. Unreachable under the
-  one-loop convention (a still-running pass holds a *fresh* lock, so the reclaim branch is
-  crash-recovery only), and deferred rather than closed with a nested TTL that could wedge landing
-  outright (lode-ao95). `heartbeat` does not check that it still *owns* the lock, so in that
-  two-winner state the pass that lost it keeps re-stamping the winner's record and the overlap becomes
-  self-concealing — it neither causes the overlap nor changes any verdict (no pass ever re-reads the
-  lock to confirm it holds it, before or after lode-m87j), but it erases the evidence a human would
-  spot one by; whichever of lode-ao95 or lode-cp4o lands second should add an owner token `heartbeat`
-  refuses to overwrite. **Release reaches only two sites** — Section 1's empty-queue exit and the end
-  of Section 4 — as a latency optimization; every other stop, *including the routine pass in which
-  every branch was kicked back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that
-  asks nothing of any exit site cannot rot as exits are added, the same reasoning as the pass-start
-  `reset --hard` below.
+  **Second, the stale-lock *reclaim* is now ATOMIC (lode-ao95)** — it used to be `rm` then create, two
+  separate steps, OBSERVED admitting two winners (3/40 rounds at 8-way contention). The fix gates the
+  destructive part of a reclaim (`rm -f "$LOCK"` + a fresh write) behind an `mkdir`-based token,
+  `$LOCK.reclaiming`: `mkdir` is a single atomic syscall, so exactly one racer's `mkdir` can ever
+  succeed for that path. The obvious version of that (an O_EXCL token, once, no self-heal) is exactly
+  what CAVEAT 2 originally warned would wedge landing *permanently* if its winner died between
+  creating the gate and clearing it — the fix bounds that risk with its own, much smaller staleness
+  window scoped to the gate alone (a fixed 30s constant, not `LAND_LOCK_STALE_SECONDS`, since it only
+  needs to outlast a couple of shell builtins, never a whole pass): a later `acquire` that finds an
+  abandoned gate past that window clears it and retries the `mkdir` once — and *dates* a gate it finds
+  with no timestamp, so a reclaimer killed in the one-syscall gap between `mkdir` and writing that
+  stamp cannot leave a gate nothing is able to age out (which would restore the permanent wedge in
+  full). The gate's winner also re-reads `$LOCK` immediately before touching it and reclaims **only on
+  positive proof** that it is still the same stale record — present, parseable, still past the window.
+  Treating an *absent* file as licence to proceed is itself a two-winner bug (an absent lock means a
+  reclaim is already in flight, and this racer's `rm` then destroys whichever record lands in the gap,
+  including a legitimate fresh-path acquire's): measured at 11/60 rounds at 32-way contention before
+  the check was made conservative. `acquire`'s original fresh-lock path (`write_lock`'s `noclobber`
+  create) was always atomic and is unchanged.
+
+  **What the gate does *not* close, and must not be described as closing.** The self-heal can still
+  admit two winners when a gate holder is *alive but stalled* past the 30s window between passing
+  re-validation and its `rm`+write: a later tick judges that gate abandoned, clears it, wins a new one,
+  re-validates (the lock is still the original stale record, since the stalled holder has not written
+  yet) and reclaims — then the stalled holder resumes and reclaims on top. Both exit 0; **observed, not
+  derived**. Re-validation cannot help, because the displaced holder passed it before stalling. This is
+  a bounded-risk tradeoff, and the price of self-healing at all: the alternative (never clear a gate) is
+  the permanent wedge, which is strictly worse because it needs no race to trigger. The 30s window is
+  deliberately generous — the guarded critical section is a handful of forks — and **must not be
+  reduced to "tighten" this**, since a smaller window makes displacing a live holder *more* likely.
+  Closing it properly needs the reclaimer to verify it still owns the gate immediately before the
+  destructive `rm` — the same owner-token check below.
+
+  **The lock record carries an owner token (5th field, lode-ao95) that `heartbeat` now preserves but
+  still does not verify.** It exists so a future ownership check has something to compare against: even
+  with an atomic reclaim, a pass whose lock is reclaimed out from under it (still possible under the
+  documented crash-recovery scenario — atomicity guarantees exactly one winner, not that the original
+  holder learns it lost) can keep calling `heartbeat` and re-stamp the new holder's record, turning a
+  genuine two-lander overlap *self-concealing* rather than merely non-atomic — the file looks
+  continuously fresh and names whichever pass wrote last, erasing the evidence a human would spot one
+  by. `heartbeat` (lode-m87j) reads whichever record is currently on disk and re-stamps that SAME token
+  rather than regenerating or blanking it, so the field stays meaningful across heartbeat calls —
+  lode-ao95 was built strictly against a trunk with no `heartbeat`, so this preservation is what merging
+  the two branches had to add (see the MERGE NOTE in `scripts/land-lock.sh`'s header). What it does
+  **not** do is compare that token against anything the calling pass remembers as *its own* — so a pass
+  that lost the lock still has no way to notice and still cannot refuse to overwrite a record it no
+  longer owns. Wiring that ownership check — threading each pass's own token through to its own
+  `heartbeat`/`release` calls, and refusing to overwrite on mismatch — is **lode-q9pm**, still open. The
+  standing rule that outlives this merge: **`heartbeat` must PRESERVE field 5, never regenerate or blank
+  it** — a heartbeat that mints a fresh token each tick leaves the field looking healthy while
+  destroying the only thing an ownership check can compare against.
+
+  **Release reaches only two sites** — Section 1's empty-queue exit and the end of Section 4 — as a
+  latency optimization; every other stop, *including the routine pass in which every branch was kicked
+  back `needs-rebase` or bounced*, waits the window out. Deliberate: a TTL that asks nothing of any exit
+  site cannot rot as exits are added, the same reasoning as the pass-start `reset --hard` below.
 - **Pass-start `git reset --hard origin/trunk`, not `git pull --rebase` (lode-k9ef).** Several
   "stop the pass" exits fire on a **machine** fault rather than a content red — today the 2b
   cheap-conflict precheck's `merge-tree` exit 2, `validate-mermaid.sh`'s exit 2, and
@@ -2232,6 +2468,46 @@ assumption would not have closed it.
   that hole. It was tracked separately as **lode-isl3** and did not block this change; lode-isl3 has
   since landed, and the guard now reads `origin/trunk` for both — see
   [Recycled-worktree guard](#recycled-worktree-guard-lode-nt98).
+
+  **Section 1 refuses to start unless cwd is genuinely the main checkout, checked once up front, not
+  folded into a `-C` on any individual command (lode-pcee).** The block used to run only the
+  `checkout -f trunk` through `-C "$(git rev-parse --show-toplevel)"`, on the theory that this pinned
+  it to the main checkout. It does not: `--show-toplevel` resolves relative to **cwd**, so from the
+  main checkout the `-C` just re-states the directory you're already in (redundant, not wrong), and
+  from a worktree it resolves to *that worktree's own root* — it can never redirect a command to a
+  *different* directory than the one it's already running in, because the value it computes is
+  cwd-derived in the first place. That reads as a safety guard and is not one. Worse, the actually
+  destructive line — `git reset --hard origin/trunk`, two lines later — carried no `-C` at all, so
+  run from a worktree it would hard-reset *that worktree's own branch*, discarding uncommitted work
+  there that no `reflog` recovers (unlike the discarded-commits case the reset is otherwise designed
+  around, directly above). `/land` is defined to run only in the main checkout (see the top of
+  `land/SKILL.md`), so this was latent, not live, at the time it was filed — but a latent guard that
+  gives false assurance is worse than no guard, because it looks checked. The fix is an **identity
+  check**, not a redirect: `git rev-parse --git-common-dir` returns the one `.git` directory every
+  worktree of a repo shares (main checkout included), so **only the main checkout's own toplevel is
+  that directory's parent** — a linked worktree's toplevel never is. The check is
+  [`scripts/assert-main-checkout.sh`](../scripts/assert-main-checkout.sh) — extracted rather than left
+  inline, the same reasoning as `scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh`:
+  a shellcheck'd, unit-tested script beats prose in a markdown fence that no gate parses. It computes
+  both paths, compares them, and exits non-zero with a diagnostic before Section 1 touches `bd` or
+  `git` at all on a mismatch, rather than trying to make the commands below correct from the wrong
+  starting directory. Once that assertion has passed, every command in the block runs unqualified —
+  no `-C` anywhere — because the assertion is what guarantees cwd already *is* the main checkout,
+  which a `-C` computed from cwd itself structurally cannot.
+
+  **The guard shares ONE fenced block with the commands it protects, and that is what makes it a
+  mechanism rather than an instruction.** Section 1's governing rule (lode-sfnb) runs every fenced
+  block as a *separate* Bash invocation with no state carried between them — so a guard in its own
+  block can only `exit` that block's shell, leaving "does the destructive block run next?" to the
+  lander's judgment while reading prose. That is the same strength of assurance the `-C` idiom
+  offered, and this ticket exists to delete it. As the first line of the *same* block, `|| exit 1`
+  makes `git reset --hard` **unreachable** unless the assertion passed, enforced by the shell with no
+  decision in between; nothing crosses a block boundary, so lode-sfnb is satisfied. Because
+  `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
+  `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
+  asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
+  (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
+  reordering within the block leave every other pin in that module green.
 
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).

@@ -32,21 +32,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from _gitrepo import _git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "release-latest-tag.sh"
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr}"
-    return result
 
 
 def _init_repo(tmp_path: Path) -> Path:

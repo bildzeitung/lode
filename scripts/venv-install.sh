@@ -13,6 +13,15 @@
 #
 # install_locked_venv LOCKFILE
 #   1. refresh uv itself, and pip inside the venv
+#
+#      Do NOT delete the pip refresh (`uv pip install -U pip`) as dead work
+#      like the step lode-xo99 removed: it is cosmetic, not dead (lode-hfaz)
+#      -- it does bump the venv's own pip, which suppresses pip's "a new
+#      release is available" notice the next time this step's own opening
+#      `pip install -U uv` runs. That pays off only on a repeat
+#      python-init.sh against a surviving ./venv; every from-scratch venv
+#      starts from ensurepip's bundle regardless. Full record:
+#      docs/stack.md#dependency-locking-lode-g2741.
 #   2. hash-verified runtime deps, from LOCKFILE
 #   3. the local package itself PLUS the dev extra, editable, resolved FRESH
 #      from pyproject.toml -- deliberately NOT locked. Already-installed,

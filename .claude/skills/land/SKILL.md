@@ -52,6 +52,19 @@ silent by default**, and this is the one skill that writes `trunk` — so any bl
 must also *assert it loaded* and abort loudly if it did not. A loop that iterates zero times and
 exits 0 is indistinguishable from a clean pass that had nothing to do.
 
+**This rule, and the mechanical gate that now backstops it repo-wide, are recorded once, in
+[`docs/agents-workflow.md`](../../../docs/agents-workflow.md#guard-against-cross-block-shell-state-in-skill-markdown-lode-sfnb--lode-x495)
+— that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
+`/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
+regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
+newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
+individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
+land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
+`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
+which has since landed, so the entry is now inert rather than a live violation) — both tracked
+by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+mechanically.
+
 ---
 
 ## 0. Single-lander lock — acquire FIRST, every tick
@@ -112,14 +125,50 @@ I am the heaviest bd **writer** in the system (many closes, plus bounce-ticket c
 with git merges and pushes), so I follow the bd-sync discipline strictly (see
 [bd-sync discipline](#bd-sync-discipline-non-negotiable) below). At the start of each pass:
 
+**Refuse to start unless I am actually in the main checkout (lode-pcee) — asserted once, up front,
+as a precondition of the whole block rather than as a `-C` bolted onto individual commands.**
+`--show-toplevel` resolves relative to
+**cwd**, so `-C "$(git rev-parse --show-toplevel)"` — the form this block used to run the `checkout
+-f trunk` through — is a no-op wherever it matters: in the main checkout it just re-states the cwd
+you're already in, and in a worktree it resolves to *that worktree's own root*, not the main
+checkout, so it can never redirect a command away from wherever you actually are. It reads as a
+safety guard and is not one — and the destructive `reset --hard` two lines later carried no `-C` at
+all, so from a worktree it would have hard-reset *that worktree's* branch, discarding any
+uncommitted work there with nothing in `reflog` to recover it. `--git-common-dir` is the mechanism
+that actually distinguishes the two: every worktree of a repo (main checkout included) shares one
+common `.git` directory, and only the **main checkout's own toplevel** is that directory's parent —
+a linked worktree's toplevel never is. The check is
+[`scripts/assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) — extracted rather than
+inlined so it is shellcheck'd and unit-tested against real worktree fixtures the same way
+`scripts/isolation-guard.sh` and `scripts/recycled-worktree-guard.sh` are (see its own header for the
+full mechanism and exit-code contract).
+
+**The guard is the FIRST LINE OF THE SAME fenced block as the commands it protects — never its own
+block, and this is the whole point.** Per the [governing rule](#governing-rule-no-fenced-block-may-depend-on-shell-state-from-another-lode-sfnb)
+above, every fenced block is a *separate* Bash invocation, so a guard in its own block can only
+`exit` **that** block's shell — whether the destructive block then runs is left to my judgment
+reading prose. That is exactly the strength of assurance lode-pcee exists to delete. Sharing one
+block makes `||` do the work instead: `git reset --hard` is **unreachable** unless the assertion
+passed, enforced by the shell, with no agent decision in between. Nothing here depends on state from
+another block, so the rule is satisfied — the guard is re-run from scratch, not carried forward:
+
 ```bash
+rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
 rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label/close state over refs/dolt/data
-rtk git -C "$(rtk git rev-parse --show-toplevel)" checkout -f trunk   # I land ON trunk, in the main checkout
+rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
 rtk git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
 rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
 ```
+
+**On a non-zero exit the pass stops there** — the script's own stderr already names cwd, the main
+checkout, and why (exit 1 = genuinely the wrong directory; exit 2 = a machine fault rather than a
+location verdict — `git rev-parse` could not answer at all, e.g. cwd is outside any repository, or
+the layout is one the derivation does not support such as a bare repo or a submodule; both stop the
+pass the same way, and neither is ever a reason to retry from here). Every command after it runs
+unqualified — no `-C` on any of them — because the assertion is what guarantees cwd already *is* the
+main checkout, which a `-C` derived from cwd itself never could.
 
 **Why a hard reset, not `pull --rebase` (lode-k9ef).** I am the only **agent** that writes `trunk`, so
 at pass start local `trunk` should already be bit-for-bit `origin/trunk`. The only way it legitimately
@@ -569,10 +618,10 @@ edges**, restricted to `$ACCEPTED`:
     pass:
 
     ```bash
-    rtk bd update "$id" --append-notes "HELD (/land, stacked-branch ordering): land/$id is stacked on
-    land/$B, which is not landing this pass ($B's own outcome: <bounced|escalated|needs-rebase|not yet
-    ready-for-land>). Re-evaluated automatically once $B lands or its own outcome resolves — no action
-    needed unless $B itself needs a human decision."
+    rtk bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
+    land/<B>, which is not landing this pass (<B>'s own outcome: <bounced|escalated|needs-rebase|not
+    yet ready-for-land>). Re-evaluated automatically once <B> lands or its own outcome resolves -- no
+    action needed unless <B> itself needs a human decision."
     ```
 
     (No `bd dolt push` needed here in isolation — this note rides along with the pass's other
@@ -863,13 +912,35 @@ machine. A red gate is content; exit 2 is the machine.
                               # start the replay's record from empty so Section 4 closes only what
                               # THIS loop actually keeps merged
 
-  # BASELINE before attributing anything (lode-sys4). `nox -s tests` asks a question about the tree
-  # alone, so pinning its red on "whichever branch was merged when it turned red" is sound. `nox -s
-  # lock_currency` does NOT: it asks whether the committed lock is a fixed point of the tree PLUS this
-  # machine's ambient uv PLUS today's PyPI — so it can be red with no branch involved at all (a uv
-  # release that changes the emitted format, an upstream yank, a lock that went stale on trunk itself).
-  # Establish that bare `origin/trunk` is green on it BEFORE entering the attribution loop; otherwise
-  # the loop blames — and deletes — whichever innocent branch happened to be merged first.
+  # BASELINE before attributing anything (lode-sys4, extended to cover `nox -s tests` by
+  # lode-kq4v). THE RULE, stated generally so a gate added here later inherits it instead of
+  # earning its own paragraph: NO gate this loop attributes is a pure function of the tree, so
+  # baseline EVERY one of them on bare `origin/trunk` before entering the attribution loop.
+  # Otherwise the loop blames — and deletes — whichever innocent branch happened to be merged
+  # first. This whole block is on the red/isolate path only, so a green pass never pays for it.
+  #
+  # `nox -s tests` used to be exempt, on the premise that it "asks a question about the tree
+  # alone". That premise licensed a real incident (lode-kq4v, OBSERVED landing a real pass): an
+  # ambient `FORCE_COLOR=3` in the LANDING SESSION's own shell — not set anywhere in this repo —
+  # fixed rich's colour decision at IMPORT (lode-xgaa's mechanism) and reddened 6
+  # `tests/test_cli.py` tests on a bare, unmodified `origin/trunk` with NOTHING merged. Trusting
+  # it would have bounced the first branch in `$ACCEPTED`: `bd supersede` closes its ticket, a
+  # rebuild ticket carries a FABRICATED "turned the gate red" finding, and `git push origin
+  # --delete land/<id>` destroys the reviewed branch — for a variable this repo does not set.
+  # `nox -s lock_currency` fails the same test for its own reason: it asks whether the committed
+  # lock is a fixed point of the tree PLUS this machine's ambient uv PLUS today's PyPI, so it too
+  # can be red with no branch involved at all (a uv release that changes the emitted format, an
+  # upstream yank, a lock that went stale on trunk itself).
+  rtk nox -s tests
+  #   exit 0 → attributable from here on for THIS gate: any later `nox -s tests` red IS caused by
+  #            a merged branch. Continue.
+  #   nonzero → the suite is red before any branch merged — not attributable to anything in
+  #            $ACCEPTED. Stop the pass, land nothing, surface as a human decision — and check the
+  #            landing shell's own environment for an ambient `FORCE_COLOR` / `NO_COLOR` /
+  #            `TTY_COMPATIBLE` / `TTY_INTERACTIVE` first (lode-kq4v; `tests/conftest.py` now
+  #            scrubs these for every pytest invocation it collects for, so a baseline red here
+  #            more likely means a genuine regression on `trunk` itself — still not attributable
+  #            to any branch in this pass, but worth a closer look before assuming "just env").
   rtk nox -s lock_currency
   #   exit 0 → attributable from here on: any later red IS caused by a merged branch. Continue.
   #   exit 1 → trunk's own lock is stale, before any branch merged. Not attributable to anything in
@@ -1143,8 +1214,12 @@ done
 # deleted in favor of this backstop owning all local worktree/branch reclaim (lode-h1vn) — for a
 # **builder's own** `worktree-agent-*` worktree specifically, `merged` is what proves the ticket already
 # landed: its branch is never pushed anywhere, so the origin arm added by lode-amif is always false for
-# it, and an in-flight `ready-for-code-review`/`ready-for-land`/`land-escalated` ticket's builder
-# worktree is excluded regardless of lock state, exactly as before. A `land/<id>`-branched
+# it. WHAT `merged` NO LONGER IMPLIES (lode-yrtu): an in-flight
+# `ready-for-code-review`/`ready-for-land`/`land-escalated` ticket's builder worktree used to be
+# excluded outright, both ancestry arms being false for it. It is now reachable by the DIR-ONLY arm
+# below once its last commit is older than $MIN_AGE_SECONDS and its tree is clean — its DIRECTORY is
+# reclaimed while its branch REF is deliberately KEPT, so no commit is ever lost, but do not read
+# `merged` as a promise that a builder worktree's directory survives. A `land/<id>`-branched
 # **reviewer/rebase-pickup** worktree is different since lode-amif: once its branch is pushed to
 # `origin/land/<id>`, the origin arm can make it reclaimable even though its branch has not (and, if
 # escalated, never will) merge into trunk — that is the gap lode-amif exists to close. This `locked`
@@ -1182,11 +1257,59 @@ done
 # past the locked gate into the `--force` below — precisely the "rip a worktree out from under a
 # running agent" harm the gate exists to prevent (the pre-lode-oqr disaster). Keeping `branch` last
 # makes its empty case a TRAILING delimiter, which `read` discards harmlessly ($BR="").
-RECLAIMED=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
+RECLAIMED=0; RECLAIMED_DIR_ONLY=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
+STALE_LOCKS_FOUND=0
+# lode-yrtu: minimum age (seconds) of a NOT-MERGED worktree-agent-*'s last commit before its
+# DIRECTORY (never its branch ref) becomes eligible for the new dir-only reclaim below -- see the
+# case arm's own comment for why an age floor is the guard here rather than the lock start-token
+# check used for the LOCKED bucket just below, and docs/agents-workflow.md's "Worktree-GC widened"
+# section for the tunable + default (documented there, not configuration.md, per that page's own
+# scope note: dev-tooling for the landing loop, not an application knob).
+MIN_AGE_SECONDS="${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"
+# lode-9hgu's dirty-tree guard, defined ONCE (lode-yrtu): both reclaim arms below gate on it, and it
+# is the single most safety-critical test in this loop, so the `:(exclude)` pathspec list must not
+# exist in two copies that can drift apart. Returns 0 only when the tree is PROVABLY clean.
+# The two-step `st=$(...)` then `[ -z "$st" ]` is load-bearing and must stay two steps: `status
+# --porcelain` prints nothing BOTH when the tree is clean AND when the command itself errors
+# (missing dir, corrupt worktree admin, …), and an assignment inherits its command substitution's
+# exit code — so success and emptiness are tested SEPARATELY, making an error skip exactly like a
+# dirty tree instead of failing OPEN into `--force`. `local st` is its own line for the same reason:
+# `local st=$(...)` would mask the substitution's exit code behind `local`'s own.
+# See the full lode-bns3/lode-9hgu rationale at the second call site below (why EXCLUDE rather than
+# restore, and why the passive bd export can never count as dirt).
+wt_provably_clean() {
+  local st
+  st=$(git -C "$1" status --porcelain -- . \
+    ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$st" ]
+}
 while IFS=$'\t' read -r WT SHA LOCKED BR; do
   if [ "$LOCKED" = "1" ]; then
-    SKIP_LOCKED=$((SKIP_LOCKED + 1))
-    continue
+    # lode-yrtu: the lock recorded here is PER-SESSION, not per-agent -- measured: several worktrees
+    # can share ONE lock-owner pid (the parent session process), so a DEAD session leaves every
+    # worktree it ever locked stuck at this check forever, since `locked` is tested before any other
+    # predicate. scripts/worktree-lock-stale.sh proves the recorded pid is either not running at all,
+    # or has been REUSED by an unrelated later process (via /proc/<pid>/stat's own starttime, matched
+    # against the token the harness recorded at lock time) -- see the script's header for the full
+    # mechanism and why a plain PID-liveness probe (signal 0) alone cannot safely make this call. A
+    # lock the script cannot positively prove dead is left alone (fail closed) and skipped exactly
+    # as before.
+    LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" '
+      /^worktree / { path=$2; reason="" }
+      /^locked/    { reason=substr($0,8) }
+      /^$/         { if (path==want) { print reason; exit }; path="" }
+    ')
+    if scripts/worktree-lock-stale.sh "$LOCK_REASON"; then
+      STALE_LOCKS_FOUND=$((STALE_LOCKS_FOUND + 1))
+      # `git worktree remove` refuses a still-locked worktree even with `--force` -- that flag
+      # overrides "has modifications," never "is locked" (verified: dry-run against a fabricated
+      # repo, lode-yrtu). Proving the SESSION is dead is not the same as clearing git's own on-disk
+      # lock, so unlock it now, unconditionally, before falling through to the ancestor test and
+      # whichever reclaim path (full or dir-only) it leads to below.
+      git worktree unlock "$WT" 2>/dev/null || true
+    else
+      SKIP_LOCKED=$((SKIP_LOCKED + 1))
+      continue
+    fi
   fi
   # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
   # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
@@ -1202,8 +1325,9 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
   # same way backstop 2 already does, so this reaches origin/land/<id> regardless of which local name
   # the reviewer/pickup checked the branch out under. A detached worktree (empty $BR) or a builder's
   # own worktree-agent-* branch (never pushed to origin, so origin/worktree-agent-* doesn't exist and
-  # the ancestor test fails) fall through to `continue` exactly as before — this arm is simply false
-  # for them, so builder worktrees are unaffected.
+  # the ancestor test fails) both make this arm false. A DETACHED worktree is then kept outright; a
+  # worktree-agent-* one no longer falls straight to `continue` as it once did — since lode-yrtu it
+  # falls to the dir-only arm below instead (directory reclaimed, branch ref kept).
   #
   # ZERO-DIVERGENCE RESIDUAL, AND WHY IT IS BENIGN ON THIS ARM (lode-9hgu, not re-litigated here):
   # like the trunk arm, this ancestor test is a proxy that reads TRUE at zero divergence — a
@@ -1218,17 +1342,65 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
   # (where it once destroyed two live builds, pre-lode-oqr). The dirty-tree guard immediately below
   # (lode-9hgu) is what makes this arm safe even for that exited-agent case: it still keeps a worktree
   # that has additional uncommitted content on top of a pushed tip, rather than reclaiming it.
-  git merge-base --is-ancestor "$SHA" trunk \
-    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; } \
-    || { SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1)); continue; }
+  if git merge-base --is-ancestor "$SHA" trunk \
+    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; }; then
+    : # merged into trunk, or captured on origin -- fall through to the shared dirty-guard + reclaim below
+  else
+    # lode-yrtu: NOT-MERGED no longer means "leaked forever." A builder's OWN worktree-agent-*
+    # branch is never pushed to origin, by construction (coding.md) -- so BOTH ancestor arms above
+    # are PERMANENTLY false the instant its ticket is abandoned, bounced, or its build simply dies,
+    # and nothing else in the system ever revisits it (measured: 8 of 14 leaked worktree dirs on the
+    # landing machine, lode-yrtu). Reclaim the DIRECTORY ONLY for exactly this branch shape, keeping
+    # the branch REF so any commits the build made stay reachable -- verified (docs/decisions.md's
+    # lode-yrtu entry) that this loses nothing, INCLUDING the detached-HEAD case the ref argument
+    # does not itself cover: the `case` pattern below can only ever match a NON-EMPTY `$BR` (a
+    # detached worktree's `$BR` is always empty), so a detached worktree structurally can never enter
+    # this arm at all -- it always falls to the unchanged `*)` default below. Every OTHER not-merged
+    # shape (a `land/<id>`-branched reviewer/rebase-pickup worktree, a detached worktree, anything
+    # else) is UNCHANGED: still kept, full stop -- this widening is scoped to `worktree-agent-*` only.
+    case "$BR" in
+      worktree-agent-*)
+        # AGE GUARD, deliberately NOT the lock start-token check used for the LOCKED bucket above.
+        # Why, in one line: that token exists only while the worktree is actually LOCKED, and
+        # coding.md unlocks right after its FIRST commit (lode-oqr), so the entire window this arm
+        # targets -- build, gates, hand-off, and the whole review/land wait -- runs unlocked with no
+        # token left to compare. Age of the last commit is the only signal still available, and it
+        # fails SAFE: a build still cycling has a recent HEAD commit almost by construction, so a
+        # generous floor skips it, and the cost of being wrong is bounded to disk (the branch ref is
+        # kept either way, so no commit is ever lost). Full reasoning, and why 6h specifically:
+        # docs/decisions.md's lode-yrtu entry.
+        LAST_COMMIT_TS=$(git -C "$WT" log -1 --format=%ct 2>/dev/null) || LAST_COMMIT_TS=""
+        NOW=$(date +%s)
+        if [ -n "$LAST_COMMIT_TS" ] && [ $((NOW - LAST_COMMIT_TS)) -ge "$MIN_AGE_SECONDS" ]; then
+          # Same lode-9hgu dirty-tree guard the merged/captured path below gates on (one shared
+          # definition above) -- a dirty worktree-agent-* is still NEVER reclaimed, in any bucket.
+          if wt_provably_clean "$WT"; then
+            if git worktree remove --force "$WT"; then
+              RECLAIMED_DIR_ONLY=$((RECLAIMED_DIR_ONLY + 1))   # ref intentionally KEPT -- no `git branch -D`
+            else
+              FAILED=$((FAILED + 1))
+            fi
+          else
+            SKIP_DIRTY=$((SKIP_DIRTY + 1))
+          fi
+        else
+          SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))   # too young (or commit ts unreadable) -- fail safe, keep
+        fi
+        ;;
+      *)
+        SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))
+        ;;
+    esac
+    continue
+  fi
   # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
-  # Gates BOTH arms: a worktree captured on trunk or captured on origin but left dirty must still be
-  # KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. Success and emptiness are
-  # tested SEPARATELY, on purpose: `status --porcelain` prints nothing both when the tree is CLEAN and
-  # when the command ERRORS, and an assignment inherits its command substitution's exit code — so a
-  # failure (missing dir, corrupt worktree admin, …) skips exactly like a dirty tree instead of failing
-  # OPEN into `--force`. Skipping on error costs little: the `git worktree prune` below still drops a
-  # vanished worktree's admin entry, and any leftover branch ref falls to the bare-ref backstops.
+  # Gates BOTH ancestry arms: a worktree captured on trunk or captured on origin but left dirty must
+  # still be KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. The clean test
+  # itself is `wt_provably_clean` (defined once above the loop — its header covers why success and
+  # emptiness must be tested separately, so an errored `status` skips exactly like a dirty tree rather
+  # than failing OPEN into `--force`). Skipping on error costs little: the `git worktree prune` below
+  # still drops a vanished worktree's admin entry, and any leftover branch ref falls to the bare-ref
+  # backstops.
   #
   # lode-bns3: the passive bd export is EXCLUDED from this judgment via `:(exclude)` pathspecs, so a
   # staged/modified `.beads/*.jsonl` can never read as "dirty" and zero out the sweep. It is BY
@@ -1253,8 +1425,7 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
   # `worktree remove` FAILED and nothing was reclaimed at all — the observability half of lode-bns3
   # lying in exactly the direction it exists to expose (a total GC failure reading as a healthy sweep).
   # `failed` is its own bucket so the buckets still partition the candidates exactly.
-  if STATUS=$(git -C "$WT" status --porcelain -- . \
-       ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$STATUS" ]; then
+  if wt_provably_clean "$WT"; then
     if git worktree remove --force "$WT"; then
       [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
       RECLAIMED=$((RECLAIMED + 1))
@@ -1275,8 +1446,8 @@ git worktree prune          # drop any now-stale worktree admin entries
 # lode-bns3 (observability): always emit one line. "reclaimed 0 of 0" (nothing to do) reads differently
 # from "reclaimed 0 of N" (everything was skipped — worth investigating), and the reason breakdown
 # makes a regression that silently zeroes out GC visible here instead of indistinguishable from idle.
-TOTAL=$((RECLAIMED + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
-echo "worktree GC: reclaimed $RECLAIMED of $TOTAL candidate(s) under .claude/worktrees/ (skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
+TOTAL=$((RECLAIMED + RECLAIMED_DIR_ONLY + SKIP_LOCKED + SKIP_NOTMERGED + SKIP_DIRTY + FAILED))
+echo "worktree GC: reclaimed $((RECLAIMED + RECLAIMED_DIR_ONLY)) of $TOTAL candidate(s) under .claude/worktrees/ (full=$RECLAIMED, dir-only=$RECLAIMED_DIR_ONLY, stale-locks-treated-as-unlocked=$STALE_LOCKS_FOUND; skipped: locked=$SKIP_LOCKED, not-merged=$SKIP_NOTMERGED, dirty=$SKIP_DIRTY; failed=$FAILED)"
 
 # Second backstop: dangling local land/<id> refs with no worktree attached at all (so the
 # worktree-GC loop above never even considered them) and no remote counterpart left (lode-r78). That
@@ -1308,10 +1479,24 @@ echo "worktree GC: reclaimed $RECLAIMED of $TOTAL candidate(s) under .claude/wor
 # so the first `--` is always the worktree-suffix delimiter.
 if REMOTE_LAND=$(git ls-remote --heads origin 'land/*' 2>/dev/null); then
   REMOTE_LAND=$(printf '%s\n' "$REMOTE_LAND" | sed 's#^.*refs/heads/##')
-  git for-each-ref --format='%(refname:short)' 'refs/heads/land/*' | while read -r BR; do
+  # lode-yrtu (lode-bns3 treatment): report only deletions that ACTUALLY happened, reading `git
+  # branch -D`'s own exit status rather than announcing one "before the fact" behind `|| true`.
+  # OBSERVED live (bd show lode-yrtu): this backstop once printed "deleting stale local ref
+  # land/lode-rlyx--agent-aad6b30a923856fb7" while the ref still existed afterward -- `git branch -D`
+  # had refused it (still checked out in a locked worktree) and the trailing `|| true` swallowed that
+  # failure silently. Same class of bug lode-bns3 already fixed for the WORKTREE loop above (counting
+  # an attempt rather than the remove's real exit status). Process substitution (`< <(...)`), not a
+  # pipe, so these counters survive past the loop instead of dying in a subshell.
+  B2_DELETED=0; B2_FAILED=0
+  while read -r BR; do
     printf '%s\n' "$REMOTE_LAND" | grep -qxF "${BR%%--*}" && continue   # remote still exists — keep
-    git branch -D "$BR" 2>/dev/null || true
-  done
+    if git branch -D "$BR" 2>/dev/null; then
+      B2_DELETED=$((B2_DELETED + 1))
+    else
+      B2_FAILED=$((B2_FAILED + 1))    # refused (e.g. still checked out somewhere) -- report it, don't claim success
+    fi
+  done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/land/*')
+  echo "bare-ref backstop2 (land/*): deleted $B2_DELETED stale local ref(s) (failed=$B2_FAILED)"
 fi
 
 # Third backstop: dangling local worktree-agent-* refs with no worktree attached at all
@@ -1336,11 +1521,19 @@ fi
 # from ever being a candidate in the first place.
 MERGED=$(git branch --merged trunk --format='%(refname:short)')
 CHECKED_OUT=$(git worktree list --porcelain | awk '/^branch refs\/heads\//{print substr($0,19)}')
-git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*' | while read -r BR; do
+# lode-yrtu (lode-bns3 treatment): same fix as backstop 2 just above -- report only what `git branch
+# -D` actually did, and use process substitution rather than a pipe so these counters survive.
+B3_DELETED=0; B3_FAILED=0
+while read -r BR; do
   printf '%s\n' "$CHECKED_OUT" | grep -qxF "$BR" && continue   # still checked out somewhere — keep
   printf '%s\n' "$MERGED" | grep -qxF "$BR" || continue        # not merged into trunk — keep (in-flight)
-  git branch -D "$BR" 2>/dev/null || true
-done
+  if git branch -D "$BR" 2>/dev/null; then
+    B3_DELETED=$((B3_DELETED + 1))
+  else
+    B3_FAILED=$((B3_FAILED + 1))
+  fi
+done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
+echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
 rtk scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
                                      # the staleness window (lode-aps3; see Section 0)
@@ -1359,17 +1552,21 @@ stopped recording them (see lode-2m89's `docs/decisions.md` entry). Discovering 
 of trusting recorded paths is strictly better anyway: there is no bookkeeping to drift. Builds can
 happen on several machines, and a worktree on another machine simply isn't in this machine's
 `git worktree list`, so it's invisible to this sweep and that other machine's
-own `/land` (or a later sweep there) reclaims it. The sweep only reclaims a worktree that is
-`merged`+`unlocked`+clean, which for a just-landed ticket's builder worktree is true precisely *because*
-this pass just `--no-ff` merged it into trunk a few lines above. Its **HEAD-ancestry** gate is what
-holds the tree through the other outcomes: on a **bounce** the branch is dropped but the rebuild ticket
-may still want the tree, and on an **escalate** the work is held for a human — in both cases the
-*builder's* worktree HEAD never merged into `trunk`, so the predicate excludes it and it is kept. (Scope
-that claim to the **builder's** worktree deliberately: a reviewer's or rebase-pickup's *own* launch
-worktree is a different thing — `/code` reclaims that one proactively on an escalation, lode-vs7g, and
-**lode-amif** widens this loop's predicate to reclaim it via *origin*-ancestry precisely *because* an
-escalated branch never merges. So "an escalate reclaims nothing" is true of the builder's worktree only,
-and is not a guarantee about the sweep as a whole.) This backstop sweep
+own `/land` (or a later sweep there) reclaims it. A worktree that is `merged`+`unlocked`+clean is
+reclaimed **fully** (directory *and* branch ref), which for a just-landed ticket's builder worktree is
+true precisely *because* this pass just `--no-ff` merged it into trunk a few lines above. **Since
+lode-yrtu, failing the ancestry gate no longer means the tree is kept.** On a **bounce** the branch is
+dropped but the rebuild ticket may still want the tree, and on an **escalate** the work is held for a
+human — in both cases the *builder's* worktree HEAD never merges into `trunk`, and its
+`worktree-agent-*` branch is never pushed, so neither ancestry arm ever becomes true. Its **branch
+ref** is what survives those outcomes now, not its directory: once its last commit ages past
+`LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` (default 6h) and its tree is clean, the dir-only arm reclaims
+the directory and keeps the ref, so every commit stays reachable but the checkout itself does not
+persist indefinitely. A **dirty** builder worktree is still never touched, in any bucket (lode-9hgu).
+(Scope all of that to the **builder's** worktree deliberately: a reviewer's or rebase-pickup's *own*
+launch worktree is a different thing — `/code` reclaims that one proactively on an escalation,
+lode-vs7g, and **lode-amif** widens this loop's predicate to reclaim it via *origin*-ancestry precisely
+*because* an escalated branch never merges.) This backstop sweep
 is now the **only** net over the same machine's worktrees: it doesn't consult any ticket's metadata, so
 it reclaims **any** worktree under `.claude/worktrees/` — branch-attached (`worktree-agent-*`,
 `land/<id>--<worktree-dir>`, or any other name) or **detached** alike — regardless of whether any
@@ -1379,9 +1576,17 @@ later one keyed directly on
 **HEAD-sha ancestry** (`lode-mxeu`) added because a detached worktree has no branch name for the first
 sweep to match. Both tested the identical predicate — "this worktree's tip is already merged into
 trunk" — so now there is one loop: it requires the worktree to be **unlocked** (no in-flight agent owns
-it) and its **HEAD commit** an ancestor of `trunk` (`git merge-base --is-ancestor <HEAD-sha> trunk` —
-the work is safely captured elsewhere), with no branch-name pattern to keep in sync as new
-worktree-branch-naming conventions are added. That name-independence is **scoped to this loop**: the
+it — or, since lode-yrtu, holding a lock whose recorded owner process is *provably* dead, which
+`scripts/worktree-lock-stale.sh` must positively prove before the lock is cleared) and its **HEAD
+commit** an ancestor of `trunk` (`git merge-base --is-ancestor <HEAD-sha> trunk` — the work is safely
+captured elsewhere). The **FULL** reclaim (directory *and* branch ref) therefore still needs no
+branch-name pattern to keep in sync as new worktree-branch-naming conventions are added. lode-yrtu
+adds the loop's one deliberate exception to that: the **dir-only** arm does key on a branch NAME
+(`worktree-agent-*`), because what it is really testing — "no agent will ever want this exact
+checkout again, and its ref will survive to hold the commits" — has no ticket-metadata-free signal
+other than the branch shape, this sweep consulting no ticket metadata by design. So a NEW
+worktree-branch-naming convention leaks past the dir-only arm (it simply won't be reclaimed) but
+never past the full one. That name-independence is otherwise **scoped to this loop**: the
 bare-ref backstops below still enumerate `land/*` and `worktree-agent-*` by name (they must —
 `refs/heads/*` is shared with human branches), so a new *bare-ref* namespace can still leak exactly as
 `lode-j5i0`'s did. (`lode-j5i0`'s own sweep is the **third** backstop below — alive and untouched; it

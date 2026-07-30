@@ -266,14 +266,81 @@ behavior exactly); **Opus 5** (`qa_think_harder_llm` default) now runs adaptive
 thinking instead of disabled thinking, a deliberate change; **Fable-class**
 overrides now work.
 
-**The enrichment forced-tool-use branch needed no code change** — it has never
-sent `thinking` at all (`lode-d1sr` never touched it), so it already follows
-the same "never explicitly disable" rule and cannot hit this 400 today. A
-related but separate and currently-unreachable risk — a `Kind.RUNTIME`
-override of `enrichment_llm` to a thinking-capable model would share its own
-(smaller, unraised) `max_tokens=1024` between thinking and the forced
-tool-call JSON — is tracked as a follow-up rather than fixed here, since it
-needs its own tuning pass once someone actually wants that override.
+**The enrichment forced-tool-use branch needed no code change to avoid the
+400** — it has never sent `thinking` at all (`lode-d1sr` never touched it),
+so it already follows the same "never explicitly disable" rule and cannot hit
+this 400. The separate risk named at the time — a `Kind.RUNTIME` override of
+`enrichment_llm` to a thinking-capable model sharing its own (smaller,
+unraised) `max_tokens=1024` between thinking and the forced tool-call JSON —
+was then unreachable and tracked as a follow-up; it is now closed, see
+[below](#enrichment_llm-max_tokens-headroom-for-a-thinking-capable-override-decided-lode-jgus).
+
+### enrichment_llm max_tokens headroom for a thinking-capable override (decided, lode-jgus)
+
+`lode-3dlt` named a real but then-unreachable risk on the enrichment
+forced-tool-use branch of `AnthropicProvider.structured_call` (`enrichment_llm`,
+[Models](#models) above): that branch never sends `thinking` at all — a
+property of the *default* tier (Haiku 4.5 predates thinking-on-by-default),
+not of forced tool use itself, since a forced `tool_choice` on the
+first-party Claude API does not preclude thinking (only Amazon Bedrock
+requires pairing it with an explicit `disabled`). A `Kind.RUNTIME` override
+of `enrichment_llm` to a thinking-capable model (Opus 5, Sonnet 5,
+Fable-class) therefore runs adaptive thinking on this call too, sharing the
+same `max_tokens` budget between thinking and the forced tool-call JSON — the
+identical truncation hazard `lode-3dlt`'s Q&A fix exists to avoid, on a path
+that predates thinking, so nobody had sized headroom for it: the
+immediate/batch enrichment calls both sent a hardcoded `max_tokens = 1024`.
+
+**Fixed the same way `qa.MAX_TOKENS` was** — a new named constant,
+`enrich.MAX_TOKENS`, replaces the two identical inline `1024` literals in
+`_call_haiku` and `_build_batch_request` (which must stay byte-for-byte equal
+per `lode-568v.2`'s wire-equivalence bar), raised `1024 -> 2048`: headroom
+for adaptive thinking to share the budget with the tool-call payload, not a
+hard truncation guarantee.
+
+**The two routes are bounded differently, and that matters for which failure
+mode to expect.** Neither is bounded by the Anthropic SDK's non-streaming
+timeout guard — that guard is skipped outright whenever an explicit `timeout`
+is passed, and the provider seam always passes one. Beyond that they diverge:
+the *immediate* call passes [`llm_call_timeout_s`](#async-work-queue) (120s),
+as `qa.MAX_TOKENS`'s own path does, so a runaway thinking budget there tends to
+surface as a timeout before it exhausts the cap. The *batch* call has no
+equivalent bound — a `BatchRequest` carries no per-item timeout (the `timeout_s`
+on `submit_batch`/`collect_batch` bounds only their own HTTP calls) and
+generation runs server-side — so `enrich.MAX_TOKENS` is the only thing bounding
+a batch item, and **truncation, not a timeout, is the realistic failure mode
+there**. That is the route the raised ceiling has to actually be sufficient for.
+
+The raised cap is headroom, not a guarantee, so `AnthropicProvider` also
+*handles* running out of it on both routes. A response that spends its whole
+budget inside thinking carries no `tool_use` block at all. On the immediate
+route that previously escaped as a raw `StopIteration` from an unguarded
+`next(...)` — the identical failure shape (and identical fix) as the
+`messages.parse` branch's "no text block" guard `lode-3dlt` added; it now
+raises `LLMProviderError`. On the batch route `collect_batch` already caught
+it, degrading the one item to an `errored` `BatchResult` rather than failing
+the whole collection — correct, but its message named nothing, so the same
+raise that makes this reachable there also made it undiagnosable; it now
+carries the model and `stop_reason` the immediate branch reports.
+
+No config-load validation, model→capability predicate, or different
+mitigation was chosen — same rationale `lode-3dlt` gave for the Q&A branch:
+raising the cap is the simplest option, needs no new capability-detection
+surface, and works on every model regardless of whether it thinks.
+
+**A fourth option — make the budget itself a knob — was considered during
+technical review and deferred (`lode-d70n`).** It is worth recording because
+the batch-route finding above sharpens it: `enrichment_llm` is `Kind.RUNTIME`,
+so a user can pick a model whose budget needs differ, but `enrich.MAX_TOKENS`
+is a source constant, so they cannot adjust the budget to match — and on the
+batch route, where truncation is the realistic failure mode, they have no
+escape hatch at all. The named `LLMProviderError` tells them exactly what
+happened with no user-side remedy but editing source. The natural home is
+`ModelTier`, which already pairs `(model, reasoning_effort)` precisely because
+those co-vary per surface; `max_tokens` co-varies with the same choice. It is
+deferred rather than done here because it touches the `Settings` schema, both
+`qa.MAX_TOKENS` and `enrich.MAX_TOKENS`, and needs a defaults decision —
+and doing it for enrichment alone would leave the Q&A tier asymmetric.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 
@@ -308,15 +375,27 @@ legal set is `none`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`, derived
 from the installed SDK's own `Reasoning.effort` Literal rather than
 hand-typed.
 
-**What lode-90o7 deliberately did NOT do: validate at config load.** Both
-providers check the effort *value* at the seam, on the first call — not when
-`config.toml` is parsed. So a plain typo (`reasoning_effort = "LOW"`) starts
-clean but fails at first use, and on the enrichment path that failure is
-classified as *transient* by `worker.run_one`: it charges an attempt, backs
-off, and dead-letters the job after `retry_max_attempts`, rather than
-refusing to start. A `Settings` validator (the shape
-`_azure_api_version_required_with_endpoint` already uses) would move that to
-startup; it is filed as lode-tvps, not done here.
+**`reasoning_effort` value is also validated at config load (decided, lode-tvps).**
+lode-90o7 left the effort *value* check at the provider seam only — on the
+first API call, not when `config.toml` is parsed — so a plain typo
+(`reasoning_effort = "LOW"`) started clean but failed at first use; on the
+enrichment path that failure was then classified as *transient* by
+`worker.run_one`, charging an attempt, backing off, and dead-lettering the
+job after `retry_max_attempts` rather than refusing to start. A `Settings`
+`@model_validator(mode="after")` now checks **every `ModelTier` knob's**
+`reasoning_effort` against the legal set for the configured `llm_provider` at
+construction time, naming the offending tier and that set on failure. Since
+every CLI entry point and the TUI resolve settings through `load_settings()`,
+that surfaces as a one-line `invalid config file …` on stderr and exit 1
+before any work starts. Legality is always relative to the *configured*
+provider: a value legal only under the *other* one (e.g. `minimal`,
+OpenAI-only) is rejected exactly like an outright typo. The provider-seam
+value checks stay in place unchanged — they remain the guard for programmatic
+callers that construct a provider directly, bypassing `Settings`. Still
+deliberately unpredicted: the value/model *pairing* (lode-3dlt option 1,
+reaffirmed by lode-90o7) — the load-time check reads the effort value against
+the provider's legal set, never against what the tier's specific `model`
+supports.
 
 **Interaction with the `thinking`-omission decision above: not reachable.**
 Opus 5 rejects `thinking={"type": "disabled"}` paired with effort

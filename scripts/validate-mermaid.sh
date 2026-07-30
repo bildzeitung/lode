@@ -22,9 +22,26 @@
 # 1 -- which in THIS script means "invalid mermaid". Every non-`if` command
 # is therefore a route from a machine fault to a fabricated content verdict,
 # the exact lode-9i2p inversion. Measured (bash 5.2, shebang honoured):
-# `mktemp -d` failing under -e exits 1. That one is now routed through
-# gate_could_not_run below; the remaining ones (the REPO= assignment, the
-# printf, both chmods) are pre-existing and tracked in lode-3xqb.
+# `mktemp -d` failing under -e exits 1, and so do the REPO= assignment, the
+# printf into $CFG/puppeteer.json, and both chmod calls below. All five are
+# now routed to exit 2 -- four through gate_could_not_run, and REPO= through
+# its own pre-library fallback, argued at that line rather than restated here
+# (lode-bss5, lode-3xqb).
+#
+# Two more found reviewing that pass, because guarding a command is not the
+# same as guarding the SHELL (lode-3xqb):
+#   * the `rm -rf` in the EXIT trap -- which under -e rewrites the status of
+#     every exit below it, so it could undo all five guards above. Fixed at
+#     the trap itself; see the comment there.
+#   * `basename` in the loop, replaced with parameter expansion.
+# What deliberately stays unguarded: the plain `echo`s. A failing echo (stdout
+# full or closed) does still abort with 1, but wrapping five of them buys a
+# vanishing case at real cost to readability. Two consequences to hold on to
+# if you edit this file: `-e` is now doing no work this script wants -- every
+# command whose failure means anything is `||`-guarded or inside an `if`, and
+# -e's only remaining effect is to convert leftovers into the WRONG code
+# (lode-6znq weighs deleting it, the alternative this ticket declined); and
+# any new command added below is unguarded by default, i.e. a new route.
 #
 # What WAS missing, unlike every other consumer, was any top-level
 # `-u`/`pipefail`; added below for parity. Inert today: this script contains
@@ -33,7 +50,32 @@
 set -uo pipefail
 
 IMAGE="minlag/mermaid-cli:latest"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# Guarded rather than left to -e (lode-3xqb): a failing `cd`/`pwd` here --
+# this script's own checkout moved or was deleted out from under it after it
+# started running -- would otherwise abort with -e's own exit 1, which in
+# this script means "invalid mermaid", blaming a fabricated content verdict
+# on a checkout/machine fault. This runs BEFORE gate-lib.sh is sourced below,
+# so gate_could_not_run is not yet defined -- same chicken-and-egg reason the
+# source guard immediately below hardcodes its own fallback instead of
+# calling it.
+#
+# Honest about the cost, though: unlike the source guard -- which is the guard
+# FOR the source and so genuinely cannot use the library it is checking for --
+# this ordering is not forced. Nothing between here and the source line uses
+# $REPO, and that line derives its own path from $0 independently, so the two
+# blocks could be swapped and this could call the helper. Until they are, this
+# fallback emits the banner and cause but NOT the GATE_ADVISORY trailer below
+# -- half the contract, which is exactly what gate-lib.sh's header warns about
+# and what its ordering sweep cannot see, since this is not a call site at all.
+# Deferred to lode-dyq0 rather than done here: lode-ysr6 is rewriting that same
+# source line, and reordering it before that lands is the one edit that could
+# merge into a source line missing its advisory args.
+REPO="$(cd "$(dirname "$0")/.." && pwd)" || {
+  echo "GATE COULD NOT RUN: could not resolve the repo root from \"\$0\" ($0)" >&2
+  echo "-- its parent directory is missing or inaccessible. This is a" >&2
+  echo "machine/checkout fault, not a mermaid syntax error." >&2
+  exit 2
+}
 
 # `command -v docker` is a PROXY — it only proves some binary named `docker`
 # is on PATH. When Docker Desktop's engine is stopped (e.g. Resource Saver
@@ -114,12 +156,36 @@ CFG="$(mktemp -d 2>/dev/null)" || gate_could_not_run \
   "could not create a temporary directory (mktemp failed)" \
   "Usual causes: TMPDIR points at a nonexistent, full, or read-only" \
   "filesystem. Diagnose with: mktemp -d"
-trap 'rm -rf "$CFG"' EXIT
+# `|| :` is load-bearing, not defensive noise (lode-3xqb, found in review).
+# MEASURED (bash 5.2): under -e, a command that fails inside an EXIT trap
+# makes the shell exit with THAT command's status, clobbering the status the
+# script had already chosen. So an unguarded `rm -rf` here silently rewrites
+# every exit below -- including a guard's correct 2 and a clean run's 0 --
+# into rm's own 1, this script's CONTENT verdict. Reproduced end-to-end
+# against the real script: $CFG read-only fires the printf guard's exit 2,
+# then the trap's failing rm turns it into "invalid mermaid" -- the lode-9i2p
+# inversion re-entering through the one command no guard below can reach.
+# Cleanup failure is not a verdict about anything, so swallow the status;
+# rm's own stderr still names it.
+trap 'rm -rf "$CFG" || :' EXIT
+# Guarded rather than left to -e (lode-3xqb): a write failure here (disk
+# full, or $CFG's filesystem gone read-only after mktemp created it) would
+# otherwise abort with -e's own exit 1 -- this script's CONTENT verdict.
 printf '{"executablePath":"/usr/bin/chromium-browser","args":["--no-sandbox","--disable-setuid-sandbox"]}' \
-  > "$CFG/puppeteer.json"
+  > "$CFG/puppeteer.json" || gate_could_not_run \
+  "could not write $CFG/puppeteer.json" \
+  "Usual causes: the filesystem backing \$TMPDIR is full or went" \
+  "read-only after mktemp created \$CFG. Diagnose with: df -h $CFG"
 # tempfile dirs are 0700; the container's non-root user must read the mount.
-chmod 755 "$CFG"
-chmod 644 "$CFG/puppeteer.json"
+# Both chmods guarded for the same reason as the printf above.
+chmod 755 "$CFG" || gate_could_not_run \
+  "could not chmod $CFG to 755" \
+  "the container's non-root user needs read+traverse access to the" \
+  "mounted config dir. Diagnose with: ls -ld $CFG"
+chmod 644 "$CFG/puppeteer.json" || gate_could_not_run \
+  "could not chmod $CFG/puppeteer.json to 644" \
+  "the container's non-root user needs read access to the mounted" \
+  "config file. Diagnose with: ls -l $CFG/puppeteer.json"
 
 # THIS is where the invariant "a broken tool is never mistakable for broken
 # content" is enforced. The partition is drawn around mmdc's ONE content
@@ -159,7 +225,11 @@ found=0
 for f in "$REPO"/docs/*.md; do
   grep -q '```mermaid' "$f" || continue
   found=1
-  rel="docs/$(basename "$f")"
+  # Parameter expansion, not `basename` (lode-3xqb): identical result for a
+  # glob match, and it removes the last unguarded external command under -e
+  # -- a missing basename would abort the loop with basename's own status
+  # rather than this script's contract. One fewer fork per doc, besides.
+  rel="docs/${f##*/}"
   if docker run --rm -v "$REPO:/data:ro" -v "$CFG:/cfg:ro" -w /data "$IMAGE" \
        -p /cfg/puppeteer.json -i "$rel" -o /tmp/out.md --quiet; then
     echo "OK    $rel"

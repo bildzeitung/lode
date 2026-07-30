@@ -281,6 +281,43 @@ def test_structured_call_wraps_a_bad_request_from_the_forced_tool_use_branch() -
     assert err.__cause__ is bad_request
 
 
+def test_structured_call_raises_when_the_forced_tool_use_response_has_no_tool_use_block() -> (
+    None
+):
+    # Mirrors test_structured_call_raises_when_the_response_has_no_text_block
+    # above, on the forced-tool-use branch: unguarded, `next()` with no
+    # default would raise a raw StopIteration instead of LLMProviderError
+    # (lode-jgus).
+    thinking_block = mock.MagicMock()
+    thinking_block.type = "thinking"
+    response = mock.MagicMock()
+    response.content = [thinking_block]
+    response.stop_reason = "max_tokens"
+    client = mock.MagicMock()
+    client.messages.create.return_value = response
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.structured_call(
+            model="claude-opus-5",
+            reasoning_effort=None,
+            system="sys",
+            user_prompt="p",
+            output_schema=_Widget,
+            max_tokens=2048,
+            timeout_s=1.0,
+            tool_name="extract_widget",
+            tool_description="Extract a widget.",
+        )
+
+    message = str(excinfo.value)
+    assert "no tool_use block" in message
+    # The diagnosis has to survive to the log, not just the exception type.
+    assert "max_tokens" in message
+    assert "claude-opus-5" in message
+    assert excinfo.value.provider == "anthropic"
+
+
 def test_structured_call_wraps_a_bad_request_from_the_messages_parse_branch() -> None:
     # Same failure mode as the forced-tool-use test above, on the Q&A branch.
     client = mock.MagicMock()
@@ -574,6 +611,105 @@ def test_collect_batch_returns_pending_when_not_ended() -> None:
     client.beta.messages.batches.results.assert_not_called()
 
 
+def test_collect_batch_wraps_a_bad_request_from_batches_retrieve() -> None:
+    # lode-i7yr: a failure while polling must surface as LLMProviderError.
+    client = mock.MagicMock()
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.retrieve.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+    client.beta.messages.batches.results.assert_not_called()
+
+
+def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
+    # lode-i7yr: same as above, for the second (results) polling call.
+    client = mock.MagicMock()
+    client.beta.messages.batches.retrieve.return_value = SimpleNamespace(
+        processing_status="ended"
+    )
+    bad_request = _anthropic_bad_request()
+    client.beta.messages.batches.results.side_effect = bad_request
+    provider = AnthropicProvider(client)
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        provider.collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 400
+    assert "batch-1" in str(err)
+    assert err.__cause__ is bad_request
+
+
+# lifts conftest's autouse real-client-construction guard (lode-85q); the mock
+# transport answers in-process, so no socket is ever opened.
+@pytest.mark.network
+def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> None:
+    """Pins the SDK-internals property `collect_batch`'s loop comment rests on.
+
+    The two ``MagicMock`` tests above raise from the call by construction, so
+    they cannot see *when* the SDK resolves status. This one drives a real
+    client over an ``httpx.MockTransport`` and so fails if a future SDK ever
+    defers the status check into iteration, silently reopening the gap.
+
+    The 200 ``retrieve`` leg is load-bearing: ``batches.results`` retrieves the
+    batch itself first, so a transport that errored on *every* path would
+    assert against that call instead of the decoder-returning one.
+    """
+    import anthropic
+    import httpx
+
+    results_url = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
+    # Only the fields the SDK's own MessageBatch model requires.
+    batch_body = {
+        "id": "batch-1",
+        "type": "message_batch",
+        "processing_status": "ended",
+        "results_url": results_url,
+        "created_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2026-01-02T00:00:00Z",
+        "request_counts": {
+            "canceled": 0,
+            "errored": 0,
+            "expired": 0,
+            "processing": 0,
+            "succeeded": 1,
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/results"):
+            return httpx.Response(
+                429,
+                headers={"request-id": "req-test-2"},
+                json={"error": {"type": "rate_limit_error", "message": "slow down"}},
+            )
+        return httpx.Response(200, json=batch_body)
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,  # keep the SDK's own retry ladder out of the assertion
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert err.status_code == 429
+    assert err.request_id == "req-test-2"
+    assert isinstance(err.__cause__, anthropic.APIStatusError)
+
+
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:
     tool_block = mock.MagicMock()
     tool_block.type = "tool_use"
@@ -642,6 +778,8 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     bad.custom_id = "ver-3"
     bad.result.type = "succeeded"
     bad.result.message.content = []
+    bad.result.message.model = "claude-opus-5"
+    bad.result.message.stop_reason = "max_tokens"
     client.beta.messages.batches.results.return_value = iter([bad])
     provider = AnthropicProvider(client)
 
@@ -652,6 +790,17 @@ def test_collect_batch_handles_a_succeeded_result_missing_a_tool_use_block() -> 
     assert result.outcome == "errored"
     assert result.parsed is None
     assert isinstance(result.error, LLMProviderError)
+    # lode-jgus: this is the route where a thinking-capable enrichment_llm
+    # override is MOST likely to exhaust `max_tokens` (nothing bounds a batch
+    # item's generation but its own cap -- no per-item timeout), so the
+    # diagnosis has to survive to the log, exactly as on the immediate branch.
+    # Assert `stop_reason=` and not a bare "max_tokens": this message carries
+    # no max_tokens FIELD, so a bare substring would pass on the stop_reason
+    # VALUE alone and keep passing if the diagnosis were dropped.
+    message = str(result.error)
+    assert "no tool_use block" in message
+    assert "claude-opus-5" in message
+    assert "stop_reason='max_tokens'" in message
 
 
 # ---------------------------------------------------------------------------

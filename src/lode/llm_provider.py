@@ -44,7 +44,10 @@ against exactly; read that first for the *why*. This module owns the *what*:
   :class:`LLMProviderError` on both providers -- see
   :class:`AnthropicProvider`'s docstring for the Anthropic half (and for what
   it deliberately does *not* cover) and :func:`_openai_effort_kwargs` for the
-  OpenAI half.
+  OpenAI half. Both of those value checks fire at the first API call;
+  :data:`EFFORT_LEVELS_BY_PROVIDER` re-exports the two legal sets so
+  ``lode.config.Settings`` can reject a typo at config load as well
+  (**lode-tvps** -- see that constant's own comment).
 - **The batch handle stays the bare Anthropic ``batch.id`` string** (identical
   to ``submit_enrich_batch`` today) -- schema information never needs to
   survive to :meth:`collect_batch` because :class:`BatchResult.parsed` holds
@@ -112,7 +115,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
@@ -327,30 +330,43 @@ def _anthropic_effort_kwargs(
     return {"output_config": {"effort": reasoning_effort}}
 
 
+#: Shared tail for the three "the block I need isn't in ``content``" errors
+#: (:meth:`AnthropicProvider.structured_call`'s two branches and
+#: :meth:`AnthropicProvider.collect_batch`). All three have the same cause --
+#: thinking shares ``max_tokens`` with the payload, see
+#: :class:`AnthropicProvider` -- so they read identically in a log; single-
+#: sourced here because they are far apart and a reword would otherwise drift.
+_BUDGET_EXHAUSTED_HINT = "-- typically the whole output budget was consumed by thinking"
+
+
 def _anthropic_error_from_exception(
     exc: anthropic.APIStatusError, *, context: str
 ) -> LLMProviderError:
-    """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7).
+    """Wrap an Anthropic SDK 4xx/5xx into :class:`LLMProviderError` (lode-90o7, lode-i7yr).
 
-    The three call sites that *submit* a request -- ``messages.create``,
-    ``messages.parse``, ``batches.create`` -- funnel their
-    ``anthropic.APIStatusError`` here, in the same "log + wrap, preserve
-    status_code/request_id" shape :meth:`OpenAIProvider._error_from_exception`
-    already uses for the equivalent ``openai.APIStatusError``. Most reachably
-    this converts the 400 that :func:`_anthropic_effort_kwargs` cannot
-    predict -- ``reasoning_effort`` set to a legal *value* on a tier whose
-    *model* does not support it (e.g. any effort on Haiku 4.5/Sonnet 4.5, or
-    ``xhigh``/``max`` below Opus 4.7) -- into a diagnosable seam-level error
-    instead of a raw SDK exception escaping past code that only expects
-    :class:`LLMProviderError`. ``context`` names what was being attempted.
+    Used at all five ``AnthropicProvider`` SDK call sites: the three that
+    *submit* a request -- ``messages.create``, ``messages.parse``,
+    ``batches.create`` -- and the two that *poll* an existing batch in
+    :meth:`AnthropicProvider.collect_batch` -- ``batches.retrieve``,
+    ``batches.results``. Same "log + wrap, preserve status_code/request_id"
+    shape :meth:`OpenAIProvider._error_from_exception` already uses for the
+    equivalent ``openai.APIStatusError``. ``context`` names what was being
+    attempted.
 
-    **Not** the two polling calls in :meth:`AnthropicProvider.collect_batch`
-    (``batches.retrieve`` / ``batches.results``), which carry no
-    ``reasoning_effort`` and are left raw by lode-90o7 -- tracked as a separate
-    seam-coherence gap (lode-i7yr). Nor the non-status ``anthropic.APIError``
-    subclasses (``APITimeoutError``, ``APIConnectionError``): a timeout is not
-    a rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
-    surfacing raw today.
+    Most reachably this converts the 400 that :func:`_anthropic_effort_kwargs`
+    cannot predict -- ``reasoning_effort`` set to a legal *value* on a tier
+    whose *model* does not support it (e.g. any effort on Haiku 4.5/Sonnet
+    4.5, or ``xhigh``/``max`` below Opus 4.7) -- into a diagnosable seam-level
+    error instead of a raw SDK exception escaping past code that only expects
+    :class:`LLMProviderError`. That one is submit-only; see
+    :meth:`AnthropicProvider.collect_batch` for why the polling pair is
+    wrapped too.
+
+    **Not** the non-status ``anthropic.APIError`` subclasses
+    (``APITimeoutError``, ``APIConnectionError``): a timeout is not a
+    rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
+    surfacing raw today. Nor a failure raised while *streaming* a batch's
+    JSONL results -- see :meth:`AnthropicProvider.collect_batch` (lode-3gtu).
     """
     _log.error(
         "Anthropic call failed (%s, status_code=%s request_id=%s): %s",
@@ -418,18 +434,33 @@ class AnthropicProvider:
     :class:`OpenAIProvider` already honors for its equivalent shapes -- so the
     failure is diagnosable at the seam instead of surfacing far from its cause.
 
-    *The forced tool-use branch needs no equivalent change* -- it has never
-    sent ``thinking`` at all (lode-d1sr never touched it), so it already
-    follows this same "never explicitly disable" rule; no Fable-class 400 is
-    reachable there today. This is a property of the enrichment tier
-    (``enrichment_llm`` = Haiku 4.5 predates thinking-on-by-default), not of
-    forced tool use itself -- on the first-party Claude API a forced
-    ``tool_choice`` does not preclude thinking (only Amazon Bedrock requires an
-    explicit ``disabled`` alongside it), so a ``Kind.RUNTIME`` override to a
-    thinking-capable model would think there too, sharing its own (smaller,
-    unraised) ``max_tokens`` budget between thinking and the tool-call JSON --
-    a real but separate, currently-unreachable risk tracked as a follow-up
-    rather than fixed here (lode-3dlt's design notes).
+    *The forced tool-use branch never needed the Fable-class-400 fix* -- it
+    has never sent ``thinking`` at all (lode-d1sr never touched it), so it
+    already followed the "never explicitly disable" rule before this class
+    existed; no Fable-class 400 is reachable there. That is a property of the
+    enrichment tier's *default* (``enrichment_llm`` = Haiku 4.5 predates
+    thinking-on-by-default), not of forced tool use itself -- on the
+    first-party Claude API a forced ``tool_choice`` does not preclude thinking
+    (only Amazon Bedrock requires an explicit ``disabled`` alongside it), so a
+    ``Kind.RUNTIME`` override to a thinking-capable model runs adaptive
+    thinking here too, sharing ``max_tokens`` with the tool-call JSON --
+    lode-3dlt tracked this as a real but then-unreachable risk rather than
+    fixing it. **lode-jgus closes it:** :data:`lode.enrich.MAX_TOKENS` was
+    raised (1024 -> 2048) for the same headroom reason
+    :data:`lode.qa.MAX_TOKENS` was, and the branch below now guards the
+    symptom of running out of that budget -- a response whose whole
+    ``max_tokens`` was spent on thinking carries no ``tool_use`` block at
+    all, which used to escape as a raw ``StopIteration`` from an unguarded
+    ``next(...)``. It is now converted to :class:`LLMProviderError`, the same
+    treatment :meth:`structured_call`'s other branch gives its own
+    "budget spent on thinking" symptom (no text block, below).
+    :meth:`collect_batch` reaches the identical symptom by the identical route
+    -- ``enrich`` sends the same raised cap through both -- and in fact reaches
+    it *more* easily; see :data:`lode.enrich.MAX_TOKENS` for why the batch
+    route is bounded differently. It already degraded the one item to an
+    ``errored`` :class:`BatchResult` rather than failing the whole collection,
+    so no raw ``StopIteration`` ever escaped there; lode-jgus only gave its
+    message the same model/``stop_reason`` diagnosis this branch reports.
 
     **``reasoning_effort`` -> ``output_config.effort`` (lode-wnz1)** on every
     branch below; see :func:`_anthropic_effort_kwargs` for the wiring and
@@ -512,7 +543,23 @@ class AnthropicProvider:
                 raise _anthropic_error_from_exception(
                     exc, context=f"model={model}"
                 ) from exc
-            tool_block = next(b for b in response.content if b.type == "tool_use")
+            tool_block = next(
+                (b for b in response.content if b.type == "tool_use"), None
+            )
+            if tool_block is None:
+                # A response that spent its whole budget inside thinking
+                # carries no tool_use block at all; unguarded, `next()` with
+                # no default raised a raw StopIteration here instead of the
+                # LLMProviderError every caller of this seam expects
+                # (lode-jgus). Why that is now reachable: the class docstring.
+                raise LLMProviderError(
+                    f"Anthropic response contained no tool_use block to "
+                    f"decode into {output_schema.__name__} (model={model}, "
+                    f"max_tokens={max_tokens}, "
+                    f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
+                    f"{_BUDGET_EXHAUSTED_HINT}",
+                    provider="anthropic",
+                )
             return output_schema.model_validate(tool_block.input)
 
         # `thinking` is never sent here (lode-3dlt, superseding lode-d1sr's
@@ -569,8 +616,8 @@ class AnthropicProvider:
                 f"Anthropic response contained no text block to decode into "
                 f"{output_schema.__name__} (model={model}, "
                 f"max_tokens={max_tokens}, "
-                f"stop_reason={getattr(response, 'stop_reason', None)!r}) -- "
-                f"typically the whole output budget was consumed by thinking",
+                f"stop_reason={getattr(response, 'stop_reason', None)!r}) "
+                f"{_BUDGET_EXHAUSTED_HINT}",
                 provider="anthropic",
             )
         return parsed
@@ -623,32 +670,68 @@ class AnthropicProvider:
     def collect_batch(
         self, handle: str, *, timeout_s: float
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
-        # These two SDK calls are deliberately NOT wrapped by lode-90o7 -- they
-        # carry no `reasoning_effort`, so no pairing 400 can arise here. A
-        # 429/5xx from either still escapes as a raw anthropic exception past a
-        # seam whose contract says callers see LLMProviderError; that gap is
-        # tracked as lode-i7yr, not widened here.
-        batch = self._client.beta.messages.batches.retrieve(handle, timeout=timeout_s)
+        import anthropic  # deferred -- lode-4q97; needed by the `except` below
+
+        # These two SDK calls carry no `reasoning_effort`, so no pairing 400
+        # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
+        # must not escape raw (lode-i7yr): `enrich.collect_enrich_batch` calls
+        # this with no `try` of its own, so its caller only ever expects
+        # LLMProviderError.
+        try:
+            batch = self._client.beta.messages.batches.retrieve(
+                handle, timeout=timeout_s
+            )
+        except anthropic.APIStatusError as exc:
+            raise _anthropic_error_from_exception(
+                exc, context=f"batches.retrieve handle={handle}"
+            ) from exc
         if batch.processing_status != "ended":
             return ("pending", None)
 
+        try:
+            batch_results = self._client.beta.messages.batches.results(
+                handle, timeout=timeout_s
+            )
+        except anthropic.APIStatusError as exc:
+            raise _anthropic_error_from_exception(
+                exc, context=f"batches.results handle={handle}"
+            ) from exc
+
+        # The loop below is deliberately OUTSIDE that wrap. `batches.results`
+        # resolves the HTTP status before it builds the decoder it returns, so
+        # an `APIStatusError` can only ever come from the call above, never
+        # from iterating -- widening the `try` would catch nothing more. What
+        # the decoder *does* defer is the body: it streams lazily
+        # (`http_response.iter_bytes`) and json-decodes each line as the loop
+        # pulls it, so a truncated stream or a malformed line surfaces here as
+        # a raw `httpx`/`json` error -- outside any `anthropic` type, so no
+        # `except anthropic.*` clause would reach it. Tracked as lode-3gtu.
         results: list[BatchResult] = []
-        for result in self._client.beta.messages.batches.results(
-            handle, timeout=timeout_s
-        ):
+        for result in batch_results:
             if result.result.type == "succeeded":
                 try:
                     tool_block = next(
                         b for b in result.result.message.content if b.type == "tool_use"
                     )
                 except StopIteration:
+                    # Degrading the one item (rather than failing the whole
+                    # collection) is deliberate -- see the module docstring.
+                    # lode-jgus made this reachable, and reaches it more
+                    # easily here than on the immediate branch (class
+                    # docstring); name the same model/stop_reason that branch
+                    # does, or the failure is undiagnosable.
+                    message = result.result.message
                     results.append(
                         BatchResult(
                             custom_id=result.custom_id,
                             outcome="errored",
                             parsed=None,
                             error=LLMProviderError(
-                                "no tool_use block in batch result",
+                                f"no tool_use block in batch result "
+                                f"(model={getattr(message, 'model', None)!r}, "
+                                f"stop_reason="
+                                f"{getattr(message, 'stop_reason', None)!r}) "
+                                f"{_BUDGET_EXHAUSTED_HINT}",
                                 provider="anthropic",
                             ),
                         )
@@ -736,6 +819,18 @@ def _extract_content_filter(body: object) -> object | None:
 # `test_openai_effort_levels_match_the_installed_sdk_literal`. Same "ladder can
 # grow" rationale as `_ANTHROPIC_EFFORT_LEVELS` above.
 _OPENAI_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+# Public so `lode.config.Settings` can validate `reasoning_effort` against the
+# legal set for the *configured* `llm_provider` at Settings-construction time
+# (lode-tvps), not only at the first API call. Keyed by the same literal
+# `Settings.llm_provider` uses. The two per-provider tuples above stay the
+# source of truth (and stay pinned to their installed SDK's own `Literal` by
+# the meta-tests) -- this mapping is a thin, load-order-safe re-export, not a
+# second copy.
+EFFORT_LEVELS_BY_PROVIDER: Mapping[Literal["anthropic", "openai"], tuple[str, ...]] = {
+    "anthropic": _ANTHROPIC_EFFORT_LEVELS,
+    "openai": _OPENAI_EFFORT_LEVELS,
+}
 
 
 def _openai_effort_kwargs(

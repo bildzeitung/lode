@@ -5191,6 +5191,22 @@ def _noop_embed_registry() -> dict:
     return {"embed": lambda conn, tv, db, s: None}
 
 
+# Seed any job this cluster expects `lode work` to CLAIM via
+# lode.jobs.enqueue_derive_jobs, never a bare INSERT (lode-4e48). A bare INSERT
+# leaves next_attempt_at on the table's SQL strftime('now') default -- SQLite's
+# raw wall clock, not the ratcheted `now` that worker._claim_one's
+# `next_attempt_at <= now` predicate compares it against. enqueue_derive_jobs's
+# own docstring works that two-clock hazard through in full (lode-0dnk); these
+# test sites were simply never migrated with it, which is how the stranded-job
+# flake came back ("drained 2 job(s)", not 3). Seeding through the production
+# primitive is eliminative, not merely narrowing: runner.invoke runs the CLI
+# in-process, and that clock never decreases within a process.
+#
+# A bare INSERT stays fine -- and is used throughout this file -- for a row the
+# claim predicate never sees: one seeded non-pending, or of a type the patched
+# registry excludes (the ('refresh', 'ver-stuck') rows further down).
+
+
 def test_work_drains_pending_embed_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5205,12 +5221,9 @@ def test_work_drains_pending_embed_jobs(
     conn = init_db(db_path)
     try:
         with conn:
-            # Insert three embed jobs directly (no version row needed for noop handler).
+            # Three embed jobs (no version row needed for the noop handler).
             for i in range(3):
-                conn.execute(
-                    "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                    ("embed", f"ver-{i}"),
-                )
+                enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
     finally:
         conn.close()
 
@@ -5251,10 +5264,7 @@ def test_work_exits_nonzero_with_actionable_message_on_auth_error(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5301,10 +5311,7 @@ def test_work_prints_per_job_embed_outcome_line(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-1"),
-            )
+            enqueue_derive_jobs(conn, "ver-1", types=("embed",))
     finally:
         conn.close()
 
@@ -5342,10 +5349,7 @@ def test_work_prints_jira_401_outcome_naming_source_and_reason(
                 "VALUES (?, ?, ?)",
                 ("ABC-401", SOURCE_TYPE_JIRA, "https://acme.atlassian.net"),
             )
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ABC-401"),
-            )
+            enqueue_derive_jobs(conn, "ABC-401", types=("refresh",))
     finally:
         conn.close()
 
@@ -5424,10 +5428,7 @@ def test_work_wait_exits_zero_once_queue_drains(
     conn = init_db(db_path)
     try:
         with conn:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("embed", "ver-0"),
-            )
+            enqueue_derive_jobs(conn, "ver-0", types=("embed",))
     finally:
         conn.close()
 
@@ -5971,6 +5972,7 @@ def test_models_pull_is_listed_under_models_help() -> None:
     assert "pull" in result.stdout
 
 
+@pytest.mark.real_embedder
 def test_real_model_wrappers_expose_warm() -> None:
     """The three real wrappers expose the public warm() seam 'models pull' calls.
 
@@ -5978,6 +5980,17 @@ def test_real_model_wrappers_expose_warm() -> None:
     even if the real classes lost warm() -- this pins the contract against the
     genuine articles. Constructing a wrapper only stores the model name (no
     fastembed import, no download), so this stays offline.
+
+    ``@pytest.mark.real_embedder`` is load-bearing HERE for a reason worth stating,
+    because the marker's usual justification does not apply and the omission is
+    silent (lode-sx17 land-review): the import below is *function-local*, so it
+    reads ``lode.embedding``'s attribute at CALL time -- which the autouse offline
+    stub has replaced (lode-7ypf). Without the marker this asserts ``callable`` on
+    a ``warm()`` that tests/conftest.py wrote, i.e. it becomes precisely the
+    fake-wrapper vacuity the docstring above says it exists to prevent, while
+    still passing. The other two wrappers are unaffected (nothing stubs them), so
+    only the ``FastEmbedEmbedder`` leg was hollow -- which is exactly why nothing
+    failed to give it away.
     """
     from lode.embedding import FastEmbedEmbedder
     from lode.faithfulness import FastEmbedEntailmentScorer
@@ -6151,6 +6164,7 @@ def test_models_pull_unmatched_value_error_still_propagates(
     assert str(result.exception) == "some unrelated ValueError"
 
 
+@pytest.mark.real_embedder
 def test_fastembed_still_raises_the_exhausted_sources_signature(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -6170,6 +6184,13 @@ def test_fastembed_still_raises_the_exhausted_sources_signature(
     Hermetic and offline: ``HF_HUB_OFFLINE=1`` against a cold ``$LODE_HOME``
     makes fastembed force ``local_files_only=True`` throughout, so it never
     touches the network -- it exhausts its sources locally and raises.
+
+    ``@pytest.mark.real_embedder`` (lode-7ypf) opts out of tests/conftest.py's
+    autouse offline embedder stub -- this test is the one place in the suite
+    that is *about* the installed package's own behaviour, so a stand-in would
+    make it assert on a string this repo wrote. It deliberately does NOT reach
+    for ``network``/``slow``: the socket guard stays on, because the offline
+    claim above is part of what is being asserted.
     """
     from lode.cli import _FASTEMBED_EXHAUSTED_SOURCES
     from lode.embedding import FastEmbedEmbedder
