@@ -901,6 +901,7 @@ machine. A red gate is content; exit 2 is the machine.
   `.git/`.
 
   ```bash
+  rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
   rtk git reset --hard origin/trunk
   STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset

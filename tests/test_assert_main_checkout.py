@@ -384,10 +384,11 @@ def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
     # working when the surrounding prose is rewritten, which it is constantly,
     # by concurrent tickets.
     #
-    # Section 3's reset is genuinely unguarded and is the same exposure class
-    # one section over, but it is outside this ticket's stated scope (Section 1)
-    # and cannot be built until scripts/assert-main-checkout.sh exists on trunk.
-    # Tracked by lode-gczf, which blocks on lode-pcee.
+    # Section 3's reset was the same exposure class one section over -- outside
+    # this ticket's stated scope (Section 1) and blocked until
+    # scripts/assert-main-checkout.sh existed on trunk. It is now guarded too
+    # (lode-gczf); see test_section3_isolation_replay_block_shares_guard_with_its_reset
+    # below for its own pin.
     owning = [
         b
         for b in blocks
@@ -427,6 +428,52 @@ def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
             f"scripts/assert-main-checkout.sh runs AFTER `{mutation}` in the same "
             f"block (lode-pcee) -- the assertion no longer protects it.\n\n{block}"
         )
+
+
+def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
+    """Section 3's isolation-replay block (the 'Red' path's per-branch replay
+    loop) runs its OWN `git reset --hard origin/trunk` -- a second, distinct
+    exposure of the exact class lode-pcee fixed in Section 1, filed
+    separately as lode-gczf since it could not be built until
+    `scripts/assert-main-checkout.sh` existed on trunk.
+
+    This block is identified by the same anchor command as
+    `test_guard_shares_one_block_with_the_commands_it_protects`, but the
+    OPPOSITE selection: it runs `git reset --hard origin/trunk` WITHOUT
+    `git checkout -f trunk` (which uniquely marks Section 1's block instead).
+    Reusing that same pair is what lode-pcee's own resolution note called
+    "mechanical" -- the anchor already distinguishes the two blocks.
+    """
+    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+
+    owning = [
+        b
+        for b in blocks
+        if "git reset --hard origin/trunk" in b and "git checkout -f trunk" not in b
+    ]
+    assert len(owning) == 1, (
+        "expected exactly one executed fence to run `git reset --hard "
+        "origin/trunk` WITHOUT `git checkout -f trunk` (Section 3's isolation-"
+        f"replay block), found {len(owning)} -- land/SKILL.md's layout has "
+        "drifted and this pin needs re-anchoring, not deleting"
+    )
+    block = owning[0]
+
+    guard_at = block.find("scripts/assert-main-checkout.sh")
+    assert guard_at >= 0, (
+        "Section 3's isolation-replay block does not call "
+        "scripts/assert-main-checkout.sh at all (lode-gczf). A guard in a "
+        "SEPARATE block cannot stop this one -- per lode-sfnb each block is "
+        f"its own Bash invocation, so its `exit` ends only itself.\n\n{block}"
+    )
+
+    reset_at = block.find("git reset --hard origin/trunk")
+    assert reset_at >= 0
+    assert guard_at < reset_at, (
+        "scripts/assert-main-checkout.sh runs AFTER `git reset --hard "
+        f"origin/trunk` in Section 3's block (lode-gczf) -- the assertion no "
+        f"longer protects it.\n\n{block}"
+    )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
