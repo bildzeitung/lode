@@ -163,6 +163,7 @@ class FastEmbedEmbedder:
         self._model_name = settings.embedding_model
         self._model: object | None = None
         self._revision: str | None = None
+        self._revision_probed = False
         self._load_lock = threading.Lock()
         self._heartbeat_interval_s = settings.progress_heartbeat_interval_s
 
@@ -172,6 +173,15 @@ class FastEmbedEmbedder:
         # this instance may be shared and called from concurrent threads
         # (lode-0wj.4), which a bare ``if self._model is None`` check would
         # race under.
+        #
+        # Deliberately does NOT resolve the HF revision (lode-dj6m): that used
+        # to happen right here, unconditionally, so a query-only embed (which
+        # only ever calls :meth:`_load` via :meth:`embed_query`, never
+        # :meth:`model_revision`) paid a live, untimed HTTPS round trip whose
+        # result nothing on that path reads. The probe now lives in
+        # :meth:`model_revision`, reached only by a caller that actually wants
+        # the revision -- the write path's :func:`_embedder_model_revision`,
+        # or an explicit :meth:`warm`.
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
@@ -190,36 +200,52 @@ class FastEmbedEmbedder:
                             model_name=self._model_name,
                             cache_dir=str(model_cache_dir()),
                         )
-                    # Captured alongside the model itself (same critical
-                    # section, same "only the first caller pays" property) --
-                    # a fresh probe every embed() call would otherwise double
-                    # the network round trip for no benefit, since this
-                    # instance's model_name can't change mid-lifetime. Never
-                    # raises (see resolve_model_revision); a failed probe just
-                    # leaves this None for this instance's lifetime, same as
-                    # any other WARN-territory provenance gap.
-                    self._revision = resolve_model_revision(self._model_name)
         return self._model
 
     def model_revision(self) -> str | None:
         """The resolved HuggingFace revision (commit SHA) behind this instance's weights.
 
         Forces the same lazy load :meth:`embed_passages`/:meth:`embed_query`
-        trigger (so calling this alone still resolves it), then returns the
-        revision captured at load time. ``None`` if the probe could not judge
-        (a ``config.toml`` override outside the pinned identity set, or any
-        network/lookup failure) — WARN territory, not a reason to fail.
+        trigger (so calling this alone still resolves it), then lazily probes
+        the HF revision on this, the first call to *this method* -- not inside
+        :meth:`_load` (lode-dj6m). A query-only embed never calls this method,
+        so it now pays no network cost at all; only a caller that actually
+        wants the revision (the write path's :func:`_embedder_model_revision`,
+        or :meth:`warm`) triggers the probe. Double-checked locking on the same
+        :attr:`_load_lock` as the model load keeps this thread-safe under the
+        same concurrent-caller scenario :meth:`_load`'s guard exists for
+        (lode-0wj.4), with the same "only the first caller pays" amortization
+        -- the result is cached in :attr:`_revision` for this instance's
+        lifetime; a fresh probe on every call would otherwise double the
+        network round trip for no benefit, since this instance's model_name
+        can't change mid-lifetime. ``None`` if the probe could not judge (a
+        ``config.toml`` override outside the pinned identity set, or any
+        network/lookup failure) — WARN territory, not a reason to fail (never
+        raises; see :func:`resolve_model_revision`).
         """
         self._load()
+        if not self._revision_probed:
+            with self._load_lock:
+                if not self._revision_probed:
+                    self._revision = resolve_model_revision(self._model_name)
+                    self._revision_probed = True
         return self._revision
 
     def warm(self) -> None:
-        """Force the weights download/load now, ahead of any embed call.
+        """Force the weights download/load AND the HF revision probe now, ahead
+        of any embed call.
 
-        The public seam ``lode models pull`` (lode-6qh) warms the cache through,
-        so the CLI does not depend on the private :meth:`_load`.
+        The public seam ``lode models pull`` (lode-6qh) warms the cache
+        through, so the CLI does not depend on the private :meth:`_load`.
+        Also resolves and caches :meth:`model_revision` here rather than
+        leaving it to the first real write: ``lode models pull``'s own
+        docstring promises "every subsequent run is fully offline for
+        indexing and retrieval", and the write path's
+        :func:`_embedder_model_revision` probe would otherwise still pay a
+        live network call on the first post-warm index now that
+        :meth:`_load` itself no longer resolves it eagerly (lode-dj6m).
         """
-        self._load()
+        self.model_revision()
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         model = self._load()

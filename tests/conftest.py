@@ -251,7 +251,9 @@ os.environ.pop("NO_COLOR", None)
 #: ``build_hf_headers()``, i.e. while building the headers for EVERY Hub request -- calls
 #: ``detect_agent()``, and on a cold 24h-TTL cache that
 #: is a live ``GET {ENDPOINT}/api/agent-harnesses`` (``utils/_detect_agent.py``). On lode's path
-#: (``FastEmbedEmbedder._load`` -> ``resolve_model_revision`` -> ``huggingface_hub.model_info``) that
+#: (``FastEmbedEmbedder.model_revision`` -> ``resolve_model_revision`` -> ``huggingface_hub.model_info``,
+#: reached from the write path or an explicit ``warm()`` -- lode-dj6m moved this off the query-only
+#: ``embed_query``/``_load`` path entirely) that
 #: fetch is the FIRST socket the guard sees, ahead of ``model_info``'s own. ``http_user_agent`` skips
 #: ``detect_agent()`` entirely when this is set, so the fetch never happens.
 #:
@@ -756,10 +758,12 @@ def _stub_the_query_embedder_offline(
 ) -> None:
     """Keep the real ONNX query embedder out of every guarded test (lode-7ypf).
 
-    :class:`~lode.embedding.FastEmbedEmbedder`'s first ``embed_query`` resolves
-    the HuggingFace model revision over the network, unconditionally, warm cache
-    or not (``embedding.py``'s ``resolve_model_revision``; the product-side
-    defect is lode-dj6m). Any test that lets that run reaches huggingface.co.
+    Even setting aside the HF revision probe (fixed product-side by lode-dj6m:
+    ``embed_query`` no longer resolves it at all), the real
+    :class:`~lode.embedding.FastEmbedEmbedder` still downloads/loads the actual
+    ONNX weights on first use -- hundreds of MB, and real disk/CPU cost no test
+    here wants to pay. Any test that lets that run reaches the network (a cold
+    cache) or burns real time (a warm one).
 
     The path that made this a real problem is
     :meth:`~lode.tui.widgets.related_notes_panel.RelatedNotesPanel._ensure_embedder`:

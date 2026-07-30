@@ -458,6 +458,96 @@ def test_fast_embed_embedder_model_revision_none_on_probe_failure(
     assert embedder.model_revision() is None
 
 
+def test_embed_query_never_probes_the_revision_even_with_a_warm_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A query-only embed makes no HF revision probe at all (lode-dj6m).
+
+    Before this fix, ``FastEmbedEmbedder._load`` resolved the HF revision
+    unconditionally, so every ``embed_query`` (the passive related-notes panel,
+    ``ask``/``retrieve``) paid a live, untimed HTTPS round trip whose result
+    nothing on that path reads -- regardless of whether the ONNX weights were
+    already cached on disk. ``huggingface_hub.model_info`` is stubbed to raise
+    if it is ever called, so this fails loudly rather than silently passing if
+    the probe creeps back onto the read path.
+    """
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeVector:
+        def tolist(self) -> list[float]:
+            return [0.1, 0.2, 0.3]
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def embed(self, texts: list[str]) -> list[_FakeVector]:
+            return [_FakeVector() for _ in texts]
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    def _boom(repo_id: str) -> None:
+        raise AssertionError(
+            "embed_query must never resolve the HF revision (lode-dj6m)"
+        )
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _boom)
+
+    embedder = FastEmbedEmbedder(_settings())
+    assert embedder.embed_query("anything") == [0.1, 0.2, 0.3]
+    # Twice, to rule out a "resolved lazily on the first call only" reading --
+    # embed_query must stay off this probe for the instance's whole lifetime.
+    assert embedder.embed_query("anything again") == [0.1, 0.2, 0.3]
+
+
+def test_warm_still_resolves_the_revision_so_indexing_stays_offline_after(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``warm()`` (the ``lode models pull`` seam) must still probe the revision.
+
+    lode-dj6m moved the HF revision probe off :meth:`FastEmbedEmbedder._load`
+    so a query-only embed no longer pays for it -- but ``lode models pull``'s
+    own docstring promises "every subsequent run is fully offline for indexing
+    and retrieval", and the write path's ``_embedder_model_revision`` probe
+    still needs the resolved revision. ``warm()`` must keep paying for it
+    up front so that promise stays true.
+    """
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    probe_calls = 0
+
+    class _FakeModelInfo:
+        sha = "warmed-sha"
+
+    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(_settings())
+    embedder.warm()
+
+    assert probe_calls == 1
+    # Already resolved and cached by warm() -- model_revision() afterward must
+    # not re-probe.
+    assert embedder.model_revision() == "warmed-sha"
+    assert probe_calls == 1
+
+
 # --- FastEmbedEmbedder.embed_query: the asymmetric query side (lode-bkc) --------
 #
 # The query path applies the ``search_query:`` prefix (vs ``search_document:`` for
