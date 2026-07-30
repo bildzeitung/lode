@@ -22,14 +22,17 @@ What this file adds on top of that is the regression gate, in three parts:
 
 1. Behavioural tests that run the ACTUAL script against a real, throwaway
    git repository in `tmp_path` (its only external dependency is
-   `git rev-parse --git-dir`, to place the lock under `.git/`) -- no fake
-   git, no mocked subprocess. Reintroducing either half of the old design
-   turns these red: a `trap` release makes
+   `git rev-parse --git-common-dir`, to place the lock under the repo's
+   shared `.git/` -- repo-global rather than worktree-private, lode-xkpd) --
+   no fake git, no mocked subprocess. Reintroducing either half of the old
+   design turns these red: a `trap` release makes
    `test_second_acquire_without_release_is_skipped_while_fresh` fail (the
    lock is gone by the next invocation), and a `kill -0` liveness check
    makes `test_fresh_lock_with_an_unreachable_pid_is_not_reclaimed` fail.
    Both mutations were run against this file and confirmed red (5 and 6
-   failures of 14 respectively).
+   failures of 14 respectively). `test_lock_path_is_identical_from_a_linked_
+   worktree` pins the repo-global part specifically, against a real `git
+   worktree add`.
 
 2. A concurrency stress test (lode-ao95) reproducing the actual defect: many
    rounds of N-way concurrent `acquire` calls against the SAME manually
@@ -194,6 +197,69 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not _lock_path(repo).exists()
+
+
+# ---------------------------------------------------------------------------
+# Repo-global lock path (lode-xkpd) -- `--git-dir` is worktree-PRIVATE
+# ---------------------------------------------------------------------------
+
+
+def test_lock_path_is_identical_from_a_linked_worktree(tmp_path: Path) -> None:
+    """`git rev-parse --git-dir` returns a PRIVATE per-worktree gitdir
+    (`.git/worktrees/<name>`) from a linked worktree, and only the shared
+    `.git` from the main checkout -- so a lock derived from it would let the
+    main checkout and a linked worktree of the SAME repo take two DIFFERENT
+    lockfiles, and neither `acquire` would see the other (lode-xkpd,
+    discovered while reviewing lode-pcee's identical class of bug one script
+    over). This is the regression the ticket exists to close: it fails
+    against the `--git-dir` form (the worktree's `acquire` below would
+    succeed instead of being skipped) and passes against
+    `--git-common-dir`, which returns the one shared `.git` from every
+    worktree of the repo including the main checkout."""
+    repo = _init_repo(tmp_path)
+    subprocess.run(
+        ["git", "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", str(worktree), "-b", "feat", "trunk"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+
+    from_main = _run("acquire", repo=repo)
+    assert from_main.returncode == 0, from_main.stdout + from_main.stderr
+    assert _lock_path(repo).exists()
+
+    from_worktree = _run("acquire", repo=worktree)
+
+    # If the lock path were worktree-relative, this `acquire` would succeed
+    # (it would be writing to a DIFFERENT, not-yet-existing file) instead of
+    # being skipped as "still held".
+    assert from_worktree.returncode == 1, (
+        "acquire from the linked worktree succeeded even though the main "
+        "checkout already holds the lock -- the lock path is not repo-global"
+        f"\nmain: {from_main.stdout}{from_main.stderr}"
+        f"\nworktree: {from_worktree.stdout}{from_worktree.stderr}"
+    )
+    assert "skipping this tick" in from_worktree.stderr
+
+    # And no SEPARATE, worktree-private lock file was created either -- the
+    # worktree's `acquire` genuinely contended on the SAME file, not merely
+    # failed for some unrelated reason while writing its own private one.
+    private_lock = repo / ".git" / "worktrees" / "feat" / "land.lock"
+    assert not private_lock.exists(), (
+        "a worktree-private lock file exists -- the worktree computed a "
+        "DIFFERENT $LOCK than the main checkout"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -262,8 +262,8 @@
 #           held the lock (e.g. it just skipped the tick above) must be able
 #           to call this harmlessly too.
 #
-# Lock file lives under .git/ (per-machine, never committed) -- same path the
-# snippet this replaces used: $(git rev-parse --git-dir)/land.lock.
+# Lock file lives under .git/ (per-machine, never committed) -- the shared,
+# repo-global .git, not a worktree-private one (lode-xkpd; see below).
 
 set -euo pipefail
 
@@ -274,7 +274,19 @@ if [ "$#" -ne 1 ] \
 fi
 cmd="$1"
 
-LOCK="$(git rev-parse --git-dir)/land.lock"
+# `git rev-parse --git-dir` is NOT repo-global: from a LINKED worktree it
+# returns that worktree's PRIVATE gitdir (.git/worktrees/<name>), and only
+# from the main checkout does it return the shared .git. Two /land passes --
+# one in the main checkout, one (mis)dispatched into a worktree -- would then
+# take two DIFFERENT lockfiles and neither would see the other, silently
+# defeating the single-lander guarantee this whole script exists to provide
+# (lode-xkpd, discovered while reviewing lode-pcee's identical class of bug
+# one script over). `--git-common-dir` returns the ONE shared .git from every
+# worktree of the repo, including the main checkout, and is otherwise a
+# one-word swap -- LATENT today (assert-main-checkout.sh, lode-pcee, already
+# refuses to let /land run anywhere but the main checkout), but this keeps the
+# lock path itself repo-global regardless of where the script is invoked from.
+LOCK="$(git rev-parse --git-common-dir)/land.lock"
 STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-1800}"
 
 # The mkdir-based gate serializing a reclaim's destructive rm+write (CAVEAT
