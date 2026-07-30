@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from lode.jobs import now_iso
 from lode.storage import init_db, schema_sql
+from lode.worker import _claim_one
 
 # Every table in the docs/storage.md §8 data shape.
 DATA_SHAPE_TABLES = {
@@ -162,6 +164,13 @@ def test_next_attempt_at_migrated_onto_pre_existing_jobs_table(tmp_path: Path) -
             "AND next_attempt_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
         ).fetchone()[0]
         assert due == 1, "backfilled job must be visible to the claim predicate"
+
+        # lode-uk1i: not just visible to the predicate in isolation -- actually
+        # claimable by the real worker primitive, on a DB shaped exactly like
+        # every pre-lode-pig deployment (nullable next_attempt_at, no SQL
+        # DEFAULT at all, since ALTER TABLE ADD COLUMN cannot carry one).
+        claimed_id = _claim_one(conn, ("enrich",), now_iso())
+        assert claimed_id is not None, "migrated+backfilled job must be claimable"
     finally:
         conn.close()
 

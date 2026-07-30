@@ -525,10 +525,12 @@ Scoping to `pending`/`running` is load-bearing: it dedupes in-flight work but
 scan depends on this). Enqueue uses `INSERT ... ON CONFLICT DO NOTHING`.
 
 **Backoff scheduling — `next_attempt_at`.**
-The `next_attempt_at TEXT NOT NULL DEFAULT (strftime(...'now'))` column (ISO-8601
-UTC) lets the worker durably schedule a retry: claim selects `WHERE status =
-'pending' AND next_attempt_at <= now`. Without this column a restart mid-backoff
-retries immediately.
+The `next_attempt_at TEXT NOT NULL` column (ISO-8601 UTC) lets the worker durably
+schedule a retry: claim selects `WHERE status = 'pending' AND next_attempt_at <=
+now`. Without this column a restart mid-backoff retries immediately. Deliberately
+**no SQL `DEFAULT`** (lode-uk1i, dropped after two independent test-only clock-race
+bugs it enabled — the queue-clock section below): every writer, production and
+test, stamps this column explicitly from `jobs.now_iso()`.
 
 **Dead-letter terminal — distinct `dead` status.**
 The status lifecycle is:
@@ -620,16 +622,23 @@ and pulling in opposite directions:
 
 1. **Readings never decrease** — a backward step is absorbed, so no job is spuriously "not ready yet".
 2. **Readings are never *behind* `CLOCK_REALTIME`** — because *not every timestamp it is compared
-   against comes from it.* `jobs.next_attempt_at` defaults to SQLite's own `strftime('now')`, and a
-   job is typically enqueued by one process (CLI/TUI) and claimed by another (`lode work`). A clock
-   that merely never went backward would fall permanently behind those writers after a *forward* step,
-   make every freshly enqueued job look not-yet-due, and strand it exactly as in (1) — trading one bug
-   for a worse one.
+   against comes from *this process's* ratchet.* Two writers land a `next_attempt_at` (or a value it is
+   derived from) without ever touching *this* process's `now()`: a cross-process claim — the enqueuing
+   process's own `jobs.now_iso()` call ratchets against its own `_now_epoch`, a module-level global that
+   is **not** shared across processes, so from `lode work`'s `drain` loop, running in a *different*
+   process, that stamp is indistinguishable from a raw `CLOCK_REALTIME` read; and the forward
+   migration's backfill (`storage.py`'s `_apply_migrations`: `next_attempt_at = created` for a row that
+   predates the column), which copies `created` — itself the schema's raw `strftime('now')` `DEFAULT`,
+   stamped without ever touching the ratchet at all (`jobs.next_attempt_at`'s own `DEFAULT` was dropped
+   for the identical reason, lode-uk1i — see below). A clock that merely never went backward would fall
+   permanently behind either writer after a *forward* step, make the row look not-yet-due, and strand
+   it exactly as in (1) — trading one bug for a worse one.
 
-Guarantee (2) is what makes rows stamped from a raw wall clock — SQLite's column default, or another
-process — safe to compare against `now()` without routing every writer through it. A monotonic clock
-alone would **not** have been safe. The cost of absorbing a backward step is running slightly ahead of
-true time until the wall clock catches up: a job retried a hair late, which beats a job stranded.
+Guarantee (2) is what makes rows stamped from a raw wall clock — another process's ratchet, or the
+migration backfill above — safe to compare against `now()` without routing every writer through *this*
+process's clock. A monotonic clock alone would **not** have been safe. The cost of absorbing a backward
+step is running slightly ahead of true time until the wall clock catches up: a job retried a hair late,
+which beats a job stranded.
 
 **A residual gap in guarantee (2) — closed for the same-process enqueue-then-claim case (lode-0dnk).**
 Guarantee (2) only holds relative to `CLOCK_REALTIME` *at the moment of that specific `now()` call* —

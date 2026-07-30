@@ -2520,12 +2520,18 @@ def _insert_enrich_job_worker(
     status: str = "pending",
     batch_handle: str | None = None,
 ) -> int:
-    """Insert an enrich job; return job id."""
+    """Insert an enrich job; return job id.
+
+    Stamps ``next_attempt_at`` via the same ratcheted ``_now_iso()`` clock
+    ``_batch_submit_enrich``'s claim predicate reads (lode-uk1i) -- not
+    SQLite's raw wall clock, which is exactly the cross-clock race lode-t1y /
+    lode-4e48 fixed for the sibling ``_insert_job`` helper above.
+    """
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, batch_handle) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, batch_handle),
+            "INSERT INTO jobs (type, target_version, status, batch_handle, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?, ?)",
+            (version_id, status, batch_handle, _now_iso()),
         )
     return cur.lastrowid
 

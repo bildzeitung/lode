@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_error      TEXT,
     batch_handle    TEXT,
     claimed_at      TEXT,
-    next_attempt_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    next_attempt_at TEXT NOT NULL,
     created         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

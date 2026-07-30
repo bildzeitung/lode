@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from lode.config import Settings
+from lode.jobs import now_iso
 from lode.reconcile import _embed_gap_step, _refresh_stale_step, reconcile
 from lode.storage import init_db
 
@@ -111,8 +112,9 @@ def _insert_embed_job(
     """Insert a minimal embed job row with the given status."""
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('embed', ?, ?)",
-            (target_version, status),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('embed', ?, ?, ?)",
+            (target_version, status, now_iso()),
         )
 
 
@@ -186,8 +188,9 @@ def _insert_refresh_job(
     """Insert a minimal refresh job row with the given status (lode-w0h.6)."""
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('refresh', ?, ?)",
-            (target_version, status),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('refresh', ?, ?, ?)",
+            (target_version, status, now_iso()),
         )
 
 

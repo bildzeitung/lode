@@ -21,6 +21,7 @@ from lode.jobs import (
     iso,
     next_failure_state,
     now,
+    now_iso,
     record_job_failure,
 )
 from lode.storage import init_db
@@ -149,8 +150,9 @@ def test_dead_status_accepted_by_schema(conn) -> None:
     """The status CHECK must accept 'dead' (added in lode-i05.6)."""
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES (?, ?, ?)",
-            ("embed", "ver-dead", "dead"),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("embed", "ver-dead", "dead", now_iso()),
         )
     (status,) = conn.execute(
         "SELECT status FROM jobs WHERE target_version = 'ver-dead'"
@@ -167,23 +169,28 @@ def test_dead_status_accepted_by_schema(conn) -> None:
 
 
 def _insert_running_job(conn, *, claimed_at: str | None = None) -> int:
+    # next_attempt_at is irrelevant to every caller here -- record_job_failure
+    # always overwrites it as part of the failure transition -- so any valid
+    # value satisfies the NOT NULL column (lode-uk1i dropped the schema DEFAULT
+    # that used to supply one).
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, claimed_at) "
-            "VALUES ('embed', 'ver-1', 'running', ?)",
-            (claimed_at,),
+            "INSERT INTO jobs (type, target_version, status, claimed_at, next_attempt_at) "
+            "VALUES ('embed', 'ver-1', 'running', ?, ?)",
+            (claimed_at, now_iso()),
         )
     return cur.lastrowid
 
 
 def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
     settings = Settings(retry_max_attempts=5)
-    # Anchor BEFORE the insert: the schema stamps next_attempt_at with its own
-    # NOT NULL DEFAULT (strftime('now')) — i.e. ~this instant. Asserting merely
-    # "not NULL", or "> before", would therefore pass even if record_job_failure
-    # stamped nothing at all. The backoff is only proven by requiring the value
-    # to sit a FULL retry_backoff_base_s ahead of this anchor, which the column
-    # default cannot satisfy.
+    # Anchor BEFORE the insert: _insert_running_job stamps next_attempt_at with
+    # an arbitrary valid value (~this instant) that record_job_failure's failure
+    # transition always overwrites. Asserting merely "not NULL", or "> before",
+    # would therefore pass even if record_job_failure stamped nothing new at
+    # all. The backoff is only proven by requiring the value to sit a FULL
+    # retry_backoff_base_s ahead of this anchor, which the row's initial value
+    # cannot satisfy on its own.
     before = now()
     job_id = _insert_running_job(conn)
 

@@ -35,6 +35,7 @@ from lode.enrich import (
     format_enrich_outcome,
     submit_enrich_batch,
 )
+from lode.jobs import now_iso
 from lode.llm_provider import AnthropicProvider, ModelTier
 from lode.reconcile import _enrich_gap_step
 from lode.storage import init_db
@@ -1005,7 +1006,9 @@ def test_enrich_gap_skips_live_job(conn: sqlite3.Connection) -> None:
     _insert_note(conn)
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version) VALUES ('enrich', 'ver-1')"
+            "INSERT INTO jobs (type, target_version, next_attempt_at) "
+            "VALUES ('enrich', 'ver-1', ?)",
+            (now_iso(),),
         )
     assert _enrich_gap_step(conn) == 0
 
@@ -1022,8 +1025,9 @@ def test_enrich_gap_skips_in_flight_batch_job(conn: sqlite3.Connection) -> None:
     _insert_note(conn)
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status, batch_handle) "
-            "VALUES ('enrich', 'ver-1', 'running', 'batch-abc123')"
+            "INSERT INTO jobs (type, target_version, status, batch_handle, next_attempt_at) "
+            "VALUES ('enrich', 'ver-1', 'running', 'batch-abc123', ?)",
+            (now_iso(),),
         )
     assert _enrich_gap_step(conn) == 0
     # Still exactly the one in-flight job -- no duplicate pending row.
@@ -1038,7 +1042,9 @@ def test_enrich_gap_reenqueues_dead_job(conn: sqlite3.Connection) -> None:
     _insert_note(conn)
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('enrich', 'ver-1', 'dead')"
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', 'ver-1', 'dead', ?)",
+            (now_iso(),),
         )
     count = _enrich_gap_step(conn)
     assert count == 1
@@ -1083,9 +1089,9 @@ def _insert_done_enrich_job(
     """
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status, prompt_ver) "
-            "VALUES ('enrich', ?, 'done', ?)",
-            (target_version, prompt_ver),
+            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
+            "VALUES ('enrich', ?, 'done', ?, ?)",
+            (target_version, prompt_ver, now_iso()),
         )
 
 
@@ -1178,8 +1184,9 @@ def test_enrich_gap_pending_job_not_reenqueued_regardless_of_prompt_ver(
     _insert_note(conn)
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status, prompt_ver) "
-            "VALUES ('enrich', 'ver-1', 'pending', 'some-older-prompt-ver')"
+            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
+            "VALUES ('enrich', 'ver-1', 'pending', 'some-older-prompt-ver', ?)",
+            (now_iso(),),
         )
     assert _enrich_gap_step(conn) == 0
 
@@ -1197,8 +1204,9 @@ def _insert_enrich_job(
     """Insert a pending enrich job row; return the job id."""
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('enrich', ?, ?)",
-            (version_id, status),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (version_id, status, now_iso()),
         )
     return cur.lastrowid
 
