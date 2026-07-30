@@ -30,9 +30,16 @@ What this file adds on top of that is the regression gate, in three parts:
    lock is gone by the next invocation), and a `kill -0` liveness check
    makes `test_fresh_lock_with_an_unreachable_pid_is_not_reclaimed` fail.
    Both mutations were run against this file and confirmed red (5 and 6
-   failures of 14 respectively). `test_lock_path_is_identical_from_a_linked_
-   worktree` pins the repo-global part specifically, against a real `git
-   worktree add`.
+   failures of the 14 behavioural tests that existed when that was measured).
+   Two tests pin the repo-global lock path (lode-xkpd), and both pin the SAME
+   property -- "an acquire from elsewhere in the repo contends on the same
+   file" -- from the two directions that can break it:
+   `test_lock_path_is_identical_from_a_linked_worktree` (a real `git worktree
+   add`; red if `--git-common-dir` reverts to `--git-dir`) and
+   `test_lock_path_is_identical_from_a_subdirectory_of_the_main_checkout` (a
+   cwd-relative path that stops resolving). Note that neither pins
+   `--path-format=absolute` itself on a current git -- see that second test's
+   docstring, which is explicit about the limit.
 
 2. A concurrency stress test (lode-ao95) reproducing the actual defect: many
    rounds of N-way concurrent `acquire` calls against the SAME manually
@@ -62,22 +69,30 @@ import threading
 import time
 from pathlib import Path
 
+from _gitrepo import _git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
 
 
 def _init_repo(tmp_path: Path) -> Path:
-    """A throwaway git repo -- just enough for `git rev-parse --git-dir`."""
+    """A throwaway git repo -- just enough for `git rev-parse --git-common-dir`.
+
+    The `user.email`/`user.name` config is not decoration: any test here that
+    goes on to make a COMMIT (the linked-worktree tests below need one, since
+    `git worktree add` requires a ref to branch from) fails outright with
+    `fatal: empty ident name` on a machine with no ambient global git identity
+    -- a fresh clone or a CI container (measured: exit 128). Setting it here
+    rather than in those tests matches the seven sibling script-test modules
+    that all configure it inside their own `_init_repo`, and keeps this file
+    from passing only on machines that happen to have a global identity
+    configured.
+    """
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(
-        ["git", "init", "-q", "-b", "trunk"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
+    _git(repo, "init", "-q", "-b", "trunk")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "test")
     return repo
 
 
@@ -205,35 +220,18 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
 
 def test_lock_path_is_identical_from_a_linked_worktree(tmp_path: Path) -> None:
-    """`git rev-parse --git-dir` returns a PRIVATE per-worktree gitdir
-    (`.git/worktrees/<name>`) from a linked worktree, and only the shared
-    `.git` from the main checkout -- so a lock derived from it would let the
-    main checkout and a linked worktree of the SAME repo take two DIFFERENT
-    lockfiles, and neither `acquire` would see the other (lode-xkpd,
-    discovered while reviewing lode-pcee's identical class of bug one script
-    over). This is the regression the ticket exists to close: it fails
-    against the `--git-dir` form (the worktree's `acquire` below would
-    succeed instead of being skipped) and passes against
-    `--git-common-dir`, which returns the one shared `.git` from every
-    worktree of the repo including the main checkout."""
+    """Why a worktree-private gitdir would break the lock is explained at the
+    `LOCK=` line in scripts/land-lock.sh, not restated here (this module's
+    no-second-copy policy, above).
+
+    What this test contributes: it is red against the `--git-dir` form -- the
+    worktree's `acquire` succeeds instead of being skipped -- and green against
+    `--git-common-dir`. Verified by running exactly that mutation (lode-xkpd);
+    both acquires then reported success with different tokens."""
     repo = _init_repo(tmp_path)
-    subprocess.run(
-        ["git", "commit", "-q", "--allow-empty", "-m", "base"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "base")
     worktree = tmp_path / "wt"
-    subprocess.run(
-        ["git", "worktree", "add", "-q", str(worktree), "-b", "feat", "trunk"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=True,
-    )
+    _git(repo, "worktree", "add", "-q", str(worktree), "-b", "feat", "trunk")
 
     from_main = _run("acquire", repo=repo)
     assert from_main.returncode == 0, from_main.stdout + from_main.stderr
@@ -255,10 +253,68 @@ def test_lock_path_is_identical_from_a_linked_worktree(tmp_path: Path) -> None:
     # And no SEPARATE, worktree-private lock file was created either -- the
     # worktree's `acquire` genuinely contended on the SAME file, not merely
     # failed for some unrelated reason while writing its own private one.
-    private_lock = repo / ".git" / "worktrees" / "feat" / "land.lock"
+    #
+    # ASK GIT where the private gitdir is rather than hand-spelling it: the
+    # directory under `.git/worktrees/` is named after the worktree's DIRECTORY
+    # basename (`wt`), NOT its branch (`feat`), so a hand-spelled
+    # `.git/worktrees/feat/...` names a path git never creates under EITHER
+    # form of the fix -- unconditionally absent, and therefore proof of
+    # nothing. Same reasoning as `_gate_path` above, and the same repo-wide
+    # fiat (docs/conventions.md, "Derive identifiers, never retype them").
+    private_gitdir = Path(
+        _git(
+            worktree, "rev-parse", "--path-format=absolute", "--git-dir"
+        ).stdout.strip()
+    )
+    private_lock = private_gitdir / "land.lock"
     assert not private_lock.exists(), (
         "a worktree-private lock file exists -- the worktree computed a "
-        "DIFFERENT $LOCK than the main checkout"
+        f"DIFFERENT $LOCK ({private_lock}) than the main checkout"
+    )
+
+
+def test_lock_path_is_identical_from_a_subdirectory_of_the_main_checkout(
+    tmp_path: Path,
+) -> None:
+    """A hazard the linked-worktree test above cannot catch, because it is not
+    about worktrees at all -- see the `--path-format=absolute` paragraph at the
+    `LOCK=` line in scripts/land-lock.sh for why cwd-relativity matters.
+
+    Be precise about what this does and does not pin, because it is weaker than
+    it looks. Dropping `--path-format=absolute` alone does NOT turn it red on a
+    git that resolves the relative answer against cwd (measured: git 2.43
+    answers `../../.git`, which still names the right file). The contract it
+    actually guards is "an acquire from a subdirectory contends on the SAME
+    file as one from the root", which is the property mutual exclusion needs.
+    It DOES go red once the path stops resolving from cwd -- the older-git
+    behaviour of returning a bare `.git` relative to the TOPLEVEL. Verified
+    non-vacuous by mutating $LOCK to a hardcoded `.git/land.lock`: the subdir
+    acquire then takes the MACHINE FAULT branch, so `returncode == 1` passes
+    coincidentally and the STDERR assertion below is the one that catches it.
+    Keep both."""
+    repo = _init_repo(tmp_path)
+    subdir = repo / "sub" / "deeper"
+    subdir.mkdir(parents=True)
+
+    from_root = _run("acquire", repo=repo)
+    assert from_root.returncode == 0, from_root.stdout + from_root.stderr
+    assert _lock_path(repo).exists()
+
+    from_subdir = _run("acquire", repo=subdir)
+
+    assert from_subdir.returncode == 1, (
+        "acquire from a subdirectory of the main checkout succeeded even "
+        "though the root already holds the lock -- the lock path is cwd-relative"
+        f"\nroot: {from_root.stdout}{from_root.stderr}"
+        f"\nsubdir: {from_subdir.stdout}{from_subdir.stderr}"
+    )
+    assert "skipping this tick" in from_subdir.stderr
+
+    # No second lock file anywhere under the subdirectory -- the subdir's
+    # `acquire` contended on the SAME file rather than writing its own.
+    assert not list(subdir.rglob("land.lock")), (
+        "a lock file was created under the subdirectory -- $LOCK resolved "
+        "relative to cwd instead of to the shared .git"
     )
 
 

@@ -275,18 +275,45 @@ fi
 cmd="$1"
 
 # `git rev-parse --git-dir` is NOT repo-global: from a LINKED worktree it
-# returns that worktree's PRIVATE gitdir (.git/worktrees/<name>), and only
-# from the main checkout does it return the shared .git. Two /land passes --
-# one in the main checkout, one (mis)dispatched into a worktree -- would then
-# take two DIFFERENT lockfiles and neither would see the other, silently
-# defeating the single-lander guarantee this whole script exists to provide
-# (lode-xkpd, discovered while reviewing lode-pcee's identical class of bug
-# one script over). `--git-common-dir` returns the ONE shared .git from every
-# worktree of the repo, including the main checkout, and is otherwise a
-# one-word swap -- LATENT today (assert-main-checkout.sh, lode-pcee, already
-# refuses to let /land run anywhere but the main checkout), but this keeps the
-# lock path itself repo-global regardless of where the script is invoked from.
-LOCK="$(git rev-parse --git-common-dir)/land.lock"
+# returns that worktree's PRIVATE gitdir (.git/worktrees/<name>), and only from
+# the main checkout does it return the shared .git. Two /land passes -- one in
+# the main checkout, one (mis)dispatched into a worktree -- would then take two
+# DIFFERENT lockfiles and neither would see the other, silently defeating the
+# single-lander guarantee this whole script exists to provide (lode-xkpd,
+# discovered while reviewing lode-pcee's identical class of bug one script
+# over). `--git-common-dir` returns the ONE shared .git from every worktree of
+# the repo, including the main checkout.
+#
+# `--path-format=absolute` is load-bearing too, for a SECOND, non-worktree
+# reason: bare `--git-common-dir` is CWD-RELATIVE inside the main checkout --
+# `.git` from the root, but `../../.git` from a subdirectory. Those resolve to
+# the same file (so mutual exclusion holds either way), but the path STRING
+# differs by cwd, which is not the "byte-identical from every worktree" this
+# ticket asked for, and it leaves the `$LOCK` / `$RECLAIM_GATE` paths printed
+# in the diagnostics below dependent on the reader's cwd -- directly against
+# the operator-inspects-the-right-file reasoning at the bottom of this script.
+# Forcing absolute makes the path identical from every cwd AND every worktree.
+# Same flag pair, for the same reason, as scripts/assert-main-checkout.sh
+# (lode-pcee), which reads the shared .git for its own identity check -- but
+# NOT that script's failure discipline: it wraps its `rev-parse` calls to map a
+# git failure onto its documented exit 2, whereas the bare command substitution
+# below lets git's own 128 escape through `set -e`, outside the 0/1/2 contract
+# documented above. That gap is inherited from the `--git-dir` line this
+# replaces, not introduced here (SKILL.md's caller collapses any non-zero to
+# "skip the tick", so mutual exclusion is unaffected -- what is lost is the
+# machine-fault-vs-another-lander distinction). Tracked separately; do not read
+# the cross-reference above as a claim that this script is already that strict.
+#
+# STILL LATENT rather than live -- but NOT because assert-main-checkout.sh
+# covers it. That guard runs in land/SKILL.md **Section 1**, and this lock is
+# acquired in **Section 0**, before it: nothing asserts where the pass is
+# running until after the lockfile has already been written, so a misdispatched
+# pass would write a worktree-private lock and only then be stopped. What
+# actually keeps this latent is the operating convention that /land runs in the
+# main checkout at all. That ordering gap is precisely why fixing the path here
+# is worth more than a cosmetic tidy -- do not "simplify" this back on the
+# theory that the Section 1 guard already handles it.
+LOCK="$(git rev-parse --path-format=absolute --git-common-dir)/land.lock"
 STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-1800}"
 
 # The mkdir-based gate serializing a reclaim's destructive rm+write (CAVEAT
