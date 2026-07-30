@@ -780,7 +780,17 @@ for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machin
 message — the same convention `scripts/merge-precheck.sh` and `scripts/validate-mermaid.sh` use,
 lode-9i2p):
 
+**This block needs its own [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh)
+call, for the same reason Section 3's isolation-replay block does (lode-gczf): it is a fresh Bash
+invocation, so Section 1's guard — several sections earlier — cannot reach it (lode-sfnb).**
+`scripts/land-merge-one.sh`, called inside the loop below, runs a bare `git merge --no-ff` against
+cwd with no ref or path pinning the target — the exact class of exposure lode-pcee fixed in Section 1
+and lode-gczf fixed in Section 3's replay loop, just in the third fence that runs it (lode-pxyt). Keep
+the guard first and every command it protects in this same fence — splitting it back out is what
+would silently un-guard them again.
+
 ```bash
+rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
@@ -1040,7 +1050,18 @@ rtk git status --short
   *every* commit regardless of what was `git add`-ed (see CLAUDE.md's workflow gotchas), so the
   commit itself must skip hooks too:
 
+  **Unlike every other command in this section — `git push origin trunk`, `git push origin --delete
+  land/<id>`, `git worktree remove --force`, `git branch -D`, `git worktree prune`, each ref- or
+  path-addressed and therefore cwd-independent — this commit names no ref or path at all.** It
+  commits directly to whatever branch cwd's `HEAD` happens to be on. Run from the wrong directory it
+  is not a loud failure: it silently commits the reformat to that directory's branch, and the
+  `git push origin trunk` a few lines below then pushes local `trunk` *without* it — green all the
+  way through (lode-pxyt). This is a fresh Bash invocation, so it needs its own
+  [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call, as the first line of
+  this same fence, exactly as Section 1 and Section 3's guarded blocks do:
+
   ```bash
+  rtk scripts/assert-main-checkout.sh || exit 1                          # STOP -- this commit is not ref-addressed at all; see above (lode-pxyt)
   rtk git add <path> <path> ...                                          # explicit reformatted source paths only, e.g. rtk git add src/foo.py src/bar.py
   rtk git commit --no-verify -q -m "style: nox -t fix on merged trunk"   # --no-verify: skip the beads pre-commit hook so it can't re-stage .beads/issues.jsonl
   rtk git show --stat HEAD                                               # confirm only the intended paths rode along — no jsonl, nothing else

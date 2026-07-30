@@ -483,6 +483,77 @@ def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
     )
 
 
+_MERGE_ONE = "scripts/land-merge-one.sh"
+_REFORMAT_COMMIT = "git commit --no-verify"
+
+
+def _first_pass_merge_loop_block() -> str:
+    """Section 3's FIRST-PASS ('Green') merge loop -- the block that calls
+    `scripts/land-merge-one.sh` for every id in `$ACCEPTED` on the normal
+    path, distinct from the isolation-replay ('Red') loop lode-gczf already
+    guarded, which also calls it. Only the replay block also contains
+    `_PASS_START_RESET` (its own `git reset --hard origin/trunk`), so
+    filtering that out is what tells the two apart -- anchoring on commands,
+    not section headings, so this keeps working as lode-wjw4/lode-p1r3
+    rewrite the surrounding prose (lode-pxyt)."""
+    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    candidates = [b for b in blocks if _MERGE_ONE in b and _PASS_START_RESET not in b]
+    assert len(candidates) == 1, (
+        f"expected exactly one executed fence calling `{_MERGE_ONE}` without "
+        f"`{_PASS_START_RESET}` (Section 3's first-pass merge loop), found "
+        f"{len(candidates)} -- land/SKILL.md's layout has drifted and this "
+        "pin needs re-anchoring, not deleting"
+    )
+    return candidates[0]
+
+
+def _reformat_commit_block() -> str:
+    """Section 4's reformat-commit block -- commits `nox -t fix`'s output
+    directly to whatever branch cwd's `HEAD` happens to be on. The one
+    Section 4 command that is not ref- or path-addressed, unlike the GC
+    commands enumerated in lode-gczf's own design note (`git push origin
+    trunk`, `git push origin --delete land/<id>`, `git worktree remove
+    --force`, `git branch -D`, `git worktree prune`) (lode-pxyt)."""
+    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    candidates = [b for b in blocks if _REFORMAT_COMMIT in b]
+    assert len(candidates) == 1, (
+        f"expected exactly one executed fence containing `{_REFORMAT_COMMIT}` "
+        f"(Section 4's reformat-commit block), found {len(candidates)} -- "
+        "land/SKILL.md's layout has drifted and this pin needs re-anchoring, "
+        "not deleting"
+    )
+    return candidates[0]
+
+
+def test_section3_first_pass_merge_loop_shares_guard_with_land_merge_one() -> None:
+    """Section 3's FIRST-PASS merge loop (the green path, not the isolation-
+    replay 'Red' path lode-gczf already guarded) runs `scripts/land-merge-
+    one.sh` -- a bare `git merge --no-ff` against cwd -- in its own fresh
+    Bash invocation that Section 1's guard cannot reach (lode-pxyt)."""
+    block = _first_pass_merge_loop_block()
+    _assert_guard_precedes(
+        block,
+        protects=(_MERGE_ONE,),
+        section="Section 3's first-pass merge loop",
+        ticket="lode-pxyt",
+    )
+
+
+def test_section4_reformat_commit_block_shares_guard_with_its_commit() -> None:
+    """Section 4's reformat-commit block commits `nox -t fix`'s output
+    directly to whatever branch cwd's `HEAD` happens to be on -- unlike every
+    other Section 4 command, it names no ref or path at all, so a wrong-
+    directory run silently commits there instead of failing loudly
+    (lode-pxyt)."""
+    block = _reformat_commit_block()
+    _assert_guard_precedes(
+        block,
+        protects=(_REFORMAT_COMMIT,),
+        section="Section 4's reformat-commit block",
+        ticket="lode-pxyt",
+    )
+
+
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
     """The exact regression this ticket fixes: `-C "$(git rev-parse
     --show-toplevel)"` gives the *appearance* of pinning a command to the
