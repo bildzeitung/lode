@@ -2304,6 +2304,27 @@ assumption would not have closed it.
   pass crashed". This is the same defect class as lode-sfnb (cross-block shell state) in the one skill
   that writes `trunk`, which is why the replacement is a file under `.git/` recording its acquire
   time, read back by the next tick: no shell state, nothing that dies with a block.
+
+  **Which `.git/` is part of the guarantee, not an implementation detail (lode-xkpd).** The lockfile
+  path is derived from `git rev-parse --path-format=absolute --git-common-dir` — the *shared* `.git`,
+  spelled absolutely. Both halves are load-bearing, and the plain forms fail in different directions:
+  bare `--git-dir` returns a *worktree-private* gitdir (`.git/worktrees/<name>`) from a linked
+  worktree, so a `/land` pass in the main checkout and one dispatched into a worktree would take two
+  **different** lockfiles and neither would see the other — mutual exclusion silently absent; and bare
+  `--git-common-dir` is *cwd-relative* inside the main checkout (`.git` from the root, `../../.git`
+  from a subdirectory), which still resolves to the right file but makes the path string, and so the
+  operator-facing diagnostics, depend on where the pass was invoked from. What makes this worth
+  stating here is an **ordering** constraint that is easy to destroy by reordering `land/SKILL.md`:
+  the lock is acquired in **Section 0**, but `scripts/assert-main-checkout.sh` (lode-pcee) does not
+  run until **Section 1** — so the lockfile is written *before* anything asserts where the pass is
+  running, and the lock path cannot lean on that guard for its correctness. Anyone moving the guard or
+  the acquire must preserve that the lock path is repo-global on its own.
+
+  The same `--git-dir` idiom in `land/SKILL.md`'s `STATE_DIR` is **deliberately left alone**, and is
+  not the same bug: every `STATE_DIR` derivation runs *after* Section 1's guard (where the two flags
+  are provably identical), and it is per-pass scratch that wants internal consistency at one cwd
+  rather than cross-invocation identity — making it repo-global would make two co-existing passes
+  *share* scratch state instead of isolating it.
   `LAND_LOCK_STALE_SECONDS` (env, default **1800s/30min** — see below for why the heartbeat did *not*
   buy a reduction) is the reclaim window. It is documented here rather than in
   [configuration.md](configuration.md) per that page's scope note — dev-tooling for the landing loop,
