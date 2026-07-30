@@ -354,79 +354,133 @@ def test_land_skill_section1_calls_the_script() -> None:
     )
 
 
-def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
-    """The guard must be the first line of the SAME fenced block as every
-    mutation it protects -- not merely present, and not merely earlier in the
-    document.
+_GUARD = "scripts/assert-main-checkout.sh"
+_PASS_START_RESET = "git reset --hard origin/trunk"
+_SECTION1_ONLY = "git checkout -f trunk"
 
-    This is the property the whole ticket turns on. Per `land/SKILL.md`'s own
-    governing rule (lode-sfnb), each fenced block is executed as a SEPARATE
-    Bash invocation with no shell state carried between them, so a guard
-    sitting in its own block can only `exit` that block's shell -- whether the
-    destructive block runs next is then an agent's judgment call made while
-    reading prose. Sharing one block is what makes `|| exit 1` mechanical:
-    `git reset --hard origin/trunk` becomes unreachable unless the assertion
-    passed, with no decision in between. Splitting the fences back apart, or
-    reordering within the block, restores exactly the defect lode-pcee fixed
-    -- an unrecoverable hard reset reached with nothing having established
-    where it is running. Both regressions are verified by mutation, and both
-    leave every other pin in this module green.
+
+def _the_two_reset_blocks() -> tuple[str, str]:
+    """`(Section 1's pass-start block, Section 3's isolation-replay block)`.
+
+    Both open with `git reset --hard origin/trunk`, so that command does NOT
+    identify Section 1 on its own -- an earlier column-0 fence scanner could
+    not see Section 3's indented block and made it look as though it did (see
+    `_fenced_bash_blocks`). Only Section 1's block also runs `git checkout -f
+    trunk`, so that pair is what tells the two apart. Anchoring on commands
+    rather than section headings keeps both pins working when the surrounding
+    prose is rewritten, which it is constantly, by concurrent tickets.
+
+    Asserting "exactly one of each" here rather than in each caller is what
+    makes a THIRD reset block -- a new unguarded copy of this whole exposure --
+    fail loudly instead of being silently split between two narrower pins.
     """
     blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    resets = [b for b in blocks if _PASS_START_RESET in b]
+    section1 = [b for b in resets if _SECTION1_ONLY in b]
+    section3 = [b for b in resets if _SECTION1_ONLY not in b]
 
-    # Anchor on the pass-start hard reset -- the unrecoverable command -- but it
-    # is NOT unique to Section 1: Section 3's isolation-replay block opens with
-    # its own `git reset --hard origin/trunk` before re-deriving $STATE_DIR.
-    # (An earlier column-0 fence scanner could not see that indented block and
-    # made this anchor look unique; see `_fenced_bash_blocks`.) Section 1 is
-    # identified by the PAIR -- only its block also runs `git checkout -f
-    # trunk`. Anchoring on commands rather than a section heading keeps the pin
-    # working when the surrounding prose is rewritten, which it is constantly,
-    # by concurrent tickets.
-    #
-    # Section 3's reset is genuinely unguarded and is the same exposure class
-    # one section over, but it is outside this ticket's stated scope (Section 1)
-    # and cannot be built until scripts/assert-main-checkout.sh exists on trunk.
-    # Tracked by lode-gczf, which blocks on lode-pcee.
-    owning = [
-        b
-        for b in blocks
-        if "git reset --hard origin/trunk" in b and "git checkout -f trunk" in b
-    ]
-    assert len(owning) == 1, (
-        "expected exactly one executed fence to run BOTH `git reset --hard "
-        f"origin/trunk` and `git checkout -f trunk`, found {len(owning)} -- "
-        "land/SKILL.md's layout has drifted and this pin needs re-anchoring, "
-        "not deleting"
+    assert len(section1) == 1 and len(section3) == 1, (
+        f"expected exactly one executed fence running `{_PASS_START_RESET}` WITH "
+        f"`{_SECTION1_ONLY}` (Section 1) and exactly one WITHOUT it (Section 3), "
+        f"found {len(section1)} and {len(section3)} -- land/SKILL.md's layout has "
+        "drifted and these pins need re-anchoring, not deleting"
     )
-    block = owning[0]
+    return section1[0], section3[0]
 
-    guard_at = block.find("scripts/assert-main-checkout.sh")
+
+def _assert_guard_precedes(
+    block: str, *, protects: tuple[str, ...], section: str, ticket: str
+) -> None:
+    """Assert `block` calls the guard, and that every command in `protects` is
+    still IN `block` and after it.
+
+    Both halves are load-bearing, and the presence half is the easier one to
+    lose. Per `land/SKILL.md`'s governing rule (lode-sfnb) each fenced block is
+    a SEPARATE Bash invocation with no shell state carried between them, so a
+    guard sitting in its own block can only `exit` that block's shell -- whether
+    the destructive block then runs is an agent's judgment call made while
+    reading prose, which is exactly the strength of assurance lode-pcee exists
+    to delete. Sharing one block makes `|| exit 1` mechanical instead: each
+    protected command is unreachable unless the assertion passed, with no
+    decision in between.
+
+    So an ordering-only pin is not enough. Refactoring a protected command out
+    into a fence of its own re-opens the defect while leaving the ordering
+    assertion perfectly green, which is why presence is checked too. Verified by
+    mutation on land/SKILL.md: deleting the guard, reordering it after the reset,
+    splitting it into its own fence, and splitting the replay loop (or the
+    `land-merge-one.sh` call) out of Section 3's block are each caught by one of
+    these two assertions -- and the last two by the presence half alone.
+    """
+    guard_at = block.find(_GUARD)
     assert guard_at >= 0, (
-        "the fenced block that runs `git reset --hard origin/trunk` does not call "
-        "scripts/assert-main-checkout.sh at all (lode-pcee). A guard in a SEPARATE "
-        "block cannot stop this one -- per lode-sfnb each block is its own Bash "
-        f"invocation, so its `exit` ends only itself.\n\n{block}"
+        f"{section}'s fenced block does not call {_GUARD} at all ({ticket}). A "
+        "guard in a SEPARATE block cannot stop this one -- per lode-sfnb each "
+        "block is its own Bash invocation, so its `exit` ends only "
+        f"itself.\n\n{block}"
     )
-
-    # ...and before every state-changing command sharing that block. `bd dolt
-    # pull` writes the local Dolt DB; the rest write git. Only `reset --hard` is
-    # unrecoverable, but a wrong-directory `checkout -f` is destructive too.
-    for mutation in (
-        "bd dolt pull",
-        "git checkout -f trunk",
-        "git fetch origin",
-        "git reset --hard origin/trunk",
-    ):
+    for mutation in protects:
         at = block.find(mutation)
         assert at >= 0, (
-            f"{mutation!r} left Section 1's block -- if it moved somewhere "
-            "unguarded, that is the lode-pcee defect returning by another route"
+            f"`{mutation}` left {section}'s block -- if it moved to a fence of "
+            "its own it is now reached with nothing having established where it "
+            f"runs, which is the lode-pcee defect returning by another route "
+            f"({ticket})\n\n{block}"
         )
         assert guard_at < at, (
-            f"scripts/assert-main-checkout.sh runs AFTER `{mutation}` in the same "
-            f"block (lode-pcee) -- the assertion no longer protects it.\n\n{block}"
+            f"{_GUARD} runs AFTER `{mutation}` in {section}'s block ({ticket}) "
+            f"-- the assertion no longer protects it.\n\n{block}"
         )
+
+
+def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
+    """Section 1's pass-start block: the guard must be the first line of the
+    SAME fence as every mutation it protects -- not merely present, and not
+    merely earlier in the document. This is the property lode-pcee turns on;
+    `_assert_guard_precedes` carries the reasoning and the mutation evidence.
+    """
+    section1, _ = _the_two_reset_blocks()
+
+    # `bd dolt pull` writes the local Dolt DB; the rest write git. Only
+    # `reset --hard` is unrecoverable, but a wrong-directory `checkout -f` is
+    # destructive too.
+    _assert_guard_precedes(
+        section1,
+        protects=(
+            "bd dolt pull",
+            _SECTION1_ONLY,
+            "git fetch origin",
+            _PASS_START_RESET,
+        ),
+        section="Section 1",
+        ticket="lode-pcee",
+    )
+
+
+def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
+    """Section 3's isolation-replay block (the 'Red' path's per-branch replay
+    loop) runs its OWN `git reset --hard origin/trunk` -- a second, distinct
+    exposure of the exact class lode-pcee fixed in Section 1, filed separately
+    as lode-gczf since it could not be built until
+    `scripts/assert-main-checkout.sh` existed on trunk.
+    """
+    _, section3 = _the_two_reset_blocks()
+
+    # The pass-start reset is NOT this block's only cwd-assuming destructive
+    # command, and `scripts/land-merge-one.sh` belongs on the list even though
+    # it is a script rather than an inline git command: it runs a bare `git
+    # merge --no-ff` plus `git restore --staged --worktree .beads/issues.jsonl`
+    # and `git merge --abort`, all resolved against cwd.
+    _assert_guard_precedes(
+        section3,
+        protects=(
+            _PASS_START_RESET,
+            "scripts/land-merge-one.sh",
+            "git reset --hard HEAD~1",
+        ),
+        section="Section 3",
+        ticket="lode-gczf",
+    )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:

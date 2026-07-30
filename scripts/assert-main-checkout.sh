@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
-# Main-checkout identity guard for /land's Section 1 (lode-pcee).
+# Main-checkout identity guard for /land. Called as the first line of Section
+# 1's pass-start block (lode-pcee) and of Section 3's isolation-replay block
+# (lode-gczf) -- both open with a `git reset --hard origin/trunk`, and each
+# needs its OWN call because every fenced block in land/SKILL.md is a separate
+# Bash invocation (lode-sfnb), so one block's `exit` cannot stop another's.
 #
 # THE BUG THIS REPLACES: Section 1 used to run its `git checkout -f trunk`
 # through `git -C "$(git rev-parse --show-toplevel)" checkout -f trunk`, on
