@@ -239,10 +239,11 @@ of whatever Python happens to be default on the machine running the command. Thi
 **one** place — `scripts/compile-lock.sh` — which every caller below invokes rather than keeping its
 own copy of the `uv pip compile` command string:
 
-- `scripts/update-deps.sh` (bare invocation for the whole-set flow, `--package NAME` for the
-  single-package flow — its own command-line surface; internally it passes `--upgrade` /
-  `--upgrade-package NAME` down to `scripts/compile-lock.sh`, never as flags on its own command line)
-  — the sanctioned way to move `requirements.lock` (`lode-g274.2`/`lode-fdjr`).
+- `scripts/update-deps.sh` — the sanctioned way to move `requirements.lock`
+  (`lode-g274.2`/`lode-fdjr`). Its two flows are a bare invocation for the whole set and
+  `--package NAME` for one package (full usage:
+  [onboarding.md](onboarding.md#updating-dependencies)); the corresponding `--upgrade` /
+  `--upgrade-package NAME` go *down* to `compile-lock.sh` — not flags `update-deps.sh` accepts.
 - **CI enforcement (`lode-g274.6` / `lode-sys4`):** `tests.yml`'s `tests` job installs from
   `requirements.lock` itself (via `scripts/python-init.sh`, the same install path a developer runs),
   and a separate, independent `lock-currency` job in the same workflow verifies the lock is current —
