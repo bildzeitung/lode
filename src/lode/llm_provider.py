@@ -625,6 +625,15 @@ class AnthropicProvider:
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
+        # lode-a31q: every enrichment item in a batch carries the identical
+        # EnrichmentResult schema, and pydantic v2 doesn't memoize
+        # model_json_schema() -- rebuilding it per item is pure redundant
+        # computation on the high-volume background path (measured: ~37s of
+        # wasted CPU at Anthropic's 100k-request batch cap). Cache per
+        # distinct schema *within this submission*, keyed on the class object
+        # itself (hashable) -- correct for a heterogeneous batch, since
+        # BatchRequest carries a per-request output_schema.
+        schema_cache: dict[type[BaseModel], dict[str, Any]] = {}
         api_requests: list[dict[str, Any]] = []
         for req in requests:
             params: dict[str, Any] = {
@@ -634,11 +643,15 @@ class AnthropicProvider:
                 "messages": [{"role": "user", "content": req.user_prompt}],
             }
             if req.tool_name is not None:
+                input_schema = schema_cache.get(req.output_schema)
+                if input_schema is None:
+                    input_schema = req.output_schema.model_json_schema()
+                    schema_cache[req.output_schema] = input_schema
                 params["tools"] = [
                     {
                         "name": req.tool_name,
                         "description": req.tool_description or "",
-                        "input_schema": req.output_schema.model_json_schema(),
+                        "input_schema": input_schema,
                     }
                 ]
                 params["tool_choice"] = {"type": "tool", "name": req.tool_name}
