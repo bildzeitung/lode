@@ -431,3 +431,85 @@ def test_puppeteer_config_chmod_failure_is_gate_could_not_run(fake_bin):
 
     _assert_gate_could_not_run(result, says="could not chmod")
     assert "to 644" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# lode-yoc3: the per-doc loop's `grep -q '```mermaid' "$f" || continue` was
+# the mirror defect of the -e class above -- and worse, since it reports a
+# clean PASS rather than a fabricated FAIL. grep exits 1 for "no match" (a
+# CONTENT answer: this doc has no diagram) and anything else for an ERROR (a
+# MACHINE answer: unreadable file, I/O error, or the docs glob passed through
+# literally). `|| continue` treated both identically, silently skipping an
+# unreadable doc as though it simply had no diagram -- and if every doc
+# errored this way, the gate printed "no mermaid diagrams found in docs/ --
+# nothing to validate" and exited 0 on a completely broken run.
+# ---------------------------------------------------------------------------
+
+
+def _add_real_chmod(bin_dir: Path) -> None:
+    """Symlinks the real ``chmod`` into the fake PATH -- needed by the grep
+    tests below, which want $CFG's two chmod calls to succeed for real (same
+    as a normal run) so the script actually reaches the per-doc loop, where
+    the grep fixtures below take over."""
+    real_chmod = shutil.which("chmod")
+    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
+    (bin_dir / "chmod").symlink_to(real_chmod)
+
+
+def _add_grep_with_exit(bin_dir: Path, exit_code: int) -> None:
+    """A fake ``grep`` that always exits ``exit_code``, standing in for the
+    script's ONE grep call -- scanning each doc in the per-doc loop for a
+    mermaid fence. That is the only place validate-mermaid.sh invokes grep at
+    all, so a blanket fake (ignoring its arguments entirely) is safe here
+    without needing to also intercept some OTHER real usage. It fires on the
+    very first doc in $REPO/docs/*.md, whichever that happens to be -- the
+    guard being tested doesn't care which file, only which exit code."""
+    shim = bin_dir / "grep"
+    shim.write_text(f"#!/bin/bash\nexit {exit_code}\n")
+    shim.chmod(0o755)
+
+
+def test_grep_scan_failure_is_gate_could_not_run(fake_bin):
+    """grep exits 2 (or any code other than 0/1) scanning a doc for a mermaid
+    fence -- an unreadable file, an I/O error, or $REPO/docs vanishing mid-run.
+    This must not be silently treated the same as "no match" (exit 1): it is a
+    machine fault, not a content answer, so it must escalate through
+    gate_could_not_run rather than fall through the old bare `|| continue` and
+    let the doc -- and potentially the whole gate -- report a false clean PASS.
+    """
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    _add_real_mktemp(fake_bin)
+    _add_real_chmod(fake_bin)
+    _add_grep_with_exit(fake_bin, 2)
+
+    result = _run_gate(fake_bin)
+
+    _assert_gate_could_not_run(result, says="grep failed scanning")
+    assert "exit 2" in result.stderr
+
+
+def test_grep_no_match_still_skips_silently_without_tripping_guard(fake_bin):
+    """grep exits 1 (genuine "no match") for every doc -- the unchanged,
+    pre-existing behaviour: a doc with no mermaid block is skipped silently,
+    `found` stays 0, and the gate reports its normal clean "nothing to
+    validate" PASS. This is the guard on the guard above: it must not widen
+    into treating exit 1 as a machine fault too, which would turn every
+    ordinary diagram-free doc into a spurious GATE COULD NOT RUN.
+    """
+    _add_docker_with_run_exit(fake_bin, 0)
+    _add_real_rm(fake_bin)
+    _add_real_mktemp(fake_bin)
+    _add_real_chmod(fake_bin)
+    _add_grep_with_exit(fake_bin, 1)
+
+    result = _run_gate(fake_bin)
+
+    assert result.returncode == 0, (
+        f"expected exit 0 (nothing to validate), got {result.returncode}\n"
+        f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+    )
+    assert "no mermaid diagrams found in docs/" in result.stdout
+    assert "GATE COULD NOT RUN" not in result.stderr
+    assert "FAIL" not in result.stdout
+    assert "FAIL" not in result.stderr
