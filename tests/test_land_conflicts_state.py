@@ -25,42 +25,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from conftest import bash_fence_blocks
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
-def _bash_blocks(markdown: str) -> list[str]:
+def _skill_blocks() -> list[str]:
     """Each ```bash fence as its own string, in document order -- what an
     agent actually EXECUTES, one Bash tool invocation per block.
 
     Unlike a single concatenation of every fenced block (the
     tests/test_land_lock.py precedent), this preserves block BOUNDARIES,
     which is the point here: whether $CONFLICTS is read from a file or from a
-    bash variable set earlier is a per-block question, and some of the
-    relevant blocks in this skill are indented under a bullet (e.g. the
-    isolation-replay loop), so the fence marker itself may carry leading
-    whitespace -- matched on the stripped line, not `str.startswith`.
+    bash variable set earlier is a per-block question. Thin wrapper over the
+    shared tests/conftest.py::bash_fence_blocks parser (lode-ovgs unified this
+    file's own former private copy, which was functionally identical, with
+    tests/test_skill_bash_state.py's and the fixed
+    tests/test_land_lock.py's, so a fourth copy can never quietly diverge).
     """
-    blocks: list[str] = []
-    current: list[str] = []
-    in_bash = False
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_bash:
-                blocks.append("\n".join(current))
-                current = []
-                in_bash = False
-            else:
-                in_bash = stripped in {"```bash", "```sh"}
-            continue
-        if in_bash:
-            current.append(line)
-    return blocks
-
-
-def _skill_blocks() -> list[str]:
-    return _bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    return bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
 
 
 def _only_block_with(*needles: str, what: str) -> str:
