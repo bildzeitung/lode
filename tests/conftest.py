@@ -155,11 +155,14 @@ beats catching it, and the guard still fails anything either one misses.
 2. **The autouse offline query embedder (lode-7ypf)** —
    :func:`_stub_the_query_embedder_offline` replaces
    :class:`lode.embedding.FastEmbedEmbedder` for every test the socket guard
-   polices. The real one resolves its HuggingFace revision over the network on
-   first ``embed_query``, warm cache or not, and the related-notes panel
-   constructs it from a debounced background worker — so any TUI test that put
-   text in a body ``TextArea`` without stubbing armed a live call that outlived
-   its own test. ``@pytest.mark.real_embedder`` opts back out.
+   polices. The real one downloads/loads the actual ONNX weights on first use,
+   and the related-notes panel constructs it from a debounced background worker
+   — so any TUI test that put text in a body ``TextArea`` without stubbing armed
+   a live call that outlived its own test. (Until lode-dj6m that first
+   ``embed_query`` *also* resolved the HuggingFace revision over the network,
+   warm cache or not; that probe is now off the query-only path, but the weights
+   load alone still justifies the stub.)
+   ``@pytest.mark.real_embedder`` opts back out.
 """
 
 import ast
@@ -251,9 +254,9 @@ os.environ.pop("NO_COLOR", None)
 #: ``build_hf_headers()``, i.e. while building the headers for EVERY Hub request -- calls
 #: ``detect_agent()``, and on a cold 24h-TTL cache that
 #: is a live ``GET {ENDPOINT}/api/agent-harnesses`` (``utils/_detect_agent.py``). On lode's path
-#: (``FastEmbedEmbedder.model_revision`` -> ``resolve_model_revision`` -> ``huggingface_hub.model_info``,
-#: reached from the write path or an explicit ``warm()`` -- lode-dj6m moved this off the query-only
-#: ``embed_query``/``_load`` path entirely) that
+#: (``resolve_model_revision`` -> ``huggingface_hub.model_info``, reached from the write path via
+#: ``FastEmbedEmbedder.model_revision`` and from ``lode status``'s drift check directly -- lode-dj6m
+#: moved it off the query-only ``embed_query``/``_load`` path entirely, and off ``warm()``) that
 #: fetch is the FIRST socket the guard sees, ahead of ``model_info``'s own. ``http_user_agent`` skips
 #: ``detect_agent()`` entirely when this is set, so the fetch never happens.
 #:
