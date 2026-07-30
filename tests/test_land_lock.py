@@ -18,7 +18,7 @@ critical section, and the record's owner token (5th field) that a future
 ownership check in `heartbeat` will need is preserved across heartbeat calls
 but not yet verified against anything -- see lode-q9pm.
 
-What this file adds on top of that is the regression gate, in three parts:
+What this file adds on top of that is the regression gate, in four parts:
 
 1. Behavioural tests that run the ACTUAL script against a real, throwaway
    git repository in `tmp_path` (its only external dependency is
@@ -57,6 +57,34 @@ What this file adds on top of that is the regression gate, in three parts:
    and stopped calling this script at all. Same reasoning and same shape as
    `tests/test_isolation_guard.py`'s `test_every_agent_definition_invokes_
    the_guard`.
+
+4. The alive-but-stalled gate-winner displacement (lode-78ih): a gate winner
+   that stalls past RECLAIM_GATE_STALE_SECONDS between passing re-validation
+   and its destructive `rm`+write used to resume and clobber a later
+   reclaimer's fresh record unconditionally. `scripts/land-lock.sh` now
+   re-verifies gate ownership immediately before that `rm`; staging the
+   displacement deterministically (without a real 30+s sleep) needs a real
+   stall somewhere in the middle of one `acquire` invocation, which the
+   script's own `LAND_LOCK_TEST_STALL_SECONDS` test-only hook provides --
+   never set by any production caller, see the script's own comment at its
+   call site.
+
+   The gate's aging is read off `$RECLAIM_GATE`'s own directory mtime (set
+   atomically by `mkdir`, lode-78ih), not a separately written epoch file --
+   an earlier revision of this same fix used a combined epoch+token record
+   with a second writer (a "no creation stamp yet" safety net), and that
+   second writer's blind overwrite was OBSERVED, at 32-way contention, to
+   erase the real winner's own token, producing a false "lost the race" for
+   an UNDISPLACED pass. `test_concurrent_acquire_against_a_stale_lock_has_
+   exactly_one_winner` is what caught it -- it was flaky under that design,
+   not just failing outright, so treat any reintroduction of a second writer
+   to the gate's owner file as a regression even if a single run looks green.
+
+   That stress test deliberately starts every round with NO gate. Extending it
+   to start from an already-abandoned one (to exercise the self-heal path) is
+   specifically warned against in its own docstring: that arrangement reaches
+   residuals land-lock.sh documents as still open, so "exactly one winner"
+   stops being a property the design guarantees.
 """
 
 from __future__ import annotations
@@ -106,6 +134,15 @@ def _gate_path(repo: Path) -> Path:
     rename of the lock file cannot leave the gate tests pointing at a path
     nothing creates any more, which would turn them green and vacuous."""
     return _lock_path(repo).with_name(_lock_path(repo).name + ".reclaiming")
+
+
+def _set_gate_mtime(gate: Path, *, age: int) -> None:
+    """Backdate the GATE DIRECTORY's own mtime (lode-78ih) by `age` seconds --
+    the aging signal `stat` reads directly, a kernel-managed property `mkdir`
+    already sets, never a separately written epoch file (the lode-ao95-era
+    design these tests originally pinned)."""
+    stamp = time.time() - age
+    os.utime(gate, (stamp, stamp))
 
 
 def _write_stale_lock(repo: Path, *, age: int = 100_000) -> int:
@@ -619,6 +656,24 @@ def test_concurrent_acquire_against_a_stale_lock_has_exactly_one_winner(
     few seconds. The assertion is `== 1`, not `<= 1`, deliberately: a "fix"
     that simply blocked every racer would wedge landing outright while
     satisfying any check that only counted upwards.
+
+    THE STARTING STATE IS ALSO LOAD-BEARING, in the other direction: each
+    round starts with NO gate, so every racer takes the plain ``mkdir`` path
+    and exactly one can win. Do NOT extend this test to start rounds with an
+    ALREADY-ABANDONED gate in order to exercise the self-heal path -- it looks
+    like free extra coverage and it is actually an unsound assertion. On that
+    path every racer runs ``rm -rf`` then ``mkdir``, which reaches the two
+    residuals land-lock.sh's header documents as open (a racer's ``rm -rf``
+    can remove a gate it never judged; and the gateless FRESH path can slip
+    into a gate winner's own ``rm``-then-``write_lock`` gap). Both were
+    MEASURED live on that arrangement -- 2 of 150 rounds at 32-way under
+    28-way CPU saturation, one round with two reclaim winners and one with a
+    reclaim plus a fresh winner -- so ``== 1`` is asserting a guarantee the
+    design does not currently make, and the arm fails intermittently under
+    load rather than gating anything. Closing those residuals is lode-y3dw.
+    The self-heal displacement is instead covered DETERMINISTICALLY by
+    ``test_stalled_gate_winner_is_displaced_and_aborts_rather_than_clobbering``
+    below, which stages the identical interleaving without dice.
     """
     repo = _init_repo(tmp_path)
     gate = _gate_path(repo)
@@ -668,14 +723,14 @@ def test_a_gate_busy_with_a_live_reclaim_is_not_treated_as_abandoned(
     """A freshly-created reclaim gate (age well under
     RECLAIM_GATE_STALE_SECONDS) must block a concurrent acquire outright --
     it must NOT be cleared and retried, since a genuine reclaim could still
-    be in flight."""
+    be in flight. `mkdir` alone gives the gate a fresh mtime (lode-78ih) --
+    no file write is needed to simulate "a live reclaim just started"."""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     old_epoch = _write_stale_lock(repo)
 
     gate = _gate_path(repo)
     gate.mkdir()
-    (gate / "created").write_text(str(int(time.time())))
 
     result = _run(
         "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
@@ -688,43 +743,48 @@ def test_a_gate_busy_with_a_live_reclaim_is_not_treated_as_abandoned(
     assert gate.exists()
 
 
-def test_a_gate_with_no_creation_stamp_is_dated_rather_than_wedging(
+def test_an_empty_gate_is_immediately_ageable_via_its_own_mtime(
     tmp_path: Path,
 ) -> None:
-    """A reclaimer killed between `mkdir "$LOCK.reclaiming"` and writing the
-    stamp inside it leaves a gate with no `created` file; treating that as
-    "still in progress" and skipping wedges landing PERMANENTLY, since
-    nothing else ever removes a gate and the abandoned-gate branch needs a
-    timestamp to age one out. The full argument is at the code it constrains
-    (scripts/land-lock.sh, the gate-taken branch).
+    """lode-78ih: a reclaimer killed between `mkdir "$LOCK.reclaiming"` and
+    writing its owner file leaves a gate with nothing inside it at all. Under
+    the lode-ao95-era design (an epoch written INSIDE the gate) that was
+    "not yet dated" and needed a second racer to stamp it, or landing could
+    wedge permanently once that gate was truly abandoned. Deriving age from
+    the GATE DIRECTORY's own mtime instead (lode-78ih) removes that problem
+    at the root: `mkdir` sets the directory's mtime atomically, at creation,
+    so even a completely empty gate is ageable from the instant it exists --
+    no write, no "dating" step, and no separate writer to race against.
 
-    So the acquire that finds an unstamped gate must DATE it. This test pins
-    that half; `test_an_abandoned_reclaim_gate_is_cleared_and_retried` pins
-    the other half (a dated gate does get cleared once past the window), and
-    together they are "no permanent wedge" -- without needing a 30s sleep in
-    the suite to observe it end-to-end.
+    This test pins BOTH directions with the same empty gate: fresh (age 0)
+    blocks a concurrent acquire exactly like a populated one would (see
+    `test_a_gate_busy_with_a_live_reclaim_is_not_treated_as_abandoned`), and
+    backdated past the window it self-heals exactly like a populated one
+    would (see `test_an_abandoned_reclaim_gate_is_cleared_and_retried`) --
+    demonstrating the owner file's presence or absence never mattered to
+    aging in the first place.
     """
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     old_epoch = _write_stale_lock(repo)
-
     gate = _gate_path(repo)
-    gate.mkdir()  # no `created` inside: killed between mkdir and the stamp
-    assert not (gate / "created").exists()
 
-    before = int(time.time())
+    gate.mkdir()  # nothing written inside -- killed between mkdir and owner
     result = _run(
         "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
     )
-
-    # This tick still skips -- it cannot know the gate is dead rather than
-    # microseconds old. What matters is that it left the gate DATABLE.
     assert result.returncode == 1, result.stdout + result.stderr
-    stamp = (gate / "created").read_text().strip()
-    assert stamp.isdigit(), f"gate left undatable, landing wedges: {stamp!r}"
-    assert int(stamp) >= before
-    # The stale lock itself is untouched -- stamping is not reclaiming.
+    assert gate.exists(), "a fresh, empty gate must not be treated as abandoned"
     assert lock.read_text().split()[2] == str(old_epoch)
+
+    _set_gate_mtime(gate, age=1000)  # long abandoned, still nothing inside
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not gate.exists(), "an abandoned empty gate must still be clearable"
+    new_fields = lock.read_text().split()
+    assert int(new_fields[2]) > old_epoch
 
 
 def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> None:
@@ -732,14 +792,17 @@ def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> Non
     reclaimer that crashed between winning it and clearing it (age well past
     RECLAIM_GATE_STALE_SECONDS) must NOT block landing forever -- a later
     acquire clears it and retries, successfully reclaiming the still-stale
-    main lock."""
+    main lock. Backdates the GATE DIRECTORY's own mtime (lode-78ih) directly,
+    the same signal `stat` reads in the script, rather than an epoch written
+    inside it."""
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
     old_epoch = _write_stale_lock(repo)
 
     gate = _gate_path(repo)
     gate.mkdir()
-    (gate / "created").write_text(str(int(time.time()) - 1000))  # long abandoned
+    (gate / "owner").write_text("some-prior-owner-token\n")
+    _set_gate_mtime(gate, age=1000)  # long abandoned
 
     result = _run(
         "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
@@ -749,6 +812,155 @@ def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> Non
     assert not gate.exists(), "the abandoned gate must be cleared, not left behind"
     new_fields = lock.read_text().split()
     assert int(new_fields[2]) > old_epoch
+
+
+# ---------------------------------------------------------------------------
+# Gate-ownership re-check (lode-78ih) -- closes the alive-but-stalled-holder
+# displacement lode-ao95's header documented but did not fix.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_owner_token_matches_the_acquired_lock_on_an_uncontested_reclaim(
+    tmp_path: Path,
+) -> None:
+    """Sanity check for the mechanism lode-78ih adds: on an ordinary,
+    uncontested reclaim (nothing displaces this pass), the new gate-ownership
+    check always finds itself still the owner and proceeds -- the fix must
+    not turn a normal reclaim into a spurious abort."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    _write_stale_lock(repo)
+
+    result = _run(
+        "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "acquired via reclaim" in result.stdout
+    lock_token = lock.read_text().split()[4]
+    assert lock_token in result.stdout
+    # The gate is cleaned up on success -- lode-78ih's bookkeeping
+    # ($RECLAIM_GATE/owner) leaves nothing behind.
+    assert not _gate_path(repo).exists()
+
+
+def test_stalled_gate_winner_is_displaced_and_aborts_rather_than_clobbering(
+    tmp_path: Path,
+) -> None:
+    """The exact residual lode-ao95's header documented, reproduced end to
+    end and closed by lode-78ih: gate winner A stalls (via the script's own
+    LAND_LOCK_TEST_STALL_SECONDS test hook) between passing re-validation and
+    its destructive rm+write. While A is stalled, this test backdates A's own
+    GATE DIRECTORY's mtime -- standing in for the real 30+s wait
+    RECLAIM_GATE_STALE_SECONDS would otherwise require -- so a second,
+    UNMODIFIED `acquire` (B) judges A's gate abandoned, clears it, and wins a
+    fresh one under its own token, completing a full reclaim. When A resumes,
+    it must find the gate no longer shows ITS OWN token as owner (B's own
+    successful cleanup has since removed the gate entirely) and abort rather
+    than performing its own rm -f "$LOCK" + write on top of B's fresh record.
+
+    Exactly one of A/B may hold the lock afterward -- this is the same
+    "exactly one winner" bar as the 32-way stress test above, staged instead
+    against the SPECIFIC interleaving that stress test cannot reach (see this
+    file's module docstring, part 4, and land-lock.sh's own header for why a
+    bare re-validation re-check is not enough)."""
+    repo = _init_repo(tmp_path)
+    lock = _lock_path(repo)
+    _write_stale_lock(repo)
+    gate = _gate_path(repo)
+
+    # Sized from measurement, not habit: A's `owner` file becomes visible in
+    # 11-18ms and B's whole `acquire` takes 26-30ms, so the stall has to cover
+    # ~45ms (~192ms measured under deliberate 24-way CPU saturation). 2s is a
+    # ~10x margin on the worst of those and costs 2s; the original 5s cost 5s
+    # for no more coverage. Too SHORT here fails loudly (A wakes early, two
+    # winners, the test goes red) rather than silently passing, so this is a
+    # flakiness/runtime trade, never a coverage one.
+    stall_seconds = 2
+    a = subprocess.Popen(
+        ["bash", str(SCRIPT), "acquire"],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "LAND_LOCK_STALE_SECONDS": "1800",
+            "LAND_LOCK_TEST_STALL_SECONDS": str(stall_seconds),
+        },
+    )
+    try:
+        # Poll for A to have won the gate and written its own owner file --
+        # not a fixed sleep, so this isn't itself a timing gamble. A's stall
+        # happens strictly AFTER this write (see land-lock.sh's reclaim
+        # loop), so once this is visible A is guaranteed to still be
+        # sleeping for (most of) stall_seconds.
+        deadline = time.time() + 10
+        a_token = ""
+        while time.time() < deadline:
+            owner_file = gate / "owner"
+            if owner_file.exists():
+                content = owner_file.read_text().strip()
+                if content:
+                    a_token = content
+                    break
+            time.sleep(0.05)
+        else:
+            a.kill()
+            a.communicate(timeout=5)
+            raise AssertionError("A never won the gate and wrote its own owner file")
+
+        # Pin the invariant the whole aging scheme rests on, while a real
+        # process holds a real gate: `owner` is the ONLY entry inside it. A
+        # directory's mtime is bumped by any entry created or removed in it, so
+        # a second file written into a gate its holder already owns would
+        # refresh the aging clock at every write -- and an abandoned gate whose
+        # clock keeps being refreshed can never age out, which is the permanent
+        # wedge the gate's staleness bound exists to rule out. Without this
+        # assertion that constraint is prose in land-lock.sh's header only, and
+        # an edit adding `$RECLAIM_GATE/pid` would pass this whole file.
+        assert sorted(p.name for p in gate.iterdir()) == ["owner"], (
+            "something other than `owner` is being written inside the reclaim "
+            "gate -- see land-lock.sh's gate-aging comment; this silently "
+            "refreshes the aging clock and can re-wedge landing"
+        )
+
+        # Backdate A's OWN gate directory mtime so B's self-heal judges it
+        # abandoned without waiting out the real RECLAIM_GATE_STALE_SECONDS
+        # window -- same technique as
+        # test_an_abandoned_reclaim_gate_is_cleared_and_retried above,
+        # applied here to a gate a REAL concurrent process currently owns
+        # rather than a synthetic one. A's own owner file is left
+        # untouched -- it still names A's token, exactly as A wrote it;
+        # only the DIRECTORY's aging signal is backdated.
+        _set_gate_mtime(gate, age=1000)
+
+        b = _run(
+            "acquire", repo=repo, env_overrides={"LAND_LOCK_STALE_SECONDS": "1800"}
+        )
+        assert b.returncode == 0, b.stdout + b.stderr
+        assert "acquired via reclaim" in b.stdout
+
+        a_stdout, a_stderr = a.communicate(timeout=stall_seconds + 15)
+        a_rc = a.returncode
+    finally:
+        if a.poll() is None:
+            a.kill()
+            a.communicate(timeout=5)
+
+    winners = [rc for rc in (a_rc, b.returncode) if rc == 0]
+    assert len(winners) == 1, (
+        f"a: rc={a_rc} out={a_stdout!r} err={a_stderr!r}\n"
+        f"b: rc={b.returncode} out={b.stdout!r} err={b.stderr!r}"
+    )
+    assert a_rc == 1, a_stdout + a_stderr
+    assert "lost the race" in a_stderr
+
+    # The final lock must be B's record -- A must never have performed its
+    # own rm -f "$LOCK" + write on top of it.
+    b_token = lock.read_text().split()[4]
+    assert b_token in b.stdout
+    assert a_token not in lock.read_text()
 
 
 # NOTE on the gate-winner's internal re-validation (land-lock.sh's own
@@ -764,6 +976,55 @@ def test_an_abandoned_reclaim_gate_is_cleared_and_retried(tmp_path: Path) -> Non
 # pinned rather than left to taste -- measurements and the full argument are
 # in that test's own docstring. Lowering it to speed this file up deletes the
 # only gate that has ever caught a live two-lander bug in this script.
+
+
+def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
+    """`scripts/land-lock.sh` carries a test-only `LAND_LOCK_TEST_STALL_SECONDS`
+    hook that makes it `sleep` while holding the reclaim gate -- i.e. it
+    manufactures, on demand, the exact stall that is this lock's documented
+    two-winner residual. Its safety rests entirely on nothing in production
+    ever setting it, and that is the kind of claim this repo mechanizes rather
+    than asserts in a comment.
+
+    Only two files may mention the variable at all: the script that reads it,
+    and this test file. In particular a `/land` skill step, a nox session, or an
+    `env` block in `.claude/settings*.json` must never set it -- an exported
+    value would stall lock acquisition at the one point where stalling is known
+    to admit two landers.
+    """
+    allowed = {
+        REPO_ROOT / "scripts" / "land-lock.sh",
+        Path(__file__).resolve(),
+    }
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    ).stdout.split("\0")
+
+    offenders = []
+    for rel in tracked:
+        if not rel:
+            continue
+        path = REPO_ROOT / rel
+        if path in allowed or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError, OSError:
+            continue  # binary or unreadable: cannot be setting a shell env var
+        if "LAND_LOCK_TEST_STALL_SECONDS" in text:
+            offenders.append(rel)
+
+    assert not offenders, (
+        "land-lock.sh's test-only stall hook is referenced outside "
+        f"scripts/land-lock.sh and this test file: {offenders}. If a production "
+        "caller ever sets it, /land stalls while holding the reclaim gate -- the "
+        "documented two-winner residual, manufactured on purpose."
+    )
 
 
 # ---------------------------------------------------------------------------
