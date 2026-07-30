@@ -568,6 +568,14 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     ]
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned
+    # code/SKILL.md earns its own entry: it is the ONE real file whose every
+    # plain fence is indented, so it is the only one of the three whose entry
+    # here goes red if `bash_fence_blocks` ever regresses to a column-0
+    # `line.startswith("```")` scanner (lode-ovgs). land/SKILL.md and
+    # coding.md both keep 20 and 25 blocks under that regression -- still
+    # non-empty, so they would sit here looking fine while the parser was
+    # broken, and this coverage pin would pass vacuously. Verified by mutation.
+    assert "skills/code/SKILL.md" in scanned, scanned
 
 
 def test_no_cross_block_shell_state_outside_the_allowlist() -> None:

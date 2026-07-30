@@ -48,15 +48,12 @@ What this file adds on top of that is the regression gate, in three parts:
    `tests/test_isolation_guard.py`'s `test_every_agent_definition_invokes_
    the_guard`.
 
-   `_fenced_bash` -- the parser these pins run over -- used to match the
-   fence marker with `line.startswith("```")`, blind to any fence INDENTED
-   under a markdown bullet (4 of this file's 24 bash blocks, including one
-   of Section 3's two merge loops). Fixed by lode-ovgs, which also unified
-   this parser with two other private copies of the identical fix
-   (tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py) into
-   one shared `tests/conftest.py::bash_fence_blocks` helper --
-   `test_fenced_bash_sees_every_bash_marker_including_indented_ones` pins the
-   fix with an independently-derived expected block count.
+   These pins are only as good as the parser under them, which is why one of
+   them checks the parser rather than the skill:
+   `test_fenced_bash_sees_every_bash_marker_including_indented_ones` asserts
+   the shared `tests/conftest.py::bash_fence_blocks` helper sees every bash
+   fence in SKILL.md, against an independently-derived count. Without it these
+   pins silently covered 20 of 24 blocks (lode-ovgs).
 """
 
 from __future__ import annotations
@@ -767,16 +764,11 @@ def _fenced_bash(markdown: str) -> str:
     which is how the bug survived unnoticed in the first place.
 
     Thin wrapper over the shared `tests/conftest.py::bash_fence_blocks`
-    parser (lode-ovgs). This function used to have its own copy, which
-    matched the fence marker with `line.startswith("```")` -- so a fence
-    INDENTED under a markdown bullet (this file has 4 of them, e.g. Section
-    3's isolation-replay merge loop) never opened at all, and this pin was
-    silently checking only 20 of the file's 24 bash blocks. Unified onto the
-    shared, already-correct parser rather than just patching the bug in
-    place, since two other private copies of the identical fix already
-    existed (tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py)
-    -- three near-identical parsers is this repo's own stated bar for
-    extracting a shared helper.
+    parser; this function used to carry its own column-0 copy, which silently
+    checked 20 of this file's 24 bash blocks (lode-ovgs). Why it was unified
+    rather than patched in place, and the parser's known blind spots, live
+    next to the parser itself -- deliberately not restated here, per this
+    module's own no-second-copy rule above.
     """
     return "\n".join(bash_fence_blocks(markdown))
 

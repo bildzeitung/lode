@@ -39,10 +39,11 @@ def _skill_blocks() -> list[str]:
     tests/test_land_lock.py precedent), this preserves block BOUNDARIES,
     which is the point here: whether $CONFLICTS is read from a file or from a
     bash variable set earlier is a per-block question. Thin wrapper over the
-    shared tests/conftest.py::bash_fence_blocks parser (lode-ovgs unified this
-    file's own former private copy, which was functionally identical, with
-    tests/test_skill_bash_state.py's and the fixed
-    tests/test_land_lock.py's, so a fourth copy can never quietly diverge).
+    shared tests/conftest.py::bash_fence_blocks parser, onto which lode-ovgs
+    unified this file's own former private copy (byte-identical in behaviour
+    on every consumed file -- verified, so this file's pins policed exactly the
+    same block set before and after). The parser's known blind spots are
+    documented next to it, not restated here.
     """
     return bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
 

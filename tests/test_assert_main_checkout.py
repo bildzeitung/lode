@@ -274,10 +274,15 @@ def _fenced_bash(markdown: str) -> str:
     --show-toplevel)"` idiom), so the pin has to separate what is executed
     from what is merely described.
 
-    Deliberately NOT the same shape as tests/test_land_lock.py's `_fenced_bash`,
-    which matches the fence marker at column 0 and is therefore blind to
-    indented fences (lode-ovgs). Unifying the four private copies of this
-    scanner is that ticket's job, not this one's.
+    Once deliberately NOT the same shape as tests/test_land_lock.py's
+    `_fenced_bash`, which matched the fence marker at column 0 and was
+    therefore blind to indented fences. lode-ovgs has since fixed that copy and
+    unified it -- along with tests/test_land_conflicts_state.py's and
+    tests/test_skill_bash_state.py's -- onto the shared
+    `tests/conftest.py::bash_fence_blocks`, so the shapes now agree. This
+    module is the one remaining private copy; folding it in too is lode-p4qb's
+    job, deliberately sequenced after land/lode-gczf (which changes 178 lines
+    of this file) so the deletion cannot merge cleanly into edited call sites.
     """
     return "\n".join(_fenced_bash_blocks(markdown))
 
@@ -295,7 +300,7 @@ def _fenced_bash_blocks(markdown: str) -> list[str]:
     The fence marker is matched on the STRIPPED line, never at column 0. Four
     of land/SKILL.md's fences are indented under a markdown bullet, so a
     `line.startswith("```")` scanner -- the shape `tests/test_land_lock.py`
-    still uses, which `lode-ovgs` was filed against -- sees 20 of this file's
+    used until `lode-ovgs` fixed it -- sees 20 of this file's
     24 bash blocks. That is not cosmetic for THIS module: one of the four it
     misses is Section 3's isolation-replay block, which runs its own
     `git reset --hard origin/trunk`. Under the column-0 shape the anchor below
