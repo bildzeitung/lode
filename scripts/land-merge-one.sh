@@ -66,25 +66,19 @@ set -uo pipefail   # deliberately NOT -e: every branch below inspects an exit
 #
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
+# This gate's own advisory trailer, bound at source time (lode-ysr6; see
+# gate-lib.sh's GATE_ADVISORY contract for the mechanism and why it is not a
+# separate assignment). tests/test_land_merge_one.py::_assert_machine_fault_contract
+# pins the advisory TEXT below on an exit-2 path, which no static sweep can
+# see -- route any new exit-2 test through it.
 # shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh"; then
+if ! . "$(dirname "$0")/gate-lib.sh" \
+     "This is a machine fault a human must fix, not a branch conflict --" \
+     "do not kick this branch back needs-rebase in place of diagnosing it."; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
   echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
 fi
-
-# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
-# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW -- a call placed
-# above it still exits 2 with a correct banner but silently emits HALF the
-# contract. Two tests catch that: tests/test_gate_lib.py's ordering sweep
-# (line order, every discovered consumer) and this script's own
-# tests/test_land_merge_one.py::_assert_machine_fault_contract (the advisory
-# TEXT on an exit-2 path, which the sweep cannot see).
-# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
-GATE_ADVISORY=(
-  "This is a machine fault a human must fix, not a branch conflict --"
-  "do not kick this branch back needs-rebase in place of diagnosing it."
-)
 
 # Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`, whose exit 1
 # is exactly the CONFLICT code (same reasoning as merge-precheck.sh's header).
