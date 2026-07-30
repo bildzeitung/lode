@@ -2645,9 +2645,53 @@ while erasing it here would lose the record of what was believed, and when.
     query-only path (`embed_query` — related-notes, `ask`/`retrieve`) now makes no HF probe at all,
     pinned by `tests/test_embedding.py::test_embed_query_never_probes_the_revision_even_with_a_warm_cache`.
     The autouse stub above stays necessary regardless — the real embedder still loads hundreds of MB
-    of ONNX weights on first use. Still open after lode-dj6m, and deliberately not folded into it:
+    of ONNX weights on first use. Left open after lode-dj6m, and deliberately not folded into it:
     the *write* path re-probes once per process, so `lode models pull`'s "every subsequent run is
-    fully offline for indexing and retrieval" remains false for indexing (lode-r4r2).
+    fully offline for indexing and retrieval" remained false for indexing. **Resolved by lode-r4r2**
+    — see that entry below for the resolution (docstring corrected to promise offline retrieval
+    only; the probe now short-circuits under `HF_HUB_OFFLINE` instead of blocking on a network
+    timeout; persisting the revision to make the write path genuinely offline was considered and
+    rejected).
+
+- **2026-07-30 (lode-r4r2) — `lode models pull`'s "fully offline" promise, resolved via docstring +
+  offline short-circuit, not by persisting the revision.** Filed during lode-dj6m's review: after
+  that fix, retrieval (`embed_query`) makes no HF probe on a warm cache, but indexing (`embed`) still
+  makes one live `huggingface_hub.model_info` call per process to stamp per-vector provenance
+  (`model_revision`), because the resolved value is per-instance in-memory state that `FastEmbedEmbedder.warm()`
+  cannot usefully prepay — a *later*, separate process's embedder starts with `_revision_probed =
+  False` regardless of an earlier `models pull`. The ticket named three options and left the choice
+  open, deliberately, as a design call rather than a mechanical fix:
+  - **(a) Persist the resolved revision** next to the weights cache so a warm genuinely prepays it.
+  - **(b) Correct the docstring** to promise offline retrieval only.
+  - **(c) Make the probe respect `HF_HUB_OFFLINE`** so it short-circuits instead of blocking on a TCP
+    timeout with no network.
+  - **Decided: (b) + (c), not (a).** (a) is the only option that makes the original sentence
+    literally true, but it changes what the recorded `model_revision` *means*: `docs/storage.md`'s
+    DETECT-not-PIN decision (`lode-crh8.1`) frames the per-vector field as the **live, currently-resolved**
+    revision at embed time — "a fact about a given installation's pull history" that two installs
+    embedding on different days can legitimately disagree about — not a value read back from a prior
+    `models pull` that can go stale between pulls. Making indexing read a cached local value instead
+    of probing live would quietly redefine that field toward PIN semantics, which is exactly the
+    revisit-only-deliberately territory `docs/storage.md` already reserves for a separate decision,
+    not something to fold into a docstring-accuracy ticket. (b) and (c) are cheap, compatible, and
+    leave that architecture untouched: the write path still makes one live probe per process (this is
+    a real, accepted, bounded cost — not eliminated), but the promise made about it is now accurate,
+    and a user who explicitly opted into `HF_HUB_OFFLINE=1` no longer pays a silent network stall for
+    it.
+  - **What changed:** `lode models pull`'s docstring (`src/lode/cli.py`) now says retrieval is fully
+    offline after a warm and indexing makes one metadata call per process, rather than claiming both
+    are offline. `resolve_model_revision` (`src/lode/embedding.py`) now checks
+    `lode.config.hf_hub_offline()` before attempting the HTTP call and returns `None` immediately if
+    set (`huggingface_hub.model_info` does not itself honor that env var — confirmed by reading
+    `huggingface_hub.hf_api`, which never consults it). The private `_hf_hub_offline()` helper that
+    used to live only in `cli.py` moved to `lode.config.hf_hub_offline()` (public) once a second
+    module needed the identical check, rather than duplicating it. `README.md`, `docs/onboarding.md`,
+    and `docs/configuration.md`'s "Models" section, which all repeated the same "fully offline for
+    indexing and retrieval" claim, are corrected to match.
+  - **If a future ticket wants (a) anyway** (e.g. because the live-probe network cost on every
+    indexing run turns out to matter more than the DETECT-semantics purity), it needs to re-open and
+    explicitly resolve the tension with `docs/storage.md`'s DETECT-not-PIN framing first — this entry
+    is that trigger, not a blanket "don't."
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered

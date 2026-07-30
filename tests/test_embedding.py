@@ -400,6 +400,49 @@ def test_resolve_model_revision_never_raises_on_probe_failure(
     assert resolve_model_revision(_settings().embedding_model) is None
 
 
+def test_resolve_model_revision_short_circuits_under_hf_hub_offline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lode-r4r2: HF_HUB_OFFLINE=1 must skip the network call entirely, not
+    just eventually fail after it -- huggingface_hub.model_info does not
+    honor the flag itself (see resolve_model_revision's docstring), so
+    without this short-circuit a real no-network run would block on the OS
+    TCP timeout instead of returning None immediately.
+    """
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    def _boom(repo_id: str) -> None:
+        raise AssertionError("must not be reached when HF_HUB_OFFLINE is set")
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _boom)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+    # A model id that DOES resolve a pinned identity -- proves the
+    # short-circuit is the flag, not model_cache_identity() already
+    # returning None for an unpinned id (that's the sibling test above).
+    assert resolve_model_revision(_settings().embedding_model) is None
+
+
+def test_resolve_model_revision_probes_normally_when_hf_hub_offline_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The offline short-circuit must not swallow the ordinary online path."""
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    class _FakeModelInfo:
+        sha = "online-sha"
+
+    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+
+    assert resolve_model_revision(_settings().embedding_model) == "online-sha"
+
+
 def test_fast_embed_embedder_model_revision_resolves_and_caches(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

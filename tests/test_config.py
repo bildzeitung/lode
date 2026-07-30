@@ -28,6 +28,7 @@ from lode.config import (
     config_rows,
     confluence_active,
     default_db_path,
+    hf_hub_offline,
     jira_active,
     knob_kinds,
     knob_rows,
@@ -438,6 +439,32 @@ def test_model_cache_dir_defaults_under_home_not_tempdir(
     cache_dir = model_cache_dir()
     assert cache_dir == Path.home() / ".lode" / "models"
     assert not str(cache_dir).startswith(tempfile.gettempdir())
+
+
+# --- hf_hub_offline() — shared HF_HUB_OFFLINE truthiness check (lode-r4r2) --
+# Moved here from a cli.py-private helper once lode.embedding needed the
+# identical check (resolve_model_revision's offline short-circuit).
+
+
+@pytest.mark.parametrize("value", ["1", "true", "True", "TRUE", "yes", "on"])
+def test_hf_hub_offline_true_for_recognized_truthy_spellings(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("HF_HUB_OFFLINE", value)
+    assert hf_hub_offline() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", ""])
+def test_hf_hub_offline_false_for_falsy_or_empty(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("HF_HUB_OFFLINE", value)
+    assert hf_hub_offline() is False
+
+
+def test_hf_hub_offline_false_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    assert hf_hub_offline() is False
 
 
 # --- config_rows() — the CLI's raw path-row builder (lode-l38d.4) -----------

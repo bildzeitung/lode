@@ -52,7 +52,12 @@ from pathlib import Path
 from typing import Protocol
 
 from lode.chunking import Passage, chunk
-from lode.config import Settings, model_cache_dir, model_cache_identity
+from lode.config import (
+    Settings,
+    hf_hub_offline,
+    model_cache_dir,
+    model_cache_identity,
+)
 from lode.progress import op_progress
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
@@ -133,9 +138,26 @@ def resolve_model_revision(model_name: str) -> str | None:
     fail an embed (mismatch-behavior decision, same doc section), so a
     resolution failure is recorded as ``model_revision = NULL`` on the write
     rather than raised.
+
+    **Short-circuits under ``HF_HUB_OFFLINE`` (lode-r4r2), returning ``None``
+    immediately instead of attempting the call.** ``huggingface_hub.model_info``
+    does not itself honor that env var — confirmed by reading
+    ``huggingface_hub.hf_api``, which never consults ``HF_HUB_OFFLINE`` or
+    ``constants.is_offline_mode()`` — so with no network reachable this would
+    otherwise block on the OS TCP connect timeout on every single call, one
+    per process, before falling into the same ``except Exception`` this
+    docstring already describes. A user who set ``HF_HUB_OFFLINE=1``
+    specifically to avoid a network stall still deserves that: fastembed's own
+    weights load already honors the flag
+    (``fastembed/common/model_management.py``), so only this HTTP-metadata
+    call was left blocking. :func:`lode.config.hf_hub_offline` is the same
+    truthiness check :mod:`lode.cli`'s ``models_pull`` cold-cache handling
+    already relies on for the identical env var.
     """
     identity = model_cache_identity(model_name)
     if identity is None:
+        return None
+    if hf_hub_offline():
         return None
     hf_source, _model_file = identity
     try:
@@ -251,17 +273,30 @@ class FastEmbedEmbedder:
         so the CLI does not depend on the private :meth:`_load`.
 
         Deliberately does **not** also call :meth:`model_revision` to prepay the
-        HF revision probe (lode-dj6m). That looks like it would keep ``lode
-        models pull``'s "every subsequent run is fully offline for indexing and
-        retrieval" promise true for the write path, but it cannot: :attr:`_revision`
-        is per-instance in-memory state, ``models pull`` warms a *throwaway*
+        HF revision probe (lode-dj6m). That looks like it would keep indexing
+        offline after a warm, but it cannot: :attr:`_revision` is per-instance
+        in-memory state, ``models pull`` warms a *throwaway*
         ``FastEmbedEmbedder(settings)`` and then the process exits, and nothing
         persists a resolved revision to disk — so the next run's fresh embedder
         re-probes regardless. Measured: warm-then-new-instance-index probes
-        twice, not once. The revision probe on the write path is therefore still
-        live network work on every indexing run, before and after lode-dj6m
-        alike — a real, pre-existing gap in that promise, tracked in lode-r4r2
-        rather than papered over with a call whose result is discarded.
+        twice, not once. The revision probe on the write path is therefore
+        still live network work on every indexing run, before and after
+        lode-dj6m alike.
+
+        **Resolved in lode-r4r2, not by eliminating that per-process probe.**
+        Persisting the resolved revision next to the weights cache so a warm
+        genuinely could prepay it was considered and rejected here: the
+        recorded ``model_revision`` is meant to be a DETECT-not-PIN fact about
+        *this installation's* actually-resolved revision
+        (``docs/storage.md`` "Model provenance"), and a value read back from a
+        prior ``models pull`` -- rather than probed live at embed time --
+        would drift from that meaning without a much larger design change than
+        this ticket scoped. Instead: ``lode models pull``'s docstring now
+        promises offline RETRIEVAL only, and states plainly that indexing
+        makes one metadata call per process; and
+        :func:`resolve_model_revision` now short-circuits under
+        ``HF_HUB_OFFLINE`` rather than blocking on a network timeout, so the
+        gap is a documented, bounded cost instead of a silent stall.
         """
         self._load()
 
