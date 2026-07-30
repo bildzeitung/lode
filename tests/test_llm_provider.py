@@ -520,28 +520,33 @@ def test_submit_batch_builds_forced_tool_use_requests() -> None:
 
 def test_submit_batch_builds_schema_once_per_distinct_output_schema() -> None:
     # lode-a31q: every batch item sharing the same output_schema must reuse
-    # one model_json_schema() call, not rebuild it per item.
+    # one model_json_schema() call, not rebuild it per item -- and the cache
+    # must be scoped to ONE submission. A process-global cache keyed on the
+    # class object would satisfy the first assertion while pinning every
+    # schema class for the life of the process, so the second submission below
+    # pins the lifetime too: it must pay its own build, not inherit the first.
     client = mock.MagicMock()
     client.beta.messages.batches.create.return_value = SimpleNamespace(id="batch-5")
     provider = AnthropicProvider(client)
+    batch = [
+        _batch_request(custom_id="ver-1"),
+        _batch_request(custom_id="ver-2"),
+        _batch_request(custom_id="ver-3"),
+    ]
 
     with mock.patch.object(
         _Widget, "model_json_schema", wraps=_Widget.model_json_schema
     ) as spy:
-        provider.submit_batch(
-            [
-                _batch_request(custom_id="ver-1"),
-                _batch_request(custom_id="ver-2"),
-                _batch_request(custom_id="ver-3"),
-            ],
-            timeout_s=30.0,
-        )
+        provider.submit_batch(batch, timeout_s=30.0)
+        assert spy.call_count == 1
+        provider.submit_batch(batch, timeout_s=30.0)
+        assert spy.call_count == 2
 
-    assert spy.call_count == 1
+    expected = _Widget.model_json_schema()
     reqs = client.beta.messages.batches.create.call_args.kwargs["requests"]
     assert len(reqs) == 3
     for req in reqs:
-        assert req["params"]["tools"][0]["input_schema"] == _Widget.model_json_schema()
+        assert req["params"]["tools"][0]["input_schema"] == expected
 
 
 def test_submit_batch_builds_correct_schema_per_output_schema_in_a_heterogeneous_batch() -> (
@@ -565,20 +570,13 @@ def test_submit_batch_builds_correct_schema_per_output_schema_in_a_heterogeneous
         timeout_s=30.0,
     )
 
+    widget_schema = _Widget.model_json_schema()
+    gadget_schema = _Gadget.model_json_schema()
     reqs = client.beta.messages.batches.create.call_args.kwargs["requests"]
     by_id = {req["custom_id"]: req for req in reqs}
-    assert (
-        by_id["ver-1"]["params"]["tools"][0]["input_schema"]
-        == _Widget.model_json_schema()
-    )
-    assert (
-        by_id["ver-2"]["params"]["tools"][0]["input_schema"]
-        == _Gadget.model_json_schema()
-    )
-    assert (
-        by_id["ver-3"]["params"]["tools"][0]["input_schema"]
-        == _Widget.model_json_schema()
-    )
+    assert by_id["ver-1"]["params"]["tools"][0]["input_schema"] == widget_schema
+    assert by_id["ver-2"]["params"]["tools"][0]["input_schema"] == gadget_schema
+    assert by_id["ver-3"]["params"]["tools"][0]["input_schema"] == widget_schema
 
 
 def test_submit_batch_omits_tools_when_no_tool_name() -> None:
