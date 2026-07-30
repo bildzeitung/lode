@@ -2355,7 +2355,7 @@ assumption would not have closed it.
   what CAVEAT 2 originally warned would wedge landing *permanently* if its winner died between
   creating the gate and clearing it — the fix bounds that risk with its own, much smaller staleness
   window scoped to the gate alone (a fixed 30s constant, not `LAND_LOCK_STALE_SECONDS`, since it only
-  needs to outlast a couple of shell builtins, never a whole pass): a later `acquire` that finds an
+  needs to outlast a handful of forks, never a whole pass): a later `acquire` that finds an
   abandoned gate past that window clears it and retries the `mkdir` once. Aging is read off
   `$RECLAIM_GATE`'s own directory **mtime** (lode-78ih) — a kernel-managed property `mkdir` sets
   atomically at creation, so a reclaimer killed in the gap between `mkdir` and anything else leaves a
@@ -2363,7 +2363,14 @@ assumption would not have closed it.
   earlier revision dated an untimestamped gate by having a *different* racer write an epoch inside it;
   that second writer turned out to be the actual source of a different bug once the gate also had to
   carry an owner token — see lode-78ih below — so this redesign removes it rather than further
-  synchronizing it.) The gate's winner also re-reads `$LOCK` immediately before touching it and
+  synchronizing it.) What that aging signal depends on, and how to break it: a directory's mtime is
+  bumped by any entry **created or removed** inside it, not only by the `mkdir`. Today exactly one such
+  event follows creation (the winner's single `owner` write, microseconds later — harmless, and in the
+  safe direction, since it only makes a live gate look *younger*), so the "one file, written once,
+  immediately" shape is load-bearing for aging as well as for single-writer ownership. **Anything that
+  later writes a new entry into a gate it already holds would refresh this clock at every write, and an
+  abandoned gate whose clock keeps being refreshed can never age out — the permanent wedge, back again.**
+  The gate's winner also re-reads `$LOCK` immediately before touching it and
   reclaims **only on positive proof** that it is still the same stale record — present, parseable,
   still past the window. Treating an *absent* file as licence to proceed is itself a two-winner bug (an
   absent lock means a reclaim is already in flight, and this racer's `rm` then destroys whichever
@@ -2387,9 +2394,49 @@ assumption would not have closed it.
   comparison fails and it aborts (exit 1, "lost the race") instead of clobbering the new holder's
   record. Every failure mode of the check itself — the gate directory or its owner file gone,
   unreadable, or simply not a match — takes that same abort branch; there is no "unknown, so proceed"
-  reading. This shrinks the exposed window from the *whole* critical section down to the handful of
-  shell builtins between the check succeeding and the `rm -f "$LOCK"` immediately after it — no process
-  fork, no I/O beyond the one `read` the check itself performs.
+  reading.
+
+  **The stalled holder is not the most reachable case that check closes**, and it must not be judged (or
+  weakened) on that case alone. The self-heal admits a second, *stall-free* version of the same
+  displacement: with an abandoned gate present, racer Y reads its mtime, judges it dead and `rm -rf`s
+  it — but by then that directory may be the *fresh* gate racer X won microseconds earlier, so Y deletes
+  X's gate, Y's own `mkdir` then succeeds, and X and Y both believe they hold it. Nothing stalls; two
+  self-heals simply overlap. **Measured** with the ownership check neutered and an already-abandoned gate
+  present: **37 of 60 rounds at 32-way produced 2–4 simultaneous winners** (with the check in place, 0 of
+  120 under the same conditions). On that path lode-ao95's record re-validation fires *zero* times — both
+  racers correctly see the same still-stale record — while this check fires ~2.7 times per round, so for
+  the self-heal race it is not a second opinion, it is the only thing preventing two landers.
+
+  This shrinks the exposed window from the *whole* critical section down to the span between the check
+  succeeding and **`write_lock` returning**. That boundary matters: it is *not* the `rm -f "$LOCK"` two
+  lines below the check. Displacement anywhere up to `write_lock`'s create still yields two winners,
+  because the pass's own `rm` destroys the displacer's fresh record and its `write_lock` then succeeds
+  into the hole it just made. Nor is the span fork- or I/O-free: it contains an `echo` to stdout (a
+  *blocking* write — if the caller stops draining that pipe, that is itself a stall of exactly the kind
+  being guarded against), `rm`'s fork+exec, and `write_lock`'s subshell plus the `hostname` and two
+  `date` forks inside `lock_record`. **Measured at ~5ms**, and a `sleep` injected there in a scratch copy
+  reproduces two winners on the first try — narrow, but a real residual rather than a rounding error.
+
+  **A stall is not actually required to reach that window** — this is where lode-ao95's "a machine already
+  in serious trouble" framing was wrong, and it is the strongest argument yet for **lode-y3dw** adopting
+  `flock(1)`. Two routes reach it with no stall at all, both measured live (32-way, an already-abandoned
+  gate present, 28-way CPU saturation: **2 of 150 rounds ended with two winners**):
+
+  1. **The self-heal's `rm -rf` can remove a gate it never judged.** A racer reads the abandoned gate's
+     mtime, decides "dead", and by the time its `rm -rf` runs that path may hold the *fresh* gate another
+     racer just won — check-then-act on a re-created object, and POSIX shell has no "unlink only if this
+     is still the same directory". Observed as two *reclaim* winners in one round.
+  2. **The fresh path takes no gate**, so it is not serialized against a gate winner's `rm -f "$LOCK"` +
+     `write_lock` at all: a top-of-script `write_lock` landing in that two-step gap succeeds alongside the
+     reclaimer. Observed as one reclaim winner plus one *fresh* winner in another round. The gate only ever
+     gave mutual exclusion among *reclaimers*.
+
+  Neither is closable without the OS primitive below, and the exposure preamble still bounds all of it
+  (reaching any of this needs concurrent `/land` invocations against an already-stale lock — crash
+  recovery with the one-lander convention already violated). But the residual must not be described as
+  requiring a stalled process: it does not. This is also why the stress test deliberately starts each
+  round with *no* gate — an already-abandoned-gate arm reaches these routes, so "exactly one winner" stops
+  being a property the design guarantees and the arm fails intermittently under load instead of gating.
 
   `$RECLAIM_GATE/owner` has exactly **one writer** for the lifetime of a given gate: the `mkdir` winner
   itself. An earlier revision of this fix combined the owner token with the aging epoch in one record
@@ -2408,7 +2455,7 @@ assumption would not have closed it.
   gate) — adopting one is **lode-y3dw**'s decision to make, not lode-78ih's. The 30s window is
   deliberately generous — the guarded critical section is a handful of forks — and **must not be reduced
   to "tighten" this**, since a smaller window makes displacing a live holder *more* likely and does
-  nothing about the builtin-count-bounded residual above. Note this is a *different* object and check
+  nothing about the residual above. Note this is a *different* object and check
   from lode-q9pm below: q9pm is entirely about `heartbeat` re-stamping the *main lock's* own token field,
   never the *gate directory's* own small record touched here — landing q9pm exactly as scoped would have
   left this reclaim-path hole exactly as open as it was, which is why it needed its own ticket rather
