@@ -900,6 +900,15 @@ machine. A red gate is content; exit 2 is the machine.
   `git reset --hard` below, since that only resets the index and working tree, never anything under
   `.git/`.
 
+  Being a fresh invocation is also why this block needs its **own**
+  [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call as its first line
+  (lode-gczf) — Section 1's cannot reach it. The
+  [rule and its reasoning live in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and
+  apply here unchanged: keep the guard first, and keep every destructive command below it **in this
+  same fence** — the replay loop's two `git reset --hard HEAD~1` calls and the `git merge` inside
+  `land-merge-one.sh` are protected only by sharing it. Splitting this block is what would silently
+  un-guard them.
+
   ```bash
   rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
   rtk git reset --hard origin/trunk
