@@ -78,6 +78,7 @@ from lode.ids import short_version_id
 from lode.llm_provider import (
     BatchRequest,
     LLMProvider,
+    ModelTier,
     build_provider,
     provider_identity,
 )
@@ -141,7 +142,30 @@ _TOOL_NAME = "extract_enrichment"
 #: ``errored`` :class:`~lode.llm_provider.BatchResult` rather than failing the
 #: whole collection. See :class:`~lode.llm_provider.AnthropicProvider`'s
 #: docstring for both.
+#:
+#: **This is the fallback, not the last word (lode-d70n) -- closes the gap
+#: named above.** ``enrichment_llm`` is ``Kind.RUNTIME``, so a user can point
+#: it at a model whose output-budget needs differ from this default -- most
+#: reachably on the BATCH route, which (per the finding above) has no
+#: escape-hatch bound at all besides this cap. The active tier's
+#: :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this constant
+#: when set, on both routes identically (both call sites resolve the same
+#: fallback, preserving the byte-for-byte wire-equivalence bar this constant
+#: itself exists to satisfy). See ``docs/configuration.md`` "Models" for the
+#: decision.
 MAX_TOKENS = 2048
+
+
+def _resolve_max_tokens(tier: ModelTier) -> int:
+    """``tier.max_tokens`` if set, else :data:`MAX_TOKENS` (lode-d70n).
+
+    One place for the fallback so :func:`_call_haiku` and
+    :func:`_build_batch_request` can't drift apart on it -- the same
+    byte-for-byte-equivalence bar :data:`MAX_TOKENS` itself is pinned by
+    (``lode-568v.2``).
+    """
+    return tier.max_tokens if tier.max_tokens is not None else MAX_TOKENS
+
 
 _SYSTEM = (
     "You are a knowledge-extraction assistant. Extract structured information from "
@@ -261,7 +285,7 @@ def _call_haiku(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=MAX_TOKENS,
+        max_tokens=_resolve_max_tokens(tier),
         timeout_s=settings.llm_call_timeout_s,
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
@@ -593,7 +617,7 @@ def _build_batch_request(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=MAX_TOKENS,
+        max_tokens=_resolve_max_tokens(tier),
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
     )

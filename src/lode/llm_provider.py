@@ -119,7 +119,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
-from pydantic import BaseModel, ConfigDict, RootModel, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    model_validator,
+)
 
 from lode.auth import build_client
 
@@ -135,13 +142,27 @@ _log = logging.getLogger(__name__)
 
 
 class ModelTier(BaseModel):
-    """A per-surface model/effort tier (``docs/stack.md`` "Config shape").
+    """A per-surface model/effort/budget tier (``docs/stack.md`` "Config shape").
 
     ``model`` is an Anthropic model id, or an Azure/OpenAI deployment name
     once a second provider lands (``lode-568v.3``). ``reasoning_effort`` is
     meaningful only under a reasoning-capable deployment; :class:`AnthropicProvider`
     sends it as ``output_config.effort`` (``lode-wnz1``) and
     :class:`OpenAIProvider` sends it as ``reasoning.effort``.
+
+    ``max_tokens`` is an optional per-tier override of the output-budget
+    source constant each call site otherwise falls back to
+    (:data:`lode.qa.MAX_TOKENS`, :data:`lode.enrich.MAX_TOKENS`) -- decided,
+    ``lode-d70n``, closing the gap named in ``lode-jgus``'s technical review:
+    a ``Kind.RUNTIME`` override can point a tier at a model whose
+    output-budget needs differ substantially (a thinking-capable model shares
+    ``max_tokens`` between thinking and the payload), but the budget used to
+    be a source constant the user had no way to adjust to match. ``None``
+    (every existing ``config.toml`` today, and what a bare TOML string
+    coerces to) means "use the call site's own default" -- back-compat, no
+    migration required. When set it must be a positive integer; see
+    ``docs/configuration.md`` "Models" for the full rationale and the
+    truncation-vs-cost tradeoff a lower override makes.
 
     A bare TOML string (every existing ``config.toml`` today, e.g.
     ``enrichment_llm = "claude-haiku-4-5"``) coerces to
@@ -152,6 +173,7 @@ class ModelTier(BaseModel):
 
     model: str
     reasoning_effort: str | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="before")
     @classmethod

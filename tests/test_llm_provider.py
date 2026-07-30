@@ -43,12 +43,33 @@ def test_model_tier_coerces_from_a_bare_string() -> None:
     tier = ModelTier.model_validate("claude-haiku-4-5")
     assert tier.model == "claude-haiku-4-5"
     assert tier.reasoning_effort is None
+    assert tier.max_tokens is None
 
 
 def test_model_tier_accepts_explicit_fields() -> None:
     tier = ModelTier(model="gpt-5.5", reasoning_effort="high")
     assert tier.model == "gpt-5.5"
     assert tier.reasoning_effort == "high"
+
+
+def test_model_tier_accepts_an_explicit_max_tokens_override() -> None:
+    # lode-d70n: the per-tier output-budget override.
+    tier = ModelTier(model="claude-opus-5", max_tokens=4096)
+    assert tier.max_tokens == 4096
+
+
+def test_model_tier_max_tokens_defaults_to_none() -> None:
+    # None means "use the call site's own source-constant default"
+    # (qa.MAX_TOKENS / enrich.MAX_TOKENS) -- back-compat, no migration needed.
+    tier = ModelTier(model="x")
+    assert tier.max_tokens is None
+
+
+def test_model_tier_rejects_a_non_positive_max_tokens() -> None:
+    with pytest.raises(ValidationError):
+        ModelTier(model="x", max_tokens=0)
+    with pytest.raises(ValidationError):
+        ModelTier(model="x", max_tokens=-1)
 
 
 def test_model_tier_is_frozen() -> None:

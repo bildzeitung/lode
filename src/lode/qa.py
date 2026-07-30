@@ -89,6 +89,13 @@ OPUS_MODEL = "claude-opus-5"
 #: ``anthropic.APITimeoutError`` rather than a truncated answer. Whether that
 #: timeout should rise, split per-call, or stay is a measurement-backed
 #: decision tracked in lode-wfyx, not settled here.
+#:
+#: **This is the fallback, not the last word (lode-d70n).** ``qa_llm`` /
+#: ``qa_think_harder_llm`` are ``Kind.RUNTIME``, so a user can point either at
+#: a model whose output-budget needs differ from this default; the active
+#: tier's :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this
+#: constant when set (``answer_question`` resolves the fallback). See
+#: ``docs/configuration.md`` "Models" for the decision.
 MAX_TOKENS = 8192
 
 _SYSTEM_PROMPT = (
@@ -208,6 +215,7 @@ def answer_question(
         provider,
         model,
         tier.reasoning_effort,
+        tier.max_tokens if tier.max_tokens is not None else MAX_TOKENS,
         question,
         egress.sent,
         is_external,
@@ -225,6 +233,7 @@ def _request_claims(
     provider: LLMProvider,
     model: str,
     reasoning_effort: str | None,
+    max_tokens: int,
     question: str,
     sent: tuple[RedactedSend, ...],
     is_external: dict[str, bool],
@@ -239,6 +248,10 @@ def _request_claims(
     response against the claims schema and returns a typed instance
     (``docs/stack.md`` "structured outputs + Pydantic"), byte-for-byte
     identical to the direct SDK call this replaced.
+
+    ``max_tokens`` is :data:`MAX_TOKENS` unless the active tier's
+    :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides it
+    (``lode-d70n`` -- the caller resolves that fallback, not this function).
     """
     sources = "\n\n".join(
         _render_source(send, is_external.get(send.target_id, False)) for send in sent
@@ -250,7 +263,7 @@ def _request_claims(
         system=_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         output_schema=_ClaimsEnvelope,
-        max_tokens=MAX_TOKENS,
+        max_tokens=max_tokens,
         timeout_s=timeout_s,
     )
 
