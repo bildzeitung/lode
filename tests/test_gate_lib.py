@@ -109,7 +109,7 @@ BARE_SOURCE = '. "$(dirname "$0")/gate-lib.sh"'
 # this fixture can never drift from the literal GUARD_RE actually matches --
 # used only by the discovery-predicate tests below, never by production
 # matching (which goes through GUARD_RE/`_guard_match` instead).
-GUARDED_SOURCE = f'if ! {BARE_SOURCE}; then\n  {GUARD_TAIL}'
+GUARDED_SOURCE = f"if ! {BARE_SOURCE}; then\n  {GUARD_TAIL}"
 
 
 def _non_comment_lines(text: str) -> list[tuple[int, str]]:
