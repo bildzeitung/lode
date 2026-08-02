@@ -78,7 +78,9 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _add_worktree(repo: Path, rel_path: str, branch: str, base: str = "origin/trunk") -> Path:
+def _add_worktree(
+    repo: Path, rel_path: str, branch: str, base: str = "origin/trunk"
+) -> Path:
     """A real `git worktree add`, branched off `base` (default `origin/trunk`,
     matching `worktree.baseRef: "fresh"`)."""
     wt = repo / rel_path
@@ -161,7 +163,9 @@ def test_locked_is_kept_regardless_of_ancestry_or_dirt(tmp_path: Path) -> None:
     prove dead, and this script must never second-guess that."""
     repo = _init_repo(tmp_path)
     wt = _add_worktree(repo, ".claude/worktrees/locked", "worktree-agent-locked")
-    sha = _git(wt, "rev-parse", "HEAD").stdout.strip()  # == trunk tip: trivially "merged"
+    sha = _git(
+        wt, "rev-parse", "HEAD"
+    ).stdout.strip()  # == trunk tip: trivially "merged"
 
     result = _run(repo, wt, sha, "1", "worktree-agent-locked")
 
@@ -313,7 +317,9 @@ def test_vanished_directory_fails_closed_to_keep_dirty(tmp_path: Path) -> None:
 # --- fixture 1 & 3: worktree-agent-* dir-only reclaim + age floor ---------
 
 
-def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(tmp_path: Path) -> None:
+def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(
+    tmp_path: Path,
+) -> None:
     """A builder's own branch, never pushed anywhere, not merged into trunk,
     but old enough (min-age-seconds=0, trivially satisfied) and clean ->
     dir-only. The script never touches the branch ref itself -- it only
@@ -329,12 +335,16 @@ def test_worktree_agent_not_merged_clean_and_old_enough_is_dir_only(tmp_path: Pa
     assert _bucket(result) == "dir-only"
 
 
-def test_worktree_agent_not_merged_but_too_young_is_kept_notmerged(tmp_path: Path) -> None:
+def test_worktree_agent_not_merged_but_too_young_is_kept_notmerged(
+    tmp_path: Path,
+) -> None:
     """Same shape as above, but the age floor is set far in the future
     relative to the commit -- a build still cycling has a recent HEAD commit
     almost by construction, so this must fail SAFE and keep it."""
     repo = _init_repo(tmp_path)
-    wt = _add_worktree(repo, ".claude/worktrees/fresh-build", "worktree-agent-freshbuild")
+    wt = _add_worktree(
+        repo, ".claude/worktrees/fresh-build", "worktree-agent-freshbuild"
+    )
     sha = _commit(wt, "wip.txt", "still building")
 
     result = _run(
@@ -344,11 +354,15 @@ def test_worktree_agent_not_merged_but_too_young_is_kept_notmerged(tmp_path: Pat
     assert _bucket(result) == "keep-notmerged"
 
 
-def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(tmp_path: Path) -> None:
+def test_worktree_agent_not_merged_dirty_and_old_enough_is_kept_dirty(
+    tmp_path: Path,
+) -> None:
     """The dir-only arm gates on the SAME dirty-tree guard as full-reclaim --
     old enough and worktree-agent-shaped is not sufficient by itself."""
     repo = _init_repo(tmp_path)
-    wt = _add_worktree(repo, ".claude/worktrees/leaked-dirty", "worktree-agent-leakeddirty")
+    wt = _add_worktree(
+        repo, ".claude/worktrees/leaked-dirty", "worktree-agent-leakeddirty"
+    )
     sha = _commit(wt, "wip.txt", "abandoned build")
     (wt / "scratch.tmp").write_text("uncommitted\n")
 
@@ -381,7 +395,9 @@ def test_empty_branch_never_matches_the_worktree_agent_glob(tmp_path: Path) -> N
 # --- fixture 5: land/-branched, not captured -------------------------------
 
 
-def test_land_branched_not_merged_and_never_pushed_is_kept_notmerged(tmp_path: Path) -> None:
+def test_land_branched_not_merged_and_never_pushed_is_kept_notmerged(
+    tmp_path: Path,
+) -> None:
     """A `land/<id>`-branched worktree that is neither merged into trunk nor
     captured on any origin counterpart (never pushed) -- kept, full stop; this
     shape never enters the worktree-agent-* dir-only arm regardless of age."""
