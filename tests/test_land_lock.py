@@ -986,27 +986,29 @@ def test_stalled_gate_winner_is_displaced_and_aborts_rather_than_clobbering(
 # only gate that has ever caught a live two-lander bug in this script.
 
 
-def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
-    """`scripts/land-lock.sh` carries a test-only `LAND_LOCK_TEST_STALL_SECONDS`
-    hook that makes it `sleep` while holding the reclaim gate -- i.e. it
-    manufactures, on demand, the exact stall that is this lock's documented
-    two-winner residual. Its safety rests entirely on nothing in production
-    ever setting it, and that is the kind of claim this repo mechanizes rather
-    than asserts in a comment.
+_STALL_HOOK_VAR = "LAND_LOCK_TEST_STALL_SECONDS"
 
-    Only two files may mention the variable at all: the script that reads it,
-    and this test file. In particular a `/land` skill step, a nox session, or an
-    `env` block in `.claude/settings*.json` must never set it -- an exported
-    value would stall lock acquisition at the one point where stalling is known
-    to admit two landers.
+# .beads/*.jsonl is beads' passive export -- regenerated and re-staged by the
+# pre-commit hook on EVERY commit (import.auto: false, lode-6ra), so it is
+# never itself a production caller of anything. A bd issue body that happens
+# to name `_STALL_HOOK_VAR` (this ticket's own description does) would
+# otherwise redden this scan for a reason unrelated to any real caller --
+# excluded for that reason, not to widen what the scan is willing to miss.
+_STALL_HOOK_SCAN_EXCLUDED_RELPATHS = {
+    ".beads/issues.jsonl",
+    ".beads/interactions.jsonl",
+}
+
+
+def _stall_hook_offenders(repo_root: Path, *, allowed: set[Path]) -> list[str]:
+    """Every git-TRACKED file under `repo_root` that mentions `_STALL_HOOK_VAR`,
+    other than `allowed` and the passive bd export. Tracked-only by
+    construction (`git ls-files`): see the caller's docstring for what that
+    does and does not promise.
     """
-    allowed = {
-        REPO_ROOT / "scripts" / "land-lock.sh",
-        Path(__file__).resolve(),
-    }
     tracked = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=REPO_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         timeout=60,
@@ -1015,17 +1017,51 @@ def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
 
     offenders = []
     for rel in tracked:
-        if not rel:
+        if not rel or rel in _STALL_HOOK_SCAN_EXCLUDED_RELPATHS:
             continue
-        path = REPO_ROOT / rel
+        path = repo_root / rel
         if path in allowed or not path.is_file():
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError, OSError:
             continue  # binary or unreadable: cannot be setting a shell env var
-        if "LAND_LOCK_TEST_STALL_SECONDS" in text:
+        if _STALL_HOOK_VAR in text:
             offenders.append(rel)
+    return offenders
+
+
+def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
+    """`scripts/land-lock.sh` carries a test-only `LAND_LOCK_TEST_STALL_SECONDS`
+    hook that makes it `sleep` while holding the reclaim gate -- i.e. it
+    manufactures, on demand, the exact stall that is this lock's documented
+    two-winner residual. Its safety rests entirely on nothing in production
+    ever setting it, and that is the kind of claim this repo mechanizes rather
+    than asserts in a comment.
+
+    Only two TRACKED files may mention the variable at all: the script that
+    reads it, and this test file. In particular a `/land` skill step or a nox
+    session must never set it -- an exported value would stall lock
+    acquisition at the one point where stalling is known to admit two
+    landers.
+
+    This scan is `git ls-files` (tracked files only), so it CANNOT see
+    `.claude/settings.local.json` -- the one file CLAUDE.md's "New machine
+    setup" designates as the machine-local `env` home, and gitignored
+    precisely so it stays untracked (.gitignore:4). That is the single most
+    likely place a developer would actually export the variable, and it is
+    outside this test's reach by construction; this test makes no promise
+    about it.
+
+    `.beads/issues.jsonl` and `.beads/interactions.jsonl` ARE tracked but are
+    excluded anyway -- see `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` above.
+    """
+    allowed = {
+        REPO_ROOT / "scripts" / "land-lock.sh",
+        Path(__file__).resolve(),
+    }
+
+    offenders = _stall_hook_offenders(REPO_ROOT, allowed=allowed)
 
     assert not offenders, (
         "land-lock.sh's test-only stall hook is referenced outside "
@@ -1033,6 +1069,29 @@ def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
         "caller ever sets it, /land stalls while holding the reclaim gate -- the "
         "documented two-winner residual, manufactured on purpose."
     )
+
+
+def test_the_stall_hook_scans_exclusion_is_not_vacuous(tmp_path: Path) -> None:
+    """The `.beads/*.jsonl` exclusion above must hide exactly the passive bd
+    export -- never become a way to hide an actual production caller. Stage a
+    throwaway repo with the variable planted in BOTH `.beads/issues.jsonl`
+    and an unrelated tracked file, and confirm the scan stays green for the
+    former while still catching the latter -- i.e. the exclusion is narrow,
+    not a loophole.
+    """
+    repo = _init_repo(tmp_path)
+    beads_dir = repo / ".beads"
+    beads_dir.mkdir()
+    (beads_dir / "issues.jsonl").write_text(
+        f'{{"id": "fake", "description": "{_STALL_HOOK_VAR}"}}\n'
+    )
+    offender = repo / "some_module.py"
+    offender.write_text(f"{_STALL_HOOK_VAR} = 1\n")
+    _git(repo, "add", "-A")
+
+    offenders = _stall_hook_offenders(repo, allowed=set())
+
+    assert offenders == ["some_module.py"], offenders
 
 
 # ---------------------------------------------------------------------------

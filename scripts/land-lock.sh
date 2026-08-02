@@ -589,8 +589,12 @@ fi
 # crashed between winning it and finishing its rm+write. Every attempt's
 # actual decision is a bare `mkdir`, so no number of attempts by THIS racer
 # can produce a second winner alongside another racer that is keeping its
-# gate (the case that CAN, an alive-but-stalled holder, is the documented
-# residual in the header -- it is not created by retrying here).
+# gate. The residual documented in the header above -- the stall-free
+# self-heal overlap, two DIFFERENT racers' mkdir/rm -rf interleaving -- is
+# likewise not created by retrying here; it takes a second racer, not a
+# second attempt by this one. An alive-but-stalled holder is NOT part of
+# that residual any more: the gate-ownership re-check below (lode-78ih)
+# catches it before it can complete its reclaim.
 for _ in 1 2; do
 
   if mkdir "$RECLAIM_GATE" 2>/dev/null; then
