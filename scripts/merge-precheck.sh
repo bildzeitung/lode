@@ -70,26 +70,19 @@ set -uo pipefail   # deliberately NOT -e: this script's entire job is to
 
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
+# This gate's own advisory trailer, bound at source time (lode-ysr6; see
+# gate-lib.sh's GATE_ADVISORY contract for the mechanism and why it is not a
+# separate assignment). tests/test_merge_precheck.py's "not a branch conflict"
+# assertions pin the advisory TEXT below on an exit-2 path, which no static
+# sweep can see -- keep those on any new exit-2 test.
 # shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh"; then
+if ! . "$(dirname "$0")/gate-lib.sh" \
+     "This is a machine fault a human must fix, not a branch conflict --" \
+     "do not kick this branch back needs-rebase in place of diagnosing it."; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
   echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
 fi
-
-# This gate's own advisory trailer (see gate-lib.sh's GATE_ADVISORY contract).
-# KEEP THIS ABOVE EVERY gate_could_not_run CALL SITE BELOW. A call placed above
-# it still exits 2 with a correct banner but silently emits HALF the contract --
-# invisible to set -u, to shellcheck, and to the library's own tests. Two tests
-# catch it: tests/test_gate_lib.py's ordering sweep (line order, every
-# discovered consumer) and tests/test_merge_precheck.py's "not a branch
-# conflict" assertions (the advisory TEXT on an exit-2 path, which the sweep
-# cannot see) -- keep those on any new exit-2 test.
-# shellcheck disable=SC2034  # read by gate_could_not_run() in the sourced gate-lib.sh
-GATE_ADVISORY=(
-  "This is a machine fault a human must fix, not a branch conflict --"
-  "do not kick this branch back needs-rebase in place of diagnosing it."
-)
 
 # Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`. In a script
 # run as `bash merge-precheck.sh`, an unset `${1:?}` exits 1, which is exactly

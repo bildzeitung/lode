@@ -61,12 +61,18 @@ class _StubEmbedder:
     default 500ms). Whether that timer fires before a test finishes is a
     wall-clock race the test bodies do not control; when it does fire, the
     worker (``RelatedNotesPanel._search_related``) lazily constructs a real
-    :class:`~lode.embedding.FastEmbedEmbedder`, whose first embed resolves the
-    ONNX model's revision over a live HTTPS call to huggingface.co
-    (:func:`lode.embedding.resolve_model_revision`) -- unconditionally, whether
-    or not the model is already cached on disk. That is the call
-    ``tests/conftest.py``'s socket guard was catching, and the reason a green
-    local run is *not* evidence this stub is unnecessary.
+    :class:`~lode.embedding.FastEmbedEmbedder`, whose first embed downloads/loads
+    the actual ONNX weights (hundreds of MB on a cold cache) via ``fastembed``.
+    At the time this test was written that first embed *also* resolved the
+    model's HF revision over a live HTTPS call to huggingface.co
+    (:func:`lode.embedding.resolve_model_revision`), unconditionally, whether or
+    not the model was already cached on disk -- that call is what
+    ``tests/conftest.py``'s socket guard was catching here. lode-dj6m has since
+    moved that probe off the query-only path entirely (``embed_query`` no
+    longer resolves the revision at all), but the stub is still required: the
+    real weights download/construction remains real disk/network/CPU cost no
+    test here wants to pay, and a green local run against an already-warm
+    cache is *not* evidence this stub is unnecessary.
 
     Only ``embed_query`` is exercised; the width follows ``settings`` so the
     query vector matches the LanceDB table that ``vector_search`` lazily creates

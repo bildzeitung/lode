@@ -163,6 +163,7 @@ class FastEmbedEmbedder:
         self._model_name = settings.embedding_model
         self._model: object | None = None
         self._revision: str | None = None
+        self._revision_probed = False
         self._load_lock = threading.Lock()
         self._heartbeat_interval_s = settings.progress_heartbeat_interval_s
 
@@ -172,6 +173,17 @@ class FastEmbedEmbedder:
         # this instance may be shared and called from concurrent threads
         # (lode-0wj.4), which a bare ``if self._model is None`` check would
         # race under.
+        #
+        # Deliberately does NOT resolve the HF revision (lode-dj6m): that used
+        # to happen right here, unconditionally, so a query-only embed (which
+        # only ever calls :meth:`_load` via :meth:`embed_query`, never
+        # :meth:`model_revision`) paid a live, untimed HTTPS round trip whose
+        # result nothing on that path reads. The probe now lives in
+        # :meth:`model_revision`, reached only by a caller that actually wants
+        # the revision -- in-tree, just the write path's
+        # :func:`_embedder_model_revision`. (``lode status``'s drift check wants
+        # it too but calls :func:`resolve_model_revision` directly, never
+        # through an embedder instance.)
         if self._model is None:
             with self._load_lock:
                 if self._model is None:
@@ -190,27 +202,46 @@ class FastEmbedEmbedder:
                             model_name=self._model_name,
                             cache_dir=str(model_cache_dir()),
                         )
-                    # Captured alongside the model itself (same critical
-                    # section, same "only the first caller pays" property) --
-                    # a fresh probe every embed() call would otherwise double
-                    # the network round trip for no benefit, since this
-                    # instance's model_name can't change mid-lifetime. Never
-                    # raises (see resolve_model_revision); a failed probe just
-                    # leaves this None for this instance's lifetime, same as
-                    # any other WARN-territory provenance gap.
-                    self._revision = resolve_model_revision(self._model_name)
         return self._model
 
     def model_revision(self) -> str | None:
         """The resolved HuggingFace revision (commit SHA) behind this instance's weights.
 
         Forces the same lazy load :meth:`embed_passages`/:meth:`embed_query`
-        trigger (so calling this alone still resolves it), then returns the
-        revision captured at load time. ``None`` if the probe could not judge
-        (a ``config.toml`` override outside the pinned identity set, or any
-        network/lookup failure) — WARN territory, not a reason to fail.
+        trigger (so calling this alone still resolves it), then lazily probes
+        the HF revision on this, the first call to *this method* -- not inside
+        :meth:`_load` (lode-dj6m). A query-only embed never calls this method,
+        so it now pays no network cost at all; only a caller that actually
+        wants the revision (in-tree, just the write path's
+        :func:`_embedder_model_revision`) triggers the probe — notably **not**
+        :meth:`warm`, which cannot usefully prepay it (see there).
+
+        Double-checked locking on the same :attr:`_load_lock` as the model load
+        keeps this thread-safe under the same concurrent-caller scenario
+        :meth:`_load`'s guard exists for (lode-0wj.4), with the same "only the
+        first caller pays" amortization -- the result is cached in
+        :attr:`_revision` for this instance's lifetime; a fresh probe on every
+        call would otherwise double the network round trip for no benefit, since
+        this instance's model_name can't change mid-lifetime. Note the probe is
+        taken *after* :meth:`_load` returns, so the lock is never held across
+        both the ONNX load and the network call, and a concurrent
+        :meth:`embed_query` takes :meth:`_load`'s lock-free fast path rather than
+        blocking behind the probe. ``None`` if the probe could not judge (a
+        ``config.toml`` override outside the pinned identity set, or any
+        network/lookup failure) — WARN territory, not a reason to fail (never
+        raises; see :func:`resolve_model_revision`).
         """
         self._load()
+        # A separate flag, not ``self._revision is None``: a FAILED probe
+        # legitimately caches None (WARN territory, see above), and that must
+        # stay a one-time cost too -- keying off the value would re-probe on
+        # every call for exactly the offline/unpinned-model case that can least
+        # afford it.
+        if not self._revision_probed:
+            with self._load_lock:
+                if not self._revision_probed:
+                    self._revision = resolve_model_revision(self._model_name)
+                    self._revision_probed = True
         return self._revision
 
     def warm(self) -> None:
@@ -218,6 +249,19 @@ class FastEmbedEmbedder:
 
         The public seam ``lode models pull`` (lode-6qh) warms the cache through,
         so the CLI does not depend on the private :meth:`_load`.
+
+        Deliberately does **not** also call :meth:`model_revision` to prepay the
+        HF revision probe (lode-dj6m). That looks like it would keep ``lode
+        models pull``'s "every subsequent run is fully offline for indexing and
+        retrieval" promise true for the write path, but it cannot: :attr:`_revision`
+        is per-instance in-memory state, ``models pull`` warms a *throwaway*
+        ``FastEmbedEmbedder(settings)`` and then the process exits, and nothing
+        persists a resolved revision to disk — so the next run's fresh embedder
+        re-probes regardless. Measured: warm-then-new-instance-index probes
+        twice, not once. The revision probe on the write path is therefore still
+        live network work on every indexing run, before and after lode-dj6m
+        alike — a real, pre-existing gap in that promise, tracked in lode-r4r2
+        rather than papered over with a call whose result is discarded.
         """
         self._load()
 

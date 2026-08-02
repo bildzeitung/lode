@@ -47,14 +47,16 @@ set -uo pipefail
 
 # The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
 # section for the measurement and why the guard can't use the library it loads.
+# --no-advisory (lode-ysr6): this gate carries no domain-specific trailer, the
+# same shape it always had -- but the sentinel is REQUIRED, never omitted.
+# Omitting it would fold this script's own RANGE argument into GATE_ADVISORY
+# instead; see gate-lib.sh's GATE_ADVISORY contract for why.
 # shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh"; then
+if ! . "$(dirname "$0")/gate-lib.sh" --no-advisory; then
   echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
   echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
   exit 2
 fi
-# No GATE_ADVISORY set here -- this gate carries no domain-specific trailer,
-# the same shape it always had (see gate-lib.sh's GATE_ADVISORY contract).
 
 # Arg-count check first, and it must exit 2 -- never let an unset "${1:?...}"
 # exit 1, which would collide with a legitimate "none" outcome being

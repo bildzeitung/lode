@@ -2638,9 +2638,16 @@ while erasing it here would lose the record of what was believed, and when.
     each proven against a sabotage. Two of those tests were themselves caught being order-dependent
     by their own sabotage — a module first imported *inside* a test body binds the already-patched
     value and asserts nothing — and now import at module scope so collection binds them first.
-  - **Not fixed here, and still worth fixing: lode-dj6m**, the product-side defect underneath
+  - **Not fixed here: lode-dj6m**, the product-side defect underneath
     (`FastEmbedEmbedder._load` resolves the HF revision eagerly even on query-only paths). This
-    entry removes the *test*-side exposure only. The real `lode` binary still pays that round-trip.
+    entry removed the *test*-side exposure only. **Since fixed by lode-dj6m**, which moved the probe
+    out of `_load` into `model_revision()` behind an idempotent flag under the same lock: the
+    query-only path (`embed_query` — related-notes, `ask`/`retrieve`) now makes no HF probe at all,
+    pinned by `tests/test_embedding.py::test_embed_query_never_probes_the_revision_even_with_a_warm_cache`.
+    The autouse stub above stays necessary regardless — the real embedder still loads hundreds of MB
+    of ONNX weights on first use. Still open after lode-dj6m, and deliberately not folded into it:
+    the *write* path re-probes once per process, so `lode models pull`'s "every subsequent run is
+    fully offline for indexing and retrieval" remains false for indexing (lode-r4r2).
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
