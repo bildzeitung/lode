@@ -362,6 +362,38 @@ def test_land_skill_section1_calls_the_script() -> None:
 _GUARD = "scripts/assert-main-checkout.sh"
 _PASS_START_RESET = "git reset --hard origin/trunk"
 _SECTION1_ONLY = "git checkout -f trunk"
+_MERGE_ONE = "scripts/land-merge-one.sh"
+_REFORMAT_COMMIT = "git commit --no-verify"
+
+
+def _the_one_block(
+    *, contains: tuple[str, ...], excludes: tuple[str, ...] = (), label: str
+) -> str:
+    """The single executed fence matching `contains` and not `excludes`.
+
+    Every guarded block in land/SKILL.md is located this way, so the selection
+    lives here once. Anchoring on the COMMANDS a block runs, rather than on
+    section headings, keeps the pins working while the surrounding prose is
+    rewritten -- which it is constantly, by concurrent tickets.
+
+    The `len(...) == 1` assertion is the load-bearing half, not a tidiness
+    check: it is what makes a SECOND, unguarded copy of an already-guarded
+    exposure fail loudly here instead of being silently absorbed by whichever
+    narrower pin still happens to match one of them.
+    """
+    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    candidates = [
+        b
+        for b in blocks
+        if all(s in b for s in contains) and not any(s in b for s in excludes)
+    ]
+    assert len(candidates) == 1, (
+        f"expected exactly one executed fence containing {list(contains)}"
+        + (f" and none of {list(excludes)}" if excludes else "")
+        + f" ({label}), found {len(candidates)} -- land/SKILL.md's layout has "
+        "drifted and this pin needs re-anchoring, not deleting"
+    )
+    return candidates[0]
 
 
 def _the_two_reset_blocks() -> tuple[str, str]:
@@ -371,26 +403,19 @@ def _the_two_reset_blocks() -> tuple[str, str]:
     identify Section 1 on its own -- an earlier column-0 fence scanner could
     not see Section 3's indented block and made it look as though it did (see
     `_fenced_bash_blocks`). Only Section 1's block also runs `git checkout -f
-    trunk`, so that pair is what tells the two apart. Anchoring on commands
-    rather than section headings keeps both pins working when the surrounding
-    prose is rewritten, which it is constantly, by concurrent tickets.
-
-    Asserting "exactly one of each" here rather than in each caller is what
-    makes a THIRD reset block -- a new unguarded copy of this whole exposure --
-    fail loudly instead of being silently split between two narrower pins.
+    trunk`, so that pair is what tells the two apart.
     """
-    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
-    resets = [b for b in blocks if _PASS_START_RESET in b]
-    section1 = [b for b in resets if _SECTION1_ONLY in b]
-    section3 = [b for b in resets if _SECTION1_ONLY not in b]
-
-    assert len(section1) == 1 and len(section3) == 1, (
-        f"expected exactly one executed fence running `{_PASS_START_RESET}` WITH "
-        f"`{_SECTION1_ONLY}` (Section 1) and exactly one WITHOUT it (Section 3), "
-        f"found {len(section1)} and {len(section3)} -- land/SKILL.md's layout has "
-        "drifted and these pins need re-anchoring, not deleting"
+    return (
+        _the_one_block(
+            contains=(_PASS_START_RESET, _SECTION1_ONLY),
+            label="Section 1's pass-start block",
+        ),
+        _the_one_block(
+            contains=(_PASS_START_RESET,),
+            excludes=(_SECTION1_ONLY,),
+            label="Section 3's isolation-replay block",
+        ),
     )
-    return section1[0], section3[0]
 
 
 def _assert_guard_precedes(
@@ -480,11 +505,53 @@ def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
         section3,
         protects=(
             _PASS_START_RESET,
-            "scripts/land-merge-one.sh",
+            _MERGE_ONE,
             "git reset --hard HEAD~1",
         ),
         section="Section 3",
         ticket="lode-gczf",
+    )
+
+
+def test_section3_first_pass_merge_loop_shares_guard_with_land_merge_one() -> None:
+    """Section 3's FIRST-PASS ('Green') merge loop runs `land-merge-one.sh` --
+    a bare `git merge --no-ff` against cwd -- in its own fresh Bash invocation
+    that Section 1's guard cannot reach (lode-pxyt).
+
+    The isolation-replay ('Red') loop lode-gczf already guarded calls the same
+    script, and only IT also runs `_PASS_START_RESET`; excluding that is what
+    tells the two apart.
+    """
+    _assert_guard_precedes(
+        _the_one_block(
+            contains=(_MERGE_ONE,),
+            excludes=(_PASS_START_RESET,),
+            label="Section 3's first-pass merge loop",
+        ),
+        protects=(_MERGE_ONE,),
+        section="Section 3's first-pass merge loop",
+        ticket="lode-pxyt",
+    )
+
+
+def test_section4_reformat_commit_block_shares_guard_with_its_commit() -> None:
+    """Section 4's reformat-commit block commits `nox -t fix`'s output directly
+    to whatever branch cwd's `HEAD` happens to be on -- the one `git` write in
+    that section naming no ref or path at all, so a wrong-directory run commits
+    there silently instead of failing loudly (lode-pxyt).
+
+    `git add` is protected as well as the commit: it is the block's other
+    cwd-resolved write, and without it here, splitting it out into a fence of
+    its own leaves this whole module green (measured).
+    """
+    _assert_guard_precedes(
+        _the_one_block(
+            contains=(_REFORMAT_COMMIT,),
+            label="Section 4's reformat-commit block",
+        ),
+        protects=("git add", _REFORMAT_COMMIT),
+        section="Section 4's reformat-commit block",
+        ticket="lode-pxyt",
     )
 
 
