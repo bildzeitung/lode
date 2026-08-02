@@ -778,16 +778,14 @@ wrote (never a bash variable), and communicates a real conflict's paths back ove
 with `CONFLICTS=$(...)`) instead of a global `$CONFLICTS` bash variable — see the script's own header
 for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machine fault / missing
 message — the same convention `scripts/merge-precheck.sh` and `scripts/validate-mermaid.sh` use,
-lode-9i2p):
+lode-9i2p).
 
-**This block needs its own [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh)
-call, for the same reason Section 3's isolation-replay block does (lode-gczf): it is a fresh Bash
-invocation, so Section 1's guard — several sections earlier — cannot reach it (lode-sfnb).**
-`scripts/land-merge-one.sh`, called inside the loop below, runs a bare `git merge --no-ff` against
-cwd with no ref or path pinning the target — the exact class of exposure lode-pcee fixed in Section 1
-and lode-gczf fixed in Section 3's replay loop, just in the third fence that runs it (lode-pxyt). Keep
-the guard first and every command it protects in this same fence — splitting it back out is what
-would silently un-guard them again.
+That script runs a bare `git merge --no-ff` against **cwd**, with no ref or path pinning the target,
+so this block needs its **own** [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh)
+call as its first line (lode-pxyt) — Section 1's cannot reach it. The
+[rule and its reasoning live in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and
+apply here unchanged: keep the guard first and the `land-merge-one.sh` call it protects **in this
+same fence**. Splitting this block is what would silently un-guard it.
 
 ```bash
 rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
@@ -1050,15 +1048,17 @@ rtk git status --short
   *every* commit regardless of what was `git add`-ed (see CLAUDE.md's workflow gotchas), so the
   commit itself must skip hooks too:
 
-  **Unlike every other command in this section — `git push origin trunk`, `git push origin --delete
-  land/<id>`, `git worktree remove --force`, `git branch -D`, `git worktree prune`, each ref- or
-  path-addressed and therefore cwd-independent — this commit names no ref or path at all.** It
-  commits directly to whatever branch cwd's `HEAD` happens to be on. Run from the wrong directory it
-  is not a loud failure: it silently commits the reformat to that directory's branch, and the
-  `git push origin trunk` a few lines below then pushes local `trunk` *without* it — green all the
-  way through (lode-pxyt). This is a fresh Bash invocation, so it needs its own
-  [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call, as the first line of
-  this same fence, exactly as Section 1 and Section 3's guarded blocks do:
+  **This commit names no ref or path at all — the one `git` write in this section that doesn't.**
+  Every other one below is ref- or path-addressed and therefore cwd-independent (`git push origin
+  trunk`, `git push origin --delete land/<id>`, `git worktree unlock/remove --force/prune`, `git
+  branch -D` — each names its own target; the `bd` calls are cwd-independent too, but for an
+  unrelated reason: `bd` resolves the repo's canonical `.beads` rather than cwd's). This one commits
+  directly to whatever branch cwd's `HEAD` happens to be on, and run from the wrong directory that is
+  not a loud failure: it silently commits the reformat to that directory's branch, and the
+  `git push origin trunk` below then pushes local `trunk` *without* it — green all the way through
+  (lode-pxyt). Fresh Bash invocation, so it needs its own
+  [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call as this fence's first
+  line ([rule and reasoning in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)):
 
   ```bash
   rtk scripts/assert-main-checkout.sh || exit 1                          # STOP -- this commit is not ref-addressed at all; see above (lode-pxyt)

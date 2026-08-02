@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# Main-checkout identity guard for /land. Called as the first line of Section
-# 1's pass-start block (lode-pcee) and of Section 3's isolation-replay block
-# (lode-gczf) -- both open with a `git reset --hard origin/trunk`, and each
-# needs its OWN call because every fenced block in land/SKILL.md is a separate
-# Bash invocation (lode-sfnb), so one block's `exit` cannot stop another's.
+# Main-checkout identity guard for /land. Called as the FIRST LINE of every
+# land/SKILL.md fence that issues a cwd-resolved mutation -- four of them as of
+# lode-pxyt, each needing its OWN call because every fenced block in that file
+# is a separate Bash invocation (lode-sfnb), so one block's `exit` cannot stop
+# another's. Do NOT maintain the call-site list here: it went stale within one
+# ticket of being written, which is why this header now names the RULE instead.
+# tests/test_assert_main_checkout.py pins each guarded fence and is the
+# authoritative list. Note that not every caller opens with a `git reset
+# --hard` -- the reset is the worst case the diagnostic below narrates, not the
+# only thing this guard protects (see lode-ibfw on that message's wording).
 #
 # THE BUG THIS REPLACES: Section 1 used to run its `git checkout -f trunk`
 # through `git -C "$(git rev-parse --show-toplevel)" checkout -f trunk`, on

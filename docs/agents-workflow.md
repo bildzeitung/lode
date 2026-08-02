@@ -2611,44 +2611,41 @@ assumption would not have closed it.
   (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
   reordering within the block leave every other pin in that module green.
 
-  **This same mechanism now protects four fenced blocks, not one — the paragraph above describes
-  only Section 1's.** `git reset --hard origin/trunk`, `land/SKILL.md`'s other genuinely destructive,
-  cwd-resolved command, recurs in Section 3's isolation-replay ("Red") loop; `lode-gczf` gave that
-  block its own `assert-main-checkout.sh` call rather than trying to extend Section 1's reach across
-  a block boundary, since lode-sfnb rules that out. A follow-up audit (`lode-pxyt`) then found the
-  same exposure in two more fences: Section 3's first-pass ("Green") merge loop and Section 4's
-  reformat-commit block each call `scripts/land-merge-one.sh` / `git commit --no-verify` — a bare
-  `git merge --no-ff` and a bare `git commit`, both resolved against cwd with no ref or path pinning
-  the target — and got the identical fix. `tests/test_assert_main_checkout.py` pins all four
-  independently (`test_guard_shares_one_block_with_the_commands_it_protects`,
-  `test_section3_isolation_replay_block_shares_guard_with_its_reset`,
-  `test_section3_first_pass_merge_loop_shares_guard_with_land_merge_one`,
-  `test_section4_reformat_commit_block_shares_guard_with_its_commit`), so a reader checking whether a
-  given block is covered should check that module's anchors, not this paragraph's count — it will
-  drift again the next time a fence is added.
+  **This mechanism now protects four fenced blocks, not one — the paragraph above describes only
+  Section 1's.** `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
+  `git reset --hard origin/trunk`; `lode-pxyt` then added Section 3's first-pass ("Green") merge loop
+  and Section 4's reformat-commit block, which reach a bare `git merge --no-ff` (via
+  `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
+  in the script's header** — both went stale within one ticket of being written, which is the whole
+  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` pins each guarded fence
+  independently and is the authoritative list; this paragraph deliberately does not restate it.
 
-  **`lode-gczf`'s own design note characterized "Section 4's worktree/branch GC" as exempt, and that
-  claim needed correcting, not deleting.** Its literal text: those commands "operate on specific
-  named refs/paths rather than assuming cwd is the main checkout." Read as written — scoped to the
-  five commands it actually enumerated (`git push origin trunk`, `git push origin --delete
-  land/<id>`, `git worktree remove --force`, `git branch -D`, `git worktree prune`) — it is correct;
-  every one of those genuinely names its own target and cannot be redirected by cwd. The risk was
-  generalizing it to "Section 4 is exempt" as a whole: the reformat-commit block sits in the same
-  section and fails the same test the enumerated commands pass — `git commit --no-verify -q -m
-  "..."` names no ref or path at all, so a wrong-directory run does not fail loudly, it silently
-  commits the reformat to that directory's own branch, and the `git push origin trunk` a few lines
-  later then pushes local `trunk` *without* it. `lode-pxyt` is that correction: the enumerated GC
-  commands stay documented-exempt for the reason above; the reformat-commit block is guarded instead.
+  **`lode-gczf`'s "Section 4's worktree/branch GC is exempt" is right as scoped and wrong if
+  generalized — the distinction is the point.** Its literal text: those commands "operate on specific
+  named refs/paths rather than assuming cwd is the main checkout." For the commands it actually
+  enumerated that holds — each names its own target and cannot be redirected by cwd. Generalized to
+  "Section 4 is exempt" it does not: the reformat-commit block sits in the same section and names no
+  ref or path at all, so a wrong-directory run commits *silently* rather than failing loudly
+  ([mechanics in `land/SKILL.md` §4](../.claude/skills/land/SKILL.md#4-land-the-survivors)).
+  `lode-pxyt` guards that block and keeps the enumerated GC commands documented-exempt.
 
-  **One further fenced command was judged documented-exempt rather than guarded — the standalone
-  `git restore --staged --worktree .beads/issues.jsonl` inside Section 3's prose, just before the
+  **Two things make an exemption like that easy to over-claim, and both bit here.** First, an
+  enumeration silently stops covering the section it is stated over: `lode-pxyt`'s own first draft of
+  the sentence said "every other command in this section" while listing five, omitting `git worktree
+  unlock`. Second, a *shared conclusion* invites a *shared reason* that isn't shared — Section 4's
+  `bd close` / `bd update` / `bd label add` are cwd-independent too, but because `bd` resolves the
+  repo's canonical `.beads` (verified: `bd where` from a linked worktree returns the **main
+  checkout's**), not because they are ref-addressed. State the reason per command, not per section.
+
+  **One further fenced command is documented-exempt rather than guarded — the standalone
+  `git restore --staged --worktree .beads/issues.jsonl` in Section 3's prose, just before the
   first-pass merge loop.** It is cwd-resolved like every bare `git` call in this file, so the
-  ref/path-addressed reasoning above does not cover it — the honest reason it is left alone is
-  narrower: the only path it can ever touch is the passive bd export, which is by invariant never
-  real work (`import.auto: false`, lode-6ra), so the worst case of running it from the wrong
-  directory is discarding export churn that regenerates on the next commit, not a genuine loss. It
-  has been independently rediscovered twice (`lode-gczf`'s technical review missed it; that same
-  ticket's land-review found it) — recorded here so a third rediscovery finds this paragraph instead.
+  ref/path-addressed reasoning does not cover it; it is left unguarded on narrower grounds. The only
+  path it can touch is the passive bd export, which is by invariant never real work
+  (`import.auto: false`, lode-6ra), so the worst case of a wrong-directory run is discarding export
+  churn that regenerates on the next commit. It has been independently rediscovered twice
+  (`lode-gczf`'s technical review missed it; that same ticket's land-review found it) — recorded here
+  so a third rediscovery finds this paragraph instead.
 
   Operative form, including why the preceding `git checkout -f trunk` is load-bearing:
   [`land/SKILL.md` — Section 1](../.claude/skills/land/SKILL.md#1-setup-the-pass--dolt-authoritative-fetch-origin).
