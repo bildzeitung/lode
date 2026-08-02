@@ -127,16 +127,20 @@ needs no allowlist entry because it stops being a `$`-reference at all.
 `challenge/SKILL.md` carries no fenced ```bash/```sh blocks at all. `code/SKILL.md`
 carries five and `epic-audit/SKILL.md` six, all clean. Note that every one of
 `code/SKILL.md`'s fences is INDENTED (nested under a list item), so a scanner anchored
-at column 0 -- `line.startswith("```")`, the shape `tests/test_land_lock.py` still uses
-and `lode-ovgs` was filed against -- sees zero blocks there and would report the file
-as carrying no bash at all. `_bash_blocks` strips each line before testing, so it sees
-all five; this docstring previously recorded the column-0 answer as fact.
+at column 0 -- `line.startswith("```")`, the shape `tests/test_land_lock.py` used before
+lode-ovgs fixed it -- sees zero blocks there and would report the file as carrying no
+bash at all. `_bash_blocks` (imported from `tests/conftest.py::bash_fence_blocks`,
+lode-ovgs unified what were three near-identical private copies into one shared
+helper) strips each line before testing, so it sees all five; this docstring previously
+recorded the column-0 answer as fact.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+
+from conftest import bash_fence_blocks as _bash_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLAUDE_DIR = REPO_ROOT / ".claude"
@@ -210,28 +214,6 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "deleted (lode-p1r3)."
     ),
 }
-
-
-def _bash_blocks(markdown: str) -> list[str]:
-    """The ```bash/```sh fences only, as a list of separate block texts -- what an
-    agent actually EXECUTES, one Bash tool call per block. Mirrors
-    tests/test_land_lock.py's `_fenced_bash`, generalized to preserve block
-    boundaries (that test only needed one joined string; this gate needs to know
-    which block a use/assignment falls in)."""
-    blocks: list[str] = []
-    current: list[str] | None = None
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if current is not None:
-                blocks.append("\n".join(current))
-                current = None
-            elif stripped in {"```bash", "```sh"}:
-                current = []
-            continue
-        if current is not None:
-            current.append(line)
-    return blocks
 
 
 def _strip_comment(line: str) -> str:
@@ -543,10 +525,11 @@ def test_sh_fence_is_scanned_the_same_as_bash() -> None:
 
 def test_indented_fence_is_still_a_fence_the_lode_ovgs_shape() -> None:
     """A fence nested under a list item is indented, and a scanner anchored at column 0
-    (`line.startswith("```")` -- what `tests/test_land_lock.py` does, which `lode-ovgs`
-    was filed against) is blind to it. Every one of `code/SKILL.md`'s five bash blocks
-    opens with an indented fence, so this is not hypothetical: a column-0 scanner reports
-    that file as carrying no bash at all. `_bash_blocks` must strip first."""
+    (`line.startswith("```")` -- what `tests/test_land_lock.py` did before `lode-ovgs`
+    fixed it) is blind to it. Every one of `code/SKILL.md`'s five bash blocks opens with
+    an indented fence, so this is not hypothetical: a column-0 scanner reports that file
+    as carrying no bash at all. `_bash_blocks` (the shared `bash_fence_blocks` helper,
+    imported from `tests/conftest.py`) must strip first."""
     markdown = '1. Step one:\n\n   ```bash\n   echo "$UNASSIGNED"\n   ```\n'
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1
@@ -585,6 +568,14 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     ]
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned
+    # code/SKILL.md earns its own entry: it is the ONE real file whose every
+    # plain fence is indented, so it is the only one of the three whose entry
+    # here goes red if `bash_fence_blocks` ever regresses to a column-0
+    # `line.startswith("```")` scanner (lode-ovgs). land/SKILL.md and
+    # coding.md both keep 20 and 25 blocks under that regression -- still
+    # non-empty, so they would sit here looking fine while the parser was
+    # broken, and this coverage pin would pass vacuously. Verified by mutation.
+    assert "skills/code/SKILL.md" in scanned, scanned
 
 
 def test_no_cross_block_shell_state_outside_the_allowlist() -> None:

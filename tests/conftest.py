@@ -1079,6 +1079,95 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
     }
 
 
+# --- Fenced ```bash/```sh block parsing (lode-ovgs) -------------------------
+#
+# Three copies of this parser existed independently before this unification:
+# tests/test_land_lock.py's `_fenced_bash` matched the fence marker with
+# `line.startswith("```")`, so a fence INDENTED under a markdown list item
+# (e.g. nested under a bullet, as `.claude/skills/land/SKILL.md`'s Section 3
+# isolation-replay merge loop is) never opened at all -- 4 of that file's 24
+# bash fences were invisible to it. tests/test_land_conflicts_state.py
+# (lode-rfon) and tests/test_skill_bash_state.py (lode-x495) each
+# independently discovered and fixed the identical blind spot by matching the
+# STRIPPED line instead, as two private, near-identical copies. Per the
+# lode-ovgs ticket's own acceptance criteria, reaching three copies of the
+# same parser is the unify trigger (the repo's stated bar, per
+# scripts/gate-lib.sh / scripts/epic-children-closed.sh /
+# scripts/recycled-worktree-guard.sh) -- unified here, once.
+#
+# NOT YET the only copy, and this comment must not claim otherwise:
+# tests/test_assert_main_checkout.py::_fenced_bash_blocks is a FOURTH copy,
+# still live, and already diverged (it flushes an unterminated final fence;
+# this one drops it -- see the docstring's "Known boundaries"). Unifying it was
+# deliberately left to lode-p4qb rather than done here: land/lode-gczf was
+# already ready-for-land carrying 178 changed lines of that file, and it keeps
+# both helpers while calling them from four sites. Deleting the definitions
+# here would have merged CLEANLY with those call-site edits and produced a file
+# calling deleted functions -- a clean merge with a broken collection. What
+# lode-ovgs did do in that file is correct the two claims its own landing
+# falsified.
+
+
+def bash_fence_blocks(markdown: str) -> list[str]:
+    """Every fenced ```bash/```sh block in ``markdown``, as separate strings,
+    in document order -- what an agent actually EXECUTES, one Bash tool
+    invocation per block.
+
+    Matches the fence marker on the STRIPPED line, never
+    ``line.startswith("```")``: a fence nested under a markdown list item is
+    legitimately indented (all five of ``.claude/skills/code/SKILL.md``'s
+    PLAIN bash fences open this way -- see the blockquote boundary below for
+    why that is five and not that file's full nine), and a column-0-anchored
+    scanner reports such a file as carrying no bash at all -- the lode-ovgs
+    bug. A caller that wants every block concatenated into one string (e.g. to
+    check for an offending token whose position within the file doesn't
+    matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
+
+    Known boundaries -- each yields NO block, SILENTLY. A gate built on this
+    helper therefore reports "clean" for them rather than "unparsed", which is
+    the same false assurance lode-ovgs was filed against, so measure before
+    trusting a green result on a new file. All four measured during lode-ovgs's
+    review:
+
+    * a BLOCKQUOTED fence (``> ```bash``) is skipped -- ``>`` survives
+      ``.strip()``, so the marker never matches. **This one is LIVE, not
+      hypothetical:** ``.claude/skills/code/SKILL.md`` writes 4 of its 9 bash
+      blocks that way (openers at lines 65, 292, 324, 367), so those 4 are
+      invisible here and consequently ungated by
+      ``tests/test_skill_bash_state.py``. Filed and owned as **lode-wroz**,
+      which also measured the fix as free (51 -> 55 blocks corpus-wide, zero
+      new violations); deliberately not fixed under lode-ovgs, whose scope was
+      the indented-fence variant and the unification.
+      ``tests/test_bd_list_limit_gate.py`` works around it today by stripping
+      the marker off its OWN input before calling this helper.
+    * an UNTERMINATED final fence is dropped (no closing marker, so the block
+      is never flushed). ``tests/test_assert_main_checkout.py``'s surviving
+      copy deliberately keeps it -- the one live divergence between them.
+    * a FOUR-backtick fence (````bash) is skipped -- ``stripped`` no longer
+      equals "```bash". That form is not exotic: it is what an author MUST use
+      for a block whose own body contains a ```-prefixed line.
+    * a TILDE fence (~~~bash) is skipped -- only backticks are recognized.
+      ``scripts/check_links.py`` handles both, with a ``^\\s*(`{3,}|~{3,})``
+      regex. The last three are latent on today's corpus (every other
+      consumed file carries only paired, exactly-three-backtick fences) and are
+      tracked for a deliberate answer in **lode-p4qb**.
+    """
+    blocks: list[str] = []
+    current: list[str] | None = None
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if current is not None:
+                blocks.append("\n".join(current))
+                current = None
+            elif stripped in {"```bash", "```sh"}:
+                current = []
+            continue
+        if current is not None:
+            current.append(line)
+    return blocks
+
+
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
 #
 # The ONE home for both of lode's settle-under-load patterns for driving a

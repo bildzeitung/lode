@@ -58,6 +58,13 @@ What this file adds on top of that is the regression gate, in four parts:
    `tests/test_isolation_guard.py`'s `test_every_agent_definition_invokes_
    the_guard`.
 
+   These pins are only as good as the parser under them, which is why one of
+   them checks the parser rather than the skill:
+   `test_fenced_bash_sees_every_bash_marker_including_indented_ones` asserts
+   the shared `tests/conftest.py::bash_fence_blocks` helper sees every bash
+   fence in SKILL.md, against an independently-derived count. Without it these
+   pins silently covered 20 of 24 blocks (lode-ovgs).
+
 4. The alive-but-stalled gate-winner displacement (lode-78ih): a gate winner
    that stalls past RECLAIM_GATE_STALE_SECONDS between passing re-validation
    and its destructive `rm`+write used to resume and clobber a later
@@ -98,6 +105,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
+from conftest import bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -1128,26 +1136,63 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
 
 
 def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only -- what an agent actually EXECUTES.
+    """The ```bash fences only, concatenated into one string -- what an agent
+    actually EXECUTES.
 
     Scanning the whole file would match the prose that *explains* the old
     defect (it necessarily quotes `trap` and `kill -0`), so the pin has to
     separate what is executed from what is merely described. That split is
     also the point: the fence is the one part of this skill no gate parses,
     which is how the bug survived unnoticed in the first place.
+
+    Thin wrapper over the shared `tests/conftest.py::bash_fence_blocks`
+    parser; this function used to carry its own column-0 copy, which silently
+    checked 20 of this file's 24 bash blocks (lode-ovgs). Why it was unified
+    rather than patched in place, and the parser's known blind spots, live
+    next to the parser itself -- deliberately not restated here, per this
+    module's own no-second-copy rule above.
     """
-    blocks: list[str] = []
-    in_bash = False
-    for line in markdown.splitlines():
-        if line.startswith("```"):
-            if in_bash:
-                in_bash = False
-            else:
-                in_bash = line.strip() in {"```bash", "```sh"}
-            continue
-        if in_bash:
-            blocks.append(line)
-    return "\n".join(blocks)
+    return "\n".join(bash_fence_blocks(markdown))
+
+
+def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
+    """Regression pin for lode-ovgs, independent of `_fenced_bash`/
+    `bash_fence_blocks` itself: derive the EXPECTED fence count a second,
+    unrelated way (a plain stripped-line ```bash/```sh marker count) and
+    assert the parser's own block count matches it.
+
+    This is the shape the ticket asked for explicitly: a startswith-anchored
+    parser undercounts (it saw 20 of 24 blocks against the shipped file when
+    this test was written -- 4 indented fences invisible to it), so this
+    test would have failed against the pre-fix parser without needing to
+    know in advance which blocks are indented or where.
+
+    Sabotage recipe (recorded per this repo's non-vacuous-test standard):
+    in tests/conftest.py's `bash_fence_blocks`, replace `stripped = line.strip()`
+    with `stripped = line` (i.e. stop stripping before the fence-marker check,
+    reintroducing the exact column-0-anchored bug this ticket fixes). Every
+    caller of `bash_fence_blocks` -- this test included -- then parses only 20
+    blocks against this file instead of 24, and this test goes red reporting
+    exactly that mismatch. Restoring `stripped = line.strip()` turns it green
+    again. Verified by hand against this exact file while writing this ticket.
+    """
+    text = LAND_SKILL.read_text(encoding="utf-8")
+    expected_marker_count = sum(
+        1 for line in text.splitlines() if line.strip() in {"```bash", "```sh"}
+    )
+    # A sanity floor on the independent count itself -- if this ever drops to
+    # 0 the file lost every bash fence, which is a different, louder bug this
+    # test should not quietly go vacuous over.
+    assert expected_marker_count > 0
+
+    parsed_block_count = len(bash_fence_blocks(text))
+
+    assert parsed_block_count == expected_marker_count, (
+        f"parsed {parsed_block_count} ```bash/```sh fenced blocks but "
+        f"{expected_marker_count} opening ```bash/```sh markers exist in the "
+        "file -- the parser is missing some, e.g. an INDENTED fence a "
+        "column-0-anchored scanner cannot see (lode-ovgs)"
+    )
 
 
 def test_land_skill_never_reintroduces_an_inline_lock() -> None:
