@@ -177,6 +177,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -184,6 +185,7 @@ import pytest
 from textual.pilot import Pilot
 
 import lode
+from lode import jobs
 from lode.config import model_cache_dir
 
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
@@ -573,6 +575,49 @@ def _restore_root_logger_state():
         if handler not in handlers_before:
             root.removeHandler(handler)
             handler.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_jobs_clock_anchor() -> None:
+    """Reset ``lode.jobs``'s process-global clock anchor before every test (lode-x10m).
+
+    ``jobs.now()`` ratchets a module-global, ``jobs._now_epoch``, forward-only
+    and never restores it -- there is no test seam that resets it. That is
+    fine as long as nothing patches the *inputs* to ``now()``'s anchor
+    computation (``time.monotonic()``) out from under it, but something does:
+    ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
+    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line``
+    both do ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``.
+    Because ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the
+    shared ``time`` module object, not a module-local alias -- so that patch
+    is PROCESS-GLOBAL and reaches ``lode.jobs`` (which also did a plain
+    ``import time``) too, not just ``lode.cli``.
+
+    With the fake monotonic substituted, ``now()``'s anchor computation
+    (``real_now - fake_monotonic``) comes out far larger than the true anchor
+    (real ``time.monotonic()`` on Linux is seconds-since-boot, commonly
+    hundreds of hours), and ``max()`` only ever grows ``_now_epoch``. Nothing
+    restores it afterward: ``monkeypatch`` reverts ``time.monotonic`` itself,
+    but ``_now_epoch`` was never the thing patched, so the poisoned value
+    survives for the rest of that worker process. Every later test in the
+    same ``pytest-xdist`` worker then sees ``jobs.now()`` running hours to
+    days ahead of the wall clock -- confirmed to flip
+    ``tests/test_worker.py::test_reset_leaves_future_failed_alone``,
+    ``test_claim_respects_future_next_attempt_at``, and
+    ``test_run_refresh_dead_letter_still_tombstones_over_older_content``
+    (whichever of those a poisoned worker happens to run next), since none of
+    them request the ``clock`` fixture that resets this anchor itself.
+
+    Resetting the anchor before every test -- not merely restoring whatever a
+    scoped ``monkeypatch`` changed -- closes the whole class rather than the
+    three known instances: any *future* test that patches the shared ``time``
+    module (anywhere, not just ``test_cli.py``) re-arms harmlessly instead of
+    poisoning the rest of the worker. Tests that drive ``jobs.now()``
+    directly (``tests/test_worker.py``'s own ``clock`` fixture) still run
+    after this and still see a freshly reset anchor -- setting the same value
+    twice is a no-op, not a conflict.
+    """
+    jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
 
 @pytest.fixture
