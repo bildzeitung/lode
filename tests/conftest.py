@@ -177,6 +177,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -184,6 +185,7 @@ import pytest
 from textual.pilot import Pilot
 
 import lode
+from lode import jobs
 from lode.config import model_cache_dir
 
 #: lode-kq4v: scrub ambient colour/tty-forcing env vars BEFORE any test module can import
@@ -212,8 +214,9 @@ from lode.config import model_cache_dir
 #:
 #: ORDERING CONSTRAINT, for whoever edits the import block above: ruff keeps imports first, so
 #: this scrub necessarily sits below them, and is early enough only while nothing imported above
-#: constructs a rich ``Console``. True today -- neither ``lode``, ``lode.config`` nor
-#: ``textual.pilot`` reaches ``lode.cli`` or ``rich.console``. Adding an import that does would
+#: constructs a rich ``Console``. True today -- none of ``lode``, ``lode.config``,
+#: ``lode.jobs`` (added lode-x10m; it pulls in only ``sqlite3``) nor ``textual.pilot``
+#: constructs one. Adding an import that does would
 #: silently half-disable this scrub; ``tests/test_conftest_color_scrub.py`` is what would catch
 #: it.
 #:
@@ -281,8 +284,9 @@ os.environ.pop("NO_COLOR", None)
 #: that needs the Hub still works with it set.
 #:
 #: SAME ORDERING CONSTRAINT AS THE SCRUB ABOVE: this is early enough only while nothing in the import
-#: block imports ``huggingface_hub`` (true today -- verified that ``lode``, ``lode.config`` and
-#: ``textual.pilot`` pull in neither it nor ``fastembed``). If that changes, the constant freezes at
+#: block imports ``huggingface_hub`` (true today -- verified that ``lode``, ``lode.config``,
+#: ``lode.jobs`` (added lode-x10m) and ``textual.pilot`` pull in neither it nor ``fastembed``).
+#: If that changes, the constant freezes at
 #: ``False`` before this line runs; ``tests/test_network_guard.py``'s
 #: ``test_hub_telemetry_is_disabled_and_skips_the_agent_registry_fetch`` is what would catch it.
 #:
@@ -573,6 +577,74 @@ def _restore_root_logger_state():
         if handler not in handlers_before:
             root.removeHandler(handler)
             handler.close()
+
+
+@pytest.fixture(autouse=True)
+def _reset_jobs_clock_anchor() -> None:
+    """Reset ``lode.jobs``'s process-global clock anchor before every test (lode-x10m).
+
+    ``jobs.now()`` ratchets a module-global, ``jobs._now_epoch``, forward-only
+    and never restores it (the ratchet itself is owned by
+    :func:`lode.jobs.now` and ``docs/storage.md`` -- read either for *why* it
+    ratchets; this only covers what that costs the test suite). That is fine
+    as long as nothing patches the *inputs* to ``now()``'s anchor computation
+    (``time.monotonic()``) out from under it, but something does:
+    ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
+    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line``
+    both do ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``.
+    Because ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the
+    shared ``time`` module object, not a module-local alias -- so that patch
+    is PROCESS-GLOBAL and reaches ``lode.jobs`` (which also did a plain
+    ``import time``) too, not just ``lode.cli``.
+
+    With the fake monotonic substituted, ``now()``'s anchor computation
+    (``real_now - fake_monotonic``) comes out far larger than the true anchor
+    (real ``time.monotonic()`` on Linux is seconds-since-boot, commonly
+    hundreds of hours), and ``max()`` only ever grows ``_now_epoch``. Nothing
+    restores it afterward: ``monkeypatch`` reverts ``time.monotonic`` itself,
+    but ``_now_epoch`` was never the thing patched, so the poisoned value
+    survives for the rest of that worker process. Every later test in the
+    same ``pytest-xdist`` worker then sees ``jobs.now()`` running hours to
+    days ahead of the wall clock -- confirmed to flip
+    ``tests/test_worker.py::test_reset_leaves_future_failed_alone``,
+    ``test_claim_respects_future_next_attempt_at``, and
+    ``test_run_refresh_dead_letter_still_tombstones_over_older_content``
+    (whichever of those a poisoned worker happens to run next), since none of
+    them request the ``clock`` fixture that resets this anchor itself.
+
+    Resetting the anchor before every test -- not merely restoring whatever a
+    scoped ``monkeypatch`` changed -- closes this off for the three known
+    victims *and* for any **future** test that patches the shared ``time``
+    module (anywhere, not just ``test_cli.py``): the poison re-arms harmlessly
+    instead of outliving the test that created it. Tests that drive
+    ``jobs.now()`` directly (``tests/test_worker.py``'s own ``clock`` fixture,
+    which resets this same anchor) still run after this and still see a
+    freshly reset anchor. Deleting this fixture turns nothing red on its own,
+    so ``tests/test_conftest_jobs_clock_anchor.py`` is what would catch it.
+
+    SCOPE OF THAT CLAIM, stated precisely, because an unbounded version of it
+    is what let this bug survive three sightings:
+
+    - It closes the class of poisoned ``_now_epoch``, not the broader class of
+      "a test patches an attribute on a shared stdlib module object." What
+      makes that sufficient *today* is that ``_now_epoch`` is the only
+      persistent sink for such a patch: it is the only module-global rebound
+      under a ``global`` statement anywhere in ``src/lode/``, and every other
+      ``time.monotonic()`` call site in ``src/lode/`` binds the reading to a
+      local that dies with the call. A future module-global derived from a
+      patchable clock would need its own reset here.
+    - This fixture is function-scoped, so it cannot protect *module*- or
+      *session*-scoped fixture setup, which pytest runs before it. A
+      higher-scoped fixture that reaches ``jobs.now()`` therefore still sees
+      whatever the previous test left behind -- reachable today only via
+      ``tests/test_capture_lag_diagnosis.py``'s ``seeded_db``, which is
+      ``skipif``-gated and asserts nothing about job timestamps.
+    - It bounds the poison's lifetime; it does not prevent the leak. The
+      poisoning test still runs with a process-global fake clock, so anything
+      *it* observes is still affected (lode-y7gk fixes the leak at its source
+      -- the two are complementary, not alternatives).
+    """
+    jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
 
 @pytest.fixture
