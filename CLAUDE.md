@@ -124,11 +124,23 @@ git add . && git commit -m "msg" && git push
 rtk git add . && rtk git commit -m "msg" && rtk git push
 ```
 
+**One known exception — `git log` is NOT a faithful passthrough (lode-eza9).** `rtk git log`
+**silently drops merge commits** (upstream [rtk-ai/rtk#2305](https://github.com/rtk-ai/rtk/issues/2305)):
+measured on a real range, 7 commits → 4, all three `--no-ff` merges gone, with no marker, no count,
+and exit status 0. So the "passes through unchanged, so RTK is always safe" premise above does not
+hold here. Use **bare `git log`** wherever a *missing* merge commit would change a decision — history
+audits, residue checks before a destructive reset, anything reasoning about merge structure. The
+divergence is scoped to `log`: `rev-list` (including `--first-parent`) and `show` are faithful and
+stay on `rtk`. Live exception sites are commented at the call site; the load-bearing one is
+[`.claude/skills/land/SKILL.md`](.claude/skills/land/SKILL.md) Section 1's pass-start residue print.
+
 ## Commands by workflow
 
 ```bash
-# Git (59–80% savings) — passthrough works for ALL subcommands
-rtk git status | log | diff | show | add | commit | push | pull | branch | worktree
+# Git (59–80% savings) — every subcommand is accepted, but see the `git log` exception above:
+# `rtk git log` DROPS MERGE COMMITS. Faithful passthrough is not guaranteed per-subcommand.
+rtk git status | diff | show | add | commit | push | pull | branch | worktree
+git log   # ← BARE, not `rtk git log`, when a missing merge commit would change a decision
 
 # GitHub
 rtk gh pr view <n> | gh pr checks | gh run list | gh issue list | gh api
