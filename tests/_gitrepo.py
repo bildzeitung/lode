@@ -18,11 +18,14 @@ fixture file content and commit messages -- encode the different contracts of
 the script each module drives; flattening them into one parametrized helper
 would likely be a net loss (lode-863q). Each module keeps its own.
 
-One pair IS byte-identical -- `test_release_latest_tag.py` and
-`test_release_bump.py` -- and is left alone anyway: two copies of a fixture
-premise sits under the three-copy bar both precedents above fired at, and a
-helper imported by only 2 of the 6 modules would leave two different
-`_init_repo`s sharing one name across this directory.
+TWO pairs are byte-identical -- `test_release_latest_tag.py`/
+`test_release_bump.py`, and `test_recycled_worktree_guard.py`/
+`test_worktree_gc_classify.py` (lode-9owc) -- and both are left alone anyway:
+two copies of a fixture premise sits under the three-copy bar both precedents
+above fired at, and the two pairs are NOT identical to each other, so hoisting
+would produce two differently-shaped `_init_repo`s sharing one name across
+this directory rather than one helper. Count the copies per PAIR, not in
+total, when judging whether the bar has been crossed.
 """
 
 from __future__ import annotations

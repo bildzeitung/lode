@@ -3,18 +3,14 @@
 `/land`'s Section 4 worktree-GC backstop sweep (`.claude/skills/land/SKILL.md`)
 decides what to do with each candidate under `.claude/worktrees/` via a
 per-candidate predicate that -- before this ticket -- lived only as inline
-bash in a markdown fence, reachable by no gate at all. lode-yrtu added TWO new
-safety-critical predicates to that loop in one change and treated them
-differently: the stale-lock check was extracted to
-scripts/worktree-lock-stale.sh with a real test suite
-(tests/test_worktree_lock_stale.py), but the DIR-ONLY RECLAIM predicate --
-branch shape + age-since-last-commit + the lode-9hgu dirty-tree guard, gating
-a `git worktree remove --force` that DESTROYS a directory -- had none. This
-extracts the WHOLE per-candidate decision (not just the dir-only arm) to
-scripts/worktree-gc-classify.sh, a pure, side-effect-free predicate that only
-ever PRINTS a bucket name -- it never removes a worktree or deletes a branch,
-so every fixture below only has to assert the printed bucket, never inspect
-git state afterward for something the script itself never touches.
+bash in a markdown fence, reachable by no gate at all. The script's own header
+carries WHY it was extracted and what each bucket means; that is deliberately
+not retold here.
+
+What matters to the tests: the script only ever PRINTS a bucket name -- it
+never removes a worktree or deletes a branch -- so every fixture below only
+has to assert the printed bucket, never inspect git state afterward for
+something the script itself never touches.
 
 All tests run the ACTUAL `scripts/worktree-gc-classify.sh` against real git
 repositories (with a real `origin` remote and real `git worktree add`
@@ -44,10 +40,17 @@ Fixture matrix (from the ticket's own acceptance criteria) and its bucket:
 Plus the two positive buckets (full-reclaim via each ancestry arm), the
 lode-em6v worktree-uniqueness-suffix strip on the origin arm, and a usage-
 error pin.
+
+Two tests do not touch git at all: they pin that SKILL.md's `case "$BUCKET"`
+dispatch handles exactly the buckets this script can print. That coupling is
+the one part of the decision path the extraction did NOT make testable on its
+own -- a rename on either side fails safe into `*)` and silently stops GC
+while everything stays green.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -56,6 +59,7 @@ from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "worktree-gc-classify.sh"
+LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -134,6 +138,66 @@ def _is_ancestor(repo: Path, sha: str, ref: str) -> bool:
         check=False,
     )
     return result.returncode == 0
+
+
+# --- the two sides of the bucket vocabulary agree ------------------------
+
+
+def _buckets_the_script_can_print() -> set[str]:
+    """Every bucket name `worktree-gc-classify.sh` actually echoes.
+
+    Derived from the script, never restated here -- a hand-typed expectation
+    would just be a third copy of the vocabulary this test exists to keep at
+    two. The usage line is excluded by the `$` anchor: it carries a trailing
+    `>&2`.
+    """
+    return set(
+        re.findall(
+            r'^\s*echo "([a-z][a-z-]*)"$',
+            SCRIPT.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    )
+
+
+def _buckets_the_land_loop_handles() -> set[str]:
+    """Every non-default arm label of `SKILL.md`'s `case "$BUCKET"` dispatch."""
+    text = LAND_SKILL.read_text(encoding="utf-8")
+    start = text.index('case "$BUCKET" in')
+    end = text.index("\n  esac", start)
+    return set(re.findall(r"^\s*([a-z][a-z-]*)\)", text[start:end], re.MULTILINE))
+
+
+def test_land_loop_handles_exactly_the_buckets_the_script_prints() -> None:
+    """`/land`'s loop maps each bucket to a counter and a (possibly
+    DESTRUCTIVE) action by matching the script's output as a literal string,
+    in a markdown fence that no other gate reads. Nothing else links the two
+    vocabularies, so a rename or typo on either side is caught by nothing:
+    the loop would fall to its `*)` arm for every candidate and count the
+    whole sweep as `failed`, silently zeroing out worktree GC. That fails
+    SAFE (no worktree is touched), which is exactly why it could run
+    unnoticed -- `/land` stays green and the leak just grows.
+
+    This is the same residual the extraction itself exists to close, one
+    level up: the predicate is now unit-tested, but the DISPATCH on its
+    result was still ungated. Both sides are derived, so this test cannot
+    drift into agreeing with itself.
+    """
+    assert _buckets_the_script_can_print() == _buckets_the_land_loop_handles()
+
+
+def test_the_bucket_vocabulary_is_the_documented_five() -> None:
+    """Pins the vocabulary itself, so the agreement test above cannot be
+    satisfied by BOTH sides losing the same bucket -- e.g. `dir-only`
+    disappearing from the script and the loop together would leave lode-yrtu's
+    whole reclaim arm dead while both tests stayed green."""
+    assert _buckets_the_script_can_print() == {
+        "full-reclaim",
+        "dir-only",
+        "keep-locked",
+        "keep-notmerged",
+        "keep-dirty",
+    }
 
 
 # --- usage --------------------------------------------------------------

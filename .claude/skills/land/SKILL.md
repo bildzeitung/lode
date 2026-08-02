@@ -1127,13 +1127,25 @@ done
 #   settled in EITHER direction — the whole point is that the gate is correct whatever the trigger
 #   turns out to be, since the export is by invariant never work. It now EXCLUDES
 #   `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the cleanliness judgment outright, via
-#   `:(exclude)` pathspecs on the dirty-tree guard below — so a staged or modified export, from
+#   `:(exclude)` pathspecs on the dirty-tree guard (in `scripts/worktree-gc-classify.sh` since
+#   lode-9owc — see the WHERE THE PREDICATES LIVE note below) — so a staged or modified export, from
 #   whatever cause, present or future, can never zero out this sweep on its own.
 # If you touch `.gitignore`, re-check that this loop still reclaims.
 #
 # Full record — the three options, the measurement, why deletion beat guarding: docs/decisions.md,
 # lode-h1vn entry.
 
+# WHERE THE PREDICATES LIVE, READ THIS FIRST (lode-9owc): every predicate the comments from here to
+# the loop describe — both ancestry arms, the lode-9hgu dirty-tree guard and its `:(exclude)` list,
+# and the lode-yrtu dir-only age floor — now lives in `scripts/worktree-gc-classify.sh`, NOT in the
+# fence below. So "the dirty-tree guard below", "the loop below also tests", "either predicate" and
+# friends in this block mean "in the classifier the loop below calls." Only the CODE moved, and it
+# moved so it could be shellcheck'd and unit-tested (tests/test_worktree_gc_classify.py) instead of
+# living unreachable by any gate in a markdown fence. The prose split that leaves: this block holds
+# the SWEEP-level contract (which worktrees are candidates at all, and what this sweep promises
+# about them); the script's header holds the per-arm detail. Change a predicate there and this block
+# is what tells you whether you were allowed to.
+#
 # Backstop: now the ONLY local worktree/branch reclaim in this pass — catches every just-landed
 # builder worktree (per the reasoning above) plus whatever it always caught: a stale/missing
 # review_worktree pointer, a build that never got GC'd on its own machine, a reviewer/rebase-pickup
@@ -1275,15 +1287,11 @@ STALE_LOCKS_FOUND=0
 # there, not configuration.md, per that page's own scope note: dev-tooling for the landing loop,
 # not an application knob).
 MIN_AGE_SECONDS="${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"
-# lode-9owc: the per-candidate DECISION (is this worktree full-reclaim / dir-only / kept, and why)
-# is scripts/worktree-gc-classify.sh -- a pure, side-effect-free predicate, shellcheck'd and
-# unit-tested (tests/test_worktree_gc_classify.py) the same way lode-ivth extracted
-# scripts/recycled-worktree-guard.sh and lode-yrtu extracted scripts/worktree-lock-stale.sh out of
-# this same loop. Its header carries the full rationale for every arm (the lode-amif
-# captured-on-origin widening, the lode-9hgu dirty-tree guard and its `:(exclude)` list, the
-# lode-yrtu dir-only age floor) -- not re-duplicated here. This loop keeps only what the script
-# cannot own: reading the porcelain candidates, resolving a STALE lock (a real mutation), and the
-# two DESTRUCTIVE calls the script only ever recommends but never performs.
+# lode-9owc: the per-candidate DECISION is scripts/worktree-gc-classify.sh (see WHERE THE PREDICATES
+# LIVE above), extracted the same way lode-ivth extracted scripts/recycled-worktree-guard.sh and
+# lode-yrtu extracted scripts/worktree-lock-stale.sh out of this same loop. What stays HERE is
+# exactly what a side-effect-free script cannot own: reading the porcelain candidates, resolving a
+# STALE lock (a real mutation), and the two DESTRUCTIVE calls the script only ever recommends.
 while IFS=$'\t' read -r WT SHA LOCKED BR; do
   if [ "$LOCKED" = "1" ]; then
     # lode-yrtu: the lock recorded here is PER-SESSION, not per-agent -- measured: several worktrees

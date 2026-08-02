@@ -145,14 +145,19 @@ wt_provably_clean() {
 # worktree also counts as captured once its HEAD is an ancestor of its own
 # `origin/<branch>` counterpart -- reached regardless of which locally-
 # suffixed name (lode-em6v) the branch was checked out under.
-captured=0
-if git merge-base --is-ancestor "$sha" trunk 2>/dev/null; then
-  captured=1
-elif [ -n "$br" ] && git merge-base --is-ancestor "$sha" "origin/${br%%--*}" 2>/dev/null; then
-  captured=1
-fi
-
-if [ "$captured" = "1" ]; then
+#
+# Kept as the ONE `||`-chained condition SKILL.md itself used, character for
+# character (only the variable names are lowercased), so "is this still a
+# direct port?" stays answerable by reading the two side by side rather than
+# by re-deriving an intermediate flag's truth table. Note the ASYMMETRIC
+# stderr: the origin arm silences it (an absent `origin/<branch>` is the
+# ROUTINE case for a builder's never-pushed branch -- one `fatal:` per
+# candidate, per pass, saying nothing), while the trunk arm deliberately does
+# NOT, because the only way IT can error is a missing or broken `trunk` --
+# never routine, and the one diagnostic worth surfacing on a sweep that ends
+# in `--force`.
+if git merge-base --is-ancestor "$sha" trunk \
+  || { [ -n "$br" ] && git merge-base --is-ancestor "$sha" "origin/${br%%--*}" 2>/dev/null; }; then
   if wt_provably_clean "$wt"; then
     echo "full-reclaim"
   else
