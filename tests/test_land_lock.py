@@ -1039,11 +1039,12 @@ def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
     ever setting it, and that is the kind of claim this repo mechanizes rather
     than asserts in a comment.
 
-    Only two TRACKED files may mention the variable at all: the script that
-    reads it, and this test file. In particular a `/land` skill step or a nox
-    session must never set it -- an exported value would stall lock
-    acquisition at the one point where stalling is known to admit two
-    landers.
+    Two TRACKED files may mention the variable -- the script that reads it and
+    this test file -- plus the two excluded exports named at the bottom of this
+    docstring. In particular a `/land` skill step, a nox session, or an `env`
+    block in the TRACKED `.claude/settings.json` must never set it: an exported
+    value would stall lock acquisition at the one point where stalling is known
+    to admit two landers.
 
     This scan is `git ls-files` (tracked files only), so it CANNOT see
     `.claude/settings.local.json` -- the one file CLAUDE.md's "New machine
@@ -1071,13 +1072,22 @@ def test_the_stall_hook_is_set_nowhere_outside_the_tests() -> None:
     )
 
 
-def test_the_stall_hook_scans_exclusion_is_not_vacuous(tmp_path: Path) -> None:
-    """The `.beads/*.jsonl` exclusion above must hide exactly the passive bd
-    export -- never become a way to hide an actual production caller. Stage a
-    throwaway repo with the variable planted in BOTH `.beads/issues.jsonl`
-    and an unrelated tracked file, and confirm the scan stays green for the
-    former while still catching the latter -- i.e. the exclusion is narrow,
-    not a loophole.
+def test_the_stall_hook_scan_exclusion_is_not_vacuous(tmp_path: Path) -> None:
+    """The `.beads/*.jsonl` exclusion above must actually DO something, and
+    must not swallow an ordinary tracked file on its way past the export.
+    Stage a throwaway repo with the variable planted in BOTH
+    `.beads/issues.jsonl` and an unrelated tracked file, and confirm the scan
+    stays green for the former while still reporting the latter.
+
+    What this pins, stated at the strength it was MEASURED at (each mutation
+    applied to `_stall_hook_offenders` and re-run): emptying
+    `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS`, or widening the skip to swallow
+    every path or every `*.py`, each turn this test RED. What it does NOT pin
+    is the exclusion's exact shape -- broadening the skip to a `.beads/`
+    prefix, to any `*.jsonl`, or simply adding another relpath to the set all
+    still PASS, since these two planted files are the only ones here. Read it
+    as "the exclusion is live and not all-consuming", not as proof that it can
+    never be widened into a loophole.
     """
     repo = _init_repo(tmp_path)
     beads_dir = repo / ".beads"
@@ -1088,6 +1098,13 @@ def test_the_stall_hook_scans_exclusion_is_not_vacuous(tmp_path: Path) -> None:
     offender = repo / "some_module.py"
     offender.write_text(f"{_STALL_HOOK_VAR} = 1\n")
     _git(repo, "add", "-A")
+
+    # The export fixture proves nothing unless git genuinely TRACKS it: a
+    # machine-global `core.excludesFile` matching `*.jsonl` would drop it from
+    # `git ls-files` and leave this test green with the exclusion doing
+    # nothing at all -- the same "passes only on machines configured like
+    # mine" trap `_init_repo`'s user.email/user.name comment exists to avoid.
+    assert ".beads/issues.jsonl" in _git(repo, "ls-files").stdout.split()
 
     offenders = _stall_hook_offenders(repo, allowed=set())
 
