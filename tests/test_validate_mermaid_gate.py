@@ -116,8 +116,11 @@ def _run_gate(
     ``inherit_path=True`` (the in-loop tests): ``path_dir`` is *prepended* to the
     real PATH. Those tests run past the pre-flight guard and need real
     ``mktemp``/``chmod``/``grep``/``rm`` to reach the per-doc loop, which
-    ``fake_bin`` (just ``dirname``) doesn't carry. The fake docker still wins the
-    PATH search because it comes first.
+    ``fake_bin`` (just ``dirname``) doesn't carry. Prepending does not give up
+    control of any of them: whichever a test wants faked instead, it puts in
+    ``path_dir``, which wins the PATH search because it comes first -- how the
+    fake docker beats a real one here, and how the grep tests below beat a real
+    grep.
     """
     path = f"{path_dir}:{os.environ.get('PATH', '')}" if inherit_path else str(path_dir)
     return subprocess.run(
@@ -434,26 +437,12 @@ def test_puppeteer_config_chmod_failure_is_gate_could_not_run(fake_bin):
 
 
 # ---------------------------------------------------------------------------
-# lode-yoc3: the per-doc loop's `grep -q '```mermaid' "$f" || continue` was
-# the mirror defect of the -e class above -- and worse, since it reports a
-# clean PASS rather than a fabricated FAIL. grep exits 1 for "no match" (a
-# CONTENT answer: this doc has no diagram) and anything else for an ERROR (a
-# MACHINE answer: unreadable file, I/O error, or the docs glob passed through
-# literally). `|| continue` treated both identically, silently skipping an
-# unreadable doc as though it simply had no diagram -- and if every doc
-# errored this way, the gate printed "no mermaid diagrams found in docs/ --
-# nothing to validate" and exited 0 on a completely broken run.
+# lode-yoc3: the per-doc loop's grep, the mirror defect of the -e class above
+# and worse -- it reported a clean PASS rather than a fabricated FAIL. Both
+# sides of the new partition are covered here (grep's exit 1 = content, every
+# other exit = machine); why that partition is drawn where it is, is argued at
+# the loop in scripts/validate-mermaid.sh.
 # ---------------------------------------------------------------------------
-
-
-def _add_real_chmod(bin_dir: Path) -> None:
-    """Symlinks the real ``chmod`` into the fake PATH -- needed by the grep
-    tests below, which want $CFG's two chmod calls to succeed for real (same
-    as a normal run) so the script actually reaches the per-doc loop, where
-    the grep fixtures below take over."""
-    real_chmod = shutil.which("chmod")
-    assert real_chmod, "chmod not found — cannot build a hermetic PATH"
-    (bin_dir / "chmod").symlink_to(real_chmod)
 
 
 def _add_grep_with_exit(bin_dir: Path, exit_code: int) -> None:
@@ -478,12 +467,9 @@ def test_grep_scan_failure_is_gate_could_not_run(fake_bin):
     let the doc -- and potentially the whole gate -- report a false clean PASS.
     """
     _add_docker_with_run_exit(fake_bin, 0)
-    _add_real_rm(fake_bin)
-    _add_real_mktemp(fake_bin)
-    _add_real_chmod(fake_bin)
     _add_grep_with_exit(fake_bin, 2)
 
-    result = _run_gate(fake_bin)
+    result = _run_gate(fake_bin, inherit_path=True)
 
     _assert_gate_could_not_run(result, says="grep failed scanning")
     assert "exit 2" in result.stderr
@@ -498,12 +484,9 @@ def test_grep_no_match_still_skips_silently_without_tripping_guard(fake_bin):
     ordinary diagram-free doc into a spurious GATE COULD NOT RUN.
     """
     _add_docker_with_run_exit(fake_bin, 0)
-    _add_real_rm(fake_bin)
-    _add_real_mktemp(fake_bin)
-    _add_real_chmod(fake_bin)
     _add_grep_with_exit(fake_bin, 1)
 
-    result = _run_gate(fake_bin)
+    result = _run_gate(fake_bin, inherit_path=True)
 
     assert result.returncode == 0, (
         f"expected exit 0 (nothing to validate), got {result.returncode}\n"

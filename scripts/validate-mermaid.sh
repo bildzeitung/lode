@@ -240,14 +240,21 @@ for f in "$REPO"/docs/*.md; do
   # errored this way, `found` stayed 0 and the gate printed a clean "nothing
   # to validate" PASS on a completely broken run. This is the mirror of the
   # `docker run` partition below: only ONE exit code is a real content
-  # answer, everything else escalates. The `if grep ...; then ... else
-  # rc=$? ... fi` shape (no leading `!`) keeps the grep call inside an `if`
-  # arm, same reason as `docker run` below -- bash exempts `if` conditions
-  # from -e, so -e still cannot fire on the grep itself. `!` is deliberately
-  # NOT used here: `! cmd`'s $? is cmd's status LOGICALLY NEGATED (0<->1),
-  # not cmd's own status, so `rc=$?` after `if ! grep ...; then` would have
-  # captured the wrong number entirely -- measured while writing this fix's
-  # own tests.
+  # answer, everything else escalates, and the grep sits inside an `if` arm
+  # for the same -e reason that block does (argued once, in AUDIT above).
+  #
+  # That vanished-$REPO/docs route reaches grep ONLY because this script
+  # leaves `nullglob` unset, which is what passes the unmatched glob through
+  # as a literal filename for grep to fail on. Do not set it here: with
+  # `nullglob` the loop body would never run at all, `found` would stay 0,
+  # and the gate would go straight back to a clean "nothing to validate" exit
+  # 0 on a missing docs tree -- this exact bug, restored, with every test
+  # below still green (they run against the real docs/, which always matches).
+  #
+  # `!` is deliberately NOT used here: `! cmd`'s $? is cmd's status LOGICALLY
+  # NEGATED (0<->1), not cmd's own status, so `rc=$?` after `if ! grep ...;
+  # then` would have captured the wrong number entirely -- measured while
+  # writing this fix's own tests.
   if grep -q '```mermaid' "$f"; then
     found=1
   else
