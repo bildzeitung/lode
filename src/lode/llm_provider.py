@@ -151,18 +151,12 @@ class ModelTier(BaseModel):
     :class:`OpenAIProvider` sends it as ``reasoning.effort``.
 
     ``max_tokens`` is an optional per-tier override of the output-budget
-    source constant each call site otherwise falls back to
-    (:data:`lode.qa.MAX_TOKENS`, :data:`lode.enrich.MAX_TOKENS`) -- decided,
-    ``lode-d70n``, closing the gap named in ``lode-jgus``'s technical review:
-    a ``Kind.RUNTIME`` override can point a tier at a model whose
-    output-budget needs differ substantially (a thinking-capable model shares
-    ``max_tokens`` between thinking and the payload), but the budget used to
-    be a source constant the user had no way to adjust to match. ``None``
-    (every existing ``config.toml`` today, and what a bare TOML string
-    coerces to) means "use the call site's own default" -- back-compat, no
-    migration required. When set it must be a positive integer; see
-    ``docs/configuration.md`` "Models" for the full rationale and the
-    truncation-vs-cost tradeoff a lower override makes.
+    constant each call site otherwise falls back to
+    (:data:`lode.qa.MAX_TOKENS`, :data:`lode.enrich.MAX_TOKENS`), resolved
+    through :meth:`resolve_max_tokens`: ``None`` means "use the call site's
+    own default", and a set value must be positive. ``docs/configuration.md``
+    "Models" owns the rationale and the truncation-vs-cost tradeoff a lower
+    override makes (``lode-d70n``).
 
     A bare TOML string (every existing ``config.toml`` today, e.g.
     ``enrichment_llm = "claude-haiku-4-5"``) coerces to
@@ -181,6 +175,16 @@ class ModelTier(BaseModel):
         if isinstance(data, str):
             return {"model": data}
         return data
+
+    def resolve_max_tokens(self, default: int) -> int:
+        """This tier's :attr:`max_tokens` if set, else ``default`` (lode-d70n).
+
+        The one home for the "unset means the call site's own constant" rule,
+        on the type that owns the field -- so the Q&A call and both enrichment
+        routes cannot drift apart on it (the byte-for-byte wire-equivalence
+        bar :data:`lode.enrich.MAX_TOKENS` is itself pinned by, lode-568v.2).
+        """
+        return self.max_tokens if self.max_tokens is not None else default
 
 
 # ---------------------------------------------------------------------------

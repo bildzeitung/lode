@@ -72,6 +72,16 @@ def test_model_tier_rejects_a_non_positive_max_tokens() -> None:
         ModelTier(model="x", max_tokens=-1)
 
 
+def test_resolve_max_tokens_falls_back_to_the_call_sites_default() -> None:
+    # lode-d70n: the one home for "unset means the call site's own constant",
+    # shared by qa.answer_question and both enrichment routes.
+    assert ModelTier(model="x").resolve_max_tokens(2048) == 2048
+
+
+def test_resolve_max_tokens_prefers_the_tier_override() -> None:
+    assert ModelTier(model="x", max_tokens=777).resolve_max_tokens(2048) == 777
+
+
 def test_model_tier_is_frozen() -> None:
     tier = ModelTier(model="x")
     with pytest.raises(Exception):

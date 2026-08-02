@@ -13,8 +13,9 @@ by this response schema (``docs/retrieval.md``).
 ``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
 ``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
 5**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
-each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort,
-lode-568v.2), so a user override actually reaches the call. The call itself is
+each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort +
+max_tokens; lode-568v.2, lode-d70n), so a user override actually reaches the
+call. The call itself is
 routed through the vendor-neutral :class:`~lode.llm_provider.LLMProvider` seam
 (:func:`~lode.llm_provider.build_provider`) rather than a hardcoded Anthropic
 client -- credentials still resolve via the SDK's own chain underneath, never a
@@ -90,11 +91,10 @@ OPUS_MODEL = "claude-opus-5"
 #: timeout should rise, split per-call, or stay is a measurement-backed
 #: decision tracked in lode-wfyx, not settled here.
 #:
-#: **This is the fallback, not the last word (lode-d70n).** ``qa_llm`` /
-#: ``qa_think_harder_llm`` are ``Kind.RUNTIME``, so a user can point either at
-#: a model whose output-budget needs differ from this default; the active
-#: tier's :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this
-#: constant when set (``answer_question`` resolves the fallback). See
+#: **This is the fallback, not the last word (lode-d70n):** the active tier's
+#: :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this constant
+#: when set, resolved in :func:`answer_question` through
+#: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`. See
 #: ``docs/configuration.md`` "Models" for the decision.
 MAX_TOKENS = 8192
 
@@ -215,7 +215,7 @@ def answer_question(
         provider,
         model,
         tier.reasoning_effort,
-        tier.max_tokens if tier.max_tokens is not None else MAX_TOKENS,
+        tier.resolve_max_tokens(MAX_TOKENS),
         question,
         egress.sent,
         is_external,
@@ -248,10 +248,6 @@ def _request_claims(
     response against the claims schema and returns a typed instance
     (``docs/stack.md`` "structured outputs + Pydantic"), byte-for-byte
     identical to the direct SDK call this replaced.
-
-    ``max_tokens`` is :data:`MAX_TOKENS` unless the active tier's
-    :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides it
-    (``lode-d70n`` -- the caller resolves that fallback, not this function).
     """
     sources = "\n\n".join(
         _render_source(send, is_external.get(send.target_id, False)) for send in sent

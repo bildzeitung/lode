@@ -336,16 +336,14 @@ see [below](#per-tier-max_tokens-override-decided-lode-d70n).
 
 The gap the section above named: `enrichment_llm` / `qa_llm` /
 `qa_think_harder_llm` are all `Kind.RUNTIME`, so a user can point any of them
-at a model whose output-budget needs differ substantially (a thinking-capable
-model shares `max_tokens` between thinking and the payload), but the budgets
+at a model whose output-budget needs differ substantially, but the budgets
 were source constants (`qa.MAX_TOKENS` = 8192, `enrich.MAX_TOKENS` = 2048) —
-so the user could change the model and had no way to change the budget to
-match. Sharpest on the enrichment **batch** route: nothing bounds an item's
-generation but its own `max_tokens` (`BatchRequest` carries no per-item
-timeout), so truncation — not a timeout — is the realistic failure mode
-there, and it was precisely the route with no user-side escape hatch: a
-clean, well-named `LLMProviderError` naming the model and `stop_reason`, and
-no way to act on it except editing source.
+they could change the model and had no way to change the budget to match.
+Sharpest on the enrichment **batch** route, for the bounding reason the
+section above establishes: that cap is the only thing bounding a batch item,
+so truncation is the realistic failure mode there, and it was precisely the
+route with no user-side escape hatch — a clean, well-named
+`LLMProviderError`, and no way to act on it except editing source.
 
 **Decided yes, on `ModelTier`, both tiers.** `ModelTier` gained an optional
 third field, `max_tokens: int | None = None` (validated `> 0` when set) —
@@ -359,15 +357,13 @@ precisely because those co-vary per surface; `max_tokens` co-varies with the
 same choice, so a `Kind.RUNTIME` override that changes the model can change
 the budget alongside it in the same TOML table.
 
-**Wiring, symmetric across both tiers and both enrichment routes.**
-`lode.qa.answer_question` resolves `tier.max_tokens if tier.max_tokens is not
-None else qa.MAX_TOKENS` and threads it through to the `structured_call`.
-`lode.enrich` factors the identical fallback into one helper,
-`_resolve_max_tokens(tier)`, called from both `_call_haiku` (immediate) and
-`_build_batch_request` (batch) — one place for the fallback so the two routes
-can't drift apart on it, the same byte-for-byte-equivalence bar
-`enrich.MAX_TOKENS` itself is already pinned by (`lode-568v.2`). Neither
-`qa.MAX_TOKENS` nor `enrich.MAX_TOKENS` was removed — they stay the
+**Wiring, symmetric across both tiers and both enrichment routes.** The
+fallback lives on `ModelTier` itself (`resolve_max_tokens(default)`), so the
+Q&A call and both enrichment routes share one definition of "unset means the
+call site's own constant" rather than each re-deriving it — the same
+byte-for-byte-equivalence bar `enrich.MAX_TOKENS` is itself pinned by
+(`lode-568v.2`), which a per-route copy of the rule would put at risk.
+Neither `qa.MAX_TOKENS` nor `enrich.MAX_TOKENS` was removed — they stay the
 documented default headroom value (see their own sections above); the tier
 field only ever *overrides*, never replaces, them.
 
