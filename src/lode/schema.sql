@@ -239,6 +239,19 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- UTC) lets the worker durably schedule a retry; claim selects WHERE
 -- next_attempt_at <= now. Without it a restart mid-backoff retries immediately.
 --
+-- next_attempt_at deliberately has NO DEFAULT (lode-uk1i) -- do not "fix" the
+-- asymmetry with `created` below by adding one back. `now` in that predicate is
+-- lode.jobs.now(), a ratcheted clock; a strftime('now') default stamps SQLite's
+-- raw wall clock instead, and a backward CLOCK_REALTIME step between the two
+-- readings makes a fresh row read as not-yet-due -- stranding it and, since
+-- drain() stops at the first miss, every job behind it. That default enabled
+-- exactly that bug twice (lode-0dnk, lode-4e48) before being dropped. NOT NULL
+-- with no default makes an omitted column an IntegrityError instead. `created`
+-- keeps its default -- the claim predicate never reads it, and its one path to
+-- the ratchet (storage.py's forward-migration backfill, next_attempt_at =
+-- created) is a raw reading the ratchet is safe against. Full reasoning:
+-- docs/storage.md "The queue's clock must never go backward".
+--
 -- Status lifecycle (PINNED 2026-06-28, lode-i05.6):
 --   pending -> running -> done            (success)
 --                      -> failed          (transient error; worker resets to pending)

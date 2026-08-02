@@ -50,9 +50,14 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # lode-aor: crash-reclaim signal for jobs stuck in status='running'
         "ALTER TABLE jobs ADD COLUMN claimed_at TEXT",
         # lode-pig: backoff schedule for jobs (2f2379d added it to CREATE TABLE
-        # only). Added nullable — SQLite rejects ADD COLUMN with the schema's
-        # strftime() expression default ("Cannot add a column with non-constant
-        # default"). Backfilled below so pre-existing rows are not left NULL
+        # only). Added nullable, and unavoidably so: SQLite rejected the
+        # strftime() expression default schema.sql carried then ("Cannot add a
+        # column with non-constant default"), and rejects a bare NOT NULL now
+        # that lode-uk1i has dropped that default (ADD COLUMN NOT NULL requires
+        # a non-NULL constant default). So every DB predating lode-pig has this
+        # column nullable with no default, whatever schema.sql says — which is
+        # why the migration test also drains one.
+        # Backfilled below so pre-existing rows are not left NULL
         # (NULL fails the ``next_attempt_at <= now`` claim predicate → invisible).
         "ALTER TABLE jobs ADD COLUMN next_attempt_at TEXT",
         # lode-gpzn.2: persisted Atlassian API base (see schema.sql's comment on

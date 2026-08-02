@@ -5207,19 +5207,21 @@ def _noop_embed_registry() -> dict:
 
 
 # Seed any job this cluster expects `lode work` to CLAIM via
-# lode.jobs.enqueue_derive_jobs, never a bare INSERT (lode-4e48). A bare INSERT
-# leaves next_attempt_at on the table's SQL strftime('now') default -- SQLite's
-# raw wall clock, not the ratcheted `now` that worker._claim_one's
-# `next_attempt_at <= now` predicate compares it against. enqueue_derive_jobs's
-# own docstring works that two-clock hazard through in full (lode-0dnk); these
-# test sites were simply never migrated with it, which is how the stranded-job
-# flake came back ("drained 2 job(s)", not 3). Seeding through the production
-# primitive is eliminative, not merely narrowing: runner.invoke runs the CLI
-# in-process, and that clock never decreases within a process.
+# lode.jobs.enqueue_derive_jobs, never a hand-written INSERT (lode-4e48). The
+# hazard is two clocks either side of one comparison: worker._claim_one's
+# `next_attempt_at <= now` predicate reads the ratcheted `lode.jobs.now`, so a
+# row stamped from SQLite's raw wall clock instead can read as not-yet-due and
+# strand every job behind it ("drained 2 job(s)", not 3). enqueue_derive_jobs's
+# own docstring works that through in full (lode-0dnk). Seeding through the
+# production primitive is eliminative, not merely narrowing: runner.invoke runs
+# the CLI in-process, and that clock never decreases within a process.
 #
-# A bare INSERT stays fine -- and is used throughout this file -- for a row the
-# claim predicate never sees: one seeded non-pending, or of a type the patched
-# registry excludes (the ('refresh', 'ver-stuck') rows further down).
+# Since lode-uk1i the column has no SQL DEFAULT at all, so omitting it is an
+# outright IntegrityError rather than a silent wrong-clock stamp -- the trap is
+# gone, not merely documented. A hand-written INSERT is therefore still fine for
+# a row the claim predicate never sees (seeded non-pending, or of a type the
+# patched registry excludes -- the ('refresh', 'ver-stuck') rows further down),
+# but it must now supply next_attempt_at explicitly; any valid value will do.
 
 
 def test_work_drains_pending_embed_jobs(

@@ -77,8 +77,11 @@ def enqueue_derive_jobs(
     reconciliation scan's embed-gap step) pass an explicit subset; the underlying
     INSERT is the same in both cases.
 
-    **``next_attempt_at`` is stamped from :func:`now_iso`, not the schema's own
-    ``strftime('now')`` default (lode-0dnk).** Both defaulted to the OS wall clock
+    **``next_attempt_at`` is stamped from :func:`now_iso` (lode-0dnk), not the
+    schema's own ``strftime('now')`` default — which this fix made redundant and
+    lode-uk1i then dropped from ``schema.sql`` outright, so a writer that omits
+    the column now fails loudly instead of taking the wrong clock.** Both had
+    read the OS wall clock
     independently, which is exactly the crack :func:`now`'s own docstring warns
     about: ``CLOCK_REALTIME`` can step *backward* (NTP correction, or a
     hypervisor catching a descheduled guest back up — routine on a WSL2 VM). A
@@ -143,12 +146,13 @@ def now() -> datetime:
        :func:`lode.worker.drain`'s loop breaks on the first miss — stranding an
        already-eligible job for the rest of the pass.
     2. **Never reads *behind* ``CLOCK_REALTIME``.** Not every timestamp this
-       clock is compared against comes *from* it: ``jobs.next_attempt_at``
-       defaults to SQLite's own ``strftime('now')`` (``schema.sql``), and a job
-       is typically enqueued by one process and claimed by another. A clock that
-       merely never went backward would lag those writers permanently after a
-       *forward* step and strand jobs just the same — trading one bug for a
-       worse one.
+       clock is compared against comes from *this process's* ratchet — another
+       process stamped its own (``_now_epoch`` is a module-level global), and
+       the forward migration backfills ``next_attempt_at = created``, a raw
+       ``strftime('now')`` reading. A clock that merely never went backward
+       would lag those writers permanently after a *forward* step and strand
+       jobs just the same — trading one bug for a worse one. What (2) does and
+       does not cover for each writer: ``docs/storage.md``.
 
     Both fall out of ratcheting the monotonic epoch forward only: the epoch
     never decreases and neither does ``elapsed``, giving (1); the epoch is

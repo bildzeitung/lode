@@ -621,24 +621,23 @@ on this host under load, between two back-to-back reads in the same loop).
 and pulling in opposite directions:
 
 1. **Readings never decrease** — a backward step is absorbed, so no job is spuriously "not ready yet".
-2. **Readings are never *behind* `CLOCK_REALTIME`** — because *not every timestamp it is compared
-   against comes from *this process's* ratchet.* Two writers land a `next_attempt_at` (or a value it is
-   derived from) without ever touching *this* process's `now()`: a cross-process claim — the enqueuing
-   process's own `jobs.now_iso()` call ratchets against its own `_now_epoch`, a module-level global that
-   is **not** shared across processes, so from `lode work`'s `drain` loop, running in a *different*
-   process, that stamp is indistinguishable from a raw `CLOCK_REALTIME` read; and the forward
-   migration's backfill (`storage.py`'s `_apply_migrations`: `next_attempt_at = created` for a row that
-   predates the column), which copies `created` — itself the schema's raw `strftime('now')` `DEFAULT`,
-   stamped without ever touching the ratchet at all (`jobs.next_attempt_at`'s own `DEFAULT` was dropped
-   for the identical reason, lode-uk1i — see below). A clock that merely never went backward would fall
+2. **Readings are never *behind* `CLOCK_REALTIME`** — because not every timestamp this clock is
+   compared against comes from *this process's* ratchet. Two writers stamp a `next_attempt_at` without
+   touching it: **another process** (`_now_epoch` is a module-level global, so the CLI/TUI that
+   enqueued a job and the `lode work` that claims it ratchet independently), and the **forward
+   migration's backfill** (`storage.py`'s `_apply_migrations`: `next_attempt_at = created` for a row
+   that predates the column, and `created` still carries the schema's raw `strftime('now')` `DEFAULT` —
+   `next_attempt_at`'s own was dropped, lode-uk1i, once it had enabled two clock-race bugs and no
+   production writer still relied on it). A clock that merely never went backward would fall
    permanently behind either writer after a *forward* step, make the row look not-yet-due, and strand
    it exactly as in (1) — trading one bug for a worse one.
 
-Guarantee (2) is what makes rows stamped from a raw wall clock — another process's ratchet, or the
-migration backfill above — safe to compare against `now()` without routing every writer through *this*
-process's clock. A monotonic clock alone would **not** have been safe. The cost of absorbing a backward
-step is running slightly ahead of true time until the wall clock catches up: a job retried a hair late,
-which beats a job stranded.
+Guarantee (2) is necessary for both writers, but *sufficient* only for the backfill: `created` is a raw
+`CLOCK_REALTIME` reading, so a `now()` never behind `CLOCK_REALTIME` is never behind it either. Another
+process's ratchet is **not** a raw reading — absorbing a backward step leaves it running *ahead* of
+`CLOCK_REALTIME` until the wall clock catches up, so a claim landing inside that window can still read
+the row as not-yet-due. That residual is the standing trade-off here, not a new one: a job retried a
+hair late beats a job stranded. A monotonic clock alone would **not** have been safe for either writer.
 
 **A residual gap in guarantee (2) — closed for the same-process enqueue-then-claim case (lode-0dnk).**
 Guarantee (2) only holds relative to `CLOCK_REALTIME` *at the moment of that specific `now()` call* —
@@ -655,7 +654,8 @@ silently pending instead of running immediately
 (`tests/test_cli.py::test_add_claims_own_job_not_backlog_job`'s intermittent xdist flake — reproduced
 deterministically with a scripted backward-step, never with CPU load alone, since the trigger is a
 genuine `CLOCK_REALTIME` step, not scheduling contention). **Fix:** `enqueue_derive_jobs` now stamps
-`next_attempt_at` explicitly from `jobs.now_iso()` instead of falling through to the DEFAULT, so the
+`next_attempt_at` explicitly from `jobs.now_iso()` instead of falling through to the DEFAULT the column
+still carried then (lode-uk1i has since dropped it outright, above), so the
 enqueue's own call becomes (or reinforces) the ratchet's baseline and guarantee (1) — not just (2) —
 now covers the claim that follows it, no matter how soon after. A cross-process claim (the plain `lode
 work` drain loop, run by a different process than the one that enqueued) is unaffected either way — it

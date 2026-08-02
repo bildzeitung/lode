@@ -169,10 +169,11 @@ def test_dead_status_accepted_by_schema(conn) -> None:
 
 
 def _insert_running_job(conn, *, claimed_at: str | None = None) -> int:
-    # next_attempt_at is irrelevant to every caller here -- record_job_failure
-    # always overwrites it as part of the failure transition -- so any valid
-    # value satisfies the NOT NULL column (lode-uk1i dropped the schema DEFAULT
-    # that used to supply one).
+    # The value stamped here is irrelevant to every caller -- the retry arm
+    # overwrites it and asserts the new value, the dead-letter arm leaves it
+    # alone and asserts only status/attempts/last_error -- so any valid value
+    # satisfies the NOT NULL column (lode-uk1i dropped the schema DEFAULT that
+    # used to supply one).
     with conn:
         cur = conn.execute(
             "INSERT INTO jobs (type, target_version, status, claimed_at, next_attempt_at) "
@@ -185,8 +186,8 @@ def _insert_running_job(conn, *, claimed_at: str | None = None) -> int:
 def test_record_job_failure_applies_backoff_below_max_attempts(conn) -> None:
     settings = Settings(retry_max_attempts=5)
     # Anchor BEFORE the insert: _insert_running_job stamps next_attempt_at with
-    # an arbitrary valid value (~this instant) that record_job_failure's failure
-    # transition always overwrites. Asserting merely "not NULL", or "> before",
+    # an arbitrary valid value (~this instant) that record_job_failure's retry
+    # arm then overwrites. Asserting merely "not NULL", or "> before",
     # would therefore pass even if record_job_failure stamped nothing new at
     # all. The backoff is only proven by requiring the value to sit a FULL
     # retry_backoff_base_s ahead of this anchor, which the row's initial value
