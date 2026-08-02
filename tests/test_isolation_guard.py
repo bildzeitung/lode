@@ -85,12 +85,9 @@ def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
     fails, and the script must convert that into its own documented exit 2
     with a diagnostic, NOT let `set -e` propagate git's raw 128 (lode-t6ni).
 
-    128 sits outside the 0/1/2 contract this script's own header promises
-    (docs/agents-workflow.md, "Precondition guards (the 0/1/2 family)"), and
-    a caller that only distinguishes those three cannot tell it apart from a
-    location verdict -- the same machine-vs-content confusion lode-9i2p's
-    exit-2 convention exists to prevent, applied here to a precondition
-    rather than a content gate. Mirrors
+    Why 128 is unacceptable is the family contract's business, not this
+    module's: docs/agents-workflow.md, "Precondition guards (the 0/1/2
+    family)". Mirrors
     tests/test_assert_main_checkout.py::test_not_inside_any_repository_is_exit_2_not_a_raw_git_128,
     the sibling this behavior was backported from."""
     outside = tmp_path / "not-a-repo"

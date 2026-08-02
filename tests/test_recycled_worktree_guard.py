@@ -140,7 +140,9 @@ def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
     """cwd outside any git repository at all -- `git rev-parse --show-toplevel`
     fails, and the script must convert that into its own documented exit 2
     with a `GUARD COULD NOT RUN` diagnostic, NOT let `set -e` propagate git's
-    raw 128 (lode-t6ni).
+    raw 128 (lode-t6ni). Why 128 is unacceptable is the family contract's
+    business: docs/agents-workflow.md, "Precondition guards (the 0/1/2
+    family)".
 
     Reached before the `.claude/worktrees/` case check even runs, so this
     must NOT be misreported as "not in an isolated launch worktree" (exit 1)

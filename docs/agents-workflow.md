@@ -865,8 +865,12 @@ so a broken precondition is caught before it can do anything else.
 - **Exit 0** — the precondition holds (or, for `recycled-worktree-guard.sh` alone, it *didn't* and the
   script just repaired it — the one member of the family that performs a remediation rather than only
   asserting). Safe to proceed.
-- **Exit 1** — the precondition genuinely does **not** hold: no worktree at all, the wrong worktree, or
-  not the main checkout. This is a **location/identity verdict**, and it is categorically more severe
+- **Exit 1** — the precondition genuinely does **not** hold: cwd is not the location the guard
+  requires — no isolated worktree at all (`isolation-guard.sh`; and `recycled-worktree-guard.sh`'s
+  refusal to run its destructive remediation from outside one), or not the main checkout
+  (`assert-main-checkout.sh`). Note what is **not** here: a *recycled* worktree — the wrong worktree
+  rather than no worktree — is `recycled-worktree-guard.sh`'s exit **0**-after-repair case above, not
+  an exit 1. This is a **location/identity verdict**, and it is categorically more severe
   than a content gate's exit 1 (below) — it means "something is wrong with *how this agent was
   dispatched*," not "this piece of work is bad." The one sanctioned response is **STOP AND REPORT**:
   never retry `EnterWorktree`, never self-provision with `git worktree add`, never `cd` somewhere else
@@ -879,49 +883,57 @@ so a broken precondition is caught before it can do anything else.
   instead. Like exit 1, the caller STOPs AND REPORTs; unlike exit 1, nothing here is a claim about
   where the agent is or what state its worktree is in.
 
-**The STOP-AND-REPORT rule is uniform, and none of these three exit codes are distinguished in
-practice by any caller.** Every call site in this repo (`.claude/agents/coding.md`,
-`.claude/agents/code-reviewer.md`, `.claude/agents/land-review.md`, `.claude/skills/land/SKILL.md`)
-treats *any* non-zero exit from any of these three scripts identically: `|| exit 1` or an equivalent
-hard stop, with no branch on the specific code. The 0/1/2 distinction exists for the **operator**
-reading a transcript or a diagnostic after the fact, not for the calling script's control flow — which
-is exactly why it was safe to resolve the inconsistency below without touching any call site.
+**The STOP-AND-REPORT rule is uniform: no caller distinguishes exit 1 from exit 2.** The rule, not a
+list — every call site collapses *any* non-zero exit to the same hard stop (`|| exit 1`, or a `|| { … ;
+exit 1; }` whose only extra test is `[ -x ]`, a filesystem check for the bootstrap gap rather than a
+branch on the code). Callers therefore see a **binary**: proceed, or stop. The 1-vs-2 distinction
+exists for the **operator** reading a transcript or a diagnostic after the fact, never for the calling
+script's control flow — which is exactly why it was safe to resolve the inconsistency below without
+touching a single call site. A new call site must preserve that: collapse non-zero to a stop, and do
+not start branching on the specific code without changing this contract first.
 
 **Why these are NOT `scripts/gate-lib.sh` consumers.** That helper's "GATE COULD NOT RUN" banner and
 its own exit-2 convention belong to the **content-verifying** gates (`validate-mermaid.sh`,
-`merge-precheck.sh`, `release-bump.sh`, `release-latest-tag.sh`), where exit 1 means "this branch's
+`merge-precheck.sh`, `land-merge-one.sh`, `release-bump.sh`, `release-latest-tag.sh` — the five that
+actually `. gate-lib.sh`), where exit 1 means "this branch's
 content is bad, bounce it" and exit 2 means "the gate could not judge that content, machine fault."
 These three precondition guards run *before* any content is even in scope — they assert facts about
 the dispatch itself, not about a branch under review — so their exit 1 means something categorically
 different (STOP THE WHOLE CYCLE, not "bounce this piece of work"). Routing them through `gate-lib.sh`
 would misapply a bounce-shaped convention to a hard-stop-shaped one. (`scripts/assert-main-checkout.sh`
-carries this same explanation in its own header, in more detail, because a whole-file substring match
-in `tests/test_gate_lib.py`'s consumer sweep once mistook that explanatory comment for a real
-`gate-lib.sh` source line — see the sweep's own history, lode-pcee.)
+also states this at length in its own header, and that copy is kept **deliberately**: a whole-file
+substring match in `tests/test_gate_lib.py`'s consumer sweep once mistook that comment for a real
+`gate-lib.sh` source line, and lode-pcee's resolution was to fix the sweep's predicate rather than
+reword the comment around it. The sweep now anchors on a real, non-comment source line, so the comment
+is safe where it is.)
 
-**The 128-vs-exit-2 disagreement, resolved (lode-t6ni).** `assert-main-checkout.sh` was built wrapping
-both of its `git rev-parse` calls so a failure becomes its documented exit 2 with a diagnostic, citing
-the lode-ska2 misdispatch class as the motivating precedent. `isolation-guard.sh` and
-`recycled-worktree-guard.sh` did not: each let its own `top="$(git rev-parse --show-toplevel)"` line
-fail under bare `set -e`, escaping as git's raw, undocumented exit 128 — and this doc used to describe
-that as acceptable, on the grounds that no call site distinguishes exit codes anyway. That reasoning
-wasn't wrong about *caller* behavior (see the STOP-AND-REPORT paragraph above — it's still true), but
-it left the family disagreeing with itself: the same failure mode, motivated by citing the same
-incident class, handled two different ways, with nothing arbitrating between them. **Resolved by
-backporting the wrap**: both `isolation-guard.sh` and `recycled-worktree-guard.sh` now wrap that same
-`git rev-parse --show-toplevel` call, converting a failure into their own documented exit 2 (with a
-diagnostic naming the guard and the likely cause) rather than letting 128 escape. This is the direction
-`assert-main-checkout.sh` already took, for the reason its own header gives: a bare `git` fatal with no
-lode-context is strictly worse for an operator reading a transcript than the guard's own diagnostic,
-and 128 sits outside the family's documented 0/1/2 contract — indistinguishable, per that contract,
-from the location verdicts a caller is told to expect. The change costs nothing at any call site (none
-branch on the exact code, per the STOP-AND-REPORT paragraph above) and means a fourth guard's header
-can point at this one paragraph rather than re-deriving whether to wrap.
+**Every `git` call is wrapped — raw 128 must never escape.** When a guard's own dependency fails
+(`git rev-parse` answering with a `fatal:` instead of a path), the guard converts that into **its own
+exit 2**, with a diagnostic naming the guard and the likely cause. It is never left to `set -e`, which
+would propagate git's raw 128 — a status outside the triple above, therefore indistinguishable to a
+caller from a location verdict, and one that hands an operator a bare `fatal:` with no lode context
+exactly where the guard's own diagnostic would have named the fault. Diagnostic wording stays in each
+script's **existing** register rather than being unified across the family: `assert-main-checkout.sh`
+and `isolation-guard.sh` say `MACHINE FAULT`, `recycled-worktree-guard.sh` says `GUARD COULD NOT RUN`
+because that is what its `origin/trunk` arm already said. Match the script you are in. (History:
+`assert-main-checkout.sh` shipped this wrap first while the other two let 128 escape, which this doc
+once called acceptable on the grounds that no caller distinguishes the codes — true of callers, but it
+left the family disagreeing with itself about one failure mode. lode-t6ni backported the wrap, touching
+no call site.)
+
+**Explicitly NOT in this family: [`scripts/land-lock.sh`](../scripts/land-lock.sh).** It documents a
+0/1/2 contract too, and is easy to mistake for a fourth member — but its **exit 1 is the opposite kind
+of thing**: `/land`'s routine "another pass still holds the lock, skip this tick cleanly," an *expected*
+outcome on the healthy path, not a location verdict anyone should stop and report. It is also acquired
+in `land/SKILL.md` **Section 0**, *before* any guard here runs. Do not apply this contract to it. Its
+own unwrapped `rev-parse` is tracked separately (**lode-8qkb**) and is a consistency fix *within its
+own* contract — not an admission into this one.
 
 **For a guard added later:** follow the exit-triple contract above, wrap every `git` (or equivalent)
-call whose failure is reachable from a broken dispatch so nothing escapes as an undocumented status,
-shellcheck and unit-test it the same way, and link back to this subsection from the new script's own
-header instead of restating the contract inline.
+call whose failure is reachable from a broken dispatch, shellcheck and unit-test it the same way, and
+link back to this subsection from the new script's own header instead of restating the contract inline.
+`tests/test_precondition_guards.py` pins that link and is the family's **authoritative roster** — add
+the new guard there and the roster above stays honest.
 
 ### Concurrency cap (lode-2cf)
 

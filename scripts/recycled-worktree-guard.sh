@@ -86,23 +86,13 @@
 #           statement about the worktree's content (lode-9i2p's machine-vs-
 #           content rule). Three causes: a usage error (wrong argument
 #           count), `git rev-parse --show-toplevel` itself failing (cwd not
-#           inside any git repository at all -- lode-t6ni, below), or
-#           `origin/trunk` not resolving at all. Like exit 1, the caller must
-#           STOP and report; unlike exit 1, nothing here is a claim that the
-#           worktree is dirty.
-#
-#           The `git rev-parse --show-toplevel` arm is checked explicitly,
-#           same shape as the `origin/trunk` arm below, rather than left to
-#           escape as git's own raw, undocumented 128 under `set -e`
-#           (lode-t6ni) -- that status sits outside this script's 0/1/2
-#           contract and a caller that only distinguishes those three cannot
-#           tell it apart from a location verdict. This is one of THREE
-#           sibling precondition guards (this script,
-#           `scripts/isolation-guard.sh`, `scripts/assert-main-checkout.sh`)
-#           sharing that contract -- see [docs/agents-workflow.md,
-#           "Precondition guards (the 0/1/2
-#           family)"](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
-#           for the single source of it.
+#           inside any git repository at all), or `origin/trunk` not
+#           resolving at all. Like exit 1, the caller must STOP and report;
+#           unlike exit 1, nothing here is a claim that the worktree is
+#           dirty. BOTH git arms are checked EXPLICITLY rather than left to
+#           escape as git's own raw 128 under `set -e` -- lode-t6ni for the
+#           `--show-toplevel` one, lode-isl3 for the `origin/trunk` one,
+#           whose own note follows.
 #
 #           The `origin/trunk`-unresolvable arm is checked EXPLICITLY, up
 #           front, rather than left to fall out of the ancestor test (lode-isl3
@@ -142,6 +132,11 @@
 # reason to STOP AND REPORT -- never as license to silently skip the guard
 # and proceed. See the four .claude/agents/*.md call sites for the wrapper
 # that does this.
+#
+# One of lode's 0/1/2 precondition guards. The shared contract -- exit
+# meanings, the STOP-AND-REPORT rule, the roster, why these are not
+# gate-lib.sh consumers -- is stated ONCE and deliberately NOT restated here:
+# [docs/agents-workflow.md](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
 
 set -euo pipefail
 

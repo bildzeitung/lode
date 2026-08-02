@@ -68,15 +68,12 @@
 #           could not answer (cwd is not inside any git repository at all,
 #           git missing/too old). A machine/harness fault, never a worktree
 #           verdict -- do not read this as "cwd is not isolated" (exit 1's
-#           job), and note it is NOT git's own raw, undocumented 128.
+#           job).
 #
-# This is one of THREE sibling precondition guards (this script,
-# `scripts/recycled-worktree-guard.sh`, `scripts/assert-main-checkout.sh`)
-# sharing the exit-triple contract above -- see [docs/agents-workflow.md,
-# "Precondition guards (the 0/1/2
-# family)"](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
-# for the single source of that contract, including why none of the three may
-# let a bare `git` failure escape as an undocumented status.
+# One of lode's 0/1/2 precondition guards. The shared contract -- exit
+# meanings, the STOP-AND-REPORT rule, the roster, why these are not
+# gate-lib.sh consumers -- is stated ONCE and deliberately NOT restated here:
+# [docs/agents-workflow.md](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
 
 set -euo pipefail
 

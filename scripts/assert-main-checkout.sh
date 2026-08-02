@@ -67,17 +67,16 @@
 #
 # Not sourced from `scripts/gate-lib.sh`: that helper's "GATE COULD NOT RUN"
 # banner belongs to the CONTENT-verifying gates (validate-mermaid.sh,
-# merge-precheck.sh, release-bump.sh, release-latest-tag.sh), where exit 2
+# merge-precheck.sh, land-merge-one.sh, release-bump.sh, release-latest-tag.sh),
+# where exit 2
 # means "could not judge the content." This is a precondition GUARD, and it
 # matches its true siblings -- isolation-guard.sh and
 # recycled-worktree-guard.sh, neither of which sources gate-lib.sh either.
 #
-# This script is the one that ships the wrap described above; the other two
-# siblings now match it (lode-t6ni backported the same wrap to both, closing
-# a prior disagreement where they let this exact failure escape as git's raw
-# 128 instead). See [docs/agents-workflow.md, "Precondition guards (the 0/1/2
-# family)"](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
-# for the single source of the shared contract all three now follow.
+# One of lode's 0/1/2 precondition guards. The shared contract -- exit
+# meanings, the STOP-AND-REPORT rule, the roster, why these are not
+# gate-lib.sh consumers -- is stated ONCE and deliberately NOT restated here:
+# [docs/agents-workflow.md](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
 
 set -euo pipefail
 
