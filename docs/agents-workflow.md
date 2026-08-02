@@ -2042,6 +2042,18 @@ Human decision, and the full measurement/verification trail: [docs/decisions.md]
   had. Fixing the observability required switching both loops from a trailing pipe to process
   substitution (`< <(...)`), since counters assigned inside the right side of a pipe die in that
   subshell and never reach the summary line.
+- **The per-candidate DECISION itself is now `scripts/worktree-gc-classify.sh` (lode-9owc).**
+  lode-yrtu extracted the stale-lock check above to a tested script but left the dir-only/full-reclaim
+  predicate — branch shape, the age floor, and the lode-9hgu dirty-tree guard, gating a
+  `git worktree remove --force` that destroys a directory — as inline bash in this markdown fence,
+  reachable by no gate. `worktree-gc-classify.sh` is a pure, side-effect-free predicate (shellcheck'd,
+  and unit-tested by `tests/test_worktree_gc_classify.py` against real git repositories) that takes
+  a candidate's path, HEAD sha, resolved lock state, branch name, and the age floor, and prints one of
+  `full-reclaim | dir-only | keep-locked | keep-notmerged | keep-dirty` — never acting itself. The loop
+  in `SKILL.md` is now a thin caller: read the porcelain candidates, resolve a stale lock (a genuine
+  mutation, so it cannot live in a side-effect-free script), call the classifier, and perform the two
+  destructive calls the bucket recommends. No behaviour change — every branch in the script is a
+  direct port of the loop's own prior logic.
 
 ### The step-0 pickup merges, it never rebases (lode-cln)
 
