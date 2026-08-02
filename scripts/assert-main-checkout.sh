@@ -71,6 +71,13 @@
 # means "could not judge the content." This is a precondition GUARD, and it
 # matches its true siblings -- isolation-guard.sh and
 # recycled-worktree-guard.sh, neither of which sources gate-lib.sh either.
+#
+# This script is the one that ships the wrap described above; the other two
+# siblings now match it (lode-t6ni backported the same wrap to both, closing
+# a prior disagreement where they let this exact failure escape as git's raw
+# 128 instead). See [docs/agents-workflow.md, "Precondition guards (the 0/1/2
+# family)"](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
+# for the single source of the shared contract all three now follow.
 
 set -euo pipefail
 
