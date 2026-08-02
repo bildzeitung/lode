@@ -403,26 +403,45 @@ def test_resolve_model_revision_never_raises_on_probe_failure(
 def test_resolve_model_revision_short_circuits_under_hf_hub_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """lode-r4r2: HF_HUB_OFFLINE=1 must skip the network call entirely, not
-    just eventually fail after it -- huggingface_hub.model_info does not
-    honor the flag itself (see resolve_model_revision's docstring), so
-    without this short-circuit a real no-network run would block on the OS
-    TCP timeout instead of returning None immediately.
+    """lode-r4r2: HF_HUB_OFFLINE=1 skips the metadata call in lode's own code,
+    before ``huggingface_hub`` is consulted at all (see
+    ``resolve_model_revision``'s docstring for why lode states this contract
+    itself when the hub already refuses the call too).
+
+    **COUNTS calls; the stub deliberately does NOT raise.** A raising stub
+    asserts nothing about this function -- ``resolve_model_revision``'s
+    ``except Exception: return None`` swallows whatever it raises (including
+    ``AssertionError``) and returns the expected ``None`` regardless, so such
+    a test stays green with the short-circuit deleted. That is not
+    hypothetical: this test was written that way and verified vacuous by
+    deleting the guard and watching it pass. Same trap lode-dj6m's review
+    already caught once in this file.
     """
     import huggingface_hub
 
     from lode.embedding import resolve_model_revision
 
-    def _boom(repo_id: str) -> None:
-        raise AssertionError("must not be reached when HF_HUB_OFFLINE is set")
+    probe_calls = 0
 
-    monkeypatch.setattr(huggingface_hub, "model_info", _boom)
+    class _FakeModelInfo:
+        sha = "must-not-be-reached"
+
+    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
 
     # A model id that DOES resolve a pinned identity -- proves the
     # short-circuit is the flag, not model_cache_identity() already
     # returning None for an unpinned id (that's the sibling test above).
     assert resolve_model_revision(_settings().embedding_model) is None
+    assert probe_calls == 0, (
+        "HF_HUB_OFFLINE=1 must skip huggingface_hub.model_info entirely, not "
+        "call it and discard the result"
+    )
 
 
 def test_resolve_model_revision_probes_normally_when_hf_hub_offline_unset(

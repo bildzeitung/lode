@@ -2891,15 +2891,15 @@ def models_pull() -> None:
     Once warmed, RETRIEVAL is fully offline: a query-only embed
     (related-notes, "lode ask") never resolves an HF revision, so it makes no
     outbound call against warm weights. INDEXING is not -- it still makes one
-    read-only HuggingFace metadata call per process to stamp the vector
-    provenance it records (the resolved model revision, docs/storage.md
-    "Model provenance"), even against a fully warm cache; warming here cannot
-    prepay that call, since the revision it resolves is per-process,
-    in-memory state that nothing persists to disk (lode-r4r2). Set
+    read-only HuggingFace metadata call per indexed version to stamp the
+    vector provenance it records (the resolved model revision,
+    docs/storage.md "Model provenance"), even against a fully warm cache.
+    Warming here cannot prepay that call: the revision it resolves is
+    per-embedder, in-memory state that nothing persists to disk, and "lode
+    work" builds a fresh embedder per queued job (lode-r4r2, lode-j5r2). Set
     HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific -- to
     force fastembed's local-weights-only load AND skip that metadata call
-    outright (recording model_revision = NULL for the run rather than
-    blocking on a network timeout).
+    outright, recording model_revision = NULL for those vectors instead.
 
     A bad config.toml gives the same clean stderr message and exit 1 every
     other command gives, not a raw traceback. On its most likely failure
