@@ -125,29 +125,31 @@ matching the file's own established `<...>` convention already used two sections
 needs no allowlist entry because it stops being a `$`-reference at all.
 
 `challenge/SKILL.md` carries no fenced ```bash/```sh blocks at all. `code/SKILL.md`
-carries **nine** and `epic-audit/SKILL.md` six, all clean. Every one of `code/SKILL.md`'s
-fences is INDENTED (nested under a list item), so a scanner anchored at column 0 --
-`line.startswith("```")`, the shape `tests/test_land_lock.py` used before lode-ovgs fixed
-it -- sees zero blocks there and would report the file as carrying no bash at all.
-`_bash_blocks` (imported from `tests/conftest.py::bash_fence_blocks`, lode-ovgs unified
-what were three near-identical private copies into one shared helper) strips each line
-before testing, so it sees all nine -- this docstring previously recorded the column-0
-answer (zero) as fact, then (after lode-ovgs, before lode-wroz) a stale count of five.
+carries **nine** and `epic-audit/SKILL.md` six, all clean. Not one of `code/SKILL.md`'s
+nine fences puts its backticks at column 0: eight are indented under a list item, four
+open inside a markdown blockquote, and three are BOTH -- the per-fence breakdown is
+recorded once, next to the parser, in `tests/conftest.py::bash_fence_blocks`. A scanner
+anchored at column 0 -- `line.startswith("```")`, the shape `tests/test_land_lock.py`
+used before lode-ovgs fixed it -- therefore sees zero blocks in that file and would
+report it as carrying no bash at all. `_bash_blocks` (imported from
+`tests/conftest.py::bash_fence_blocks`, lode-ovgs unified what were three near-identical
+private copies into one shared helper) normalizes each line before testing, so it sees
+all nine -- this docstring previously recorded the column-0 answer (zero) as fact, then
+(after lode-ovgs, before lode-wroz) a stale count of five.
 
-FOUR of those nine are ALSO nested inside a markdown blockquote (`> ```bash`, at
-~lines 65, 292, 324, 367) -- a second, independent blind spot from the indentation one
-above: a bare `>` survives `.strip()`, so `stripped.startswith("```")` still never
-matched for them even once the indentation fix landed. `_bash_blocks` was blind to
-those 4 blocks (and, just as importantly, to their CONTENT -- a same-block
-assign-then-use pair like `REPO_ROOT=...` / `$REPO_ROOT`, both prefixed `> ` in the raw
-source, needs the marker stripped from every line, not just the fence delimiters, or
-the assignment's own `^`-anchored regex never matches it) until lode-wroz. Filed as a
-sibling of lode-ovgs rather than folded into it: lode-ovgs's scope was the
-indented-fence variant and the three-copies-to-one unification, and the blockquote fix
-was measured free against the whole corpus (51 -> 55 blocks, zero new violations) only
-once that unification had already landed -- fixing it in `tests/conftest.py`'s shared
-helper, once, rather than adding a fourth private copy of the same workaround
-`tests/test_bd_list_limit_gate.py` already carries on its own input.
+The blockquote half of that was a SECOND blind spot, independent of the indentation one
+and closed later (lode-wroz): a bare `>` survives `.strip()`, so
+`stripped.startswith("```")` never matched a `> ```bash` fence even once the indentation
+fix had landed -- and the marker has to come off the CONTENT lines too, or a same-block
+assign-then-use pair still reads as unassigned (mechanism stated once, at
+`_BLOCKQUOTE_MARKER`; pinned by `test_blockquoted_fence_content_lines_are_also_unmarked`
+below). Filed as a sibling of lode-ovgs rather than folded into it: lode-ovgs's scope was
+the indented-fence variant and the three-copies-to-one unification, and the blockquote
+fix was measured free -- the six SKILL.md files go 51 -> 55 blocks and this gate's full
+corpus, which also takes in `.claude/agents/*.md`, goes 96 -> 100, with zero new
+violations either way -- only once that unification had already landed. Fixing it in
+`tests/conftest.py`'s shared helper, once, rather than adding a fourth private copy of
+the same workaround `tests/test_bd_list_limit_gate.py` already carries on its own input.
 """
 
 from __future__ import annotations
@@ -541,10 +543,11 @@ def test_sh_fence_is_scanned_the_same_as_bash() -> None:
 def test_indented_fence_is_still_a_fence_the_lode_ovgs_shape() -> None:
     """A fence nested under a list item is indented, and a scanner anchored at column 0
     (`line.startswith("```")` -- what `tests/test_land_lock.py` did before `lode-ovgs`
-    fixed it) is blind to it. Every one of `code/SKILL.md`'s nine bash blocks opens with
-    an indented fence, so this is not hypothetical: a column-0 scanner reports that file
-    as carrying no bash at all. `_bash_blocks` (the shared `bash_fence_blocks` helper,
-    imported from `tests/conftest.py`) must strip first."""
+    fixed it) is blind to it. Eight of `code/SKILL.md`'s nine bash blocks open with an
+    indented fence (the ninth is blockquoted instead -- see the test below), so this is
+    not hypothetical: a column-0 scanner reports that file as carrying no bash at all.
+    `_bash_blocks` (the shared `bash_fence_blocks` helper, imported from
+    `tests/conftest.py`) must strip first."""
     markdown = '1. Step one:\n\n   ```bash\n   echo "$UNASSIGNED"\n   ```\n'
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1
@@ -556,8 +559,10 @@ def test_blockquoted_fence_is_still_a_fence_the_lode_wroz_shape() -> None:
     blind spot from the indented one above: `>` survives `.strip()`, so
     `stripped.startswith("```")` never matched it even after lode-ovgs's fix. This is not
     hypothetical either -- four of `code/SKILL.md`'s nine bash blocks open this way
-    (~lines 65, 292, 324, 367). `_bash_blocks` must strip the blockquote marker from the
-    fence delimiters to open/close the block at all."""
+    (~lines 65, 292, 324, 367). Line 65 is this test's exact shape -- blockquoted at
+    column 0, no indentation -- so it is the one fence in the corpus that the indented
+    test above cannot reach even in principle. `_bash_blocks` must strip the blockquote
+    marker from the fence delimiters to open/close the block at all."""
     markdown = '> Step one:\n>\n> ```bash\n> echo "$UNASSIGNED"\n> ```\n'
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1
@@ -613,10 +618,10 @@ def test_every_skill_and_agent_file_is_covered() -> None:
     assert "skills/land/SKILL.md" in scanned, scanned
     assert "agents/coding.md" in scanned, scanned
     # code/SKILL.md earns its own entry: it is the ONE real file whose every
-    # fence opens off column 0 -- five plainly indented, four ALSO nested
-    # inside a blockquote (lode-wroz) -- so it is the only one of the three
-    # whose entry here goes red if `bash_fence_blocks` ever regresses to a
-    # column-0 `line.startswith("```")` scanner (lode-ovgs). land/SKILL.md and
+    # fence opens off column 0 -- five plainly indented, three indented AND
+    # blockquoted, one blockquoted only (lode-wroz) -- so it is the only one of
+    # the three whose entry here goes red if `bash_fence_blocks` ever regresses
+    # to a column-0 `line.startswith("```")` scanner (lode-ovgs). land/SKILL.md and
     # coding.md both keep 20 and 25 blocks under that regression -- still
     # non-empty, so they would sit here looking fine while the parser was
     # broken, and this coverage pin would pass vacuously. Verified by mutation.
@@ -627,17 +632,16 @@ def test_code_skill_blockquoted_blocks_are_visible_and_clean() -> None:
     """Sabotage-verified against the REAL file, not a synthetic snippet (lode-wroz's
     acceptance criteria). `code/SKILL.md` carries nine bash blocks; four open with a
     blockquoted fence (~lines 65, 292, 324, 367) and were invisible to `_bash_blocks`
-    before this fix -- `len(blocks) == 9` fails (8, then 5 before lode-ovgs) if that
-    regresses.
+    before this fix. Both regressions were re-measured against this exact file rather
+    than estimated: drop the blockquote strip from `bash_fence_blocks` and
+    `len(blocks) == 9` fails at **5**; regress it further to the pre-lode-ovgs column-0
+    `line.startswith("```")` scanner and it fails at **0**.
 
-    The count alone would not catch a fix that stripped the blockquote marker from the
-    fence DELIMITERS but not from CONTENT lines -- that variant also parses to 9 blocks,
-    just with every content line still carrying a literal `> ` prefix. The real,
-    load-bearing check is the second assertion: block 0 (the first fence in the file,
-    ~lines 65-68) assigns `$REPO_ROOT` on one line and uses it on the next, the exact
-    same-block assign-then-use shape lode-sfnb's gate exists to allow -- if content lines
-    kept their `> ` prefix, `REPO_ROOT=...`'s `^`-anchored assignment regex would never
-    match and this would report `{"REPO_ROOT"}` instead of `set()`."""
+    The count alone is not enough -- a delimiters-only strip also parses to 9, measured.
+    The load-bearing assertion is the last one: block 0 (~lines 65-68) is the real
+    `$REPO_ROOT` assign-then-use pair the synthetic
+    `test_blockquoted_fence_content_lines_are_also_unmarked` above covers in miniature,
+    and it reports `{"REPO_ROOT"}` rather than `set()` under that partial fix."""
     text = (SKILLS_DIR / "code" / "SKILL.md").read_text(encoding="utf-8")
     blocks = _bash_blocks(text)
     assert len(blocks) == 9, blocks

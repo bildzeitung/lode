@@ -1120,7 +1120,11 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # regexes in tests/test_skill_bash_state.py (lode-wroz). Same shape as
 # tests/test_bd_list_limit_gate.py's `_BLOCKQUOTE_RE`/`_strip_blockquote`,
 # which normalizes its OWN input the same way ahead of calling this helper --
-# doing it HERE means every caller gets the fix, not just that one.
+# doing it HERE means every caller gets the fix, not just that one. That
+# pre-pass is now redundant AHEAD OF THIS HELPER (lode-3pyo) but not dead: the
+# same gate's inline-backtick scan never goes through here and still needs it.
+# Stripping twice is a no-op on today's corpus, measured, but is not one in
+# general -- a `>>`-leading line double-strips to a bare one.
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 
@@ -1131,15 +1135,20 @@ def bash_fence_blocks(markdown: str) -> list[str]:
 
     Matches the fence marker on the STRIPPED line, never
     ``line.startswith("```")``: a fence nested under a markdown list item is
-    legitimately indented (all nine of ``.claude/skills/code/SKILL.md``'s bash
-    fences open this way -- five plainly indented, four ALSO nested inside a
-    blockquote, see below), and a column-0-anchored scanner reports such a
-    file as carrying no bash at all -- the lode-ovgs bug. A leading blockquote
-    marker (``> ```bash``) is stripped the same way, from both fence
-    delimiters and content lines (lode-wroz; see ``_BLOCKQUOTE_MARKER``
-    above) -- ``>`` survives a bare ``.strip()``, so without this a
-    blockquoted fence would stay invisible the same way an indented one used
-    to. A caller that wants every block concatenated into one string (e.g. to
+    legitimately indented, and a column-0-anchored scanner reports such a file
+    as carrying no bash at all -- the lode-ovgs bug. Measured on
+    ``.claude/skills/code/SKILL.md``, the one consumed file that exercises
+    both shapes: of its nine bash fences, five are plainly indented, three are
+    indented AND inside a blockquote, and one (line 65) is a top-level
+    blockquote with no indentation at all. Not one of the nine puts its
+    backticks at column 0, which is why a column-0 scanner sees zero blocks
+    there. A leading blockquote marker (``> ```bash``) is stripped the same
+    way, from both fence delimiters and content lines (lode-wroz; see
+    ``_BLOCKQUOTE_MARKER`` above) -- ``>`` survives a bare ``.strip()``, so
+    without this a blockquoted fence would stay invisible the same way an
+    indented one used to.
+
+    A caller that wants every block concatenated into one string (e.g. to
     check for an offending token whose position within the file doesn't
     matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
 
@@ -1162,6 +1171,17 @@ def bash_fence_blocks(markdown: str) -> list[str]:
       file carries only paired, exactly-three-backtick fences, and no file
       outside code/SKILL.md nests a fence in a blockquote) and are tracked for
       a deliberate answer in **lode-p4qb**.
+
+    The blockquote strip has a COST of its own, in the opposite direction: it
+    cannot tell a blockquote marker from a redirection, so it also fires on a
+    CONTENT line whose first non-blank character is ``>``. ``>&2 echo hi``
+    extracts as ``&2 echo hi``, ``>> log`` as ``> log``, ``> out`` as ``out``.
+    Unlike the boundaries above this is silent CORRUPTION, not a silent skip,
+    so a gate asserting on exact command text would assert against the mangled
+    form. Measured under lode-wroz: no consumed file has such a line today --
+    every block the pre-strip parser saw is byte-identical after it, across
+    every ``.claude/skills/*/SKILL.md`` and ``.claude/agents/*.md`` -- so
+    re-measure rather than assume if one is ever added.
     """
     blocks: list[str] = []
     current: list[str] | None = None
