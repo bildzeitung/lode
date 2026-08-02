@@ -137,8 +137,10 @@ stay on `rtk`. Live exception sites are commented at the call site; the load-bea
 ## Commands by workflow
 
 ```bash
-# Git (59–80% savings) — passthrough works for ALL subcommands
-rtk git status | log | diff | show | add | commit | push | pull | branch | worktree
+# Git (59–80% savings) — every subcommand is accepted, but see the `git log` exception above:
+# `rtk git log` DROPS MERGE COMMITS. Faithful passthrough is not guaranteed per-subcommand.
+rtk git status | diff | show | add | commit | push | pull | branch | worktree
+git log   # ← BARE, not `rtk git log`, when a missing merge commit would change a decision
 
 # GitHub
 rtk gh pr view <n> | gh pr checks | gh run list | gh issue list | gh api
