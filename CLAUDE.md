@@ -124,6 +124,16 @@ git add . && git commit -m "msg" && git push
 rtk git add . && rtk git commit -m "msg" && rtk git push
 ```
 
+**One known exception — `git log` is NOT a faithful passthrough (lode-eza9).** `rtk git log`
+**silently drops merge commits** (upstream [rtk-ai/rtk#2305](https://github.com/rtk-ai/rtk/issues/2305)):
+measured on a real range, 7 commits → 4, all three `--no-ff` merges gone, with no marker, no count,
+and exit status 0. So the "passes through unchanged, so RTK is always safe" premise above does not
+hold here. Use **bare `git log`** wherever a *missing* merge commit would change a decision — history
+audits, residue checks before a destructive reset, anything reasoning about merge structure. The
+divergence is scoped to `log`: `rev-list` (including `--first-parent`) and `show` are faithful and
+stay on `rtk`. Live exception sites are commented at the call site; the load-bearing one is
+[`.claude/skills/land/SKILL.md`](.claude/skills/land/SKILL.md) Section 1's pass-start residue print.
+
 ## Commands by workflow
 
 ```bash

@@ -158,7 +158,14 @@ rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label
 rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
-rtk git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
+git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
+  # DELIBERATELY BARE `git`, NOT `rtk git` (lode-eza9) -- the ONE exception to CLAUDE.md's RTK golden
+  # rule in this file. `rtk git log` silently DROPS MERGE COMMITS (upstream rtk-ai/rtk#2305): measured
+  # on a real pass, 7 commits -> 4, all three --no-ff merges gone, no marker, exit 0. Residue here is
+  # BY CONSTRUCTION merge commits (a pass that died between Section 3's merges and Section 4's push),
+  # so the rtk form under-reports precisely the case this line exists for -- it would print EMPTY
+  # while the reset below destroyed real merges. Scope is `log` only: `rev-list` (including
+  # --first-parent, which 1a's direction test greps) and `show` are unaffected and stay on `rtk`.
 rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
 ```
 
