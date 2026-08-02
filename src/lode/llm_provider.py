@@ -625,6 +625,15 @@ class AnthropicProvider:
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
+        # lode-a31q: pydantic v2 doesn't memoize model_json_schema() -- it
+        # rebuilds a fresh dict per call (~0.5ms measured) -- and every
+        # enrichment item in a batch carries the identical EnrichmentResult
+        # schema, so building it per item wastes tens of ms per submission at
+        # the default enrichment_batch_flush_size of 50, scaling with that
+        # knob. Cache per distinct schema, keyed on the class object; scoped
+        # to this submission, never process-global. The cached dict is shared
+        # by reference across the requests using it -- treat it as read-only.
+        schema_cache: dict[type[BaseModel], dict[str, Any]] = {}
         api_requests: list[dict[str, Any]] = []
         for req in requests:
             params: dict[str, Any] = {
@@ -634,11 +643,15 @@ class AnthropicProvider:
                 "messages": [{"role": "user", "content": req.user_prompt}],
             }
             if req.tool_name is not None:
+                input_schema = schema_cache.get(req.output_schema)
+                if input_schema is None:
+                    input_schema = req.output_schema.model_json_schema()
+                    schema_cache[req.output_schema] = input_schema
                 params["tools"] = [
                     {
                         "name": req.tool_name,
                         "description": req.tool_description or "",
-                        "input_schema": req.output_schema.model_json_schema(),
+                        "input_schema": input_schema,
                     }
                 ]
                 params["tool_choice"] = {"type": "tool", "name": req.tool_name}
@@ -938,6 +951,11 @@ class OpenAIProvider:
     def submit_batch(
         self, requests: Sequence[BatchRequest], *, timeout_s: float
     ) -> str:
+        # lode-a31q: deliberately NOT carrying AnthropicProvider.submit_batch's
+        # per-submission schema cache. This loop is degenerate -- one live
+        # Responses API round trip per request -- so a sub-millisecond schema
+        # rebuild is noise against the per-item network cost, where the
+        # Anthropic loop is pure CPU before a single batches.create.
         encoded: list[dict[str, Any]] = []
         for req in requests:
             try:
