@@ -112,12 +112,12 @@ fi
 if [ "$cwd_toplevel" != "$main_checkout" ]; then
   echo "NOT RUNNING IN THE MAIN CHECKOUT (lode-pcee): cwd resolves to '$cwd_toplevel'," \
        "but the main checkout is '$main_checkout'. /land is defined to run only in the" \
-       "main checkout, on trunk -- every command that follows (up to and including" \
-       "'git reset --hard') assumes that and carries no -C of its own. Run from here," \
-       "checkout would switch THIS directory's branch to trunk and reset --hard would" \
-       "destroy any of its uncommitted work, with nothing in reflog to recover it. STOP" \
-       "AND REPORT to the operator; do not retry without understanding why cwd was" \
-       "wrong." >&2
+       "main checkout, on trunk -- every command in this caller's block assumes that and" \
+       "carries no -C of its own. Run from here, those commands would mutate THIS" \
+       "directory instead -- at minimum a 'git reset --hard' (every call site has one)," \
+       "and at some call sites a 'git checkout' too -- destroying any uncommitted work" \
+       "here, with nothing in reflog to recover it. STOP AND REPORT to the operator; do" \
+       "not retry without understanding why cwd was wrong." >&2
   exit 1
 fi
 
