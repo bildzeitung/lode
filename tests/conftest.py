@@ -171,6 +171,7 @@ import importlib.util
 import ipaddress
 import logging
 import os
+import re
 import socket
 import sys
 import threading
@@ -1108,6 +1109,21 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # falsified.
 
 
+# A markdown blockquote marker: optional leading whitespace, one `>`, one
+# optional following space -- CommonMark's own blockquote-marker shape.
+# Stripped from EVERY line (fence delimiters AND content) before either is
+# matched, so a fence nested inside a blockquote (`> ```bash`) is an ordinary
+# fence, and its CONTENT lines lose their own literal `> ` prefix too --
+# without that second half, a same-block assign-then-use pair like
+# `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
+# unassigned, since the leading `> ` defeats the `^`-anchored assignment
+# regexes in tests/test_skill_bash_state.py (lode-wroz). Same shape as
+# tests/test_bd_list_limit_gate.py's `_BLOCKQUOTE_RE`/`_strip_blockquote`,
+# which normalizes its OWN input the same way ahead of calling this helper --
+# doing it HERE means every caller gets the fix, not just that one.
+_BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
+
+
 def bash_fence_blocks(markdown: str) -> list[str]:
     """Every fenced ```bash/```sh block in ``markdown``, as separate strings,
     in document order -- what an agent actually EXECUTES, one Bash tool
@@ -1115,31 +1131,25 @@ def bash_fence_blocks(markdown: str) -> list[str]:
 
     Matches the fence marker on the STRIPPED line, never
     ``line.startswith("```")``: a fence nested under a markdown list item is
-    legitimately indented (all five of ``.claude/skills/code/SKILL.md``'s
-    PLAIN bash fences open this way -- see the blockquote boundary below for
-    why that is five and not that file's full nine), and a column-0-anchored
-    scanner reports such a file as carrying no bash at all -- the lode-ovgs
-    bug. A caller that wants every block concatenated into one string (e.g. to
+    legitimately indented (all nine of ``.claude/skills/code/SKILL.md``'s bash
+    fences open this way -- five plainly indented, four ALSO nested inside a
+    blockquote, see below), and a column-0-anchored scanner reports such a
+    file as carrying no bash at all -- the lode-ovgs bug. A leading blockquote
+    marker (``> ```bash``) is stripped the same way, from both fence
+    delimiters and content lines (lode-wroz; see ``_BLOCKQUOTE_MARKER``
+    above) -- ``>`` survives a bare ``.strip()``, so without this a
+    blockquoted fence would stay invisible the same way an indented one used
+    to. A caller that wants every block concatenated into one string (e.g. to
     check for an offending token whose position within the file doesn't
     matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
 
     Known boundaries -- each yields NO block, SILENTLY. A gate built on this
     helper therefore reports "clean" for them rather than "unparsed", which is
     the same false assurance lode-ovgs was filed against, so measure before
-    trusting a green result on a new file. All four measured during lode-ovgs's
-    review:
+    trusting a green result on a new file. All three measured during
+    lode-ovgs's review (the blockquote boundary above this list was the
+    fourth, closed by lode-wroz):
 
-    * a BLOCKQUOTED fence (``> ```bash``) is skipped -- ``>`` survives
-      ``.strip()``, so the marker never matches. **This one is LIVE, not
-      hypothetical:** ``.claude/skills/code/SKILL.md`` writes 4 of its 9 bash
-      blocks that way (openers at lines 65, 292, 324, 367), so those 4 are
-      invisible here and consequently ungated by
-      ``tests/test_skill_bash_state.py``. Filed and owned as **lode-wroz**,
-      which also measured the fix as free (51 -> 55 blocks corpus-wide, zero
-      new violations); deliberately not fixed under lode-ovgs, whose scope was
-      the indented-fence variant and the unification.
-      ``tests/test_bd_list_limit_gate.py`` works around it today by stripping
-      the marker off its OWN input before calling this helper.
     * an UNTERMINATED final fence is dropped (no closing marker, so the block
       is never flushed). ``tests/test_assert_main_checkout.py``'s surviving
       copy deliberately keeps it -- the one live divergence between them.
@@ -1148,13 +1158,15 @@ def bash_fence_blocks(markdown: str) -> list[str]:
       for a block whose own body contains a ```-prefixed line.
     * a TILDE fence (~~~bash) is skipped -- only backticks are recognized.
       ``scripts/check_links.py`` handles both, with a ``^\\s*(`{3,}|~{3,})``
-      regex. The last three are latent on today's corpus (every other
-      consumed file carries only paired, exactly-three-backtick fences) and are
-      tracked for a deliberate answer in **lode-p4qb**.
+      regex. All three are latent on today's corpus (every other consumed
+      file carries only paired, exactly-three-backtick fences, and no file
+      outside code/SKILL.md nests a fence in a blockquote) and are tracked for
+      a deliberate answer in **lode-p4qb**.
     """
     blocks: list[str] = []
     current: list[str] | None = None
-    for line in markdown.splitlines():
+    for raw_line in markdown.splitlines():
+        line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
         if stripped.startswith("```"):
             if current is not None:
