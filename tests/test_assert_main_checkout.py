@@ -41,6 +41,7 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
+from conftest import bash_fence_blocks as _fenced_bash_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "assert-main-checkout.sh"
@@ -266,63 +267,48 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
+# Block boundaries are load-bearing here in a way they are not for
+# `_fenced_bash` below: per land/SKILL.md's governing rule (lode-sfnb) each
+# fence is executed as its own Bash invocation, so two commands are guaranteed
+# to share a shell -- and therefore `||` short-circuiting -- only if they are
+# in the same block. A pin that flattens the blocks first cannot tell
+# "guarded" from "merely preceded somewhere in the document". That is why
+# `_the_one_block`/`_assert_guard_precedes` below work over
+# `_fenced_bash_blocks` (kept separate) rather than `_fenced_bash` (joined).
+#
+# `_fenced_bash_blocks` used to be this module's own private copy of the
+# fenced-```bash/```sh parser -- the fourth such copy in the repo, and the
+# last one left after lode-ovgs unified the other three (test_land_lock.py,
+# test_land_conflicts_state.py, test_skill_bash_state.py) onto
+# `tests/conftest.py::bash_fence_blocks`. Left in place deliberately at that
+# point: land/lode-gczf was already ready-for-land carrying 178 changed lines
+# of THIS file that kept both helpers and called them from four sites, so
+# deleting the definitions at the same time would have merged cleanly with
+# those call-site edits and produced a file calling deleted functions -- a
+# clean merge with a broken collection. lode-p4qb finishes the unification now
+# that land/lode-gczf has landed. The one place this module's copy used to
+# diverge from the shared helper -- it flushed an unterminated final fence,
+# the shared helper silently dropped it -- is resolved in the shared helper's
+# favor of THIS module's answer (flush, not drop); see
+# `tests/conftest.py::bash_fence_blocks`'s own docstring for the parsing rules
+# now shared by every consumer, including its answer to that question and its
+# four-backtick / tilde fence support (also lode-p4qb). `_fenced_bash_blocks`
+# is now just the module-level import above, aliased for this file's own
+# call sites -- see the top of this file.
+
+
 def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only -- what an agent actually EXECUTES.
+    """The ```bash fences only, concatenated into one string -- what an agent
+    actually EXECUTES.
 
     Scanning the whole file would match the prose that *explains* the old
     defect (it necessarily quotes the broken `-C "$(git rev-parse
     --show-toplevel)"` idiom), so the pin has to separate what is executed
-    from what is merely described.
-
-    Once deliberately NOT the same shape as tests/test_land_lock.py's
-    `_fenced_bash`, which matched the fence marker at column 0 and was
-    therefore blind to indented fences. lode-ovgs has since fixed that copy and
-    unified it -- along with tests/test_land_conflicts_state.py's and
-    tests/test_skill_bash_state.py's -- onto the shared
-    `tests/conftest.py::bash_fence_blocks`, so the shapes now agree. This
-    module is the one remaining private copy; folding it in too is lode-p4qb's
-    job, deliberately sequenced after land/lode-gczf (which changes 178 lines
-    of this file) so the deletion cannot merge cleanly into edited call sites.
+    from what is merely described. Thin wrapper over `_fenced_bash_blocks`
+    (the shared `tests/conftest.py::bash_fence_blocks` parser) -- this
+    function carries no parsing logic of its own.
     """
     return "\n".join(_fenced_bash_blocks(markdown))
-
-
-def _fenced_bash_blocks(markdown: str) -> list[str]:
-    """The ```bash fences kept SEPARATE, one string per block.
-
-    Block boundaries are load-bearing here in a way they are not for
-    `_fenced_bash`: per land/SKILL.md's governing rule (lode-sfnb) each fence
-    is executed as its own Bash invocation, so two commands are guaranteed to
-    share a shell -- and therefore `||` short-circuiting -- only if they are
-    in the same block. A pin that flattens the blocks first cannot tell
-    "guarded" from "merely preceded somewhere in the document".
-
-    The fence marker is matched on the STRIPPED line, never at column 0. Four
-    of land/SKILL.md's fences are indented under a markdown bullet, so a
-    `line.startswith("```")` scanner -- the shape `tests/test_land_lock.py`
-    used until `lode-ovgs` fixed it -- sees 20 of this file's
-    24 bash blocks. That is not cosmetic for THIS module: one of the four it
-    misses is Section 3's isolation-replay block, which runs its own
-    `git reset --hard origin/trunk`. Under the column-0 shape the anchor below
-    found exactly one reset block and looked correct; it was simply blind to
-    the second. Measured on this file: 20 blocks vs 24, and 1 reset block vs 2.
-    """
-    blocks: list[str] = []
-    current: list[str] = []
-    in_bash = False
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_bash:
-                blocks.append("\n".join(current))
-                current = []
-            in_bash = not in_bash and stripped in {"```bash", "```sh"}
-            continue
-        if in_bash:
-            current.append(line)
-    if in_bash and current:  # unterminated final fence
-        blocks.append("\n".join(current))
-    return blocks
 
 
 def test_fence_scanner_sees_indented_fences() -> None:

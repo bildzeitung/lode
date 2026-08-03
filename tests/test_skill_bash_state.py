@@ -585,6 +585,61 @@ def test_blockquoted_fence_content_lines_are_also_unmarked() -> None:
     assert _violations_in_block(blocks[0]) == set()
 
 
+def test_unterminated_final_fence_is_flushed_not_dropped() -> None:
+    """lode-p4qb's deliberate answer to the EOF-flush divergence: a ```bash fence with
+    no closing marker at all (the file just ends) is FLUSHED as a block, not silently
+    dropped. Chosen over dropping because dropping is the same false-assurance shape
+    this whole helper exists to delete -- a gate built on this parser would report
+    "clean" for a malformed file's trailing block instead of "unparsed". Unreachable
+    against every file this helper parses today (measured during lode-p4qb: every
+    consumed fence is paired), so this is hardening, not a live-bug fix.
+
+    Sabotage recipe: in `bash_fence_blocks`, delete the trailing
+    `if current is not None: blocks.append(...)` flush and this test goes red (the
+    unterminated block silently vanishes, `_bash_blocks(markdown) == []`)."""
+    markdown = '```bash\necho "$UNASSIGNED"\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
+def test_four_backtick_fence_is_scanned_the_lode_p4qb_shape() -> None:
+    """A FOUR-backtick fence (````bash) is not exotic -- it is what an author MUST use
+    for a block whose own body contains a literal ```-prefixed line, and it must be
+    scanned rather than silently skipped (lode-p4qb). The literal triple-backtick
+    content line must survive as ordinary text, not be mistaken for the close: only a
+    closing run of the SAME character and AT LEAST AS LONG as the opening one may
+    close the block (CommonMark's own rule) -- the whole point of the four-backtick
+    form.
+
+    Sabotage recipe: in `_FENCE_MARKER_RE`, drop the `{3,}` -> exact `{3}` (or revert
+    the marker regex to a literal ``` check) and this test goes red -- the open marker
+    (````bash`) no longer matches, so `_bash_blocks(markdown) == []`."""
+    markdown = '````bash\necho "$UNASSIGNED"\n```\necho done\n````\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert "```" in blocks[0], (
+        "the literal triple-backtick content line was lost -- it must survive as "
+        f"ordinary text inside a four-backtick block: {blocks[0]!r}"
+    )
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
+def test_tilde_fence_is_scanned_the_lode_p4qb_shape() -> None:
+    """A TILDE fence (~~~bash) is legitimate CommonMark and must be scanned rather
+    than silently skipped (lode-p4qb) -- `scripts/check_links.py`'s own `_FENCE_RE`
+    already recognizes both backtick and tilde fences; this helper now matches its
+    shape rather than inventing a narrower one.
+
+    Sabotage recipe: in `_FENCE_MARKER_RE`, drop the `~{3,}` alternative and this test
+    goes red -- the open marker (~~~bash) no longer matches any fence, so
+    `_bash_blocks(markdown) == []`."""
+    markdown = '~~~bash\necho "$UNASSIGNED"\n~~~\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
 def test_two_separate_blocks_are_returned_separately() -> None:
     markdown = '```bash\nFOO=1\n```\nprose in between\n```bash\necho "$FOO"\n```\n'
     blocks = _bash_blocks(markdown)
