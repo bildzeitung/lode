@@ -1517,9 +1517,12 @@ another.
 
 **Persisting carries two obligations, and both have been forgotten at least once each.** A file path
 that a later block can re-derive is necessarily a *fixed* path, and a fixed path **outlives the run
-that wrote it** — so (a) **wipe it at the start of every pass** (`rm -rf "$DIR" && mkdir -p "$DIR"`,
-as `/land`'s `$STATE_DIR` and `/sweep`'s `$SWEEP_TMP` both do), or a skipped write silently serves the
-*previous* pass's data, which is worse than the crash it replaced; and (b) **assert on load** and
+that wrote it** — so (a) **wipe it at the start of every pass, ahead of every block that writes to
+it**, or a skipped write silently serves the *previous* pass's data, which is worse than the crash it
+replaced. With one writer the wipe and the `mkdir -p` go together (`rm -rf "$DIR" && mkdir -p "$DIR"`,
+as `/sweep`'s `$SWEEP_TMP` and `/release`'s `NOTES_FILE` both do); with several, split them — `/land`
+wipes `$STATE_DIR` once in Section 1 and leaves each writer to `mkdir -p` its own subdirectory, so no
+writer has to be verbally ordered around a wipe further down the file (lode-wjw4). And (b) **assert on load** and
 abort loudly, because a zero-iteration loop over an empty file exits 0 and is indistinguishable from a
 clean pass with nothing to do. `lode-x495` shipped `/release`'s `NOTES_FILE` on a fixed path without
 (a), which would have let a skipped notes-write publish the last release's notes as this one's — the
