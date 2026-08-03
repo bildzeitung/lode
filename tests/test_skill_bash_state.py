@@ -115,10 +115,9 @@ Measured while making the call, and recorded here because it is evidence rather 
 rationale: at the time (across `trunk`, that branch, and all five in-flight sibling
 branches touching the file), the parser reported exactly `$ACCEPTED` and `$CONFLICTS`
 and nothing else -- no false positive, and no sibling introduced a new instance.
-`lode-p1r3` later confirmed `$CONFLICTS` had gone inert once `lode-rfon` landed (its
-fix persists the conflicting paths to `$STATE_DIR/conflicts/<id>` and reads them back,
-closing the cross-block hop) and deleted that allowlist entry; `$ACCEPTED` remains,
-permanently, for the reason recorded next to it in `ALLOWLIST` below.
+`$CONFLICTS` went inert once `lode-rfon` landed and `lode-p1r3` deleted its entry, so
+`$ACCEPTED` is now the only one -- for the reason recorded next to it in `ALLOWLIST`
+below.
 
 That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
 to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
@@ -215,18 +214,18 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("skills/land/SKILL.md", "ACCEPTED"): (
         "Section 3a's ordered, land-review-verdict-derived accepted set -- the same "
         "shape as release/SKILL.md's $PROPOSED above: computed by the agent's own "
-        "reasoning across Sections 2c (dispatched land-review verdicts, returned in "
-        "conversation -- land-review itself never writes its verdict to bd or a file; "
-        "see its own 'What I don't do': 'no merge, no trunk push, no bd close, no "
-        "branch delete, no label changes') and 3a (stacked-branch ordering), never by "
-        "any single deterministic bash command in the file, so there is nothing "
-        "upstream in this file's own bash to re-derive or persist it FROM. Note the "
-        "block that uses it immediately persists it onward ($STATE_DIR/accepted), "
-        "which every later block reads back -- so the cross-block hop this gate exists "
-        "to catch is already closed downstream; only the initial hand-off from the "
-        "agent's reasoning into bash remains. lode-p1r3 re-audited land-review's "
-        "contract specifically looking for a mechanical source and found none -- this "
-        "entry is permanent, the same conclusion release/SKILL.md's $PROPOSED reached."
+        "reasoning across Sections 2c (dispatched land-review verdicts) and 3a "
+        "(stacked-branch ordering), never by any single deterministic bash command in "
+        "the file. land/SKILL.md states the checkable property itself, right next to "
+        "the persist block: the set 'encodes land-review's per-branch judgment, which "
+        "is not queryable from git or bd' -- so there is nothing upstream in this "
+        "file's own bash to re-derive or persist it FROM. Note the block that uses it "
+        "immediately persists it onward ($STATE_DIR/accepted), which every later block "
+        "reads back -- so the cross-block hop this gate exists to catch is already "
+        "closed downstream; only the initial hand-off from the agent's reasoning into "
+        "bash remains. Removing this entry needs a genuine mechanical source for the "
+        "set, which means land-review persisting its verdict machine-readably -- its "
+        "contract rules that out today (lode-p1r3 audited for one and found none)."
     ),
 }
 

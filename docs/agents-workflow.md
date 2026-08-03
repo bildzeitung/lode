@@ -1592,13 +1592,16 @@ ticket's risk budget. `lode-x495`'s technical review rejected that shape: it con
 (genuinely risky) with *covering* it, which cost only two allowlist entries and not one byte of
 `land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves every **future**
 cross-block variable added to that file unguarded too, not just the known ones, in exactly the file the
-rule was written for. So the file is gated like every other skill. `lode-p1r3` closed out both of the
-two original entries: `$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch by persisting the
-conflicting paths to `$STATE_DIR/conflicts/<id>` and reading them back) went inert once that branch
-landed, so its allowlist entry is deleted. `$ACCEPTED` (agent-reasoned, same "nothing upstream to
-re-derive from" shape as `$PROPOSED`) has no mechanical source — `land-review` returns its verdict in
-conversation and never writes it to bd or a file (its own "What I don't do") — so `lode-p1r3` confirmed
-it stays allowlisted permanently; it is the one entry `land/SKILL.md` still carries.
+rule was written for. So the file is gated like every other skill. `lode-p1r3` then closed out both of
+those entries. `$CONFLICTS` went inert once `lode-rfon` landed, and deleting its entry made the gate
+strictly **stronger** — an allowlist entry is file-wide, so while it stood a regression of `$CONFLICTS`
+anywhere in the file would have been silently excused; now it fails (the fix's producer side is pinned
+separately, by `tests/test_land_conflicts_state.py`). `$ACCEPTED` (agent-reasoned, same "nothing
+upstream to re-derive from" shape as `$PROPOSED`) is the one entry `land/SKILL.md` still carries: that
+audit looked for a mechanical source and found none, because the value is `land-review`'s per-branch
+judgment and `land-review` returns its verdict in conversation only. **That is a contract, not a law of
+nature** — the entry becomes removable if `land-review` is ever changed to persist its verdict
+machine-readably, which is the removal condition recorded next to the entry itself.
 
 ### Invariants the coding loop never breaks
 
