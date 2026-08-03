@@ -149,18 +149,15 @@ def resolve_model_revision(model_name: str, *, timeout_s: float) -> str | None:
     measurement: ``docs/decisions.md``, the lode-r4r2 entry.
 
     **``timeout_s`` bounds the flag-UNSET no-network case (lode-w5nr), which the
-    guard above does not cover.** ``huggingface_hub``'s client factory
-    deliberately disables ``httpx``'s 5s default (``timeout=None`` on the shared
-    ``httpx.Client``), so with no offline flag set and the network black-holed
-    (captive portal, VPN down, air-gapped host) the probe used to be genuinely
-    unbounded — it blocked for the OS TCP connect timeout (~130s on Linux)
-    before reaching the ``except`` below, for a value that ends up ``None``
-    regardless. Passing ``timeout`` on the per-request ``model_info`` call
-    overrides the client's disabled default even though the client itself has
-    none configured (measured: a request to a black-holed TEST-NET-1 address
-    with ``timeout_s=3.0`` raised ``ConnectTimeout`` in ~3s, not ~130s). Callers
-    thread ``settings.hf_probe_timeout_s`` through — there is no default here,
-    so a caller cannot silently reintroduce the unbounded wait by omission.
+    guard above does not cover.** ``huggingface_hub`` disables ``httpx``'s own
+    timeout on its shared client, so the probe was otherwise unbounded — it
+    blocked for the OS TCP connect timeout before reaching the ``except`` below,
+    for a value that ends up ``None`` regardless. Required, not defaulted, so a
+    caller cannot silently reintroduce that wait by omission; callers thread
+    ``settings.hf_probe_timeout_s`` through. Full reasoning and the measurement
+    (including what a float ``timeout`` bounds in ``httpx``, and why this does
+    not cover ``fastembed``'s own weights download): ``docs/decisions.md``, the
+    lode-w5nr entry.
 
     :func:`lode.config.hf_hub_offline` is the same truthiness check
     :mod:`lode.cli`'s ``models_pull`` cold-cache handling already relies on for
