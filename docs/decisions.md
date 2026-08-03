@@ -2846,3 +2846,51 @@ while erasing it here would lose the record of what was believed, and when.
     `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
+
+- **2026-08-02 (lode-w5nr) — `resolve_model_revision`'s HF probe is now bounded by an explicit
+  per-call timeout, closing the stall `lode-r4r2` named but could not cover.** Filed during
+  `lode-r4r2`'s review: with `HF_HUB_OFFLINE` *unset* and the network black-holed (captive portal, VPN
+  down, air-gapped host that never set the flag), `huggingface_hub.model_info()` blocked for the OS TCP
+  connect timeout (~130s on Linux) before `resolve_model_revision`'s own `except Exception: return
+  None` recorded `model_revision = NULL` anyway — no offline-flag short-circuit can see this case, since
+  it fires only when the flag is set.
+  - **Root cause, measured:** `huggingface_hub`'s `default_client_factory`
+    (`utils/_http.py`) builds its shared `httpx.Client` with `timeout=None` — deliberately disabling
+    `httpx`'s own 5s default. `HfApi.model_info()` does, however, accept a `timeout: float | None`
+    keyword and forwards it straight to the per-request `get_session().get(..., timeout=timeout)` call.
+    Verified empirically against a real black hole (a TEST-NET-1 address, `HF_ENDPOINT` pointed at it):
+    with no `timeout` kwarg, a request to that address must be killed rather than waited out; passing
+    `timeout=3.0` raised `httpx.ConnectTimeout` in ~3.02s. `httpx` honors a per-request timeout override
+    even though the client itself was constructed with none — this is option (a) from the ticket's
+    three sketched directions, not (b) (a lode-owned client factory, rejected: `set_client_factory()` is
+    process-global and would also bound `fastembed`'s own download client, an unwanted side effect) or
+    (c) (a bounded wait wrapped around the call in lode's own code, unnecessary once (a) works).
+  - **What changed:** `resolve_model_revision(model_name, *, timeout_s)` (`src/lode/embedding.py`) takes
+    a new required keyword-only `timeout_s`, forwarded to `model_info(hf_source, timeout=timeout_s)` —
+    required, not defaulted, so a caller cannot silently reintroduce the unbounded wait by omission.
+    Both production call sites thread it from the new `Settings.hf_probe_timeout_s` knob (`runtime`,
+    default `5.0`, [configuration.md](configuration.md#models)): `FastEmbedEmbedder.__init__` caches
+    `settings.hf_probe_timeout_s` and passes it from `model_revision()`, and `cli.py`'s
+    `_model_revision_status` (the `lode status` drift check) passes it directly. `5.0` was chosen to
+    match `httpx`'s own disabled default (the exact figure `huggingface_hub` turned off) rather than the
+    existing `fetch_timeout_s` (`10s`) — this is a small metadata GET, not a page fetch.
+  - **Blast radius, and why the fix doesn't need to change with it:** at the time this ticket was filed,
+    the write path (`embed()`) constructed one `FastEmbedEmbedder` per indexed version, so a hang could
+    recur once per version drained. A concurrent sibling, `lode-j5r2`, hoists ONE shared
+    `FastEmbedEmbedder` across a whole `drain()`/`--loop` process, cutting that to one hang per process
+    — reducing exposure, not eliminating the need for a bound: an untimed probe still blocks the first
+    (and only) call for the full OS TCP timeout regardless of how many times it would otherwise have
+    been made. The user-visible symptom described in this ticket (an unexplained multi-minute stall in
+    `lode work` with no output) is unchanged in kind either way, just capped at once per process instead
+    of once per version after `lode-j5r2` lands. `resolve_model_revision`'s call signature was extended
+    (a new required kwarg), never moved or renamed, specifically so it merges cleanly regardless of
+    which of the two branches lands first.
+  - **Test trap avoided (third time in this function, after `lode-dj6m` / `lode-r4r2`):** a stub that
+    merely raises is swallowed by `except Exception: return None` and asserts nothing about whether a
+    timeout is actually applied. The acceptance tests instead capture the `timeout` kwarg
+    `huggingface_hub.model_info` receives and assert its value
+    (`tests/test_embedding.py::test_resolve_model_revision_forwards_timeout_s_to_model_info` and
+    `::test_fast_embed_embedder_threads_hf_probe_timeout_s_through`, the latter proving the `Settings`
+    knob reaches the network call through the real `FastEmbedEmbedder` seam, not just the bare
+    function) — both were sabotage-tested non-vacuous by reverting the `timeout=timeout_s` argument and
+    watching them fail before restoring it.

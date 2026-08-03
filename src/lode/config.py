@@ -493,6 +493,23 @@ class Settings(BaseModel):
         "(nomic-embed-text-v1.5 → 768) — lode-txh.6.",
         gt=0,
     )
+    hf_probe_timeout_s: float = _knob(
+        5.0,
+        Kind.RUNTIME,
+        "Per-call timeout (seconds) passed to huggingface_hub.model_info() by "
+        "resolve_model_revision's live HF revision probe (lode.embedding). "
+        "huggingface_hub's own client factory deliberately disables httpx's "
+        "5s default (timeout=None), so with HF_HUB_OFFLINE unset and the "
+        "network black-holed the probe would otherwise block for the OS TCP "
+        "connect timeout (~130s on Linux) before falling back to "
+        "model_revision=NULL anyway (lode-w5nr). httpx honors a PER-REQUEST "
+        "timeout override even though the shared client has none configured "
+        "-- measured: a request to a black-holed address raised ConnectTimeout "
+        "in ~timeout_s, not ~130s. Matches httpx's own (disabled) default "
+        "rather than fetch_timeout_s (10s, web content fetches) -- this is a "
+        "small metadata GET, not a page fetch.",
+        gt=0.0,
+    )
     enrichment_llm: ModelTier = _knob(
         ModelTier(model="claude-haiku-4-5"),
         Kind.RUNTIME,

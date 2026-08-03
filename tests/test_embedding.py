@@ -352,22 +352,61 @@ def test_resolve_model_revision_returns_the_probed_sha(
     class _FakeModelInfo:
         sha = "deadbeef123"
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
         captured["repo_id"] = repo_id
+        captured["timeout"] = timeout
         return _FakeModelInfo()
 
     monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
 
     model_id = _settings().embedding_model
-    assert resolve_model_revision(model_id) == "deadbeef123"
+    assert resolve_model_revision(model_id, timeout_s=1.5) == "deadbeef123"
     # Probed via the pinned HF source repo id, not the friendly model id --
     # they can differ for some models (lode.config.model_cache_identity).
     from lode.config import model_cache_identity
 
     hf_source, _model_file = model_cache_identity(model_id)  # type: ignore[misc]
     assert captured["repo_id"] == hf_source
+
+
+def test_resolve_model_revision_forwards_timeout_s_to_model_info(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lode-w5nr: the network probe must be bounded, not left to the OS TCP timeout.
+
+    ``huggingface_hub``'s client factory deliberately disables ``httpx``'s own
+    5s default (``timeout=None``), so with ``HF_HUB_OFFLINE`` unset and the
+    network black-holed the probe used to block for the OS TCP connect timeout
+    (~130s on Linux) -- measured against a real TEST-NET-1 black hole during
+    this ticket's investigation (docs/decisions.md, lode-w5nr entry). A stub
+    that merely *raises* would be swallowed by ``except Exception: return
+    None`` and assert nothing about whether the bound is actually applied (the
+    exact trap that bit this file twice already, lode-dj6m / lode-r4r2) -- so
+    this asserts on the ``timeout`` kwarg ``huggingface_hub.model_info``
+    actually received instead. Deleting the ``timeout=timeout_s`` argument at
+    the call site (reverting to the untimed call) makes this fail: the
+    captured dict then holds no ``"timeout"`` key at all.
+    """
+    import huggingface_hub
+
+    from lode.embedding import resolve_model_revision
+
+    captured: dict[str, object] = {}
+
+    class _FakeModelInfo:
+        sha = "sha-bounded"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        captured["timeout"] = timeout
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    model_id = _settings().embedding_model
+    assert resolve_model_revision(model_id, timeout_s=3.25) == "sha-bounded"
+    assert captured["timeout"] == 3.25
 
 
 def test_resolve_model_revision_unknown_model_returns_none_no_network(
@@ -377,12 +416,12 @@ def test_resolve_model_revision_unknown_model_returns_none_no_network(
 
     from lode.embedding import resolve_model_revision
 
-    def _boom(repo_id: str) -> None:
+    def _boom(repo_id: str, *, timeout: float) -> None:
         raise AssertionError("must not be reached for an unpinned model id")
 
     monkeypatch.setattr(huggingface_hub, "model_info", _boom)
 
-    assert resolve_model_revision("not-a-real/model-id") is None
+    assert resolve_model_revision("not-a-real/model-id", timeout_s=5.0) is None
 
 
 def test_resolve_model_revision_never_raises_on_probe_failure(
@@ -392,12 +431,12 @@ def test_resolve_model_revision_never_raises_on_probe_failure(
 
     from lode.embedding import resolve_model_revision
 
-    def _offline(repo_id: str) -> None:
+    def _offline(repo_id: str, *, timeout: float) -> None:
         raise OSError("no network")
 
     monkeypatch.setattr(huggingface_hub, "model_info", _offline)
 
-    assert resolve_model_revision(_settings().embedding_model) is None
+    assert resolve_model_revision(_settings().embedding_model, timeout_s=5.0) is None
 
 
 def test_resolve_model_revision_short_circuits_under_hf_hub_offline(
@@ -426,7 +465,7 @@ def test_resolve_model_revision_short_circuits_under_hf_hub_offline(
     class _FakeModelInfo:
         sha = "must-not-be-reached"
 
-    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
         nonlocal probe_calls
         probe_calls += 1
         return _FakeModelInfo()
@@ -437,7 +476,7 @@ def test_resolve_model_revision_short_circuits_under_hf_hub_offline(
     # A model id that DOES resolve a pinned identity -- proves the
     # short-circuit is the flag, not model_cache_identity() already
     # returning None for an unpinned id (that's the sibling test above).
-    assert resolve_model_revision(_settings().embedding_model) is None
+    assert resolve_model_revision(_settings().embedding_model, timeout_s=5.0) is None
     assert probe_calls == 0, (
         "HF_HUB_OFFLINE=1 must skip huggingface_hub.model_info entirely, not "
         "call it and discard the result"
@@ -457,9 +496,14 @@ def test_resolve_model_revision_probes_normally_when_hf_hub_offline_unset(
     class _FakeModelInfo:
         sha = "online-sha"
 
-    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+    monkeypatch.setattr(
+        huggingface_hub, "model_info", lambda repo_id, *, timeout: _FakeModelInfo()
+    )
 
-    assert resolve_model_revision(_settings().embedding_model) == "online-sha"
+    assert (
+        resolve_model_revision(_settings().embedding_model, timeout_s=5.0)
+        == "online-sha"
+    )
 
 
 def test_fast_embed_embedder_model_revision_resolves_and_caches(
@@ -482,7 +526,7 @@ def test_fast_embed_embedder_model_revision_resolves_and_caches(
     class _FakeModelInfo:
         sha = "resolved-sha"
 
-    def _fake_model_info(repo_id: str) -> _FakeModelInfo:
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
         nonlocal probe_calls
         probe_calls += 1
         return _FakeModelInfo()
@@ -495,6 +539,45 @@ def test_fast_embed_embedder_model_revision_resolves_and_caches(
     # Resolved once at load time, cached for this instance's lifetime -- not
     # re-probed on every model_revision() call.
     assert probe_calls == 1
+
+
+def test_fast_embed_embedder_threads_hf_probe_timeout_s_through(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """lode-w5nr: ``settings.hf_probe_timeout_s`` must reach the network call.
+
+    End-to-end version of ``test_resolve_model_revision_forwards_timeout_s_to_
+    model_info`` through the real production seam (``FastEmbedEmbedder.
+    model_revision()`` -> ``resolve_model_revision``), with a settings value
+    distinctive enough (``9.5``, not the default ``5.0``) that a call site
+    silently reverting to a hardcoded or default timeout would be caught.
+    """
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    captured: dict[str, object] = {}
+
+    class _FakeModelInfo:
+        sha = "resolved-sha"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        captured["timeout"] = timeout
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    settings = load_settings(embedding_vector_dim=DIM, hf_probe_timeout_s=9.5)
+    embedder = FastEmbedEmbedder(settings)
+    assert embedder.model_revision() == "resolved-sha"
+    assert captured["timeout"] == 9.5
 
 
 def test_fast_embed_embedder_model_revision_none_on_probe_failure(
@@ -511,7 +594,7 @@ def test_fast_embed_embedder_model_revision_none_on_probe_failure(
 
     monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
 
-    def _offline(repo_id: str) -> None:
+    def _offline(repo_id: str, *, timeout: float) -> None:
         raise OSError("no network")
 
     monkeypatch.setattr(huggingface_hub, "model_info", _offline)

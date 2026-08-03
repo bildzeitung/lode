@@ -767,7 +767,7 @@ def test_status_hints_mixed_model_revision(
     # The mixed check needs no live probe -- stub it offline so this test
     # stays hermetic and isolates just the mixed-index signal (drift is
     # covered by its own sibling test below).
-    def _offline(repo_id: str) -> None:
+    def _offline(repo_id: str, *, timeout: float) -> None:
         raise OSError("no network")
 
     monkeypatch.setattr(huggingface_hub, "model_info", _offline)
@@ -791,7 +791,9 @@ def test_status_hints_model_revision_drift(
     class _FakeModelInfo:
         sha = "sha-current"
 
-    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+    monkeypatch.setattr(
+        huggingface_hub, "model_info", lambda repo_id, *, timeout: _FakeModelInfo()
+    )
 
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
@@ -813,7 +815,9 @@ def test_status_no_revision_hint_when_recorded_matches_live_probe(
     class _FakeModelInfo:
         sha = "sha-current"
 
-    monkeypatch.setattr(huggingface_hub, "model_info", lambda repo_id: _FakeModelInfo())
+    monkeypatch.setattr(
+        huggingface_hub, "model_info", lambda repo_id, *, timeout: _FakeModelInfo()
+    )
 
     db_path = tmp_path / "lode.db"
     init_db(db_path).close()
