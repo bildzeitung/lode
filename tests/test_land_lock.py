@@ -123,13 +123,6 @@ def _init_repo(tmp_path: Path) -> Path:
     that all configure it inside their own `_init_repo`, and keeps this file
     from passing only on machines that happen to have a global identity
     configured.
-
-    lode-c835 considered whether this call site (a single `git init -q -b
-    trunk`, one of the "or consciously reject" candidates that ticket named)
-    was worth migrating off a raw `subprocess.run` -- and found it had
-    already been done, incidentally, when this module was first written
-    against the already-extracted `_git` (tests/_gitrepo.py, lode-863q).
-    Nothing to re-open here.
     """
     repo = tmp_path / "repo"
     repo.mkdir()

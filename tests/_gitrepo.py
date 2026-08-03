@@ -9,19 +9,12 @@ before it was extracted into one script (lode-ivth), and the same reason
 `tests/_hookharness.py` exists one tier up, after three copies of ITS harness
 started to drift (lode-zlg8).
 
-The roster has grown since (a new module importing `_git` is exactly the
-success case this extraction was for -- one call site to write, not one
-definition to duplicate) and has gone visibly stale at least twice already
-(lode-9owc's technical review caught one staleness; this paragraph is
-itself a fix for another). Rather than re-commit to a number that will drift
-again the moment the next module imports this, verify the current roster
-mechanically instead of trusting this comment:
-`grep -rl '^from _gitrepo import _git$' tests/`. At the time of lode-c835
-(the ticket that added this note) that was ten modules: test_assert_main_
-checkout.py, test_check_links.py, test_isolation_guard.py, test_land_lock.py,
-test_land_merge_one.py, test_merge_precheck.py,
-test_recycled_worktree_guard.py, test_release_bump.py,
-test_release_latest_tag.py, test_worktree_gc_classify.py.
+That six is HISTORICAL -- the count at extraction, not today's. The current
+roster is deliberately NOT enumerated here: the enumeration that used to sit
+in this paragraph went stale silently (it still said six well after four more
+modules had imported this), and a new importer is the success case this
+extraction was for, not drift. Read the roster off the code instead --
+`grep -rl '^from _gitrepo import' tests/` (lode-c835).
 
 `_init_repo`/`_add_worktree` are deliberately NOT hoisted here. Their
 differences across modules -- a real `origin` remote vs none, branching off
