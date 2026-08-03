@@ -382,7 +382,9 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     `_BLOCKQUOTE_MARKER`: a one-sided divergence would make the two paths partition one
     document differently."""
     found: list[tuple[str, int]] = []
-    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"; "" means not in a fence
+    fence = (
+        ""  # the opening run, e.g. "```" or "````" or "~~~"; "" means not in a fence
+    )
     for lineno, line in enumerate(_strip_blockquote(markdown).splitlines(), 1):
         stripped = line.strip()
         if fence:
