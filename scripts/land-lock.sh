@@ -587,10 +587,16 @@ fi
 # Stale -- attempt an ATOMIC reclaim (CAVEAT 2). Exactly two attempts: once
 # outright, and once more after clearing a gate abandoned by a reclaimer that
 # crashed between winning it and finishing its rm+write. Every attempt's
-# actual decision is a bare `mkdir`, so no number of attempts by THIS racer
-# can produce a second winner alongside another racer that is keeping its
-# gate (the case that CAN, an alive-but-stalled holder, is the documented
-# residual in the header -- it is not created by retrying here).
+# actual WIN is a bare `mkdir`, so no number of attempts by THIS racer can
+# produce a second winner alongside another racer that is KEEPING its gate.
+# That qualifier is load-bearing, and the retry is not innocent past it: the
+# `rm -rf` at the bottom of this loop IS the self-heal the header names as a
+# stall-free route into the window that remains -- the gate it removes may
+# have been re-created by a fresh winner between the mtime read just above it
+# and the `rm` itself. What that window IS belongs to the header and ONLY the
+# header: this line used to carry its own summary, and lode-78ih's header
+# rewrite left that summary asserting the opposite (lode-qg6g). Don't re-add
+# one.
 for _ in 1 2; do
 
   if mkdir "$RECLAIM_GATE" 2>/dev/null; then
