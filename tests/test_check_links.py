@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import _git
 from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,13 +30,9 @@ github_slug = check_links.github_slug
 def _git_init(root: Path) -> None:
     """A real git repo is required -- the gate scopes to ``git ls-files``, not
     a bare directory walk, so scratch/gitignored markdown never enters it."""
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"],
-        cwd=root,
-        check=True,
-    )
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x")
 
 
 def _write(root: Path, rel: str, content: str) -> Path:
