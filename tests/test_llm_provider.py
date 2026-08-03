@@ -7,6 +7,7 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
+import json
 from types import SimpleNamespace
 from typing import ClassVar
 from unittest import mock
@@ -800,6 +801,151 @@ def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> N
     assert err.status_code == 429
     assert err.request_id == "req-test-2"
     assert isinstance(err.__cause__, anthropic.APIStatusError)
+
+
+def _ended_batch_body(results_url: str) -> dict:
+    """The minimal ``retrieve`` response body for an "ended" batch (lode-3gtu)."""
+    return {
+        "id": "batch-1",
+        "type": "message_batch",
+        "processing_status": "ended",
+        "results_url": results_url,
+        "created_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2026-01-02T00:00:00Z",
+        "request_counts": {
+            "canceled": 0,
+            "errored": 0,
+            "expired": 0,
+            "processing": 0,
+            "succeeded": 1,
+        },
+    }
+
+
+def _succeeded_jsonl_line(custom_id: str) -> bytes:
+    """A real, fully-decodable JSONL line for ``batches.results`` (lode-3gtu)."""
+    return (
+        json.dumps(
+            {
+                "custom_id": custom_id,
+                "result": {
+                    "type": "succeeded",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-haiku-4-5",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "emit",
+                                "input": {"name": "w", "count": 1},
+                            }
+                        ],
+                        "stop_reason": "tool_use",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                },
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+# lifts conftest's autouse real-client-construction guard (lode-85q); the mock
+# transport answers in-process, so no socket is ever opened.
+@pytest.mark.network
+def test_collect_batch_wraps_a_malformed_jsonl_line_from_the_results_stream() -> None:
+    """lode-3gtu: a malformed JSONL line is a raw `json.JSONDecodeError` from
+    inside the SDK's lazily-streamed decoder -- not an `anthropic.APIStatusError`
+    at all (the status already resolved cleanly at 200), so no `except
+    anthropic.*` clause reaches it. Drives a real SDK client over an
+    `httpx.MockTransport`, matching the sibling
+    `test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url`
+    real-client pattern, since the whole gap lives in the SDK's own laziness.
+
+    Non-vacuous: against the pre-fix code (no `try` around the iteration loop
+    at all) this raised a raw `json.decoder.JSONDecodeError`, failing
+    `pytest.raises(LLMProviderError)` -- confirmed before writing the fix.
+    """
+    import anthropic
+    import httpx
+
+    results_url = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/results"):
+            return httpx.Response(200, content=b"not valid json\n")
+        return httpx.Response(200, json=_ended_batch_body(results_url))
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert "batch-1" in str(err)
+    assert isinstance(err.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.network
+def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failure() -> (
+    None
+):
+    """lode-3gtu: a stream that dies mid-read raises a raw `httpx.HTTPError`
+    from inside the decoder's iteration, after some lines already decoded
+    successfully -- the "partial read" case the ticket calls out as the one a
+    naive wrapper gets wrong. The deliberate choice here: discard whatever was
+    already decoded and raise, rather than returning a partial result list --
+    `batches.results` re-fetches the identical, already-computed JSONL from
+    the start on every call (there is no resume-after-N-lines cursor), so nothing
+    already-good is permanently lost; the next `collect_enrich_batch` poll just
+    redecodes it. Pins that `collect_batch` never returns a tuple here at all.
+
+    Non-vacuous: against the pre-fix code (no `try` around the loop) this
+    raised a raw `httpx.ReadError`, failing `pytest.raises(LLMProviderError)`
+    -- confirmed before writing the fix.
+    """
+    import anthropic
+    import httpx
+
+    results_url = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
+
+    class _FlakyStream(httpx.SyncByteStream):
+        """Yields one good JSONL line, then dies as if the connection reset."""
+
+        def __iter__(self) -> object:
+            yield _succeeded_jsonl_line("ver-ok")
+            raise httpx.ReadError("connection reset mid-stream")
+
+        def close(self) -> None:
+            pass
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/results"):
+            return httpx.Response(200, stream=_FlakyStream())
+        return httpx.Response(200, json=_ended_batch_body(results_url))
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert "batch-1" in str(err)
+    assert isinstance(err.__cause__, httpx.HTTPError)
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:

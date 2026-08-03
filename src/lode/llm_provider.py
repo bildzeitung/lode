@@ -392,7 +392,10 @@ def _anthropic_error_from_exception(
     (``APITimeoutError``, ``APIConnectionError``): a timeout is not a
     rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
     surfacing raw today. Nor a failure raised while *streaming* a batch's
-    JSONL results -- see :meth:`AnthropicProvider.collect_batch` (lode-3gtu).
+    JSONL results -- that is a raw ``httpx``/``json`` exception, never an
+    ``anthropic.APIStatusError``, so it cannot go through this helper at all;
+    :meth:`AnthropicProvider.collect_batch` wraps that case separately, with
+    its own message shape (lode-3gtu).
     """
     _log.error(
         "Anthropic call failed (%s, status_code=%s request_id=%s): %s",
@@ -710,6 +713,7 @@ class AnthropicProvider:
         self, handle: str, *, timeout_s: float
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
         import anthropic  # deferred -- lode-4q97; needed by the `except` below
+        import httpx  # deferred -- lode-4q97; needed by the `except` below (lode-3gtu)
 
         # These two SDK calls carry no `reasoning_effort`, so no pairing 400
         # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
@@ -736,69 +740,94 @@ class AnthropicProvider:
                 exc, context=f"batches.results handle={handle}"
             ) from exc
 
-        # The loop below is deliberately OUTSIDE that wrap. `batches.results`
-        # resolves the HTTP status before it builds the decoder it returns, so
-        # an `APIStatusError` can only ever come from the call above, never
-        # from iterating -- widening the `try` would catch nothing more. What
-        # the decoder *does* defer is the body: it streams lazily
-        # (`http_response.iter_bytes`) and json-decodes each line as the loop
-        # pulls it, so a truncated stream or a malformed line surfaces here as
-        # a raw `httpx`/`json` error -- outside any `anthropic` type, so no
-        # `except anthropic.*` clause would reach it. Tracked as lode-3gtu.
+        # The loop below is deliberately OUTSIDE the `except anthropic.APIStatusError`
+        # wrap above. `batches.results` resolves the HTTP status before it builds
+        # the decoder it returns, so an `APIStatusError` can only ever come from
+        # the call above, never from iterating -- widening that clause would catch
+        # nothing more. What the decoder *does* defer is the body: it streams
+        # lazily (`http_response.iter_bytes`) and json-decodes each line as the
+        # loop pulls it, so a truncated stream (`httpx.HTTPError`) or a malformed
+        # line (`json.JSONDecodeError`) surfaces here -- outside any `anthropic`
+        # type, so no `except anthropic.*` clause would reach it. Wrapped
+        # separately below (lode-3gtu, closing the gap `_anthropic_error_from_exception`'s
+        # docstring names). Deliberately NOT `except Exception` -- that would also
+        # swallow a genuine bug in the loop body itself (e.g. a `KeyError`) or a
+        # `KeyboardInterrupt`, neither of which is a transport/parse failure.
         results: list[BatchResult] = []
-        for result in batch_results:
-            if result.result.type == "succeeded":
-                try:
-                    tool_block = next(
-                        b for b in result.result.message.content if b.type == "tool_use"
-                    )
-                except StopIteration:
-                    # Degrading the one item (rather than failing the whole
-                    # collection) is deliberate -- see the module docstring.
-                    # lode-jgus made this reachable, and reaches it more
-                    # easily here than on the immediate branch (class
-                    # docstring); name the same model/stop_reason that branch
-                    # does, or the failure is undiagnosable.
-                    message = result.result.message
+        try:
+            for result in batch_results:
+                if result.result.type == "succeeded":
+                    try:
+                        tool_block = next(
+                            b
+                            for b in result.result.message.content
+                            if b.type == "tool_use"
+                        )
+                    except StopIteration:
+                        # Degrading the one item (rather than failing the whole
+                        # collection) is deliberate -- see the module docstring.
+                        # lode-jgus made this reachable, and reaches it more
+                        # easily here than on the immediate branch (class
+                        # docstring); name the same model/stop_reason that
+                        # branch does, or the failure is undiagnosable.
+                        message = result.result.message
+                        results.append(
+                            BatchResult(
+                                custom_id=result.custom_id,
+                                outcome="errored",
+                                parsed=None,
+                                error=LLMProviderError(
+                                    f"no tool_use block in batch result "
+                                    f"(model={getattr(message, 'model', None)!r}, "
+                                    f"stop_reason="
+                                    f"{getattr(message, 'stop_reason', None)!r}) "
+                                    f"{_BUDGET_EXHAUSTED_HINT}",
+                                    provider="anthropic",
+                                ),
+                            )
+                        )
+                        continue
                     results.append(
                         BatchResult(
                             custom_id=result.custom_id,
-                            outcome="errored",
-                            parsed=None,
-                            error=LLMProviderError(
-                                f"no tool_use block in batch result "
-                                f"(model={getattr(message, 'model', None)!r}, "
-                                f"stop_reason="
-                                f"{getattr(message, 'stop_reason', None)!r}) "
-                                f"{_BUDGET_EXHAUSTED_HINT}",
-                                provider="anthropic",
-                            ),
+                            outcome="succeeded",
+                            parsed=RootModel[dict[str, Any]](tool_block.input),
+                            error=None,
                         )
                     )
-                    continue
-                results.append(
-                    BatchResult(
-                        custom_id=result.custom_id,
-                        outcome="succeeded",
-                        parsed=RootModel[dict[str, Any]](tool_block.input),
-                        error=None,
+                else:
+                    error_type = result.result.type
+                    msg = (
+                        f"batch result={error_type}"
+                        if not hasattr(result.result, "error")
+                        else f"batch error: {result.result.error}"
                     )
-                )
-            else:
-                error_type = result.result.type
-                msg = (
-                    f"batch result={error_type}"
-                    if not hasattr(result.result, "error")
-                    else f"batch error: {result.result.error}"
-                )
-                results.append(
-                    BatchResult(
-                        custom_id=result.custom_id,
-                        outcome=error_type,
-                        parsed=None,
-                        error=LLMProviderError(msg, provider="anthropic"),
+                    results.append(
+                        BatchResult(
+                            custom_id=result.custom_id,
+                            outcome=error_type,
+                            parsed=None,
+                            error=LLMProviderError(msg, provider="anthropic"),
+                        )
                     )
-                )
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            # The results already decoded above are discarded, not returned
+            # partially: `batches.results` re-fetches the SAME already-computed
+            # JSONL from the start on every call (it is not a resumable
+            # cursor -- there is no request-side notion of "resume after N
+            # lines"), so nothing already-good is permanently lost -- the next
+            # `collect_enrich_batch` poll simply re-decodes it. A transient
+            # `httpx.HTTPError` self-heals on that retry; a `JSONDecodeError`
+            # from a permanently malformed line is sticky and fails the same
+            # way every time -- that resulting "abort this drain tick" blast
+            # radius is `enrich.collect_enrich_batch`'s and `worker.drain`'s to
+            # bound (out of scope here; see `docs/stack.md` "Error contract").
+            raise LLMProviderError(
+                f"batches.results handle={handle} failed while streaming "
+                f"JSONL results ({len(results)} result(s) already decoded, "
+                f"now discarded): {exc}",
+                provider="anthropic",
+            ) from exc
         return ("ended", results)
 
 

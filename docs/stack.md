@@ -641,12 +641,18 @@ fields populate `status_code`/`request_id` for a Responses API error, an Azure c
 rejection, etc.) is `lode-568v.3`'s scope — only the shape is pinned here.
 
 **What still escapes raw.** `AnthropicProvider` wraps all five of its SDK calls — the three that
-submit (`lode-90o7`) and `collect_batch`'s two that poll (`lode-i7yr`) — but two classes remain:
-`anthropic`'s *non*-status errors (`APITimeoutError`, `APIConnectionError` — a timeout is not a
-rejected request; see `qa.MAX_TOKENS`), and a failure raised while *streaming* a batch's JSONL
-results, which arrives as a raw `httpx`/`json` exception outside any `anthropic` type at all
-(`lode-3gtu`, open). `OpenAIProvider` catches bare `Exception` around its single call and has
-neither gap.
+submit (`lode-90o7`) and `collect_batch`'s two that poll (`lode-i7yr`) — plus, separately,
+`collect_batch`'s own JSONL-results iteration (`lode-3gtu`): that loop can raise a raw
+`httpx.HTTPError` (a stream that dies mid-read) or `json.JSONDecodeError` (a malformed line) —
+neither is an `anthropic` type, since the SDK resolves HTTP status before returning the lazily-
+streamed decoder, so no `except anthropic.*` clause can reach it. `collect_batch` catches those two
+types specifically (never bare `Exception`, so a genuine bug in the loop body or a
+`KeyboardInterrupt` still propagates) and converts them to `LLMProviderError`, discarding whatever
+results were already decoded before the failure — `batches.results` re-fetches the same JSONL from
+the start on every call (not a resumable cursor), so nothing already-good is permanently lost, only
+re-done on the next poll. Only one class remains open: `anthropic`'s *non*-status errors
+(`APITimeoutError`, `APIConnectionError` — a timeout is not a rejected request; see `qa.MAX_TOKENS`).
+`OpenAIProvider` catches bare `Exception` around its single call and has no gap at all.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 
