@@ -112,9 +112,12 @@ which was initially skipped file-wide. The reasoning for that decision and again
 lives in `docs/agents-workflow.md`'s section above ("There is no whole-file escape
 hatch, deliberately"); `test_every_skill_and_agent_file_is_covered` pins the outcome.
 Measured while making the call, and recorded here because it is evidence rather than
-rationale: across `trunk`, this branch, and all five in-flight sibling branches
-touching the file, the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing
-else -- no false positive, and no sibling introduces a new instance.
+rationale: at the time (across `trunk`, that branch, and all five in-flight sibling
+branches touching the file), the parser reported exactly `$ACCEPTED` and `$CONFLICTS`
+and nothing else -- no false positive, and no sibling introduced a new instance.
+`$CONFLICTS` went inert once `lode-rfon` landed and `lode-p1r3` deleted its entry, so
+`$ACCEPTED` is now the only one -- for the reason recorded next to it in `ALLOWLIST`
+below.
 
 That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
 to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
@@ -213,22 +216,16 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "shape as release/SKILL.md's $PROPOSED above: computed by the agent's own "
         "reasoning across Sections 2c (dispatched land-review verdicts) and 3a "
         "(stacked-branch ordering), never by any single deterministic bash command in "
-        "the file, so there is nothing upstream in this file's own bash to re-derive or "
-        "persist it FROM. Note the block that uses it immediately persists it onward "
-        "($STATE_DIR/accepted), which every later block reads back -- so the cross-block "
-        "hop this gate exists to catch is already closed downstream; only the initial "
-        "hand-off from the agent's reasoning into bash remains. Removing this entry "
-        "needs a genuine mechanical source for the set: lode-p1r3."
-    ),
-    ("skills/land/SKILL.md", "CONFLICTS"): (
-        "The 'Needs rebase -- kick back' block interpolates the conflicting paths that "
-        "Section 2b's merge-precheck (or Section 3's merge loop) captured -- a real, "
-        "confirmed instance of this bug class, already tracked and fixed by lode-rfon "
-        "($STATE_DIR/conflicts/<id>). Allowlisted rather than fixed here only because "
-        "that fix belongs to lode-rfon's branch and this one does not merge trunk in; "
-        "verified against origin/land/lode-rfon, whose land/SKILL.md no longer trips "
-        "this. The entry goes inert the moment lode-rfon lands and should then be "
-        "deleted (lode-p1r3)."
+        "the file. land/SKILL.md states the checkable property itself, right next to "
+        "the persist block: the set 'encodes land-review's per-branch judgment, which "
+        "is not queryable from git or bd' -- so there is nothing upstream in this "
+        "file's own bash to re-derive or persist it FROM. Note the block that uses it "
+        "immediately persists it onward ($STATE_DIR/accepted), which every later block "
+        "reads back -- so the cross-block hop this gate exists to catch is already "
+        "closed downstream; only the initial hand-off from the agent's reasoning into "
+        "bash remains. Removing this entry needs a genuine mechanical source for the "
+        "set, which means land-review persisting its verdict machine-readably -- its "
+        "contract rules that out today (lode-p1r3 audited for one and found none)."
     ),
 }
 

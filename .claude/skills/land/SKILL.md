@@ -57,12 +57,9 @@ exits 0 is indistinguishable from a clean pass that had nothing to do.
 — that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
 `/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
 regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
-newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
-individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
-land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
-`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
-which has since landed, so the entry is now inert rather than a live violation) — both tracked
-by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+newly-introduced cross-block variable here fails `nox -s tests`. One name is allowlisted rather than
+fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the land-review verdicts, so there
+is nothing upstream in this file's bash to re-derive it from). Everything else in this file is gated
 mechanically.
 
 ---
