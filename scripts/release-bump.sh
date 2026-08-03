@@ -133,26 +133,98 @@ read_log() {   # read_log <pretty-format> -> stdout, or exit 2 with git's own st
   gate_could_not_run "git log failed" "${lines[@]}"
 }
 
+# Each of the four greps below partitions its OWN exit code (lode-umtc): 1 is
+# grep's "no match" -- a CONTENT answer -- and anything else is a MACHINE
+# fault, the distinction the exit-2 contract above exists to draw.
+# scripts/validate-mermaid.sh's per-doc loop OWNS the rationale for that
+# partition (lode-yoc3), including why the command is never tested with `!`
+# (that captures the negation of the status, not the status itself); each
+# gate_could_not_run call below states it once more for the OPERATOR, which is
+# the only audience that does not have this file open.
+#
+# Each site's regex is held in a PAT_* variable so the live `grep` and the
+# "Diagnose with:" line the operator is handed cannot fork.
+#
+# EXTRACTION (this ticket's acceptance criterion): worth doing, DEFERRED --
+# not refused. Only each site's `rc=$?` and `-ne 1` test would move into a
+# shared helper; the success and no-match arms stay open-coded, so the helper
+# needs no callbacks. But it spans gate-lib.sh, this file AND
+# validate-mermaid.sh's two sites plus their tests -- wider than this ticket's
+# scope. Filed as lode-1mea with the measurement and a working trial.
+
 # BREAKING-CHANGE-in-body check: a whole-stream search. No per-commit
 # attribution is needed -- only "did ANY commit in range carry the marker" --
 # so there is no record-splitting to get wrong.
+PAT_BODY_BREAKING='BREAKING[ -]CHANGE:'
 BODIES="$(read_log '%B')" || exit $?
-if grep -qE 'BREAKING[ -]CHANGE:' <<<"$BODIES"; then
+if grep -qE "$PAT_BODY_BREAKING" <<<"$BODIES"; then
   echo breaking
   exit 0
+else
+  rc=$?
+  if [ "$rc" -ne 1 ]; then
+    gate_could_not_run \
+      "grep failed scanning commit bodies for a BREAKING-CHANGE marker" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "breaking-change marker anywhere in this range), so anything else is a" \
+      "machine fault, not content. Diagnose with:" \
+      "git log $RANGE --format='%B' | grep -qE '$PAT_BODY_BREAKING'"
+  fi
 fi
 
 # Subjects: `%s` is one full line per commit, so `grep`'s own per-line
 # matching supplies the record boundaries and the `^` anchors bind per
-# commit. Precedence (breaking > feat > fix > none) falls out of the elif
-# chain, so no accumulator state is needed.
+# commit. Precedence (breaking > feat > fix > none) falls out of the ORDER of
+# the three blocks below -- each exits on a match, and only a genuine "no
+# match" reaches the next -- so no accumulator state is needed.
+PAT_SUBJ_BREAKING='^[a-zA-Z]+(\([^)]*\))?!:'
+PAT_SUBJ_FEAT='^feat(\([^)]*\))?:'
+PAT_SUBJ_FIX='^fix(\([^)]*\))?:'
 SUBJECTS="$(read_log '%s')" || exit $?
-if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<<"$SUBJECTS"; then
+if grep -qE "$PAT_SUBJ_BREAKING" <<<"$SUBJECTS"; then
   echo breaking
-elif grep -qE '^feat(\([^)]*\))?:' <<<"$SUBJECTS"; then
-  echo feat
-elif grep -qE '^fix(\([^)]*\))?:' <<<"$SUBJECTS"; then
-  echo fix
+  exit 0
 else
-  echo none
+  rc=$?
+  if [ "$rc" -ne 1 ]; then
+    gate_could_not_run \
+      "grep failed scanning commit subjects for a breaking-change marker" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "subject in this range carries a \"!:\" breaking marker), so anything" \
+      "else is a machine fault, not content. Diagnose with:" \
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_BREAKING'"
+  fi
 fi
+
+if grep -qE "$PAT_SUBJ_FEAT" <<<"$SUBJECTS"; then
+  echo feat
+  exit 0
+else
+  rc=$?
+  if [ "$rc" -ne 1 ]; then
+    gate_could_not_run \
+      "grep failed scanning commit subjects for a feat prefix" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "feat commit in this range), so anything else is a machine fault, not" \
+      "content. Diagnose with:" \
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_FEAT'"
+  fi
+fi
+
+if grep -qE "$PAT_SUBJ_FIX" <<<"$SUBJECTS"; then
+  echo fix
+  exit 0
+else
+  rc=$?
+  if [ "$rc" -ne 1 ]; then
+    gate_could_not_run \
+      "grep failed scanning commit subjects for a fix prefix" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "fix commit in this range), so anything else is a machine fault, not" \
+      "content. Diagnose with:" \
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_FIX'"
+  fi
+fi
+
+# Reached only when all three blocks above saw a genuine "no match" (rc 1).
+echo none
