@@ -2719,6 +2719,56 @@ while erasing it here would lose the record of what was believed, and when.
     indexing run turns out to matter more than the DETECT-semantics purity), it needs to re-open and
     explicitly resolve the tension with `docs/storage.md`'s DETECT-not-PIN framing first — this entry
     is that trigger, not a blanket "don't."
+  - **Update (lode-j5r2):** landed — `drain()` now hoists ONE shared embedder across its main loop
+    (and `lode work`'s CLI command shares one further still, across every `--loop` poll pass), so the
+    write path's live probe — and the far larger ONNX reload that rides along with it — is paid once
+    per **process** again, not once per indexed version. The four doc sites this entry names above
+    (`lode models pull`'s docstring, `README.md`, `docs/onboarding.md`, `docs/configuration.md`'s
+    "Models" section) are corrected back to "per process" to match; this entry's own "per indexed
+    version" wording is left as-is (this file is a dated log — an entry narrates history, it is not
+    rewritten). See the dedicated `lode-j5r2` entry below for the fix itself.
+
+- **2026-08-02 (lode-j5r2) — `worker.drain` hoists ONE embedder across its main loop; `lode work`
+  shares one further still across `--loop` poll passes.** Filed during `lode-r4r2`'s review: that
+  ticket corrected `lode models pull`'s docstring (and three sibling docs) to say indexing makes one
+  HuggingFace metadata call **per indexed version**, because that was what `_embed_handler` actually
+  did — `lode.embedding.embed`'s `embedder or FastEmbedEmbedder(settings)` fallback built a brand-new
+  instance every job, so a drain of N queued versions paid N full ONNX model loads (measured ~1.5s
+  each) *and* N live `model_info` probes, not one.
+  - **The fix:** `drain()`'s main claim/run loop now constructs (or reuses, if the caller supplies
+    one via the new `embedder=` parameter) exactly ONE `FastEmbedEmbedder` and threads it into every
+    `embed` job via `_embed_handler`'s own new `embedder=` parameter — the same seam `embed()` already
+    exposed and the TUI's capture screen already uses for the identical reason (module docstring,
+    `lode-0wj.4`). The swap is guarded on handler *identity*
+    (`registry.get("embed") is _embed_handler`), not job-type membership, so a test that injects its
+    own stub "embed" handler is completely unaffected — no `functools.partial` wrapper is ever applied
+    over a caller-supplied handler, only over the real one, and the module-level `_REGISTRY` singleton
+    is never mutated (the swap builds a shallow per-call copy). `lode work`'s CLI command (`cli.py`)
+    goes one step further: it constructs the shared embedder itself, once, *before* the polling
+    `while True:` loop, and passes it into every `drain()` call across `--loop` ticks — so the
+    amortization holds for the whole process, not just a single drain pass with several jobs queued at
+    once.
+  - **Why not cache across `drain()` calls by default:** `drain()`'s own default (`embedder` omitted)
+    still constructs a fresh instance per *call* — correct for a caller with no reason to keep one
+    around (e.g. a test, or a future one-off caller). Sharing across an entire process's lifetime is a
+    decision the *caller* makes by holding one instance and passing it in every time, which is exactly
+    what `cli.py`'s `work` command now does; `drain()` itself stays a plain, stateless function with no
+    module-level embedder cache of its own.
+  - **Docs corrected back to "per process":** `lode models pull`'s docstring (`src/lode/cli.py`),
+    `README.md`, `docs/onboarding.md`, and `docs/configuration.md`'s "Models" section — the same four
+    sites `lode-r4r2` corrected to "per indexed version" — now say "per process" again, since it is
+    true again. `FastEmbedEmbedder.warm()`'s own docstring (`src/lode/embedding.py`), which had named
+    this exact gap ("worse than once per process ... that is lode-j5r2, filed rather than fixed
+    here"), is updated in the same place to record the fix. See the **Update (lode-j5r2)** marker on
+    the `lode-r4r2` entry above.
+  - **Test proven non-vacuous the way this function's own history demands** (`lode-dj6m` and
+    `lode-r4r2` each caught a raising-stub trap here once already): a new `drain()`-level test counts
+    both `FastEmbedEmbedder` constructions and `model_revision()` probes across a 3-job drain using a
+    counting stub — never a stub that raises, which `_embedder_model_revision`'s own
+    `except Exception: return None` would silently swallow into a false pass. The stub mirrors the
+    real class's own one-time-probe caching (`lode-dj6m`) so a merely-shared-but-still-reprobing
+    instance would still fail the assertion; asserts exactly 1 construction and exactly 1 probe across
+    3 queued jobs, and that all 3 land `done`.
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered

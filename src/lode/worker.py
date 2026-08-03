@@ -132,17 +132,22 @@ DB for lode-i05.5 restart-resume), and reclaiming one here would risk
 resubmitting a request already in flight.
 """
 
+import functools
 import logging
 import sqlite3
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lode import jobs
 from lode.config import Settings
 from lode.config import lance_dir as _lance_dir
 from lode.ids import short_version_id
 from lode.progress import op_progress
+
+if TYPE_CHECKING:
+    from lode.embedding import Embedder
 
 log = logging.getLogger(__name__)
 
@@ -915,6 +920,7 @@ def drain(
     *,
     _batch_client: object | None = None,
     outcomes: list[str] | None = None,
+    embedder: Embedder | None = None,
 ) -> int:
     """Claim+run all ready pending jobs until none remain.
 
@@ -931,6 +937,23 @@ def drain(
     (``status='failed' AND next_attempt_at <= now``), and loops
     :func:`_claim_one` → :func:`run_one` until nothing is claimable (``embed``
     and any residual ``enrich`` jobs not claimed by the batch step).
+
+    **One shared embedder per call, not one per job (lode-j5r2).** Before the
+    main loop, if the registered ``embed`` handler is the real
+    :func:`_embed_handler` (never true for a test-injected stub — see below),
+    this constructs (or reuses, if ``embedder`` was given) exactly ONE
+    :class:`~lode.embedding.FastEmbedEmbedder` and threads it through every
+    ``embed`` job the loop runs, via :func:`functools.partial` over a
+    per-call copy of the registry — the module-level :data:`_REGISTRY` itself
+    is never mutated. Previously every queued ``embed`` job built its own
+    fresh embedder inside :func:`_embed_handler`, paying a full ONNX model
+    load (measured ~1.5s) and a live HuggingFace revision probe *per job*
+    instead of once for the whole drain. ``lode work``'s ``--loop`` shares one
+    instance across polling passes too, by constructing it once and passing
+    it in as ``embedder`` on every call (``cli.py``'s ``work`` command) — so
+    the cost is genuinely once per process, not once per pass. A long-lived
+    embedder keeps the ONNX model resident in memory for as long as it is
+    reused; that is the accepted trade for not reloading it every pass.
 
     Returns the total number of jobs claimed and run by the **main loop**
     (including failures and dead-letters). Batch pre-step and reclaim activity
@@ -950,6 +973,9 @@ def drain(
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
     tests (an ``LLMProvider``, passed through to the batch pre-steps).
+    ``embedder`` is likewise optional and production-only in effect — see
+    "One shared embedder per call" above; a test that injects its own
+    ``_registry`` with a stub ``embed`` handler is never touched by it.
 
     ``outcomes`` (lode-1gr.4), if given, is a mutable list that this call
     appends human-readable per-job outcome lines to — from both channels: the
@@ -969,6 +995,26 @@ def drain(
     settings = settings or Settings()
     registry = _registry if _registry is not None else _REGISTRY
     types = tuple(registry)
+
+    # Hoist ONE embedder across this call's main loop (lode-j5r2), rather than
+    # let each `embed` job's handler build its own. Guarded on identity, not
+    # job type membership: only swap in the shared instance when the
+    # registered "embed" handler IS the real `_embed_handler` -- a test that
+    # injects its own fake "embed" handler (e.g. `_noop_registry()`, or a
+    # handler counting calls) must see that handler unchanged, never a
+    # `functools.partial` wrapper it didn't ask for. `run_registry` is a
+    # shallow copy so the module-level `_REGISTRY` singleton is never mutated.
+    run_registry = registry
+    if registry.get("embed") is _embed_handler:
+        from lode.embedding import FastEmbedEmbedder
+
+        shared_embedder = (
+            embedder if embedder is not None else FastEmbedEmbedder(settings)
+        )
+        run_registry = dict(registry)
+        run_registry["embed"] = functools.partial(
+            _embed_handler, embedder=shared_embedder
+        )
 
     # Unconditional -- the `except` header below needs the classes on every
     # drain -- and cheap only because neither lode.auth nor lode.llm_provider
@@ -1034,7 +1080,7 @@ def drain(
             if job_id is None:
                 break
             log.info("drain.run_jobs: running job %s", job_id)
-            run_one(conn, job_id, db_path, settings, registry, outcomes=outcomes)
+            run_one(conn, job_id, db_path, settings, run_registry, outcomes=outcomes)
             processed += 1
 
     # The credential-free work is done; now surface the permanent failure the
@@ -1056,6 +1102,8 @@ def _embed_handler(
     target_version: str,
     db_path: Path,
     settings: Settings,
+    *,
+    embedder: Embedder | None = None,
 ) -> str | None:
     """Embed handler: vector leg only (lode-x6r.5, lode-xyb).
 
@@ -1091,13 +1139,26 @@ def _embed_handler(
     <short-id>: 3 passages"``, optionally suffixed with the gate's own outcome
     line for a snapshot target, for :func:`run_one` to surface to ``lode
     work``'s echo.
+
+    ``embedder``, if given, is threaded straight through to
+    :func:`lode.embedding.embed`'s own ``embedder=`` seam instead of letting
+    it construct a fresh :class:`~lode.embedding.FastEmbedEmbedder` (lode-j5r2)
+    — :func:`drain` supplies ONE instance shared across every ``embed`` job in
+    its main loop, so a queue of N versions pays one ONNX load and one HF
+    revision probe instead of N. ``None`` (the default) preserves the old
+    per-call construction; a caller that invokes this handler directly (the
+    tests below, or any future non-drain caller) is unaffected.
     """
     from lode.embedding import embed
     from lode.externals import gate_reenrich
 
     # Vector leg: chunk + embed + persist passage rows + store vectors in LanceDB.
     count = embed(
-        conn, target_version, lance_dir=_lance_dir(db_path), settings=settings
+        conn,
+        target_version,
+        lance_dir=_lance_dir(db_path),
+        settings=settings,
+        embedder=embedder,
     )
     outcome = f"embedded {short_version_id(target_version)}: {count} passages"
 

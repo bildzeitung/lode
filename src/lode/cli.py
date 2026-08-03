@@ -2891,15 +2891,19 @@ def models_pull() -> None:
     Once warmed, RETRIEVAL is fully offline: a query-only embed
     (related-notes, "lode ask") never resolves an HF revision, so it makes no
     outbound call against warm weights. INDEXING is not -- it still makes one
-    read-only HuggingFace metadata call per indexed version to stamp the
-    vector provenance it records (the resolved model revision,
-    docs/storage.md "Model provenance"), even against a fully warm cache.
-    Warming here cannot prepay that call: the revision it resolves is
-    per-embedder, in-memory state that nothing persists to disk, and "lode
-    work" builds a fresh embedder per queued job (lode-r4r2, lode-j5r2). Set
-    HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific -- to
-    force fastembed's local-weights-only load AND skip that metadata call
-    outright, recording model_revision = NULL for those vectors instead.
+    read-only HuggingFace metadata call per process to stamp the vector
+    provenance it records (the resolved model revision, docs/storage.md
+    "Model provenance"), even against a fully warm cache. Warming here cannot
+    prepay that call: the revision it resolves is per-embedder, in-memory
+    state that nothing persists to disk, so a later "lode work" process's own
+    embedder re-probes regardless (lode-r4r2). Within that process, "lode
+    work" shares ONE embedder across every queued job and every "--loop" poll
+    pass, so the probe (and the far larger ONNX reload that used to ride
+    alongside it) is paid once per process, not once per indexed version
+    (lode-j5r2). Set HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not
+    lode-specific -- to force fastembed's local-weights-only load AND skip
+    that metadata call outright, recording model_revision = NULL for those
+    vectors instead.
 
     A bad config.toml gives the same clean stderr message and exit 1 every
     other command gives, not a raw traceback. On its most likely failure
@@ -3034,6 +3038,7 @@ def work(
         raise typer.Exit(code=1)
 
     from lode.auth import AuthError
+    from lode.embedding import FastEmbedEmbedder
     from lode.reconcile import reconcile as _reconcile
     from lode.worker import drain as _drain
 
@@ -3045,6 +3050,14 @@ def work(
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
+    # ONE embedder for this whole process (lode-j5r2), constructed here rather
+    # than left to `drain()`'s own per-call default so it survives every
+    # --loop poll pass, not just the jobs within a single pass: without this,
+    # a one-shot invocation already got the one-per-call fix inside `drain()`
+    # itself, but a --loop session would still rebuild (and reload) the ONNX
+    # model on every tick. Construction alone is cheap (no model load, no
+    # network) -- the cost this amortizes is paid lazily, on first embed.
+    embedder = FastEmbedEmbedder(settings)
     try:
         try:
             with WorkerLock(db_path):
@@ -3068,7 +3081,13 @@ def work(
                         # embed jobs and any enrich batch it collected actually
                         # produced, ahead of the existing job-count summary.
                         outcomes: list[str] = []
-                        n = _drain(conn, db_path, settings, outcomes=outcomes)
+                        n = _drain(
+                            conn,
+                            db_path,
+                            settings,
+                            outcomes=outcomes,
+                            embedder=embedder,
+                        )
                         for outcome in outcomes:
                             typer.echo(outcome)
                         typer.echo(f"drained {n} job(s)")

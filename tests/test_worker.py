@@ -2373,6 +2373,89 @@ def test_drain_empty_queue_returns_zero(
     assert n == 0
 
 
+def test_drain_shares_one_embedder_across_all_embed_jobs_in_the_loop(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A drain of N queued embed jobs constructs ONE FastEmbedEmbedder, not N (lode-j5r2).
+
+    Regression test for the defect this ticket fixes: ``_embed_handler`` used
+    to let :func:`lode.embedding.embed`'s own ``embedder or
+    FastEmbedEmbedder(settings)`` fallback build a brand-new instance for
+    every job, so a drain of N queued versions paid N full ONNX model loads
+    and N live HuggingFace revision probes. ``drain()`` now hoists ONE
+    instance across its main loop (via the real, un-overridden module-level
+    registry — this test deliberately omits ``_registry=`` so
+    ``_embed_handler`` is the genuine handler, not a stub) and threads it
+    into every ``embed`` job through the handler's own ``embedder=`` seam.
+
+    Counts constructions and ``model_revision()`` probes directly on a stub
+    that mirrors the real class's own per-instance probe caching (lode-dj6m)
+    — never a stub that RAISES: :func:`lode.embedding._embedder_model_revision`
+    swallows any exception from ``model_revision()`` into ``None``, which is
+    exactly the trap that made this area's own acceptance tests vacuous twice
+    already (lode-dj6m, lode-r4r2 — noted in this ticket's own description).
+    """
+    import lode.embedding as embedding_mod
+
+    class _CountingEmbedder:
+        constructions = 0
+        probes = 0
+
+        def __init__(self, settings: Settings) -> None:
+            _CountingEmbedder.constructions += 1
+            self._dim = settings.embedding_vector_dim
+            self._revision_probed = False
+            self._revision: str | None = None
+
+        def embed_passages(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] * self._dim for _ in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return [0.0] * self._dim
+
+        def warm(self) -> None:
+            return None
+
+        def model_revision(self) -> str | None:
+            # Mirrors FastEmbedEmbedder.model_revision()'s own one-time-probe
+            # caching (lode-dj6m) -- without this, even a correctly SHARED
+            # instance would still probe once per embed() call, masking the
+            # fix this test exists to pin.
+            if not self._revision_probed:
+                _CountingEmbedder.probes += 1
+                self._revision = "fake-revision"
+                self._revision_probed = True
+            return self._revision
+
+    monkeypatch.setattr(embedding_mod, "FastEmbedEmbedder", _CountingEmbedder)
+
+    for i in range(3):
+        _insert_note_worker(
+            conn, note_id=f"note-{i}", version_id=f"ver-{i}", body=f"body {i}"
+        )
+        enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
+
+    n = drain(conn, db_path, settings)  # real _REGISTRY -- no _registry= override
+
+    assert n == 3
+    assert _CountingEmbedder.constructions == 1, (
+        "expected exactly one FastEmbedEmbedder construction across the "
+        f"drain, got {_CountingEmbedder.constructions}"
+    )
+    assert _CountingEmbedder.probes == 1, (
+        "expected exactly one HF revision probe across the drain, got "
+        f"{_CountingEmbedder.probes}"
+    )
+    statuses = [
+        r[0]
+        for r in conn.execute("SELECT status FROM jobs WHERE type = 'embed'").fetchall()
+    ]
+    assert statuses == ["done"] * 3
+
+
 # ---------------------------------------------------------------------------
 # registered_types / module-level registry
 # ---------------------------------------------------------------------------
