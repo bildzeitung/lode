@@ -223,13 +223,52 @@ chmod 644 "$CFG/puppeteer.json" || gate_could_not_run \
 fail=0
 found=0
 for f in "$REPO"/docs/*.md; do
-  grep -q '```mermaid' "$f" || continue
-  found=1
   # Parameter expansion, not `basename` (lode-3xqb): identical result for a
   # glob match, and it removes the last unguarded external command under -e
   # -- a missing basename would abort the loop with basename's own status
   # rather than this script's contract. One fewer fork per doc, besides.
+  # Computed before the grep check below so a machine-fault message can name
+  # the file it happened on.
   rel="docs/${f##*/}"
+  # grep exits 1 for "no match" -- a CONTENT answer: this doc genuinely has
+  # no mermaid block, so skip it exactly as before. Anything else (2: file
+  # unreadable, an I/O error, or -- if $REPO/docs vanished mid-run -- the
+  # unmatched glob passed through literally) is a MACHINE fault, not a
+  # content answer, and must not be treated the same way (lode-yoc3): a bare
+  # `|| continue` here cannot tell the two apart, so an unreadable doc was
+  # silently skipped as though it simply had no diagram -- and if every doc
+  # errored this way, `found` stayed 0 and the gate printed a clean "nothing
+  # to validate" PASS on a completely broken run. This is the mirror of the
+  # `docker run` partition below: only ONE exit code is a real content
+  # answer, everything else escalates, and the grep sits inside an `if` arm
+  # for the same -e reason that block does (argued once, in AUDIT above).
+  #
+  # That vanished-$REPO/docs route reaches grep ONLY because this script
+  # leaves `nullglob` unset, which is what passes the unmatched glob through
+  # as a literal filename for grep to fail on. Do not set it here: with
+  # `nullglob` the loop body would never run at all, `found` would stay 0,
+  # and the gate would go straight back to a clean "nothing to validate" exit
+  # 0 on a missing docs tree -- this exact bug, restored, with every test
+  # below still green (they run against the real docs/, which always matches).
+  #
+  # `!` is deliberately NOT used here: `! cmd`'s $? is cmd's status LOGICALLY
+  # NEGATED (0<->1), not cmd's own status, so `rc=$?` after `if ! grep ...;
+  # then` would have captured the wrong number entirely -- measured while
+  # writing this fix's own tests.
+  if grep -q '```mermaid' "$f"; then
+    found=1
+  else
+    rc=$?
+    if [ "$rc" -ne 1 ]; then
+      gate_could_not_run \
+        "grep failed scanning $rel for a mermaid block (exit $rc) --" \
+        "grep's exit 1 means \"no match\" (a content answer: no diagram in" \
+        "this doc), so anything else is a machine fault, not content -- the" \
+        "file may be unreadable, hit an I/O error, or \$REPO/docs may have" \
+        "vanished mid-run. Diagnose with: grep -q -- '\`\`\`mermaid' $rel"
+    fi
+    continue
+  fi
   if docker run --rm -v "$REPO:/data:ro" -v "$CFG:/cfg:ro" -w /data "$IMAGE" \
        -p /cfg/puppeteer.json -i "$rel" -o /tmp/out.md --quiet; then
     echo "OK    $rel"
