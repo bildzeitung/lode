@@ -332,9 +332,15 @@ def sh_violations(text: str) -> list[tuple[str, int]]:
 def fenced_violations(markdown: str) -> list[tuple[str, int]]:
     """(snippet, line number) for every unguarded `bd ... list` inside a ```bash/```sh
     fence -- what an agent actually executes. `_bash_blocks` returns block TEXT with no
-    line information, so the number is reported as -1 (rendered `?`)."""
+    line information, so the number is reported as -1 (rendered `?`).
+
+    No `_strip_blockquote` pre-pass here (lode-3pyo) -- `_bash_blocks` (conftest's
+    `bash_fence_blocks`) strips a leading blockquote marker from every line itself as of
+    lode-wroz, so a second strip ahead of it was a harmless-on-this-corpus, but not
+    harmless-in-general, no-op. `inline_violations` below still needs its own
+    `_strip_blockquote` call -- that path never goes through `_bash_blocks`."""
     found: list[tuple[str, int]] = []
-    for block in _bash_blocks(_strip_blockquote(markdown)):
+    for block in _bash_blocks(markdown):
         for line in block.splitlines():
             snippet = _line_snippet(line)
             if snippet is not None:
@@ -649,10 +655,12 @@ def test_scan_scope_covers_agent_definitions() -> None:
     }
     assert ".claude/agents/coding.md" in scanned
     assert ".claude/agents/code-reviewer.md" in scanned
+    # No `_strip_blockquote` pre-pass here either (lode-3pyo) -- same redundant-ahead-of
+    # `_bash_blocks` shape as `fenced_violations` above, since lode-wroz.
     bd_lines = sum(
         1
         for p in AGENTS_DIR.glob("*.md")
-        for block in _bash_blocks(_strip_blockquote(p.read_text(encoding="utf-8")))
+        for block in _bash_blocks(p.read_text(encoding="utf-8"))
         for line in block.splitlines()
         if re.search(r"\bbd\b", _strip_comment(line))
     )
