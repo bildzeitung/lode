@@ -2391,44 +2391,36 @@ def test_drain_shares_one_embedder_across_all_embed_jobs_in_the_loop(
     ``_embed_handler`` is the genuine handler, not a stub) and threads it
     into every ``embed`` job through the handler's own ``embedder=`` seam.
 
-    Counts constructions and ``model_revision()`` probes directly on a stub
-    that mirrors the real class's own per-instance probe caching (lode-dj6m)
+    Counts constructions and ``model_revision()`` probes directly on the stub
     — never a stub that RAISES: :func:`lode.embedding._embedder_model_revision`
     swallows any exception from ``model_revision()`` into ``None``, which is
     exactly the trap that made this area's own acceptance tests vacuous twice
     already (lode-dj6m, lode-r4r2 — noted in this ticket's own description).
     """
+    from conftest import _OfflineQueryEmbedder
+
     import lode.embedding as embedding_mod
 
-    class _CountingEmbedder:
+    class _CountingEmbedder(_OfflineQueryEmbedder):
+        """conftest's offline stand-in, plus construction/probe counters."""
+
         constructions = 0
         probes = 0
 
         def __init__(self, settings: Settings) -> None:
+            super().__init__(settings)
             _CountingEmbedder.constructions += 1
-            self._dim = settings.embedding_vector_dim
-            self._revision_probed = False
-            self._revision: str | None = None
-
-        def embed_passages(self, texts: list[str]) -> list[list[float]]:
-            return [[0.0] * self._dim for _ in texts]
-
-        def embed_query(self, text: str) -> list[float]:
-            return [0.0] * self._dim
-
-        def warm(self) -> None:
-            return None
+            self._probed = False
 
         def model_revision(self) -> str | None:
             # Mirrors FastEmbedEmbedder.model_revision()'s own one-time-probe
-            # caching (lode-dj6m) -- without this, even a correctly SHARED
-            # instance would still probe once per embed() call, masking the
-            # fix this test exists to pin.
-            if not self._revision_probed:
+            # caching (lode-dj6m). Without it a correctly SHARED instance would
+            # still probe once per embed() call, and `probes == 1` below would
+            # fail for a reason that has nothing to do with the fix.
+            if not self._probed:
                 _CountingEmbedder.probes += 1
-                self._revision = "fake-revision"
-                self._revision_probed = True
-            return self._revision
+                self._probed = True
+            return "fake-revision"
 
     monkeypatch.setattr(embedding_mod, "FastEmbedEmbedder", _CountingEmbedder)
 

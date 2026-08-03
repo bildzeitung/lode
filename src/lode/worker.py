@@ -938,22 +938,21 @@ def drain(
     :func:`_claim_one` → :func:`run_one` until nothing is claimable (``embed``
     and any residual ``enrich`` jobs not claimed by the batch step).
 
-    **One shared embedder per call, not one per job (lode-j5r2).** Before the
-    main loop, if the registered ``embed`` handler is the real
-    :func:`_embed_handler` (never true for a test-injected stub — see below),
-    this constructs (or reuses, if ``embedder`` was given) exactly ONE
-    :class:`~lode.embedding.FastEmbedEmbedder` and threads it through every
-    ``embed`` job the loop runs, via :func:`functools.partial` over a
-    per-call copy of the registry — the module-level :data:`_REGISTRY` itself
-    is never mutated. Previously every queued ``embed`` job built its own
-    fresh embedder inside :func:`_embed_handler`, paying a full ONNX model
-    load (measured ~1.5s) and a live HuggingFace revision probe *per job*
-    instead of once for the whole drain. ``lode work``'s ``--loop`` shares one
-    instance across polling passes too, by constructing it once and passing
-    it in as ``embedder`` on every call (``cli.py``'s ``work`` command) — so
-    the cost is genuinely once per process, not once per pass. A long-lived
-    embedder keeps the ONNX model resident in memory for as long as it is
-    reused; that is the accepted trade for not reloading it every pass.
+    **One shared embedder per call, not one per job (lode-j5r2).** Every
+    ``embed`` job this call runs gets the same
+    :class:`~lode.embedding.FastEmbedEmbedder` — ``embedder`` if given, else one
+    constructed here — instead of each building its own, which cost a full ONNX
+    load (~1.5s measured) and a live HuggingFace revision probe *per job*.
+    Sharing across *calls* is the caller's decision, made by passing the same
+    instance in every time; ``lode work`` does that, so a whole polling session
+    (``--loop`` or ``--wait``) pays once per process. The mechanism, and why a
+    test-injected ``embed`` stub never sees it, is commented at the swap below.
+
+    The trade, both halves accepted (``docs/decisions.md``, lode-j5r2): a
+    long-lived embedder keeps the ONNX model resident, and latches its *first*
+    ``model_revision()`` result — failures included — for its whole lifetime, so
+    a single failed probe stamps ``model_revision = NULL`` on every version
+    indexed for the rest of that process, not just the job that hit it.
 
     Returns the total number of jobs claimed and run by the **main loop**
     (including failures and dead-letters). Batch pre-step and reclaim activity
@@ -973,9 +972,7 @@ def drain(
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
     tests (an ``LLMProvider``, passed through to the batch pre-steps).
-    ``embedder`` is likewise optional and production-only in effect — see
-    "One shared embedder per call" above; a test that injects its own
-    ``_registry`` with a stub ``embed`` handler is never touched by it.
+    ``embedder`` is likewise optional — see "One shared embedder per call" above.
 
     ``outcomes`` (lode-1gr.4), if given, is a mutable list that this call
     appends human-readable per-job outcome lines to — from both channels: the
@@ -1004,17 +1001,19 @@ def drain(
     # handler counting calls) must see that handler unchanged, never a
     # `functools.partial` wrapper it didn't ask for. `run_registry` is a
     # shallow copy so the module-level `_REGISTRY` singleton is never mutated.
+    #
+    # The guard fails OPEN -- a non-matching handler silently costs the
+    # amortization rather than erroring -- so what keeps it honest is
+    # test_drain_shares_one_embedder_across_all_embed_jobs_in_the_loop, which
+    # drives the REAL registry and goes red the moment this stops matching.
     run_registry = registry
     if registry.get("embed") is _embed_handler:
-        from lode.embedding import FastEmbedEmbedder
+        if embedder is None:
+            from lode.embedding import FastEmbedEmbedder
 
-        shared_embedder = (
-            embedder if embedder is not None else FastEmbedEmbedder(settings)
-        )
+            embedder = FastEmbedEmbedder(settings)
         run_registry = dict(registry)
-        run_registry["embed"] = functools.partial(
-            _embed_handler, embedder=shared_embedder
-        )
+        run_registry["embed"] = functools.partial(_embed_handler, embedder=embedder)
 
     # Unconditional -- the `except` header below needs the classes on every
     # drain -- and cheap only because neither lode.auth nor lode.llm_provider
@@ -1141,13 +1140,11 @@ def _embed_handler(
     work``'s echo.
 
     ``embedder``, if given, is threaded straight through to
-    :func:`lode.embedding.embed`'s own ``embedder=`` seam instead of letting
-    it construct a fresh :class:`~lode.embedding.FastEmbedEmbedder` (lode-j5r2)
-    — :func:`drain` supplies ONE instance shared across every ``embed`` job in
-    its main loop, so a queue of N versions pays one ONNX load and one HF
-    revision probe instead of N. ``None`` (the default) preserves the old
-    per-call construction; a caller that invokes this handler directly (the
-    tests below, or any future non-drain caller) is unaffected.
+    :func:`lode.embedding.embed`'s own ``embedder=`` seam instead of letting it
+    construct a fresh one (lode-j5r2) — this is the seam :func:`drain` binds to
+    share one instance across a whole drain; see its docstring for why. ``None``
+    (the default) preserves the per-call construction, so a caller that invokes
+    this handler directly is unaffected.
     """
     from lode.embedding import embed
     from lode.externals import gate_reenrich

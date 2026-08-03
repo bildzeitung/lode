@@ -2896,14 +2896,10 @@ def models_pull() -> None:
     "Model provenance"), even against a fully warm cache. Warming here cannot
     prepay that call: the revision it resolves is per-embedder, in-memory
     state that nothing persists to disk, so a later "lode work" process's own
-    embedder re-probes regardless (lode-r4r2). Within that process, "lode
-    work" shares ONE embedder across every queued job and every "--loop" poll
-    pass, so the probe (and the far larger ONNX reload that used to ride
-    alongside it) is paid once per process, not once per indexed version
-    (lode-j5r2). Set HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not
-    lode-specific -- to force fastembed's local-weights-only load AND skip
-    that metadata call outright, recording model_revision = NULL for those
-    vectors instead.
+    embedder re-probes regardless (lode-r4r2, lode-j5r2). Set
+    HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific -- to
+    force fastembed's local-weights-only load AND skip that metadata call
+    outright, recording model_revision = NULL for those vectors instead.
 
     A bad config.toml gives the same clean stderr message and exit 1 every
     other command gives, not a raw traceback. On its most likely failure
@@ -3050,13 +3046,12 @@ def work(
     db_path = db or default_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = init_db(db_path)
-    # ONE embedder for this whole process (lode-j5r2), constructed here rather
-    # than left to `drain()`'s own per-call default so it survives every
-    # --loop poll pass, not just the jobs within a single pass: without this,
-    # a one-shot invocation already got the one-per-call fix inside `drain()`
-    # itself, but a --loop session would still rebuild (and reload) the ONNX
-    # model on every tick. Construction alone is cheap (no model load, no
-    # network) -- the cost this amortizes is paid lazily, on first embed.
+    # ONE embedder for this whole process (lode-j5r2). Constructed HERE, not
+    # left to `drain()`'s per-call default, because that default would rebuild
+    # (and reload the ONNX model on) every poll pass of the loop below.
+    # Construction alone is cheap -- no model load, no network; the cost this
+    # amortizes is paid lazily, on first embed -- so building it before the
+    # lock, on a run that may exit on LockHeld, costs nothing.
     embedder = FastEmbedEmbedder(settings)
     try:
         try:

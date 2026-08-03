@@ -5456,6 +5456,73 @@ def test_work_wait_exits_zero_once_queue_drains(
     assert "drained 1 job(s)" in result.stdout
 
 
+def test_work_holds_ONE_embedder_across_every_poll_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' builds one FastEmbedEmbedder for the process, not one per pass.
+
+    The PROCESS-level half of lode-j5r2, and the half nothing else pins.
+    tests/test_worker.py's own drain-level test proves one embedder serves every
+    job *within* one drain; only `work` constructing it outside the polling
+    `while True:` makes it one per *process*, which is precisely what four doc
+    sites now promise ("one metadata call per process"). Without this test the
+    obvious tidy-up -- moving that construction inside the loop for locality --
+    reverts the promise with every gate green.
+
+    Asserted two ways, because construction-counting alone would still pass if
+    `work` built one embedder and then forgot to pass it: every `drain()` call
+    must also receive the *same object*.
+
+    The registry is deliberately NOT patched (unlike its neighbours here): the
+    hoist is guarded on `registry["embed"] is worker._embed_handler`, so a stub
+    registry would disable the very thing under test. No jobs are queued -- the
+    embedder's lifetime is the subject, and the drain-level test already covers
+    what happens to jobs.
+    """
+    from conftest import _OfflineQueryEmbedder
+
+    import lode.embedding as embedding_mod
+    import lode.worker as worker_mod
+
+    class _CountingEmbedder(_OfflineQueryEmbedder):
+        constructions = 0
+
+        def __init__(self, settings: object) -> None:
+            super().__init__(settings)
+            _CountingEmbedder.constructions += 1
+
+    monkeypatch.setattr(embedding_mod, "FastEmbedEmbedder", _CountingEmbedder)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    real_drain = worker_mod.drain
+    seen: list[object] = []
+
+    def _counting_drain(*args: object, **kwargs: object) -> int:
+        seen.append(kwargs.get("embedder"))
+        # Two passes are the minimum that can tell "once per process" apart
+        # from "once per pass"; stop the endless --loop on the second.
+        if len(seen) == 2:
+            raise KeyboardInterrupt
+        return real_drain(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(worker_mod, "drain", _counting_drain)
+
+    result = runner.invoke(
+        app, ["work", "--db", str(db_path), "--loop", "--interval", "0.1"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(seen) == 2, f"expected two poll passes, got {len(seen)}"
+    assert _CountingEmbedder.constructions == 1, (
+        "expected ONE FastEmbedEmbedder for the whole process, got "
+        f"{_CountingEmbedder.constructions}"
+    )
+    assert seen[0] is not None, "work() did not pass its embedder into drain()"
+    assert seen[0] is seen[1], "each poll pass got a different embedder instance"
+
+
 def test_work_wait_times_out_naming_outstanding_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

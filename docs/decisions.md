@@ -2665,6 +2665,8 @@ while erasing it here would lose the record of what was believed, and when.
   whole deliverable was making the docs agree with the behaviour that exists. The wording everywhere
   says "per indexed version" for that reason; `lode-j5r2` landing should make the original "per
   process" wording true and is the trigger to revisit those sites together.)
+  **Update (lode-j5r2) — that landing happened; those sites say "per process" again. See the marker
+  at the end of this entry.**
   The ticket named three options and left the choice
   open, deliberately, as a design call rather than a mechanical fix:
   - **(a) Persist the resolved revision** next to the weights cache so a warm genuinely prepays it.
@@ -2719,17 +2721,13 @@ while erasing it here would lose the record of what was believed, and when.
     indexing run turns out to matter more than the DETECT-semantics purity), it needs to re-open and
     explicitly resolve the tension with `docs/storage.md`'s DETECT-not-PIN framing first — this entry
     is that trigger, not a blanket "don't."
-  - **Update (lode-j5r2):** landed — `drain()` now hoists ONE shared embedder across its main loop
-    (and `lode work`'s CLI command shares one further still, across every `--loop` poll pass), so the
-    write path's live probe — and the far larger ONNX reload that rides along with it — is paid once
-    per **process** again, not once per indexed version. The four doc sites this entry names above
-    (`lode models pull`'s docstring, `README.md`, `docs/onboarding.md`, `docs/configuration.md`'s
-    "Models" section) are corrected back to "per process" to match; this entry's own "per indexed
-    version" wording is left as-is (this file is a dated log — an entry narrates history, it is not
-    rewritten). See the dedicated `lode-j5r2` entry below for the fix itself.
+  - **Update (lode-j5r2):** landed — the probe is once per **process** again, so the four doc sites
+    this entry names above are corrected back to "per process". This entry's own "per indexed
+    version" wording stays as written (this file is a dated log — an entry narrates history, it is
+    not rewritten); the fix itself is the next entry below.
 
 - **2026-08-02 (lode-j5r2) — `worker.drain` hoists ONE embedder across its main loop; `lode work`
-  shares one further still across `--loop` poll passes.** Filed during `lode-r4r2`'s review: that
+  shares one further still across every poll pass of its run.** Filed during `lode-r4r2`'s review: that
   ticket corrected `lode models pull`'s docstring (and three sibling docs) to say indexing makes one
   HuggingFace metadata call **per indexed version**, because that was what `_embed_handler` actually
   did — `lode.embedding.embed`'s `embedder or FastEmbedEmbedder(settings)` fallback built a brand-new
@@ -2745,9 +2743,9 @@ while erasing it here would lose the record of what was believed, and when.
     over a caller-supplied handler, only over the real one, and the module-level `_REGISTRY` singleton
     is never mutated (the swap builds a shallow per-call copy). `lode work`'s CLI command (`cli.py`)
     goes one step further: it constructs the shared embedder itself, once, *before* the polling
-    `while True:` loop, and passes it into every `drain()` call across `--loop` ticks — so the
-    amortization holds for the whole process, not just a single drain pass with several jobs queued at
-    once.
+    `while True:` loop, and passes it into every `drain()` call that loop makes — every pass of
+    `--loop` *and* of `--wait`, which share that loop — so the amortization holds for the whole
+    process, not just a single drain pass with several jobs queued at once.
   - **Why not cache across `drain()` calls by default:** `drain()`'s own default (`embedder` omitted)
     still constructs a fresh instance per *call* — correct for a caller with no reason to keep one
     around (e.g. a test, or a future one-off caller). Sharing across an entire process's lifetime is a
@@ -2759,16 +2757,44 @@ while erasing it here would lose the record of what was believed, and when.
     sites `lode-r4r2` corrected to "per indexed version" — now say "per process" again, since it is
     true again. `FastEmbedEmbedder.warm()`'s own docstring (`src/lode/embedding.py`), which had named
     this exact gap ("worse than once per process ... that is lode-j5r2, filed rather than fixed
-    here"), is updated in the same place to record the fix. See the **Update (lode-j5r2)** marker on
-    the `lode-r4r2` entry above.
+    here"), is corrected in place. The *live* home for the fact itself is `docs/storage.md`'s async
+    work queue section, per CLAUDE.md's routing rule — this entry is the dated log, not the record a
+    reader should have to find.
   - **Test proven non-vacuous the way this function's own history demands** (`lode-dj6m` and
     `lode-r4r2` each caught a raising-stub trap here once already): a new `drain()`-level test counts
     both `FastEmbedEmbedder` constructions and `model_revision()` probes across a 3-job drain using a
     counting stub — never a stub that raises, which `_embedder_model_revision`'s own
     `except Exception: return None` would silently swallow into a false pass. The stub mirrors the
-    real class's own one-time-probe caching (`lode-dj6m`) so a merely-shared-but-still-reprobing
-    instance would still fail the assertion; asserts exactly 1 construction and exactly 1 probe across
-    3 queued jobs, and that all 3 land `done`.
+    real class's own one-time-probe caching (`lode-dj6m`) because without it even a correctly *shared*
+    instance would probe once per `embed()` call and the probe assertion would fail for the wrong
+    reason; asserts exactly 1 construction and exactly 1 probe across 3 queued jobs, and that all 3
+    land `done`. Re-proven under sabotage during review: with the identity guard forced false the test
+    fails `3 == 1`. A **second** test (`tests/test_cli.py`) pins the *process*-level half separately —
+    two poll passes of `lode work --loop`, one construction — because nothing else does: the obvious
+    future tidy-up (moving `cli.py`'s construction inside the polling loop) would otherwise revert it
+    with every gate green and six doc sites left lying.
+  - **The trade this makes, named because half of it was a surprise (found in review).** A long-lived
+    embedder keeping the ONNX model resident is the expected, intended cost. The unintended half is
+    that `FastEmbedEmbedder.model_revision()` latches its first result for the instance's lifetime and
+    **deliberately caches a FAILED probe too** (`embedding.py`'s own comment: keying off the value
+    would re-probe on every call for exactly the offline case that can least afford it). That latch
+    was written when instances were per-job; it now spans a process. Measured during review, first
+    probe failing and every later one succeeding: a shared instance returns `None` five times for one
+    `resolve_model_revision` call, where five per-job instances return `None` once and then the real
+    SHA. So a single transient probe failure at the head of an hours-long `lode work --loop` stamps
+    `model_revision = NULL` on **every** version indexed for the rest of that process — degrading
+    `lode status`'s drift check to "mixed" for the whole session, with no self-heal short of a
+    restart, where before it cost exactly one version. Accepted, not fixed here: re-probing per
+    `drain()` call is a behaviour change of its own and is filed as `lode-fxse`. Note this makes
+    `lode-w5nr` (bounding the probe) matter *more*, not less: post-fix the unbounded no-network stall
+    is paid once per process rather than once per version, but its NULL result now sticks for the run.
+  - **This is not the `lru_cache` alternative the ticket rejected, and not a drift toward PIN.** The
+    ticket rejected memoizing `resolve_model_revision` partly because a long-running process would
+    then read a cached rather than live revision. Per-*process* caching is not that concession: it is
+    the semantics `lode-r4r2`'s entry above already describes as intended ("one metadata call per
+    process"), and the per-*job* probing this fixes was the accident. `lode status`'s drift check is
+    untouched — it calls `resolve_model_revision` directly, never through an embedder, so it still
+    reads live. The `DETECT, not PIN` decision (`storage.md`, `lode-crh8.1`) is unaffected.
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
