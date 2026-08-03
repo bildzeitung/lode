@@ -164,11 +164,11 @@ from pathlib import Path
 
 import pytest
 
-# The blockquote-marker shape the INLINE scan normalizes with. Imported, never
-# re-declared: `bash_fence_blocks` strips the same marker for the fenced path, and the
-# two paths must partition the same document identically (module docstring:
-# "Blockquoted fences").
-from conftest import _BLOCKQUOTE_MARKER
+# The blockquote-marker and fence-marker shapes the INLINE scan normalizes with.
+# Imported, never re-declared: `bash_fence_blocks` uses the same two constants for the
+# fenced path, and the two paths must partition the same document identically (module
+# docstring: "Blockquoted fences").
+from conftest import _BLOCKQUOTE_MARKER, _FENCE_MARKER_RE
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
@@ -364,29 +364,34 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     """(span, 1-based line number) for every unguarded `bd ... list` in an inline
     single-backtick span OUTSIDE any fence.
 
-    Fence tracking is a line-by-line state machine on `line.strip().startswith("```")`
-    rather than a `` ```...``` `` region regex. Two reasons, both load-bearing: a
-    region regex pairs
-    delimiters by position, so a single stray ``` inside a block (`.claude/agents/
-    coding.md:447` has one, in a comment) inverts every pairing after it and starts
-    stripping PROSE instead of code -- a silent false negative; and substituting the
-    regions away destroys line numbers, which is not cosmetic here (the release/SKILL.md
-    inline site really at line 129 was reported as line 96, sending a reader to the
-    wrong place in the only message this gate ever prints).
+    Fence tracking is a line-by-line state machine on `_FENCE_MARKER_RE` (imported from
+    conftest -- see the import comment above) rather than a `` ```...``` `` region regex.
+    Two reasons, both load-bearing: a region regex pairs delimiters by position, so a
+    single stray ``` inside a block (`.claude/agents/coding.md:447` has one, in a
+    comment) inverts every pairing after it and starts stripping PROSE instead of code --
+    a silent false negative; and substituting the regions away destroys line numbers,
+    which is not cosmetic here (the release/SKILL.md inline site really at line 129 was
+    reported as line 96, sending a reader to the wrong place in the only message this
+    gate ever prints).
 
-    This rule NO LONGER matches `_bash_blocks`'s, and that divergence is unpinned
-    (lode-p4qb widened the shared helper to four-or-more backticks and `~~~`; this
-    scan was left at three backticks, filed as lode-xqc7). A `~~~bash` block would be
-    executed-context to one path and prose to the other -- the same two-paths-
-    partition-one-document failure `_strip_blockquote`/`_BLOCKQUOTE_MARKER` are shared
-    to prevent. Latent only: zero such fences exist in the gated corpus today."""
+    This state machine is NOT the same job as `_bash_blocks` (this one excludes any
+    fence from the inline scan; that one extracts only ```bash/```sh content), so it
+    stays a separate loop here -- but it shares `_FENCE_MARKER_RE`'s marker shape and
+    CommonMark closing rule (a closing run must be the same character as the opening one
+    and at least as long) with it, for the same reason `_strip_blockquote` shares
+    `_BLOCKQUOTE_MARKER`: a one-sided divergence would make the two paths partition one
+    document differently."""
     found: list[tuple[str, int]] = []
-    in_fence = False
+    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"; "" means not in a fence
     for lineno, line in enumerate(_strip_blockquote(markdown).splitlines(), 1):
-        if line.strip().startswith("```"):
-            in_fence = not in_fence
+        stripped = line.strip()
+        if fence:
+            if len(stripped) >= len(fence) and set(stripped) == {fence[0]}:
+                fence = ""
             continue
-        if in_fence:
+        m = _FENCE_MARKER_RE.match(stripped)
+        if m:
+            fence = m.group(1)
             continue
         for span in _INLINE_SPAN_RE.findall(line):
             if _is_unguarded(span):
@@ -580,6 +585,28 @@ def test_inline_scan_skips_blockquoted_fenced_content() -> None:
     real subject: both paths must partition the same document the same way, which is why
     they share one marker definition."""
     markdown = '> ```bash\n> echo "`bd list --json`"\n> ```\n'
+    assert inline_violations(markdown) == []
+    assert len(fenced_violations(markdown)) == 1
+
+
+def test_inline_scan_agrees_with_fenced_scan_on_a_tilde_fence() -> None:
+    """The tilde twin of `test_inline_scan_skips_blockquoted_fenced_content` (lode-xqc7):
+    both paths must partition a `~~~bash` fence the same way, or such a block reads as
+    executed to `fenced_violations` and as prose to `inline_violations`."""
+    markdown = '~~~bash\necho "`bd list --json`"\n~~~\n'
+    assert inline_violations(markdown) == []
+    assert len(fenced_violations(markdown)) == 1
+
+
+def test_inline_scan_agrees_with_fenced_scan_on_a_four_backtick_fence() -> None:
+    """The four-backtick twin (lode-xqc7). A bare ``` line -- shorter than the four-
+    backtick opening run -- is CONTENT under CommonMark's closing rule, not a close, and
+    that is the whole reason an author reaches for four backticks. A three-backtick
+    toggle gets this wrong: it closes on that bare ``` line, then scans the real
+    invocation on the next line as prose (SABOTAGE-VERIFIED: reverting `inline_violations`
+    to a bare `startswith("```")` toggle turns this green assertion into a reported
+    violation)."""
+    markdown = '````bash\n```\necho "`bd list --json`"\n````\n'
     assert inline_violations(markdown) == []
     assert len(fenced_violations(markdown)) == 1
 

@@ -1203,13 +1203,11 @@ _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 # check_links.py toggles on ANY marker, so there a ``~~~`` line does close a
 # ```-opened block. Do not read one as documentation for the other.
 #
-# UNPINNED, ONE-SIDED DIVERGENCE, filed as lode-xqc7: this widening is not
-# mirrored in tests/test_bd_list_limit_gate.py's own inline-span fence tracker,
-# which still toggles on `startswith("```")`. That is the exact failure mode
-# `_BLOCKQUOTE_MARKER` above is SHARED to prevent -- two paths partitioning one
-# document differently -- so a ``~~~bash`` block would read as executed to this
-# helper and as prose to that scan. Latent only: zero tilde and zero
-# four-plus-backtick fences exist across the gated corpus, measured.
+# Exported (not just declared) because tests/test_bd_list_limit_gate.py's own
+# inline-span fence tracker imports it rather than re-declaring its own copy
+# (lode-xqc7) -- mirroring how that module already imports `_BLOCKQUOTE_MARKER`
+# above for the same reason: a one-sided change to this shape would make the
+# two paths partition one document differently.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
