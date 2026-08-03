@@ -497,13 +497,15 @@ def run_one(
       run the dead-letter hook a second time — the same resurrection the
       ``AuthError`` arm below already guards against (lode-9yy), mirrored here
       for the transient path.
-    - Handler raises a **permanent, user-actionable** error (currently only
-      :class:`lode.auth.AuthError` — see ``docs/storage.md`` "Transient vs.
-      permanent job failures", lode-9yy) → none of the above: the job is reset
-      straight back to ``status='pending'`` with ``attempts`` untouched (no
-      backoff, never ``'dead'``) and the exception is **re-raised** rather than
-      absorbed, so it reaches the caller with its actionable message instead of
-      being silently retried forever on something retrying can never fix.
+    - Handler raises a **permanent, user-actionable** error
+      (:class:`lode.auth.AuthError` or :class:`~lode.llm_provider.LLMAuthError`,
+      matching this function's own catch below — see ``docs/storage.md``
+      "Transient vs. permanent job failures", lode-9yy, lode-568v.3) → none of
+      the above: the job is reset straight back to ``status='pending'`` with
+      ``attempts`` untouched (no backoff, never ``'dead'``) and the exception is
+      **re-raised** rather than absorbed, so it reaches the caller with its
+      actionable message instead of being silently retried forever on something
+      retrying can never fix.
 
     Returns ``True`` on success (``done``), ``False`` on a transient error
     (``failed`` or ``dead``); raises on a permanent error (see above).  The
@@ -877,6 +879,16 @@ def _batch_submit_enrich(
     # and re-raise so `lode work` sees build_client's actionable message.
     # Ordered ahead of `except Exception` — AuthError/LLMAuthError are both
     # RuntimeError subclasses, so the generic arm would otherwise swallow them.
+    #
+    # Deliberately NOT widened to LLMProviderError the way drain()'s outer catch
+    # was (lode-5zqa): this arm has the transient `except Exception` path below
+    # it, which reverts the pre-claimed jobs with backoff so an ordinary 429/5xx
+    # retries next tick under the usual attempts/dead-letter accounting. A
+    # non-auth provider error here is transient BY DESIGN. drain()'s catch is
+    # wider only because the collect pre-step has no such accounting of its own
+    # -- a raise there has nothing to fall into. Making these two "consistent"
+    # would turn every transient submit failure into a permanent, uncharged
+    # reset plus a hard non-zero exit on every tick.
     except (AuthError, LLMAuthError) as exc:
         log.error(
             "_batch_submit_enrich: permanent, user-actionable failure — "
@@ -958,16 +970,34 @@ def drain(
     (including failures and dead-letters). Batch pre-step and reclaim activity
     is logged but not included in the return count.
 
-    **Permanent failures** (:class:`lode.auth.AuthError` — ``docs/storage.md``
-    "Transient vs. permanent job failures", lode-9yy): ``drain`` raises, rather
-    than returning, so ``lode work`` can surface the actionable message and exit
-    non-zero. But it raises **last**, not on the spot: an ``AuthError`` from the
-    enrich batch pre-steps is stashed and re-raised only after the reclaim, the
-    retry reset, and the main claim/run loop have all run. Those do
-    credential-free work — ``embed`` jobs come from the local fastembed model —
-    and must not be starved by a missing Anthropic key. A pending enrich job is
-    essentially always present (every ``add`` enqueues one), so raising from the
-    pre-step would abort every single ``drain`` before the first embed ever ran.
+    **Permanent failures** (:class:`lode.auth.AuthError`, or any
+    :class:`~lode.llm_provider.LLMProviderError` — ``docs/storage.md``
+    "Transient vs. permanent job failures" owns the taxonomy and the
+    rationale; lode-9yy, widened to ``LLMProviderError`` by lode-5zqa):
+    ``drain`` raises rather than returning, so ``lode work`` exits non-zero.
+    But it raises **last**, not on the spot: the error is stashed and
+    re-raised only after the reclaim, the retry reset, and the main claim/run
+    loop have all run, so the credential-free ``embed`` jobs are never
+    starved by a missing key or by a batch wedged on bad data.
+
+    Two limits worth knowing at this call site:
+
+    * The catch is scoped by exception *type*, so it bounds only failures that
+      reach it as an ``LLMProviderError``. A provider-side failure that
+      escapes as some other type — e.g. a well-formed but wrong-shape
+      batch-results line, which surfaces from ``collect_batch``'s loop body as
+      a raw ``AttributeError``/``TypeError`` (lode-t7en, open) — still aborts
+      the pass exactly as before.
+    * Both pre-steps share one ``try``, so a collect failure also skips the
+      submit step: while any handle is stuck, no *new* enrich batch is
+      submitted either.
+
+    Neither this nor the widening makes a stuck batch un-stuck — there is no
+    failure budget or dead-letter path for one; it stays wedged until a human
+    intervenes (lode-knnt). Note ``lode work`` has no handler for
+    ``LLMProviderError`` (only ``AuthError``), so unlike the credential case it
+    surfaces as an unhandled traceback rather than a clean actionable line
+    (lode-yx1c).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1018,10 +1048,11 @@ def drain(
     # Unconditional -- the `except` header below needs the classes on every
     # drain -- and cheap only because neither lode.auth nor lode.llm_provider
     # imports the Anthropic/OpenAI SDKs at module level (lode-4q97).
-    # LLMAuthError alongside AuthError: lode-568v.3 widening, see run_one's
-    # identical comment.
+    # LLMProviderError alongside AuthError: lode-5zqa widening, see the "Batch
+    # pre-steps" comment block below. (LLMAuthError subclasses it, so this
+    # still covers lode-568v.3's credential case.)
     from lode.auth import AuthError
-    from lode.llm_provider import LLMAuthError
+    from lode.llm_provider import LLMProviderError
 
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
     #
@@ -1037,6 +1068,13 @@ def drain(
     # dense half of retrieval. That trades "enrich is retried forever" for "the
     # whole queue stops", which is strictly worse.
     #
+    # lode-5zqa: the identical starvation applies to a STUCK batch (a poll that
+    # keeps failing on the same bad data), not just a missing credential, so the
+    # catch below is LLMProviderError rather than LLMAuthError. Widening is
+    # strict -- LLMAuthError subclasses it -- and it degrades the stuck step
+    # rather than aborting the pass. It does not make the batch un-stuck; see
+    # drain's docstring for the limits that leaves standing.
+    #
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
     # so the embeds land before any residual enrich job re-raises out of run_one.
@@ -1047,7 +1085,7 @@ def drain(
     # The reclaim/reset sweeps between them are left uninstrumented on purpose:
     # they are fast local UPDATEs with no network or model call to stall on.
     heartbeat_interval_s = settings.progress_heartbeat_interval_s
-    permanent: AuthError | LLMAuthError | None = None
+    permanent: AuthError | LLMProviderError | None = None
     try:
         with op_progress(
             "drain.batch_collect", heartbeat_interval_s=heartbeat_interval_s
@@ -1059,7 +1097,7 @@ def drain(
             "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
-    except (AuthError, LLMAuthError) as exc:
+    except (AuthError, LLMProviderError) as exc:
         permanent = exc
 
     reclaimed = _reclaim_stale_running(conn, settings)

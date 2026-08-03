@@ -673,6 +673,14 @@ lost, only re-done on the next poll.
 catches bare `Exception` around its single real call. The asymmetry is inherent to the two batch
 designs, not an unclosed gap.
 
+**Consumer-side blast radius (`lode-5zqa`).** Whatever this seam raises lands in
+`lode.worker.drain`'s batch pre-step, which catches `(AuthError, LLMProviderError)` and stashes it
+until the credential-free `embed` jobs have run. So an `LLMProviderError` from the poll path degrades
+that step rather than aborting the pass — but only because it arrives as *that type*: a failure that
+escapes as something else (`lode-t7en`) still aborts the whole drain, which is the consumer-side
+reason the classes above are worth closing at this seam rather than downstream. `docs/storage.md`
+"Transient vs. permanent job failures" owns the policy and the limits it leaves standing.
+
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 
 `src/lode/llm_provider.py::OpenAIProvider` is the second `LLMProvider` implementation, resolved by
