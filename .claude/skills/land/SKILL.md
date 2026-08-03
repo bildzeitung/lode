@@ -167,6 +167,12 @@ git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, p
   # while the reset below destroyed real merges. Scope is `log` only: `rev-list` (including
   # --first-parent, which 1a's direction test greps) and `show` are unaffected and stay on `rtk`.
 rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # per-pass scratch under .git/ -- the reset
+  # above never touches it (only the index+worktree); wipe it here too, since a leftover from a
+  # crashed prior pass is the same residue category as a leftover trunk commit (lode-wjw4). Writers
+  # below (2b, 3a) each `mkdir -p` their own subdirectory on their own, fresh Bash invocation -- this
+  # line only ever removes, so no writer has to be verbally ordered around a later section's wipe.
+rm -rf "$STATE_DIR"
 ```
 
 **On a non-zero exit the pass stops there** — the script's own stderr already names cwd, the main
@@ -192,6 +198,15 @@ re-derives everything from `origin`), but it is not nothing — see the reader c
 below. What it buys is that a bare crash or kill self-heals too, which a per-exit-site restore cannot:
 a killed pass runs no exit-site code at all. Content reds (exit **1**) are untouched — they still
 isolate and bounce exactly as before.
+
+**The same block also wipes `$STATE_DIR` (lode-wjw4).** `.git/land-state/` is per-pass scratch — 2b's
+conflict record, 3a's accepted/message/conflicts files — and, like `trunk` itself, `git reset --hard`
+never touches it (only the index and working tree). A leftover from a crashed prior pass is the same
+*residue* category as a leftover merge commit, and Section 0's lock is already held by this point, so
+wiping it here is safe. Each writer that needs a subdirectory (`$CONFLICTS_DIR` in 2b, `$MSG_DIR`/
+`$CONFLICTS_DIR` in 3a) still `mkdir -p`s it locally, in its own fresh Bash invocation — this line only
+ever removes, never creates, so no writer earlier in the pass than 3a has to be verbally ordered around
+when a later section's wipe might run.
 
 Two things the reset does **not** do that `pull --rebase` did, both deliberate: it does not replay
 local-only commits forward, and it does **not** refuse on a dirty tree or index. The second cuts both
@@ -409,9 +424,8 @@ per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, wi
 tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
-# STATE_DIR is the same $STATE_DIR Section 3a formalizes below (`.git/land-state`) -- this runs
-# FIRST in the pass, ahead of 3a's own `rm -rf "$STATE_DIR" && mkdir -p ...`, so create the
-# subdirectory here rather than assume 3a already has (lode-rfon).
+# STATE_DIR (`.git/land-state`) is wiped once, per pass, in Section 1 -- re-derive it here since
+# this is a fresh Bash invocation, and mkdir -p this block's own subdirectory (lode-wjw4).
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
 CONFLICTS_DIR="$STATE_DIR/conflicts"
 mkdir -p "$CONFLICTS_DIR"
@@ -448,11 +462,10 @@ fi
   since the file — not the shell variable — is what the kick-back block actually reads) holds
   exactly the conflicting path(s), one per line — no tree OID, no chatter. → needs-rebase kick-back
   (see "Needs rebase — kick back"): skip `land-review`, leave the merge set. **Do that kick-back now,
-  for this branch, while still in Section 2** — not batched up for later. [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent)'s
-  `rm -rf "$STATE_DIR"` wipes the file this block just wrote, so a kick-back deferred past it finds
-  nothing and aborts loudly instead of kicking back at all. (Nothing else needs saying: 3a already
-  computes `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching
-  3a un-kicked-back is out of order on its own terms.)
+  for this branch, while still in Section 2** — not batched up for later:
+  [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) already computes
+  `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching 3a
+  un-kicked-back is out of order on its own terms.
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
   `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
   `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
@@ -711,13 +724,9 @@ MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only re
 CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
                                                          # conflict's paths for the kick-back block
                                                          # below to read (lode-rfon)
-rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # fresh per pass -- no stale message,
-                                                         # accepted set, or conflicts record from an
-                                                         # earlier /land tick can leak into this one.
-                                                         # (2b's own conflicts writes, if any, already
-                                                         # ran and were consumed by the per-branch
-                                                         # kick-back before Section 2 finished -- this
-                                                         # wipe cannot race them.)
+mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # $STATE_DIR itself was wiped once, per pass, in Section 1
+                                        # (lode-wjw4) -- this block just ensures its own subdirectories
+                                        # exist, the same as 2b does for its own above.
 
 # Capture the accepted set to a file HERE, at the one moment I actually hold it (2c's land-review
 # verdicts, in the order 3a just established). Every later block RE-READS this file instead of having
