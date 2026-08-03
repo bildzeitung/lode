@@ -52,7 +52,12 @@ from pathlib import Path
 from typing import Protocol
 
 from lode.chunking import Passage, chunk
-from lode.config import Settings, model_cache_dir, model_cache_identity
+from lode.config import (
+    Settings,
+    hf_hub_offline,
+    model_cache_dir,
+    model_cache_identity,
+)
 from lode.progress import op_progress
 from lode.redact import redact_before_index
 from lode.vectorstore import VectorStore
@@ -133,9 +138,29 @@ def resolve_model_revision(model_name: str) -> str | None:
     fail an embed (mismatch-behavior decision, same doc section), so a
     resolution failure is recorded as ``model_revision = NULL`` on the write
     rather than raised.
+
+    **Short-circuits under ``HF_HUB_OFFLINE`` (lode-r4r2), returning ``None``
+    before ``huggingface_hub`` is consulted at all.** DO NOT delete this as
+    redundant on discovering that the hub already refuses the call itself — that
+    is known, and measured; it is kept deliberately, so that a promise lode makes
+    to users in four places is enforced and tested here rather than inherited
+    from a transitive dependency, and so that the flag is read LIVE (the hub
+    freezes it into a module constant at import). Full reasoning and the
+    measurement: ``docs/decisions.md``, the lode-r4r2 entry.
+
+    **What this guard does NOT cover:** the flag-UNSET no-network case, where the
+    probe really is unbounded and blocks for the OS TCP connect timeout before
+    reaching the ``except`` below. That is lode-w5nr; no offline-flag check can
+    see it.
+
+    :func:`lode.config.hf_hub_offline` is the same truthiness check
+    :mod:`lode.cli`'s ``models_pull`` cold-cache handling already relies on for
+    the identical env var (both mirror ``fastembed``'s own inline set).
     """
     identity = model_cache_identity(model_name)
     if identity is None:
+        return None
+    if hf_hub_offline():
         return None
     hf_source, _model_file = identity
     try:
@@ -251,17 +276,35 @@ class FastEmbedEmbedder:
         so the CLI does not depend on the private :meth:`_load`.
 
         Deliberately does **not** also call :meth:`model_revision` to prepay the
-        HF revision probe (lode-dj6m). That looks like it would keep ``lode
-        models pull``'s "every subsequent run is fully offline for indexing and
-        retrieval" promise true for the write path, but it cannot: :attr:`_revision`
-        is per-instance in-memory state, ``models pull`` warms a *throwaway*
+        HF revision probe (lode-dj6m). That looks like it would keep indexing
+        offline after a warm, but it cannot: :attr:`_revision` is per-instance
+        in-memory state, ``models pull`` warms a *throwaway*
         ``FastEmbedEmbedder(settings)`` and then the process exits, and nothing
         persists a resolved revision to disk — so the next run's fresh embedder
         re-probes regardless. Measured: warm-then-new-instance-index probes
-        twice, not once. The revision probe on the write path is therefore still
-        live network work on every indexing run, before and after lode-dj6m
-        alike — a real, pre-existing gap in that promise, tracked in lode-r4r2
-        rather than papered over with a call whose result is discarded.
+        twice, not once. The revision probe on the write path is therefore
+        still live network work on every indexing run, before and after
+        lode-dj6m alike.
+
+        **Resolved in lode-r4r2, not by eliminating that probe.** Persisting the
+        resolved revision next to the weights cache so a warm genuinely could
+        prepay it was considered and rejected here: the recorded
+        ``model_revision`` is meant to be a DETECT-not-PIN fact about *this
+        installation's* actually-resolved revision (``docs/storage.md`` "Model
+        provenance"), and a value read back from a prior ``models pull`` --
+        rather than probed live at embed time -- would drift from that meaning
+        without a much larger design change than this ticket scoped. Instead:
+        ``lode models pull``'s docstring now promises offline RETRIEVAL only,
+        and states plainly that indexing pays that metadata call; and
+        :func:`resolve_model_revision` now short-circuits under
+        ``HF_HUB_OFFLINE``, so the cost is documented and explicitly opt-out-able
+        rather than a silent surprise.
+
+        **How often that probe actually fires is worse than "once per process":**
+        ``lode work``'s drain constructs a fresh ``FastEmbedEmbedder`` per queued
+        job, so a drain of N versions pays N probes -- and N full ONNX loads, the
+        far larger cost. That is lode-j5r2, filed rather than fixed here; the
+        docs say "per indexed version" because that is what the code does today.
         """
         self._load()
 

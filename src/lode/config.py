@@ -897,6 +897,29 @@ def model_cache_identity(model_name: str) -> tuple[str, str] | None:
     return _MODEL_CACHE_IDENTITY.get(model_name.lower())
 
 
+def hf_hub_offline() -> bool:
+    """Mirror ``fastembed``'s own ``HF_HUB_OFFLINE`` truthiness check.
+
+    Read directly rather than imported -- ``fastembed`` does not expose this
+    as a reusable helper (``fastembed/common/model_management.py:398-401``
+    inlines it) -- and must stay the same truthy set ``fastembed`` itself
+    checks, or a caller's offline branch would misclassify a failure
+    ``fastembed`` would not actually have treated as offline.
+
+    Shared by :mod:`lode.cli` (:func:`_warm`'s offline/cold-cache branch,
+    ``lode-96t``) and :mod:`lode.embedding` (:func:`resolve_model_revision`'s
+    offline short-circuit, ``lode-r4r2``) -- moved here rather than kept as a
+    ``cli.py``-private helper once a second module needed the identical
+    check.
+    """
+    return os.environ.get("HF_HUB_OFFLINE", "").strip().upper() in {
+        "1",
+        "TRUE",
+        "YES",
+        "ON",
+    }
+
+
 def config_path() -> Path:
     """The optional user config file under the root: ``$LODE_HOME/config.toml``.
 

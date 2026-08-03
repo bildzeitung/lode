@@ -141,9 +141,11 @@ lode models pull
 ```
 
 This warms `$LODE_HOME/models/` (the [model cache directory](configuration.md#paths--locations),
-`lode-gmo`) so a reboot never re-triggers the download. After this, indexing and
-retrieval are fully offline; see [configuration.md](configuration.md#models) for
-the `HF_HUB_OFFLINE=1` air-gapped escape hatch.
+`lode-gmo`) so a reboot never re-triggers the download. After this, retrieval is fully
+offline; indexing still makes one read-only HuggingFace metadata call per indexed version to
+stamp vector provenance, which a warm cannot prepay (`lode-r4r2`) — see
+[configuration.md](configuration.md#models) for the full story and the `HF_HUB_OFFLINE=1`
+air-gapped escape hatch, which also skips that call.
 
 **`lode ask` returning nothing after pulling a release?** A schema-changing release makes the LanceDB
 vector cache self-heal on next open (it drops and silently recreates the table under the new

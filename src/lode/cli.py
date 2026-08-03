@@ -56,6 +56,7 @@ from lode.config import (
     config_path,
     config_rows,
     default_db_path,
+    hf_hub_offline,
     knob_rows,
     lance_dir,
     load_settings,
@@ -2790,23 +2791,6 @@ app.add_typer(models_app, name="models")
 _FASTEMBED_EXHAUSTED_SOURCES = "from any source"
 
 
-def _hf_hub_offline() -> bool:
-    """Mirror fastembed's own ``HF_HUB_OFFLINE`` truthiness check.
-
-    Read directly rather than imported -- fastembed does not expose this as a
-    reusable helper (``fastembed/common/model_management.py:398-401`` inlines it)
-    -- and must stay the same truthy set fastembed itself checks, or
-    :func:`_warm`'s offline/cold-cache branch would misclassify a failure fastembed
-    would not actually have treated as offline.
-    """
-    return os.environ.get("HF_HUB_OFFLINE", "").strip().upper() in {
-        "1",
-        "TRUE",
-        "YES",
-        "ON",
-    }
-
-
 def _warm(warm: Callable[[], None], model_id: str) -> None:
     """Run one wrapper's ``warm()``, translating a download failure into an
     actionable ``lode models pull`` message instead of a raw traceback (lode-96t).
@@ -2833,7 +2817,7 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
       re-raises or chains the original cause, so by the time this ``ValueError``
       reaches us there is no exception-side signal left to tell the two apart.
       The only reliable signal is one *we* already have before calling in:
-      whether ``HF_HUB_OFFLINE`` was set (:func:`_hf_hub_offline`). If it was,
+      whether ``HF_HUB_OFFLINE`` was set (:func:`lode.config.hf_hub_offline`). If it was,
       fastembed forced ``local_files_only=True`` throughout (mirroring the same
       env var itself) and never attempts the network at all, so a failure here
       can only be the cold-cache case; if not, this is a genuine download
@@ -2867,7 +2851,7 @@ def _warm(warm: Callable[[], None], model_id: str) -> None:
     except ValueError as exc:
         if _FASTEMBED_EXHAUSTED_SOURCES not in str(exc):
             raise  # not fastembed's download-failure signature -- a real bug
-        if _hf_hub_offline():
+        if hf_hub_offline():
             typer.echo(
                 f"cache is cold for {model_id} and HF_HUB_OFFLINE=1 is set, so "
                 "no download was attempted: run 'lode models pull' once without "
@@ -2904,9 +2888,18 @@ def models_pull() -> None:
     default to the same id, so when they match, the second load is skipped
     as a cache hit rather than re-fetched.
 
-    Once warmed, every subsequent run is fully offline for indexing and
-    retrieval. To force that even against a cold cache miss, set
-    HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific.
+    Once warmed, RETRIEVAL is fully offline: a query-only embed
+    (related-notes, "lode ask") never resolves an HF revision, so it makes no
+    outbound call against warm weights. INDEXING is not -- it still makes one
+    read-only HuggingFace metadata call per indexed version to stamp the
+    vector provenance it records (the resolved model revision,
+    docs/storage.md "Model provenance"), even against a fully warm cache.
+    Warming here cannot prepay that call: the revision it resolves is
+    per-embedder, in-memory state that nothing persists to disk, and "lode
+    work" builds a fresh embedder per queued job (lode-r4r2, lode-j5r2). Set
+    HF_HUB_OFFLINE=1 -- fastembed's own offline flag, not lode-specific -- to
+    force fastembed's local-weights-only load AND skip that metadata call
+    outright, recording model_revision = NULL for those vectors instead.
 
     A bad config.toml gives the same clean stderr message and exit 1 every
     other command gives, not a raw traceback. On its most likely failure

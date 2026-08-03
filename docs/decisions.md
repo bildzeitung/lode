@@ -2645,9 +2645,80 @@ while erasing it here would lose the record of what was believed, and when.
     query-only path (`embed_query` — related-notes, `ask`/`retrieve`) now makes no HF probe at all,
     pinned by `tests/test_embedding.py::test_embed_query_never_probes_the_revision_even_with_a_warm_cache`.
     The autouse stub above stays necessary regardless — the real embedder still loads hundreds of MB
-    of ONNX weights on first use. Still open after lode-dj6m, and deliberately not folded into it:
-    the *write* path re-probes once per process, so `lode models pull`'s "every subsequent run is
-    fully offline for indexing and retrieval" remains false for indexing (lode-r4r2).
+    of ONNX weights on first use. Left open after lode-dj6m, and deliberately not folded into it:
+    the *write* path re-probes per indexed version, so `lode models pull`'s "every subsequent run is
+    fully offline for indexing and retrieval" remained false for indexing. **Resolved by lode-r4r2**
+    — see that entry below for the resolution (docstring corrected to promise offline retrieval
+    only; the probe now short-circuits under `HF_HUB_OFFLINE`; persisting the revision to make the
+    write path genuinely offline was considered and rejected).
+
+- **2026-07-30 (lode-r4r2) — `lode models pull`'s "fully offline" promise, resolved via docstring +
+  offline short-circuit, not by persisting the revision.** Filed during lode-dj6m's review: after
+  that fix, retrieval (`embed_query`) makes no HF probe on a warm cache, but indexing (`embed`) still
+  makes one live `huggingface_hub.model_info` call **per indexed version** to stamp per-vector
+  provenance (`model_revision`), because the resolved value is per-instance in-memory state that
+  `FastEmbedEmbedder.warm()` cannot usefully prepay — a *later*, separate process's embedder starts
+  with `_revision_probed = False` regardless of an earlier `models pull`. (The ticket said "per
+  process"; this review measured it as worse than that — `lode work`'s drain builds a fresh embedder
+  per queued job, so a drain of N versions pays N probes and N ONNX reloads. That behaviour is
+  `lode-j5r2`, filed rather than fixed here: changing it is a behaviour change, and this ticket's
+  whole deliverable was making the docs agree with the behaviour that exists. The wording everywhere
+  says "per indexed version" for that reason; `lode-j5r2` landing should make the original "per
+  process" wording true and is the trigger to revisit those sites together.)
+  The ticket named three options and left the choice
+  open, deliberately, as a design call rather than a mechanical fix:
+  - **(a) Persist the resolved revision** next to the weights cache so a warm genuinely prepays it.
+  - **(b) Correct the docstring** to promise offline retrieval only.
+  - **(c) Make the probe respect `HF_HUB_OFFLINE`** so it short-circuits instead of blocking on a TCP
+    timeout with no network — *as the ticket framed it; that framing turned out to be wrong, below.*
+  - **Decided: (b) + (c), not (a).** (a) is the only option that makes the original sentence
+    literally true, but it changes what the recorded `model_revision` *means*: `docs/storage.md`'s
+    DETECT-not-PIN decision (`lode-crh8.1`) frames the per-vector field as the **live, currently-resolved**
+    revision at embed time — "a fact about a given installation's pull history" that two installs
+    embedding on different days can legitimately disagree about — not a value read back from a prior
+    `models pull` that can go stale between pulls. Making indexing read a cached local value instead
+    of probing live would quietly redefine that field toward PIN semantics, which is exactly the
+    revisit-only-deliberately territory `docs/storage.md` already reserves for a separate decision,
+    not something to fold into a docstring-accuracy ticket. (b) and (c) are cheap, compatible, and
+    leave that architecture untouched: the write path still makes one live probe per indexed version
+    (this is a real, accepted cost — not eliminated), but the promise made about it is now accurate.
+  - **(c) turned out to be a no-op in behaviour, and is kept anyway — knowingly.** The ticket's
+    premise for (c) was that `HF_HUB_OFFLINE=1` on a black-holed network still stalls on a TCP
+    timeout. **That premise is false**, measured during this review on the pinned `huggingface_hub`
+    1.24.0 with `socket.socket.connect` patched to record attempts: with the guard removed and
+    `HF_HUB_OFFLINE=1` set, `model_info` returned control in 0.2s with **zero** connect attempts —
+    `utils/_http.py`'s `hf_request_event_hook` raises `OfflineModeIsEnabled` (a `ConnectionError`)
+    before any socket work, and `resolve_model_revision`'s existing `except Exception` already folded
+    that into the same `None`. (The repo knew this: `tests/conftest.py` says so in passing, in its
+    "why `HF_HUB_DISABLE_TELEMETRY` and not `HF_HUB_OFFLINE`" note.) The guard is kept because lode
+    now *promises* this behaviour to users in four places, and a promise worth making is worth
+    enforcing and testing locally rather than inheriting from a transitive dependency — and because
+    lode's check is read live, where `huggingface_hub` freezes `HF_HUB_OFFLINE` into a module
+    constant at import (the same import-time-freeze trap `tests/conftest.py` documents). It is
+    recorded as belt-and-suspenders, **not** as a stall that was fixed.
+  - **The stall the premise described is real, just elsewhere: `lode-w5nr`.** With `HF_HUB_OFFLINE`
+    *unset* and no network, the probe is genuinely unbounded — `huggingface_hub`'s
+    `default_client_factory` builds its `httpx.Client` with `timeout=None`. No offline-flag check can
+    see that case; it needs a bound of its own.
+  - **What changed:** `lode models pull`'s docstring (`src/lode/cli.py`) now says retrieval is fully
+    offline after a warm and indexing makes one metadata call per indexed version, rather than
+    claiming both are offline. `resolve_model_revision` (`src/lode/embedding.py`) now checks
+    `lode.config.hf_hub_offline()` before attempting the HTTP call and returns `None` immediately if
+    set. The private `_hf_hub_offline()` helper that
+    used to live only in `cli.py` moved to `lode.config.hf_hub_offline()` (public) once a second
+    module needed the identical check, rather than duplicating it. `README.md`, `docs/onboarding.md`,
+    and `docs/configuration.md`'s "Models" section, which all repeated the same "fully offline for
+    indexing and retrieval" claim, are corrected to match.
+  - **Test trap, hit for the second time in this one function.** The acceptance test as first written
+    stubbed `huggingface_hub.model_info` to *raise*, which `except Exception: return None` silently
+    swallows — it stayed green with the short-circuit deleted. Now counts calls instead (see the
+    docstring on `test_resolve_model_revision_short_circuits_under_hf_hub_offline`). **Anything
+    testing this function must count or time, never raise** — lode-dj6m's review caught the identical
+    vacuity in the sibling test.
+  - **If a future ticket wants (a) anyway** (e.g. because the live-probe network cost on every
+    indexing run turns out to matter more than the DETECT-semantics purity), it needs to re-open and
+    explicitly resolve the tension with `docs/storage.md`'s DETECT-not-PIN framing first — this entry
+    is that trigger, not a blanket "don't."
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
