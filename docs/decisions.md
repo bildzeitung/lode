@@ -2846,3 +2846,32 @@ while erasing it here would lose the record of what was believed, and when.
     `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
+
+- **2026-07-28/30 (lode-ysr6) — `scripts/gate-lib.sh`'s `GATE_ADVISORY` contract made structural,
+  not an ordering convention; folded in here once `lode-ur6o` (this file's own supersession-marker
+  normalization) had landed and the file was safe to touch again.** `GATE_ADVISORY` used to be set by
+  a separate `GATE_ADVISORY=(...)` statement each consumer wrote itself, below the source line — a
+  `gate_could_not_run` call site placed ABOVE that assignment still exited 2 with a correct banner but
+  silently emitted only half the contract, invisible to `set -u` (a validly declared-empty array), to
+  shellcheck (suppressed by the SC2034 disable every caller needed), and to the library's own tests
+  (which chose their own orderings). **Decided: bind `GATE_ADVISORY` at source time instead**, from
+  positional arguments passed on the source line itself
+  (`. gate-lib.sh "advisory line 1" "advisory line 2"`, or the literal `--no-advisory` sentinel for a
+  no-advisory consumer) — the assignment now runs as part of the `source` command itself, necessarily
+  before any later line in the consumer, so there is no longer a separate statement for a call site to
+  sit above.
+  - **Correction the original proposal did not anticipate, verified empirically on bash 5.2:** `source
+    file` with ZERO trailing tokens does not clear `$@` inside `file` — it inherits the calling
+    script's own current positional parameters unchanged. A naive, unconditional
+    `GATE_ADVISORY=("$@")` would therefore leak a no-advisory consumer's own CLI argv (e.g.
+    `release-bump.sh`'s range argument) into `GATE_ADVISORY` the moment that consumer sources bare.
+    Closed via the `--no-advisory` sentinel: every consumer must now pass either its advisory strings
+    or that literal sentinel, never nothing — a narrower discipline than the old ordering convention,
+    mechanically swept once per consumer file by `tests/test_gate_lib.py`.
+  - **Full mechanism, the bash-behavior verification, and the usage contract live in
+    `scripts/gate-lib.sh`'s own header comment (its `GATE_ADVISORY` section) — not restated here.**
+    That header is the owner of this claim; this entry exists only to put the decision where
+    `docs/decisions.md` readers look for one, per this ticket's own dispatch (`lode-ysr6` was
+    explicitly forbidden from touching this file while `lode-ur6o` was mid-flight normalizing it, and
+    left the record in the script header with a blocked follow-up, `lode-szgb`, to fold it in here
+    once `lode-ur6o` landed).
