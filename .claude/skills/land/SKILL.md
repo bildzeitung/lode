@@ -1155,13 +1155,25 @@ done
 #   settled in EITHER direction — the whole point is that the gate is correct whatever the trigger
 #   turns out to be, since the export is by invariant never work. It now EXCLUDES
 #   `.beads/issues.jsonl` / `.beads/interactions.jsonl` from the cleanliness judgment outright, via
-#   `:(exclude)` pathspecs on the dirty-tree guard below — so a staged or modified export, from
+#   `:(exclude)` pathspecs on the dirty-tree guard (in `scripts/worktree-gc-classify.sh` since
+#   lode-9owc — see the WHERE THE PREDICATES LIVE note below) — so a staged or modified export, from
 #   whatever cause, present or future, can never zero out this sweep on its own.
 # If you touch `.gitignore`, re-check that this loop still reclaims.
 #
 # Full record — the three options, the measurement, why deletion beat guarding: docs/decisions.md,
 # lode-h1vn entry.
 
+# WHERE THE PREDICATES LIVE, READ THIS FIRST (lode-9owc): every predicate the comments from here to
+# the loop describe — both ancestry arms, the lode-9hgu dirty-tree guard and its `:(exclude)` list,
+# and the lode-yrtu dir-only age floor — now lives in `scripts/worktree-gc-classify.sh`, NOT in the
+# fence below. So "the dirty-tree guard below", "the loop below also tests", "either predicate" and
+# friends in this block mean "in the classifier the loop below calls." Only the CODE moved, and it
+# moved so it could be shellcheck'd and unit-tested (tests/test_worktree_gc_classify.py) instead of
+# living unreachable by any gate in a markdown fence. The prose split that leaves: this block holds
+# the SWEEP-level contract (which worktrees are candidates at all, and what this sweep promises
+# about them); the script's header holds the per-arm detail. Change a predicate there and this block
+# is what tells you whether you were allowed to.
+#
 # Backstop: now the ONLY local worktree/branch reclaim in this pass — catches every just-landed
 # builder worktree (per the reasoning above) plus whatever it always caught: a stale/missing
 # review_worktree pointer, a build that never got GC'd on its own machine, a reviewer/rebase-pickup
@@ -1298,28 +1310,16 @@ done
 RECLAIMED=0; RECLAIMED_DIR_ONLY=0; SKIP_LOCKED=0; SKIP_NOTMERGED=0; SKIP_DIRTY=0; FAILED=0
 STALE_LOCKS_FOUND=0
 # lode-yrtu: minimum age (seconds) of a NOT-MERGED worktree-agent-*'s last commit before its
-# DIRECTORY (never its branch ref) becomes eligible for the new dir-only reclaim below -- see the
-# case arm's own comment for why an age floor is the guard here rather than the lock start-token
-# check used for the LOCKED bucket just below, and docs/agents-workflow.md's "Worktree-GC widened"
-# section for the tunable + default (documented there, not configuration.md, per that page's own
-# scope note: dev-tooling for the landing loop, not an application knob).
+# DIRECTORY (never its branch ref) becomes eligible for the dir-only reclaim below -- see
+# docs/agents-workflow.md's "Worktree-GC widened" section for the tunable + default (documented
+# there, not configuration.md, per that page's own scope note: dev-tooling for the landing loop,
+# not an application knob).
 MIN_AGE_SECONDS="${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"
-# lode-9hgu's dirty-tree guard, defined ONCE (lode-yrtu): both reclaim arms below gate on it, and it
-# is the single most safety-critical test in this loop, so the `:(exclude)` pathspec list must not
-# exist in two copies that can drift apart. Returns 0 only when the tree is PROVABLY clean.
-# The two-step `st=$(...)` then `[ -z "$st" ]` is load-bearing and must stay two steps: `status
-# --porcelain` prints nothing BOTH when the tree is clean AND when the command itself errors
-# (missing dir, corrupt worktree admin, …), and an assignment inherits its command substitution's
-# exit code — so success and emptiness are tested SEPARATELY, making an error skip exactly like a
-# dirty tree instead of failing OPEN into `--force`. `local st` is its own line for the same reason:
-# `local st=$(...)` would mask the substitution's exit code behind `local`'s own.
-# See the full lode-bns3/lode-9hgu rationale at the second call site below (why EXCLUDE rather than
-# restore, and why the passive bd export can never count as dirt).
-wt_provably_clean() {
-  local st
-  st=$(git -C "$1" status --porcelain -- . \
-    ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$st" ]
-}
+# lode-9owc: the per-candidate DECISION is scripts/worktree-gc-classify.sh (see WHERE THE PREDICATES
+# LIVE above), extracted the same way lode-ivth extracted scripts/recycled-worktree-guard.sh and
+# lode-yrtu extracted scripts/worktree-lock-stale.sh out of this same loop. What stays HERE is
+# exactly what a side-effect-free script cannot own: reading the porcelain candidates, resolving a
+# STALE lock (a real mutation), and the two DESTRUCTIVE calls the script only ever recommends.
 while IFS=$'\t' read -r WT SHA LOCKED BR; do
   if [ "$LOCKED" = "1" ]; then
     # lode-yrtu: the lock recorded here is PER-SESSION, not per-agent -- measured: several worktrees
@@ -1329,8 +1329,8 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
     # or has been REUSED by an unrelated later process (via /proc/<pid>/stat's own starttime, matched
     # against the token the harness recorded at lock time) -- see the script's header for the full
     # mechanism and why a plain PID-liveness probe (signal 0) alone cannot safely make this call. A
-    # lock the script cannot positively prove dead is left alone (fail closed) and skipped exactly
-    # as before.
+    # lock the script cannot positively prove dead is left alone (fail closed): $LOCKED stays "1" and
+    # classify below reports keep-locked, same as before.
     LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" '
       /^worktree / { path=$2; reason="" }
       /^locked/    { reason=substr($0,8) }
@@ -1341,138 +1341,45 @@ while IFS=$'\t' read -r WT SHA LOCKED BR; do
       # `git worktree remove` refuses a still-locked worktree even with `--force` -- that flag
       # overrides "has modifications," never "is locked" (verified: dry-run against a fabricated
       # repo, lode-yrtu). Proving the SESSION is dead is not the same as clearing git's own on-disk
-      # lock, so unlock it now, unconditionally, before falling through to the ancestor test and
-      # whichever reclaim path (full or dir-only) it leads to below.
+      # lock, so unlock it now, unconditionally, then reflect the resolution in $LOCKED so classify
+      # below judges this candidate as unlocked rather than short-circuiting to keep-locked.
       git worktree unlock "$WT" 2>/dev/null || true
-    else
-      SKIP_LOCKED=$((SKIP_LOCKED + 1))
-      continue
+      LOCKED=0
     fi
   fi
-  # WIDENED PREDICATE (lode-amif): "merged into trunk" is not the real safety invariant — it is a
-  # PROXY for "this worktree's content is already captured elsewhere, so removing it loses nothing."
-  # An ESCALATED branch never merges into trunk (by definition — it's held for a human decision), so
-  # the trunk-only test could never reclaim its reviewer/rebase-pickup worktree even after the /code
-  # session that would otherwise eagerly reclaim it (lode-vs7g) has itself died mid-fan-out — an
-  # indefinite leak one level up from the gap lode-vs7g closed. The real invariant is "captured on
-  # origin," which every reviewer/rebase-pickup worktree satisfies by construction: both push to
-  # origin/land/<id> before returning (lode-k5e/lode-8k3), on EITHER outcome (ready-for-land or
-  # land-escalated). So: reclaim if the worktree's HEAD is an ancestor of trunk, OR — for a
-  # branch-attached worktree only — an ancestor of that branch's origin counterpart. `${BR%%--*}`
-  # strips the lode-em6v worktree-uniqueness suffix (`land/<id>--<worktree-dir>` -> `land/<id>`) the
-  # same way backstop 2 already does, so this reaches origin/land/<id> regardless of which local name
-  # the reviewer/pickup checked the branch out under. A detached worktree (empty $BR) or a builder's
-  # own worktree-agent-* branch (never pushed to origin, so origin/worktree-agent-* doesn't exist and
-  # the ancestor test fails) both make this arm false. A DETACHED worktree is then kept outright; a
-  # worktree-agent-* one no longer falls straight to `continue` as it once did — since lode-yrtu it
-  # falls to the dir-only arm below instead (directory reclaimed, branch ref kept).
-  #
-  # ZERO-DIVERGENCE RESIDUAL, AND WHY IT IS BENIGN ON THIS ARM (lode-9hgu, not re-litigated here):
-  # like the trunk arm, this ancestor test is a proxy that reads TRUE at zero divergence — a
-  # reviewer/pickup worktree freshly checked out at origin/land/<id>'s tip is trivially "an ancestor
-  # of" that same tip until its first local commit. But a LIVE reviewer/pickup worktree is `locked`
-  # for the duration of its agent's run (the harness locks every `isolation: worktree` launch
-  # worktree — see the CONTRACT above), so the `locked` check above drops it before this predicate ever runs:
-  # this arm CANNOT sweep a running agent. It can only reach an EXITED one, whose worktree at zero
-  # divergence holds nothing but uncommitted, ungated scratch from a run that never finished — the
-  # authoritative content is on origin and the ticket is re-reviewed from there. That is exactly the
-  # worktree this widening exists to reclaim, so the residual is benign HERE, unlike on the trunk arm
-  # (where it once destroyed two live builds, pre-lode-oqr). The dirty-tree guard immediately below
-  # (lode-9hgu) is what makes this arm safe even for that exited-agent case: it still keeps a worktree
-  # that has additional uncommitted content on top of a pushed tip, rather than reclaiming it.
-  if git merge-base --is-ancestor "$SHA" trunk \
-    || { [ -n "$BR" ] && git merge-base --is-ancestor "$SHA" "origin/${BR%%--*}" 2>/dev/null; }; then
-    : # merged into trunk, or captured on origin -- fall through to the shared dirty-guard + reclaim below
-  else
-    # lode-yrtu: NOT-MERGED no longer means "leaked forever." A builder's OWN worktree-agent-*
-    # branch is never pushed to origin, by construction (coding.md) -- so BOTH ancestor arms above
-    # are PERMANENTLY false the instant its ticket is abandoned, bounced, or its build simply dies,
-    # and nothing else in the system ever revisits it (measured: 8 of 14 leaked worktree dirs on the
-    # landing machine, lode-yrtu). Reclaim the DIRECTORY ONLY for exactly this branch shape, keeping
-    # the branch REF so any commits the build made stay reachable -- verified (docs/decisions.md's
-    # lode-yrtu entry) that this loses nothing, INCLUDING the detached-HEAD case the ref argument
-    # does not itself cover: the `case` pattern below can only ever match a NON-EMPTY `$BR` (a
-    # detached worktree's `$BR` is always empty), so a detached worktree structurally can never enter
-    # this arm at all -- it always falls to the unchanged `*)` default below. Every OTHER not-merged
-    # shape (a `land/<id>`-branched reviewer/rebase-pickup worktree, a detached worktree, anything
-    # else) is UNCHANGED: still kept, full stop -- this widening is scoped to `worktree-agent-*` only.
-    case "$BR" in
-      worktree-agent-*)
-        # AGE GUARD, deliberately NOT the lock start-token check used for the LOCKED bucket above.
-        # Why, in one line: that token exists only while the worktree is actually LOCKED, and
-        # coding.md unlocks right after its FIRST commit (lode-oqr), so the entire window this arm
-        # targets -- build, gates, hand-off, and the whole review/land wait -- runs unlocked with no
-        # token left to compare. Age of the last commit is the only signal still available, and it
-        # fails SAFE: a build still cycling has a recent HEAD commit almost by construction, so a
-        # generous floor skips it, and the cost of being wrong is bounded to disk (the branch ref is
-        # kept either way, so no commit is ever lost). Full reasoning, and why 6h specifically:
-        # docs/decisions.md's lode-yrtu entry.
-        LAST_COMMIT_TS=$(git -C "$WT" log -1 --format=%ct 2>/dev/null) || LAST_COMMIT_TS=""
-        NOW=$(date +%s)
-        if [ -n "$LAST_COMMIT_TS" ] && [ $((NOW - LAST_COMMIT_TS)) -ge "$MIN_AGE_SECONDS" ]; then
-          # Same lode-9hgu dirty-tree guard the merged/captured path below gates on (one shared
-          # definition above) -- a dirty worktree-agent-* is still NEVER reclaimed, in any bucket.
-          if wt_provably_clean "$WT"; then
-            if git worktree remove --force "$WT"; then
-              RECLAIMED_DIR_ONLY=$((RECLAIMED_DIR_ONLY + 1))   # ref intentionally KEPT -- no `git branch -D`
-            else
-              FAILED=$((FAILED + 1))
-            fi
-          else
-            SKIP_DIRTY=$((SKIP_DIRTY + 1))
-          fi
-        else
-          SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))   # too young (or commit ts unreadable) -- fail safe, keep
-        fi
-        ;;
-      *)
-        SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1))
-        ;;
-    esac
-    continue
-  fi
-  # lode-9hgu dirty-tree guard — the ACTUAL invariant, not either ancestry proxy above (see CONTRACT).
-  # Gates BOTH ancestry arms: a worktree captured on trunk or captured on origin but left dirty must
-  # still be KEPT, otherwise either arm reopens exactly the hole lode-9hgu closed. The clean test
-  # itself is `wt_provably_clean` (defined once above the loop — its header covers why success and
-  # emptiness must be tested separately, so an errored `status` skips exactly like a dirty tree rather
-  # than failing OPEN into `--force`). Skipping on error costs little: the `git worktree prune` below
-  # still drops a vanished worktree's admin entry, and any leftover branch ref falls to the bare-ref
-  # backstops.
-  #
-  # lode-bns3: the passive bd export is EXCLUDED from this judgment via `:(exclude)` pathspecs, so a
-  # staged/modified `.beads/*.jsonl` can never read as "dirty" and zero out the sweep. It is BY
-  # INVARIANT never real work (import.auto: false, lode-6ra), and this gate must not depend on
-  # something ELSE having scrubbed it first (the Stop hook in .claude/settings.json, an explicit
-  # `bd export`, or the now-reconciled "bd reads never dirty it" premise — see the coupling note above
-  # and Section 3's reconciled note). A worktree with any OTHER dirt still lands in the dirty bucket
-  # below and is KEPT, untouched — exclusion narrows what counts as dirt, nothing else.
-  #
-  # EXCLUDE, DON'T RESTORE — the difference matters here even though Section 3 restores. Section 3 must
-  # genuinely CLEAN the index (its `git merge --no-ff` refuses to run otherwise); this loop only has to
-  # JUDGE. Restoring would make a read-only judgment WRITE into candidate worktrees — including the
-  # dirty ones it then decides to KEEP, silently discarding their export churn as a side effect of
-  # merely looking at them. Excluding has zero blast radius, which is the right posture for a loop that
-  # ends in `--force`. It also sidesteps a real trap: `git restore` aborts WHOLESALE on an unmatched
-  # pathspec and would restore NEITHER file (silently, under `|| true`) for a candidate sitting at a
-  # commit that predates one of these paths — a stale leftover worktree being exactly what this backstop
-  # exists to reclaim. `git status` with `:(exclude)` simply exits 0 in that case.
-  #
-  # COUNT THE REMOVE'S ACTUAL EXIT STATUS, not merely the fact that we attempted it. An unconditional
-  # `RECLAIMED=$((RECLAIMED + 1))` here would let the summary line report "reclaimed N" when every
-  # `worktree remove` FAILED and nothing was reclaimed at all — the observability half of lode-bns3
-  # lying in exactly the direction it exists to expose (a total GC failure reading as a healthy sweep).
-  # `failed` is its own bucket so the buckets still partition the candidates exactly.
-  if wt_provably_clean "$WT"; then
-    if git worktree remove --force "$WT"; then
-      [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
-      RECLAIMED=$((RECLAIMED + 1))
-    else
-      FAILED=$((FAILED + 1))    # git printed its own error; surface it in the summary too
-    fi
-  else
-    SKIP_DIRTY=$((SKIP_DIRTY + 1))
-  fi
+  # scripts/worktree-gc-classify.sh is the single source of truth for the bucket -- see its own
+  # header for what each name means and why. It takes no action; the case below performs the two
+  # destructive calls the script only ever recommends, and counts each candidate into exactly one
+  # bucket (lode-bns3: reading `git worktree remove`'s own exit status, not merely the fact that we
+  # attempted it, so the summary line can never report "reclaimed N" when every remove FAILED).
+  BUCKET=$(scripts/worktree-gc-classify.sh "$WT" "$SHA" "$LOCKED" "$BR" "$MIN_AGE_SECONDS")
+  case "$BUCKET" in
+    keep-locked)    SKIP_LOCKED=$((SKIP_LOCKED + 1)) ;;
+    keep-notmerged) SKIP_NOTMERGED=$((SKIP_NOTMERGED + 1)) ;;
+    keep-dirty)     SKIP_DIRTY=$((SKIP_DIRTY + 1)) ;;
+    dir-only)
+      if git worktree remove --force "$WT"; then
+        RECLAIMED_DIR_ONLY=$((RECLAIMED_DIR_ONLY + 1))   # ref intentionally KEPT -- no `git branch -D`
+      else
+        FAILED=$((FAILED + 1))
+      fi
+      ;;
+    full-reclaim)
+      if git worktree remove --force "$WT"; then
+        [ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true
+        RECLAIMED=$((RECLAIMED + 1))
+      else
+        FAILED=$((FAILED + 1))    # git printed its own error; surface it in the summary too
+      fi
+      ;;
+    *)
+      # Never observed -- a defensive net against a future classify bug printing something outside
+      # its own documented bucket set. Fails CLOSED (counted as failed, worktree left untouched)
+      # rather than silently falling through either reclaim arm.
+      echo "worktree GC: unexpected classify output '$BUCKET' for $WT -- treating as failed" >&2
+      FAILED=$((FAILED + 1))
+      ;;
+  esac
 done < <(git worktree list --porcelain | awk '
   /^worktree / { path=$2; head=""; branch=""; locked=0 }
   /^HEAD / { head=$2 }
