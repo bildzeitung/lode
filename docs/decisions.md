@@ -2847,31 +2847,35 @@ while erasing it here would lose the record of what was believed, and when.
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
 
-- **2026-07-28/30 (lode-ysr6) — `scripts/gate-lib.sh`'s `GATE_ADVISORY` contract made structural,
-  not an ordering convention; folded in here once `lode-ur6o` (this file's own supersession-marker
-  normalization) had landed and the file was safe to touch again.** `GATE_ADVISORY` used to be set by
-  a separate `GATE_ADVISORY=(...)` statement each consumer wrote itself, below the source line — a
-  `gate_could_not_run` call site placed ABOVE that assignment still exited 2 with a correct banner but
-  silently emitted only half the contract, invisible to `set -u` (a validly declared-empty array), to
-  shellcheck (suppressed by the SC2034 disable every caller needed), and to the library's own tests
-  (which chose their own orderings). **Decided: bind `GATE_ADVISORY` at source time instead**, from
-  positional arguments passed on the source line itself
-  (`. gate-lib.sh "advisory line 1" "advisory line 2"`, or the literal `--no-advisory` sentinel for a
-  no-advisory consumer) — the assignment now runs as part of the `source` command itself, necessarily
-  before any later line in the consumer, so there is no longer a separate statement for a call site to
-  sit above.
+- **2026-07-28 (lode-ysr6) — `scripts/gate-lib.sh`'s `GATE_ADVISORY` contract made structural, not
+  an ordering convention.** `GATE_ADVISORY` used to be set by a separate `GATE_ADVISORY=(...)`
+  statement each consumer wrote below its own source line, so a `gate_could_not_run` call site placed
+  above that statement still exited 2 with a correct banner while silently emitting only half the
+  contract — and nothing mechanical caught it: not `set -u`, not shellcheck, not the library's own
+  tests. **Decided: bind `GATE_ADVISORY` at source time instead**, from positional arguments on the
+  source line itself (`. gate-lib.sh "advisory line 1" "advisory line 2"`) — the assignment becomes
+  part of the `source` command, so there is no longer a separate statement for a call site to sit
+  above.
   - **Correction the original proposal did not anticipate, verified empirically on bash 5.2:** `source
     file` with ZERO trailing tokens does not clear `$@` inside `file` — it inherits the calling
-    script's own current positional parameters unchanged. A naive, unconditional
-    `GATE_ADVISORY=("$@")` would therefore leak a no-advisory consumer's own CLI argv (e.g.
-    `release-bump.sh`'s range argument) into `GATE_ADVISORY` the moment that consumer sources bare.
-    Closed via the `--no-advisory` sentinel: every consumer must now pass either its advisory strings
-    or that literal sentinel, never nothing — a narrower discipline than the old ordering convention,
-    mechanically swept once per consumer file by `tests/test_gate_lib.py`.
-  - **Full mechanism, the bash-behavior verification, and the usage contract live in
-    `scripts/gate-lib.sh`'s own header comment (its `GATE_ADVISORY` section) — not restated here.**
-    That header is the owner of this claim; this entry exists only to put the decision where
-    `docs/decisions.md` readers look for one, per this ticket's own dispatch (`lode-ysr6` was
-    explicitly forbidden from touching this file while `lode-ur6o` was mid-flight normalizing it, and
-    left the record in the script header with a blocked follow-up, `lode-szgb`, to fold it in here
-    once `lode-ur6o` landed).
+    script's own positional parameters unchanged. A naive, unconditional `GATE_ADVISORY=("$@")` would
+    therefore have leaked a no-advisory consumer's own CLI argv (e.g. `release-bump.sh`'s range
+    argument) into the advisory trailer. Closed by requiring an explicit `--no-advisory` sentinel:
+    every consumer now passes either its advisory strings or that literal sentinel, never nothing — a
+    narrower discipline than the old ordering convention, and swept once per consumer file by
+    `tests/test_gate_lib.py`.
+  - **Weighed and rejected: keeping the separate assignment because it reads better.** The ticket
+    raised this explicitly — a plain `GATE_ADVISORY=(...)` near the top of a consumer is arguably
+    easier to read than threading two strings through a source line. Overruled because the two are
+    not comparable: the readability cost is paid once, visibly, by whoever writes the source line,
+    while the ordering hazard was silent and unpoliceable by any of the three mechanisms above. The
+    ticket also predicted the positional-parameter restore behaviour would need its own comment to be
+    safe; it does, and the header carries it. Recorded here so the trade is not rediscovered a third
+    time: the header states the outcome, not the alternative that lost.
+  - **`scripts/gate-lib.sh`'s header comment (its `GATE_ADVISORY` section) is the OPERATIVE copy** —
+    the full usage contract, the bash-5.2 verification and the enforcement story live there, and are
+    corrected in place as the mechanism changes. The prose above is this log's dated snapshot of what
+    was decided and why; if the contract later changes, it changes in the header, and this entry gets
+    a dated supersession marker rather than a rewrite (see this file's preamble). (Recorded late:
+    `lode-ur6o` was normalizing this file when `lode-ysr6` landed, so `lode-ysr6` left the record in
+    the header and `lode-szgb` folded it in here afterwards.)
