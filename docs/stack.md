@@ -642,17 +642,36 @@ rejection, etc.) is `lode-568v.3`'s scope — only the shape is pinned here.
 
 **What still escapes raw.** `AnthropicProvider` wraps all five of its SDK calls — the three that
 submit (`lode-90o7`) and `collect_batch`'s two that poll (`lode-i7yr`) — plus, separately,
-`collect_batch`'s own JSONL-results iteration (`lode-3gtu`): that loop can raise a raw
-`httpx.HTTPError` (a stream that dies mid-read) or `json.JSONDecodeError` (a malformed line) —
-neither is an `anthropic` type, since the SDK resolves HTTP status before returning the lazily-
-streamed decoder, so no `except anthropic.*` clause can reach it. `collect_batch` catches those two
-types specifically (never bare `Exception`, so a genuine bug in the loop body or a
-`KeyboardInterrupt` still propagates) and converts them to `LLMProviderError`, discarding whatever
-results were already decoded before the failure — `batches.results` re-fetches the same JSONL from
-the start on every call (not a resumable cursor), so nothing already-good is permanently lost, only
-re-done on the next poll. Only one class remains open: `anthropic`'s *non*-status errors
-(`APITimeoutError`, `APIConnectionError` — a timeout is not a rejected request; see `qa.MAX_TOKENS`).
-`OpenAIProvider` catches bare `Exception` around its single call and has no gap at all.
+`collect_batch`'s own JSONL-results iteration (`lode-3gtu`). That last one is not covered by any
+`except anthropic.*` clause and never can be: the SDK resolves HTTP status *before* it returns the
+lazily-streamed decoder, so a failure while pulling the body is not an `anthropic` type at all.
+`collect_batch` converts three such types to `LLMProviderError`:
+
+| Escaping type | Cause |
+|---|---|
+| `httpx.HTTPError` | the stream dies mid-read |
+| `json.JSONDecodeError` | a line is not valid JSON |
+| `UnicodeDecodeError` | a line is not decodable at all — `json.loads(bytes)` sniffs an encoding and decodes *before* it parses, so an invalid byte fails one step earlier and lands on a different `ValueError` subclass |
+
+The wrap brackets only the *iteration*, never the loop body, so a genuine bug below it can never be
+mistaken for a stream failure and no bare `except Exception` is needed to say so. Whatever was
+already decoded is discarded rather than returned partially: `batches.results` re-fetches the same
+JSONL from the start on every call (not a resumable cursor), so nothing already-good is permanently
+lost, only re-done on the next poll.
+
+**Two classes remain open**, both measured against the pinned SDK, neither yet bounded:
+
+- `anthropic`'s *non*-status errors (`APITimeoutError`, `APIConnectionError` — a timeout is not a
+  rejected request; see `qa.MAX_TOKENS`).
+- A results line that is *well-formed* JSON but the wrong *shape* (`lode-t7en`). The SDK builds each
+  line with `construct_type_unchecked`, which by design does **not** validate, so a missing field
+  surfaces in the loop body as a raw `AttributeError`/`TypeError` — a different class from the three
+  above, and deliberately not swept up by them, since catching it would also swallow real bugs.
+
+`OpenAIProvider` needs none of this: its `collect_batch` makes no network call and decodes no stream
+(`submit_batch` already ran every request and self-encoded the results into the handle), and it
+catches bare `Exception` around its single real call. The asymmetry is inherent to the two batch
+designs, not an unclosed gap.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 
