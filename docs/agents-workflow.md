@@ -1589,13 +1589,16 @@ fixed once in `land/SKILL.md`, then found again, unfixed, in two other skills).
 **There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
 on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
 ticket's risk budget. `lode-x495`'s technical review rejected that shape: it conflates *fixing* the file
-(genuinely risky, still deferred to `lode-p1r3`) with *covering* it, which costs two allowlist entries
-and not one byte of `land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves
-every **future** cross-block variable added to that file unguarded too, not just the known ones, in
-exactly the file the rule was written for. So the file is gated like every other skill, with
-`$ACCEPTED` (agent-reasoned, same "nothing upstream to re-derive from" shape as `$PROPOSED`) and
-`$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch — the entry goes inert when that lands)
-allowlisted individually, and its other 22 blocks covered. Removing those two entries is `lode-p1r3`.
+(genuinely risky) with *covering* it, which cost only two allowlist entries and not one byte of
+`land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves every **future**
+cross-block variable added to that file unguarded too, not just the known ones, in exactly the file the
+rule was written for. So the file is gated like every other skill. `lode-p1r3` closed out both of the
+two original entries: `$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch by persisting the
+conflicting paths to `$STATE_DIR/conflicts/<id>` and reading them back) went inert once that branch
+landed, so its allowlist entry is deleted. `$ACCEPTED` (agent-reasoned, same "nothing upstream to
+re-derive from" shape as `$PROPOSED`) has no mechanical source — `land-review` returns its verdict in
+conversation and never writes it to bd or a file (its own "What I don't do") — so `lode-p1r3` confirmed
+it stays allowlisted permanently; it is the one entry `land/SKILL.md` still carries.
 
 ### Invariants the coding loop never breaks
 
