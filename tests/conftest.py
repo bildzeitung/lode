@@ -589,14 +589,16 @@ def _reset_jobs_clock_anchor() -> None:
     :func:`lode.jobs.now` and ``docs/storage.md`` -- read either for *why* it
     ratchets; this only covers what that costs the test suite). That is fine
     as long as nothing patches the *inputs* to ``now()``'s anchor computation
-    (``time.monotonic()``) out from under it, but something does:
+    (``time.monotonic()``) out from under it, and until lode-e8lo something did:
     ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
-    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line``
-    both do ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``.
-    Because ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the
-    shared ``time`` module object, not a module-local alias -- so that patch
-    is PROCESS-GLOBAL and reaches ``lode.jobs`` (which also did a plain
-    ``import time``) too, not just ``lode.cli``.
+    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line`` both
+    did ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because
+    ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the shared
+    ``time`` module object, not a module-local alias -- so that patch was
+    PROCESS-GLOBAL and reached ``lode.jobs`` (which also does a plain
+    ``import time``) too, not just ``lode.cli``. Both now rebind the *name*
+    ``time`` inside ``lode.cli`` instead (``test_cli.py``'s
+    ``_patch_cli_clock_past_deadline``), so no poisoner is live today.
 
     With the fake monotonic substituted, ``now()``'s anchor computation
     (``real_now - fake_monotonic``) comes out far larger than the true anchor
@@ -620,8 +622,15 @@ def _reset_jobs_clock_anchor() -> None:
     instead of outliving the test that created it. Tests that drive
     ``jobs.now()`` directly (``tests/test_worker.py``'s own ``clock`` fixture,
     which resets this same anchor) still run after this and still see a
-    freshly reset anchor. Deleting this fixture turns nothing red on its own,
-    so ``tests/test_conftest_jobs_clock_anchor.py`` is what would catch it.
+    freshly reset anchor. That forward-looking half is now the WHOLE of this
+    fixture's justification: lode-e8lo removed the only live poisoner, so this
+    stays as defence in depth against the next one, not because anything leaks
+    today. Deleting it turns nothing red on its own, and since lode-e8lo it no
+    longer turns ``tests/test_conftest_jobs_clock_anchor.py``'s nested repro
+    red either (see that file's NON-VACUITY section); the only live pin left
+    there is ``test_the_anchor_reset_fixture_is_armed_for_every_test``, which
+    asserts this fixture is autouse rather than exercising it. Restoring a
+    behavioural pin is lode-up8x.
 
     SCOPE OF THAT CLAIM, stated precisely, because an unbounded version of it
     is what let this bug survive three sightings:
@@ -640,10 +649,12 @@ def _reset_jobs_clock_anchor() -> None:
       whatever the previous test left behind -- reachable today only via
       ``tests/test_capture_lag_diagnosis.py``'s ``seeded_db``, which is
       ``skipif``-gated and asserts nothing about job timestamps.
-    - It bounds the poison's lifetime; it does not prevent the leak. The
-      poisoning test still runs with a process-global fake clock, so anything
-      *it* observes is still affected (lode-y7gk fixes the leak at its source
-      -- the two are complementary, not alternatives).
+    - It bounds a poison's lifetime; it does not prevent the leak. lode-e8lo
+      fixed the leak at its source for the two ``test_cli.py`` tests, so no
+      test currently runs under a process-global fake clock -- but a future
+      one that does would still see the poison for its own duration, and only
+      this fixture stops that outliving it. The two are complementary, not
+      alternatives.
     """
     jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
