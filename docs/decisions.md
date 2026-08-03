@@ -2665,6 +2665,8 @@ while erasing it here would lose the record of what was believed, and when.
   whole deliverable was making the docs agree with the behaviour that exists. The wording everywhere
   says "per indexed version" for that reason; `lode-j5r2` landing should make the original "per
   process" wording true and is the trigger to revisit those sites together.)
+  **Update (lode-j5r2) — that landing happened; those sites say "per process" again. See the marker
+  at the end of this entry.**
   The ticket named three options and left the choice
   open, deliberately, as a design call rather than a mechanical fix:
   - **(a) Persist the resolved revision** next to the weights cache so a warm genuinely prepays it.
@@ -2700,6 +2702,7 @@ while erasing it here would lose the record of what was believed, and when.
     *unset* and no network, the probe is genuinely unbounded — `huggingface_hub`'s
     `default_client_factory` builds its `httpx.Client` with `timeout=None`. No offline-flag check can
     see that case; it needs a bound of its own.
+    **Update (lode-w5nr, 2026-08-02) — bounded; see the `lode-w5nr` entry at the end of this file.**
   - **What changed:** `lode models pull`'s docstring (`src/lode/cli.py`) now says retrieval is fully
     offline after a warm and indexing makes one metadata call per indexed version, rather than
     claiming both are offline. `resolve_model_revision` (`src/lode/embedding.py`) now checks
@@ -2719,6 +2722,80 @@ while erasing it here would lose the record of what was believed, and when.
     indexing run turns out to matter more than the DETECT-semantics purity), it needs to re-open and
     explicitly resolve the tension with `docs/storage.md`'s DETECT-not-PIN framing first — this entry
     is that trigger, not a blanket "don't."
+  - **Update (lode-j5r2):** landed — the probe is once per **process** again, so the four doc sites
+    this entry names above are corrected back to "per process". This entry's own "per indexed
+    version" wording stays as written (this file is a dated log — an entry narrates history, it is
+    not rewritten); the fix itself is the next entry below.
+
+- **2026-08-02 (lode-j5r2) — `worker.drain` hoists ONE embedder across its main loop; `lode work`
+  shares one further still across every poll pass of its run.** Filed during `lode-r4r2`'s review: that
+  ticket corrected `lode models pull`'s docstring (and three sibling docs) to say indexing makes one
+  HuggingFace metadata call **per indexed version**, because that was what `_embed_handler` actually
+  did — `lode.embedding.embed`'s `embedder or FastEmbedEmbedder(settings)` fallback built a brand-new
+  instance every job, so a drain of N queued versions paid N full ONNX model loads (measured ~1.5s
+  each) *and* N live `model_info` probes, not one.
+  - **The fix:** `drain()`'s main claim/run loop now constructs (or reuses, if the caller supplies
+    one via the new `embedder=` parameter) exactly ONE `FastEmbedEmbedder` and threads it into every
+    `embed` job via `_embed_handler`'s own new `embedder=` parameter — the same seam `embed()` already
+    exposed and the TUI's capture screen already uses for the identical reason (module docstring,
+    `lode-0wj.4`). The swap is guarded on handler *identity*
+    (`registry.get("embed") is _embed_handler`), not job-type membership, so a test that injects its
+    own stub "embed" handler is completely unaffected — no `functools.partial` wrapper is ever applied
+    over a caller-supplied handler, only over the real one, and the module-level `_REGISTRY` singleton
+    is never mutated (the swap builds a shallow per-call copy). `lode work`'s CLI command (`cli.py`)
+    goes one step further: it constructs the shared embedder itself, once, *before* the polling
+    `while True:` loop, and passes it into every `drain()` call that loop makes — every pass of
+    `--loop` *and* of `--wait`, which share that loop — so the amortization holds for the whole
+    process, not just a single drain pass with several jobs queued at once.
+  - **Why not cache across `drain()` calls by default:** `drain()`'s own default (`embedder` omitted)
+    still constructs a fresh instance per *call* — correct for a caller with no reason to keep one
+    around (e.g. a test, or a future one-off caller). Sharing across an entire process's lifetime is a
+    decision the *caller* makes by holding one instance and passing it in every time, which is exactly
+    what `cli.py`'s `work` command now does; `drain()` itself stays a plain, stateless function with no
+    module-level embedder cache of its own.
+  - **Docs corrected back to "per process":** `lode models pull`'s docstring (`src/lode/cli.py`),
+    `README.md`, `docs/onboarding.md`, and `docs/configuration.md`'s "Models" section — the same four
+    sites `lode-r4r2` corrected to "per indexed version" — now say "per process" again, since it is
+    true again. `FastEmbedEmbedder.warm()`'s own docstring (`src/lode/embedding.py`), which had named
+    this exact gap ("worse than once per process ... that is lode-j5r2, filed rather than fixed
+    here"), is corrected in place. The *live* home for the fact itself is `docs/storage.md`'s async
+    work queue section, per CLAUDE.md's routing rule — this entry is the dated log, not the record a
+    reader should have to find.
+  - **Test proven non-vacuous the way this function's own history demands** (`lode-dj6m` and
+    `lode-r4r2` each caught a raising-stub trap here once already): a new `drain()`-level test counts
+    both `FastEmbedEmbedder` constructions and `model_revision()` probes across a 3-job drain using a
+    counting stub — never a stub that raises, which `_embedder_model_revision`'s own
+    `except Exception: return None` would silently swallow into a false pass. The stub mirrors the
+    real class's own one-time-probe caching (`lode-dj6m`) because without it even a correctly *shared*
+    instance would probe once per `embed()` call and the probe assertion would fail for the wrong
+    reason; asserts exactly 1 construction and exactly 1 probe across 3 queued jobs, and that all 3
+    land `done`. Re-proven under sabotage during review: with the identity guard forced false the test
+    fails `3 == 1`. A **second** test (`tests/test_cli.py`) pins the *process*-level half separately —
+    two poll passes of `lode work --loop`, one construction — because nothing else does: the obvious
+    future tidy-up (moving `cli.py`'s construction inside the polling loop) would otherwise revert it
+    with every gate green and six doc sites left lying.
+  - **The trade this makes, named because half of it was a surprise (found in review).** A long-lived
+    embedder keeping the ONNX model resident is the expected, intended cost. The unintended half is
+    that `FastEmbedEmbedder.model_revision()` latches its first result for the instance's lifetime and
+    **deliberately caches a FAILED probe too** (`embedding.py`'s own comment: keying off the value
+    would re-probe on every call for exactly the offline case that can least afford it). That latch
+    was written when instances were per-job; it now spans a process. Measured during review, first
+    probe failing and every later one succeeding: a shared instance returns `None` five times for one
+    `resolve_model_revision` call, where five per-job instances return `None` once and then the real
+    SHA. So a single transient probe failure at the head of an hours-long `lode work --loop` stamps
+    `model_revision = NULL` on **every** version indexed for the rest of that process — degrading
+    `lode status`'s drift check to "mixed" for the whole session, with no self-heal short of a
+    restart, where before it cost exactly one version. Accepted, not fixed here: re-probing per
+    `drain()` call is a behaviour change of its own and is filed as `lode-fxse`. Note this makes
+    `lode-w5nr` (bounding the probe) matter *more*, not less: post-fix the unbounded no-network stall
+    is paid once per process rather than once per version, but its NULL result now sticks for the run.
+  - **This is not the `lru_cache` alternative the ticket rejected, and not a drift toward PIN.** The
+    ticket rejected memoizing `resolve_model_revision` partly because a long-running process would
+    then read a cached rather than live revision. Per-*process* caching is not that concession: it is
+    the semantics `lode-r4r2`'s entry above already describes as intended ("one metadata call per
+    process"), and the per-*job* probing this fixes was the accident. `lode status`'s drift check is
+    untouched — it calls `resolve_model_revision` directly, never through an embedder, so it still
+    reads live. The `DETECT, not PIN` decision (`storage.md`, `lode-crh8.1`) is unaffected.
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
@@ -2846,3 +2923,77 @@ while erasing it here would lose the record of what was believed, and when.
     `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
+
+- **2026-08-02 (lode-w5nr) — `resolve_model_revision`'s HF probe is now bounded by an explicit
+  per-call timeout, closing the stall `lode-r4r2` named but could not cover.** Filed during
+  `lode-r4r2`'s review: with `HF_HUB_OFFLINE` *unset* and the network black-holed (captive portal, VPN
+  down, air-gapped host that never set the flag), `huggingface_hub.model_info()` blocked for the OS TCP
+  connect timeout (~130s on Linux) before `resolve_model_revision`'s own `except Exception: return
+  None` recorded `model_revision = NULL` anyway — no offline-flag short-circuit can see this case, since
+  it fires only when the flag is set.
+  - **Root cause, measured:** `huggingface_hub`'s `default_client_factory`
+    (`utils/_http.py`) builds its shared `httpx.Client` with `timeout=None` — deliberately disabling
+    `httpx`'s own 5s default. `HfApi.model_info()` does, however, accept a `timeout: float | None`
+    keyword and forwards it straight to the per-request `get_session().get(..., timeout=timeout)` call.
+    Verified empirically against a real black hole (a TEST-NET-1 address, `HF_ENDPOINT` pointed at it):
+    with no `timeout` kwarg, a request to that address must be killed rather than waited out; passing
+    `timeout=3.0` raised `httpx.ConnectTimeout` in ~3.02s. `httpx` honors a per-request timeout override
+    even though the client itself was constructed with none. Note what a float `timeout` means to
+    `httpx`: `Timeout(5.0)` sets `connect`/`read`/`write`/`pool` to 5.0 **each** — a per-phase bound, not
+    a total-call one, and applied per hop under the client's `follow_redirects=True`. So `5.0` does not
+    cap a slow-but-alive HF at 5s total; it caps each phase, which is why a black hole (connect only)
+    returns in ~5s while a legitimately slow metadata GET is not cut short.
+  - **This is option (a) of the ticket's three sketched directions.** Not (b), a lode-owned client
+    factory via `set_client_factory()` — but **not for the reason first recorded here.** "It would also
+    bound `fastembed`'s downloads" is refutable: `httpx.Timeout(connect=5.0, read=None, write=None,
+    pool=None)` bounds exactly the black-hole phase and leaves a multi-hundred-MB read unbounded. The
+    real reasons: (i) it would not be a complete bound anyway — `fastembed` fetches from its GCS mirror
+    with a bare, untimed `requests.get(url, stream=True)`
+    (`fastembed/common/model_management.py`), outside `huggingface_hub` entirely, so no client factory
+    reaches it; and (ii) `get_session()` memoizes `_GLOBAL_CLIENT` on first use, so a factory must be
+    installed before *any* hf call anywhere in the process — an import-time mutation of third-party
+    global state from a library module, a worse altitude than a threaded kwarg, not a better one. lode
+    owns exactly two hf call sites, so threading scales fine at n=2. Not (c) (a bounded wait wrapped
+    around the call in lode's own code) either — unnecessary once (a) works.
+  - **Scope: this bounds the probe, not the weights load.** It is the last unbounded hf call on a
+    *warm*-cache `lode work`, which is what makes it the right fix — `fastembed`'s `download_model`
+    tries `local_files_only=True` first, so a warm cache makes no network call of its own. But that
+    attempt is wrapped in `except Exception: pass`, and a cold, partial, or unverifiable cache falls
+    through to untimed `model_info` + `list_repo_tree` + `snapshot_download` under a retry loop. Those
+    are `fastembed`'s call sites, not lode's; `HF_HUB_OFFLINE=1` (which flips `local_files_only` on) is
+    still the only thing that bounds them, and `lode models pull` is where that cost belongs.
+  - **What changed:** `resolve_model_revision(model_name, *, timeout_s)` (`src/lode/embedding.py`) takes
+    a new required keyword-only `timeout_s`, forwarded to `model_info(hf_source, timeout=timeout_s)` —
+    required, not defaulted, so a caller cannot silently reintroduce the unbounded wait by omission.
+    Both production call sites thread it from the new `Settings.hf_probe_timeout_s` knob (`runtime`,
+    default `5.0`, [configuration.md](configuration.md#models)): `FastEmbedEmbedder.__init__` caches
+    `settings.hf_probe_timeout_s` and passes it from `model_revision()`, and `cli.py`'s
+    `_model_revision_status` (the `lode status` drift check) passes it directly. `5.0` was chosen to
+    match `httpx`'s own disabled default (the exact figure `huggingface_hub` turned off) rather than the
+    existing `fetch_timeout_s` (`10s`) — this is a small metadata GET, not a page fetch.
+  - **Blast radius, and why the fix doesn't need to change with it:** at the time this ticket was filed,
+    the write path (`embed()`) constructed one `FastEmbedEmbedder` per indexed version, so a hang could
+    recur once per version drained. A concurrent sibling, `lode-j5r2`, hoists ONE shared
+    `FastEmbedEmbedder` across a whole `drain()`/`--loop` process, cutting that to one hang per process
+    — reducing exposure, not eliminating the need for a bound: an untimed probe still blocks the first
+    (and only) call for the full OS TCP timeout regardless of how many times it would otherwise have
+    been made. The user-visible symptom described in this ticket (an unexplained multi-minute stall in
+    `lode work` with no output) is unchanged in kind either way, just capped at once per process instead
+    of once per version after `lode-j5r2` lands. `resolve_model_revision`'s call signature was extended
+    (a new required kwarg), never moved or renamed, specifically so it merges cleanly regardless of
+    which of the two branches lands first.
+  - **Test trap avoided (third time in this function, after `lode-dj6m` / `lode-r4r2`):** a stub that
+    merely raises is swallowed by `except Exception: return None` and asserts nothing about whether a
+    timeout is actually applied. The acceptance tests instead capture the `timeout` kwarg
+    `huggingface_hub.model_info` receives and assert its value
+    (`tests/test_embedding.py::test_resolve_model_revision_forwards_timeout_s_to_model_info` and
+    `::test_fast_embed_embedder_model_revision_resolves_caches_and_threads_timeout`, the latter proving
+    the `Settings` knob reaches the network call through the real `FastEmbedEmbedder` seam, not just the
+    bare function) — both were sabotage-tested non-vacuous by reverting the `timeout=timeout_s` argument
+    and watching them fail before restoring it.
+  - **A fourth instance of the same trap, found in review and fixed here:**
+    `::test_resolve_model_revision_unknown_model_returns_none_no_network` had stubbed `model_info` with
+    a stub raising `AssertionError("must not be reached")` — swallowed by the same `except`, so its
+    `is None` assertion passed whether or not the stub ran. Proven by bypassing the `identity is None`
+    early return and watching the raising form still pass; rewritten to count calls and assert
+    `probe_calls == 0`. Counting, never raising, is the rule for this function.

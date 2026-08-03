@@ -1154,34 +1154,26 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# Four copies of this parser existed independently before this unification:
-# tests/test_land_lock.py's `_fenced_bash` matched the fence marker with
-# `line.startswith("```")`, so a fence INDENTED under a markdown list item
-# (e.g. nested under a bullet, as `.claude/skills/land/SKILL.md`'s Section 3
-# isolation-replay merge loop is) never opened at all -- 4 of that file's 24
-# bash fences were invisible to it. tests/test_land_conflicts_state.py
-# (lode-rfon), tests/test_skill_bash_state.py (lode-x495), and
-# tests/test_assert_main_checkout.py (lode-pcee) each independently
-# discovered and fixed the identical blind spot by matching the STRIPPED line
-# instead, as three private, near-identical copies. Per the lode-ovgs
-# ticket's own acceptance criteria, reaching three copies of the same parser
-# is the unify trigger (the repo's stated bar, per scripts/gate-lib.sh /
-# scripts/epic-children-closed.sh / scripts/recycled-worktree-guard.sh) --
-# lode-ovgs unified the first three here.
+# THE ONE parser for "which bash does an agent actually execute", for the four
+# gates listed below, after four private copies of it drifted apart. NOT the
+# only such state machine left in the repo: a fifth, hand-rolled inline, is in
+# tests/test_sweep_digest_id.py -- measured byte-identical on sweep/SKILL.md
+# today, and filed as lode-jm4a rather than absorbed here.
 #
-# tests/test_assert_main_checkout.py::_fenced_bash_blocks was deliberately
-# left as a private FOURTH copy at that point, already diverged (it flushed an
-# unterminated final fence; this helper silently dropped it): land/lode-gczf
-# was already ready-for-land carrying 178 changed lines of that file and kept
-# both helpers, calling them from four sites. Deleting the definitions at the
-# same time lode-ovgs landed would have merged CLEANLY with those call-site
-# edits and produced a file calling deleted functions -- a clean merge with a
-# broken collection. lode-p4qb finishes the unification now that land/lode-gczf
-# has landed, and settles the divergence deliberately rather than leaving it
-# unify-by-coincidence: an unterminated final fence is now FLUSHED (the answer
-# test_assert_main_checkout.py's copy always gave), and a four-backtick or
-# tilde bash fence is now scanned rather than silently skipped -- see the
-# function's own "Known boundaries" for what's left.
+# The bug that forced the unification is worth keeping, because it is the shape
+# any re-implementation reinvents: tests/test_land_lock.py matched the fence
+# marker with `line.startswith("```")`, so a fence INDENTED under a markdown
+# list item (e.g. `.claude/skills/land/SKILL.md`'s Section 3 isolation-replay
+# merge loop) never opened at all -- 4 of that file's 24 bash fences were
+# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Three
+# other modules each rediscovered and re-fixed that independently before
+# lode-ovgs unified them here and lode-p4qb folded in the fourth
+# (tests/test_assert_main_checkout.py).
+#
+# Consumers: tests/test_land_lock.py, tests/test_land_conflicts_state.py,
+# tests/test_skill_bash_state.py, tests/test_assert_main_checkout.py. A change
+# to the rules below changes what all four gates consider "executed", so the
+# rules are stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1192,23 +1184,32 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # without that second half, a same-block assign-then-use pair like
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
-# regexes in tests/test_skill_bash_state.py (lode-wroz). Same shape as
-# tests/test_bd_list_limit_gate.py's `_BLOCKQUOTE_RE`/`_strip_blockquote`,
-# which normalizes its OWN input the same way ahead of calling this helper --
-# doing it HERE means every caller gets the fix, not just that one. That
-# pre-pass is now redundant AHEAD OF THIS HELPER (lode-3pyo) but not dead: the
-# same gate's inline-backtick scan never goes through here and still needs it.
-# Stripping twice is a no-op on today's corpus, measured, but is not one in
-# general -- a `>>`-leading line double-strips to a bare one.
+# regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
+# caller gets the fix, not just one. tests/test_bd_list_limit_gate.py IMPORTS this
+# constant (rather than declaring its own) for its inline-backtick scan -- a path that
+# never reaches this helper and so must unmark its own input to the SAME shape, or the
+# two would partition one document differently. Its pre-pass ahead of this helper was
+# removed by lode-3pyo: stripping twice is a no-op on today's corpus, measured, but not
+# in general -- a `>>`-leading line double-strips to a bare one.
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
-# A fence marker: three-or-more backticks, or three-or-more tildes -- the
-# shape of ``scripts/check_links.py``'s own ``_FENCE_RE``, reused rather than
-# reinvented (lode-p4qb). The two never close each other, and CommonMark
-# requires a closing run to be the SAME character as the opening one and AT
-# LEAST AS LONG: that is what lets a four-backtick-opened block contain an
-# ordinary triple-backtick content line as literal text instead of a false
-# close -- the whole reason a four-backtick fence exists.
+# A fence marker: three-or-more backticks, or three-or-more tildes, plus
+# whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
+# as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
+# imported, and the two state machines that consume them do NOT agree: this one
+# applies CommonMark's closing rule (a closing run must be the SAME character
+# as the opening one and AT LEAST AS LONG, which is what lets a four-backtick
+# block hold an ordinary ```-prefixed content line as literal text), while
+# check_links.py toggles on ANY marker, so there a ``~~~`` line does close a
+# ```-opened block. Do not read one as documentation for the other.
+#
+# UNPINNED, ONE-SIDED DIVERGENCE, filed as lode-xqc7: this widening is not
+# mirrored in tests/test_bd_list_limit_gate.py's own inline-span fence tracker,
+# which still toggles on `startswith("```")`. That is the exact failure mode
+# `_BLOCKQUOTE_MARKER` above is SHARED to prevent -- two paths partitioning one
+# document differently -- so a ``~~~bash`` block would read as executed to this
+# helper and as prose to that scan. Latent only: zero tilde and zero
+# four-plus-backtick fences exist across the gated corpus, measured.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
@@ -1232,24 +1233,26 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     without this a blockquoted fence would stay invisible the same way an
     indented one used to.
 
-    Also matches a FOUR-OR-MORE-backtick fence and a TILDE (``~~~bash``)
-    fence (lode-p4qb; see ``_FENCE_MARKER_RE`` above) -- both legitimate
-    CommonMark, and the four-backtick form is what an author MUST use for a
-    block whose own body contains a literal ```-prefixed line. An
-    UNTERMINATED final fence (no closing marker at all, so the block would
-    otherwise never flush) is now FLUSHED rather than dropped -- lode-p4qb's
-    deliberate answer to a divergence this helper used to carry silently
-    against ``tests/test_assert_main_checkout.py``'s now-unified copy, which
-    always flushed. All three are latent on today's corpus: zero instances of
-    any of them exist in any file this helper parses, measured across all 58
-    markdown files in the repo during lode-p4qb -- hardening, not a live-bug
-    fix.
+    Three further rules, all settled by lode-p4qb and all latent on today's
+    corpus -- zero instances of any of them exist in any of the repo's
+    markdown files, measured, so this is hardening rather than a live-bug fix:
+
+    * a FOUR-OR-MORE-backtick fence and a TILDE (``~~~bash``) fence are both
+      scanned (see ``_FENCE_MARKER_RE`` above), not silently skipped.
+    * a closing run must be the SAME character as the opening one and AT LEAST
+      AS LONG (CommonMark), so a ```-prefixed line inside a four-backtick
+      block is content, not a close -- which is the whole reason an author
+      reaches for the four-backtick form.
+    * an UNTERMINATED final fence is FLUSHED, not dropped. Dropping is the
+      same false-assurance shape this helper exists to delete: a gate would
+      report "clean" for a block it never parsed.
 
     A caller that wants every block concatenated into one string (e.g. to
     check for an offending token whose position within the file doesn't
     matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
 
-    One remaining known boundary, silent and unrelated to the three above: the
+    One remaining known boundary, and the only one left of the OPPOSITE kind
+    -- corruption rather than a silent skip: the
     blockquote strip cannot tell a blockquote marker from a redirection, so it
     also fires on a CONTENT line whose first non-blank character is ``>``.
     ``>&2 echo hi`` extracts as ``&2 echo hi``, ``>> log`` as ``> log``,
@@ -1263,17 +1266,14 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     """
     blocks: list[str] = []
     current: list[str] | None = None
-    fence_char = ""
-    fence_len = 0
+    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"
     for raw_line in markdown.splitlines():
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
         if current is not None:
-            if (
-                stripped
-                and len(stripped) >= fence_len
-                and set(stripped) == {fence_char}
-            ):
+            # A closing run: nothing but the opening character, and at least
+            # as long. An empty line has neither property, so it is content.
+            if len(stripped) >= len(fence) and set(stripped) == {fence[0]}:
                 blocks.append("\n".join(current))
                 current = None
             else:
@@ -1281,8 +1281,7 @@ def bash_fence_blocks(markdown: str) -> list[str]:
             continue
         m = _FENCE_MARKER_RE.match(stripped)
         if m and m.group(2).strip() in {"bash", "sh"}:
-            fence_char = m.group(1)[0]
-            fence_len = len(m.group(1))
+            fence = m.group(1)
             current = []
     if current is not None:  # unterminated final fence -- flushed, not dropped
         blocks.append("\n".join(current))
