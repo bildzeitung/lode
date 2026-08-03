@@ -119,7 +119,7 @@ def _embedder_model_revision(embedder: object) -> str | None:
         return None
 
 
-def resolve_model_revision(model_name: str) -> str | None:
+def resolve_model_revision(model_name: str, *, timeout_s: float) -> str | None:
     """Resolve ``model_name``'s currently-live HuggingFace revision (commit SHA).
 
     The same ``huggingface_hub.model_info(repo).sha`` lookup ``fastembed``'s own
@@ -148,10 +148,16 @@ def resolve_model_revision(model_name: str) -> str | None:
     freezes it into a module constant at import). Full reasoning and the
     measurement: ``docs/decisions.md``, the lode-r4r2 entry.
 
-    **What this guard does NOT cover:** the flag-UNSET no-network case, where the
-    probe really is unbounded and blocks for the OS TCP connect timeout before
-    reaching the ``except`` below. That is lode-w5nr; no offline-flag check can
-    see it.
+    **``timeout_s`` bounds the flag-UNSET no-network case (lode-w5nr), which the
+    guard above does not cover.** ``huggingface_hub`` disables ``httpx``'s own
+    timeout on its shared client, so the probe was otherwise unbounded — it
+    blocked for the OS TCP connect timeout before reaching the ``except`` below,
+    for a value that ends up ``None`` regardless. Required, not defaulted, so a
+    caller cannot silently reintroduce that wait by omission; callers thread
+    ``settings.hf_probe_timeout_s`` through. Full reasoning and the measurement
+    (including what a float ``timeout`` bounds in ``httpx``, and why this does
+    not cover ``fastembed``'s own weights download): ``docs/decisions.md``, the
+    lode-w5nr entry.
 
     :func:`lode.config.hf_hub_offline` is the same truthiness check
     :mod:`lode.cli`'s ``models_pull`` cold-cache handling already relies on for
@@ -166,7 +172,7 @@ def resolve_model_revision(model_name: str) -> str | None:
     try:
         from huggingface_hub import model_info
 
-        return model_info(hf_source).sha
+        return model_info(hf_source, timeout=timeout_s).sha
     except Exception:
         return None
 
@@ -191,6 +197,7 @@ class FastEmbedEmbedder:
         self._revision_probed = False
         self._load_lock = threading.Lock()
         self._heartbeat_interval_s = settings.progress_heartbeat_interval_s
+        self._probe_timeout_s = settings.hf_probe_timeout_s
 
     def _load(self) -> object:
         # Double-checked locking: the fast (already-loaded) path never takes
@@ -265,7 +272,9 @@ class FastEmbedEmbedder:
         if not self._revision_probed:
             with self._load_lock:
                 if not self._revision_probed:
-                    self._revision = resolve_model_revision(self._model_name)
+                    self._revision = resolve_model_revision(
+                        self._model_name, timeout_s=self._probe_timeout_s
+                    )
                     self._revision_probed = True
         return self._revision
 
@@ -300,11 +309,12 @@ class FastEmbedEmbedder:
         ``HF_HUB_OFFLINE``, so the cost is documented and explicitly opt-out-able
         rather than a silent surprise.
 
-        **How often that probe actually fires is worse than "once per process":**
-        ``lode work``'s drain constructs a fresh ``FastEmbedEmbedder`` per queued
-        job, so a drain of N versions pays N probes -- and N full ONNX loads, the
-        far larger cost. That is lode-j5r2, filed rather than fixed here; the
-        docs say "per indexed version" because that is what the code does today.
+        **Once per process, not once per job (lode-j5r2).** ``lode work`` used
+        to build a fresh embedder for every queued job, so a drain of N versions
+        paid N probes and N ONNX loads. Who shares an instance is the caller's
+        call, and ``lode work`` now holds one for its whole run
+        (:func:`lode.worker.drain`) -- so the per-process cost described above
+        is what indexing actually pays.
         """
         self._load()
 

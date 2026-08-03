@@ -2727,6 +2727,12 @@ assumption would not have closed it.
   in the script's header** — both went stale within one ticket of being written, which is the whole
   reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` pins each guarded fence
   independently and is the authoritative list; this paragraph deliberately does not restate it.
+  Since `lode-1d2y` that module is the authoritative record of the **exempt** half too, and for the
+  same reason: the per-fence pins were closed-world, so a genuinely new unguarded fence matched no
+  selector and failed nothing, while every exemption below was prose that no gate could falsify. An
+  open-world sweep now flags every mutating command in every fence unless it is guarded or carries a
+  reasoned entry in that module's allowlist — so the paragraphs below are the *reasoning*, not the
+  roster, and an exemption that stops being true fails a test rather than aging quietly in this file.
 
   **`lode-gczf`'s "Section 4's worktree/branch GC is exempt" is right as scoped and wrong if
   generalized — the distinction is the point.** Its literal text: those commands "operate on specific

@@ -469,6 +469,14 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   duplicates. Runs at the start of each `lode work` drain pass (startup + every ``--loop`` tick).
 - **Single owner** (the startup advisory lock, above) is what lets a one-claimer SQLite queue stay
   correct with no distributed locking.
+- **The embedder is owned by the run, not by the job** (`lode-j5r2`). `drain()` hands every `embed`
+  job in a pass the same `FastEmbedEmbedder`, and `lode work` holds one for the whole process — across
+  every pass of `--loop`/`--wait` — so an ONNX model load (~1.5s) and the provenance revision probe
+  ([Model provenance](#model-provenance-the-embedder-revision-manifest-decided-lode-crh81)) are paid
+  once per process, not once per indexed version. Sharing across passes is the *caller's* choice:
+  `drain()` keeps no embedder of its own between calls. The trade is that the instance's first
+  revision probe latches for the run — a failed one included, so one bad probe stamps
+  `model_revision = NULL` for the rest of that process (`docs/decisions.md`, `lode-j5r2`).
 
 ### Enqueue ownership, atomicity, and layering — pinned 2026-06-28 (lode-i05.1)
 
