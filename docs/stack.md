@@ -648,21 +648,13 @@ results, which arrives as a raw `httpx`/`json` exception outside any `anthropic`
 (`lode-3gtu`, open). `OpenAIProvider` catches bare `Exception` around its single call and has
 neither gap.
 
-**Consumer-side blast radius (`lode-5zqa`).** `lode.worker.drain`'s batch pre-step catch — until now
-`except (AuthError, LLMAuthError)`, the same permanent-failure carve-out `lode-9yy`/`lode-568v.3`
-built for a missing credential — is widened to `except (AuthError, LLMProviderError)`
-(`LLMAuthError` already subclasses `LLMProviderError`, so this is a strict widening, not a behavior
-change for the existing missing-credential case). Without it, any `LLMProviderError` surfaced by the
-batch-poll step — including, once `lode-3gtu` lands, the fix for the streaming gap named above —
-would propagate raw straight out of `drain()` and abort the whole pass before the credential-free
-`embed` jobs ever ran. Worse, a batch stuck on a permanently malformed results line re-polls and
-re-fails identically on every tick (the job stays `'running'` with `batch_handle` set, so
-`_reclaim_stale_running` deliberately skips it): unwidened, that is a poison-pill loop with no bound
-and no visible exit. The wider catch still raises **last**, only after the credential-free work has
-run — see `lode.worker.drain`'s own docstring for the exact contract. This does not distinguish a
-transient poll failure (self-heals next tick) from a sticky one (the same malformed bytes forever),
-nor add any failure-budget/dead-letter mechanism for a permanently stuck batch — both left as
-possible follow-ups, not required by this fix.
+**Consumer-side blast radius (`lode-5zqa`).** Whatever this seam raises lands in
+`lode.worker.drain`'s batch pre-step, which catches `(AuthError, LLMProviderError)` and stashes it
+until the credential-free `embed` jobs have run. So an `LLMProviderError` from the poll path degrades
+that step rather than aborting the pass — but only because it arrives as *that type*: a failure that
+escapes as something else (`lode-t7en`) still aborts the whole drain, which is the consumer-side
+reason the classes above are worth closing at this seam rather than downstream. `docs/storage.md`
+"Transient vs. permanent job failures" owns the policy and the limits it leaves standing.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)
 
