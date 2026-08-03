@@ -576,6 +576,15 @@ config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
+Exactly one call site reads that roster wider: `drain`'s *batch pre-step* treats the
+whole `LLMProviderError` base class as permanent (`lode-5zqa`), not just its
+`LLMAuthError` subclass — see "must not starve the credential-free work" below. The
+two sites named next keep the narrow pair deliberately, because each has a transient
+`except Exception` path of its own that a non-auth provider error *should* fall into;
+the batch *collect* path has none, which is what makes the difference. Note the
+roster is by exception **type**, so it bounds nothing arriving as another type — e.g.
+`lode-t7en`'s wrong-shape results line, a raw `AttributeError`/`TypeError`.
+
 `run_one` and `_batch_submit_enrich` special-case `(AuthError, LLMAuthError)` ahead
 of their generic catch: the claimed job is reset straight back to `'pending'` with
 `attempts` untouched (never `'failed'` with backoff, never `'dead'`), then the
@@ -596,26 +605,47 @@ decides how loud "surface it" should be:
   call (which resolves credentials via `build_provider()`) in a broad `except`, so an `AuthError`/`LLMAuthError`
   there already propagates out of it — the swallow this section fixes never
   existed on that path. `drain` handles it identically to `_batch_submit_enrich`'s,
-  below.
+  below. The same "no special case" is true of a non-auth `LLMProviderError` from
+  the same unwrapped `provider.collect_batch()` call (e.g. a permanently
+  malformed batch-results line — `lode-3gtu`); `drain`'s outer catch (below) is
+  widened to absorb that too (`lode-5zqa`), for the identical starvation reason.
 
-**A missing credential must not starve the credential-free work.** Both enrich
-batch pre-steps run *before* `drain`'s reclaim, retry-reset, and main claim/run
-loop — so a pre-step that raised on the spot would abort the entire drain. That
-is not acceptable: `embed` jobs are produced by the **local** fastembed model and
-have nothing to do with the cloud LLM provider's credentials, and a pending
-enrich job is essentially always present (every `add` enqueues one). Raising from
-the pre-step would therefore abort *every* `lode work` before the first embed
-ever ran, leaving an unkeyed user's embeds pending forever and silently killing
-the dense half of retrieval — trading "enrich is retried forever" for "the whole
-queue stops", which is strictly worse.
+**A missing credential — or a stuck batch poll — must not starve the
+credential-free work.** Both enrich batch pre-steps run *before* `drain`'s
+reclaim, retry-reset, and main claim/run loop — so a pre-step that raised on the
+spot would abort the entire drain. That is not acceptable: `embed` jobs are
+produced by the **local** fastembed model and have nothing to do with the cloud
+LLM provider's credentials (or its batch-results stream), and a pending enrich
+job is essentially always present (every `add` enqueues one). Raising from the
+pre-step would therefore abort *every* `lode work` before the first embed ever
+ran, leaving an unkeyed user's embeds pending forever and silently killing the
+dense half of retrieval — trading "enrich is retried forever" for "the whole
+queue stops", which is strictly worse. A batch stuck polling a permanently
+malformed results line makes the same trade even sharper: nothing reclaims it
+("Batch-backed enrich jobs are excluded" below), so the identical failure would
+otherwise repeat on *every* tick forever — a poison-pill loop with no bound
+(`lode-5zqa`).
 
-So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError`, completes the reclaim, the
-retry-reset and the main claim/run loop, and re-raises it only at the end. The
-main loop drains `embed` ahead of `enrich` (`_claim_one` orders on type), so the
-embeds land before any residual enrich job re-raises out of `run_one`. Net effect
-for an operator with no credentials: embeds keep draining, enrichment stays
-pending and uncharged, and `lode work` still exits non-zero with the actionable
-message.
+So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError` — and, since
+`lode-5zqa`, any other `LLMProviderError` — completes the reclaim, the
+retry-reset and the main claim/run loop, and re-raises it only at the end
+(`LLMAuthError` already subclasses `LLMProviderError`, so widening the catch to
+the base class changed nothing about the credential case). The main loop drains
+`embed` ahead of `enrich` (`_claim_one` orders on type), so the embeds land
+before any residual enrich job re-raises out of `run_one`. Net effect for an
+operator with no credentials, or with a batch wedged on bad data: embeds keep
+draining, enrichment stays pending and uncharged (or the batch stays `'running'`,
+unresolved), and `lode work` still exits non-zero.
+
+What the stuck-batch case does **not** get, and the credential case does: a clean
+message. `lode work` handles only `AuthError` (`cli.py`), so a non-auth
+`LLMProviderError` — and, today, an `LLMAuthError` too — escapes every handler and
+surfaces as a raw traceback, which is why the bullet above promises traceback-free
+treatment the batch path does not yet honour (`lode-yx1c`). And the widening bounds
+the *starvation*, not the wedge itself: the batch re-fails every tick with no
+failure budget and no dead-letter path, one shared `try` means a stuck collect also
+blocks new submissions, and a single poisoned handle blocks the other healthy ones
+(`lode-knnt`). A permanently stuck batch still needs a human.
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 
