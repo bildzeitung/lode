@@ -98,6 +98,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -1251,10 +1252,24 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     blocks against this file instead of 24, and this test goes red reporting
     exactly that mismatch. Restoring `stripped = line.strip()` turns it green
     again. Verified by hand against this exact file while writing this ticket.
+
+    The independent count must recognize the same FENCE SHAPES the parser
+    does, or it stops being an independent second derivation and becomes a
+    stale narrower one: lode-p4qb widened `bash_fence_blocks` to open on
+    four-or-more backticks and on `~~~`, and against an exactly-three-backtick
+    marker count the first author to write the four-backtick form -- the one
+    the parser's own docstring says an author MUST use for a block containing
+    a ```-prefixed line -- would fail this test on a CORRECT parse, with a
+    message blaming the parser for missing a fence it actually found.
+    Measured while widening it: one added four-backtick (or tilde) bash fence
+    took land/SKILL.md to 25 parsed against 24 markers. What stays independent
+    is the METHOD -- a flat per-line marker count, no state machine, no call
+    into the parser -- not the grammar.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
+    opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
     expected_marker_count = sum(
-        1 for line in text.splitlines() if line.strip() in {"```bash", "```sh"}
+        1 for line in text.splitlines() if opening_marker.match(line.strip())
     )
     # A sanity floor on the independent count itself -- if this ever drops to
     # 0 the file lost every bash fence, which is a different, louder bug this

@@ -115,7 +115,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
@@ -391,8 +391,10 @@ def _anthropic_error_from_exception(
     **Not** the non-status ``anthropic.APIError`` subclasses
     (``APITimeoutError``, ``APIConnectionError``): a timeout is not a
     rejected request, and :data:`lode.qa.MAX_TOKENS`'s note documents it
-    surfacing raw today. Nor a failure raised while *streaming* a batch's
-    JSONL results -- see :meth:`AnthropicProvider.collect_batch` (lode-3gtu).
+    surfacing raw today. Nor a failure raised while *streaming* a batch's JSONL
+    results: that is never an ``anthropic.APIStatusError``, so it cannot go
+    through this helper at all -- :meth:`AnthropicProvider.collect_batch` wraps
+    it separately (lode-3gtu).
     """
     _log.error(
         "Anthropic call failed (%s, status_code=%s request_id=%s): %s",
@@ -709,7 +711,9 @@ class AnthropicProvider:
     def collect_batch(
         self, handle: str, *, timeout_s: float
     ) -> tuple[Literal["pending"], None] | tuple[Literal["ended"], list[BatchResult]]:
-        import anthropic  # deferred -- lode-4q97; needed by the `except` below
+        # Both deferred -- lode-4q97; needed by the `except` clauses below.
+        import anthropic
+        import httpx
 
         # These two SDK calls carry no `reasoning_effort`, so no pairing 400
         # (lode-90o7) can arise here -- but a 429/5xx/404 while polling still
@@ -736,17 +740,39 @@ class AnthropicProvider:
                 exc, context=f"batches.results handle={handle}"
             ) from exc
 
-        # The loop below is deliberately OUTSIDE that wrap. `batches.results`
-        # resolves the HTTP status before it builds the decoder it returns, so
-        # an `APIStatusError` can only ever come from the call above, never
-        # from iterating -- widening the `try` would catch nothing more. What
-        # the decoder *does* defer is the body: it streams lazily
-        # (`http_response.iter_bytes`) and json-decodes each line as the loop
-        # pulls it, so a truncated stream or a malformed line surfaces here as
-        # a raw `httpx`/`json` error -- outside any `anthropic` type, so no
-        # `except anthropic.*` clause would reach it. Tracked as lode-3gtu.
+        # `batches.results` resolves the HTTP status before it builds the decoder
+        # it returns, so an `APIStatusError` can only ever come from the call
+        # above, never from iterating -- widening that clause would catch nothing
+        # more. What the decoder *does* defer is the body: it streams lazily
+        # (`http_response.iter_bytes`) and decodes each line as it is pulled, so a
+        # dead stream or an undecodable line surfaces from the ITERATION as a raw
+        # non-`anthropic` exception. `_stream` converts those (lode-3gtu);
+        # `docs/stack.md` "Error contract" owns the inventory of what still gets
+        # past this seam raw, and why discarding a partial read is safe.
         results: list[BatchResult] = []
-        for result in batch_results:
+
+        def _stream() -> Iterator[Any]:
+            """Iterate `batch_results`, converting a mid-stream failure.
+
+            Brackets only the *iteration* -- never the loop body below -- so a
+            genuine bug there can never be mistaken for a stream failure, and no
+            `except Exception` is needed to say so. Closes over `results` so the
+            message can report how much had been decoded when the stream died.
+            """
+            try:
+                yield from batch_results
+            except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                context = (
+                    f"batches.results handle={handle} failed while streaming JSONL "
+                    f"results ({len(results)} result(s) already decoded, now "
+                    f"discarded)"
+                )
+                _log.error("Anthropic call failed (%s): %s", context, exc)
+                raise LLMProviderError(
+                    f"{context}: {exc}", provider="anthropic"
+                ) from exc
+
+        for result in _stream():
             if result.result.type == "succeeded":
                 try:
                     tool_block = next(

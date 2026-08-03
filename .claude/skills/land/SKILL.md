@@ -57,12 +57,9 @@ exits 0 is indistinguishable from a clean pass that had nothing to do.
 — that is the source of truth, not this restatement.** `lode-x495` found the same bug class in
 `/sweep` and `/release` (both since fixed) and shipped `tests/test_skill_bash_state.py` to catch a
 regression to this file or any other skill's markdown. **This file is covered by that gate**, so a
-newly-introduced cross-block variable here fails `nox -s tests`. Two known names are allowlisted
-individually rather than fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the
-land-review verdicts, so there is nothing upstream in this file's bash to re-derive it from) and
-`$CONFLICTS` (a few sections below — was a real instance of this bug class, fixed by `lode-rfon`,
-which has since landed, so the entry is now inert rather than a live violation) — both tracked
-by `lode-p1r3`, which removes the now-dead allowlist entry. Everything else in this file is gated
+newly-introduced cross-block variable here fails `nox -s tests`. One name is allowlisted rather than
+fixed — `$ACCEPTED` (Section 3a; derived by my own reasoning over the land-review verdicts, so there
+is nothing upstream in this file's bash to re-derive it from). Everything else in this file is gated
 mechanically.
 
 ---
@@ -158,6 +155,8 @@ rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label
 rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+rm -rf "$STATE_DIR"   # per-pass scratch the reset below cannot clear (lode-wjw4) -- see below
 git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
   # DELIBERATELY BARE `git`, NOT `rtk git` (lode-eza9) -- the ONE exception to CLAUDE.md's RTK golden
   # rule in this file. `rtk git log` silently DROPS MERGE COMMITS (upstream rtk-ai/rtk#2305): measured
@@ -214,6 +213,18 @@ exactly the crash case this reset exists to heal.
 
 Full write-up, including the writer this does **not** cover:
 [docs/agents-workflow.md — Mechanics (decided)](../../../docs/agents-workflow.md#mechanics-decided).
+
+**The same block also wipes `$STATE_DIR` (lode-wjw4).** `.git/land-state/` is per-pass scratch the
+reset cannot clear, and a leftover from a crashed prior pass is the same *residue* category as a
+leftover merge commit; Section 0's lock is already held by this point, so this is its altitude. The
+line only ever **removes** — each writer still `mkdir -p`s the subdirectory it needs (`$CONFLICTS_DIR`
+in 2b, `$MSG_DIR`/`$CONFLICTS_DIR` in 3a) — so Section 1 never has to enumerate a subdirectory a later
+section invents, and, running ahead of every writer, nothing has to be verbally ordered around it.
+Its position *inside* the block is load-bearing too, and is pinned rather than remembered:
+`tests/test_land_conflicts_state.py` fails if the wipe leaves this block, or if `git reset --hard`
+stops being the block's **last** command — no block here runs under `set -e`, so that last command's
+status is the only machine-readable signal the block gives, and `rm -rf` reports success even on a
+path that does not exist.
 
 Then read the queue — every ticket carrying the **`ready-for-land`** label (it stays `in_progress`;
 the label, not a status, is the queue):
@@ -409,9 +420,7 @@ per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, wi
 tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
-# STATE_DIR is the same $STATE_DIR Section 3a formalizes below (`.git/land-state`) -- this runs
-# FIRST in the pass, ahead of 3a's own `rm -rf "$STATE_DIR" && mkdir -p ...`, so create the
-# subdirectory here rather than assume 3a already has (lode-rfon).
+# $STATE_DIR is wiped once per pass, in Section 1 (lode-wjw4); re-derived here, fresh invocation.
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
 CONFLICTS_DIR="$STATE_DIR/conflicts"
 mkdir -p "$CONFLICTS_DIR"
@@ -448,11 +457,10 @@ fi
   since the file — not the shell variable — is what the kick-back block actually reads) holds
   exactly the conflicting path(s), one per line — no tree OID, no chatter. → needs-rebase kick-back
   (see "Needs rebase — kick back"): skip `land-review`, leave the merge set. **Do that kick-back now,
-  for this branch, while still in Section 2** — not batched up for later. [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent)'s
-  `rm -rf "$STATE_DIR"` wipes the file this block just wrote, so a kick-back deferred past it finds
-  nothing and aborts loudly instead of kicking back at all. (Nothing else needs saying: 3a already
-  computes `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching
-  3a un-kicked-back is out of order on its own terms.)
+  for this branch, while still in Section 2** — not batched up for later:
+  [3a](#3a-order-the-accepted-set--base-before-dependent-hold-an-orphaned-dependent) already computes
+  `$ACCEPTED` from outcomes that include "kicked back `needs-rebase`", so a branch reaching 3a
+  un-kicked-back is out of order on its own terms.
 - **`rc=2`** → **MACHINE FAULT, not a branch conflict** (git < 2.38, an unreadable/unknown ref, or
   `merge-tree` itself failing). Per lode-9i2p's rule — the same one Section 3 already honours for
   `validate-mermaid.sh`'s exit 2 ("a red gate is content; exit 2 is the machine") — I do **not** kick
@@ -711,13 +719,7 @@ MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only re
 CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
                                                          # conflict's paths for the kick-back block
                                                          # below to read (lode-rfon)
-rm -rf "$STATE_DIR" && mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # fresh per pass -- no stale message,
-                                                         # accepted set, or conflicts record from an
-                                                         # earlier /land tick can leak into this one.
-                                                         # (2b's own conflicts writes, if any, already
-                                                         # ran and were consumed by the per-branch
-                                                         # kick-back before Section 2 finished -- this
-                                                         # wipe cannot race them.)
+mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # $STATE_DIR is wiped once per pass, in Section 1 (lode-wjw4)
 
 # Capture the accepted set to a file HERE, at the one moment I actually hold it (2c's land-review
 # verdicts, in the order 3a just established). Every later block RE-READS this file instead of having

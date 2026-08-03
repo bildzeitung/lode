@@ -364,15 +364,22 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     """(span, 1-based line number) for every unguarded `bd ... list` in an inline
     single-backtick span OUTSIDE any fence.
 
-    Fence tracking is a line-by-line state machine using the same
-    `line.strip().startswith("```")` rule `_bash_blocks` applies, rather than a
-    `` ```...``` `` region regex. Two reasons, both load-bearing: a region regex pairs
+    Fence tracking is a line-by-line state machine on `line.strip().startswith("```")`
+    rather than a `` ```...``` `` region regex. Two reasons, both load-bearing: a
+    region regex pairs
     delimiters by position, so a single stray ``` inside a block (`.claude/agents/
     coding.md:447` has one, in a comment) inverts every pairing after it and starts
     stripping PROSE instead of code -- a silent false negative; and substituting the
     regions away destroys line numbers, which is not cosmetic here (the release/SKILL.md
     inline site really at line 129 was reported as line 96, sending a reader to the
-    wrong place in the only message this gate ever prints)."""
+    wrong place in the only message this gate ever prints).
+
+    This rule NO LONGER matches `_bash_blocks`'s, and that divergence is unpinned
+    (lode-p4qb widened the shared helper to four-or-more backticks and `~~~`; this
+    scan was left at three backticks, filed as lode-xqc7). A `~~~bash` block would be
+    executed-context to one path and prose to the other -- the same two-paths-
+    partition-one-document failure `_strip_blockquote`/`_BLOCKQUOTE_MARKER` are shared
+    to prevent. Latent only: zero such fences exist in the gated corpus today."""
     found: list[tuple[str, int]] = []
     in_fence = False
     for lineno, line in enumerate(_strip_blockquote(markdown).splitlines(), 1):
