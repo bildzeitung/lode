@@ -34,6 +34,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from _gitrepo import _git
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -62,10 +63,20 @@ def _commit(repo: Path, message: str, filename: str | None = None) -> None:
     _git(repo, "commit", "-q", "-m", message)
 
 
-def _run(range_: str, repo: Path) -> subprocess.CompletedProcess:
+def _run(
+    range_: str, repo: Path, bin_dir: Path | None = None
+) -> subprocess.CompletedProcess:
+    """Run the real script over `range_` in `repo`. `bin_dir`, when given, is
+    PREPENDED to the real PATH so a shim it holds wins the PATH search over the
+    genuine binary -- how the grep-fault tests below beat the real grep, while
+    every other tool the script needs (git, mktemp) still resolves normally."""
+    env = None
+    if bin_dir is not None:
+        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
     return subprocess.run(
         ["bash", str(SCRIPT), range_],
         cwd=repo,
+        env=env,
         capture_output=True,
         text=True,
         timeout=30,
@@ -322,22 +333,25 @@ def test_usage_with_two_args_is_also_exit_2() -> None:
 
 
 # ---------------------------------------------------------------------------
-# lode-umtc: the four grep call sites that consume read_log's output (the
-# BREAKING-CHANGE-in-body scan, and the breaking/feat/fix subject checks)
-# used to conflate grep's exit 1 ("no match" -- a content answer) with any
-# other nonzero exit (a machine fault -- unreadable stream, grep missing from
-# PATH, ...). Both landed in the same implicit fallthrough, so a fault at any
-# of the three subject checks silently downgraded the verdict (breaking ->
-# feat -> fix -> none) and still exited 0 -- a wrong-but-plausible SemVer
-# level then gets tagged and shipped. Mirrors the shape lode-yoc3 already
-# established for validate-mermaid.sh's per-doc loop.
+# lode-umtc: the four grep call sites that consume read_log's output. Why the
+# partition is drawn at exit 1, and why it is open-coded per site rather than
+# extracted, is argued at the greps in scripts/release-bump.sh -- not repeated
+# here.
 #
 # Each fake grep below delegates to the REAL grep for every call except the
 # one call site under test (matched on grep's own PATTERN argument, `$2` --
-# release-bump.sh always invokes `grep -qE '<pattern>' <<<"$STREAM"`), so a
+# release-bump.sh always invokes `grep -qE "$PAT_..." <<<"$STREAM"`), so a
 # test targeting one site cannot be masked by -- or accidentally pass because
 # of -- a different site also being broken.
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_bin(tmp_path: Path) -> Path:
+    """An empty directory to hold PATH shims, passed to ``_run(bin_dir=...)``."""
+    d = tmp_path / "fakebin"
+    d.mkdir()
+    return d
 
 
 def _add_faulty_grep(bin_dir: Path, pattern_marker: str, exit_code: int) -> None:
@@ -359,124 +373,80 @@ def _add_faulty_grep(bin_dir: Path, pattern_marker: str, exit_code: int) -> None
     shim.chmod(0o755)
 
 
-def _run_with_faulty_path(
-    range_: str, repo: Path, bin_dir: Path
-) -> subprocess.CompletedProcess:
-    """Like ``_run`` above, but with ``bin_dir`` prepended to PATH so the
-    faulty ``grep`` shim it holds wins the PATH search over the real one."""
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
-    return subprocess.run(
-        ["bash", str(SCRIPT), range_],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-
-
-def test_body_scan_grep_fault_is_gate_could_not_run(tmp_path: Path) -> None:
-    """The BREAKING-CHANGE-in-body scan (the first of the four sites) faults
-    with a non-1 exit code -- must escalate rather than being silently read
-    as "no marker in this range" and falling through to the subject checks."""
-    repo = _init_repo(tmp_path)
-    _git(repo, "tag", "v0.3.1")
-    _commit(repo, "feat: add a thing")
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    _add_faulty_grep(bin_dir, "BREAKING", 2)
-
-    result = _run_with_faulty_path("v0.3.1..HEAD", repo, bin_dir)
-
+def _assert_gate_could_not_run(
+    result: subprocess.CompletedProcess, *, says: str, exit_code: int
+) -> None:
+    """The whole contract of a gate-could-not-run exit from this script, pinned
+    in ONE place so tightening it later is one edit rather than one per site:
+    exit 2 (never 0, which would carry a bump verdict a caller would act on),
+    nothing on stdout, the banner, the scan that failed, and grep's OWN
+    faulting status echoed back -- which is what proves `rc=$?` captured grep's
+    status rather than something else's."""
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
     assert "GATE COULD NOT RUN" in result.stderr
-    assert "commit bodies" in result.stderr
-    assert "exit 2" in result.stderr
+    assert says in result.stderr
+    assert f"exit {exit_code}" in result.stderr
 
 
-def test_breaking_subject_grep_fault_is_gate_could_not_run(tmp_path: Path) -> None:
-    """The breaking-subject check (second site) faults. The commit carries no
-    BREAKING-CHANGE body marker, so the body scan (first site) genuinely finds
-    nothing and this is the first place the fault can surface."""
+@pytest.mark.parametrize(
+    ("subject", "pattern_marker", "exit_code", "says"),
+    [
+        # Site 1, the BREAKING-CHANGE body scan. Nothing runs before it, so any
+        # subject reaches it; a fault here must not read as "no marker in this
+        # range" and fall through to the subject checks.
+        ("feat: add a thing", "BREAKING", 2, "commit bodies"),
+        # Site 2, the `!:` subject scan. No BREAKING-CHANGE body marker, so
+        # site 1 genuinely finds nothing and this is the first place a fault
+        # can surface.
+        ("fix: correct a thing", "!:", 5, "breaking-change marker"),
+        # Site 3, the feat subject scan. Neither a body marker nor a `!:`
+        # subject, so sites 1 and 2 genuinely find nothing.
+        ("fix: correct a thing", "feat", 3, "feat prefix"),
+        # Site 4, the fix subject scan (last). The commit carries none of the
+        # first three markers, so this is the first place a fault can surface.
+        ("chore: tidy up", "fix", 4, "fix prefix"),
+    ],
+)
+def test_grep_fault_at_each_site_is_gate_could_not_run(
+    tmp_path: Path,
+    fake_bin: Path,
+    subject: str,
+    pattern_marker: str,
+    exit_code: int,
+    says: str,
+) -> None:
+    """A grep faulting with a non-1 exit at ANY of the four sites must escalate
+    to exit 2, not be read as "no match". Each case picks a commit subject that
+    leaves the earlier sites genuinely matchless, so the site named in the
+    parameter really is the one that faulted -- and a distinct exit code per
+    case, echoed back in the message, pins that grep's OWN status was captured.
+    """
     repo = _init_repo(tmp_path)
     _git(repo, "tag", "v0.3.1")
-    _commit(repo, "fix: correct a thing")
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    _add_faulty_grep(bin_dir, "!:", 5)
+    _commit(repo, subject)
+    _add_faulty_grep(fake_bin, pattern_marker, exit_code)
 
-    result = _run_with_faulty_path("v0.3.1..HEAD", repo, bin_dir)
+    result = _run("v0.3.1..HEAD", repo, bin_dir=fake_bin)
 
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "GATE COULD NOT RUN" in result.stderr
-    assert "breaking-change marker" in result.stderr
-    assert "exit 5" in result.stderr
-
-
-def test_feat_subject_grep_fault_is_gate_could_not_run(tmp_path: Path) -> None:
-    """The feat-subject check (third site) faults; the commit carries neither
-    a breaking-change body marker nor a `!:` subject, so the first two sites
-    genuinely find nothing and this is the first place the fault can surface."""
-    repo = _init_repo(tmp_path)
-    _git(repo, "tag", "v0.3.1")
-    _commit(repo, "fix: correct a thing")
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    _add_faulty_grep(bin_dir, "feat", 3)
-
-    result = _run_with_faulty_path("v0.3.1..HEAD", repo, bin_dir)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "GATE COULD NOT RUN" in result.stderr
-    assert "feat prefix" in result.stderr
-    assert "exit 3" in result.stderr
-
-
-def test_fix_subject_grep_fault_is_gate_could_not_run(tmp_path: Path) -> None:
-    """The fix-subject check (fourth and last site) faults; the commit
-    carries none of the first three markers, so this is the first place the
-    fault can surface."""
-    repo = _init_repo(tmp_path)
-    _git(repo, "tag", "v0.3.1")
-    _commit(repo, "chore: tidy up")
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    _add_faulty_grep(bin_dir, "fix", 4)
-
-    result = _run_with_faulty_path("v0.3.1..HEAD", repo, bin_dir)
-
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "GATE COULD NOT RUN" in result.stderr
-    assert "fix prefix" in result.stderr
-    assert "exit 4" in result.stderr
+    _assert_gate_could_not_run(result, says=says, exit_code=exit_code)
 
 
 def test_fault_at_breaking_subject_does_not_fall_through_to_feat(
-    tmp_path: Path,
+    tmp_path: Path, fake_bin: Path
 ) -> None:
-    """The elif chain's fall-through, closed: a fault scanning for the
-    breaking-change SUBJECT marker must escalate immediately -- even though
-    the very next check in the old elif chain (feat) WOULD have matched had
-    it been reached. This is what distinguishes "the chain closed at the
-    correct arm" from a blanket-broken grep that fails every site
-    identically: if the fallthrough were still open, this repo's one feat
-    commit would let the script silently report "feat" instead of
-    escalating."""
+    """The precedence ladder's fall-through, closed. Kept separate from the
+    parametrized cases above because it asserts something they cannot: the
+    range holds a feat commit, so the NEXT, lower-precedence check would have
+    matched had the fault been allowed to reach it. That is what distinguishes
+    "escalated at the correct rung" from a blanket-broken grep failing every
+    site identically -- unpartitioned, this repo reports a confident `feat`."""
     repo = _init_repo(tmp_path)
     _git(repo, "tag", "v0.3.1")
     _commit(repo, "feat: add a thing")  # would match feat's own check
-    bin_dir = tmp_path / "fakebin"
-    bin_dir.mkdir()
-    _add_faulty_grep(bin_dir, "!:", 2)
+    _add_faulty_grep(fake_bin, "!:", 2)
 
-    result = _run_with_faulty_path("v0.3.1..HEAD", repo, bin_dir)
+    result = _run("v0.3.1..HEAD", repo, bin_dir=fake_bin)
 
-    assert result.returncode == 2, result.stdout + result.stderr
-    assert result.stdout == ""
-    assert "breaking-change marker" in result.stderr
+    _assert_gate_could_not_run(result, says="breaking-change marker", exit_code=2)
     assert "feat prefix" not in result.stderr  # never reached the next arm

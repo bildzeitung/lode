@@ -133,47 +133,31 @@ read_log() {   # read_log <pretty-format> -> stdout, or exit 2 with git's own st
   gate_could_not_run "git log failed" "${lines[@]}"
 }
 
-# Each of the four greps below partitions its OWN exit code the same way
-# lode-yoc3 did for validate-mermaid.sh's per-doc loop (lode-umtc): exit 1 is
-# grep's own "no match" -- a CONTENT answer (this stream genuinely carries no
-# such marker) -- and every other nonzero exit (an unreadable stream, an I/O
-# fault, grep missing from PATH (127), ...) is a MACHINE fault that must not
-# be silently read as "no match". Before this fix all four sites landed in
-# the same implicit fallthrough a bare `if`/`elif` chain gives a false test:
-# a fault at any of them silently downgraded the verdict (breaking -> feat ->
-# fix -> none) and still exited 0 -- worse than the mermaid gate's false PASS,
-# since a wrong-but-plausible SemVer level then gets tagged and shipped.
+# Each of the four greps below partitions its OWN exit code (lode-umtc): 1 is
+# grep's "no match" -- a CONTENT answer -- and anything else is a MACHINE
+# fault, the distinction the exit-2 contract above exists to draw.
+# scripts/validate-mermaid.sh's per-doc loop OWNS the rationale for that
+# partition (lode-yoc3), including why the command is never tested with `!`
+# (that captures the negation of the status, not the status itself); each
+# gate_could_not_run call below states it once more for the OPERATOR, which is
+# the only audience that does not have this file open.
 #
-# `!` is deliberately NOT used to test each grep (same reason as
-# validate-mermaid.sh's loop): `if ! cmd; then rc=$?` captures 0, not cmd's
-# own status -- measured on lode-yoc3, restated here since a fourth
-# consumer joining this file makes it worth restating once at the top rather
-# than at each of the four sites below.
+# Each site's regex is held in a PAT_* variable so the live `grep` and the
+# "Diagnose with:" line the operator is handed cannot fork.
 #
-# EXTRACTION DECIDED (per this ticket's own acceptance criterion): declined,
-# not done. Between this file (four sites) and validate-mermaid.sh's two
-# (its per-doc grep, and its `docker run` partition, the same "exit 1 is
-# content, everything else is a fault" shape) the idiom now stands at six
-# sites across two files -- gate-lib.sh's own header cites reaching three
-# duplicated copies as its bar for extracting a *shared* piece (that is what
-# justified pulling gate_could_not_run itself out from three call sites). But
-# this idiom isn't one reusable statement the way that function was: every
-# site here differs in its SUCCESS arm (echo a different verdict and exit 0,
-# vs. mermaid's `found=1` / `echo OK`), its FALLTHROUGH arm (this file falls
-# through to the next check on a clean "no match"; mermaid's loop instead
-# `continue`s to the next doc), and its FAILURE message (which marker, which
-# stream, which diagnostic command to hand the operator). A wrapper general
-# enough to cover all six would need a success callback, a fallthrough
-# callback, and a caller-supplied cause-line array -- machinery that is not
-# meaningfully shorter than the `if`/`else`/`rc=$?` block it would replace.
-# So each site stays open-coded, matching the shape lode-yoc3 already
-# established rather than inventing a third one.
+# EXTRACTION (this ticket's acceptance criterion): worth doing, DEFERRED --
+# not refused. Only each site's `rc=$?` and `-ne 1` test would move into a
+# shared helper; the success and no-match arms stay open-coded, so the helper
+# needs no callbacks. But it spans gate-lib.sh, this file AND
+# validate-mermaid.sh's two sites plus their tests -- wider than this ticket's
+# scope. Filed as lode-1mea with the measurement and a working trial.
 
 # BREAKING-CHANGE-in-body check: a whole-stream search. No per-commit
 # attribution is needed -- only "did ANY commit in range carry the marker" --
 # so there is no record-splitting to get wrong.
+PAT_BODY_BREAKING='BREAKING[ -]CHANGE:'
 BODIES="$(read_log '%B')" || exit $?
-if grep -qE 'BREAKING[ -]CHANGE:' <<<"$BODIES"; then
+if grep -qE "$PAT_BODY_BREAKING" <<<"$BODIES"; then
   echo breaking
   exit 0
 else
@@ -184,22 +168,20 @@ else
       "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
       "breaking-change marker anywhere in this range), so anything else is a" \
       "machine fault, not content. Diagnose with:" \
-      "git log $RANGE --format='%B' | grep -qE 'BREAKING[ -]CHANGE:'"
+      "git log $RANGE --format='%B' | grep -qE '$PAT_BODY_BREAKING'"
   fi
 fi
 
 # Subjects: `%s` is one full line per commit, so `grep`'s own per-line
 # matching supplies the record boundaries and the `^` anchors bind per
-# commit. Precedence (breaking > feat > fix > none) used to fall out of an
-# `if`/`elif`/`elif`/`else` chain; that chain is now three sequential `if`
-# blocks instead, each of which exits immediately on a match (`echo ...;
-# exit 0`) and each of which escalates immediately on a machine fault rather
-# than falling through to the next, lower-precedence check. Only a genuine
-# "no match" (rc 1) reaches the next block -- the precedence order is
-# unchanged, but a fault at, say, the breaking-subject check can no longer be
-# silently reported as `feat` by the next block down.
+# commit. Precedence (breaking > feat > fix > none) falls out of the ORDER of
+# the three blocks below -- each exits on a match, and only a genuine "no
+# match" reaches the next -- so no accumulator state is needed.
+PAT_SUBJ_BREAKING='^[a-zA-Z]+(\([^)]*\))?!:'
+PAT_SUBJ_FEAT='^feat(\([^)]*\))?:'
+PAT_SUBJ_FIX='^fix(\([^)]*\))?:'
 SUBJECTS="$(read_log '%s')" || exit $?
-if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<<"$SUBJECTS"; then
+if grep -qE "$PAT_SUBJ_BREAKING" <<<"$SUBJECTS"; then
   echo breaking
   exit 0
 else
@@ -210,36 +192,39 @@ else
       "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
       "subject in this range carries a \"!:\" breaking marker), so anything" \
       "else is a machine fault, not content. Diagnose with:" \
-      "git log $RANGE --format='%s' | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:'"
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_BREAKING'"
   fi
 fi
 
-if grep -qE '^feat(\([^)]*\))?:' <<<"$SUBJECTS"; then
+if grep -qE "$PAT_SUBJ_FEAT" <<<"$SUBJECTS"; then
   echo feat
   exit 0
 else
   rc=$?
   if [ "$rc" -ne 1 ]; then
     gate_could_not_run \
-      "grep failed scanning commit subjects for a feat prefix (exit $rc) --" \
-      "grep's exit 1 means \"no match\" (a content answer: no feat commit in" \
-      "this range), so anything else is a machine fault, not content." \
-      "Diagnose with: git log $RANGE --format='%s' | grep -qE '^feat(\([^)]*\))?:'"
+      "grep failed scanning commit subjects for a feat prefix" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "feat commit in this range), so anything else is a machine fault, not" \
+      "content. Diagnose with:" \
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_FEAT'"
   fi
 fi
 
-if grep -qE '^fix(\([^)]*\))?:' <<<"$SUBJECTS"; then
+if grep -qE "$PAT_SUBJ_FIX" <<<"$SUBJECTS"; then
   echo fix
   exit 0
 else
   rc=$?
   if [ "$rc" -ne 1 ]; then
     gate_could_not_run \
-      "grep failed scanning commit subjects for a fix prefix (exit $rc) --" \
-      "grep's exit 1 means \"no match\" (a content answer: no fix commit in" \
-      "this range), so anything else is a machine fault, not content." \
-      "Diagnose with: git log $RANGE --format='%s' | grep -qE '^fix(\([^)]*\))?:'"
+      "grep failed scanning commit subjects for a fix prefix" \
+      "(exit $rc) -- grep's exit 1 means \"no match\" (a content answer: no" \
+      "fix commit in this range), so anything else is a machine fault, not" \
+      "content. Diagnose with:" \
+      "git log $RANGE --format='%s' | grep -qE '$PAT_SUBJ_FIX'"
   fi
 fi
 
+# Reached only when all three blocks above saw a genuine "no match" (rc 1).
 echo none
