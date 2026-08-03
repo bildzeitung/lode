@@ -84,10 +84,15 @@
 #           the main checkout. The diagnostic is already printed to stderr.
 # Exit 2 -- the guard COULD NOT RUN, so its verdict is unknown -- never a
 #           statement about the worktree's content (lode-9i2p's machine-vs-
-#           content rule). Two causes: a usage error (wrong argument count),
-#           or `origin/trunk` not resolving at all. Like exit 1, the caller
-#           must STOP and report; unlike exit 1, nothing here is a claim that
-#           the worktree is dirty.
+#           content rule). Three causes: a usage error (wrong argument
+#           count), `git rev-parse --show-toplevel` itself failing (cwd not
+#           inside any git repository at all), or `origin/trunk` not
+#           resolving at all. Like exit 1, the caller must STOP and report;
+#           unlike exit 1, nothing here is a claim that the worktree is
+#           dirty. BOTH git arms are checked EXPLICITLY rather than left to
+#           escape as git's own raw 128 under `set -e` -- lode-t6ni for the
+#           `--show-toplevel` one, lode-isl3 for the `origin/trunk` one,
+#           whose own note follows.
 #
 #           The `origin/trunk`-unresolvable arm is checked EXPLICITLY, up
 #           front, rather than left to fall out of the ancestor test (lode-isl3
@@ -127,6 +132,11 @@
 # reason to STOP AND REPORT -- never as license to silently skip the guard
 # and proceed. See the four .claude/agents/*.md call sites for the wrapper
 # that does this.
+#
+# One of lode's 0/1/2 precondition guards. The shared contract -- exit
+# meanings, the STOP-AND-REPORT rule, the roster, why these are not
+# gate-lib.sh consumers -- is stated ONCE and deliberately NOT restated here:
+# [docs/agents-workflow.md](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
 
 set -euo pipefail
 
@@ -136,7 +146,16 @@ if [ "$#" -ne 1 ]; then
 fi
 context_message="$1"
 
-top="$(git rev-parse --show-toplevel)"
+if ! top="$(git rev-parse --show-toplevel)"; then
+  echo "recycled-worktree-guard: GUARD COULD NOT RUN (lode-t6ni) -- 'git rev-parse" \
+       "--show-toplevel' failed (git's own error is above). cwd is most likely not inside any" \
+       "git repository at all -- the same class of harness misdispatch that motivated this" \
+       "script's sibling, scripts/isolation-guard.sh (lode-ska2). This says NOTHING about" \
+       "whether a worktree is contaminated -- the check did not run. STOP and report" \
+       "$context_message." >&2
+  exit 2
+fi
+
 case "$top" in
   */.claude/worktrees/*) ;;    # an isolated launch worktree -- safe to repair
   *)

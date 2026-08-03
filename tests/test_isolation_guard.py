@@ -78,6 +78,28 @@ def test_wrong_argument_count_exits_2(tmp_path: Path) -> None:
     assert result.returncode == 2, result.stdout + result.stderr
 
 
+def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
+    tmp_path: Path,
+) -> None:
+    """cwd outside any git repository at all -- `git rev-parse --show-toplevel`
+    fails, and the script must convert that into its own documented exit 2
+    with a diagnostic, NOT let `set -e` propagate git's raw 128 (lode-t6ni).
+
+    Why 128 is unacceptable is the family contract's business, not this
+    module's: docs/agents-workflow.md, "Precondition guards (the 0/1/2
+    family)". Mirrors
+    tests/test_assert_main_checkout.py::test_not_inside_any_repository_is_exit_2_not_a_raw_git_128,
+    the sibling this behavior was backported from."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run(outside)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "MACHINE FAULT" in result.stderr
+    assert "lode-t6ni" in result.stderr
+
+
 def test_cwd_under_claude_worktrees_passes(tmp_path: Path) -> None:
     """The genuinely-isolated case: cwd is a worktree under
     `.claude/worktrees/` -- exit 0, nothing printed to stderr."""

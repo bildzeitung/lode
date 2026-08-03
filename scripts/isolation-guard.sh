@@ -64,8 +64,16 @@
 # Exit 1 -- cwd is NOT inside an isolated launch worktree. The diagnostic is
 #           already printed to stderr. STOP AND REPORT -- do not attempt
 #           EnterWorktree, `git worktree add`, or any other self-rescue.
-# Exit 2 -- usage error (an argument was given). Caller bug, not a worktree
-#           problem.
+# Exit 2 -- usage error (an argument was given), OR `git rev-parse` itself
+#           could not answer (cwd is not inside any git repository at all,
+#           git missing/too old). A machine/harness fault, never a worktree
+#           verdict -- do not read this as "cwd is not isolated" (exit 1's
+#           job).
+#
+# One of lode's 0/1/2 precondition guards. The shared contract -- exit
+# meanings, the STOP-AND-REPORT rule, the roster, why these are not
+# gate-lib.sh consumers -- is stated ONCE and deliberately NOT restated here:
+# [docs/agents-workflow.md](../docs/agents-workflow.md#precondition-guards-the-012-family-lode-t6ni)
 
 set -euo pipefail
 
@@ -74,7 +82,15 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-top="$(git rev-parse --show-toplevel)"
+if ! top="$(git rev-parse --show-toplevel)"; then
+  echo "isolation-guard: MACHINE FAULT (lode-t6ni) -- 'git rev-parse --show-toplevel' failed" \
+       "(git's own error is above). cwd is most likely not inside any git repository at all --" \
+       "the same class of harness misdispatch that motivated this script in the first place" \
+       "(lode-ska2), but this is a MACHINE FAULT, not a location verdict. STOP AND REPORT; do" \
+       "not treat this as evidence about isolation one way or the other." >&2
+  exit 2
+fi
+
 case "$top" in
   */.claude/worktrees/*)
     exit 0

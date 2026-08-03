@@ -134,6 +134,32 @@ def test_wrong_argument_count_exits_2(tmp_path: Path, script_args: list[str]) ->
     assert result.returncode == 2, result.stdout + result.stderr
 
 
+def test_not_inside_any_repository_is_exit_2_not_a_raw_git_128(
+    tmp_path: Path,
+) -> None:
+    """cwd outside any git repository at all -- `git rev-parse --show-toplevel`
+    fails, and the script must convert that into its own documented exit 2
+    with a `GUARD COULD NOT RUN` diagnostic, NOT let `set -e` propagate git's
+    raw 128 (lode-t6ni). Why 128 is unacceptable is the family contract's
+    business: docs/agents-workflow.md, "Precondition guards (the 0/1/2
+    family)".
+
+    Reached before the `.claude/worktrees/` case check even runs, so this
+    must NOT be misreported as "not in an isolated launch worktree" (exit 1)
+    -- there is no worktree, isolated or otherwise, to make that claim about.
+    Mirrors
+    tests/test_assert_main_checkout.py::test_not_inside_any_repository_is_exit_2_not_a_raw_git_128,
+    the sibling this behavior was backported from."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run(outside)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GUARD COULD NOT RUN" in result.stderr
+    assert "lode-t6ni" in result.stderr
+
+
 def test_clean_worktree_at_trunk_head_is_a_noop(tmp_path: Path) -> None:
     """HEAD == origin/trunk exactly (a genuinely fresh launch worktree): exit
     0, nothing rescued, nothing reset."""
