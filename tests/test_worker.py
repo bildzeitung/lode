@@ -42,7 +42,7 @@ from lode.config import Settings
 from lode.enrich import ENRICH_PROMPT_VER
 from lode.jobs import enqueue_derive_jobs
 from lode.jobs import now_iso as _now_iso
-from lode.llm_provider import AnthropicProvider, LLMAuthError
+from lode.llm_provider import AnthropicProvider, LLMAuthError, LLMProviderError
 from lode.storage import init_db
 from lode.worker import (
     _REGISTRY,
@@ -2323,6 +2323,81 @@ def test_drain_still_runs_embed_jobs_when_credentials_are_missing(
     assert states["embed"] == "done"
     # The enrich job is left pending + uncharged, for a later credentialed run.
     assert states["enrich"] == "pending"
+
+
+def test_drain_still_runs_embed_jobs_when_a_batch_poll_is_stuck(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """A stuck/poison enrich batch poll must NOT starve the local embed jobs
+    (lode-5zqa).
+
+    Before this fix, drain()'s batch pre-step try only caught
+    ``(AuthError, LLMAuthError)`` -- a plain ``LLMProviderError`` from
+    ``_batch_collect_enrich`` (e.g. lode-3gtu's planned wrap of a permanently
+    malformed batch-results line in ``AnthropicProvider.collect_batch``'s
+    lazy JSONL iteration) was not an ``LLMAuthError``, so it propagated raw
+    straight out of ``drain()``, aborting the whole pass before the main
+    claim/run loop ever ran -- including the credential-free ``embed`` jobs
+    the AuthError carve-out (lode-9yy) was specifically written to protect.
+    Because the malformed batch's job stays ``'running'`` with
+    ``batch_handle`` set (``_reclaim_stale_running`` deliberately skips it),
+    the exact same failure repeats identically on every subsequent
+    ``drain()`` -- a poison-pill loop with no bound and no visible exit.
+
+    A stub ``LLMProvider`` whose ``collect_batch`` always raises
+    ``LLMProviderError`` stands in for the real Anthropic SDK plumbing here
+    -- this test exercises drain()'s own catch-and-continue contract, not
+    lode-3gtu's still-unlanded httpx/json -> LLMProviderError conversion.
+    """
+
+    class _PoisonProvider:
+        """Simulates a permanently malformed batch-results line: every poll
+        of the in-flight batch raises LLMProviderError."""
+
+        def collect_batch(self, handle: str, *, timeout_s: float):
+            raise LLMProviderError(
+                "malformed batch results (test)", provider="anthropic"
+            )
+
+        def submit_batch(self, requests, *, timeout_s: float) -> str:
+            raise AssertionError(
+                "no pending enrich jobs in this test -- submit_batch should "
+                "never be reached"
+            )
+
+        def structured_call(self, **kwargs):
+            raise AssertionError("not used by this test")
+
+    # One embed job (credential-free, local fastembed) + one enrich job
+    # already 'running' against a batch that will never stop failing to poll.
+    _insert_job(conn, job_type="embed", target_version="ver-1")
+    _insert_enrich_job_worker(conn, status="running", batch_handle="poison-batch")
+
+    embedded: list[str] = []
+
+    def _embed(conn_, tv, db, s):
+        embedded.append(tv)
+
+    # The LLMProviderError still surfaces to the caller...
+    with pytest.raises(LLMProviderError):
+        drain(
+            conn,
+            db_path,
+            settings,
+            _registry={"embed": _embed},
+            _batch_client=_PoisonProvider(),
+        )
+
+    # ...but only AFTER the embed job ran to completion.
+    assert embedded == ["ver-1"], "embed job was starved by the stuck batch poll"
+    row = conn.execute(
+        "SELECT status, batch_handle FROM jobs WHERE type = 'enrich'"
+    ).fetchone()
+    # The poisoned enrich job is untouched -- still 'running' against its
+    # batch_handle, ready to be re-polled (and fail again) next tick.
+    assert row == ("running", "poison-batch")
 
 
 def test_drain_returns_count_including_failures(

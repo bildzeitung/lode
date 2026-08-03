@@ -588,26 +588,39 @@ decides how loud "surface it" should be:
   call (which resolves credentials via `build_provider()`) in a broad `except`, so an `AuthError`/`LLMAuthError`
   there already propagates out of it — the swallow this section fixes never
   existed on that path. `drain` handles it identically to `_batch_submit_enrich`'s,
-  below.
+  below. The same "no special case" is true of a non-auth `LLMProviderError` from
+  the same unwrapped `provider.collect_batch()` call (e.g. a permanently
+  malformed batch-results line — `lode-3gtu`); `drain`'s outer catch (below) is
+  widened to absorb that too (`lode-5zqa`), for the identical starvation reason.
 
-**A missing credential must not starve the credential-free work.** Both enrich
-batch pre-steps run *before* `drain`'s reclaim, retry-reset, and main claim/run
-loop — so a pre-step that raised on the spot would abort the entire drain. That
-is not acceptable: `embed` jobs are produced by the **local** fastembed model and
-have nothing to do with the cloud LLM provider's credentials, and a pending
-enrich job is essentially always present (every `add` enqueues one). Raising from
-the pre-step would therefore abort *every* `lode work` before the first embed
-ever ran, leaving an unkeyed user's embeds pending forever and silently killing
-the dense half of retrieval — trading "enrich is retried forever" for "the whole
-queue stops", which is strictly worse.
+**A missing credential — or a stuck batch poll — must not starve the
+credential-free work.** Both enrich batch pre-steps run *before* `drain`'s
+reclaim, retry-reset, and main claim/run loop — so a pre-step that raised on the
+spot would abort the entire drain. That is not acceptable: `embed` jobs are
+produced by the **local** fastembed model and have nothing to do with the cloud
+LLM provider's credentials (or its batch-results stream), and a pending enrich
+job is essentially always present (every `add` enqueues one). Raising from the
+pre-step would therefore abort *every* `lode work` before the first embed ever
+ran, leaving an unkeyed user's embeds pending forever and silently killing the
+dense half of retrieval — trading "enrich is retried forever" for "the whole
+queue stops", which is strictly worse. A batch stuck polling a permanently
+malformed results line makes the same trade even sharper: the job stays
+`'running'` with `batch_handle` set, so `_reclaim_stale_running` deliberately
+skips it, and the identical failure would otherwise repeat on *every* tick
+forever — a poison-pill loop with no bound (`lode-5zqa`).
 
-So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError`, completes the reclaim, the
-retry-reset and the main claim/run loop, and re-raises it only at the end. The
-main loop drains `embed` ahead of `enrich` (`_claim_one` orders on type), so the
-embeds land before any residual enrich job re-raises out of `run_one`. Net effect
-for an operator with no credentials: embeds keep draining, enrichment stays
-pending and uncharged, and `lode work` still exits non-zero with the actionable
-message.
+So `drain` **stashes** the pre-step's `AuthError`/`LLMAuthError` — and, since
+`lode-5zqa`, any other `LLMProviderError` — completes the reclaim, the
+retry-reset and the main claim/run loop, and re-raises it only at the end
+(`LLMAuthError` already subclasses `LLMProviderError`, so widening the catch to
+the base class changed nothing about the credential case). The main loop drains
+`embed` ahead of `enrich` (`_claim_one` orders on type), so the embeds land
+before any residual enrich job re-raises out of `run_one`. Net effect for an
+operator with no credentials, or with a batch wedged on bad data: embeds keep
+draining, enrichment stays pending and uncharged (or the batch stays `'running'`,
+unresolved), and `lode work` still exits non-zero with the actionable message —
+visible, but not itself a fix for a permanently stuck batch, which still needs a
+human (no failure-budget/dead-letter mechanism exists for this case yet).
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 
