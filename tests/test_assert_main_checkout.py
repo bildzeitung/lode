@@ -280,86 +280,32 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
+# Block boundaries are load-bearing here in a way they are not for
+# `_fenced_bash` below: per land/SKILL.md's governing rule (lode-sfnb) each
+# fence is executed as its own Bash invocation, so two commands are guaranteed
+# to share a shell -- and therefore `||` short-circuiting -- only if they are
+# in the same block. A pin that flattens the blocks first cannot tell
+# "guarded" from "merely preceded somewhere in the document". That is why
+# `_the_one_block`/`_assert_guard_precedes` below work over the block LIST
+# (`bash_fence_blocks`) rather than `_fenced_bash` (joined).
+#
+# This module carried the last private copy of that parser until lode-p4qb
+# folded it into `tests/conftest.py::bash_fence_blocks`. Why the four copies
+# existed and what the shared parser's rules now are live next to the parser
+# itself -- deliberately not restated here, per the same no-second-copy rule
+# tests/test_land_lock.py and tests/test_land_conflicts_state.py follow.
+
+
 def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only -- what an agent actually EXECUTES.
+    """The ```bash fences only, concatenated into one string -- what an agent
+    actually EXECUTES.
 
     Scanning the whole file would match the prose that *explains* the old
     defect (it necessarily quotes the broken `-C "$(git rev-parse
     --show-toplevel)"` idiom), so the pin has to separate what is executed
     from what is merely described.
-
-    Once deliberately NOT the same shape as tests/test_land_lock.py's
-    `_fenced_bash`, which matched the fence marker at column 0 and was
-    therefore blind to indented fences. lode-ovgs has since fixed that copy and
-    unified it -- along with tests/test_land_conflicts_state.py's and
-    tests/test_skill_bash_state.py's -- onto the shared
-    `tests/conftest.py::bash_fence_blocks`, so the shapes now agree. This
-    module is the one remaining private copy; folding it in too is lode-p4qb's
-    job, deliberately sequenced after land/lode-gczf (which changes 178 lines
-    of this file) so the deletion cannot merge cleanly into edited call sites.
     """
-    return "\n".join(_fenced_bash_blocks(markdown))
-
-
-def _fenced_bash_blocks(markdown: str) -> list[str]:
-    """The ```bash fences kept SEPARATE, one string per block.
-
-    Block boundaries are load-bearing here in a way they are not for
-    `_fenced_bash`: per land/SKILL.md's governing rule (lode-sfnb) each fence
-    is executed as its own Bash invocation, so two commands are guaranteed to
-    share a shell -- and therefore `||` short-circuiting -- only if they are
-    in the same block. A pin that flattens the blocks first cannot tell
-    "guarded" from "merely preceded somewhere in the document".
-
-    The fence marker is matched on the STRIPPED line, never at column 0. Four
-    of land/SKILL.md's fences are indented under a markdown bullet, so a
-    `line.startswith("```")` scanner -- the shape `tests/test_land_lock.py`
-    used until `lode-ovgs` fixed it -- sees 20 of this file's
-    24 bash blocks. That is not cosmetic for THIS module: one of the four it
-    misses is Section 3's isolation-replay block, which runs its own
-    `git reset --hard origin/trunk`. Under the column-0 shape the anchor below
-    found exactly one reset block and looked correct; it was simply blind to
-    the second. Measured on this file: 20 blocks vs 24, and 1 reset block vs 2.
-    """
-    blocks: list[str] = []
-    current: list[str] = []
-    in_bash = False
-    for line in markdown.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if in_bash:
-                blocks.append("\n".join(current))
-                current = []
-            in_bash = not in_bash and stripped in {"```bash", "```sh"}
-            continue
-        if in_bash:
-            current.append(line)
-    if in_bash and current:  # unterminated final fence
-        blocks.append("\n".join(current))
-    return blocks
-
-
-def test_fence_scanner_sees_indented_fences() -> None:
-    """Regression pin on the scanner SHAPE (lode-ovgs). A fence nested under a
-    markdown bullet is indented, so a column-0 `line.startswith("```")` scanner
-    never enters it. Four of land/SKILL.md's 24 bash fences are indented, and
-    one of those is Section 3's isolation-replay block -- which runs its own
-    `git reset --hard origin/trunk`.
-
-    Without this pin, reverting `_fenced_bash_blocks` to the column-0 shape
-    silently restores a state where the anchor below finds ONE reset block
-    instead of two, and therefore looks correct while being blind to half the
-    question it is asking. That is the same false-assurance failure mode this
-    whole ticket exists to delete, so it gets a gate rather than a comment."""
-    blocks = _fenced_bash_blocks(
-        "1. Step one:\n\n   ```bash\n   echo indented\n   ```\n"
-    )
-
-    assert len(blocks) == 1, (
-        "an indented ```bash fence was not parsed as a block -- the scanner has "
-        "regressed to matching at column 0 (lode-ovgs)"
-    )
-    assert "echo indented" in blocks[0]
+    return "\n".join(bash_fence_blocks(markdown))
 
 
 def test_land_skill_section1_calls_the_script() -> None:
@@ -395,7 +341,7 @@ def _the_one_block(
     exposure fail loudly here instead of being silently absorbed by whichever
     narrower pin still happens to match one of them.
     """
-    blocks = _fenced_bash_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
     candidates = [
         b
         for b in blocks
@@ -415,9 +361,14 @@ def _the_two_reset_blocks() -> tuple[str, str]:
 
     Both open with `git reset --hard origin/trunk`, so that command does NOT
     identify Section 1 on its own -- an earlier column-0 fence scanner could
-    not see Section 3's indented block and made it look as though it did (see
-    `_fenced_bash_blocks`). Only Section 1's block also runs `git checkout -f
-    trunk`, so that pair is what tells the two apart.
+    not see Section 3's indented block and made it look as though it did
+    (lode-ovgs). Only Section 1's block also runs `git checkout -f trunk`, so
+    that pair is what tells the two apart. Reverting the shared parser to that
+    column-0 shape now makes this helper's second `_the_one_block` call fail
+    loudly with "found 0", not silently agree -- which is why the synthetic
+    indented-fence pin this module used to carry was dropped as a fifth copy
+    of a claim `tests/test_skill_bash_state.py` and `tests/test_land_lock.py`
+    already own (lode-p4qb).
     """
     return (
         _the_one_block(
@@ -640,12 +591,14 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    rewriting those assignments leaves the key matching byte-for-byte with
 #    its recorded reason now false.
 # 4. BLOCK EXTRACTION INHERITS `tests/conftest.py::bash_fence_blocks`'s
-#    DOCUMENTED BOUNDARIES, each of which yields no block SILENTLY -- which
-#    is the one failure mode an open-world sweep must not have quietly. That
-#    helper owns the list and the measurement; lode-p4qb owns the deliberate
-#    answer. The sweep uses it rather than this module's private
-#    `_fenced_bash_blocks` so lode-p4qb has one fewer call site to migrate,
-#    not because the boundaries are acceptable.
+#    DOCUMENTED BOUNDARIES -- the one failure mode an open-world sweep must
+#    not have quietly. lode-p4qb answered the three that used to yield NO
+#    BLOCK silently (an unterminated final fence is now flushed; four-backtick
+#    and tilde fences are now scanned), so what remains is one boundary of the
+#    opposite kind: a content line whose first non-blank character is `>` is
+#    silently CORRUPTED by the blockquote strip, not skipped. A mutating
+#    command written that way would reach this sweep in mangled form. That
+#    helper owns the rule and the measurement; do not restate either here.
 # ---------------------------------------------------------------------------
 
 _MUTATING_VERB_RE = re.compile(
