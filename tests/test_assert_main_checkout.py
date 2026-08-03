@@ -26,21 +26,35 @@ worktree the process happens to be standing in, which is what makes it
 usable to DISTINGUISH the two rather than just restate wherever cwd already
 is.
 
-All tests run the ACTUAL `scripts/assert-main-checkout.sh` against real git
-repositories (including real `git worktree add` checkouts and a real
-submodule) built in `tmp_path` -- no fake git, no mocked subprocess --
-sabotage-provable per the lode-verb bar: reverting the script back to
-comparing `--show-toplevel` against itself would turn the worktree-refusal
-test below green for the wrong reason, but the submodule/layout test would
-catch a script that assumes `--git-common-dir` always ends in `/.git`.
+The SCRIPT-BEHAVIOUR tests below run the ACTUAL
+`scripts/assert-main-checkout.sh` against real git repositories (including
+real `git worktree add` checkouts and a real submodule) built in `tmp_path` --
+no fake git, no mocked subprocess -- sabotage-provable per the lode-verb bar:
+reverting the script back to comparing `--show-toplevel` against itself would
+turn the worktree-refusal test below green for the wrong reason, but the
+submodule/layout test would catch a script that assumes `--git-common-dir`
+always ends in `/.git`.
+
+From "Call-site pin against the SHIPPED SKILL.md" onward the subject changes:
+those tests run no script and touch no repo. They assert against the text of
+`.claude/skills/land/SKILL.md` itself, because the defect this guard exists to
+prevent lives in a markdown fence that no other gate parses.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
+from conftest import bash_fence_blocks
+
+# Share lode-x495's quote-aware comment stripper rather than adding a second,
+# competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
+# was told to make, for the same reason: "what does an agent actually execute"
+# parsing is identical across these gates even when the assertions differ.
+from test_skill_bash_state import _strip_comment
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "assert-main-checkout.sh"
@@ -576,3 +590,287 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
                 f"the destructive reset carries a -C again: {line!r} -- this is "
                 "the exact unguarded, most dangerous half of the lode-pcee defect"
             )
+
+
+# ---------------------------------------------------------------------------
+# Guard-coverage SWEEP (lode-1d2y) -- catches a NEW unguarded fence, not just
+# the four already-known ones pinned above.
+#
+# Everything above this point pins a SPECIFIC, already-discovered fence by
+# anchoring on the commands it contains (`_the_one_block` /
+# `_the_two_reset_blocks`). That is precise, but closed-world: a genuinely NEW
+# class of unguarded mutation -- `git clean -fdx`, `git rebase`, a `git
+# checkout -f` with no accompanying reset, a bare `git commit -m` missing
+# `--no-verify` -- matches none of the four `contains=` selectors above and is
+# caught by NOTHING. That is exactly how lode-pxyt's own two exposures survived
+# a full ticket cycle before a human noticed them by inspection. The sweep
+# below is the open-world complement; `_unguarded_mutations` owns its
+# mechanics.
+#
+# KNOWN LIMITATIONS (lode-1d2y):
+#
+# 1. INLINE COMMANDS ONLY -- SCRIPT-REFERENCE FOLLOWING IS DELIBERATELY OUT
+#    OF SCOPE. This sweep does not open `scripts/*.sh` and classify what it
+#    mutates; it only sees commands written directly in the fence. It would
+#    NOT have caught lode-pxyt's first exposure on its own merits: Section
+#    3's first-pass merge loop contains zero bare mutating git commands --
+#    its only mutation is inside `scripts/land-merge-one.sh`, special-cased
+#    below (`_MERGE_ONE`, already pinned above). A brand-new script reference
+#    is caught by nothing here and would need the same manual discovery
+#    lode-pxyt's did. Measured while writing this: of the scripts referenced
+#    from an UNGUARDED fence today, none runs a cwd-resolved mutating git
+#    command -- their only git calls are `merge-base --is-ancestor` and
+#    `merge-tree --write-tree`, both read-only -- so the gap is latent, not
+#    live. Re-measure rather than assume.
+# 2. THE MUTATING-VERB REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
+#    matches `git branch`, `git worktree`, and `git merge` as whole verbs,
+#    not just the destructive subcommands (`branch -D`, `worktree remove`,
+#    a bare `merge`) -- so it also flags read-only lookalikes: `git merge-
+#    base` (`\b` matches against the hyphen), `git branch --merged`, `git
+#    worktree list`. Narrowing the regex to exclude every read-only shape
+#    would inherit the risk of excluding a genuinely dangerous one by the
+#    same narrowing, so each false positive gets an allowlist entry instead.
+# 3. AN ALLOWLIST ENTRY GOES STALE IN ONE DIRECTION SILENTLY, AND THAT
+#    DIRECTION IS NOT COVERED. A change to an exempt line's TEXT re-flags it
+#    loudly (`test_sweep_allowlist_match_is_exact_text_not_shape`), and a
+#    deleted line fails `test_every_allowlist_entry_still_matches_a_real_
+#    command`. A change to an exempt line's SURROUNDINGS does neither: four
+#    reasons below are claims about variable PROVENANCE (`$WT`/`$BR` "read
+#    from `git worktree list --porcelain`") that nothing here checks, so
+#    rewriting those assignments leaves the key matching byte-for-byte with
+#    its recorded reason now false.
+# 4. BLOCK EXTRACTION INHERITS `tests/conftest.py::bash_fence_blocks`'s
+#    DOCUMENTED BOUNDARIES, each of which yields no block SILENTLY -- which
+#    is the one failure mode an open-world sweep must not have quietly. That
+#    helper owns the list and the measurement; lode-p4qb owns the deliberate
+#    answer. The sweep uses it rather than this module's private
+#    `_fenced_bash_blocks` so lode-p4qb has one fewer call site to migrate,
+#    not because the boundaries are acceptable.
+# ---------------------------------------------------------------------------
+
+_MUTATING_VERB_RE = re.compile(
+    r"\bgit\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|merge"
+    r"|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)\b"
+)
+
+# Exact command text (comment-stripped, `.strip()`'d) -> why it needs no
+# `scripts/assert-main-checkout.sh` guard. Keying on exact text is what makes
+# an exemption reviewable data rather than prose; KNOWN LIMITATION 3 above
+# records what that keying does and does not catch.
+_KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
+    # --- read-only false positives of the broad verb regex (limitation 2) ---
+    'for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
+        "read-only: enumerates merge-bases, mutates nothing (1a stacked-branch "
+        "detection)"
+    ),
+    'rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
+        "read-only: --is-ancestor is a pure query, mutates nothing"
+    ),
+    'LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" \'': (
+        "read-only listing (Section 4 worktree-GC loop's stale-lock reason lookup)"
+    ),
+    "done < <(git worktree list --porcelain | awk '": (
+        "read-only listing (Section 4 worktree-GC loop's candidate enumeration)"
+    ),
+    "MERGED=$(git branch --merged trunk --format='%(refname:short)')": (
+        "read-only listing (Section 4's third backstop, computing the merged set)"
+    ),
+    "CHECKED_OUT=$(git worktree list --porcelain | awk "
+    "'/^branch refs\\/heads\\//{print substr($0,19)}')": (
+        "read-only listing (Section 4's third backstop, computing checked-out branches)"
+    ),
+    # --- explicit ref/path-addressed writes: cwd-independent by construction,
+    #     the same reasoning Section 4's own prose gives for these commands
+    #     ("each names its own target") ---
+    "rtk git push origin trunk": (
+        "ref-addressed (explicit remote+branch); Section 4's own text: cwd-independent"
+    ),
+    'rtk git push origin --delete "land/$id"': (
+        "ref-addressed delete (explicit remote+branch); cwd-independent "
+        "(Section 4's per-ticket branch GC)"
+    ),
+    'rtk git push origin --delete "land/<id>"': (
+        "ref-addressed delete (explicit remote+branch); cwd-independent "
+        "(Bounce / Escalate-exit-(b) / Escalate-exit-(c))"
+    ),
+    'git worktree unlock "$WT" 2>/dev/null || true': (
+        "path-addressed to $WT (the exact worktree path just read from "
+        "`git worktree list --porcelain`), not cwd-resolved"
+    ),
+    'if git worktree remove --force "$WT"; then': (
+        "path-addressed to $WT, not cwd-resolved (same reasoning as worktree "
+        "unlock above)"
+    ),
+    '[ -n "$BR" ] && git branch -D "$BR" 2>/dev/null || true': (
+        "ref-addressed to $BR, an explicit branch name read from the same "
+        "porcelain listing, not cwd-resolved"
+    ),
+    'if git branch -D "$BR" 2>/dev/null; then': (
+        "ref-addressed to $BR, an explicit branch name, not cwd-resolved"
+    ),
+    "git worktree prune": (
+        "housekeeping only: drops stale worktree admin entries already gone "
+        "from disk; never removes real content or a live worktree"
+    ),
+    # --- path-addressed to the passive bd export, never real work ---
+    "rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
+        "path-addressed to the passive .beads/issues.jsonl export only -- "
+        "never real work (import.auto: false, lode-6ra); a wrong-directory "
+        "run only restores that worktree's own copy of a regenerated artifact"
+    ),
+}
+
+
+def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
+    """Every fenced ```bash block's mutating command that is neither
+    allowlisted nor preceded, in its OWN block, by `scripts/assert-main-
+    checkout.sh`. Empty means full coverage.
+
+    Block boundaries are load-bearing, not tidiness: per land/SKILL.md's
+    governing rule (lode-sfnb) each fence is its own Bash invocation, so a
+    guard only protects commands in the SAME fence. `guarded` therefore resets
+    per block, and reading it in document order is the whole of the "precedes"
+    check -- no positional arithmetic, which would go ambiguous the moment two
+    lines in one block carry identical text. See the module comment above for
+    the regex/allowlist design and its known limitations.
+    """
+    violations: list[str] = []
+    for block_index, block in enumerate(bash_fence_blocks(markdown)):
+        guarded = False
+        for raw_line in block.splitlines():
+            cmd = _strip_comment(raw_line).strip()
+            if not cmd:
+                continue
+            if _GUARD in cmd:
+                guarded = True
+                continue
+            if not (_MUTATING_VERB_RE.search(cmd) or _MERGE_ONE in cmd):
+                continue
+            if guarded or cmd in allowlist:
+                continue
+            violations.append(
+                f"block {block_index}: {cmd!r} is a mutating command with "
+                f"no preceding {_GUARD} in its own fenced block, and is not "
+                "in the allowlist -- either guard it or record a reasoned "
+                "allowlist entry"
+            )
+    return violations
+
+
+def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
+    """The sweep, run against the REAL land/SKILL.md with the real allowlist.
+    Zero violations means every mutating command in the file is either
+    guarded or a recorded, reasoned exemption -- not just the four fences the
+    pins above happen to anchor on.
+    """
+    violations = _unguarded_mutations(
+        LAND_SKILL.read_text(encoding="utf-8"),
+        allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
+    )
+    assert violations == [], "\n".join(violations)
+
+
+def test_every_allowlist_entry_still_matches_a_real_command() -> None:
+    """The sweep above passes when it finds no violation -- including when it
+    finds NOTHING AT ALL. Two silent regressions produce that: a fence parser
+    that stops recognizing blocks (the lode-ovgs class), and an exempt command
+    deleted from land/SKILL.md while its entry lives on as a frozen verdict
+    over text that no longer exists. Both leave `_KNOWN_LAND_SKILL_MUTATIONS`
+    entries matching nothing, so requiring every entry to still hit a real
+    line is what makes the green above mean something.
+    """
+    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
+    live = {
+        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
+    }
+
+    orphaned = sorted(set(_KNOWN_LAND_SKILL_MUTATIONS) - live)
+
+    assert orphaned == [], (
+        "these allowlist entries no longer match any command in land/SKILL.md, "
+        "so they exempt nothing and the sweep's green is that much emptier -- "
+        f"delete them or re-derive them from the current file: {orphaned}"
+    )
+
+
+def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
+    """The property this whole ticket exists to add: a mutating fence with NO
+    guard at all, and not present in any allowlist, must be caught.
+
+    Parametrized over one representative command per mutating verb the regex
+    is meant to cover, because the verb list is the sweep's entire open-world
+    boundary: dropping a verb from it silently un-covers that whole class
+    while every other test here stays green. `git pull` and `git add` are in
+    the list by measurement, not taste -- an earlier draft of this sweep
+    omitted both, and `git add` is the omission lode-pxyt's review had already
+    had to fix once in the per-fence pin next door.
+    """
+    for command in (
+        "rtk git add .",
+        "rtk git am /tmp/p.patch",
+        "rtk git apply /tmp/p.patch",
+        "rtk git checkout -f trunk",
+        "rtk git cherry-pick deadbeef",
+        "rtk git clean -fdx",
+        "rtk git commit -m wip",
+        "rtk git merge --no-ff origin/land/x",
+        "rtk git pull --rebase",
+        "rtk git rebase origin/trunk",
+        "rtk git reset --hard HEAD~1",
+        "rtk git restore --worktree .",
+        "rtk git revert HEAD",
+        "rtk git stash pop",
+        "rtk git switch trunk",
+    ):
+        markdown = f"1. Some new step:\n\n   ```bash\n   {command}\n   ```\n"
+
+        violations = _unguarded_mutations(markdown, allowlist={})
+
+        assert violations, (
+            f"an unguarded, unallowlisted {command!r} was not flagged -- the "
+            "mutating-verb regex no longer covers that verb, and nothing else "
+            "in this module would notice"
+        )
+        assert command in violations[0]
+
+
+def test_sweep_requires_the_guard_precede_not_merely_be_present() -> None:
+    """A guard call present in the block but AFTER the mutating command does
+    not protect it -- ordering matters, exactly as `_assert_guard_precedes`
+    already checks for the four pinned fences above."""
+    markdown = (
+        f"```bash\nrtk git reset --hard origin/trunk\nrtk {_GUARD} || exit 1\n```\n"
+    )
+    violations = _unguarded_mutations(markdown, allowlist={})
+    assert violations, "a guard AFTER the mutation must not count as coverage"
+
+
+def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
+    """Per this ticket's acceptance criteria: the sweep must fail if an
+    allowlisted command's text changes shape, even cosmetically -- proving
+    the allowlist is keyed on exact text, not on some looser notion of "the
+    same command". Take a real allowlisted entry and perturb it slightly (an
+    added flag); the perturbed text is a different string, so it no longer
+    matches the allowlist key and must be re-flagged as an unguarded
+    candidate needing its own guard or its own fresh allowlist entry.
+
+    Both halves are asserted. The perturbed half alone would pass even if the
+    allowlist were never consulted at all, so the unperturbed half is what
+    proves the exemption is real and the flag is caused by the perturbation.
+    """
+    original = "rtk git push origin trunk"
+    perturbed = original + " --porcelain"
+
+    assert (
+        _unguarded_mutations(
+            f"```bash\n{original}\n```\n", allowlist=_KNOWN_LAND_SKILL_MUTATIONS
+        )
+        == []
+    ), "the unperturbed command is not actually exempt -- fixture assumption broken"
+
+    assert _unguarded_mutations(
+        f"```bash\n{perturbed}\n```\n", allowlist=_KNOWN_LAND_SKILL_MUTATIONS
+    ), (
+        "a cosmetically-changed allowlisted command must not silently keep "
+        "matching its old allowlist entry"
+    )
