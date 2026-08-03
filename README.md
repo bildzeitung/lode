@@ -58,8 +58,8 @@ rationale (including why a split store over a unified Oracle/Postgres engine) an
 models (embedder + reranker/NLI, ~500MB of ONNX files) download from HuggingFace on first use.
 Run `lode models pull` right after install to fetch them deliberately — see
 [`docs/configuration.md`](docs/configuration.md#models) — rather than hitting that cost mid-capture.
-After that, retrieval is fully offline; indexing still makes one small metadata call per indexed
-version to record which model revision produced the vectors (`HF_HUB_OFFLINE=1` skips it too).
+After that, retrieval is fully offline; indexing still makes one small metadata call per process to
+record which model revision produced the vectors (`HF_HUB_OFFLINE=1` skips it too).
 
 ## Status
 

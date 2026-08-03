@@ -300,11 +300,12 @@ class FastEmbedEmbedder:
         ``HF_HUB_OFFLINE``, so the cost is documented and explicitly opt-out-able
         rather than a silent surprise.
 
-        **How often that probe actually fires is worse than "once per process":**
-        ``lode work``'s drain constructs a fresh ``FastEmbedEmbedder`` per queued
-        job, so a drain of N versions pays N probes -- and N full ONNX loads, the
-        far larger cost. That is lode-j5r2, filed rather than fixed here; the
-        docs say "per indexed version" because that is what the code does today.
+        **Once per process, not once per job (lode-j5r2).** ``lode work`` used
+        to build a fresh embedder for every queued job, so a drain of N versions
+        paid N probes and N ONNX loads. Who shares an instance is the caller's
+        call, and ``lode work`` now holds one for its whole run
+        (:func:`lode.worker.drain`) -- so the per-process cost described above
+        is what indexing actually pays.
         """
         self._load()
 
