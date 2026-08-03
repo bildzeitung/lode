@@ -58,7 +58,7 @@ from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs, now_iso
-from lode.llm_provider import AnthropicProvider
+from lode.llm_provider import AnthropicProvider, LLMAuthError, LLMProviderError
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
 from lode.versions import delete, save
@@ -4484,6 +4484,58 @@ def test_ask_out_of_corpus_question_abstains(
     assert cli._ABSTAIN_LINE in result.stdout
 
 
+def test_ask_exits_nonzero_with_actionable_message_on_llm_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode ask' fails loud and clean on a non-auth LLMProviderError (lode-yx1c).
+
+    AuthError and LLMProviderError are SIBLING RuntimeError subclasses -- neither
+    is an ancestor of the other -- so a handler that only named AuthError let a
+    raw traceback through here too. ``cited_answer.ask`` is stubbed to raise
+    directly; an empty corpus (retrieval finds nothing to rerank) keeps the
+    offline embedder stub sufficient without pulling in the real cross-encoder.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _offline_embedder(monkeypatch)
+
+    def _raise(*args, **kwargs):
+        raise LLMProviderError("provider returned 500", provider="anthropic")
+
+    monkeypatch.setattr("lode.cited_answer.ask", _raise)
+
+    result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert "provider returned 500" in result.stderr
+    # No raw traceback leaked to the user.
+    assert "Traceback" not in result.stdout
+
+
+def test_ask_exits_nonzero_with_actionable_message_on_llm_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode ask' fails loud and clean on LLMAuthError too (lode-568v.3, lode-yx1c).
+
+    LLMAuthError subclasses LLMProviderError, not AuthError, so it hit the same
+    gap as the plain LLMProviderError case above.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _offline_embedder(monkeypatch)
+
+    def _raise(*args, **kwargs):
+        raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
+
+    monkeypatch.setattr("lode.cited_answer.ask", _raise)
+
+    result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert "no OpenAI/Azure credentials (test)" in result.stderr
+    assert "Traceback" not in result.stdout
+
+
 @pytest.mark.slow
 def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None:
     """A passage matched only by the dense leg still reaches the Q&A context (lode-bkc).
@@ -5309,6 +5361,59 @@ def test_work_exits_nonzero_with_actionable_message_on_auth_error(
         reader.close()
     assert status == "pending"
     assert attempts == 0  # uncharged — never retried, never dead-lettered
+
+
+def test_work_exits_nonzero_with_actionable_message_on_llm_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' fails loud and clean on a non-auth LLMProviderError too (lode-yx1c).
+
+    AuthError and LLMProviderError are SIBLING RuntimeError subclasses -- neither
+    is an ancestor of the other -- so the handler above (which only named
+    AuthError) let a raw traceback through for a plain LLMProviderError escaping
+    ``drain()`` uncaught, e.g. from a batch pre-step's provider call that is not
+    a credential failure (a rate limit, a 500, ...). ``drain()`` itself is
+    stubbed to raise directly, mirroring how the gap was originally reproduced
+    -- the failure need not come from a per-job handler at all.
+    """
+
+    def _raise(*args, **kwargs):
+        raise LLMProviderError("provider returned 500", provider="anthropic")
+
+    monkeypatch.setattr("lode.worker.drain", _raise)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "provider returned 500" in result.stderr
+    # No raw traceback leaked to the user.
+    assert "Traceback" not in result.stdout
+
+
+def test_work_exits_nonzero_with_actionable_message_on_llm_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' fails loud and clean on LLMAuthError too (lode-568v.3, lode-yx1c).
+
+    LLMAuthError subclasses LLMProviderError, not AuthError, so it hit the same
+    gap as the plain LLMProviderError case above -- the ``except AuthError``
+    handler could not catch it either.
+    """
+
+    def _raise(*args, **kwargs):
+        raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
+
+    monkeypatch.setattr("lode.worker.drain", _raise)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no OpenAI/Azure credentials (test)" in result.stderr
+    assert "Traceback" not in result.stdout
 
 
 def _embed_outcome_registry() -> dict:

@@ -78,7 +78,7 @@ from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
 from lode.lexical import LexicalCacheBackend
-from lode.llm_provider import provider_identity
+from lode.llm_provider import LLMProviderError, provider_identity
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.notes_read import (
@@ -573,15 +573,15 @@ def ask(
             for claim in answer.claims
             for support in claim.support
         }
-    except AuthError as err:
-        # Fail gracefully on missing credentials: a clean, actionable line to the
-        # user (no traceback) and the underlying cause to the log for debugging.
-        # No exc_info -- the root logger mirrors to stderr, so dumping frames there
+    except (AuthError, LLMProviderError) as err:
+        # Fail gracefully on a permanent, user-actionable provider failure: missing
+        # credentials (AuthError, or a provider's own LLMAuthError -- a subclass of
+        # LLMProviderError, so this arm catches it too), or any other permanent
+        # LLMProviderError (lode-yx1c) -- a clean, actionable line to the user (no
+        # traceback) and the underlying cause to the log for debugging. No
+        # exc_info -- the root logger mirrors to stderr, so dumping frames there
         # would re-introduce the very traceback we're suppressing for the user.
-        logging.getLogger(__name__).error(
-            "ask aborted — could not resolve Anthropic credentials: %s",
-            err.__cause__ or err,
-        )
+        logging.getLogger(__name__).error("ask aborted — %s", err.__cause__ or err)
         typer.echo(str(err), err=True)
         raise typer.Exit(code=1) from None
     finally:
@@ -3131,15 +3131,16 @@ def work(
                         time.sleep(interval)
                 except KeyboardInterrupt:
                     typer.echo("worker interrupted", err=True)
-                except AuthError as err:
-                    # Permanent, user-actionable failure (lode-9yy): drain()
-                    # surfaces it once the offending job is reset to 'pending'
-                    # uncharged (docs/storage.md "Transient vs. permanent job
-                    # failures"). Rendered exactly as `ask` does above — see that
-                    # handler for why there is no exc_info.
+                except (AuthError, LLMProviderError) as err:
+                    # Permanent, user-actionable failure: an AuthError/LLMAuthError
+                    # (lode-9yy, lode-568v.3) that drain() surfaces once the
+                    # offending job is reset to 'pending' uncharged (docs/storage.md
+                    # "Transient vs. permanent job failures"), or any other
+                    # LLMProviderError that escapes drain() unstashed -- e.g. from
+                    # a batch pre-step (lode-yx1c). Rendered exactly as `ask` does
+                    # above — see that handler for why there is no exc_info.
                     logging.getLogger(__name__).error(
-                        "work aborted — could not resolve Anthropic credentials: %s",
-                        err.__cause__ or err,
+                        "work aborted — %s", err.__cause__ or err
                     )
                     typer.echo(str(err), err=True)
                     raise typer.Exit(code=1) from None

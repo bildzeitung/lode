@@ -586,6 +586,22 @@ decides how loud "surface it" should be:
 - `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints the active
   provider's actionable message to stderr and exits non-zero — the same clean,
   traceback-free treatment `lode ask` already gives `AuthError`/`LLMAuthError`.
+  **The CLI's own catch is wider than this section's permanent-job taxonomy**
+  (`lode-yx1c`): `cli.py`'s `ask` and `work` handlers name `(AuthError,
+  LLMProviderError)`, not just `AuthError`/`LLMAuthError` — `LLMProviderError`
+  is `LLMAuthError`'s own base class, so naming it also catches the subclass,
+  and additionally catches a **non-auth** `LLMProviderError` that reaches the
+  CLI without having gone through `run_one`/`_batch_submit_enrich`'s permanent
+  handling at all (e.g. straight out of a batch pre-step, or any other
+  provider call `drain` doesn't wrap). `AuthError` is named explicitly
+  alongside it — it is a sibling `RuntimeError` subclass, not a
+  `LLMProviderError` ancestor or descendant, so it would not otherwise be
+  caught. This CLI-level widening is a safety net on top of the taxonomy
+  above, not a change to it: a job handler raising a non-auth
+  `LLMProviderError` is still transient by that taxonomy (retried, then
+  dead-lettered by `run_one`'s generic `except Exception` — it never reaches
+  this catch that way); the CLI catch only matters for a `LLMProviderError`
+  that already escaped the queue machinery uncaught.
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's
