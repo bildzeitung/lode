@@ -158,6 +158,8 @@ rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label
 rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
 rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
+STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+rm -rf "$STATE_DIR"   # per-pass scratch the reset below cannot clear (lode-wjw4) -- see below
 git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
   # DELIBERATELY BARE `git`, NOT `rtk git` (lode-eza9) -- the ONE exception to CLAUDE.md's RTK golden
   # rule in this file. `rtk git log` silently DROPS MERGE COMMITS (upstream rtk-ai/rtk#2305): measured
@@ -167,12 +169,6 @@ git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, p
   # while the reset below destroyed real merges. Scope is `log` only: `rev-list` (including
   # --first-parent, which 1a's direction test greps) and `show` are unaffected and stay on `rtk`.
 rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # per-pass scratch under .git/ -- the reset
-  # above never touches it (only the index+worktree); wipe it here too, since a leftover from a
-  # crashed prior pass is the same residue category as a leftover trunk commit (lode-wjw4). Writers
-  # below (2b, 3a) each `mkdir -p` their own subdirectory on their own, fresh Bash invocation -- this
-  # line only ever removes, so no writer has to be verbally ordered around a later section's wipe.
-rm -rf "$STATE_DIR"
 ```
 
 **On a non-zero exit the pass stops there** — the script's own stderr already names cwd, the main
@@ -199,15 +195,6 @@ below. What it buys is that a bare crash or kill self-heals too, which a per-exi
 a killed pass runs no exit-site code at all. Content reds (exit **1**) are untouched — they still
 isolate and bounce exactly as before.
 
-**The same block also wipes `$STATE_DIR` (lode-wjw4).** `.git/land-state/` is per-pass scratch — 2b's
-conflict record, 3a's accepted/message/conflicts files — and, like `trunk` itself, `git reset --hard`
-never touches it (only the index and working tree). A leftover from a crashed prior pass is the same
-*residue* category as a leftover merge commit, and Section 0's lock is already held by this point, so
-wiping it here is safe. Each writer that needs a subdirectory (`$CONFLICTS_DIR` in 2b, `$MSG_DIR`/
-`$CONFLICTS_DIR` in 3a) still `mkdir -p`s it locally, in its own fresh Bash invocation — this line only
-ever removes, never creates, so no writer earlier in the pass than 3a has to be verbally ordered around
-when a later section's wipe might run.
-
 Two things the reset does **not** do that `pull --rebase` did, both deliberate: it does not replay
 local-only commits forward, and it does **not** refuse on a dirty tree or index. The second cuts both
 ways. A staged `.beads/issues.jsonl` in the main checkout is real and observed — it is why the
@@ -229,6 +216,18 @@ exactly the crash case this reset exists to heal.
 
 Full write-up, including the writer this does **not** cover:
 [docs/agents-workflow.md — Mechanics (decided)](../../../docs/agents-workflow.md#mechanics-decided).
+
+**The same block also wipes `$STATE_DIR` (lode-wjw4).** `.git/land-state/` is per-pass scratch the
+reset cannot clear, and a leftover from a crashed prior pass is the same *residue* category as a
+leftover merge commit; Section 0's lock is already held by this point, so this is its altitude. The
+line only ever **removes** — each writer still `mkdir -p`s the subdirectory it needs (`$CONFLICTS_DIR`
+in 2b, `$MSG_DIR`/`$CONFLICTS_DIR` in 3a) — so Section 1 never has to enumerate a subdirectory a later
+section invents, and, running ahead of every writer, nothing has to be verbally ordered around it.
+Its position *inside* the block is load-bearing too, and is pinned rather than remembered:
+`tests/test_land_conflicts_state.py` fails if the wipe leaves this block, or if `git reset --hard`
+stops being the block's **last** command — no block here runs under `set -e`, so that last command's
+status is the only machine-readable signal the block gives, and `rm -rf` reports success even on a
+path that does not exist.
 
 Then read the queue — every ticket carrying the **`ready-for-land`** label (it stays `in_progress`;
 the label, not a status, is the queue):
@@ -424,8 +423,7 @@ per lode-mh9g — two live defects found landing lode-l38d.6 are fixed there, wi
 tests in `tests/test_merge_precheck.py`; see the script's own header for the full writeup):
 
 ```bash
-# STATE_DIR (`.git/land-state`) is wiped once, per pass, in Section 1 -- re-derive it here since
-# this is a fresh Bash invocation, and mkdir -p this block's own subdirectory (lode-wjw4).
+# $STATE_DIR is wiped once per pass, in Section 1 (lode-wjw4); re-derived here, fresh invocation.
 STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
 CONFLICTS_DIR="$STATE_DIR/conflicts"
 mkdir -p "$CONFLICTS_DIR"
@@ -724,9 +722,7 @@ MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only re
 CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
                                                          # conflict's paths for the kick-back block
                                                          # below to read (lode-rfon)
-mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # $STATE_DIR itself was wiped once, per pass, in Section 1
-                                        # (lode-wjw4) -- this block just ensures its own subdirectories
-                                        # exist, the same as 2b does for its own above.
+mkdir -p "$MSG_DIR" "$CONFLICTS_DIR"   # $STATE_DIR is wiped once per pass, in Section 1 (lode-wjw4)
 
 # Capture the accepted set to a file HERE, at the one moment I actually hold it (2c's land-review
 # verdicts, in the order 3a just established). Every later block RE-READS this file instead of having
