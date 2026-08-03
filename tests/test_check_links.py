@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _gitrepo import _git
 from conftest import load_module_from_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -28,14 +29,17 @@ github_slug = check_links.github_slug
 
 def _git_init(root: Path) -> None:
     """A real git repo is required -- the gate scopes to ``git ls-files``, not
-    a bare directory walk, so scratch/gitignored markdown never enters it."""
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x"],
-        cwd=root,
-        check=True,
-    )
+    a bare directory walk, so scratch/gitignored markdown never enters it.
+
+    Uses the shared `_git` helper (tests/_gitrepo.py, lode-863q/lode-c835)
+    instead of a raw `subprocess.run`: it adds the missing 30s timeout this
+    module used to lack (previously bounded only by pytest-timeout's global
+    120s) and `capture_output`, so a failing git call no longer leaks its
+    stdout/stderr straight into test output.
+    """
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "x")
 
 
 def _write(root: Path, rel: str, content: str) -> Path:
