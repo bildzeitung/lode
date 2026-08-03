@@ -493,6 +493,17 @@ class Settings(BaseModel):
         "(nomic-embed-text-v1.5 → 768) — lode-txh.6.",
         gt=0,
     )
+    hf_probe_timeout_s: float = _knob(
+        5.0,
+        Kind.RUNTIME,
+        "Per-call timeout (seconds) for resolve_model_revision's live HF "
+        "revision probe (lode.embedding) -- bounds a black-holed network to "
+        "this instead of the OS TCP connect timeout (lode-w5nr). Matches "
+        "httpx's own default, not fetch_timeout_s (10s, page fetches): a "
+        "small metadata GET. Full reasoning and the measurement: "
+        "docs/decisions.md, the lode-w5nr entry.",
+        gt=0.0,
+    )
     enrichment_llm: ModelTier = _knob(
         ModelTier(model="claude-haiku-4-5"),
         Kind.RUNTIME,

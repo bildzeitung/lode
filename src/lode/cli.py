@@ -1330,7 +1330,9 @@ def _model_revision_status(
         if not recorded:
             return False, False
         mixed = len(recorded) > 1
-        current = resolve_model_revision(settings.embedding_model)
+        current = resolve_model_revision(
+            settings.embedding_model, timeout_s=settings.hf_probe_timeout_s
+        )
         drift = current is not None and any(
             rev is not None and rev != current for rev in recorded
         )

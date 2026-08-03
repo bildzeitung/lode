@@ -2702,6 +2702,7 @@ while erasing it here would lose the record of what was believed, and when.
     *unset* and no network, the probe is genuinely unbounded — `huggingface_hub`'s
     `default_client_factory` builds its `httpx.Client` with `timeout=None`. No offline-flag check can
     see that case; it needs a bound of its own.
+    **Update (lode-w5nr, 2026-08-02) — bounded; see the `lode-w5nr` entry at the end of this file.**
   - **What changed:** `lode models pull`'s docstring (`src/lode/cli.py`) now says retrieval is fully
     offline after a warm and indexing makes one metadata call per indexed version, rather than
     claiming both are offline. `resolve_model_revision` (`src/lode/embedding.py`) now checks
@@ -2922,3 +2923,77 @@ while erasing it here would lose the record of what was believed, and when.
     `scripts/worktree-lock-stale.sh` (the stale-lock detector), `tests/test_worktree_lock_stale.py`
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
+
+- **2026-08-02 (lode-w5nr) — `resolve_model_revision`'s HF probe is now bounded by an explicit
+  per-call timeout, closing the stall `lode-r4r2` named but could not cover.** Filed during
+  `lode-r4r2`'s review: with `HF_HUB_OFFLINE` *unset* and the network black-holed (captive portal, VPN
+  down, air-gapped host that never set the flag), `huggingface_hub.model_info()` blocked for the OS TCP
+  connect timeout (~130s on Linux) before `resolve_model_revision`'s own `except Exception: return
+  None` recorded `model_revision = NULL` anyway — no offline-flag short-circuit can see this case, since
+  it fires only when the flag is set.
+  - **Root cause, measured:** `huggingface_hub`'s `default_client_factory`
+    (`utils/_http.py`) builds its shared `httpx.Client` with `timeout=None` — deliberately disabling
+    `httpx`'s own 5s default. `HfApi.model_info()` does, however, accept a `timeout: float | None`
+    keyword and forwards it straight to the per-request `get_session().get(..., timeout=timeout)` call.
+    Verified empirically against a real black hole (a TEST-NET-1 address, `HF_ENDPOINT` pointed at it):
+    with no `timeout` kwarg, a request to that address must be killed rather than waited out; passing
+    `timeout=3.0` raised `httpx.ConnectTimeout` in ~3.02s. `httpx` honors a per-request timeout override
+    even though the client itself was constructed with none. Note what a float `timeout` means to
+    `httpx`: `Timeout(5.0)` sets `connect`/`read`/`write`/`pool` to 5.0 **each** — a per-phase bound, not
+    a total-call one, and applied per hop under the client's `follow_redirects=True`. So `5.0` does not
+    cap a slow-but-alive HF at 5s total; it caps each phase, which is why a black hole (connect only)
+    returns in ~5s while a legitimately slow metadata GET is not cut short.
+  - **This is option (a) of the ticket's three sketched directions.** Not (b), a lode-owned client
+    factory via `set_client_factory()` — but **not for the reason first recorded here.** "It would also
+    bound `fastembed`'s downloads" is refutable: `httpx.Timeout(connect=5.0, read=None, write=None,
+    pool=None)` bounds exactly the black-hole phase and leaves a multi-hundred-MB read unbounded. The
+    real reasons: (i) it would not be a complete bound anyway — `fastembed` fetches from its GCS mirror
+    with a bare, untimed `requests.get(url, stream=True)`
+    (`fastembed/common/model_management.py`), outside `huggingface_hub` entirely, so no client factory
+    reaches it; and (ii) `get_session()` memoizes `_GLOBAL_CLIENT` on first use, so a factory must be
+    installed before *any* hf call anywhere in the process — an import-time mutation of third-party
+    global state from a library module, a worse altitude than a threaded kwarg, not a better one. lode
+    owns exactly two hf call sites, so threading scales fine at n=2. Not (c) (a bounded wait wrapped
+    around the call in lode's own code) either — unnecessary once (a) works.
+  - **Scope: this bounds the probe, not the weights load.** It is the last unbounded hf call on a
+    *warm*-cache `lode work`, which is what makes it the right fix — `fastembed`'s `download_model`
+    tries `local_files_only=True` first, so a warm cache makes no network call of its own. But that
+    attempt is wrapped in `except Exception: pass`, and a cold, partial, or unverifiable cache falls
+    through to untimed `model_info` + `list_repo_tree` + `snapshot_download` under a retry loop. Those
+    are `fastembed`'s call sites, not lode's; `HF_HUB_OFFLINE=1` (which flips `local_files_only` on) is
+    still the only thing that bounds them, and `lode models pull` is where that cost belongs.
+  - **What changed:** `resolve_model_revision(model_name, *, timeout_s)` (`src/lode/embedding.py`) takes
+    a new required keyword-only `timeout_s`, forwarded to `model_info(hf_source, timeout=timeout_s)` —
+    required, not defaulted, so a caller cannot silently reintroduce the unbounded wait by omission.
+    Both production call sites thread it from the new `Settings.hf_probe_timeout_s` knob (`runtime`,
+    default `5.0`, [configuration.md](configuration.md#models)): `FastEmbedEmbedder.__init__` caches
+    `settings.hf_probe_timeout_s` and passes it from `model_revision()`, and `cli.py`'s
+    `_model_revision_status` (the `lode status` drift check) passes it directly. `5.0` was chosen to
+    match `httpx`'s own disabled default (the exact figure `huggingface_hub` turned off) rather than the
+    existing `fetch_timeout_s` (`10s`) — this is a small metadata GET, not a page fetch.
+  - **Blast radius, and why the fix doesn't need to change with it:** at the time this ticket was filed,
+    the write path (`embed()`) constructed one `FastEmbedEmbedder` per indexed version, so a hang could
+    recur once per version drained. A concurrent sibling, `lode-j5r2`, hoists ONE shared
+    `FastEmbedEmbedder` across a whole `drain()`/`--loop` process, cutting that to one hang per process
+    — reducing exposure, not eliminating the need for a bound: an untimed probe still blocks the first
+    (and only) call for the full OS TCP timeout regardless of how many times it would otherwise have
+    been made. The user-visible symptom described in this ticket (an unexplained multi-minute stall in
+    `lode work` with no output) is unchanged in kind either way, just capped at once per process instead
+    of once per version after `lode-j5r2` lands. `resolve_model_revision`'s call signature was extended
+    (a new required kwarg), never moved or renamed, specifically so it merges cleanly regardless of
+    which of the two branches lands first.
+  - **Test trap avoided (third time in this function, after `lode-dj6m` / `lode-r4r2`):** a stub that
+    merely raises is swallowed by `except Exception: return None` and asserts nothing about whether a
+    timeout is actually applied. The acceptance tests instead capture the `timeout` kwarg
+    `huggingface_hub.model_info` receives and assert its value
+    (`tests/test_embedding.py::test_resolve_model_revision_forwards_timeout_s_to_model_info` and
+    `::test_fast_embed_embedder_model_revision_resolves_caches_and_threads_timeout`, the latter proving
+    the `Settings` knob reaches the network call through the real `FastEmbedEmbedder` seam, not just the
+    bare function) — both were sabotage-tested non-vacuous by reverting the `timeout=timeout_s` argument
+    and watching them fail before restoring it.
+  - **A fourth instance of the same trap, found in review and fixed here:**
+    `::test_resolve_model_revision_unknown_model_returns_none_no_network` had stubbed `model_info` with
+    a stub raising `AssertionError("must not be reached")` — swallowed by the same `except`, so its
+    `is None` assertion passed whether or not the stub ran. Proven by bypassing the `identity is None`
+    early return and watching the raising form still pass; rewritten to count calls and assert
+    `probe_calls == 0`. Counting, never raising, is the rule for this function.
