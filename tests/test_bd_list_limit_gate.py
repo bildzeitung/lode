@@ -67,20 +67,32 @@ reason plus one more: its only `bd list` mention
 (`docs/agents-workflow.md:1502`) is a citation of `/sweep`'s query, and `docs/` is where
 historical decision records deliberately quote pre-change commands.
 
-## Blockquoted fences: normalized before extraction
+## Blockquoted fences: the two paths normalize at different layers
 
-`.claude/skills/code/SKILL.md` writes four of its executable bash blocks inside markdown
-blockquotes (`> ```bash`). Neither `_bash_blocks` (which tests `line.strip()`, so `>` is
-not stripped and the fence never opens) nor a `` ```...``` `` region regex (which pairs
-the delimiters and so removes the block from the inline scan too) sees inside them --
-they were invisible to BOTH paths, ~10% of that file's blocks, the same shape of blind
-spot `lode-ovgs` records for `tests/test_land_lock.py`'s column-0 `line.startswith`.
-`_strip_blockquote` removes one leading `>` marker per line before either path runs, so
-a blockquoted fence is an ordinary fence to both. Normalizing the INPUT here does not
-fork the shared helper -- but the helper itself still has the blind spot for its own
-caller, so those same four blocks are ungated for cross-block shell state in
-`test_skill_bash_state.py`. That is a real bug in a different file with a different
-owner, filed as `lode-wroz`, not something to fix behind this gate's back.
+`.claude/skills/code/SKILL.md` writes four of its nine executable bash blocks inside
+markdown blockquotes (`> ```bash`). A `>` survives `.strip()`, so a scanner testing
+`line.strip().startswith("```")` never opens the fence, and a `` ```...``` `` region
+regex pairs the delimiters and removes the block from the inline scan too -- they were
+once invisible to BOTH paths, the same shape of blind spot `lode-ovgs` records for
+`tests/test_land_lock.py`'s column-0 `line.startswith`.
+
+The FENCED path needs nothing from this file any more: `lode-wroz` moved the strip inside
+the shared `tests/conftest.py::bash_fence_blocks`, which unmarks every line (delimiters
+AND content), so every caller gets it -- and `test_skill_bash_state.py` now gates those
+same four blocks directly. `lode-3pyo` therefore dropped the `_strip_blockquote`
+pre-pass that used to run ahead of `_bash_blocks` here. That pre-pass was not merely
+redundant: stripping twice is a no-op only on today's corpus, since a `>>`-leading line
+loses one marker per pass (`>> log` would have reached this gate as `log`).
+
+The INLINE path still normalizes its own input, and `_strip_blockquote` exists solely for
+it: `inline_violations` never calls `_bash_blocks`, tracking fences itself line by line
+(see its docstring for why), so without the strip a `> ```bash` fence is not a fence to
+it and the block's contents get scanned as prose -- measured, one false positive on
+`> echo "`bd list --json`"`. `test_inline_scan_skips_blockquoted_fenced_content` pins
+exactly that. Both paths therefore share ONE marker definition, conftest's
+`_BLOCKQUOTE_MARKER`, imported rather than re-declared: a one-sided change to the marker
+shape would make the two paths partition the same file differently, double-reporting
+fenced content as prose.
 
 ## Why fenced/`.sh` comments are stripped but inline backtick spans are not
 
@@ -152,6 +164,12 @@ from pathlib import Path
 
 import pytest
 
+# The blockquote-marker shape the INLINE scan normalizes with. Imported, never
+# re-declared: `bash_fence_blocks` strips the same marker for the fenced path, and the
+# two paths must partition the same document identically (module docstring:
+# "Blockquoted fences").
+from conftest import _BLOCKQUOTE_MARKER
+
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
 # different from that one's (no cross-block variable use), but the underlying "what does
@@ -184,10 +202,6 @@ BD_LIST_RE = re.compile(
 )
 
 _LIMIT_RE = re.compile(r"--limit\b")
-
-# One leading blockquote marker, plus the single space that conventionally follows it.
-# See the module docstring's "Blockquoted fences" section.
-_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>[ \t]?")
 
 _INLINE_SPAN_RE = re.compile(r"`([^`\n]+)`")
 
@@ -277,9 +291,10 @@ SKIP_PROSE: dict[tuple[str, str], str] = {
 
 
 def _strip_blockquote(markdown: str) -> str:
-    """Drop one leading `> ` blockquote marker from every line, so a blockquoted fence
-    is an ordinary fence to both scan paths (module docstring: "Blockquoted fences")."""
-    return "\n".join(_BLOCKQUOTE_RE.sub("", line) for line in markdown.splitlines())
+    """Drop one leading `> ` blockquote marker from every line. The INLINE scan's own
+    normalization, and its only caller -- the fenced path gets this from `_bash_blocks`
+    itself (module docstring: "Blockquoted fences")."""
+    return "\n".join(_BLOCKQUOTE_MARKER.sub("", line) for line in markdown.splitlines())
 
 
 def _command_segments(line: str) -> list[str]:
@@ -334,11 +349,8 @@ def fenced_violations(markdown: str) -> list[tuple[str, int]]:
     fence -- what an agent actually executes. `_bash_blocks` returns block TEXT with no
     line information, so the number is reported as -1 (rendered `?`).
 
-    No `_strip_blockquote` pre-pass here (lode-3pyo) -- `_bash_blocks` (conftest's
-    `bash_fence_blocks`) strips a leading blockquote marker from every line itself as of
-    lode-wroz, so a second strip ahead of it was a harmless-on-this-corpus, but not
-    harmless-in-general, no-op. `inline_violations` below still needs its own
-    `_strip_blockquote` call -- that path never goes through `_bash_blocks`."""
+    No `_strip_blockquote` pre-pass: `_bash_blocks` unmarks blockquoted lines itself
+    (module docstring: "Blockquoted fences")."""
     found: list[tuple[str, int]] = []
     for block in _bash_blocks(markdown):
         for line in block.splitlines():
@@ -503,7 +515,9 @@ def test_fenced_block_with_limit_is_clean() -> None:
 
 def test_blockquoted_fence_is_still_extracted() -> None:
     """.claude/skills/code/SKILL.md writes four executable blocks as `> ```bash`.
-    Without _strip_blockquote both scan paths miss them entirely."""
+    `_bash_blocks` unmarks them itself (lode-wroz), so nothing in THIS file is what
+    makes this pass. Pinned here so a future change to the shared helper cannot
+    silently take this gate's coverage with it."""
     markdown = "> ```bash\n> rtk bd list --label foo --json\n> ```\n"
     assert fenced_violations(markdown) == [("rtk bd list --label foo --json", -1)]
 
@@ -546,6 +560,19 @@ def test_inline_scan_skips_fenced_content() -> None:
     """A single-backtick-looking sequence that is actually part of a fenced block's
     own content must be reported once (via the fenced path), never twice."""
     markdown = '```bash\necho "`bd list --json`"\n```\n'
+    assert inline_violations(markdown) == []
+    assert len(fenced_violations(markdown)) == 1
+
+
+def test_inline_scan_skips_blockquoted_fenced_content() -> None:
+    """The blockquoted twin of the test above, and the ONLY thing pinning
+    `_strip_blockquote` since lode-3pyo took the fenced path off it -- deleting that call
+    otherwise leaves the whole file green (sabotage-verified). This path tracks fences
+    itself, so the strip is what makes `> ```bash` open one; without it the block's
+    content is scanned as prose and falsely reported at line 2. The second assert is the
+    real subject: both paths must partition the same document the same way, which is why
+    they share one marker definition."""
+    markdown = '> ```bash\n> echo "`bd list --json`"\n> ```\n'
     assert inline_violations(markdown) == []
     assert len(fenced_violations(markdown)) == 1
 
@@ -655,8 +682,6 @@ def test_scan_scope_covers_agent_definitions() -> None:
     }
     assert ".claude/agents/coding.md" in scanned
     assert ".claude/agents/code-reviewer.md" in scanned
-    # No `_strip_blockquote` pre-pass here either (lode-3pyo) -- same redundant-ahead-of
-    # `_bash_blocks` shape as `fenced_violations` above, since lode-wroz.
     bd_lines = sum(
         1
         for p in AGENTS_DIR.glob("*.md")
