@@ -17,8 +17,9 @@ import pytest
 
 from lode.answer import Answer, Claim, Support
 from lode.config import Settings
-from lode.llm_provider import AnthropicProvider
+from lode.llm_provider import AnthropicProvider, ModelTier
 from lode.qa import (
+    MAX_TOKENS,
     OPUS_MODEL,
     SONNET_MODEL,
     QaPassage,
@@ -177,6 +178,48 @@ def test_qa_think_harder_llm_override_reaches_the_call(conn) -> None:
     )
     assert result.model == "claude-custom-opus-model"
     assert client.messages.calls[0]["model"] == "claude-custom-opus-model"
+
+
+def test_qa_llm_default_max_tokens_is_the_source_constant(conn) -> None:
+    # lode-d70n: an unset tier.max_tokens falls back to qa.MAX_TOKENS,
+    # unchanged from before this ticket.
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
+    )
+    assert client.messages.calls[0]["max_tokens"] == MAX_TOKENS
+
+
+def test_qa_llm_max_tokens_override_reaches_the_call(conn) -> None:
+    # lode-d70n: a Kind.RUNTIME override of qa_llm.max_tokens must actually
+    # change the budget sent on the wire, not just the model/effort.
+    settings = Settings(qa_llm=ModelTier(model="claude-sonnet-4-6", max_tokens=1234))
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert client.messages.calls[0]["max_tokens"] == 1234
+
+
+def test_qa_think_harder_llm_max_tokens_override_reaches_the_call(conn) -> None:
+    # lode-d70n: same for the think-harder tier.
+    settings = Settings(
+        qa_think_harder_llm=ModelTier(model="claude-opus-5", max_tokens=4321)
+    )
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        think_harder=True,
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert client.messages.calls[0]["max_tokens"] == 4321
 
 
 def test_no_egress_passage_excluded_from_context(conn) -> None:

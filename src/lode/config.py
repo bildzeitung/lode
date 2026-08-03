@@ -497,22 +497,28 @@ class Settings(BaseModel):
         ModelTier(model="claude-haiku-4-5"),
         Kind.RUNTIME,
         "High-volume background extraction LLM (Claude Haiku 4.5). A "
-        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
-        "still coerces to a ModelTier with reasoning_effort=None.",
+        "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
+        "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
+        "reasoning_effort=None and max_tokens=None (falls back to "
+        "enrich.MAX_TOKENS).",
     )
     qa_llm: ModelTier = _knob(
         ModelTier(model="claude-sonnet-4-6"),
         Kind.RUNTIME,
         "Default interactive Q&A synthesis LLM (Claude Sonnet 4.6). A "
-        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
-        "still coerces to a ModelTier with reasoning_effort=None.",
+        "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
+        "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
+        "reasoning_effort=None and max_tokens=None (falls back to "
+        "qa.MAX_TOKENS).",
     )
     qa_think_harder_llm: ModelTier = _knob(
         ModelTier(model="claude-opus-5"),
         Kind.RUNTIME,
         "Higher-quality 'think harder' Q&A LLM on demand (Claude Opus 5). A "
-        "(model, reasoning_effort) pair (lode-568v.2) -- a bare TOML string "
-        "still coerces to a ModelTier with reasoning_effort=None.",
+        "(model, reasoning_effort, max_tokens) tier (lode-568v.2; max_tokens "
+        "lode-d70n) -- a bare TOML string still coerces to a ModelTier with "
+        "reasoning_effort=None and max_tokens=None (falls back to "
+        "qa.MAX_TOKENS).",
     )
 
     # --- Build constants (chosen once) ---------------------------------------
@@ -1086,14 +1092,18 @@ def knob_rows(settings: Settings) -> list[tuple[str, str, str]]:
                 value = ", ".join(str(item) for item in value)
             elif isinstance(value, ModelTier):
                 # Render the bare model/deployment id (matching the pre-seam
-                # str-valued knobs, lode-568v.2), appending the effort only when
-                # set -- str(ModelTier) would otherwise print the pydantic repr
-                # "model='...' reasoning_effort=None" in `lode config` + the TUI
-                # ConfigScreen (both feed knob_rows straight to display).
-                value = (
-                    f"{value.model} (effort={value.reasoning_effort})"
-                    if value.reasoning_effort is not None
-                    else value.model
-                )
+                # str-valued knobs, lode-568v.2), appending effort/max_tokens
+                # only when set -- str(ModelTier) would otherwise print the
+                # pydantic repr "model='...' reasoning_effort=None
+                # max_tokens=None" in `lode config` + the TUI ConfigScreen
+                # (both feed knob_rows straight to display). max_tokens
+                # (lode-d70n) follows the same "only when set" rule effort
+                # already established.
+                parts = []
+                if value.reasoning_effort is not None:
+                    parts.append(f"effort={value.reasoning_effort}")
+                if value.max_tokens is not None:
+                    parts.append(f"max_tokens={value.max_tokens}")
+                value = f"{value.model} ({', '.join(parts)})" if parts else value.model
         rows.append((name, str(value), kind))
     return rows

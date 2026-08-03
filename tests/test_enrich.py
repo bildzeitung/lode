@@ -436,6 +436,24 @@ def test_enrich_version_uses_the_raised_max_tokens(
     assert MAX_TOKENS > 1024  # the raise this ticket exists to make
 
 
+def test_enrich_version_max_tokens_override_reaches_the_call(
+    conn: sqlite3.Connection,
+) -> None:
+    """lode-d70n: a Kind.RUNTIME override of enrichment_llm.max_tokens must
+    actually change the budget sent on the wire, not just the model/effort.
+    """
+    _insert_note(conn)
+    settings = Settings(
+        enrichment_llm=ModelTier(model="claude-haiku-4-5", max_tokens=777)
+    )
+    result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
+    client = _fake_client(result)
+    enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
+
+    create_kwargs = client.messages.create.call_args.kwargs
+    assert create_kwargs["max_tokens"] == 777
+
+
 def test_enrich_version_with_thinking_capable_override_omits_thinking(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1304,6 +1322,29 @@ def test_submit_enrich_batch_uses_the_raised_max_tokens(
     create_kwargs = client.beta.messages.batches.create.call_args.kwargs
     (request,) = create_kwargs["requests"]
     assert request["params"]["max_tokens"] == MAX_TOKENS
+
+
+def test_submit_enrich_batch_max_tokens_override_reaches_the_call(
+    conn: sqlite3.Connection,
+) -> None:
+    """lode-d70n: a Kind.RUNTIME override of enrichment_llm.max_tokens must
+    reach the batch route too -- the realistic-failure-mode route named in
+    enrich.MAX_TOKENS's own docstring, and the one with no other escape hatch.
+    """
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn)
+
+    settings = Settings(
+        enrichment_llm=ModelTier(model="claude-haiku-4-5", max_tokens=555)
+    )
+    client = _fake_batch_client(batch_id="batch-xyz")
+    submit_enrich_batch(
+        conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
+    )
+
+    create_kwargs = client.beta.messages.batches.create.call_args.kwargs
+    (request,) = create_kwargs["requests"]
+    assert request["params"]["max_tokens"] == 555
 
 
 def test_submit_enrich_batch_stores_batch_handle(

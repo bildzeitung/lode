@@ -119,7 +119,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
-from pydantic import BaseModel, ConfigDict, RootModel, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    model_validator,
+)
 
 from lode.auth import build_client
 
@@ -135,13 +142,21 @@ _log = logging.getLogger(__name__)
 
 
 class ModelTier(BaseModel):
-    """A per-surface model/effort tier (``docs/stack.md`` "Config shape").
+    """A per-surface model/effort/budget tier (``docs/stack.md`` "Config shape").
 
     ``model`` is an Anthropic model id, or an Azure/OpenAI deployment name
     once a second provider lands (``lode-568v.3``). ``reasoning_effort`` is
     meaningful only under a reasoning-capable deployment; :class:`AnthropicProvider`
     sends it as ``output_config.effort`` (``lode-wnz1``) and
     :class:`OpenAIProvider` sends it as ``reasoning.effort``.
+
+    ``max_tokens`` is an optional per-tier override of the output-budget
+    constant each call site otherwise falls back to
+    (:data:`lode.qa.MAX_TOKENS`, :data:`lode.enrich.MAX_TOKENS`), resolved
+    through :meth:`resolve_max_tokens`: ``None`` means "use the call site's
+    own default", and a set value must be positive. ``docs/configuration.md``
+    "Models" owns the rationale and the truncation-vs-cost tradeoff a lower
+    override makes (``lode-d70n``).
 
     A bare TOML string (every existing ``config.toml`` today, e.g.
     ``enrichment_llm = "claude-haiku-4-5"``) coerces to
@@ -152,6 +167,7 @@ class ModelTier(BaseModel):
 
     model: str
     reasoning_effort: str | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="before")
     @classmethod
@@ -159,6 +175,16 @@ class ModelTier(BaseModel):
         if isinstance(data, str):
             return {"model": data}
         return data
+
+    def resolve_max_tokens(self, default: int) -> int:
+        """This tier's :attr:`max_tokens` if set, else ``default`` (lode-d70n).
+
+        The one home for the "unset means the call site's own constant" rule,
+        on the type that owns the field -- so the Q&A call and both enrichment
+        routes cannot drift apart on it (the byte-for-byte wire-equivalence
+        bar :data:`lode.enrich.MAX_TOKENS` is itself pinned by, lode-568v.2).
+        """
+        return self.max_tokens if self.max_tokens is not None else default
 
 
 # ---------------------------------------------------------------------------

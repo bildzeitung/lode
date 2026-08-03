@@ -580,11 +580,18 @@ class ModelTier(BaseModel):
     reasoning_effort: str | None = (
         None  # meaningful only under a reasoning-capable deployment
     )
+    max_tokens: int | None = None  # lode-d70n; None = the call site's own constant
 ```
+
+`max_tokens` is a later addition (`lode-d70n`) on the same rationale — it co-varies with the model
+choice exactly as `reasoning_effort` does, and left unset falls back to the call site's own output
+budget (`qa.MAX_TOKENS` / `enrich.MAX_TOKENS`); see
+[configuration.md](configuration.md#per-tier-max_tokens-override-decided-lode-d70n), which owns that
+decision.
 
 A bare TOML string (every existing `config.toml` today, e.g. `enrichment_llm = "claude-haiku-4-5"`)
 coerces to `ModelTier(model=<string>)` — back-compat, no migration required for existing configs; an
-inline table (`qa_think_harder_llm = { model = "gpt-5.5", reasoning_effort = "high" }`) sets both
+inline table (`qa_think_harder_llm = { model = "gpt-5.5", reasoning_effort = "high" }`) sets the
 fields explicitly. This directly answers the challenge's three-way crux ("does 'think harder' select
 a different deployment, a different effort on one deployment, or both?") with **no new abstraction
 beyond upgrading each existing knob's type** — since `qa_llm` and `qa_think_harder_llm` are already

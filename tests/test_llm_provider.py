@@ -43,12 +43,43 @@ def test_model_tier_coerces_from_a_bare_string() -> None:
     tier = ModelTier.model_validate("claude-haiku-4-5")
     assert tier.model == "claude-haiku-4-5"
     assert tier.reasoning_effort is None
+    assert tier.max_tokens is None
 
 
 def test_model_tier_accepts_explicit_fields() -> None:
     tier = ModelTier(model="gpt-5.5", reasoning_effort="high")
     assert tier.model == "gpt-5.5"
     assert tier.reasoning_effort == "high"
+
+
+def test_model_tier_accepts_an_explicit_max_tokens_override() -> None:
+    # lode-d70n: the per-tier output-budget override.
+    tier = ModelTier(model="claude-opus-5", max_tokens=4096)
+    assert tier.max_tokens == 4096
+
+
+def test_model_tier_max_tokens_defaults_to_none() -> None:
+    # None means "use the call site's own source-constant default"
+    # (qa.MAX_TOKENS / enrich.MAX_TOKENS) -- back-compat, no migration needed.
+    tier = ModelTier(model="x")
+    assert tier.max_tokens is None
+
+
+def test_model_tier_rejects_a_non_positive_max_tokens() -> None:
+    with pytest.raises(ValidationError):
+        ModelTier(model="x", max_tokens=0)
+    with pytest.raises(ValidationError):
+        ModelTier(model="x", max_tokens=-1)
+
+
+def test_resolve_max_tokens_falls_back_to_the_call_sites_default() -> None:
+    # lode-d70n: the one home for "unset means the call site's own constant",
+    # shared by qa.answer_question and both enrichment routes.
+    assert ModelTier(model="x").resolve_max_tokens(2048) == 2048
+
+
+def test_resolve_max_tokens_prefers_the_tier_override() -> None:
+    assert ModelTier(model="x", max_tokens=777).resolve_max_tokens(2048) == 777
 
 
 def test_model_tier_is_frozen() -> None:

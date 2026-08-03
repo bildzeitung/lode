@@ -13,8 +13,9 @@ by this response schema (``docs/retrieval.md``).
 ``settings.qa_llm`` (default Claude **Sonnet 4.6**, :data:`SONNET_MODEL`) or, when
 ``think_harder=True``, from ``settings.qa_think_harder_llm`` (default **Opus
 5**, :data:`OPUS_MODEL`) -- both ``Kind.RUNTIME`` knobs in :mod:`lode.config`,
-each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort,
-lode-568v.2), so a user override actually reaches the call. The call itself is
+each a :class:`~lode.llm_provider.ModelTier` (model + reasoning_effort +
+max_tokens; lode-568v.2, lode-d70n), so a user override actually reaches the
+call. The call itself is
 routed through the vendor-neutral :class:`~lode.llm_provider.LLMProvider` seam
 (:func:`~lode.llm_provider.build_provider`) rather than a hardcoded Anthropic
 client -- credentials still resolve via the SDK's own chain underneath, never a
@@ -89,6 +90,12 @@ OPUS_MODEL = "claude-opus-5"
 #: ``anthropic.APITimeoutError`` rather than a truncated answer. Whether that
 #: timeout should rise, split per-call, or stay is a measurement-backed
 #: decision tracked in lode-wfyx, not settled here.
+#:
+#: **This is the fallback, not the last word (lode-d70n):** the active tier's
+#: :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this constant
+#: when set, resolved in :func:`answer_question` through
+#: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`. See
+#: ``docs/configuration.md`` "Models" for the decision.
 MAX_TOKENS = 8192
 
 _SYSTEM_PROMPT = (
@@ -208,6 +215,7 @@ def answer_question(
         provider,
         model,
         tier.reasoning_effort,
+        tier.resolve_max_tokens(MAX_TOKENS),
         question,
         egress.sent,
         is_external,
@@ -225,6 +233,7 @@ def _request_claims(
     provider: LLMProvider,
     model: str,
     reasoning_effort: str | None,
+    max_tokens: int,
     question: str,
     sent: tuple[RedactedSend, ...],
     is_external: dict[str, bool],
@@ -250,7 +259,7 @@ def _request_claims(
         system=_SYSTEM_PROMPT,
         user_prompt=user_prompt,
         output_schema=_ClaimsEnvelope,
-        max_tokens=MAX_TOKENS,
+        max_tokens=max_tokens,
         timeout_s=timeout_s,
     )
 

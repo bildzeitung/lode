@@ -194,9 +194,9 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 | Azure OpenAI endpoint (`azure_openai_endpoint`) | runtime | `""` | The resource **root**, e.g. `https://{resource}.openai.azure.com` (`lode-568v.3`) — do **not** append `/openai`; the openai SDK's `AzureOpenAI` client adds that segment itself, so `.../openai` doubles the path and every request 404s. Empty means direct OpenAI (or a non-`"openai"` `llm_provider`). Requires `azure_openai_api_version` to also be set (validated at `Settings` construction). |
 | Azure OpenAI api-version (`azure_openai_api_version`) | runtime | `""` | e.g. `2025-04-01-preview` — sent as a query param on every request, not a header (`lode-568v.3`). Required when `azure_openai_endpoint` is set. |
 | LLM provider credentials | runtime | env/SDK-only | **No key ever lives in `config.toml`** — unlike the Jira/Confluence credentials above, there is no config-file fallback for these. `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` (unchanged) resolve via the Anthropic SDK's own credential chain under the default `llm_provider`; `OPENAI_API_KEY` (direct OpenAI) or `AZURE_OPENAI_API_KEY` (when `azure_openai_endpoint` is set) resolve under `llm_provider = "openai"`. A missing credential raises `AuthError` (Anthropic) or `LLMAuthError` (OpenAI/Azure) with a provider-appropriate message naming the exact env var to set — never a traceback ([stack.md](stack.md#llm-provider-seam-decided-lode-568v1)). |
-| Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 4.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort)` `ModelTier` pair (`lode-568v.2`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
-| Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 4.6 (default provider) | Default interactive synthesis model. A `ModelTier` pair, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). Answer-time only, persists nothing — recorded default, no provenance machinery. |
-| Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5 (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier` pair, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump on the same deployment, or both. Answer-time only, persists nothing — recorded default, no provenance machinery. |
+| Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 4.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (2048) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
+| Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 4.6 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (8192). Answer-time only, persists nothing — recorded default, no provenance machinery. |
+| Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5 (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs — Anthropic by default, or an OpenAI/Azure deployment under `llm_provider = "openai"` ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)). See [stack.md](stack.md).
 
@@ -329,18 +329,52 @@ raising the cap is the simplest option, needs no new capability-detection
 surface, and works on every model regardless of whether it thinks.
 
 **A fourth option — make the budget itself a knob — was considered during
-technical review and deferred (`lode-d70n`).** It is worth recording because
-the batch-route finding above sharpens it: `enrichment_llm` is `Kind.RUNTIME`,
-so a user can pick a model whose budget needs differ, but `enrich.MAX_TOKENS`
-is a source constant, so they cannot adjust the budget to match — and on the
-batch route, where truncation is the realistic failure mode, they have no
-escape hatch at all. The named `LLMProviderError` tells them exactly what
-happened with no user-side remedy but editing source. The natural home is
-`ModelTier`, which already pairs `(model, reasoning_effort)` precisely because
-those co-vary per surface; `max_tokens` co-varies with the same choice. It is
-deferred rather than done here because it touches the `Settings` schema, both
-`qa.MAX_TOKENS` and `enrich.MAX_TOKENS`, and needs a defaults decision —
-and doing it for enrichment alone would leave the Q&A tier asymmetric.
+technical review and deferred at the time (`lode-d70n`), and is now decided;**
+see [below](#per-tier-max_tokens-override-decided-lode-d70n).
+
+### Per-tier `max_tokens` override (decided, lode-d70n)
+
+The gap the section above named: `enrichment_llm` / `qa_llm` /
+`qa_think_harder_llm` are all `Kind.RUNTIME`, so a user can point any of them
+at a model whose output-budget needs differ substantially, but the budgets
+were source constants (`qa.MAX_TOKENS` = 8192, `enrich.MAX_TOKENS` = 2048) —
+they could change the model and had no way to change the budget to match.
+Sharpest on the enrichment **batch** route, for the bounding reason the
+section above establishes: that cap is the only thing bounding a batch item,
+so truncation is the realistic failure mode there, and it was precisely the
+route with no user-side escape hatch — a clean, well-named
+`LLMProviderError`, and no way to act on it except editing source.
+
+**Decided yes, on `ModelTier`, both tiers.** `ModelTier` gained an optional
+third field, `max_tokens: int | None = None` (validated `> 0` when set) —
+back-compat by construction, the same way the existing bare-TOML-string
+coercion already gives every field a default: an unset `max_tokens` (every
+`config.toml` written before this ticket, and every tier that doesn't name
+it going forward) falls back to the call site's own source constant exactly
+as before, so nothing changes for a config that doesn't opt in. `ModelTier`
+was the natural home because it already pairs `(model, reasoning_effort)`
+precisely because those co-vary per surface; `max_tokens` co-varies with the
+same choice, so a `Kind.RUNTIME` override that changes the model can change
+the budget alongside it in the same TOML table.
+
+**Wiring, symmetric across both tiers and both enrichment routes.** The
+fallback lives on `ModelTier` itself (`resolve_max_tokens(default)`), so the
+Q&A call and both enrichment routes share one definition of "unset means the
+call site's own constant" rather than each re-deriving it — the same
+byte-for-byte-equivalence bar `enrich.MAX_TOKENS` is itself pinned by
+(`lode-568v.2`), which a per-route copy of the rule would put at risk.
+Neither `qa.MAX_TOKENS` nor `enrich.MAX_TOKENS` was removed — they stay the
+documented default headroom value (see their own sections above); the tier
+field only ever *overrides*, never replaces, them.
+
+**No floor beyond "positive integer," and no cap.** A user who sets
+`max_tokens` too low reproduces the same truncation symptom the source
+constants already guard against (`LLMProviderError` naming the model and
+`stop_reason`) — that is the explicit tradeoff an override makes, not a new
+failure mode this ticket introduces. `lode config` and the TUI `ConfigScreen`
+render it alongside `reasoning_effort` when set (e.g. `claude-opus-5
+(effort=high, max_tokens=4096)`), via the same `knob_rows` `ModelTier`
+rendering `reasoning_effort` already used — extended, not duplicated.
 
 ### `reasoning_effort` wired to `output_config.effort` (decided, lode-wnz1)
 

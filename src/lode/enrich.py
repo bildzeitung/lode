@@ -141,6 +141,14 @@ _TOOL_NAME = "extract_enrichment"
 #: ``errored`` :class:`~lode.llm_provider.BatchResult` rather than failing the
 #: whole collection. See :class:`~lode.llm_provider.AnthropicProvider`'s
 #: docstring for both.
+#:
+#: **This is the fallback, not the last word (lode-d70n) -- closes the gap
+#: named above**, most reachably on the BATCH route, which has no
+#: escape-hatch bound besides this cap. Both routes resolve the active tier's
+#: :attr:`~lode.llm_provider.ModelTier.max_tokens` over this constant through
+#: :meth:`~lode.llm_provider.ModelTier.resolve_max_tokens`, so the
+#: byte-for-byte equivalence above survives the override. See
+#: ``docs/configuration.md`` "Models" for the decision.
 MAX_TOKENS = 2048
 
 _SYSTEM = (
@@ -261,7 +269,7 @@ def _call_haiku(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=MAX_TOKENS,
+        max_tokens=tier.resolve_max_tokens(MAX_TOKENS),
         timeout_s=settings.llm_call_timeout_s,
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
@@ -593,7 +601,7 @@ def _build_batch_request(
         system=_SYSTEM,
         user_prompt=prompt,
         output_schema=EnrichmentResult,
-        max_tokens=MAX_TOKENS,
+        max_tokens=tier.resolve_max_tokens(MAX_TOKENS),
         tool_name=_TOOL_NAME,
         tool_description=_TOOL_DESCRIPTION,
     )

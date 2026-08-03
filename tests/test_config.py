@@ -572,6 +572,28 @@ def test_knob_rows_appends_reasoning_effort_when_set() -> None:
     assert rows["qa_think_harder_llm"] == "gpt-5.5 (effort=high)"
 
 
+def test_knob_rows_appends_max_tokens_when_set() -> None:
+    # lode-d70n: same "only when set" rule reasoning_effort already
+    # established, extended to the new max_tokens field.
+    rows = _knob_values(
+        Settings(qa_think_harder_llm={"model": "gpt-5.5", "max_tokens": 4096})
+    )
+    assert rows["qa_think_harder_llm"] == "gpt-5.5 (max_tokens=4096)"
+
+
+def test_knob_rows_appends_both_effort_and_max_tokens_when_both_set() -> None:
+    rows = _knob_values(
+        Settings(
+            qa_think_harder_llm={
+                "model": "gpt-5.5",
+                "reasoning_effort": "high",
+                "max_tokens": 4096,
+            }
+        )
+    )
+    assert rows["qa_think_harder_llm"] == "gpt-5.5 (effort=high, max_tokens=4096)"
+
+
 def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
     # Acceptance: works with no config.toml present (shows defaults).
     rows = knob_rows(Settings())
