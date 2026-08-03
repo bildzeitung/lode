@@ -1189,14 +1189,13 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # without that second half, a same-block assign-then-use pair like
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
-# regexes in tests/test_skill_bash_state.py (lode-wroz). Same shape as
-# tests/test_bd_list_limit_gate.py's `_BLOCKQUOTE_RE`/`_strip_blockquote`,
-# which normalizes its OWN input the same way ahead of calling this helper --
-# doing it HERE means every caller gets the fix, not just that one. That
-# pre-pass is now redundant AHEAD OF THIS HELPER (lode-3pyo) but not dead: the
-# same gate's inline-backtick scan never goes through here and still needs it.
-# Stripping twice is a no-op on today's corpus, measured, but is not one in
-# general -- a `>>`-leading line double-strips to a bare one.
+# regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
+# caller gets the fix, not just one. tests/test_bd_list_limit_gate.py IMPORTS this
+# constant (rather than declaring its own) for its inline-backtick scan -- a path that
+# never reaches this helper and so must unmark its own input to the SAME shape, or the
+# two would partition one document differently. Its pre-pass ahead of this helper was
+# removed by lode-3pyo: stripping twice is a no-op on today's corpus, measured, but not
+# in general -- a `>>`-leading line double-strips to a bare one.
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 
