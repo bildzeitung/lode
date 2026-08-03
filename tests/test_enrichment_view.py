@@ -21,6 +21,7 @@ import pytest
 
 from lode.display import display_annotations
 from lode.enrichment_view import EnrichmentEdge, EnrichmentItem, enrichment_view
+from lode.jobs import now_iso
 from lode.staleness import reanchor_annotations
 from lode.storage import init_db
 
@@ -130,18 +131,11 @@ def _insert_enrich_job(
     next_attempt_at: str | None = None,
 ) -> None:
     with conn:
-        if next_attempt_at is None:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status) "
-                "VALUES ('enrich', ?, ?)",
-                (target_version, status),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-                "VALUES ('enrich', ?, ?, ?)",
-                (target_version, status, next_attempt_at),
-            )
+        conn.execute(
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (target_version, status, next_attempt_at or now_iso()),
+        )
 
 
 def _insert_external(

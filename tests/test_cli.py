@@ -57,7 +57,7 @@ from lode.embedding import embed
 from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
-from lode.jobs import enqueue_derive_jobs
+from lode.jobs import enqueue_derive_jobs, now_iso
 from lode.llm_provider import AnthropicProvider
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
@@ -574,14 +574,23 @@ def _seed_jobs(db_path: Path) -> None:
     conn = init_db(db_path)
     try:
         with conn:
+            due = now_iso()
             conn.executemany(
-                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO jobs "
+                "(type, target_version, status, attempts, last_error, next_attempt_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    ("embed", "ver-aaaaaaaaaaaaaaaa", "pending", 0, None),
-                    ("enrich", "ver-aaaaaaaaaaaaaaaa", "running", 1, None),
-                    ("embed", "ver-bbbbbbbbbbbbbbbb", "done", 1, None),
-                    ("enrich", "ver-bbbbbbbbbbbbbbbb", "dead", 3, "RateLimitError"),
+                    ("embed", "ver-aaaaaaaaaaaaaaaa", "pending", 0, None, due),
+                    ("enrich", "ver-aaaaaaaaaaaaaaaa", "running", 1, None, due),
+                    ("embed", "ver-bbbbbbbbbbbbbbbb", "done", 1, None, due),
+                    (
+                        "enrich",
+                        "ver-bbbbbbbbbbbbbbbb",
+                        "dead",
+                        3,
+                        "RateLimitError",
+                        due,
+                    ),
                 ],
             )
             conn.executemany(
@@ -691,8 +700,10 @@ def test_status_no_hint_when_only_dead_letters_present(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
-                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+                "INSERT INTO jobs "
+                "(type, target_version, status, attempts, last_error, next_attempt_at) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
+                (now_iso(),),
             )
     finally:
         conn.close()
@@ -1065,8 +1076,9 @@ def test_reenrich_forces_fresh_job_for_a_head_with_a_stale_model(
         _write_ai_annotation(conn, "note-1", "ver-1", "some-old-model")
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status) "
-                "VALUES ('enrich', 'ver-1', 'done')"
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('enrich', 'ver-1', 'done', ?)",
+                (now_iso(),),
             )
     finally:
         conn.close()
@@ -1606,8 +1618,10 @@ def test_status_dead_line_is_uniformly_danger_not_repr_highlighted(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status, attempts, last_error) "
-                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom')"
+                "INSERT INTO jobs "
+                "(type, target_version, status, attempts, last_error, next_attempt_at) "
+                "VALUES ('enrich', 'ver-cccccccccccccccc', 'dead', 3, 'boom', ?)",
+                (now_iso(),),
             )
     finally:
         conn.close()
@@ -1808,8 +1822,9 @@ def test_status_all_clear_when_no_pending_failed_and_cache_warm(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status, attempts) "
-                "VALUES ('embed', 'ver-dddddddddddddddd', 'done', 1)"
+                "INSERT INTO jobs (type, target_version, status, attempts, next_attempt_at) "
+                "VALUES ('embed', 'ver-dddddddddddddddd', 'done', 1, ?)",
+                (now_iso(),),
             )
     finally:
         conn.close()
@@ -2689,16 +2704,16 @@ def test_show_enrichment_state_pending_failed_ready_are_wording_distinct(
     try:
         pending = save(conn, "note-pending", "not yet enriched")
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) "
-            "VALUES ('enrich', ?, 'pending')",
-            (pending.version_id,),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, 'pending', ?)",
+            (pending.version_id, now_iso()),
         )
 
         failed = save(conn, "note-failed", "enrich dead-lettered")
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) "
-            "VALUES ('enrich', ?, 'dead')",
-            (failed.version_id,),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, 'dead', ?)",
+            (failed.version_id, now_iso()),
         )
 
         # 'note-show-1' style: no job row at all -> ready (never enriched, or
@@ -5192,19 +5207,21 @@ def _noop_embed_registry() -> dict:
 
 
 # Seed any job this cluster expects `lode work` to CLAIM via
-# lode.jobs.enqueue_derive_jobs, never a bare INSERT (lode-4e48). A bare INSERT
-# leaves next_attempt_at on the table's SQL strftime('now') default -- SQLite's
-# raw wall clock, not the ratcheted `now` that worker._claim_one's
-# `next_attempt_at <= now` predicate compares it against. enqueue_derive_jobs's
-# own docstring works that two-clock hazard through in full (lode-0dnk); these
-# test sites were simply never migrated with it, which is how the stranded-job
-# flake came back ("drained 2 job(s)", not 3). Seeding through the production
-# primitive is eliminative, not merely narrowing: runner.invoke runs the CLI
-# in-process, and that clock never decreases within a process.
+# lode.jobs.enqueue_derive_jobs, never a hand-written INSERT (lode-4e48). The
+# hazard is two clocks either side of one comparison: worker._claim_one's
+# `next_attempt_at <= now` predicate reads the ratcheted `lode.jobs.now`, so a
+# row stamped from SQLite's raw wall clock instead can read as not-yet-due and
+# strand every job behind it ("drained 2 job(s)", not 3). enqueue_derive_jobs's
+# own docstring works that through in full (lode-0dnk). Seeding through the
+# production primitive is eliminative, not merely narrowing: runner.invoke runs
+# the CLI in-process, and that clock never decreases within a process.
 #
-# A bare INSERT stays fine -- and is used throughout this file -- for a row the
-# claim predicate never sees: one seeded non-pending, or of a type the patched
-# registry excludes (the ('refresh', 'ver-stuck') rows further down).
+# Since lode-uk1i the column has no SQL DEFAULT at all, so omitting it is an
+# outright IntegrityError rather than a silent wrong-clock stamp -- the trap is
+# gone, not merely documented. A hand-written INSERT is therefore still fine for
+# a row the claim predicate never sees (seeded non-pending, or of a type the
+# patched registry excludes -- the ('refresh', 'ver-stuck') rows further down),
+# but it must now supply next_attempt_at explicitly; any valid value will do.
 
 
 def test_work_drains_pending_embed_jobs(
@@ -5457,8 +5474,9 @@ def test_work_wait_times_out_naming_outstanding_jobs(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ver-stuck"),
+                "INSERT INTO jobs (type, target_version, next_attempt_at) "
+                "VALUES (?, ?, ?)",
+                ("refresh", "ver-stuck", now_iso()),
             )
     finally:
         conn.close()
@@ -5509,8 +5527,9 @@ def test_work_without_wait_is_unchanged_one_shot(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ver-stuck"),
+                "INSERT INTO jobs (type, target_version, next_attempt_at) "
+                "VALUES (?, ?, ?)",
+                ("refresh", "ver-stuck", now_iso()),
             )
     finally:
         conn.close()
@@ -5540,8 +5559,9 @@ def test_work_one_shot_reports_outstanding_jobs_not_just_drained_0(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ver-stuck"),
+                "INSERT INTO jobs (type, target_version, next_attempt_at) "
+                "VALUES (?, ?, ?)",
+                ("refresh", "ver-stuck", now_iso()),
             )
     finally:
         conn.close()
@@ -5573,8 +5593,9 @@ def test_work_wait_does_not_duplicate_the_one_shot_outstanding_line(
     try:
         with conn:
             conn.execute(
-                "INSERT INTO jobs (type, target_version) VALUES (?, ?)",
-                ("refresh", "ver-stuck"),
+                "INSERT INTO jobs (type, target_version, next_attempt_at) "
+                "VALUES (?, ?, ?)",
+                ("refresh", "ver-stuck", now_iso()),
             )
     finally:
         conn.close()
@@ -5654,12 +5675,14 @@ def _seed_external_snapshot_120s_old(db_path: Path) -> None:
                 "WHERE external_id = 'ext-1'"
             )
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status) "
-                "VALUES ('embed', 'snap-1', 'done')"
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('embed', 'snap-1', 'done', ?)",
+                (now_iso(),),
             )
             conn.execute(
-                "INSERT INTO jobs (type, target_version, status) "
-                "VALUES ('enrich', 'snap-1', 'done')"
+                "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+                "VALUES ('enrich', 'snap-1', 'done', ?)",
+                (now_iso(),),
             )
     finally:
         conn.close()

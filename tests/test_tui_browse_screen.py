@@ -21,6 +21,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Static, TextArea
 from textual.widgets._footer import FooterKey
 
 from lode.ids import short_version_id
+from lode.jobs import now_iso
 from lode.notes_read import short_note_id
 from lode.storage import init_db
 from lode.tui.app import LodeApp
@@ -879,8 +880,9 @@ def _insert_enrich_job(
 ) -> None:
     with conn:
         conn.execute(
-            "INSERT INTO jobs (type, target_version, status) VALUES ('enrich', ?, ?)",
-            (target_version, status),
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (target_version, status, now_iso()),
         )
 
 

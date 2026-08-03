@@ -2520,12 +2520,16 @@ def _insert_enrich_job_worker(
     status: str = "pending",
     batch_handle: str | None = None,
 ) -> int:
-    """Insert an enrich job; return job id."""
+    """Insert an enrich job; return job id.
+
+    Stamps ``next_attempt_at`` from ``_now_iso()`` -- the clock the claim
+    predicate reads -- exactly as the sibling ``_insert_job`` above does.
+    """
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, batch_handle) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, batch_handle),
+            "INSERT INTO jobs (type, target_version, status, batch_handle, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?, ?)",
+            (version_id, status, batch_handle, _now_iso()),
         )
     return cur.lastrowid
 
@@ -3101,9 +3105,10 @@ def test_now_adopts_a_forward_wall_clock_step_instead_of_lagging_forever(
 ) -> None:
     """now() must never read *behind* the wall clock.
 
-    Not every timestamp now() is compared against comes from now(): jobs.next_attempt_at
-    defaults to SQLite's own (unanchored) strftime('now'), and other processes
-    stamp rows from their own wall clocks. A clock anchored once at first use
+    Not every timestamp now() is compared against comes from *this process's*
+    ratchet: other processes stamp rows from their own, and the forward
+    migration backfills next_attempt_at from `created` -- SQLite's own
+    (unanchored) strftime('now'). A clock anchored once at first use
     would lag CLOCK_REALTIME permanently after a forward step, making every
     freshly enqueued job look not-yet-due — the same stranded job, from the
     opposite direction.
