@@ -657,21 +657,29 @@ re-raised anyway — of *whatever* type it originally was.
 That deferred re-raise is why `drain`'s own `try` around this pre-step catches
 wider than the submit `try` does: bare `Exception`, not the `(AuthError,
 LLMProviderError)` tuple (`lode-knnt`). This is not a re-widening of the named
-taxonomy — by construction, the only things that can ever reach it are an
-immediate credential error or the one deferred, whatever-type failure above,
-so `drain` still sees it and the "surfaces, non-zero exit" contract two
-paragraphs up is unchanged, for any failure type. A narrower tuple here would
+taxonomy — what reaches it *from the per-handle loop* is an immediate
+credential error or the one deferred, whatever-type failure above, so `drain`
+still sees it and the "surfaces, non-zero exit" contract two paragraphs up is
+unchanged, for any failure type. Those are not the only things it can catch,
+and it is deliberately not scoped as if they were: the per-handle `try` covers
+only the loop body, so `_batch_collect_enrich`'s pre-loop `SELECT` and deferred
+imports — and the `op_progress` wrapper itself — can raise straight past it
+(say a `sqlite3.Error` from a locked DB), and those are caught here too. The
+goal is that *nothing* from the collect pre-step skips the credential-free
+work, wherever in the step it came from. A narrower tuple here would
 silently reintroduce the exact starvation `lode-5zqa` fixed, just for any type
 outside that tuple. The submit `try` is not widened to match: it has no
 per-handle loop, and `_batch_submit_enrich`'s own `except Exception` already
 fully absorbs a non-auth failure itself (revert + return 0, no raise), so
 nothing but `AuthError`/`LLMProviderError` can ever reach its caller at all.
 
-What the stuck-batch case does **not** get, and the credential case does: a clean
-message. `lode work` handles only `AuthError` (`cli.py`), so a non-auth
-`LLMProviderError` — and, today, an `LLMAuthError` too — escapes every handler and
-surfaces as a raw traceback, which is why the bullet above promises traceback-free
-treatment the batch path does not yet honour (`lode-yx1c`). And none of the above
+The stuck-batch case gets the same clean, traceback-free rendering the credential
+case does, since `lode-yx1c` widened `lode work`'s handler to
+`(AuthError, LLMProviderError)` (the `lode work` bullet above owns it). Note that
+covers the *typed* failures only: a poisoned handle now bounded by the
+consequence-scoped catch above can still be of a type no CLI handler names (say
+lode-t7en's raw `AttributeError`), and that one does still surface as a raw
+traceback. And none of the above
 makes a stuck batch un-stuck: the batch re-fails every tick with no failure
 budget and no dead-letter path (`lode-u6he`, discovered-from `lode-knnt`) — only
 its *blast radius* is bounded now (blocks no other handle, blocks no new

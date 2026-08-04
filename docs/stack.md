@@ -653,13 +653,14 @@ neither gap.
 LLMProviderError)`, so a failure escaping this seam as something else (`lode-t7en`) still aborted the
 whole drain — a *consumer-side* reason (on top of the diagnosability one above) the classes this
 section names were worth closing at the seam rather than downstream. `lode-knnt` closed that
-consumer-side gap instead: `_batch_collect_enrich` now isolates each batch handle in its own try
-(consequence-scoped, not type-scoped) and `drain`'s own catch on that pre-step widened to bare
-`Exception` to match, so a failure arriving as *any* type — including one still escaping this seam raw
+consumer-side gap instead (see `docs/storage.md` "Transient vs. permanent job failures" for the
+mechanism), so a failure arriving as *any* type — including one still escaping this seam raw
 — no longer starves the credential-free `embed` jobs or blocks a new enrich submission. Closing a
 class named above at the seam is therefore no longer required for that reason; it remains worth doing
-for the diagnosability reason this section opens with (`.status_code`/`.request_id`/`__cause__`, a
-clean message instead of a raw traceback — `lode-yx1c`, still open). `docs/storage.md`
+for the diagnosability reason this section opens with (`.status_code`/`.request_id`/`__cause__`, and
+a message specific enough to act on — `lode-yx1c` landed the `lode work`/`lode ask` handler that
+turns a non-auth `LLMProviderError` into a clean line instead of a raw traceback, so what is left at
+this seam is the *quality* of that line, not whether one is printed). `docs/storage.md`
 "Transient vs. permanent job failures" owns the policy and the limits it leaves standing.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)

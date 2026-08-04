@@ -730,30 +730,20 @@ def _batch_collect_enrich(
     surfaces those outcomes to the caller.
 
     **Per-handle isolation (lode-knnt).** Each ``batch_handle`` is polled
-    inside its own ``try``, so one poisoned handle (stuck on a permanently
-    malformed results line, or any other failure) cannot stop the OTHER,
-    healthy handles in the same pass from being collected — before this fix, a
-    single raise anywhere in the loop aborted the whole function, and with it
-    every remaining handle, for as long as the poisoned one stayed stuck. The
-    catch is deliberately **consequence-scoped, not type-scoped**: it absorbs
-    whatever exception type ``collect_enrich_batch`` raises (a well-formed but
-    wrong-shape results line surfaces as a raw ``AttributeError``/``TypeError``,
-    not an ``LLMProviderError`` — lode-t7en), so this handle-level bound holds
-    regardless of what a future provider bug happens to raise.
+    inside its own ``try``, so one poisoned handle cannot stop the OTHER,
+    healthy handles in the same pass from being collected. The catch is
+    **consequence-scoped, not type-scoped** — it absorbs whatever type
+    ``collect_enrich_batch`` raises — and the failure is **deferred, not
+    swallowed**: the first one is re-raised once every handle has had its
+    turn, so :func:`drain` still sees it. ``AuthError``/``LLMAuthError`` is
+    the exception, re-raised immediately mid-loop: a missing credential is
+    not handle-specific, so there is nothing to gain from attempting the
+    rest.
 
-    A poisoned handle's failure is **deferred, not swallowed**: every other
-    handle still gets its turn this pass, but once the loop finishes, the
-    first such failure is re-raised anyway, so the caller (:func:`drain`)
-    still sees it and the existing "surfaces, non-zero exit" contract for a
-    stuck batch (``docs/storage.md`` "Transient vs. permanent job failures")
-    is unchanged — the fix bounds *whose* work a poisoned handle blocks
-    (nobody else's, now), not *whether* the pass as a whole still reports the
-    failure. The one exception re-raised **immediately**, mid-loop, rather
-    than deferred, is ``AuthError``/``LLMAuthError``: a missing credential is
-    not handle-specific — every remaining handle would fail identically — so
-    there is nothing to gain from attempting the rest, and letting it
-    propagate right away lets :func:`drain`'s own stash-and-continue contract
-    handle it exactly as before.
+    Note the ``SELECT`` and imports above sit OUTSIDE that per-handle ``try``,
+    so a failure there is not isolated per handle — it propagates to
+    :func:`drain`, which catches it all the same. ``docs/storage.md``
+    "Transient vs. permanent job failures" owns the full rationale.
     """
     batch_ids: list[str] = [
         row[0]
@@ -802,7 +792,6 @@ def _batch_collect_enrich(
             # (per-handle isolation, lode-knnt) before this is raised below.
             if deferred_exc is None:
                 deferred_exc = exc
-            continue
 
     if deferred_exc is not None:
         raise deferred_exc
@@ -1035,27 +1024,18 @@ def drain(
     taxonomy — see "Per-handle isolation" next for why that is deliberate
     and still bounded.
 
-    **Per-handle isolation + independent pre-steps (lode-knnt).**
-    :func:`_batch_collect_enrich` polls each ``batch_handle`` inside its own
-    ``try`` (consequence-scoped, not type-scoped — it bounds a poisoned
-    handle's blast radius to itself regardless of what exception type the
-    failure arrives as, e.g. lode-t7en's raw ``AttributeError``/``TypeError``
-    from a wrong-shape results line), so one stuck handle no longer stops any
-    *other* handle in the same pass; the first such failure is then re-raised
-    once every handle has had its turn — deferred, not swallowed, so this
-    call's own ``except`` (bare ``Exception``, not the narrower permanent-
-    failure tuple above) still stashes it exactly like an ``AuthError``. And
-    the two pre-steps below now run in their **own** ``try`` each, rather than
-    sharing one: a collect-side failure no longer skips the submit step, so a
-    stuck batch no longer blocks *new* enrich jobs from being submitted
-    either.
+    **Per-handle isolation + independent pre-steps (lode-knnt).** One stuck
+    ``batch_handle`` no longer stops any *other* handle in the same pass
+    (:func:`_batch_collect_enrich` isolates each one; see its docstring), and
+    the two pre-steps below now run under their **own** ``try`` each rather
+    than sharing one, so a collect-side failure no longer skips the submit
+    step. ``docs/storage.md`` "Transient vs. permanent job failures" owns the
+    rationale, including why the collect arm's catch is deliberately wider
+    than the taxonomy named above.
 
     Neither of those makes a stuck batch un-stuck — there is still no failure
     budget or dead-letter path for one; it stays wedged until a human
-    intervenes (lode-u6he, discovered-from lode-knnt). Note ``lode work`` has
-    no handler for ``LLMProviderError`` (only ``AuthError``), so unlike the
-    credential case it surfaces as an unhandled traceback rather than a clean
-    actionable line (lode-yx1c).
+    intervenes (lode-u6he, discovered-from lode-knnt).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1133,34 +1113,16 @@ def drain(
     # rather than aborting the pass. It does not make the batch un-stuck; see
     # drain's docstring for the limits that leaves standing.
     #
-    # lode-knnt: each pre-step gets its OWN try, not one shared over both --
-    # a collect-side failure must not also skip the submit step (that would
-    # mean "one stuck batch" silently becomes "no new enrich batch is ever
-    # submitted either"). `permanent` keeps whichever one raised first; if
-    # both raise, the second is dropped rather than overwriting the first --
-    # they're essentially always the same underlying condition (e.g. both
-    # calls resolve credentials via the same build_provider()), so there is
-    # nothing to gain from preferring the later one.
+    # lode-knnt: each pre-step gets its OWN try, so a collect-side failure no
+    # longer also skips the submit step. `permanent` keeps whichever raised
+    # FIRST; a second one is dropped rather than overwriting it.
     #
-    # The COLLECT try's except is deliberately bare `Exception`, wider than
-    # the submit try's below -- not a re-widening of the AuthError/
-    # LLMProviderError tuple, but a consequence of _batch_collect_enrich's own
-    # per-handle isolation (lode-knnt, see its docstring): that function's
-    # loop already absorbs and defers everything except AuthError/
-    # LLMAuthError per handle, so the ONLY things that can ever reach this
-    # `except` are (a) an immediate AuthError/LLMAuthError, or (b) the one
-    # deferred failure left over after every handle got its turn -- of
-    # WHATEVER type collect_enrich_batch happened to raise (e.g. lode-t7en's
-    # raw AttributeError/TypeError from a wrong-shape results line, which is
-    # not an LLMProviderError). A narrower tuple here would silently
-    # reintroduce the exact starvation lode-5zqa fixed, just for any type
-    # outside that tuple -- the failure would again escape straight past the
-    # reclaim/retry-reset/main loop below, starving `embed` jobs, without this
-    # `except` ever seeing it to stash it. The SUBMIT try below is not widened
-    # to match: it has no per-handle loop, and `_batch_submit_enrich`'s own
-    # `except Exception` already fully absorbs a non-auth failure itself
-    # (revert + return 0, no raise) -- so nothing but AuthError/LLMProviderError
-    # can ever reach its caller in the first place.
+    # The two catches are deliberately asymmetric -- collect is bare
+    # `Exception`, submit is the narrow tuple. WHY (per-handle isolation,
+    # what can reach each arm, why narrowing collect would re-break lode-5zqa)
+    # is owned by docs/storage.md "Transient vs. permanent job failures";
+    # _batch_collect_enrich's own docstring covers the loop side. Do not
+    # narrow the collect arm without reading those.
     #
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),

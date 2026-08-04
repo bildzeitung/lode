@@ -3106,19 +3106,19 @@ def test_batch_collect_isolates_one_poisoned_handle_from_a_healthy_one(
     from being collected in the same ``_batch_collect_enrich`` pass (lode-knnt).
 
     Before this fix, a single raise anywhere in the loop over ``batch_ids``
-    aborted the whole function — so ANY handle poisoned (stuck on
-    permanently malformed data) also stopped every OTHER, healthy handle in
-    the same pass from being collected, not just the broken one.
+    aborted the whole function, taking every other handle with it.
 
-    Stubbed at the ``lode.enrich.collect_enrich_batch`` seam — the function
+    Stubbed at the ``lode.enrich.collect_enrich_batch`` seam — the one
     ``_batch_collect_enrich``'s loop calls directly — rather than the deeper
     provider seam: this pins the LOOP's own per-handle try/except,
     independent of what actually makes a real provider call fail (covered by
     lode-3gtu / lode-t7en's own tests). The exception is deliberately NOT an
-    ``AuthError``/``LLMAuthError`` — that case is not handle-specific
-    (every remaining handle would fail identically) and is re-raised
-    immediately rather than isolated; see ``_batch_collect_enrich``'s
-    docstring.
+    ``AuthError``/``LLMAuthError``; that arm is re-raised immediately rather
+    than isolated, and is pinned by the next test.
+
+    The poisoned handle is inserted FIRST, so without per-handle isolation
+    the healthy one below is never reached at all — that ordering is what
+    makes the final assertion discriminating rather than incidental.
     """
     poison_job = _insert_enrich_job_worker(
         conn, version_id="ver-poison", status="running", batch_handle="poison-batch"
@@ -3166,21 +3166,34 @@ def test_batch_collect_auth_error_is_not_caught_as_a_poisoned_handle(
     """A credential failure must still propagate immediately, not get
     absorbed by the new per-handle ``except Exception`` (lode-knnt).
 
-    ``AuthError``/``LLMAuthError`` is not handle-specific -- a missing
-    credential means every remaining handle would fail identically -- so it
-    is re-raised right away rather than deferred like a genuinely
-    handle-specific poison. This pins the ordering: the ``except (AuthError,
-    LLMAuthError): raise`` clause must be checked, and must match, ahead of
-    the broad ``except Exception`` below it.
+    It is re-raised right away rather than deferred like a genuinely
+    handle-specific poison (see ``_batch_collect_enrich``'s docstring). This
+    pins that the ``except (AuthError, LLMAuthError): raise`` clause is
+    checked, and matches, ahead of the broad ``except Exception`` below it.
+
+    What makes that discriminating is the ABANDONED handle, not the raise
+    (lode-knnt review). ``pytest.raises(AuthError)`` alone cannot tell the two
+    arms apart: were the ``AuthError`` merely deferred by the broad
+    ``except Exception``, it would still be re-raised once the loop finished,
+    so that assertion passes either way. The only observable difference is
+    whether the REMAINING handles still got polled -- so ``auth-batch`` is
+    inserted FIRST (``_batch_collect_enrich``'s ``SELECT DISTINCT`` has no
+    ``ORDER BY``; sqlite scans the table and emits in rowid/insertion order,
+    measured) and ``healthy-batch`` must then never be polled at all. If that
+    scan order ever changes, ``calls`` below fails loudly rather than quietly
+    going vacuous again.
     """
-    healthy_job = _insert_enrich_job_worker(
-        conn, version_id="ver-healthy", status="running", batch_handle="healthy-batch"
-    )
     auth_job = _insert_enrich_job_worker(
         conn, version_id="ver-auth", status="running", batch_handle="auth-batch"
     )
+    healthy_job = _insert_enrich_job_worker(
+        conn, version_id="ver-healthy", status="running", batch_handle="healthy-batch"
+    )
+
+    calls: list[str] = []
 
     def _fake_collect(conn_, batch_id, settings_, *, outcomes=None):
+        calls.append(batch_id)
         if batch_id == "auth-batch":
             raise AuthError("no credentials (test)")
         with conn_:
@@ -3193,6 +3206,12 @@ def test_batch_collect_auth_error_is_not_caught_as_a_poisoned_handle(
 
     with pytest.raises(AuthError):
         _batch_collect_enrich(conn, settings)
+
+    # THE discriminating assertion: the loop was abandoned at the auth
+    # failure, so the later handle was never even attempted. Deferring the
+    # AuthError instead would make this ["auth-batch", "healthy-batch"].
+    assert calls == ["auth-batch"]
+    assert _job(conn, healthy_job)["status"] == "running"
 
     # The auth-batch job is untouched -- unlike a poisoned-data handle, a
     # missing credential means there is nothing handle-specific to retry.
