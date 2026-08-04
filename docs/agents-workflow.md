@@ -2761,12 +2761,17 @@ assumption would not have closed it.
   and Section 4's reformat-commit block, which reach a bare `git merge --no-ff` (via
   `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
   in the script's header** — both went stale within one ticket of being written, which is the whole
-  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` pins each guarded fence
-  independently and is the authoritative list; this paragraph deliberately does not restate it.
-  Since `lode-1d2y` that module is the authoritative record of the **exempt** half too, and for the
-  same reason: the per-fence pins were closed-world, so a genuinely new unguarded fence matched no
-  selector and failed nothing, while every exemption below was prose that no gate could falsify. An
-  open-world sweep now flags every mutating command in every fence unless it is guarded or carries a
+  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` is the authoritative list, and it no
+  longer keeps it via four hand-anchored per-fence pins: `lode-1d2y` added an open-world sweep that
+  enumerates every fenced block in `land/SKILL.md`, classifies which contain a cwd-resolved mutation,
+  and asserts each carries the guard before it; `lode-8p3c` then deleted the four per-fence pins
+  outright once that sweep subsumed them, so a genuinely new unguarded fence is caught by the sweep
+  itself rather than by adding yet another hand-anchored pin the next time one is discovered. This
+  paragraph deliberately does not restate the module's contents.
+  Since `lode-1d2y` that module is also the authoritative record of the **exempt** half: the old
+  per-fence pins were closed-world, so a genuinely new unguarded fence matched no selector and failed
+  nothing, while every exemption was prose that no gate could falsify. The open-world sweep now flags
+  every mutating command in every fence unless it is guarded or carries a
   reasoned entry in that module's allowlist — so the paragraphs below are the *reasoning*, not the
   roster, and an exemption that stops being true fails a test rather than aging quietly in this file.
 

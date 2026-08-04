@@ -280,15 +280,6 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
-# Block boundaries are load-bearing here in a way they are not for
-# `_fenced_bash` below: per land/SKILL.md's governing rule (lode-sfnb) each
-# fence is executed as its own Bash invocation, so two commands are guaranteed
-# to share a shell -- and therefore `||` short-circuiting -- only if they are
-# in the same block. A pin that flattens the blocks first cannot tell
-# "guarded" from "merely preceded somewhere in the document". That is why
-# `_the_one_block`/`_assert_guard_precedes` below work over the block LIST
-# (`bash_fence_blocks`) rather than `_fenced_bash` (joined).
-#
 # This module carried the last private copy of that parser until lode-p4qb
 # folded it into `tests/conftest.py::bash_fence_blocks`. Why the four copies
 # existed and what the shared parser's rules now are live next to the parser
@@ -320,204 +311,7 @@ def test_land_skill_section1_calls_the_script() -> None:
 
 
 _GUARD = "scripts/assert-main-checkout.sh"
-_PASS_START_RESET = "git reset --hard origin/trunk"
-_SECTION1_ONLY = "git checkout -f trunk"
 _MERGE_ONE = "scripts/land-merge-one.sh"
-_REFORMAT_COMMIT = "git commit --no-verify"
-
-
-def _the_one_block(
-    *, contains: tuple[str, ...], excludes: tuple[str, ...] = (), label: str
-) -> str:
-    """The single executed fence matching `contains` and not `excludes`.
-
-    Every guarded block in land/SKILL.md is located this way, so the selection
-    lives here once. Anchoring on the COMMANDS a block runs, rather than on
-    section headings, keeps the pins working while the surrounding prose is
-    rewritten -- which it is constantly, by concurrent tickets.
-
-    The `len(...) == 1` assertion is the load-bearing half, not a tidiness
-    check: it is what makes a SECOND, unguarded copy of an already-guarded
-    exposure fail loudly here instead of being silently absorbed by whichever
-    narrower pin still happens to match one of them.
-    """
-    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
-    candidates = [
-        b
-        for b in blocks
-        if all(s in b for s in contains) and not any(s in b for s in excludes)
-    ]
-    assert len(candidates) == 1, (
-        f"expected exactly one executed fence containing {list(contains)}"
-        + (f" and none of {list(excludes)}" if excludes else "")
-        + f" ({label}), found {len(candidates)} -- land/SKILL.md's layout has "
-        "drifted and this pin needs re-anchoring, not deleting"
-    )
-    return candidates[0]
-
-
-def _the_two_reset_blocks() -> tuple[str, str]:
-    """`(Section 1's pass-start block, Section 3's isolation-replay block)`.
-
-    Both open with `git reset --hard origin/trunk`, so that command does NOT
-    identify Section 1 on its own -- an earlier column-0 fence scanner could
-    not see Section 3's indented block and made it look as though it did
-    (lode-ovgs). Only Section 1's block also runs `git checkout -f trunk`, so
-    that pair is what tells the two apart. Reverting the shared parser to that
-    column-0 shape now makes this helper's second `_the_one_block` call fail
-    loudly with "found 0", not silently agree -- which is why the synthetic
-    indented-fence pin this module used to carry was dropped as a fifth copy
-    of a claim `tests/test_skill_bash_state.py` and `tests/test_land_lock.py`
-    already own (lode-p4qb).
-    """
-    return (
-        _the_one_block(
-            contains=(_PASS_START_RESET, _SECTION1_ONLY),
-            label="Section 1's pass-start block",
-        ),
-        _the_one_block(
-            contains=(_PASS_START_RESET,),
-            excludes=(_SECTION1_ONLY,),
-            label="Section 3's isolation-replay block",
-        ),
-    )
-
-
-def _assert_guard_precedes(
-    block: str, *, protects: tuple[str, ...], section: str, ticket: str
-) -> None:
-    """Assert `block` calls the guard, and that every command in `protects` is
-    still IN `block` and after it.
-
-    Both halves are load-bearing, and the presence half is the easier one to
-    lose. Per `land/SKILL.md`'s governing rule (lode-sfnb) each fenced block is
-    a SEPARATE Bash invocation with no shell state carried between them, so a
-    guard sitting in its own block can only `exit` that block's shell -- whether
-    the destructive block then runs is an agent's judgment call made while
-    reading prose, which is exactly the strength of assurance lode-pcee exists
-    to delete. Sharing one block makes `|| exit 1` mechanical instead: each
-    protected command is unreachable unless the assertion passed, with no
-    decision in between.
-
-    So an ordering-only pin is not enough. Refactoring a protected command out
-    into a fence of its own re-opens the defect while leaving the ordering
-    assertion perfectly green, which is why presence is checked too. Verified by
-    mutation on land/SKILL.md: deleting the guard, reordering it after the reset,
-    splitting it into its own fence, and splitting the replay loop (or the
-    `land-merge-one.sh` call) out of Section 3's block are each caught by one of
-    these two assertions -- and the last two by the presence half alone.
-    """
-    guard_at = block.find(_GUARD)
-    assert guard_at >= 0, (
-        f"{section}'s fenced block does not call {_GUARD} at all ({ticket}). A "
-        "guard in a SEPARATE block cannot stop this one -- per lode-sfnb each "
-        "block is its own Bash invocation, so its `exit` ends only "
-        f"itself.\n\n{block}"
-    )
-    for mutation in protects:
-        at = block.find(mutation)
-        assert at >= 0, (
-            f"`{mutation}` left {section}'s block -- if it moved to a fence of "
-            "its own it is now reached with nothing having established where it "
-            f"runs, which is the lode-pcee defect returning by another route "
-            f"({ticket})\n\n{block}"
-        )
-        assert guard_at < at, (
-            f"{_GUARD} runs AFTER `{mutation}` in {section}'s block ({ticket}) "
-            f"-- the assertion no longer protects it.\n\n{block}"
-        )
-
-
-def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
-    """Section 1's pass-start block: the guard must be the first line of the
-    SAME fence as every mutation it protects -- not merely present, and not
-    merely earlier in the document. This is the property lode-pcee turns on;
-    `_assert_guard_precedes` carries the reasoning and the mutation evidence.
-    """
-    section1, _ = _the_two_reset_blocks()
-
-    # `bd dolt pull` writes the local Dolt DB; the rest write git. Only
-    # `reset --hard` is unrecoverable, but a wrong-directory `checkout -f` is
-    # destructive too.
-    _assert_guard_precedes(
-        section1,
-        protects=(
-            "bd dolt pull",
-            _SECTION1_ONLY,
-            "git fetch origin",
-            _PASS_START_RESET,
-        ),
-        section="Section 1",
-        ticket="lode-pcee",
-    )
-
-
-def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
-    """Section 3's isolation-replay block (the 'Red' path's per-branch replay
-    loop) runs its OWN `git reset --hard origin/trunk` -- a second, distinct
-    exposure of the exact class lode-pcee fixed in Section 1, filed separately
-    as lode-gczf since it could not be built until
-    `scripts/assert-main-checkout.sh` existed on trunk.
-    """
-    _, section3 = _the_two_reset_blocks()
-
-    # The pass-start reset is NOT this block's only cwd-assuming destructive
-    # command, and `scripts/land-merge-one.sh` belongs on the list even though
-    # it is a script rather than an inline git command: it runs a bare `git
-    # merge --no-ff` plus `git restore --staged --worktree .beads/issues.jsonl`
-    # and `git merge --abort`, all resolved against cwd.
-    _assert_guard_precedes(
-        section3,
-        protects=(
-            _PASS_START_RESET,
-            _MERGE_ONE,
-            "git reset --hard HEAD~1",
-        ),
-        section="Section 3",
-        ticket="lode-gczf",
-    )
-
-
-def test_section3_first_pass_merge_loop_shares_guard_with_land_merge_one() -> None:
-    """Section 3's FIRST-PASS ('Green') merge loop runs `land-merge-one.sh` --
-    a bare `git merge --no-ff` against cwd -- in its own fresh Bash invocation
-    that Section 1's guard cannot reach (lode-pxyt).
-
-    The isolation-replay ('Red') loop lode-gczf already guarded calls the same
-    script, and only IT also runs `_PASS_START_RESET`; excluding that is what
-    tells the two apart.
-    """
-    _assert_guard_precedes(
-        _the_one_block(
-            contains=(_MERGE_ONE,),
-            excludes=(_PASS_START_RESET,),
-            label="Section 3's first-pass merge loop",
-        ),
-        protects=(_MERGE_ONE,),
-        section="Section 3's first-pass merge loop",
-        ticket="lode-pxyt",
-    )
-
-
-def test_section4_reformat_commit_block_shares_guard_with_its_commit() -> None:
-    """Section 4's reformat-commit block commits `nox -t fix`'s output directly
-    to whatever branch cwd's `HEAD` happens to be on -- the one `git` write in
-    that section naming no ref or path at all, so a wrong-directory run commits
-    there silently instead of failing loudly (lode-pxyt).
-
-    `git add` is protected as well as the commit: it is the block's other
-    cwd-resolved write, and without it here, splitting it out into a fence of
-    its own leaves this whole module green (measured).
-    """
-    _assert_guard_precedes(
-        _the_one_block(
-            contains=(_REFORMAT_COMMIT,),
-            label="Section 4's reformat-commit block",
-        ),
-        protects=("git add", _REFORMAT_COMMIT),
-        section="Section 4's reformat-commit block",
-        ticket="lode-pxyt",
-    )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
@@ -544,19 +338,22 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard-coverage SWEEP (lode-1d2y) -- catches a NEW unguarded fence, not just
-# the four already-known ones pinned above.
+# Guard-coverage SWEEP (lode-1d2y, generalized in lode-8p3c) -- catches a NEW
+# unguarded fence, not just the four fences four hand-anchored pins used to
+# pin individually before lode-8p3c replaced them with this sweep.
 #
-# Everything above this point pins a SPECIFIC, already-discovered fence by
-# anchoring on the commands it contains (`_the_one_block` /
-# `_the_two_reset_blocks`). That is precise, but closed-world: a genuinely NEW
-# class of unguarded mutation -- `git clean -fdx`, `git rebase`, a `git
-# checkout -f` with no accompanying reset, a bare `git commit -m` missing
-# `--no-verify` -- matches none of the four `contains=` selectors above and is
-# caught by NOTHING. That is exactly how lode-pxyt's own two exposures survived
-# a full ticket cycle before a human noticed them by inspection. The sweep
-# below is the open-world complement; `_unguarded_mutations` owns its
-# mechanics.
+# This module used to pin each already-discovered guarded fence individually,
+# by anchoring on the commands it contained (a `_the_one_block` /
+# `_the_two_reset_blocks` / `_assert_guard_precedes` trio, one pin per fence).
+# That was precise, but closed-world: a genuinely NEW class of unguarded
+# mutation -- `git clean -fdx`, `git rebase`, a `git checkout -f` with no
+# accompanying reset, a bare `git commit -m` missing `--no-verify` -- matched
+# none of those hand-picked selectors and was caught by NOTHING. That is
+# exactly how lode-pxyt's own two exposures survived a full ticket cycle
+# before a human noticed them by inspection. The sweep below is the
+# open-world replacement -- lode-8p3c deleted the four per-fence pins outright
+# once this sweep subsumed them, so there is now ONE answer to "is this fence
+# covered", not five; `_unguarded_mutations` owns its mechanics.
 #
 # KNOWN LIMITATIONS (lode-1d2y):
 #
@@ -566,9 +363,9 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    NOT have caught lode-pxyt's first exposure on its own merits: Section
 #    3's first-pass merge loop contains zero bare mutating git commands --
 #    its only mutation is inside `scripts/land-merge-one.sh`, special-cased
-#    below (`_MERGE_ONE`, already pinned above). A brand-new script reference
-#    is caught by nothing here and would need the same manual discovery
-#    lode-pxyt's did. Measured while writing this: of the scripts referenced
+#    below (`_MERGE_ONE`). A brand-new script reference is caught by nothing
+#    here and would need the same manual discovery lode-pxyt's did. Measured
+#    while writing this: of the scripts referenced
 #    from an UNGUARDED fence today, none runs a cwd-resolved mutating git
 #    command -- their only git calls are `merge-base --is-ancestor` and
 #    `merge-tree --write-tree`, both read-only -- so the gap is latent, not
@@ -713,8 +510,8 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
 def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     """The sweep, run against the REAL land/SKILL.md with the real allowlist.
     Zero violations means every mutating command in the file is either
-    guarded or a recorded, reasoned exemption -- not just the four fences the
-    pins above happen to anchor on.
+    guarded or a recorded, reasoned exemption -- across every fence in the
+    file, not just a hand-picked few.
     """
     violations = _unguarded_mutations(
         LAND_SKILL.read_text(encoding="utf-8"),
@@ -789,8 +586,7 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
 
 def test_sweep_requires_the_guard_precede_not_merely_be_present() -> None:
     """A guard call present in the block but AFTER the mutating command does
-    not protect it -- ordering matters, exactly as `_assert_guard_precedes`
-    already checks for the four pinned fences above."""
+    not protect it -- ordering matters."""
     markdown = (
         f"```bash\nrtk git reset --hard origin/trunk\nrtk {_GUARD} || exit 1\n```\n"
     )
