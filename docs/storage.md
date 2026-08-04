@@ -615,8 +615,11 @@ decides how loud "surface it" should be:
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's
-  credentials are configured. The job is already back at `'pending'`, uncharged,
-  for the next explicit `lode work` to report loudly.
+  credentials are configured. **Names `(AuthError, LLMProviderError)`** too
+  (`lode-s08c`, mirroring `lode-yx1c`'s identical fix to `ask`/`work` above), so
+  a non-auth `LLMProviderError` re-raised here is discarded the same way an
+  `AuthError`/`LLMAuthError` already was. The job is already back at
+  `'pending'`, uncharged, for the next explicit `lode work` to report loudly.
 - `_batch_collect_enrich` (the *other* batch pre-step, polling an in-flight
   request): an `AuthError`/`LLMAuthError` here is re-raised immediately (not
   handle-specific — a missing credential fails every handle identically) and

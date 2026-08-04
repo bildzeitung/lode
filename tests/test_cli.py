@@ -463,6 +463,65 @@ def test_add_auth_error_is_non_fatal(
     assert jobs_by_type["enrich"] == ("pending", 0)
 
 
+def test_add_llm_provider_error_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-auth 'LLMProviderError' must not crash capture either (lode-s08c).
+
+    'LLMProviderError' and 'AuthError' are SIBLING RuntimeError subclasses --
+    neither is an ancestor of the other -- so the 'except AuthError' that
+    already protected 'lode add' against a missing-credentials failure
+    (test_add_auth_error_is_non_fatal) let this one through as a raw
+    traceback, exactly the gap lode-yx1c already fixed for 'ask'/'work'.
+
+    ``claim_and_run_one`` (as imported into ``lode.cli`` at call time) is
+    stubbed directly, isolating ``_enrich_immediately``'s own handler --
+    mirroring how the 'work' tests stub ``lode.worker.drain`` directly
+    (test_work_exits_nonzero_with_actionable_message_on_llm_provider_error).
+    Going through a real ``enrich_version`` stub would not exercise this
+    path at all: ``run_one`` only re-raises ``(AuthError, LLMAuthError)`` --
+    a *plain* non-auth ``LLMProviderError`` raised by a job handler is
+    already absorbed as a transient failure before it ever reaches
+    ``_enrich_immediately`` (``docs/storage.md`` "Transient vs. permanent
+    job failures").
+    """
+    import lode.worker as worker_mod
+
+    def _provider_error(conn, db_path, settings, *, types, target_version=None):
+        raise LLMProviderError("provider returned 500", provider="anthropic")
+
+    monkeypatch.setattr(worker_mod, "claim_and_run_one", _provider_error)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "note body", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    note_id = result.stdout.strip()
+    assert note_id
+
+
+def test_add_llm_auth_error_is_non_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLMAuthError (a non-Anthropic missing-credential) is non-fatal too (lode-s08c).
+
+    'LLMAuthError' subclasses 'LLMProviderError', not 'AuthError', so it hit
+    the same gap as the plain 'LLMProviderError' case above. Same isolation
+    approach as that test -- see its docstring.
+    """
+    import lode.worker as worker_mod
+
+    def _no_credentials(conn, db_path, settings, *, types, target_version=None):
+        raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
+
+    monkeypatch.setattr(worker_mod, "claim_and_run_one", _no_credentials)
+
+    db_path = tmp_path / "lode.db"
+    result = runner.invoke(app, ["add", "note body", "--db", str(db_path)])
+    assert result.exit_code == 0, result.output
+    note_id = result.stdout.strip()
+    assert note_id
+
+
 def test_add_reads_body_from_stdin_verbatim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

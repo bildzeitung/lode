@@ -419,22 +419,28 @@ def _enrich_immediately(
     :func:`~lode.worker.run_one`'s own attempts/backoff/dead-letter accounting
     — never re-raised here, and never hand-rolled a second time in this
     module. A **permanent, user-actionable** failure
-    (:class:`~lode.auth.AuthError`, lode-9yy) is different: ``run_one`` resets
-    the job straight back to ``pending`` (uncharged) and re-raises it, but
-    capture must stay instant regardless of whether Anthropic credentials are
-    configured (``docs/design.md`` §1) — so it is caught and dropped here
-    rather than surfaced on every single ``add``. The job is already back at
-    ``pending``, uncharged, for the next explicit ``lode work`` to report
-    loudly (``docs/storage.md`` "Transient vs. permanent job failures").
+    (:class:`~lode.auth.AuthError`, lode-9yy, or any other
+    :class:`~lode.llm_provider.LLMProviderError` — lode-s08c, mirroring
+    lode-yx1c's identical fix to ``ask``/``work``) is different: ``run_one``
+    resets the job straight back to ``pending`` (uncharged) and re-raises it,
+    but capture must stay instant regardless of whether Anthropic credentials
+    are configured (``docs/design.md`` §1) — so it is caught and dropped here
+    rather than surfaced on every single ``add``. ``AuthError`` must be named
+    alongside ``LLMProviderError``: they are sibling ``RuntimeError``
+    subclasses, neither an ancestor of the other, so naming only one silently
+    misses the other. The job is already back at ``pending``, uncharged, for
+    the next explicit ``lode work`` to report loudly (``docs/storage.md``
+    "Transient vs. permanent job failures").
     """
     from lode.auth import AuthError
+    from lode.llm_provider import LLMProviderError
     from lode.worker import claim_and_run_one
 
     try:
         claim_and_run_one(
             conn, db_path, settings, types=("enrich",), target_version=version_id
         )
-    except AuthError:
+    except (AuthError, LLMProviderError):
         logging.getLogger(__name__).debug(
             "immediate-enrich skipped — no Anthropic credentials configured; "
             "note saved, job left pending for a future 'lode work'"
