@@ -474,9 +474,12 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   every pass of `--loop`/`--wait` — so an ONNX model load (~1.5s) and the provenance revision probe
   ([Model provenance](#model-provenance-the-embedder-revision-manifest-decided-lode-crh81)) are paid
   once per process, not once per indexed version. Sharing across passes is the *caller's* choice:
-  `drain()` keeps no embedder of its own between calls. The trade is that the instance's first
-  revision probe latches for the run — a failed one included, so one bad probe stamps
-  `model_revision = NULL` for the rest of that process (`docs/decisions.md`, `lode-j5r2`).
+  `drain()` keeps no embedder of its own between calls. The instance's revision probe latches — but
+  only a *successful* result stays cached for the whole process; a *failed* one is retried once per
+  `drain()` call (`FastEmbedEmbedder.reset_revision_probe()`, called on the shared embedder before
+  each call's jobs run), so a transient probe failure self-heals within one `--loop`/`--wait`
+  interval instead of stamping `model_revision = NULL` on every version indexed for the rest of the
+  process (`docs/decisions.md`, `lode-j5r2` / `lode-fxse`).
 
 ### Enqueue ownership, atomicity, and layering — pinned 2026-06-28 (lode-i05.1)
 
@@ -576,15 +579,22 @@ config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
-Exactly one call site reads that roster wider: `drain`'s *batch pre-step* treats the
-whole `LLMProviderError` base class as permanent (`lode-5zqa`), not just its
-`LLMAuthError` subclass — see "must not starve the credential-free work" below. The
-two sites named next (`run_one`, `_batch_submit_enrich`) keep the narrow pair
-deliberately, because each has a transient `except Exception` path of its own
-that a non-auth provider error *should* fall into. The batch *collect* path now
-has one too (`lode-knnt`) — see "Per-handle isolation" below for how it's
-shaped and why `drain`'s own catch on that pre-step widens further still, to
-bare `Exception`.
+Exactly one call site *inside the queue machinery* reads that roster wider: `drain`'s
+*batch pre-step* treats the whole `LLMProviderError` base class as permanent
+(`lode-5zqa`), not just its `LLMAuthError` subclass — see "must not starve the
+credential-free work" below. (`cli.py`'s own catch is wider still, but it decides
+only how an already-escaped error is *rendered*, not job accounting — see the
+`lode work` bullet below.) The two sites named next (`run_one`,
+`_batch_submit_enrich`) keep the narrow pair deliberately, because each has a
+transient `except Exception` path of its own that a non-auth provider error
+*should* fall into. The batch *collect* path now has one too (`lode-knnt`) — see
+"Per-handle isolation" below for how it's shaped and why `drain`'s own catch on
+that pre-step widens further still, to bare `Exception`.
+
+The roster itself is still by exception **type**, so at the two narrow sites it
+bounds nothing arriving as another type — e.g. `lode-t7en`'s wrong-shape results
+line, a raw `AttributeError`/`TypeError`. What `lode-knnt` changed is the
+*consequence* of that at the collect pre-step, not the roster.
 
 `run_one` and `_batch_submit_enrich` special-case `(AuthError, LLMAuthError)` ahead
 of their generic catch: the claimed job is reset straight back to `'pending'` with
@@ -596,6 +606,12 @@ decides how loud "surface it" should be:
 - `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints the active
   provider's actionable message to stderr and exits non-zero — the same clean,
   traceback-free treatment `lode ask` already gives `AuthError`/`LLMAuthError`.
+  **Both CLI handlers name `(AuthError, LLMProviderError)`** (`lode-yx1c`, one
+  shared body in `cli._abort_on_provider_error`), so the **non-auth**
+  `LLMProviderError` `drain` re-raises from a stuck batch pre-step (`lode-5zqa`,
+  below) renders the same way. A non-auth `LLMProviderError` raised by a **job
+  handler** never reaches it — `run_one`'s generic `except Exception` retries and
+  dead-letters that one, per the taxonomy above.
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's

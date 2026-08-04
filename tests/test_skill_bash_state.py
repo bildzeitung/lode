@@ -112,9 +112,12 @@ which was initially skipped file-wide. The reasoning for that decision and again
 lives in `docs/agents-workflow.md`'s section above ("There is no whole-file escape
 hatch, deliberately"); `test_every_skill_and_agent_file_is_covered` pins the outcome.
 Measured while making the call, and recorded here because it is evidence rather than
-rationale: across `trunk`, this branch, and all five in-flight sibling branches
-touching the file, the parser reports exactly `$ACCEPTED` and `$CONFLICTS` and nothing
-else -- no false positive, and no sibling introduces a new instance.
+rationale: at the time (across `trunk`, that branch, and all five in-flight sibling
+branches touching the file), the parser reported exactly `$ACCEPTED` and `$CONFLICTS`
+and nothing else -- no false positive, and no sibling introduced a new instance.
+`$CONFLICTS` went inert once `lode-rfon` landed and `lode-p1r3` deleted its entry, so
+`$ACCEPTED` is now the only one -- for the reason recorded next to it in `ALLOWLIST`
+below.
 
 That file already went through one thorough remediation (`lode-sfnb`: `$MSG` converted
 to a per-id file under `$MSG_DIR`, `$LANDED` built up incrementally -- each successful
@@ -213,22 +216,16 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "shape as release/SKILL.md's $PROPOSED above: computed by the agent's own "
         "reasoning across Sections 2c (dispatched land-review verdicts) and 3a "
         "(stacked-branch ordering), never by any single deterministic bash command in "
-        "the file, so there is nothing upstream in this file's own bash to re-derive or "
-        "persist it FROM. Note the block that uses it immediately persists it onward "
-        "($STATE_DIR/accepted), which every later block reads back -- so the cross-block "
-        "hop this gate exists to catch is already closed downstream; only the initial "
-        "hand-off from the agent's reasoning into bash remains. Removing this entry "
-        "needs a genuine mechanical source for the set: lode-p1r3."
-    ),
-    ("skills/land/SKILL.md", "CONFLICTS"): (
-        "The 'Needs rebase -- kick back' block interpolates the conflicting paths that "
-        "Section 2b's merge-precheck (or Section 3's merge loop) captured -- a real, "
-        "confirmed instance of this bug class, already tracked and fixed by lode-rfon "
-        "($STATE_DIR/conflicts/<id>). Allowlisted rather than fixed here only because "
-        "that fix belongs to lode-rfon's branch and this one does not merge trunk in; "
-        "verified against origin/land/lode-rfon, whose land/SKILL.md no longer trips "
-        "this. The entry goes inert the moment lode-rfon lands and should then be "
-        "deleted (lode-p1r3)."
+        "the file. land/SKILL.md states the checkable property itself, right next to "
+        "the persist block: the set 'encodes land-review's per-branch judgment, which "
+        "is not queryable from git or bd' -- so there is nothing upstream in this "
+        "file's own bash to re-derive or persist it FROM. Note the block that uses it "
+        "immediately persists it onward ($STATE_DIR/accepted), which every later block "
+        "reads back -- so the cross-block hop this gate exists to catch is already "
+        "closed downstream; only the initial hand-off from the agent's reasoning into "
+        "bash remains. Removing this entry needs a genuine mechanical source for the "
+        "set, which means land-review persisting its verdict machine-readably -- its "
+        "contract rules that out today (lode-p1r3 audited for one and found none)."
     ),
 }
 
@@ -583,6 +580,58 @@ def test_blockquoted_fence_content_lines_are_also_unmarked() -> None:
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1
     assert _violations_in_block(blocks[0]) == set()
+
+
+def test_unterminated_final_fence_is_flushed_not_dropped() -> None:
+    """One of the three lode-p4qb rules; the reasoning lives with the parser.
+
+    Sabotage recipe: in `bash_fence_blocks`, delete the trailing
+    `if current is not None: blocks.append(...)` flush and this test goes red (the
+    unterminated block silently vanishes, `_bash_blocks(markdown) == []`)."""
+    markdown = '```bash\necho "$UNASSIGNED"\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
+def test_four_backtick_fence_is_scanned_the_lode_p4qb_shape() -> None:
+    """A four-backtick fence opens, AND the literal ```-prefixed line in its body
+    survives as content rather than closing it early -- the two halves of the rule
+    together, since a four-backtick fence exists precisely to hold such a line.
+
+    Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `{3,}`
+    -> exact `{3}` and the open marker no longer matches, so
+    `_bash_blocks(markdown) == []`; or drop `_closes_fence`'s `len(stripped) >=
+    len(fence)` conjunct and the ``` content line closes the block early, so the
+    `"```" in blocks[0]` assertion goes red."""
+    markdown = '````bash\necho "$UNASSIGNED"\n```\necho done\n````\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert "```" in blocks[0], (
+        "the literal triple-backtick content line was lost -- it must survive as "
+        f"ordinary text inside a four-backtick block: {blocks[0]!r}"
+    )
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
+
+
+def test_tilde_fence_is_scanned_and_backticks_do_not_close_it() -> None:
+    """A ~~~bash fence opens, AND a ``` line inside it is content -- the SAME-character
+    half of the closing rule, which the four-backtick test above cannot reach (it only
+    exercises the length half).
+
+    Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `~{3,}`
+    alternative and the open marker no longer matches, so
+    `_bash_blocks(markdown) == []`; or relax `_closes_fence`'s `set(stripped) ==
+    {fence[0]}` to accept any fence character and the ``` line closes the tilde block
+    early, so the `"```" in blocks[0]` assertion goes red."""
+    markdown = '~~~bash\necho "$UNASSIGNED"\n```\necho done\n~~~\n'
+    blocks = _bash_blocks(markdown)
+    assert len(blocks) == 1, blocks
+    assert "```" in blocks[0], (
+        "a backtick run closed a TILDE-opened fence -- the two fence characters "
+        f"never close each other: {blocks[0]!r}"
+    )
+    assert _violations_in_block(blocks[0]) == {"UNASSIGNED"}
 
 
 def test_two_separate_blocks_are_returned_separately() -> None:

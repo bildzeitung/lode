@@ -2796,6 +2796,74 @@ while erasing it here would lose the record of what was believed, and when.
     process"), and the per-*job* probing this fixes was the accident. `lode status`'s drift check is
     untouched — it calls `resolve_model_revision` directly, never through an embedder, so it still
     reads live. The `DETECT, not PIN` decision (`storage.md`, `lode-crh8.1`) is unaffected.
+  - **Update (lode-fxse) — fixed: option (b), a bounded per-`drain()`-call retry, not left as
+    documentation-only.** Of the three options this entry's own ticket named — (a) leave it,
+    documented only; (b) retry the probe once per `drain()` call; (c) have
+    `resolve_model_revision` distinguish "deterministically unavailable" from "transiently failed"
+    so the latch means what its comment claims — **(b)** landed.
+    `FastEmbedEmbedder.reset_revision_probe()` (`embedding.py`) is a new seam `drain()` calls once
+    per call, before that call's jobs run — never once per job, and `worker.py` never reaches into
+    `_revision_probed` itself, exactly as this ticket demanded. **It is conditional, not an
+    unconditional cache-bust**: it re-arms the latch only when the cached result is already `None`
+    (a prior probe failed) and is a no-op once a probe has *resolved* a real revision — so a
+    successfully-resolved installation keeps paying the probe exactly once per process, same as
+    `lode-j5r2` intended, and only a probe that would otherwise stay stuck at `NULL` pays for a
+    retry, at most once per poll tick, never once per job. Option (c) was **not** taken — a bigger
+    change than this ticket's fix needed, since (b) alone already makes the retry safe for the
+    deliberately-offline case without that distinction (next paragraph).
+  - **Why (b) is safe for exactly the case its own comment worried about.** The rejected concern
+    was "keying off the value would re-probe on every call for exactly the offline/unpinned-model
+    case that can least afford it" — true if checked on *every* `model_revision()` call (which
+    `reset_revision_probe()` never does), false at the *once-per-`drain()`-call* granularity this
+    fix actually uses: `resolve_model_revision` short-circuits under `HF_HUB_OFFLINE` or an
+    out-of-pinned-set `model_cache_identity` *before* touching `huggingface_hub` at all (`lode-r4r2`),
+    so re-arming the latch for that case costs a cheap local check, never a live network round trip
+    — retrying it once per poll tick is free. The only case a retry genuinely costs anything is a
+    real, unreachable-network failure without `HF_HUB_OFFLINE` set, and there the cost is exactly
+    what `lode-w5nr` already bounds it to (`settings.hf_probe_timeout_s`, 5.0s default) — once per
+    poll tick with pending embed work, not once per job, self-healing within one
+    `--loop`/`--wait` interval instead of needing a restart.
+  - **Known and accepted: a SUSTAINED real outage has no backoff of its own** (review finding). The
+    retry cadence is whatever `--interval` happens to be (`work_poll_interval_s`, 5.0s default) —
+    a job-polling knob, now doubling as a network-retry cadence nothing explicitly owns. Through a
+    multi-hour HF outage with embed work continuously pending, each tick adds up to
+    `hf_probe_timeout_s` (5.0s) of blocking probe. Accepted rather than fixed: it is bounded per
+    tick by `lode-w5nr`, costs nothing on an idle queue or a `HF_HUB_OFFLINE` install, and the
+    obvious remedy (exponential backoff on consecutive failures) is state this seam deliberately
+    does not carry — the whole point of (b) over (c) was that `drain()` owns *when* to retry and
+    `FastEmbedEmbedder` owns *whether*, with neither modelling failure history. Revisit only with a
+    real report; a user hitting it can set `HF_HUB_OFFLINE` and pay nothing.
+  - **Test proven non-vacuous the way this area's own history demands** (lode-dj6m, lode-r4r2,
+    and this ticket's own description each name the same trap): a stub that *raises* is swallowed
+    by `_embedder_model_revision`'s `except Exception: return None`, so every new test here counts
+    calls instead. `tests/test_embedding.py` pins `reset_revision_probe()` in isolation — one test
+    proves a failed probe is retried and the healed result then latches again, a second proves a
+    successful probe is untouched by a reset (probe count stays 1). `tests/test_worker.py` pins the
+    `drain()`-level integration — two `drain()` calls against the *same* embedder (mirroring
+    `cli.py`'s `work` command holding one embedder across every poll pass) prove a first-call
+    failure is retried on the second call.
+  - **Counting calls is necessary but not sufficient — the seam needed its own test (review
+    finding).** `drain()` reaches the retry through `getattr(embedder, "reset_revision_probe",
+    None)`, a string literal that no rename refactor and no type checker follows, and every
+    `drain()`-level test above substitutes a stub defining whichever name that literal happens to
+    say. So the literal agreeing with the real class was pinned by nothing: renaming
+    `FastEmbedEmbedder.reset_revision_probe` (updating its real call sites, as a rename does
+    automatically) left the `getattr` resolving to `None`, `drain()` silently no-opping, this whole
+    fix dead — and the suite green, 135/135, measured. The branch's original stub-based mirror test
+    for the *success* half was vacuous for the same family of reason, one step removed from the
+    raising-stub trap: it hard-coded the "no-op on success" contract into its own stub's
+    `reset_revision_probe`, so it asserted on itself and passed against the pre-fix code unchanged.
+    Both are now replaced by one test driving the **genuine** `FastEmbedEmbedder` through three
+    `drain()` passes (`@pytest.mark.real_embedder`, with only the ONNX load and
+    `huggingface_hub.model_info` faked), asserting on the `model_revision` actually written to the
+    vector rows: NULL on the blip's own pass, healed on the next, and still cached on the third. It
+    is the only test that can pin the success half honestly, and it fails under all three sabotages
+    (method renamed, `drain()`'s call removed, the reset made unconditional).
+  - **The live record moved.** `docs/storage.md`'s async work-queue section (not this dated log)
+    now describes the fixed, self-healing behavior instead of the unfixed latch — per this file's
+    own preamble routing rule. `FastEmbedEmbedder.model_revision()`'s and `warm()`'s docstrings
+    (`embedding.py`) and `drain()`'s own docstring (`worker.py`) are corrected in place; the module
+    docstring narrative is not duplicated a further time here.
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered
@@ -2924,6 +2992,38 @@ while erasing it here would lose the record of what was believed, and when.
     (its tests), and [docs/agents-workflow.md](agents-workflow.md#worktree-gc-widened-to-reclaim-clean-not-yet-merged-builder-worktrees-lode-yrtu)
     (the summary + the `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS` tunable's home).
 
+- **2026-07-28 (lode-ysr6) — `scripts/gate-lib.sh`'s `GATE_ADVISORY` contract made structural, not
+  an ordering convention.** `GATE_ADVISORY` used to be set by a separate `GATE_ADVISORY=(...)`
+  statement each consumer wrote below its own source line, so a `gate_could_not_run` call site placed
+  above that statement still exited 2 with a correct banner while silently emitting only half the
+  contract — and nothing mechanical caught it: not `set -u`, not shellcheck, not the library's own
+  tests. **Decided: bind `GATE_ADVISORY` at source time instead**, from positional arguments on the
+  source line itself (`. gate-lib.sh "advisory line 1" "advisory line 2"`) — the assignment becomes
+  part of the `source` command, so there is no longer a separate statement for a call site to sit
+  above.
+  - **Correction the original proposal did not anticipate, verified empirically on bash 5.2:** `source
+    file` with ZERO trailing tokens does not clear `$@` inside `file` — it inherits the calling
+    script's own positional parameters unchanged. A naive, unconditional `GATE_ADVISORY=("$@")` would
+    therefore have leaked a no-advisory consumer's own CLI argv (e.g. `release-bump.sh`'s range
+    argument) into the advisory trailer. Closed by requiring an explicit `--no-advisory` sentinel:
+    every consumer now passes either its advisory strings or that literal sentinel, never nothing — a
+    narrower discipline than the old ordering convention, and swept once per consumer file by
+    `tests/test_gate_lib.py`.
+  - **Weighed and rejected: keeping the separate assignment because it reads better.** The ticket
+    raised this explicitly — a plain `GATE_ADVISORY=(...)` near the top of a consumer is arguably
+    easier to read than threading two strings through a source line. Overruled because the two are
+    not comparable: the readability cost is paid once, visibly, by whoever writes the source line,
+    while the ordering hazard was silent and unpoliceable by any of the three mechanisms above. The
+    ticket also predicted the positional-parameter restore behaviour would need its own comment to be
+    safe; it does, and the header carries it. Recorded here so the trade is not rediscovered a third
+    time: the header states the outcome, not the alternative that lost.
+  - **`scripts/gate-lib.sh`'s header comment (its `GATE_ADVISORY` section) is the OPERATIVE copy** —
+    the full usage contract, the bash-5.2 verification and the enforcement story live there, and are
+    corrected in place as the mechanism changes. The prose above is this log's dated snapshot of what
+    was decided and why; if the contract later changes, it changes in the header, and this entry gets
+    a dated supersession marker rather than a rewrite (see this file's preamble). (Recorded late:
+    `lode-ur6o` was normalizing this file when `lode-ysr6` landed, so `lode-ysr6` left the record in
+    the header and `lode-szgb` folded it in here afterwards.)
 - **2026-08-02 (lode-w5nr) — `resolve_model_revision`'s HF probe is now bounded by an explicit
   per-call timeout, closing the stall `lode-r4r2` named but could not cover.** Filed during
   `lode-r4r2`'s review: with `HF_HUB_OFFLINE` *unset* and the network black-holed (captive portal, VPN

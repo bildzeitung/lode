@@ -589,14 +589,16 @@ def _reset_jobs_clock_anchor() -> None:
     :func:`lode.jobs.now` and ``docs/storage.md`` -- read either for *why* it
     ratchets; this only covers what that costs the test suite). That is fine
     as long as nothing patches the *inputs* to ``now()``'s anchor computation
-    (``time.monotonic()``) out from under it, but something does:
+    (``time.monotonic()``) out from under it, and until lode-e8lo something did:
     ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
-    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line``
-    both do ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``.
-    Because ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the
-    shared ``time`` module object, not a module-local alias -- so that patch
-    is PROCESS-GLOBAL and reaches ``lode.jobs`` (which also did a plain
-    ``import time``) too, not just ``lode.cli``.
+    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line`` both
+    did ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because
+    ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the shared
+    ``time`` module object, not a module-local alias -- so that patch was
+    PROCESS-GLOBAL and reached ``lode.jobs`` (which also does a plain
+    ``import time``) too, not just ``lode.cli``. Both now rebind the *name*
+    ``time`` inside ``lode.cli`` instead (``test_cli.py``'s
+    ``_patch_cli_clock_past_deadline``), so no poisoner is live today.
 
     With the fake monotonic substituted, ``now()``'s anchor computation
     (``real_now - fake_monotonic``) comes out far larger than the true anchor
@@ -620,8 +622,13 @@ def _reset_jobs_clock_anchor() -> None:
     instead of outliving the test that created it. Tests that drive
     ``jobs.now()`` directly (``tests/test_worker.py``'s own ``clock`` fixture,
     which resets this same anchor) still run after this and still see a
-    freshly reset anchor. Deleting this fixture turns nothing red on its own,
-    so ``tests/test_conftest_jobs_clock_anchor.py`` is what would catch it.
+    freshly reset anchor. That forward-looking half is now the WHOLE of this
+    fixture's justification: lode-e8lo removed the only live poisoner, so this
+    stays as defence in depth against the next one, not because anything leaks
+    today. Deleting it turns nothing red on its own, and since lode-e8lo it no
+    longer turns ``tests/test_conftest_jobs_clock_anchor.py``'s nested repro
+    red either -- that file's NON-VACUITY section is where the measurement
+    lives, and it owns what is and is not pinned today, plus the follow-up.
 
     SCOPE OF THAT CLAIM, stated precisely, because an unbounded version of it
     is what let this bug survive three sightings:
@@ -640,10 +647,12 @@ def _reset_jobs_clock_anchor() -> None:
       whatever the previous test left behind -- reachable today only via
       ``tests/test_capture_lag_diagnosis.py``'s ``seeded_db``, which is
       ``skipif``-gated and asserts nothing about job timestamps.
-    - It bounds the poison's lifetime; it does not prevent the leak. The
-      poisoning test still runs with a process-global fake clock, so anything
-      *it* observes is still affected (lode-y7gk fixes the leak at its source
-      -- the two are complementary, not alternatives).
+    - It bounds a poison's lifetime; it does not prevent the leak. lode-e8lo
+      fixed the leak at its source for the two ``test_cli.py`` tests, so no
+      test currently runs under a process-global fake clock -- but a future
+      one that does would still see the poison for its own duration, and only
+      this fixture stops that outliving it. The two are complementary, not
+      alternatives.
     """
     jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
@@ -780,12 +789,16 @@ class _OfflineQueryEmbedder:
     It mirrors the real class's whole **duck-typed** surface, not just the two
     :class:`~lode.embedding.Embedder` protocol methods, because lode probes the
     rest by ``hasattr``: ``warm()`` is what ``lode models pull`` calls
-    (``cli.py``), and ``model_revision()`` is what ``embedding.py``'s
+    (``cli.py``), ``model_revision()`` is what ``embedding.py``'s
     ``_embedder_model_revision`` duck-types on to stamp provenance on written
-    vectors. Omitting either does not fail loudly — it silently routes the code
-    under test down the *absent-method* branch, which is a different path from
-    production. ``None`` is the honest revision for a stub, and is exactly what
-    that helper already documents an absent method to mean.
+    vectors, and ``reset_revision_probe()`` is what ``worker.drain()`` calls
+    once per pass to retry a failed probe (``lode-fxse``). Omitting any of
+    these does not fail loudly — it silently routes the code under test down
+    the *absent-method* branch, which is a different path from production.
+    ``None`` is the honest revision for a stub, and is exactly what that
+    helper already documents an absent method to mean; ``reset_revision_probe``
+    is a genuine no-op here since this stub's ``model_revision()`` never
+    caches anything to reset in the first place.
     """
 
     def __init__(self, settings: object) -> None:
@@ -802,6 +815,9 @@ class _OfflineQueryEmbedder:
         return None
 
     def model_revision(self) -> str | None:
+        return None
+
+    def reset_revision_probe(self) -> None:
         return None
 
 
@@ -1152,33 +1168,31 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
     }
 
 
-# --- Fenced ```bash/```sh block parsing (lode-ovgs) -------------------------
+# --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# Three copies of this parser existed independently before this unification:
-# tests/test_land_lock.py's `_fenced_bash` matched the fence marker with
-# `line.startswith("```")`, so a fence INDENTED under a markdown list item
-# (e.g. nested under a bullet, as `.claude/skills/land/SKILL.md`'s Section 3
-# isolation-replay merge loop is) never opened at all -- 4 of that file's 24
-# bash fences were invisible to it. tests/test_land_conflicts_state.py
-# (lode-rfon) and tests/test_skill_bash_state.py (lode-x495) each
-# independently discovered and fixed the identical blind spot by matching the
-# STRIPPED line instead, as two private, near-identical copies. Per the
-# lode-ovgs ticket's own acceptance criteria, reaching three copies of the
-# same parser is the unify trigger (the repo's stated bar, per
-# scripts/gate-lib.sh / scripts/epic-children-closed.sh /
-# scripts/recycled-worktree-guard.sh) -- unified here, once.
+# THE ONE parser for "which bash does an agent actually execute", for the four
+# gates listed below, after four private copies of it drifted apart. NOT the
+# only such state machine left in the repo: a fifth, hand-rolled inline, is in
+# tests/test_sweep_digest_id.py -- measured byte-identical on sweep/SKILL.md
+# today, and filed as lode-jm4a rather than absorbed here.
 #
-# NOT YET the only copy, and this comment must not claim otherwise:
-# tests/test_assert_main_checkout.py::_fenced_bash_blocks is a FOURTH copy,
-# still live, and already diverged (it flushes an unterminated final fence;
-# this one drops it -- see the docstring's "Known boundaries"). Unifying it was
-# deliberately left to lode-p4qb rather than done here: land/lode-gczf was
-# already ready-for-land carrying 178 changed lines of that file, and it keeps
-# both helpers while calling them from four sites. Deleting the definitions
-# here would have merged CLEANLY with those call-site edits and produced a file
-# calling deleted functions -- a clean merge with a broken collection. What
-# lode-ovgs did do in that file is correct the two claims its own landing
-# falsified.
+# The bug that forced the unification is worth keeping, because it is the shape
+# any re-implementation reinvents: tests/test_land_lock.py matched the fence
+# marker with `line.startswith("```")`, so a fence INDENTED under a markdown
+# list item (e.g. `.claude/skills/land/SKILL.md`'s Section 3 isolation-replay
+# merge loop) never opened at all -- 4 of that file's 24 bash fences were
+# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Three
+# other modules each rediscovered and re-fixed that independently before
+# lode-ovgs unified them here and lode-p4qb folded in the fourth
+# (tests/test_assert_main_checkout.py).
+#
+# Consumers of the FUNCTION: tests/test_land_lock.py,
+# tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
+# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py is a
+# fifth consumer of the constants and `_closes_fence` but not of the function
+# itself -- its inline-span scan runs its own loop (lode-xqc7). A change to the
+# rules below changes what all five gates consider "executed", so the rules are
+# stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1197,6 +1211,28 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # removed by lode-3pyo: stripping twice is a no-op on today's corpus, measured, but not
 # in general -- a `>>`-leading line double-strips to a bare one.
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
+
+# A fence marker: three-or-more backticks, or three-or-more tildes, plus
+# whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
+# as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
+# imported. THREE state machines now consume a marker of this shape and they do
+# not all agree. This one and tests/test_bd_list_limit_gate.py's inline-span
+# scan import BOTH this constant and ``_closes_fence`` below (lode-xqc7), so
+# they agree by construction -- sharing only the marker would have pinned where
+# a fence opens and left where it closes free to fork. ``check_links.py``
+# toggles on ANY marker, so there a ``~~~`` line does close a ```-opened block;
+# do not read that one as documentation for these two.
+_FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def _closes_fence(stripped: str, fence: str) -> bool:
+    """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
+    rule, stated in ``bash_fence_blocks``'s docstring below.
+
+    A named helper rather than an inline conjunction because
+    tests/test_bd_list_limit_gate.py applies the same rule in its own loop.
+    """
+    return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
 
 
 def bash_fence_blocks(markdown: str) -> list[str]:
@@ -1219,55 +1255,56 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     without this a blockquoted fence would stay invisible the same way an
     indented one used to.
 
+    Three further rules, all settled by lode-p4qb and all latent on today's
+    corpus -- zero instances of any of them exist in any of the repo's
+    markdown files, measured, so this is hardening rather than a live-bug fix:
+
+    * a FOUR-OR-MORE-backtick fence and a TILDE (``~~~bash``) fence are both
+      scanned (see ``_FENCE_MARKER_RE`` above), not silently skipped.
+    * a closing run must be the SAME character as the opening one and AT LEAST
+      AS LONG (CommonMark), so a ```-prefixed line inside a four-backtick
+      block is content, not a close -- which is the whole reason an author
+      reaches for the four-backtick form.
+    * an UNTERMINATED final fence is FLUSHED, not dropped. Dropping is the
+      same false-assurance shape this helper exists to delete: a gate would
+      report "clean" for a block it never parsed.
+
     A caller that wants every block concatenated into one string (e.g. to
     check for an offending token whose position within the file doesn't
     matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
 
-    Known boundaries -- each yields NO block, SILENTLY. A gate built on this
-    helper therefore reports "clean" for them rather than "unparsed", which is
-    the same false assurance lode-ovgs was filed against, so measure before
-    trusting a green result on a new file. All three measured during
-    lode-ovgs's review (the blockquote boundary above this list was the
-    fourth, closed by lode-wroz):
-
-    * an UNTERMINATED final fence is dropped (no closing marker, so the block
-      is never flushed). ``tests/test_assert_main_checkout.py``'s surviving
-      copy deliberately keeps it -- the one live divergence between them.
-    * a FOUR-backtick fence (````bash) is skipped -- ``stripped`` no longer
-      equals "```bash". That form is not exotic: it is what an author MUST use
-      for a block whose own body contains a ```-prefixed line.
-    * a TILDE fence (~~~bash) is skipped -- only backticks are recognized.
-      ``scripts/check_links.py`` handles both, with a ``^\\s*(`{3,}|~{3,})``
-      regex. All three are latent on today's corpus (every other consumed
-      file carries only paired, exactly-three-backtick fences, and no file
-      outside code/SKILL.md nests a fence in a blockquote) and are tracked for
-      a deliberate answer in **lode-p4qb**.
-
-    The blockquote strip has a COST of its own, in the opposite direction: it
-    cannot tell a blockquote marker from a redirection, so it also fires on a
-    CONTENT line whose first non-blank character is ``>``. ``>&2 echo hi``
-    extracts as ``&2 echo hi``, ``>> log`` as ``> log``, ``> out`` as ``out``.
-    Unlike the boundaries above this is silent CORRUPTION, not a silent skip,
-    so a gate asserting on exact command text would assert against the mangled
-    form. Measured under lode-wroz: no consumed file has such a line today --
-    every block the pre-strip parser saw is byte-identical after it, across
-    every ``.claude/skills/*/SKILL.md`` and ``.claude/agents/*.md`` -- so
-    re-measure rather than assume if one is ever added.
+    One remaining known boundary, and the only one left of the OPPOSITE kind
+    -- corruption rather than a silent skip: the
+    blockquote strip cannot tell a blockquote marker from a redirection, so it
+    also fires on a CONTENT line whose first non-blank character is ``>``.
+    ``>&2 echo hi`` extracts as ``&2 echo hi``, ``>> log`` as ``> log``,
+    ``> out`` as ``out``. Unlike the three above this is silent CORRUPTION,
+    not a silent skip, so a gate asserting on exact command text would assert
+    against the mangled form. Measured under lode-wroz: no consumed file has
+    such a line today -- every block the pre-strip parser saw is
+    byte-identical after it, across every ``.claude/skills/*/SKILL.md`` and
+    ``.claude/agents/*.md`` -- so re-measure rather than assume if one is ever
+    added.
     """
     blocks: list[str] = []
     current: list[str] | None = None
+    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"
     for raw_line in markdown.splitlines():
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
-        if stripped.startswith("```"):
-            if current is not None:
+        if current is not None:
+            if _closes_fence(stripped, fence):
                 blocks.append("\n".join(current))
                 current = None
-            elif stripped in {"```bash", "```sh"}:
-                current = []
+            else:
+                current.append(line)
             continue
-        if current is not None:
-            current.append(line)
+        m = _FENCE_MARKER_RE.match(stripped)
+        if m and m.group(2).strip() in {"bash", "sh"}:
+            fence = m.group(1)
+            current = []
+    if current is not None:  # unterminated final fence -- flushed, not dropped
+        blocks.append("\n".join(current))
     return blocks
 
 

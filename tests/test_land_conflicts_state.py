@@ -19,6 +19,14 @@ files, and has the kick-back block read it back from disk -- refusing loudly
 Pinned against the SHIPPED SKILL.md, not a reimplementation (the
 tests/test_land_lock.py precedent) -- the bug lived in a markdown fence no
 gate parses, so only reading the actual file catches a regression.
+
+lode-wjw4 extended this file to the OTHER half of the same mechanism: WHERE
+the per-pass `rm -rf "$STATE_DIR"` sits. It used to run in Section 3a, three
+sections after the pass began and after 2b had already written its conflicts
+record, so 2b was ordered IN PROSE to kick back before 3a ran or lose the
+file. The wipe is hoisted to Section 1, ahead of every writer, which makes
+that ordering structural instead of remembered -- and the pins below are what
+keep it that way, since nothing else in this repo parses this markdown.
 """
 
 from __future__ import annotations
@@ -71,6 +79,61 @@ def _kick_back_block() -> str:
         "--add-label needs-rebase",
         "rtk bd update",
         what="the needs-rebase kick-back",
+    )
+
+
+def test_state_dir_is_wiped_once_in_section_1_ahead_of_every_writer() -> None:
+    """lode-wjw4: the per-pass `rm -rf "$STATE_DIR"` lives in Section 1's
+    setup fence -- the first block of the pass -- and nowhere else.
+
+    Below any writer it destroys that writer's state mid-pass: the observed
+    victim was 2b's conflicts record, which the kick-back block reads back
+    from disk (the tests above), and which 3a's wipe deleted whenever the
+    kick-back was deferred past it. Hoisting the wipe is what removed that
+    ordering constraint; prose alone would let a future editor put it back.
+
+    `_only_block_with`'s exactly-one assertion is deliberately also sensitive
+    to a COMMENT quoting the literal wipe -- that is how origin/trunk's shape
+    scored two matches (2b carried a comment naming 3a's wipe). A comment
+    restating where the wipe lives is the same remembered-not-structural
+    pattern this ticket deleted, so re-flagging it is the intent, not a
+    false positive.
+    """
+    site = _only_block_with('rm -rf "$STATE_DIR"', what="the per-pass $STATE_DIR wipe")
+    assert "rtk git checkout -f trunk" in site, (
+        "the $STATE_DIR wipe is no longer in Section 1's setup fence (the only "
+        "block that runs `git checkout -f trunk`). Anywhere later and a block "
+        "that writes under $STATE_DIR before it -- 2b's conflicts record, 3a's "
+        "accepted/msg files -- loses that state to it (lode-wjw4)"
+    )
+
+
+def test_section_1_block_still_ends_on_the_pass_start_reset() -> None:
+    """The wipe must not become Section 1's LAST command (lode-wjw4).
+
+    No fenced block in this file runs under `set -e` (the governing rule at
+    the top: not even `set -e` carries between blocks), so a block's exit
+    status is its last command's and nothing else. `rm -rf` reports success
+    even on a path that does not exist -- measured, a failed `git reset
+    --hard origin/trunk` goes from rc 128 to a block that exits 0 -- which
+    would let the pass spend N `land-review` dispatches, a full re-gate and a
+    `git push origin trunk` on top of un-reset residue. Same hazard 2b's own
+    `if [ "$rc" = 1 ]` comment reasons about, from the other direction.
+    """
+    site = _only_block_with(
+        "rtk git reset --hard origin/trunk",
+        "rtk git checkout -f trunk",
+        what="Section 1's pass-start block",
+    )
+    last = [
+        ln for ln in site.splitlines() if ln.strip() and not ln.strip().startswith("#")
+    ][-1]
+    assert last.startswith("rtk git reset --hard origin/trunk"), (
+        "Section 1's setup block no longer ends on `git reset --hard "
+        f"origin/trunk` -- its last executed line is {last.strip()!r}. That "
+        "command's exit status is the only machine-readable signal the block "
+        "gives; ending on anything that cannot fail hides a failed reset "
+        "(lode-wjw4)"
     )
 
 

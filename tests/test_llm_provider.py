@@ -7,10 +7,13 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
+import json
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest import mock
 
+import httpx
 import pytest
 from pydantic import BaseModel, ValidationError
 
@@ -741,31 +744,22 @@ def test_collect_batch_wraps_a_bad_request_from_batches_results() -> None:
     assert err.__cause__ is bad_request
 
 
-# lifts conftest's autouse real-client-construction guard (lode-85q); the mock
-# transport answers in-process, so no socket is ever opened.
-@pytest.mark.network
-def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> None:
-    """Pins the SDK-internals property `collect_batch`'s loop comment rests on.
+_RESULTS_URL = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
 
-    The two ``MagicMock`` tests above raise from the call by construction, so
-    they cannot see *when* the SDK resolves status. This one drives a real
-    client over an ``httpx.MockTransport`` and so fails if a future SDK ever
-    defers the status check into iteration, silently reopening the gap.
 
-    The 200 ``retrieve`` leg is load-bearing: ``batches.results`` retrieves the
-    batch itself first, so a transport that errored on *every* path would
-    assert against that call instead of the decoder-returning one.
+def _ended_batch_body() -> dict:
+    """The ``retrieve`` body for an "ended" batch.
+
+    Only the fields the SDK's own ``MessageBatch`` model requires. The 200
+    ``retrieve`` leg is load-bearing in every test below: ``batches.results``
+    retrieves the batch itself first, so a transport that errored on *every*
+    path would assert against that call instead of the decoder-returning one.
     """
-    import anthropic
-    import httpx
-
-    results_url = "https://api.anthropic.com/v1/messages/batches/batch-1/results"
-    # Only the fields the SDK's own MessageBatch model requires.
-    batch_body = {
+    return {
         "id": "batch-1",
         "type": "message_batch",
         "processing_status": "ended",
-        "results_url": results_url,
+        "results_url": _RESULTS_URL,
         "created_at": "2026-01-01T00:00:00Z",
         "expires_at": "2026-01-02T00:00:00Z",
         "request_counts": {
@@ -777,19 +771,90 @@ def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> N
         },
     }
 
+
+def _succeeded_jsonl_line(custom_id: str) -> bytes:
+    """A real, fully-decodable JSONL line for ``batches.results``."""
+    return (
+        json.dumps(
+            {
+                "custom_id": custom_id,
+                "result": {
+                    "type": "succeeded",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-haiku-4-5",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "emit",
+                                "input": {"name": "w", "count": 1},
+                            }
+                        ],
+                        "stop_reason": "tool_use",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                },
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+def _real_anthropic_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> Any:
+    """A REAL SDK client answered in-process by ``handler``.
+
+    The ``MagicMock`` ``collect_batch`` tests raise from the call by
+    construction, so they cannot see *when* the SDK resolves status or decodes
+    a line -- and that timing is the entire subject of the tests below. Each
+    caller carries ``@pytest.mark.network`` to lift conftest's autouse
+    real-client-construction guard (lode-85q); ``httpx.MockTransport`` answers
+    in-process, so no socket is ever opened.
+    """
+    import anthropic
+
+    return anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,  # keep the SDK's own retry ladder out of the assertion
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+
+def _results_handler(
+    make_results: Callable[[], httpx.Response],
+) -> Callable[[httpx.Request], httpx.Response]:
+    """Route ``/results`` to ``make_results()``, everything else to ``retrieve``."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/results"):
-            return httpx.Response(
+            return make_results()
+        return httpx.Response(200, json=_ended_batch_body())
+
+    return handler
+
+
+@pytest.mark.network
+def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> None:
+    """Pins the SDK-internals property `collect_batch`'s comment rests on.
+
+    Fails if a future SDK ever defers the status check into iteration, silently
+    reopening the gap lode-i7yr closed.
+    """
+    import anthropic
+
+    client = _real_anthropic_client(
+        _results_handler(
+            lambda: httpx.Response(
                 429,
                 headers={"request-id": "req-test-2"},
                 json={"error": {"type": "rate_limit_error", "message": "slow down"}},
             )
-        return httpx.Response(200, json=batch_body)
-
-    client = anthropic.Anthropic(
-        api_key="test-key",
-        max_retries=0,  # keep the SDK's own retry ladder out of the assertion
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
     )
 
     with pytest.raises(LLMProviderError) as excinfo:
@@ -800,6 +865,99 @@ def test_collect_batch_wraps_a_real_sdk_status_error_from_the_results_url() -> N
     assert err.status_code == 429
     assert err.request_id == "req-test-2"
     assert isinstance(err.__cause__, anthropic.APIStatusError)
+
+
+@pytest.mark.network
+def test_collect_batch_wraps_a_malformed_jsonl_line_from_the_results_stream() -> None:
+    """lode-3gtu: a malformed line surfaces as a raw `json.JSONDecodeError`.
+
+    It comes from inside the SDK's lazily-streamed decoder, with the status
+    already resolved cleanly at 200, so no `except anthropic.*` clause reaches
+    it. Non-vacuous: against the pre-fix code this raised the `JSONDecodeError`
+    raw, failing `pytest.raises(LLMProviderError)`.
+    """
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, content=b"not valid json\n"))
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert "batch-1" in str(err)
+    assert isinstance(err.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.network
+def test_collect_batch_wraps_an_undecodable_utf8_byte_in_the_results_stream() -> None:
+    """lode-3gtu: invalid UTF-8 in a line is a `UnicodeDecodeError`, NOT a
+    `json.JSONDecodeError` -- `json.loads(bytes)` sniffs an encoding and decodes
+    before it ever parses, so an invalid byte fails one step earlier and lands
+    on a different `ValueError` subclass. Catching only `JSONDecodeError` misses
+    it entirely; measured raw-escaping against the real SDK before this test.
+
+    The first four bytes are ASCII so `json.detect_encoding` picks utf-8 -- i.e.
+    this is the ordinary "server emitted a bad byte mid-line" case, not a
+    contrived BOM.
+    """
+    client = _real_anthropic_client(
+        _results_handler(
+            lambda: httpx.Response(200, content=b'{"custom_id": "\xff\xfe\xfd"}\n')
+        )
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert "batch-1" in str(err)
+    assert isinstance(err.__cause__, UnicodeDecodeError)
+    assert not isinstance(err.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.network
+def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failure() -> (
+    None
+):
+    """lode-3gtu: a stream that dies AFTER a line already decoded discards it.
+
+    The deliberate choice: raise rather than return the partial result list --
+    `batches.results` re-fetches the identical JSONL from the start on every
+    call (there is no resume-after-N-lines cursor), so nothing already-good is
+    permanently lost. Pins that `collect_batch` never returns a tuple here.
+
+    Two lines, not one, is load-bearing: httpx's 64-byte chunker holds the tail
+    of the last raw chunk back, so a single line's trailing newline never
+    reaches the JSONL decoder and NOTHING would be decoded before the error --
+    the "partial" in this test's name would be a fiction. The second line
+    flushes the first. Asserting the decoded COUNT is what keeps that honest.
+    """
+
+    class _FlakyStream(httpx.SyncByteStream):
+        """Yields two good JSONL lines, then dies as if the connection reset."""
+
+        def __iter__(self) -> Iterator[bytes]:
+            yield _succeeded_jsonl_line("ver-one")
+            yield _succeeded_jsonl_line("ver-two")
+            raise httpx.ReadError("connection reset mid-stream")
+
+        def close(self) -> None:
+            pass
+
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, stream=_FlakyStream()))
+    )
+
+    with pytest.raises(LLMProviderError) as excinfo:
+        AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    err = excinfo.value
+    assert err.provider == "anthropic"
+    assert "batch-1" in str(err)
+    assert "1 result(s) already decoded" in str(err)
+    assert isinstance(err.__cause__, httpx.HTTPError)
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:

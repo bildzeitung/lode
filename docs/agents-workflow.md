@@ -1517,9 +1517,12 @@ another.
 
 **Persisting carries two obligations, and both have been forgotten at least once each.** A file path
 that a later block can re-derive is necessarily a *fixed* path, and a fixed path **outlives the run
-that wrote it** — so (a) **wipe it at the start of every pass** (`rm -rf "$DIR" && mkdir -p "$DIR"`,
-as `/land`'s `$STATE_DIR` and `/sweep`'s `$SWEEP_TMP` both do), or a skipped write silently serves the
-*previous* pass's data, which is worse than the crash it replaced; and (b) **assert on load** and
+that wrote it** — so (a) **wipe it at the start of every pass, ahead of every block that writes to
+it**, or a skipped write silently serves the *previous* pass's data, which is worse than the crash it
+replaced. With one writer the wipe and the `mkdir -p` go together (`rm -rf "$DIR" && mkdir -p "$DIR"`,
+as `/sweep`'s `$SWEEP_TMP` and `/release`'s `NOTES_FILE` both do); with several, split them — `/land`
+wipes `$STATE_DIR` once in Section 1 and leaves each writer to `mkdir -p` its own subdirectory, so no
+writer has to be verbally ordered around a wipe further down the file (lode-wjw4). And (b) **assert on load** and
 abort loudly, because a zero-iteration loop over an empty file exits 0 and is indistinguishable from a
 clean pass with nothing to do. `lode-x495` shipped `/release`'s `NOTES_FILE` on a fixed path without
 (a), which would have let a skipped notes-write publish the last release's notes as this one's — the
@@ -1589,13 +1592,19 @@ fixed once in `land/SKILL.md`, then found again, unfixed, in two other skills).
 **There is no whole-file escape hatch, deliberately.** `land/SKILL.md` was initially skipped file-wide,
 on the reasoning that fixing a ~2000-line file that is the sole writer of `trunk` exceeded the shipping
 ticket's risk budget. `lode-x495`'s technical review rejected that shape: it conflates *fixing* the file
-(genuinely risky, still deferred to `lode-p1r3`) with *covering* it, which costs two allowlist entries
-and not one byte of `land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves
-every **future** cross-block variable added to that file unguarded too, not just the known ones, in
-exactly the file the rule was written for. So the file is gated like every other skill, with
-`$ACCEPTED` (agent-reasoned, same "nothing upstream to re-derive from" shape as `$PROPOSED`) and
-`$CONFLICTS` (a real instance, fixed on `lode-rfon`'s branch — the entry goes inert when that lands)
-allowlisted individually, and its other 22 blocks covered. Removing those two entries is `lode-p1r3`.
+(genuinely risky) with *covering* it, which cost only two allowlist entries and not one byte of
+`land/SKILL.md`. A file-level skip is also strictly worse than it looks — it leaves every **future**
+cross-block variable added to that file unguarded too, not just the known ones, in exactly the file the
+rule was written for. So the file is gated like every other skill. `lode-p1r3` then closed out both of
+those entries. `$CONFLICTS` went inert once `lode-rfon` landed, and deleting its entry made the gate
+strictly **stronger** — an allowlist entry is file-wide, so while it stood a regression of `$CONFLICTS`
+anywhere in the file would have been silently excused; now it fails (the fix's producer side is pinned
+separately, by `tests/test_land_conflicts_state.py`). `$ACCEPTED` (agent-reasoned, same "nothing
+upstream to re-derive from" shape as `$PROPOSED`) is the one entry `land/SKILL.md` still carries: that
+audit looked for a mechanical source and found none, because the value is `land-review`'s per-branch
+judgment and `land-review` returns its verdict in conversation only. **That is a contract, not a law of
+nature** — the entry becomes removable if `land-review` is ever changed to persist its verdict
+machine-readably, which is the removal condition recorded next to the entry itself.
 
 ### Invariants the coding loop never breaks
 
