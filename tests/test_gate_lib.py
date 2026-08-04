@@ -352,6 +352,46 @@ def test_positional_params_restored_after_source_with_advisory_args():
     assert result.stdout.strip() == "own-arg1 own-arg2 2"
 
 
+# ---------------------------------------------------------------------------
+# escalate_unless_content() -- lode-1mea. The shared "rc=$? ; [ -ne 1 ] ->
+# gate_could_not_run" partition, extracted from the six call sites in
+# scripts/release-bump.sh and scripts/validate-mermaid.sh. Direct unit tests,
+# independent of any real consumer script -- those keep their own regression
+# tests (tests/test_release_bump.py, tests/test_validate_mermaid_gate.py),
+# which double as this helper's integration coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_escalate_unless_content_returns_0_on_rc_1():
+    """rc 1 is grep's own "no match" -- a content answer, not a fault. The
+    caller's own no-match arm must be reached, so this must return rather
+    than exit."""
+    result = _run('escalate_unless_content 1 "should never be printed"; echo reached')
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "reached"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("rc", [0, 2, 127, 137])
+def test_escalate_unless_content_exits_2_with_the_banner_on_anything_else(rc: int):
+    """Any rc other than 1 -- including 0, which a caller's own `if` already
+    routes to its success arm and would never itself pass here, but is worth
+    pinning as still escalating rather than being special-cased -- is a
+    machine fault: gate_could_not_run's exit-2 banner contract, with the
+    caller's cause lines passed through untouched."""
+    result = _run(
+        f'escalate_unless_content {rc} "cause one" "cause two"; echo unreached'
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert _stderr_lines(result) == [
+        "GATE COULD NOT RUN: cause one",
+        "cause two",
+    ]
+
+
 def test_the_consumer_sweep_discovers_something():
     """Guards the sweeps below against silently passing on an empty set -- a
     glob that stops matching (renamed directory, changed suffix) would make

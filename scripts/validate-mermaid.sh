@@ -251,22 +251,20 @@ for f in "$REPO"/docs/*.md; do
   # 0 on a missing docs tree -- this exact bug, restored, with every test
   # below still green (they run against the real docs/, which always matches).
   #
-  # `!` is deliberately NOT used here: `! cmd`'s $? is cmd's status LOGICALLY
-  # NEGATED (0<->1), not cmd's own status, so `rc=$?` after `if ! grep ...;
-  # then` would have captured the wrong number entirely -- measured while
-  # writing this fix's own tests.
+  # The `rc=$?`-capture-then-escalate here (and at the docker run site below)
+  # is scripts/gate-lib.sh's escalate_unless_content() (lode-1mea) -- see its
+  # own header for why `rc=$?` is captured in the `else` arm rather than by
+  # testing `! cmd` (which negates the status, not the status itself).
   if grep -q '```mermaid' "$f"; then
     found=1
   else
     rc=$?
-    if [ "$rc" -ne 1 ]; then
-      gate_could_not_run \
-        "grep failed scanning $rel for a mermaid block (exit $rc) --" \
-        "grep's exit 1 means \"no match\" (a content answer: no diagram in" \
-        "this doc), so anything else is a machine fault, not content -- the" \
-        "file may be unreadable, hit an I/O error, or \$REPO/docs may have" \
-        "vanished mid-run. Diagnose with: grep -q -- '\`\`\`mermaid' $rel"
-    fi
+    escalate_unless_content "$rc" \
+      "grep failed scanning $rel for a mermaid block (exit $rc) --" \
+      "grep's exit 1 means \"no match\" (a content answer: no diagram in" \
+      "this doc), so anything else is a machine fault, not content -- the" \
+      "file may be unreadable, hit an I/O error, or \$REPO/docs may have" \
+      "vanished mid-run. Diagnose with: grep -q -- '\`\`\`mermaid' $rel"
     continue
   fi
   if docker run --rm -v "$REPO:/data:ro" -v "$CFG:/cfg:ro" -w /data "$IMAGE" \
@@ -274,16 +272,14 @@ for f in "$REPO"/docs/*.md; do
     echo "OK    $rel"
   else
     rc=$?
-    if [ "$rc" -ne 1 ]; then
-      gate_could_not_run \
-        "docker run failed with exit $rc while validating" \
-        "$rel. mmdc reports invalid mermaid as exit 1 and nothing else, so this" \
-        "is a tool failure, not a syntax error — the diagram was never judged." \
-        "Usual causes: the image is missing and the network is unreachable (125)," \
-        "or the engine killed the container mid-run — Docker Desktop stopping" \
-        "(Resource Saver mode), or an out-of-memory kill (137). Diagnose with:" \
-        "docker info"
-    fi
+    escalate_unless_content "$rc" \
+      "docker run failed with exit $rc while validating" \
+      "$rel. mmdc reports invalid mermaid as exit 1 and nothing else, so this" \
+      "is a tool failure, not a syntax error — the diagram was never judged." \
+      "Usual causes: the image is missing and the network is unreachable (125)," \
+      "or the engine killed the container mid-run — Docker Desktop stopping" \
+      "(Resource Saver mode), or an out-of-memory kill (137). Diagnose with:" \
+      "docker info"
     echo "FAIL  $rel"
     fail=1
   fi

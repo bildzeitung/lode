@@ -140,3 +140,25 @@ gate_could_not_run() {
   for line in "${GATE_ADVISORY[@]}"; do echo "$line" >&2; done
   exit 2
 }
+
+# escalate_unless_content() -- lode-1mea, extracted from the six call sites in
+# scripts/release-bump.sh (4) and scripts/validate-mermaid.sh (2) that each
+# partition a command's own exit code as 1 = CONTENT ("no match"), anything
+# else = MACHINE fault. Only the `rc=$?`/`-ne 1` test moves here -- the
+# caller keeps its own `if`/`else`, so its success arm and no-match arm stay
+# open-coded byte-for-byte at the call site.
+#
+# Usage (caller's `else` arm, after capturing `rc=$?`):
+#   escalate_unless_content "$rc" "cause line 1" "cause line 2" ...
+# Never `if ! cmd; then rc=$?`: that captures cmd's status NEGATED, not
+# cmd's own status.
+#
+# Does NOT cover scripts/merge-precheck.sh's exit-code checks: that script
+# has TWO live content codes (0 = clean, 1 = conflict), and its rc is
+# captured from a command substitution, not an `else` arm's `$?`.
+escalate_unless_content() {
+  local rc="$1"
+  shift
+  [ "$rc" -eq 1 ] && return 0
+  gate_could_not_run "$@"
+}
