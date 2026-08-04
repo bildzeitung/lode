@@ -474,9 +474,12 @@ annotation, which the head-pointer comparison flags for re-derivation. So:
   every pass of `--loop`/`--wait` — so an ONNX model load (~1.5s) and the provenance revision probe
   ([Model provenance](#model-provenance-the-embedder-revision-manifest-decided-lode-crh81)) are paid
   once per process, not once per indexed version. Sharing across passes is the *caller's* choice:
-  `drain()` keeps no embedder of its own between calls. The trade is that the instance's first
-  revision probe latches for the run — a failed one included, so one bad probe stamps
-  `model_revision = NULL` for the rest of that process (`docs/decisions.md`, `lode-j5r2`).
+  `drain()` keeps no embedder of its own between calls. The instance's revision probe latches — but
+  only a *successful* result stays cached for the whole process; a *failed* one is retried once per
+  `drain()` call (`FastEmbedEmbedder.reset_revision_probe()`, called on the shared embedder before
+  each call's jobs run), so a transient probe failure self-heals within one `--loop`/`--wait`
+  interval instead of stamping `model_revision = NULL` on every version indexed for the rest of the
+  process (`docs/decisions.md`, `lode-j5r2` / `lode-fxse`).
 
 ### Enqueue ownership, atomicity, and layering — pinned 2026-06-28 (lode-i05.1)
 

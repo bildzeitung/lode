@@ -2796,6 +2796,48 @@ while erasing it here would lose the record of what was believed, and when.
     process"), and the per-*job* probing this fixes was the accident. `lode status`'s drift check is
     untouched — it calls `resolve_model_revision` directly, never through an embedder, so it still
     reads live. The `DETECT, not PIN` decision (`storage.md`, `lode-crh8.1`) is unaffected.
+  - **Update (lode-fxse) — fixed: option (b), a bounded per-`drain()`-call retry, not left as
+    documentation-only.** Of the three options this entry's own ticket named — (a) leave it,
+    documented only; (b) retry the probe once per `drain()` call; (c) have
+    `resolve_model_revision` distinguish "deterministically unavailable" from "transiently failed"
+    so the latch means what its comment claims — **(b)** landed.
+    `FastEmbedEmbedder.reset_revision_probe()` (`embedding.py`) is a new seam `drain()` calls once
+    per call, before that call's jobs run — never once per job, and `worker.py` never reaches into
+    `_revision_probed` itself, exactly as this ticket demanded. **It is conditional, not an
+    unconditional cache-bust**: it re-arms the latch only when the cached result is already `None`
+    (a prior probe failed) and is a no-op once a probe has *resolved* a real revision — so a
+    successfully-resolved installation keeps paying the probe exactly once per process, same as
+    `lode-j5r2` intended, and only a probe that would otherwise stay stuck at `NULL` pays for a
+    retry, at most once per poll tick, never once per job. Option (c) was **not** taken — a bigger
+    change than this ticket's fix needed, since (b) alone already makes the retry safe for the
+    deliberately-offline case without that distinction (next paragraph).
+  - **Why (b) is safe for exactly the case its own comment worried about.** The rejected concern
+    was "keying off the value would re-probe on every call for exactly the offline/unpinned-model
+    case that can least afford it" — true if checked on *every* `model_revision()` call (which
+    `reset_revision_probe()` never does), false at the *once-per-`drain()`-call* granularity this
+    fix actually uses: `resolve_model_revision` short-circuits under `HF_HUB_OFFLINE` or an
+    out-of-pinned-set `model_cache_identity` *before* touching `huggingface_hub` at all (`lode-r4r2`),
+    so re-arming the latch for that case costs a cheap local check, never a live network round trip
+    — retrying it once per poll tick is free. The only case a retry genuinely costs anything is a
+    real, unreachable-network failure without `HF_HUB_OFFLINE` set, and there the cost is exactly
+    what `lode-w5nr` already bounds it to (`settings.hf_probe_timeout_s`, 5.0s default) — once per
+    poll tick with pending embed work, not once per job, self-healing within one
+    `--loop`/`--wait` interval instead of needing a restart.
+  - **Test proven non-vacuous the way this area's own history demands** (lode-dj6m, lode-r4r2,
+    and this ticket's own description each name the same trap): a stub that *raises* is swallowed
+    by `_embedder_model_revision`'s `except Exception: return None`, so every new test here counts
+    calls instead. `tests/test_embedding.py` pins `reset_revision_probe()` in isolation — one test
+    proves a failed probe is retried and the healed result then latches again, a second proves a
+    successful probe is untouched by a reset (probe count stays 1). `tests/test_worker.py` pins the
+    `drain()`-level integration — two `drain()` calls against the *same* embedder (mirroring
+    `cli.py`'s `work` command holding one embedder across every poll pass) prove a first-call
+    failure is retried on the second call, and a mirror test proves a first-call success is never
+    reprobed on the second.
+  - **The live record moved.** `docs/storage.md`'s async work-queue section (not this dated log)
+    now describes the fixed, self-healing behavior instead of the unfixed latch — per this file's
+    own preamble routing rule. `FastEmbedEmbedder.model_revision()`'s and `warm()`'s docstrings
+    (`embedding.py`) and `drain()`'s own docstring (`worker.py`) are corrected in place; the module
+    docstring narrative is not duplicated a further time here.
 
 - **2026-07-28/29 (lode-yrtu) — HUMAN DECISION: who owns machine-local worktree-leak detection —
   widen `/land`'s existing Section 4 sweep, not a new entry point and not `/sweep`.** Discovered

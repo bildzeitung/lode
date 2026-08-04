@@ -948,11 +948,16 @@ def drain(
     (``--loop`` or ``--wait``) pays once per process. The mechanism, and why a
     test-injected ``embed`` stub never sees it, is commented at the swap below.
 
-    The trade, both halves accepted (``docs/decisions.md``, lode-j5r2): a
-    long-lived embedder keeps the ONNX model resident, and latches its *first*
-    ``model_revision()`` result — failures included — for its whole lifetime, so
-    a single failed probe stamps ``model_revision = NULL`` on every version
-    indexed for the rest of that process, not just the job that hit it.
+    The trade (``docs/decisions.md``, lode-j5r2): a long-lived embedder keeps
+    the ONNX model resident for the whole process — intended, and unchanged.
+    Its ``model_revision()`` result also latches, but only a SUCCESSFUL probe
+    stays cached for the process; a FAILED one is retried once per ``drain()``
+    call (once per poll tick, never once per job) via
+    :meth:`~lode.embedding.FastEmbedEmbedder.reset_revision_probe`, called
+    just above — so a single transient probe failure self-heals within one
+    ``--loop``/``--wait`` interval instead of stamping ``model_revision =
+    NULL`` on every version indexed for the rest of the process (lode-fxse;
+    the accepted-but-then-fixed half of lode-j5r2's own trade).
 
     Returns the total number of jobs claimed and run by the **main loop**
     (including failures and dead-letters). Batch pre-step and reclaim activity
@@ -1012,6 +1017,24 @@ def drain(
             from lode.embedding import FastEmbedEmbedder
 
             embedder = FastEmbedEmbedder(settings)
+        else:
+            # Retry a FAILED HF revision probe once per drain() call -- once
+            # per poll tick of a --loop/--wait session, not once per job --
+            # so a single failed probe no longer latches model_revision =
+            # NULL for the shared embedder's entire process lifetime
+            # (lode-fxse; the accepted-but-unfixed half of lode-j5r2's own
+            # trade, docs/decisions.md). A no-op for a freshly constructed
+            # embedder (nothing has probed it yet) and for a SUCCESSFUL prior
+            # probe -- FastEmbedEmbedder.reset_revision_probe() itself decides
+            # that, deliberately keeping worker.py blind to the embedder's
+            # internal probe state (never reach into `_revision_probed` here).
+            # Duck-typed, not required: a test stub with no
+            # reset_revision_probe() (most of them -- see
+            # conftest._OfflineQueryEmbedder) is silently unaffected, exactly
+            # like _embedder_model_revision's own model_revision() duck-type.
+            reset_probe = getattr(embedder, "reset_revision_probe", None)
+            if reset_probe is not None:
+                reset_probe()
         run_registry = dict(registry)
         run_registry["embed"] = functools.partial(_embed_handler, embedder=embedder)
 

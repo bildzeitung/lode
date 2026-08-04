@@ -251,12 +251,15 @@ class FastEmbedEmbedder:
         Double-checked locking on the same :attr:`_load_lock` as the model load
         keeps this thread-safe under the same concurrent-caller scenario
         :meth:`_load`'s guard exists for (lode-0wj.4), with the same "only the
-        first caller pays" amortization -- the result is cached in
-        :attr:`_revision` for this instance's lifetime; a fresh probe on every
-        call would otherwise double the network round trip for no benefit, since
-        this instance's model_name can't change mid-lifetime. Note the probe is
-        taken *after* :meth:`_load` returns, so the lock is never held across
-        both the ONNX load and the network call, and a concurrent
+        first caller pays" amortization -- a SUCCESSFUL result is cached in
+        :attr:`_revision` for the rest of this instance's lifetime (a fresh
+        probe on every call would otherwise double the network round trip for
+        no benefit, since this instance's model_name can't change mid-lifetime);
+        a FAILED probe is cached too, but only until :meth:`reset_revision_probe`
+        next re-arms it -- by default nothing calls that method but
+        :func:`lode.worker.drain`, once per poll tick (lode-fxse).
+        Note the probe is taken *after* :meth:`_load` returns, so the lock is
+        never held across both the ONNX load and the network call, and a concurrent
         :meth:`embed_query` takes :meth:`_load`'s lock-free fast path rather than
         blocking behind the probe. ``None`` if the probe could not judge (a
         ``config.toml`` override outside the pinned identity set, or any
@@ -277,6 +280,50 @@ class FastEmbedEmbedder:
                     )
                     self._revision_probed = True
         return self._revision
+
+    def reset_revision_probe(self) -> None:
+        """Re-arm a previously FAILED probe so the next :meth:`model_revision` call retries it.
+
+        A no-op if the cached result is already a real revision — this only
+        clears :attr:`_revision_probed` when :attr:`_revision` is still
+        ``None``, i.e. the one prior probe (if any) failed to resolve
+        anything. A successful probe stays cached, exactly as before this
+        method existed: this is a *retry*, not an unconditional cache-bust.
+
+        Exists for exactly one caller: :func:`lode.worker.drain`, which
+        invokes it once per call — once per poll tick of a ``lode work
+        --loop``/``--wait`` session, not once per job — so a single failed
+        probe no longer latches ``model_revision = NULL`` for a shared
+        instance's entire *process* lifetime (``lode-fxse``). That exposure
+        was the accepted-but-unfixed half of ``lode-j5r2``, which first made
+        one :class:`FastEmbedEmbedder` live for a whole ``lode work`` run
+        rather than one job: the per-job latch this method re-arms was
+        written when re-probing on the next job cost nothing extra, and
+        became a session-wide trap once "next job" became "next process
+        restart".
+
+        **Why "failed" and "deliberately offline" can share one check safely**,
+        even though :func:`resolve_model_revision` cannot (yet) tell them
+        apart — the rejected, bigger option (c) in ``lode-fxse``; see
+        ``docs/decisions.md``. Both outcomes cache as ``None``, so this method
+        re-arms either alike. For a deliberately offline installation
+        (``HF_HUB_OFFLINE`` set, or an out-of-pinned-set
+        :func:`lode.config.model_cache_identity`), :func:`resolve_model_revision`
+        short-circuits *before* touching ``huggingface_hub`` at all, so
+        re-arming it costs nothing beyond a cheap local check on next probe —
+        never a live network call. Only a probe that would otherwise make a
+        real, ``settings.hf_probe_timeout_s``-bounded network round trip pays
+        anything for the retry, and at most once per poll tick with pending
+        embed work, never once per job.
+
+        Thread-safe the same way :meth:`model_revision` and :meth:`_load` are
+        (lode-0wj.4): guarded on :attr:`_load_lock`, so this can never race a
+        concurrent probe into leaving :attr:`_revision`/:attr:`_revision_probed`
+        inconsistent with each other.
+        """
+        with self._load_lock:
+            if self._revision_probed and self._revision is None:
+                self._revision_probed = False
 
     def warm(self) -> None:
         """Force the weights download/load now, ahead of any embed call.
@@ -314,7 +361,11 @@ class FastEmbedEmbedder:
         paid N probes and N ONNX loads. Who shares an instance is the caller's
         call, and ``lode work`` now holds one for its whole run
         (:func:`lode.worker.drain`) -- so the per-process cost described above
-        is what indexing actually pays.
+        is what indexing actually pays -- for a probe that RESOLVES, at least.
+        A probe that FAILS gets a fresh attempt on the next poll tick with
+        pending embed work rather than staying ``None`` for the rest of the
+        process (:meth:`reset_revision_probe`, ``lode-fxse``); see there for
+        why retrying costs nothing extra in the deliberately-offline case.
         """
         self._load()
 
