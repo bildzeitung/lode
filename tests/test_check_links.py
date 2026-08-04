@@ -198,12 +198,10 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
     assert len(errors) == 1
 
 
-#: Assembled at runtime rather than written as a contiguous literal -- if
-#: this test module's own SOURCE spelled out a bare docs-dir-slash-anchor
-#: string, it would itself become a hit when check_links.py's real-repo
-#: self-test (below) walks tests/ as a tracked file outside SCAN_DIRS
-#: (lode-v10i's own new mechanism). Splitting the literal keeps this test
-#: file from citing itself.
+#: Split so this module's own source never spells out a bare
+#: docs-dir-slash-anchor string -- the real-repo self-test below walks tests/
+#: as a tracked file outside SCAN_DIRS, so a contiguous literal here would
+#: make this file cite itself, and its fabricated anchors would fail the gate.
 _DOCS = "doc" + "s"
 
 
@@ -268,36 +266,87 @@ class TestBareDocAnchorRefs:
 
         assert check(tmp_path) == []
 
-    def test_reference_inside_scan_dirs_is_not_double_scanned_by_bare_pass(
-        self, tmp_path
-    ):
-        """A SCAN_DIRS file's own bare-text mention of a docs/ anchor (e.g.
-        prose, not a markdown link) is not something the bare pass needs to
-        check independently -- it's outside this pass's remit either way,
-        confirming the two passes don't produce duplicate/contradictory
-        errors for the same file."""
+    def test_scan_dirs_files_are_excluded_from_the_bare_pass(self, tmp_path):
+        """The two passes must not both claim the same file. Asserted on the
+        pass boundary itself rather than on `check() == []`, which would hold
+        under any implementation (a plain-prose mention matches no `_LINK_RE`
+        either) and so could not detect double-scanning."""
         _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")
+        _write(tmp_path, "README.md", "# R\n")
         _git_init(tmp_path)
 
-        # The bare-text mention inside a SCAN_DIRS file is not walked by the
-        # bare pass (SCAN_DIRS is excluded from _tracked_other_files), and
-        # the full markdown-link walk only matches `[text](target)` syntax,
-        # so a plain-prose mention like this produces no error either way.
+        walked = check_links._tracked_other_files(tmp_path)
+
+        assert tmp_path / f"{_DOCS}/a.md" not in walked
+        assert tmp_path / "README.md" in walked
         assert check(tmp_path) == []
 
-    def test_real_repo_workflow_and_script_doc_citations_pass_the_gate(self):
-        """The acceptance criterion: every real docs/ anchor citation from
-        .github/workflows/*.yml and scripts/*.sh in this repo resolves."""
-        errors = check(REPO_ROOT)
-
-        assert errors == [], "broken doc citation(s):\n" + "\n".join(
-            str(e) for e in errors
+    def test_url_into_another_repos_docs_is_not_resolved_locally(self, tmp_path):
+        """A URL into ANOTHER repo's docs/ contains the literal
+        `docs/<file>.md#<anchor>` substring but is not a citation into OUR
+        docs/; the regex's root-relative lookbehind is what rejects it."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        _write(
+            tmp_path,
+            "README.md",
+            f"See https://github.com/other/repo/blob/main/{_DOCS}"
+            "/release.md#upstream-only for background.\n",
         )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_anchor_inside_a_fenced_block_in_a_non_scan_dir_markdown_is_example(
+        self, tmp_path
+    ):
+        """README.md lives outside SCAN_DIRS, so the bare pass walks it -- but
+        an anchor inside a ``` fence there is an example, not a citation. The
+        identical text OUTSIDE the fence still fails, which is what keeps this
+        test from passing vacuously."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        fenced = f"# Example\n\n```\n{_DOCS}/release.md#not-a-real-anchor\n```\n"
+        _write(tmp_path, "README.md", fenced)
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+        _write(
+            tmp_path, "README.md", fenced + f"\n{_DOCS}/release.md#not-a-real-anchor\n"
+        )
+        _git_init(tmp_path)
+
+        assert len(check(tmp_path)) == 1
+
+    def test_fence_rule_is_markdown_only_so_a_py_docstring_fence_hides_nothing(
+        self, tmp_path
+    ):
+        """The fence rule must NOT leak to non-markdown sources. A Python
+        docstring can legitimately open a ``` block (a fence-shaped line at
+        the start of a line, which is what _FENCE_RE actually matches) and
+        still cite a doc anchor after it -- noxfile.py and src/lode/cli.py
+        both carry real docstring citations today. Skipping fenced lines
+        there would silently DROP a real citation -- and worse, an ODD
+        number of fence-shaped lines in a non-markdown file would leave
+        the walker "inside a fence" for the whole remainder of the file,
+        disabling the gate for everything after it with nothing to
+        report. Silent under-checking is the exact failure this gate
+        exists to prevent."""
+        _write(tmp_path, f"{_DOCS}/release.md", "# R\n\n## Real\n")
+        _write(
+            tmp_path,
+            "noxfile.py",
+            f'"""Doc.\n\n```\nSee {_DOCS}/release.md#no-such-anchor.\n```\n"""\n',
+        )
+        _git_init(tmp_path)
+
+        assert len(check(tmp_path)) == 1
 
 
-def test_real_repo_docs_and_dot_claude_pass_the_gate():
-    """The acceptance criterion: the gate is green against docs/ and .claude/
-    as they stand once this ticket lands."""
+def test_real_repo_passes_the_gate():
+    """The acceptance criterion, for both passes at once: every relative
+    markdown link in docs/ and .claude/ resolves, AND every bare docs/ anchor
+    citation from anywhere else in the tree (.github/workflows/, scripts/,
+    src/, noxfile.py, README.md, ...) resolves."""
     errors = check(REPO_ROOT)
 
     assert errors == [], "broken link(s):\n" + "\n".join(str(e) for e in errors)
