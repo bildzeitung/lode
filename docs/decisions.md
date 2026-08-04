@@ -2176,63 +2176,39 @@ while erasing it here would lose the record of what was believed, and when.
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
   (correctness — a non-isolated dispatch could dirty the lander's tree) but rested the *worktree-GC*
-  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified
-  after this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably
-  start a dispatched agent at `origin/trunk`
-  HEAD — it has handed a builder and a `code-reviewer` a **recycled** worktree still checked out on a
-  *previous* ticket's build branch. `land-review` gets the identical dispatch mechanism, so a recycled
-  worktree handed to it starts with `HEAD` already diverged from `origin/trunk`, before `land-review` ever
-  runs — "never commits" only proves no *further* divergence, not a clean start. The existing
-  worktree-GC backstop's ancestor predicate (lode-h1vn / lode-amif) therefore fails for it, and it
-  leaks past every pass, indefinitely — the same symptom class lode-nt98 fixed for the builder and the
-  reviewer, but lode-nt98 explicitly scoped `land-review` **out** (its correctness exposure is nil, so
-  it read as no exposure at all — that conflation is exactly what lode-qv5t was filed to unpick).
+  claim ("HEAD never diverges … qualifies by construction") on an assumption lode-nt98 falsified after
+  this entry was written: the harness's `isolation: "worktree"` hand-off does not reliably start a
+  dispatched agent at `origin/trunk` HEAD, and `land-review` shares that dispatch mechanism, so a
+  recycled worktree handed to it starts already diverged before `land-review` ever runs and leaks past
+  the existing worktree-GC backstop indefinitely — even though `land-review`'s **correctness** exposure
+  stays nil throughout (it only ever fetches and diffs by ref; this is purely a worktree-leak fix, kept
+  distinct from the correctness question in the canonical account).
+
   **Fix, mirroring lode-nt98 exactly:** `land-review.md`'s frontmatter role now carries the identical
-  guard (`git merge-base --is-ancestor HEAD origin/trunk`, never bare local `trunk` — lode-isl3,
-  asserted before any fetch/diff work; on failure,
-  tag a `rescue/recycled-<sha>` branch — the rewound ref belongs to another ticket — then `git reset
-  --hard origin/trunk && git clean -fd`, only ever inside `.claude/worktrees/`). Once that guard has run, the
-  worktree's `HEAD` **is** an ancestor of `trunk` either way, so the existing backstop sweep reclaims
-  it under its unmodified predicate — Section 4 itself needed no change, and neither did the
-  worktree-GC backstop's predicate; the fix lives entirely at the dispatch-time guard, same layer as
-  lode-nt98's fix for the other two roles. **This closes the ancestry axis only, and knowingly so.**
-  The guard cannot detect a worktree recycled onto a `land/<other-id>` that has since landed (its HEAD
-  is already an ancestor of `origin/trunk` — tracked as lode-3v1p; observed live during lode-nt98's and
-  lode-qv5t's own reviews). On the ancestry axis that is
-  self-cancelling: what the guard misses already satisfies the sweep's reclaim predicate. On the
-  **dirt** axis it is not — the skipped remediation means `git clean -fd` never runs, the recycled
-  worktree's untracked leftovers survive, and the lode-9hgu dirty-tree guard keeps the worktree, so it
-  leaks for a different reason. Left open as **lode-3v1p** rather than absorbed here, because the fix
-  is a genuine choice (clean unconditionally / have the sweep judge recycling-dirt / assert clean after
-  the guard) and picking one belongs on its own ticket. **The two halves stay distinct, deliberately:**
-  `land-review`'s correctness exposure to a recycled worktree was, and remains, nil — it never reads
-  anything from the checked-out state, recycled or not, because it only ever fetches and diffs by ref.
-  This is purely a worktree-leak fix. Documented in
-  [`land-review.md`](../.claude/agents/land-review.md),
-  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate), and
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98)
-  / [Isolating `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387).
+  guard the builder and reviewer already carry, closing the **ancestry** axis only. Why lode-nt98 had
+  not already covered it: it explicitly scoped `land-review` **out** — that same nil exposure read, at
+  the time, as *no* exposure at all, and unpicking that conflation is what lode-qv5t was filed for.
+  Left open on the
+  **dirt** axis — a worktree recycled onto an already-landed `land/<other-id>` still slips past
+  undetected — tracked separately as **lode-3v1p**, below.
+
+  Guard predicate, remediation, and full mechanism are canonical in [agents-workflow.md —
+  Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98) / [Isolating
+  `land-review` dispatches](agents-workflow.md#isolating-land-review-dispatches-lode-g387); not
+  re-derived here. Also documented in [`land-review.md`](../.claude/agents/land-review.md) and
+  [`land/SKILL.md`](../.claude/skills/land/SKILL.md#2c-run-the-semantic-gate).
 - **lode-3v1p (2026-07-20) closes the dirt-axis residual left open above: `git clean -fd` now runs
-  unconditionally at all three recycled-worktree guard sites, not just inside the failed-ancestor-check
-  branch.** The gap: `merge-base --is-ancestor HEAD origin/trunk` cannot recognize a worktree recycled onto a
-  `land/<other-id>` that has *since landed* — its `HEAD` is, by then, genuinely an ancestor of `origin/trunk`,
-  so the check passes exactly as it would for a freshly branched worktree, and the remediation
-  (`git branch rescue/… && git reset --hard origin/trunk && git clean -fd`) never runs. That's harmless on the
-  **ancestry** axis (what the guard misses already satisfies `/land`'s reclaim predicate — the two
-  cancel), but not on the **dirt** axis: the recycled worktree's untracked leftovers (from whatever the
-  prior ticket's build/review left behind, uncommitted) survive, and the lode-9hgu dirty-tree guard in
-  `/land`'s Section 4 backstop sweep *keeps* any worktree that isn't clean, regardless of ancestry or
-  lock state — so the worktree leaks anyway, and (for `coding.md`/`code-reviewer.md` specifically) the
-  same leftovers can pollute the `git status --short` clean-tree assertions and the `nox` run those
-  roles gate on.
+  unconditionally at every recycled-worktree guard site, not just inside the failed-ancestor-check
+  branch.** The gap and why it's harmless on the ancestry axis but not the dirt axis are covered in the
+  canonical account — [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98); not re-derived here.
 
   **Three options were on the table; picked the first as the simplest thing that actually closes the
   gap:**
   1. **Run the existing remediation's cleanup arm unconditionally** — move `git clean -fd` out of the
      `if ! merge-base --is-ancestor …` block so it runs every time the guard is reached, pass or fail,
      still gated by the same `.claude/worktrees/`-only `case` that already wraps the destructive branch.
-     **Chosen.** It is a one-line move at each of the four call sites (`coding.md`'s fresh-build and
-     rebase-pickup instances, `code-reviewer.md`, `land-review.md`), touches nothing outside the guard
+     **Chosen.** It is a one-line move at each guard call site, touches nothing outside the guard
      itself, and needs no new precondition: `git clean -fd` (no `-x`) never removes `.gitignore`d build
      state (`venv/`, `.nox/`, `__pycache__/`), so on a genuinely fresh worktree — the overwhelming
      common case — it is a pure no-op; on an undetected recycle it removes exactly the leftover dirt.
@@ -2259,49 +2235,23 @@ while erasing it here would lose the record of what was believed, and when.
      ancestor-check-*passed* path to be treated more cautiously than dirt discovered via the
      ancestor-check-*failed* path, since both are the identical class of pre-cycle scratch.
 
-  **The two axes (ancestry, dirt) stay documented as distinct even though one fix now closes both** —
-  `land-review`'s correctness exposure to a recycled worktree remains nil regardless (it never checks
-  anything out), and this closes a worktree-**leak**, never a correctness, gap. Documented at all four
-  guard sites — [`coding.md`](../.claude/agents/coding.md),
-  [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
-  [`land-review.md`](../.claude/agents/land-review.md) — and in
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
+  Documented at every guard site and in [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
 
 - **2026-07-21 (lode-ag7j) — CC 2.1.216 shipped three worktree fixes; recorded as a data point for
-  this thread, guards KEPT unchanged.** Verified live on 2026-07-20: the main session was running
-  2.1.216, and `.claude/settings.json` still carried the undocumented `worktree.baseRef: "head"`,
-  still the un-ruled-out suspected root cause from the `baseRef` investigation
-  (`agents-workflow.md#baseref-investigation-lode-r7ow`). The three changelog entries: (1) fixed
-  worktree-isolated subagents redirecting git into the shared checkout via `git -C`, `--git-dir`, or
-  `GIT_DIR`/`GIT_WORK_TREE`; (2) fixed worktree sessions landing in another project's leftover
-  worktree when the working directory did not match the selected project; (3) fixed background
-  sessions whose worktree has no git repository being undeletable.
+  this thread, guards KEPT unchanged.** Verified live on 2026-07-20 (main session on 2.1.216;
+  `.claude/settings.json` still carried the undocumented `worktree.baseRef: "head"` at that point).
+  None of the three changelog fixes is a confirmed fix for lode-nt98 — the tempting candidate ("land in
+  another project's leftover worktree") is framed cross-project, whereas lode-nt98 is same-project,
+  same-repo. **Verdict: keep every guard, unchanged** — cheap defensive assertions against a
+  catastrophic and irreversible failure mode, and "probably fixed upstream" is not grounds to retire
+  on. Sets up a falsification test: watch whether the guard ever fires again on `>= 2.1.216`; if it
+  stops firing over a sustained window, file a follow-up to retire the lode-nt98 guard family and
+  revisit `baseRef`.
 
-  **None is a confirmed fix for lode-nt98.** Fix #2 is the tempting candidate but is framed
-  **cross-project** ("another project's leftover worktree… working directory did not match the
-  selected project"), whereas lode-nt98 is **same-project, same-repo** (the `lode-eshl` builder got
-  `lode-7abi`'s own leftover worktree, not another project's) — the underlying "land in a pooled
-  leftover worktree" mechanism is plausibly shared, but the changelog framing does not obviously
-  cover lode's single-project fleet, so this is not treated as a confirmed fix. Fix #1 only touches
-  the retired `lode-k5e` `git -C` architecture — current design already fetches branches into the
-  agent's own launch worktree, so this changes nothing operationally here. Fix #3 does not touch
-  lode's guards (lode worktrees are always inside a git repo).
-
-  **Verdict: keep every guard.** They are cheap defensive assertions against a catastrophic and
-  irreversible failure mode (unreviewed code riding into `trunk` on the wrong ticket's `land/<id>`);
-  "probably fixed upstream" is not grounds to retire on. No guard is removed or weakened, and
-  `worktree.baseRef: "head"` is untouched — the baseRef question is tracked in its own thread (the
-  human decision recorded at `lode-r7ow`, its application at `lode-jzbz`), not resolved here.
-
-  **Falsification test this sets up:** with the fleet now on (or moving onto) `>= 2.1.216`, watch
-  whether the recycled-worktree guard ever fires again — any `rescue/recycled-<sha>` branch, any
-  guard-triggered `git reset --hard origin/trunk` — across many `/code` and `/land` passes. If it **stops**
-  firing over a sustained window, that's evidence an upstream fix (candidate: #2) addressed the
-  mechanism despite the cross-project framing, and a follow-up should retire the lode-nt98 guard
-  family and revisit `baseRef`. If it **keeps** firing, 2.1.216 did not address lode-nt98's
-  same-project case, the `baseRef` hypothesis stands, and the guards stay. Documented alongside the
-  `baseRef` investigation and the guard's own section in
-  [agents-workflow.md — Recycled-worktree guard](agents-workflow.md#recycled-worktree-guard-lode-nt98).
+  Full honest-mapping analysis (fix by fix), the verdict's reasoning, and the falsification test are
+  canonical in [agents-workflow.md — Recycled-worktree
+  guard](agents-workflow.md#recycled-worktree-guard-lode-nt98); not re-derived here.
 
 - **Markdown editing — open items parked in [editing.md](editing.md).** `docs/editing.md`
   (`lode-ev5j`) records the shipped markdown-editing surface but leaves the following unresolved,
