@@ -837,6 +837,17 @@ def _batch_submit_enrich(
     enrich jobs or all gated out).
 
     ``_client`` is injectable for tests (an ``LLMProvider``).
+
+    **What sits outside this function's own try (lode-2mnj).** The internal
+    try below opens at the :func:`lode.enrich.submit_enrich_batch` call — the
+    pending-jobs SELECT, the deferred imports, and the ENTIRE pre-claim CAS
+    loop above it are not covered by anything this function catches. A
+    failure there (e.g. ``sqlite3.OperationalError`` from the CAS loop
+    racing an interactive immediate-enrich claim past the busy_timeout)
+    propagates straight to :func:`drain`, which now catches it with the same
+    bare ``Exception`` its collect-side pre-step uses (lode-knnt precedent),
+    so it cannot starve the credential-free ``embed`` work. ``docs/storage.md``
+    "Transient vs. permanent job failures" owns the full rationale.
     """
     flush_size = settings.enrichment_batch_flush_size
     rows = conn.execute(
@@ -1019,19 +1030,24 @@ def drain(
     But it raises **last**, not on the spot: the error is stashed and
     re-raised only after the reclaim, the retry reset, and the main claim/run
     loop have all run, so the credential-free ``embed`` jobs are never
-    starved by a missing key or by a batch wedged on bad data. The collect
-    pre-step's own ``try`` (below) in fact catches wider than this named
-    taxonomy — see "Per-handle isolation" next for why that is deliberate
-    and still bounded.
+    starved by a missing key or by a batch wedged on bad data. Both pre-steps'
+    own ``try`` (below) in fact catch wider than this named taxonomy — see
+    "Per-handle isolation" next for why that is deliberate and still bounded.
 
-    **Per-handle isolation + independent pre-steps (lode-knnt).** One stuck
-    ``batch_handle`` no longer stops any *other* handle in the same pass
-    (:func:`_batch_collect_enrich` isolates each one; see its docstring), and
-    the two pre-steps below now run under their **own** ``try`` each rather
-    than sharing one, so a collect-side failure no longer skips the submit
-    step. ``docs/storage.md`` "Transient vs. permanent job failures" owns the
-    rationale, including why the collect arm's catch is deliberately wider
-    than the taxonomy named above.
+    **Per-handle isolation + independent pre-steps (lode-knnt, lode-2mnj).**
+    One stuck ``batch_handle`` no longer stops any *other* handle in the same
+    pass (:func:`_batch_collect_enrich` isolates each one; see its
+    docstring), and the two pre-steps below now run under their **own**
+    ``try`` each rather than sharing one, so a collect-side failure no longer
+    skips the submit step. Both catches are bare ``Exception`` (lode-2mnj
+    widened the submit arm to match collect's lode-knnt fix) — the
+    pending-jobs SELECT, deferred imports, and pre-claim CAS loop ahead of
+    :func:`_batch_submit_enrich`'s own try can all raise something
+    unclassified (e.g. a ``sqlite3.OperationalError`` from the CAS loop
+    racing an interactive immediate-enrich claim), and a narrow catch there
+    let exactly that escape uncaught and abort ``drain`` before the
+    credential-free embed work ran. ``docs/storage.md`` "Transient vs.
+    permanent job failures" owns the rationale.
 
     Neither of those makes a stuck batch un-stuck — there is still no failure
     budget or dead-letter path for one; it stays wedged until a human
@@ -1100,15 +1116,6 @@ def drain(
         run_registry = dict(registry)
         run_registry["embed"] = functools.partial(_embed_handler, embedder=embedder)
 
-    # Unconditional -- the `except` header below needs the classes on every
-    # drain -- and cheap only because neither lode.auth nor lode.llm_provider
-    # imports the Anthropic/OpenAI SDKs at module level (lode-4q97).
-    # LLMProviderError alongside AuthError: lode-5zqa widening, see the "Batch
-    # pre-steps" comment block below. (LLMAuthError subclasses it, so this
-    # still covers lode-568v.3's credential case.)
-    from lode.auth import AuthError
-    from lode.llm_provider import LLMProviderError
-
     # Batch pre-steps: collect in-flight batches, then submit pending enrich jobs.
     #
     # A permanent, user-actionable failure here (AuthError — docs/storage.md
@@ -1134,12 +1141,18 @@ def drain(
     # longer also skips the submit step. `permanent` keeps whichever raised
     # FIRST; a second one is dropped rather than overwriting it.
     #
-    # The two catches are deliberately asymmetric -- collect is bare
-    # `Exception`, submit is the narrow tuple. WHY (per-handle isolation,
-    # what can reach each arm, why narrowing collect would re-break lode-5zqa)
-    # is owned by docs/storage.md "Transient vs. permanent job failures";
-    # _batch_collect_enrich's own docstring covers the loop side. Do not
-    # narrow the collect arm without reading those.
+    # Both catches are bare `Exception` (lode-2mnj widened the submit arm to
+    # match collect's lode-knnt fix). The invariant drain needs is not
+    # type-scoped at all: NO pre-step may abort the pass before the
+    # credential-free embed work runs. `_batch_submit_enrich` already handles
+    # every failure it can classify internally (AuthError/LLMAuthError: reset
+    # + re-raise; any other API failure: revert + return 0, no raise) -- so
+    # anything reaching THIS try is by definition unclassified (e.g. the
+    # pending-jobs SELECT, the deferred imports, or the pre-claim CAS loop,
+    # all of which sit outside `_batch_submit_enrich`'s own try), and
+    # stash-and-re-raise is strictly better than letting it abort the pass.
+    # WHY is owned by docs/storage.md "Transient vs. permanent job failures";
+    # _batch_collect_enrich's own docstring covers the loop side.
     #
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
@@ -1167,7 +1180,7 @@ def drain(
             "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
-    except (AuthError, LLMProviderError) as exc:
+    except Exception as exc:
         if permanent is None:
             permanent = exc
 
