@@ -65,7 +65,7 @@ non-goal above) so later blocks can read them back instead of relying on shell s
 survive. Fresh per pass, so no stale queue data from an earlier tick can leak into this one:
 
 ```bash
-rtk bd dolt pull
+bd dolt pull
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"
 rm -rf "$SWEEP_TMP" && mkdir -p "$SWEEP_TMP"
 ```
@@ -78,11 +78,11 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
+ESCALATED=$(bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
   | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)\t\(.status)"')
 printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
-HUMAN=$(rtk bd human list --status open --json \
+HUMAN=$(bd human list --status open --json \
   | jq -r '(. // []) | .[] | "\(.id)\thuman\t\(.title)"')
 printf '%s' "$HUMAN" > "$SWEEP_TMP/human"
 ```
@@ -140,7 +140,7 @@ CLOSABLE=""
 # `title`, so re-fetching it per epic with a second `bd show` would be a wasted
 # round-trip against derivable state.
 while IFS=$'\t' read -r e TITLE; do
-  [ "$(rtk scripts/epic-children-closed.sh "$e")" = "true" ] || continue
+  [ "$(scripts/epic-children-closed.sh "$e")" = "true" ] || continue
   ROW=$(printf '%s\tepic-ready-to-close\t%s' "$e" "$TITLE")
   # The newline MUST sit outside the command substitution above: `$(...)` strips
   # trailing newlines, so building the row as `printf '...\n'` would silently drop
@@ -148,7 +148,7 @@ while IFS=$'\t' read -r e TITLE; do
   # epics, which is why it reads fine in a one-epic spot check).
   CLOSABLE="${CLOSABLE}${ROW}
 "
-done < <(rtk bd list --type=epic --label epic-audited --status open --limit 0 --json \
+done < <(bd list --type=epic --label epic-audited --status open --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 printf '%s' "$CLOSABLE" > "$SWEEP_TMP/closable"
 ```
@@ -163,7 +163,7 @@ design and no other loop leg lists them, so once parked they otherwise vanish fr
 surface. I list them for visibility only:
 
 ```bash
-DEFERRED=$(rtk bd list --status deferred --limit 0 --json \
+DEFERRED=$(bd list --status deferred --limit 0 --json \
   | jq -r '(. // []) | .[] | [.id, .title] | @tsv')
 ```
 
@@ -235,7 +235,7 @@ scratchpad state file was explicitly rejected during design because it re-notifi
 from a second machine. The digest issue is found by a **reserved label**, not a remembered ID:
 
 ```bash
-DIGEST_ROWS=$(rtk bd list --label sweep-digest --all --limit 0 --json)
+DIGEST_ROWS=$(bd list --label sweep-digest --all --limit 0 --json)
 N=$(echo "$DIGEST_ROWS" | jq '(. // []) | length')   # `(. // [])` for the same null-serializes-empty reason as §1
 ```
 
@@ -254,9 +254,9 @@ oversight a later edit should "tidy" away.
   of `bd ready`" convention the coding loop relies on for `ready-for-code-review`/`ready-for-land`):
 
   ```bash
-  DIGEST_ID=$(rtk bd create --type=chore --title="Human-decision digest (auto-maintained by /sweep — do not build)" \
+  DIGEST_ID=$(bd create --type=chore --title="Human-decision digest (auto-maintained by /sweep — do not build)" \
     --label=sweep-digest --description="(bootstrapping — /sweep fills this in on this same pass)" --silent)
-  rtk bd update "$DIGEST_ID" --claim
+  bd update "$DIGEST_ID" --claim
   ```
 - **`N == 1`** — steady state. Nothing to do here — §5 and §6 each re-derive `$DIGEST_ID` themselves
   via `scripts/sweep-digest-id.sh`, rather than reusing this block's own `$DIGEST_ROWS`/`$N`, since
@@ -278,13 +278,13 @@ SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocat
 # The script refuses unless exactly one digest exists; a bare `.[0].id` would silently pick the
 # first of several duplicates (§4's `N > 1` anomaly) or yield "null" when none exists (§4's
 # `N == 0`). Quote its stderr rather than re-deriving a cause of my own.
-DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
 CURRENT="$(cat "$SWEEP_TMP/current")" || {
   echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
   exit 1
 }
 
-LAST_BODY=$(rtk bd show "$DIGEST_ID" --json | jq -r '.[0].description')
+LAST_BODY=$(bd show "$DIGEST_ID" --json | jq -r '.[0].description')
 LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
 CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
 
@@ -349,10 +349,10 @@ survives), so both are established here, not reused from an earlier one:
 ```bash
 # Same refusal as §5, and load-bearing for a stronger reason: this block WRITES. Under §4's
 # `N > 1` anomaly a bare `.[0].id` would overwrite whichever duplicate sorted first.
-DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
 BODY_FILE="$(mktemp)"
 # …write the digest body (format above) into "$BODY_FILE"…
-rtk bd update "$DIGEST_ID" --body-file "$BODY_FILE"
+bd update "$DIGEST_ID" --body-file "$BODY_FILE"
 ```
 
 ## 7. Notify (only when there is a new item to push)
@@ -370,13 +370,13 @@ cross-block state (re-deriving is cheap and deterministic; see this skill's own 
 ```bash
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
-DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+DIGEST_ID="$(scripts/sweep-digest-id.sh)" || exit 1
 CURRENT="$(cat "$SWEEP_TMP/current")" || {
   echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
   exit 1
 }
 
-LAST_BODY=$(rtk bd show "$DIGEST_ID" --json | jq -r '.[0].description')
+LAST_BODY=$(bd show "$DIGEST_ID" --json | jq -r '.[0].description')
 LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
 CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
 NEW_IDS=$(comm -13 <(printf '%s\n' "$LAST_IDS") <(printf '%s\n' "$CURRENT_IDS"))
@@ -427,7 +427,7 @@ report — never fail a pass over the notify channel.
 ## 8. Publish and report
 
 ```bash
-rtk scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
+scripts/bd-dolt-push.sh   # only if step 6 wrote the digest — publish over refs/dolt/data, durable cross-machine
 ```
 
 Report exactly one line, then the deferred section (§2a, always present), plus, when non-empty, the

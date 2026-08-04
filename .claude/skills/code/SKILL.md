@@ -63,8 +63,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> REPO_ROOT="$(rtk git rev-parse --show-toplevel)"
-> CODE_MAX_CONCURRENT_AGENTS="$(rtk "$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
+> REPO_ROOT="$(git rev-parse --show-toplevel)"
+> CODE_MAX_CONCURRENT_AGENTS="$("$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
 > ```
 >
 > The call is anchored to the repo root rather than resolved against the session's cwd, so *finding*
@@ -118,7 +118,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    label, so before resolving the requested task set, always check for stranded kick-backs:
 
    ```bash
-   rtk bd list --label needs-rebase --status in_progress --limit 0 --json
+   bd list --label needs-rebase --status in_progress --limit 0 --json
    ```
 
    **`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
@@ -197,9 +197,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    *all* local worktree GC (it discovers worktrees live off `git worktree list --porcelain`; the old
    per-ticket loop that keyed off `review_worktree` is gone).
 
-   Two details that are load-bearing, both verified against live `git` behaviour:
-   - **Plain `git`, not `rtk`** — `rtk` reformats `worktree list --porcelain`, which breaks the field
-     parse, the same way it did for `/land`'s own GC (lode-9j7).
+   One detail that is load-bearing, verified against live `git` behaviour:
    - **A single `--force`, never `-f -f`.** The harness *locks* a launch worktree while its agent runs
      (`locked claude agent <name> (pid …)`) and unlocks it on exit. A single `--force` therefore removes
      a finished agent's worktree but **refuses** a still-locked one — it fails safe. `-f -f` would
@@ -226,7 +224,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    (lode-t83). Check for it the same way as step 0:
 
    ```bash
-   rtk bd list --label ready-for-code-review --status in_progress --limit 0 --json
+   bd list --label ready-for-code-review --status in_progress --limit 0 --json
    ```
 
    **`--limit 0` is load-bearing, not noise — same reason as step 0's `needs-rebase` sweep above.**
@@ -238,7 +236,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    reviewable before dispatching:
 
    ```bash
-   rtk bd show <id> --json | jq -r '.[0].metadata.review_head'   # must be non-empty
+   bd show <id> --json | jq -r '.[0].metadata.review_head'   # must be non-empty
    ```
 
    If it's empty (this can only happen for a build-time escalation predating the coding.md fix for
@@ -291,7 +289,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > all, so a `human` ticket is indistinguishable from a buildable one unless you ask for the fields:
    >
    > ```bash
-   > rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+   > bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
    > ```
    >
    > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) `bd ready` is already
@@ -372,7 +370,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > from the orchestrator's own (repo-root) context **before** the Agent dispatch:
    >
    > ```bash
-   > rtk bd update <id> --claim     # sets in_progress + assignee; deterministic here, one controlled flow
+   > bd update <id> --claim     # sets in_progress + assignee; deterministic here, one controlled flow
    > ```
    >
    > This is the same local Dolt DB the builder sees, so the claim is visible to it immediately — no
@@ -411,8 +409,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    **actual** state in bd and on origin:
 
    ```bash
-   rtk bd show <id> --json | jq -r '.[0].labels'          # ready-for-code-review? land-escalated?
-   rtk git ls-remote origin refs/heads/land/<id>           # must resolve to a SHA
+   bd show <id> --json | jq -r '.[0].labels'          # ready-for-code-review? land-escalated?
+   git ls-remote origin refs/heads/land/<id>           # must resolve to a SHA
    ```
 
    Dispatch the reviewer **only** for a ticket where both checks pass. Otherwise read the labels before

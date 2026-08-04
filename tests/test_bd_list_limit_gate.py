@@ -29,7 +29,7 @@ against the REAL file content to prove the gate would have caught it.
 they are every place a `bd list` in this repo can actually be EXECUTED; each carries the
 reason it is in scope, and a test pins that the globs really reach it. The one worth
 arguing here is `.claude/agents/*.md`: a subagent definition is not a skill, but it
-carries 20+ fenced-bash lines invoking `bd` (`rtk bd show`, `rtk bd update`, ...), so a
+carries 20+ fenced-bash lines invoking `bd` (`bd show`, `bd update`, ...), so a
 `bd list` added there is exactly as operative as one in a SKILL.md -- scoping this gate
 to skills only would leave that whole surface unguarded, the same class of gap lode-200t
 itself was filed about and the same widening `lode-lv04` made to a sibling gate.
@@ -126,8 +126,8 @@ different subcommand this gate has no opinion on. `bd -C "$cwd" list` matches: `
 flag token, `"$cwd"` is consumed as that flag's value, and `list` is the next bare token.
 
 KNOWN LIMIT: the binary must be spelled literally. `"$BD" list` / `${BD} list` would not
-match. Nothing in this repo invokes bd through a variable (every site is a literal `bd`
-or `rtk bd`), and widening the regex to any word before `list` would drag in every
+match. Nothing in this repo invokes bd through a variable (every site is a literal
+`bd`), and widening the regex to any word before `list` would drag in every
 unrelated `... list` in the corpus -- so this stays a documented gap, not a fix.
 
 ## What counts as "has --limit": the SAME command, on the same line/span
@@ -492,40 +492,35 @@ def test_multiple_flags_before_list_still_match() -> None:
 
 
 def test_limit_present_on_line_is_not_a_violation() -> None:
-    assert _line_snippet("rtk bd list --label foo --limit 0 --json") is None
+    assert _line_snippet("bd list --label foo --limit 0 --json") is None
 
 
 def test_limit_absent_on_line_is_a_violation() -> None:
-    assert (
-        _line_snippet("rtk bd list --label foo --json")
-        == "rtk bd list --label foo --json"
-    )
+    assert _line_snippet("bd list --label foo --json") == "bd list --label foo --json"
 
 
 def test_limit_from_a_different_command_does_not_excuse_this_one() -> None:
     """The false negative a whole-line `--limit` search has: two commands on one line,
     only the second one guarded. Each `bd ... list` must carry its own flag."""
-    line = "rtk bd list --label a --json; rtk bd list --label b --limit 0 --json"
+    line = "bd list --label a --json; bd list --label b --limit 0 --json"
     assert _line_snippet(line) == line
     # ...and the mirror image, guarded command first.
-    line = "rtk bd list --label a --limit 0 --json; rtk bd list --label b --json"
+    line = "bd list --label a --limit 0 --json; bd list --label b --json"
     assert _line_snippet(line) == line
 
 
 def test_pipe_into_a_command_with_its_own_limit_flag_is_still_a_violation() -> None:
-    assert _line_snippet("rtk bd list --json | somecmd --limit 5") is not None
+    assert _line_snippet("bd list --json | somecmd --limit 5") is not None
 
 
 def test_pipeline_after_a_guarded_bd_list_is_clean() -> None:
     """The real corpus shape -- `bd list ... --limit 0 --json | jq ...` -- must not be
     broken by the segment split."""
-    assert (
-        _line_snippet("rtk bd list --all --limit 0 --json | jq -r '.[] | .id'") is None
-    )
+    assert _line_snippet("bd list --all --limit 0 --json | jq -r '.[] | .id'") is None
 
 
 def test_separator_inside_quotes_does_not_split_a_command() -> None:
-    assert _line_snippet('rtk bd list --label "a;b" --limit 0 --json') is None
+    assert _line_snippet('bd list --label "a;b" --limit 0 --json') is None
 
 
 def test_comment_line_is_never_a_violation() -> None:
@@ -536,12 +531,12 @@ def test_comment_line_is_never_a_violation() -> None:
 
 
 def test_fenced_block_without_limit_is_flagged() -> None:
-    markdown = "```bash\nrtk bd list --label foo --json\n```\n"
-    assert fenced_violations(markdown) == [("rtk bd list --label foo --json", -1)]
+    markdown = "```bash\nbd list --label foo --json\n```\n"
+    assert fenced_violations(markdown) == [("bd list --label foo --json", -1)]
 
 
 def test_fenced_block_with_limit_is_clean() -> None:
-    markdown = "```bash\nrtk bd list --label foo --limit 0 --json\n```\n"
+    markdown = "```bash\nbd list --label foo --limit 0 --json\n```\n"
     assert fenced_violations(markdown) == []
 
 
@@ -550,8 +545,8 @@ def test_blockquoted_fence_is_still_extracted() -> None:
     `_bash_blocks` unmarks them itself (lode-wroz), so nothing in THIS file is what
     makes this pass. Pinned here so a future change to the shared helper cannot
     silently take this gate's coverage with it."""
-    markdown = "> ```bash\n> rtk bd list --label foo --json\n> ```\n"
-    assert fenced_violations(markdown) == [("rtk bd list --label foo --json", -1)]
+    markdown = "> ```bash\n> bd list --label foo --json\n> ```\n"
+    assert fenced_violations(markdown) == [("bd list --label foo --json", -1)]
 
 
 def test_indented_fence_is_still_extracted() -> None:
@@ -559,8 +554,8 @@ def test_indented_fence_is_still_extracted() -> None:
     is NOT the blind spot lode-ovgs records for tests/test_land_lock.py's column-0
     `line.startswith("```")`. Pinned here so a future change to the shared helper
     cannot silently take this gate's coverage with it."""
-    markdown = "- bullet:\n\n  ```bash\n  rtk bd list --label foo --json\n  ```\n"
-    assert fenced_violations(markdown) == [("rtk bd list --label foo --json", -1)]
+    markdown = "- bullet:\n\n  ```bash\n  bd list --label foo --json\n  ```\n"
+    assert fenced_violations(markdown) == [("bd list --label foo --json", -1)]
 
 
 def test_fenced_block_comment_is_never_flagged() -> None:
@@ -571,7 +566,7 @@ def test_fenced_block_comment_is_never_flagged() -> None:
     markdown = (
         "```bash\n"
         "# `bd list --json` rows already carry title\n"
-        "rtk bd list --label foo --limit 0 --json\n"
+        "bd list --label foo --limit 0 --json\n"
         "```\n"
     )
     assert fenced_violations(markdown) == []
@@ -812,8 +807,8 @@ SABOTAGE_SITES = [
     ),
     (
         ".claude/skills/land/SKILL.md",
-        "rtk bd list --label ready-for-land --status in_progress --limit 0 --json",
-        "rtk bd list --label ready-for-land --status in_progress --json",
+        "bd list --label ready-for-land --status in_progress --limit 0 --json",
+        "bd list --label ready-for-land --status in_progress --json",
     ),
     (
         ".claude/skills/release/SKILL.md",

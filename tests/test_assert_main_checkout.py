@@ -411,7 +411,7 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # three classes belong in one pattern rather than a git list plus side checks.
 #
 # The bd WRITE side is out of scope here, not overlooked: `land/SKILL.md` only
-# ever reaches it through `rtk scripts/bd-dolt-push.sh`, which is KNOWN
+# ever reaches it through `scripts/bd-dolt-push.sh`, which is KNOWN
 # LIMITATION 1's territory (no script following), not this pattern's.
 _MUTATING_CMD_RE = re.compile(
     r"\b(?:git\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|fetch"
@@ -426,11 +426,11 @@ _MUTATING_CMD_RE = re.compile(
 # records what that keying does and does not catch.
 _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
     # --- read-only false positives of the broad verb regex (limitation 2) ---
-    'for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
+    'for mb in $(git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
         "read-only: enumerates merge-bases, mutates nothing (1a stacked-branch "
         "detection)"
     ),
-    'rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
+    'git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
         "read-only: --is-ancestor is a pure query, mutates nothing"
     ),
     'LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" \'': (
@@ -449,14 +449,14 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
     # --- explicit ref/path-addressed writes: cwd-independent by construction,
     #     the same reasoning Section 4's own prose gives for these commands
     #     ("each names its own target") ---
-    "rtk git push origin trunk": (
+    "git push origin trunk": (
         "ref-addressed (explicit remote+branch); Section 4's own text: cwd-independent"
     ),
-    'rtk git push origin --delete "land/$id"': (
+    'git push origin --delete "land/$id"': (
         "ref-addressed delete (explicit remote+branch); cwd-independent "
         "(Section 4's per-ticket branch GC)"
     ),
-    'rtk git push origin --delete "land/<id>"': (
+    'git push origin --delete "land/<id>"': (
         "ref-addressed delete (explicit remote+branch); cwd-independent "
         "(Bounce / Escalate-exit-(b) / Escalate-exit-(c))"
     ),
@@ -480,7 +480,7 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
         "from disk; never removes real content or a live worktree"
     ),
     # --- path-addressed to the passive bd export, never real work ---
-    "rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
+    "git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
         "path-addressed to the passive .beads/issues.jsonl export only -- "
         "never real work (import.auto: false, lode-6ra); a wrong-directory "
         "run only restores that worktree's own copy of a regenerated artifact"
@@ -573,25 +573,25 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
     had to fix once in the per-fence pin lode-8p3c has since deleted.
     """
     for command in (
-        "rtk git add .",
-        "rtk git am /tmp/p.patch",
-        "rtk git apply /tmp/p.patch",
-        "rtk git checkout -f trunk",
-        "rtk git cherry-pick deadbeef",
-        "rtk git clean -fdx",
-        "rtk git commit -m wip",
-        "rtk git fetch origin",
-        "rtk git merge --no-ff origin/land/x",
-        "rtk git pull --rebase",
-        "rtk git rebase origin/trunk",
-        "rtk git reset --hard HEAD~1",
-        "rtk git restore --worktree .",
-        "rtk git revert HEAD",
-        "rtk git stash pop",
-        "rtk git switch trunk",
+        "git add .",
+        "git am /tmp/p.patch",
+        "git apply /tmp/p.patch",
+        "git checkout -f trunk",
+        "git cherry-pick deadbeef",
+        "git clean -fdx",
+        "git commit -m wip",
+        "git fetch origin",
+        "git merge --no-ff origin/land/x",
+        "git pull --rebase",
+        "git rebase origin/trunk",
+        "git reset --hard HEAD~1",
+        "git restore --worktree .",
+        "git revert HEAD",
+        "git stash pop",
+        "git switch trunk",
         # Not git, but a cwd-resolved mutation the sweep must still see -- see
         # `_MUTATING_CMD_RE`'s non-git alternatives (lode-8p3c).
-        "rtk bd dolt pull",
+        "bd dolt pull",
     ):
         markdown = f"1. Some new step:\n\n   ```bash\n   {command}\n   ```\n"
 
@@ -608,9 +608,7 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
 def test_sweep_requires_the_guard_precede_not_merely_be_present() -> None:
     """A guard call present in the block but AFTER the mutating command does
     not protect it -- ordering matters."""
-    markdown = (
-        f"```bash\nrtk git reset --hard origin/trunk\nrtk {_GUARD} || exit 1\n```\n"
-    )
+    markdown = f"```bash\ngit reset --hard origin/trunk\n{_GUARD} || exit 1\n```\n"
     violations = _unguarded_mutations(markdown, allowlist={})
     assert violations, "a guard AFTER the mutation must not count as coverage"
 
@@ -628,7 +626,7 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
     allowlist were never consulted at all, so the unperturbed half is what
     proves the exemption is real and the flag is caused by the perturbation.
     """
-    original = "rtk git push origin trunk"
+    original = "git push origin trunk"
     perturbed = original + " --porcelain"
 
     assert (

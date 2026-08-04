@@ -84,7 +84,7 @@ def _only_block_with(*needles: str, what: str) -> str:
 def _kick_back_block() -> str:
     return _only_block_with(
         "--add-label needs-rebase",
-        "rtk bd update",
+        "bd update",
         what="the needs-rebase kick-back",
     )
 
@@ -107,7 +107,7 @@ def test_state_dir_is_wiped_once_in_section_1_ahead_of_every_writer() -> None:
     false positive.
     """
     site = _only_block_with('rm -rf "$STATE_DIR"', what="the per-pass $STATE_DIR wipe")
-    assert "rtk git checkout -f trunk" in site, (
+    assert "git checkout -f trunk" in site, (
         "the $STATE_DIR wipe is no longer in Section 1's setup fence (the only "
         "block that runs `git checkout -f trunk`). Anywhere later and a block "
         "that writes under $STATE_DIR before it -- 2b's conflicts record, 3a's "
@@ -128,14 +128,14 @@ def test_section_1_block_still_ends_on_the_pass_start_reset() -> None:
     `if [ "$rc" = 1 ]` comment reasons about, from the other direction.
     """
     site = _only_block_with(
-        "rtk git reset --hard origin/trunk",
-        "rtk git checkout -f trunk",
+        "git reset --hard origin/trunk",
+        "git checkout -f trunk",
         what="Section 1's pass-start block",
     )
     last = [
         ln for ln in site.splitlines() if ln.strip() and not ln.strip().startswith("#")
     ][-1]
-    assert last.startswith("rtk git reset --hard origin/trunk"), (
+    assert last.startswith("git reset --hard origin/trunk"), (
         "Section 1's setup block no longer ends on `git reset --hard "
         f"origin/trunk` -- its last executed line is {last.strip()!r}. That "
         "command's exit status is the only machine-readable signal the block "
@@ -205,7 +205,7 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
     )
 
     read_pos = site.index('CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>"')
-    update_pos = site.index("rtk bd update <id> --remove-label ready-for-land")
+    update_pos = site.index("bd update <id> --remove-label ready-for-land")
     assert read_pos < update_pos, (
         "the kick-back block reads $CONFLICTS from disk AFTER the bd update call "
         "-- too late to be interpolated into the --append-notes text"
@@ -223,7 +223,7 @@ def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     )
 
     guard_pos = site.index("GATE COULD NOT RUN")
-    update_pos = site.index("rtk bd update <id> --remove-label ready-for-land")
+    update_pos = site.index("bd update <id> --remove-label ready-for-land")
     exit_pos = site.index("exit 1", guard_pos)
     assert guard_pos < exit_pos < update_pos, (
         "the loud failure guard does not exit BEFORE the bd update call -- a "
@@ -242,7 +242,7 @@ when someone drops it for the reason the doc already contemplates, and stay
 green if `nox -s tests` were removed -- both directions wrong.
 """
 
-_PUSH = "rtk git push origin trunk"
+_PUSH = "git push origin trunk"
 
 
 def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:

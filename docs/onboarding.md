@@ -211,27 +211,13 @@ scripts/update-images.sh      # one-time: pull the mermaid-cli image
 scripts/validate-mermaid.sh   # parse every fenced mermaid block, fail on syntax errors
 ```
 
-### 8. (Optional) RTK command exclusions
-
-Only if you use [RTK](https://github.com/rtk-ai/rtk) to proxy dev commands. Two commands
-must bypass RTK's rewrite so their output stays raw: beads JSON (`bd … --json`) and `git
-worktree list --porcelain` (worktree GC parses real porcelain, not RTK's reformatted
-table). RTK keeps this in your user-global config only, so a script makes it reproducible:
-
-```bash
-scripts/rtk-setup.sh          # idempotent: adds the excludes to ~/.config/rtk/config.toml
-```
-
-### 9. (Optional) Re-create the machine-local settings
+### 8. (Optional) Re-create the machine-local settings
 
 Two scopes deliberately do **not** travel with the clone, so a fresh machine starts without
 them. Neither is required — set them only if you want them.
 
 **User scope** (`~/.claude/settings.json`) — personal, applies to every project:
 
-- the rtk `PreToolUse` hook, `{"matcher": "Bash", "hooks": [{"type": "command", "command":
-  "rtk hook claude"}]}` (skip if you skipped step 8 — plain commands work fine and the
-  committed `Bash(rtk *)` allow entry is inert),
 - `permissions.defaultMode`,
 - model choice, personal statusline.
 

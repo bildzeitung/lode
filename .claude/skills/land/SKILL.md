@@ -39,7 +39,7 @@ re-gate says otherwise.
 **I run each fenced `bash` block below as its own, separate Bash tool invocation. Nothing carries
 over between them** — not variables, not arrays, not function definitions, not `trap`s, not `set -e`
 / `set -o pipefail`, not background jobs. Anything one block needs from an earlier one is either
-**re-derived** (cheap, deterministic — e.g. `$(rtk git rev-parse --git-dir)`) or **persisted to a
+**re-derived** (cheap, deterministic — e.g. `$(git rev-parse --git-dir)`) or **persisted to a
 file** under `$STATE_DIR` (`.git/land-state/`, which survives `git reset --hard` because that only
 touches the index and working tree). Logic shared by two call sites lives in `scripts/`, never in a
 bash function defined in one block and called from another.
@@ -108,7 +108,7 @@ Before doing anything else, take the local lock. If another `/land` is still run
 not run in parallel:
 
 ```bash
-rtk scripts/land-lock.sh acquire || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
+scripts/land-lock.sh acquire || { echo "land: could not acquire the lock this tick -- skipping."; exit 0; }
 ```
 
 **Convention:** run the `/land` loop on **one machine only** — the local lock does not cross
@@ -150,22 +150,17 @@ passed, enforced by the shell, with no agent decision in between. Nothing here d
 another block, so the rule is satisfied — the guard is re-run from scratch, not carried forward:
 
 ```bash
-rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
-rtk bd dolt pull            # Dolt is authoritative; pull the latest claim/label/close state over refs/dolt/data
-rtk git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
+scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
+bd dolt pull            # Dolt is authoritative; pull the latest claim/label/close state over refs/dolt/data
+git checkout -f trunk   # I land ON trunk, in the main checkout (just asserted above)
   # `-f` so this cannot FAIL (lode-k9ef) — not to clean anything; the reset below does that by itself.
-rtk git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+git fetch origin        # I need origin/trunk and every origin/land/<id> fresh
+STATE_DIR="$(git rev-parse --git-dir)/land-state"
 rm -rf "$STATE_DIR"   # per-pass scratch the reset below cannot clear (lode-wjw4) -- see below
 git log --oneline origin/trunk..trunk   # expected EMPTY; non-empty = residue, printed before it goes
-  # DELIBERATELY BARE `git`, NOT `rtk git` (lode-eza9) -- the ONE exception to CLAUDE.md's RTK golden
-  # rule in this file. `rtk git log` silently DROPS MERGE COMMITS (upstream rtk-ai/rtk#2305): measured
-  # on a real pass, 7 commits -> 4, all three --no-ff merges gone, no marker, exit 0. Residue here is
-  # BY CONSTRUCTION merge commits (a pass that died between Section 3's merges and Section 4's push),
-  # so the rtk form under-reports precisely the case this line exists for -- it would print EMPTY
-  # while the reset below destroyed real merges. Scope is `log` only: `rev-list` (including
-  # --first-parent, which 1a's direction test greps) and `show` are unaffected and stay on `rtk`.
-rtk git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
+  # Residue here is BY CONSTRUCTION merge commits (a pass that died between Section 3's merges and
+  # Section 4's push), so this print must be faithful about merges -- the reset below destroys them.
+git reset --hard origin/trunk   # pass-start reset, NOT `pull --rebase` (lode-k9ef) -- see below
 ```
 
 **On a non-zero exit the pass stops there** — the script's own stderr already names cwd, the main
@@ -244,7 +239,7 @@ Then read the queue — every ticket carrying the **`ready-for-land`** label (it
 the label, not a status, is the queue):
 
 ```bash
-rtk bd list --label ready-for-land --status in_progress --limit 0 --json
+bd list --label ready-for-land --status in_progress --limit 0 --json
 ```
 
 **`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
@@ -256,7 +251,7 @@ If the queue is empty, there is nothing to land: release the lock and stop —
 
 ```bash
 # Normal completion -- release now rather than waiting out the staleness window for no reason.
-rtk scripts/land-lock.sh release
+scripts/land-lock.sh release
 exit 0
 ```
 
@@ -296,7 +291,7 @@ merge-base means one of *two* things, and only the first is a stack:
   itself, a symptom of anything wrong.
 
 ```bash
-rtk git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
+git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
 # for every ORDERED pair (X, Y) among the listed refs:
 # ENUMERATE ALL merge-bases — a pair can have more than one (see below) — and keep only the
 # off-trunk ones. A base branch that later takes a needs-rebase trunk-merge pickup (lode-cln)
@@ -306,8 +301,8 @@ rtk git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/land/*'
 # unrelated and the stack goes undetected. `--all` sees every candidate; discarding the
 # on-trunk ones and keeping any survivor is what makes this immune to that flow.
 OFF_TRUNK=""
-for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do
-  rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"
+for mb in $(git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do
+  git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"
 done
 [ -z "$OFF_TRUNK" ] && continue   # every merge-base is on trunk → unrelated
 # At least one off-trunk merge-base → X and Y share non-trunk history. That is EITHER a stack OR two
@@ -316,8 +311,8 @@ done
 # DIRECTION: the BASE is the one whose own first-parent spine contains an off-trunk MB — the
 # dependent reached that commit through a merge (second parent), so it is not on its spine.
 for mb in $OFF_TRUNK; do
-  rtk git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$mb" \
-    && ! rtk git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$mb" \
+  git rev-list --first-parent origin/trunk..origin/land/<X> | grep -qx "$mb" \
+    && ! git rev-list --first-parent origin/trunk..origin/land/<Y> | grep -qx "$mb" \
     && echo "<Y> is stacked on <X>" && break
 done
 ```
@@ -409,9 +404,9 @@ across the whole queue. `scripts/land-lock.sh`'s own header has the full reasoni
 logged but never stops the pass (this is lock bookkeeping, not the vet itself):
 
 ```bash
-rtk scripts/land-lock.sh heartbeat || true
-rtk bd show <id> --json     # read metadata.land_head and metadata.land_summary
-rtk git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
+scripts/land-lock.sh heartbeat || true
+bd show <id> --json     # read metadata.land_head and metadata.land_summary
+git ls-remote origin "refs/heads/land/<id>"   # branch must still exist on origin...
 # ...and origin/land/<id>'s tip SHA must equal metadata.land_head
 ```
 
@@ -435,7 +430,7 @@ tests in `tests/test_merge_precheck.py`; see the script's own header for the ful
 
 ```bash
 # $STATE_DIR is wiped once per pass, in Section 1 (lode-wjw4); re-derived here, fresh invocation.
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"
+STATE_DIR="$(git rev-parse --git-dir)/land-state"
 CONFLICTS_DIR="$STATE_DIR/conflicts"
 mkdir -p "$CONFLICTS_DIR"
 
@@ -443,7 +438,7 @@ mkdir -p "$CONFLICTS_DIR"
 # unlike a bare `VAR=$(cmd)` assignment, which would abort the shell on a
 # non-zero exit before `rc=$?` is ever reached. Same idiom the snippet this
 # replaced used, for the same reason.
-if CONFLICTS=$(rtk scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); then
+if CONFLICTS=$(scripts/merge-precheck.sh origin/trunk "origin/land/<id>"); then
   rc=0
 else
   rc=$?
@@ -607,7 +602,7 @@ read from its own real exit status, never from a downstream command's.** No `run
 `Bash`'s 600000ms timeout cap. And never pipe a gate through `tail`/`head`/`grep` and read the
 *pipeline's* exit status as the gate's own: a shell pipeline's exit status is its **last** element's,
 not the gate's, so a killed or hung gate can surface as "completed, exit 0" while its own output ends
-mid-run. **OBSERVED (lode-b8sr):** `rtk nox -s tests 2>&1 | tail -30` exceeded the Bash timeout, was
+mid-run. **OBSERVED (lode-b8sr):** `nox -s tests 2>&1 | tail -30` exceeded the Bash timeout, was
 moved to the background, hung, and was killed with `SIGTERM` — the harness reported the run as
 "completed (exit code 0)" because that 0 was `tail`'s exit status, even though the captured output
 itself ended in `nox > Session tests failed`. If a gate's output must be trimmed, capture its real
@@ -647,7 +642,7 @@ edges**, restricted to `$ACCEPTED`:
     pass:
 
     ```bash
-    rtk bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
+    bd update <id> --append-notes "HELD (/land, stacked-branch ordering): land/<id> is stacked on
     land/<B>, which is not landing this pass (<B>'s own outcome: <bounced|escalated|needs-rebase|not
     yet ready-for-land>). Re-evaluated automatically once <B> lands or its own outcome resolves -- no
     action needed unless <B> itself needs a human decision."
@@ -728,7 +723,7 @@ only resets the index and working tree, never anything under `.git/`, so these f
 reset intact — which is exactly why `STATE_DIR` lives there and not in the working tree:
 
 ```bash
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"    # under .git/ -- survives a later `git reset
+STATE_DIR="$(git rev-parse --git-dir)/land-state"    # under .git/ -- survives a later `git reset
 MSG_DIR="$STATE_DIR/msg"                                 # --hard` (that only resets the index+worktree)
 CONFLICTS_DIR="$STATE_DIR/conflicts"                     # same mechanism, holding a Section-3
                                                          # conflict's paths for the kick-back block
@@ -744,13 +739,13 @@ printf '%s\n' $ACCEPTED > "$STATE_DIR/accepted"
 : > "$STATE_DIR/landed"    # appended to by the merge loops below; Section 4 reads it back
 
 for id in $(cat "$STATE_DIR/accepted"); do
-  SUMMARY=$(rtk bd show "$id" --json | jq -r '.[0].metadata.land_summary // .[0].title')
+  SUMMARY=$(bd show "$id" --json | jq -r '.[0].metadata.land_summary // .[0].title')
   printf '%s' "Merge land/$id: $SUMMARY ($id)" > "$MSG_DIR/$id"
 done
 ```
 
 **Re-derive `STATE_DIR`/`MSG_DIR` at the top of every later block that needs them** — Section 3's merge
-loop and its isolation-replay copy below both do this. Deriving `$(rtk git rev-parse --git-dir)` fresh
+loop and its isolation-replay copy below both do this. Deriving `$(git rev-parse --git-dir)` fresh
 each time is cheap and deterministic, not "state assumed to survive"; what actually persists across
 blocks is the **files** on disk, never the shell variables naming their location.
 
@@ -778,7 +773,7 @@ staged index entry in place, so a naive retry loops. `git restore --staged --wor
 index and worktree back to `HEAD` in one shot:
 
 ```bash
-rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # unstage the passive export;
+git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true   # unstage the passive export;
   # a STAGED jsonl aborts 'git merge' even though 'git diff' reads clean (staged != unstaged) — never
   # let the passive export block or enter a merge (import.auto: false; see bd-sync discipline below)
 ```
@@ -811,8 +806,8 @@ apply here unchanged: keep the guard first and the `land-merge-one.sh` call it p
 same fence**. Splitting this block is what would silently un-guard it.
 
 ```bash
-rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
+scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
 
@@ -829,7 +824,7 @@ for id in $ACCEPTED; do
   # arm is the SCRIPT's real exit status. Do NOT rewrite this as `if ! CMD; then rc=$?`: there `$?`
   # is the *negation's* status, which inside that arm is always 0 -- so a machine-fault 2 would read
   # as a clean merge and the pass would carry on as though the branch had landed.
-  if CONFLICTS=$(rtk scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+  if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
     rc=0
   else
     rc=$?
@@ -877,7 +872,7 @@ set has no Python gate — skip nox, run `scripts/validate-mermaid.sh` only if a
 
 ```bash
 . ./venv/bin/activate
-rtk nox -t fix && rtk nox -s tests && rtk nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
+nox -t fix && nox -s tests && nox -s lock_currency     # if nox -t fix reformats merged code, commit that as part of the merge result
 ```
 
 **`nox -s lock_currency` (lode-sys4) catches a stale `requirements.lock` here — locally, before the
@@ -941,9 +936,9 @@ machine. A red gate is content; exit 2 is the machine.
   un-guard them.
 
   ```bash
-  rtk scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
-  rtk git reset --hard origin/trunk
-  STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
+  scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
+  git reset --hard origin/trunk
+  STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- see above; 3a's files under
   MSG_DIR="$STATE_DIR/msg"                                 # $STATE_DIR are untouched by the reset
   CONFLICTS_DIR="$STATE_DIR/conflicts"
   ACCEPTED=$(cat "$STATE_DIR/accepted") || exit 1
@@ -972,7 +967,7 @@ machine. A red gate is content; exit 2 is the machine.
   # lock is a fixed point of the tree PLUS this machine's ambient uv PLUS today's PyPI, so it too
   # can be red with no branch involved at all (a uv release that changes the emitted format, an
   # upstream yank, a lock that went stale on trunk itself).
-  rtk nox -s tests
+  nox -s tests
   #   exit 0 → attributable from here on for THIS gate: any later `nox -s tests` red IS caused by
   #            a merged branch. Continue.
   #   nonzero → the suite is red before any branch merged — not attributable to anything in
@@ -982,7 +977,7 @@ machine. A red gate is content; exit 2 is the machine.
   #            scrubs these for every pytest invocation it collects for, so a baseline red here
   #            more likely means a genuine regression on `trunk` itself — still not attributable
   #            to any branch in this pass, but worth a closer look before assuming "just env").
-  rtk nox -s lock_currency
+  nox -s lock_currency
   #   exit 0 → attributable from here on: any later red IS caused by a merged branch. Continue.
   #   exit 1 → trunk's own lock is stale, before any branch merged. Not attributable to anything in
   #            $ACCEPTED: stop the pass, land nothing, surface as a human decision.
@@ -994,7 +989,7 @@ machine. A red gate is content; exit 2 is the machine.
     # Identical idiom and identical shape to the first-pass loop above -- see its comment for why
     # `if ! CMD; then rc=$?` is wrong here (that `$?` is the negation's, always 0 in that arm, so a
     # machine-fault 2 would read as a clean merge). Keep the two loops the same shape.
-    if CONFLICTS=$(rtk scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
+    if CONFLICTS=$(scripts/land-merge-one.sh "$id" "$MSG_DIR"); then
       rc=0
     else
       rc=$?
@@ -1017,17 +1012,17 @@ machine. A red gate is content; exit 2 is the machine.
         continue
         ;;
     esac
-    if ! rtk nox -s tests; then
-      rtk git reset --hard HEAD~1   # back the culprit out
+    if ! nox -s tests; then
+      git reset --hard HEAD~1   # back the culprit out
       # → bounce <id> (Section "Bounce"); it does NOT land this pass
       continue
     fi
-    rtk nox -s lock_currency
+    nox -s lock_currency
     case $? in
       0) echo "$id" >> "$STATE_DIR/landed" ;;   # survivor — keep it merged and record it
       2) break ;;                          # machine fault mid-loop, NOT this branch: stop the pass,
                                            # land nothing (skip section 4). Never bounce on a 2.
-      *) rtk git reset --hard HEAD~1 ;;    # back the culprit out → bounce <id> (Section "Bounce")
+      *) git reset --hard HEAD~1 ;;    # back the culprit out → bounce <id> (Section "Bounce")
     esac
   done
   ```
@@ -1037,8 +1032,7 @@ machine. A red gate is content; exit 2 is the machine.
   whichever prefix of `$ACCEPTED` had merged when the loop broke. I restore none of them; that is
   [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s job (lode-k9ef).
 
-  Read `$?` from the gate itself — `rtk` passes a child's exit status through unchanged, so
-  `rtk nox -s lock_currency` yields nox's own 0/1/2. The same lode-b8sr rule as ever applies with
+  Read `$?` from the gate itself — `nox -s lock_currency` yields nox's own 0/1/2. The same lode-b8sr rule as ever applies with
   extra force here: never pipe this gate into `tail`/`grep` and read the *pipeline's* status, which
   would silently flatten a 2 into whatever ran last.
 
@@ -1066,15 +1060,14 @@ separate bd-sync concern.
 First, check whether the re-gate's `nox -t fix` (above) actually changed anything:
 
 ```bash
-rtk git status --short
+git status --short
 ```
 
 - **Empty** → `nox -t fix` touched nothing. Skip the commit entirely — there's nothing to commit.
 - **Non-empty** → stage **only** the explicitly-named reformatted source paths shown by that
   `git status`. Never `-A`, and never rely on a `':!.beads'` pathspec exclude to keep the passive
-  jsonl export out — that exclude does not reliably survive the `rtk` proxy (it once let
-  `.beads/issues.jsonl` through, and separately `-A` swept in an unrelated pre-existing untracked
-  directory under a misleading `style:` message — both hit landing `lode-0wj.1`). Beads' own
+  jsonl export out (`-A` once swept in an unrelated pre-existing untracked directory under a
+  misleading `style:` message, hitting landing `lode-0wj.1`); the exclude cannot help anyway — beads' own
   pre-commit hook (`.beads/hooks/pre-commit`) re-exports and re-stages `.beads/issues.jsonl` on
   *every* commit regardless of what was `git add`-ed (see CLAUDE.md's workflow gotchas), so the
   commit itself must skip hooks too:
@@ -1092,15 +1085,15 @@ rtk git status --short
   line ([rule and reasoning in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)):
 
   ```bash
-  rtk scripts/assert-main-checkout.sh || exit 1                          # STOP -- this commit is not ref-addressed at all; see above (lode-pxyt)
-  rtk git add <path> <path> ...                                          # explicit reformatted source paths only, e.g. rtk git add src/foo.py src/bar.py
-  rtk git commit --no-verify -q -m "style: nox -t fix on merged trunk"   # --no-verify: skip the beads pre-commit hook so it can't re-stage .beads/issues.jsonl
-  rtk git show --stat HEAD                                               # confirm only the intended paths rode along — no jsonl, nothing else
+  scripts/assert-main-checkout.sh || exit 1                          # STOP -- this commit is not ref-addressed at all; see above (lode-pxyt)
+  git add <path> <path> ...                                          # explicit reformatted source paths only, e.g. git add src/foo.py src/bar.py
+  git commit --no-verify -q -m "style: nox -t fix on merged trunk"   # --no-verify: skip the beads pre-commit hook so it can't re-stage .beads/issues.jsonl
+  git show --stat HEAD                                               # confirm only the intended paths rode along — no jsonl, nothing else
   ```
 
 ```bash
-rtk git push origin trunk
-rtk git status                 # MUST show trunk up to date with origin
+git push origin trunk
+git status                 # MUST show trunk up to date with origin
 
 # $LANDED: the ids that actually stayed merged through Section 3 -- read back from the file Section 3's
 # merge loops appended to as each branch merged (lode-sfnb), never restated by hand. On the Green path
@@ -1108,11 +1101,11 @@ rtk git status                 # MUST show trunk up to date with origin
 # loop truncated the file and re-recorded only the branches it kept merged, so bounced culprits and
 # held dependents are already excluded. An EMPTY file is legitimate (every branch kicked back or
 # bounced) and correctly closes nothing; a MISSING one means Section 3 never ran -- abort.
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation again
+STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive -- fresh Bash invocation again
 LANDED=$(cat "$STATE_DIR/landed") || exit 1
 for id in $LANDED; do
-  rtk bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
-  rtk bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
+  bd close "$id" --reason "Landed on trunk via /land (merge <sha>)"
+  bd update "$id" --remove-label ready-for-land   # tidy the queue label off the (now closed) ticket --
     # symmetric with the needs-rebase/escalate/bounce exits, which have always done this; the success
     # path was the one exit that forgot (lode-myh6). Keep this AFTER the close: a crash between the two
     # leaves only the old, benign stale label, whereas stripping FIRST would strand an open, label-less
@@ -1133,16 +1126,16 @@ done
 # proves it — since no gate here would ever catch a markdown-embedded jq snippet regressing).
 # The script is read-only; this loop is the one place that actually writes the label.
 for id in $LANDED; do
-  RESULT=$(rtk scripts/epic-completion-check.sh "$id")
+  RESULT=$(scripts/epic-completion-check.sh "$id")
   [ -z "$RESULT" ] && continue
   PARENT=$(printf '%s' "$RESULT" | awk '{print $2}')
-  rtk bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
+  bd label add "$PARENT" epic-ready-to-audit   # /epic-audit picks it up
 done
 
-rtk scripts/bd-dolt-push.sh               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
+scripts/bd-dolt-push.sh               # publish the closes, epic-ready-to-audit labels, and any bounce tickets over refs/dolt/data — durable, cross-machine
 
 for id in $LANDED; do
-  rtk git push origin --delete "land/$id"   # GC the merged remote branch — a bare ref delete, not a
+  git push origin --delete "land/$id"   # GC the merged remote branch — a bare ref delete, not a
                                              # worktree/uncommitted-work risk, so this stays per-ticket
                                              # regardless of the local worktree-GC decision below.
 done
@@ -1204,8 +1197,7 @@ done
 # worktree from a multi-cycle review that no ticket's single review_worktree field can point at
 # (lode-r78 — the reviewer and a rebase pickup each check `land/<id>` out into their OWN fresh
 # worktree per lode-k5e/lode-8k3, so a ticket reviewed more than once leaves extra land/<id>-branched
-# worktrees a per-ticket net could never see anyway), or (historically) this section's own
-# rtk-mangled-porcelain bug. Walks the raw porcelain blocks directly, so a worktree with no matching
+# worktrees a per-ticket net could never see anyway). Walks the raw porcelain blocks directly, so a worktree with no matching
 # ticket, or a ticket with stale/wrong metadata, still gets reclaimed.
 #
 # NOTE (lode-vs7g): `/code`'s own orchestrating session now reclaims a reviewer's or rebase-pickup's
@@ -1504,7 +1496,7 @@ while read -r BR; do
 done < <(git for-each-ref --format='%(refname:short)' 'refs/heads/worktree-agent-*')
 echo "bare-ref backstop3 (worktree-agent-*): deleted $B3_DELETED stale local ref(s) (failed=$B3_FAILED)"
 
-rtk scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
+scripts/land-lock.sh release   # the pass is fully done -- release now rather than waiting out
                                      # the staleness window (lode-aps3; see Section 0)
 ```
 
@@ -1670,20 +1662,20 @@ under `$STATE_DIR/conflicts/<id>` instead, and refuse — loudly — rather than
 paths section if that file is missing or empty:
 
 ```bash
-STATE_DIR="$(rtk git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
+STATE_DIR="$(git rev-parse --git-dir)/land-state"     # re-derive -- fresh Bash invocation; the
 CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>" 2>/dev/null)  # FILE under $STATE_DIR is what survived,
                                                             # never a bash variable
 [ -n "$CONFLICTS" ] || { echo "GATE COULD NOT RUN: $STATE_DIR/conflicts/<id> is missing or empty --" \
   "the producer site (2b's merge-precheck.sh call, or a Section-3 merge loop) did not persist the" \
   "conflicting paths. Refusing to kick back with a blank paths section." >&2; exit 1; }
 
-rtk bd update <id> --remove-label ready-for-land --add-label needs-rebase \
-  --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(rtk git rev-parse --short origin/trunk).
+bd update <id> --remove-label ready-for-land --add-label needs-rebase \
+  --append-notes "NEEDS REBASE (/land): origin/land/<id> no longer merges cleanly onto trunk @ $(git rev-parse --short origin/trunk).
 Conflicting paths:
 $CONFLICTS
 /code's step-0 pickup merges current trunk into land/<id>, re-gates, commits, and pushes the result
 itself (an ordinary, non-force push), then swaps needs-rebase back to ready-for-land (lode-cln)."
-rtk scripts/bd-dolt-push.sh       # publish the label swap + note over refs/dolt/data
+scripts/bd-dolt-push.sh       # publish the label swap + note over refs/dolt/data
 # The branch is KEPT (no delete). The build worktree is KEPT. No supersede, no new ticket, no close.
 ```
 
@@ -1722,7 +1714,7 @@ against `<id>`'s tip — that is the tip test 1a exists to avoid.
   of question:
 
   ```bash
-  rtk bd update <id> --remove-label ready-for-land --add-label land-escalated \
+  bd update <id> --remove-label ready-for-land --add-label land-escalated \
     --append-notes "ESCALATION (/land bounce, lode-02v): land-review bounced this branch (findings
   below), but land/<dep> is a LIVE branch that already merged land/<id>'s commits — deleting land/<id>
   now would silently strand land/<dep>, which would carry the very defect this bounce is rejecting.
@@ -1732,7 +1724,7 @@ against `<id>`'s tip — that is the tip test 1a exists to avoid.
   it), or DROP (neither is wanted anymore — close both).
 
   LAND-REVIEW FINDINGS: <the bounce findings, verbatim>"
-  rtk scripts/bd-dolt-push.sh
+  scripts/bd-dolt-push.sh
   # BOTH land/<id> and land/<dep> are KEPT (no delete) until the human resolves it.
   ```
 
@@ -1766,19 +1758,19 @@ dedicated command — `supersedes` is **not** a `--deps` type):
 # RUNTIME failure (bd missing, Dolt DB locked, an id bd can't resolve) makes the script itself exit
 # non-zero, which no gate on the script's internals can catch -- only the caller reading its exit
 # status can. That is what this `if !` does.
-if ! DEPS=$(rtk scripts/blocks-dependents.sh <id>); then
+if ! DEPS=$(scripts/blocks-dependents.sh <id>); then
   # Do NOT proceed blind to the supersede: continuing here would close <id> while never having
   # confirmed its blocks-dependents (if any), which unblocks them immediately against a rebuild
   # that doesn't exist yet -- the exact unsafe outcome lode-verb extracted this script to prevent.
   # Nothing has been created or changed yet at this point (no $NEW, no re-parent, no supersede), so
   # escalating here is a clean stop, not a partial one.
-  rtk bd update <id> --add-label land-escalated --remove-label ready-for-land \
+  bd update <id> --add-label land-escalated --remove-label ready-for-land \
     --append-notes "ESCALATION (bounce): scripts/blocks-dependents.sh <id> failed at runtime (bd
 missing, Dolt DB locked, or an id it couldn't resolve) while deriving blocks-dependents ahead of a
 supersede. Bounce does not proceed blind -- superseding without a reliable dependent list risks
 re-pointing nothing while blocks-dependents silently unblock against an unbuilt rebuild. No rebuild
 ticket was created; land/<id> is kept. Retry the bounce once the underlying bd failure clears."
-  rtk scripts/bd-dolt-push.sh
+  scripts/bd-dolt-push.sh
   # STOP here -- and stop with a STATEMENT, not a comment. A bare `# STOP` is INERT: control
   # would fall through the `fi` straight into `NEW=$(bd create ...)` / `bd supersede` (which
   # CLOSES <id>) / `git push --delete` below, superseding the ticket anyway -- the exact
@@ -1796,7 +1788,7 @@ fi
 # editor changing this block should either add a check that reads it directly, or preserve the
 # `if !` shape as-is.
 
-NEW=$(rtk bd create --type=<same-type-as-original> \
+NEW=$(bd create --type=<same-type-as-original> \
   --title="<original title> (rebuild after land bounce)" \
   --description="Rebuild of <id>, bounced by /land semantic review.
 
@@ -1815,19 +1807,19 @@ REBUILD BRIEF (from land-review):
 # --include-dependents walk and so lives in scripts/blocks-dependents.sh (no
 # `.dependencies[]?`/`.dependents[]?` walk survives inline in this file -- lode-v4rk's audit
 # extracted every other one; confirmed by grep).
-PARENT=$(rtk bd show <id> --json | jq -r '.[0].parent // empty')
-[ -n "$PARENT" ] && rtk bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
+PARENT=$(bd show <id> --json | jq -r '.[0].parent // empty')
+[ -n "$PARENT" ] && bd dep add "$NEW" "$PARENT" --type=parent-child   # NEW becomes a child of the epic
 
 # Re-point the non-parent dependents derived above ($DEPS, captured before $NEW existed).
 for DEP in $DEPS; do
-  rtk bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
+  bd dep add "$DEP" "$NEW"   # DEP now depends on the rebuild, not the superseded original
 done
 
-rtk bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> as superseded
-rtk bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
+bd supersede <id> --with "$NEW"   # links <id> -> NEW and AUTO-CLOSES <id> as superseded
+bd update <id> --remove-label ready-for-land   # tidy the queue label off the (now closed) original
 
-rtk git push origin --delete "land/<id>"    # drop the rejected branch (a rebuild gets a fresh land/<new-id>)
-rtk scripts/bd-dolt-push.sh                            # publish the new ticket + supersede over refs/dolt/data
+git push origin --delete "land/<id>"    # drop the rejected branch (a rebuild gets a fresh land/<new-id>)
+scripts/bd-dolt-push.sh                            # publish the new ticket + supersede over refs/dolt/data
 ```
 
 `bd supersede` **closes** the original (with a reference to `NEW`) — superseded means *replaced*, and
@@ -1884,9 +1876,9 @@ defensible-but-different approach; the ticket/branch is unidentifiable). I land 
 the rest of the batch** (the accepted set still merges):
 
 ```bash
-rtk bd update <id> --add-label land-escalated --remove-label ready-for-land \
+bd update <id> --add-label land-escalated --remove-label ready-for-land \
   --append-notes "ESCALATION (/land semantic review): <the decision needed, with options as land-review framed them>"
-rtk scripts/bd-dolt-push.sh
+scripts/bd-dolt-push.sh
 # origin/land/<id> is KEPT (no delete) until the human resolves it.
 ```
 
@@ -1919,11 +1911,11 @@ swap the label. `land-review` stays authoritative on re-review; there is deliber
 out-of-band manual act, not a designed fast-path):
 
 ```bash
-rtk bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # land-review reads
+bd update <id> --acceptance="<revised, unambiguous acceptance criteria>"   # land-review reads
   # acceptance_criteria as the contract — this is the field that must change; add --description too
   # if the narrative text also needs updating. The BRANCH is untouched.
-rtk bd update <id> --remove-label land-escalated --add-label ready-for-land
-rtk scripts/bd-dolt-push.sh
+bd update <id> --remove-label land-escalated --add-label ready-for-land
+scripts/bd-dolt-push.sh
 # /land's NEXT pass re-runs land-review against the now-unambiguous ticket — same gate, no bypass.
 ```
 
@@ -1945,16 +1937,16 @@ use the [keep-for-lift disposition](#branch-disposition-on-a-bounce--drop-defaul
 rule if folding. No descendant found → proceed exactly as below.
 
 ```bash
-NEW=$(rtk bd create --type=<same-type-as-original> \
+NEW=$(bd create --type=<same-type-as-original> \
   --title="<original title> (rebuild after land-escalated)" \
   --description="Rebuild of <id>. Human resolution of the land-escalated decision:
 <the decision + what the rebuild must satisfy that the escalated branch did not>" \
   --json | jq -r '.id')
 # re-parent onto the same epic / re-point blocking dependents — see Bounce above for why.
-rtk bd supersede <id> --with "$NEW"          # closes <id> as superseded, links to $NEW
-rtk bd update <id> --remove-label land-escalated
-rtk git push origin --delete "land/<id>"     # drop the escalated branch — the rebuild gets a fresh land/<new-id>
-rtk scripts/bd-dolt-push.sh
+bd supersede <id> --with "$NEW"          # closes <id> as superseded, links to $NEW
+bd update <id> --remove-label land-escalated
+git push origin --delete "land/<id>"     # drop the escalated branch — the rebuild gets a fresh land/<new-id>
+scripts/bd-dolt-push.sh
 ```
 
 ### (c) Drop — close with reason, GC the branch
@@ -1970,10 +1962,10 @@ the dependent get dropped too, or does it need to be re-founded on something els
 deleting silently.
 
 ```bash
-rtk bd close <id> --reason "<why this is dropped>"
-rtk bd update <id> --remove-label land-escalated
-rtk git push origin --delete "land/<id>"     # GC the branch — nothing will land it
-rtk scripts/bd-dolt-push.sh
+bd close <id> --reason "<why this is dropped>"
+bd update <id> --remove-label land-escalated
+git push origin --delete "land/<id>"     # GC the branch — nothing will land it
+scripts/bd-dolt-push.sh
 ```
 
 All three end the same way: **`land-escalated` is gone**, so a surfacer's queue — the forthcoming
@@ -2006,9 +1998,9 @@ The first row is exit (a) as defined above; the other three follow the same shap
 into the ticket first, then swap `land-escalated` for the row's label and publish:
 
 ```bash
-rtk bd update <id> --append-notes "RESOLVED (human): <the decision>"
-rtk bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|needs-rebase>
-rtk scripts/bd-dolt-push.sh
+bd update <id> --append-notes "RESOLVED (human): <the decision>"
+bd update <id> --remove-label land-escalated --add-label <ready-for-code-review|needs-rebase>
+scripts/bd-dolt-push.sh
 ```
 
 **The build-time case is the deliberately arguable one, decided rather than left implicit.** A

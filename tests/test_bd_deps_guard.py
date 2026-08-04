@@ -83,17 +83,15 @@ DENIED = [
     'bd -C /wt create "x" --deps blocks:lode-1',  # bd's global -C, like git -C
     'bd --directory=/wt create "x" --deps blocks:lode-1',
     'bd -C /wt new "x" --deps blocks:lode-1',
-    'rtk bd create -t task "x" --deps blocks:lode-1',  # the repo's mandated rtk prefix
-    'rtk bd -C /wt new "x" --deps blocks:lode-1',
-    'cd /r && rtk bd create "x" --deps blocks:lode-1',  # not the first command on the line
+    'cd /r && bd create "x" --deps blocks:lode-1',  # not the first command on the line
     'cd /r; bd create "x" --deps blocks:lode-1',
     'ID=$(bd create "x" --deps blocks:lode-1 --json)',  # command substitution
     # lode-m6px: backslash-continued -- the NORMAL shape for a real call with a
     # --title/--description, per this repo's own coding.md examples. `grep`'s `.` never
     # crosses a newline, so a single-line-only pattern misses these; this is the exact shape
     # that reached the live DB on 2026-07-17.
-    'rtk bd create --title="x" \\\n  --deps blocks:lode-1',
-    'NEW_ID=$(rtk bd create --title="x" --description="y" \\\n  --type=task --deps blocks:lode-1 --silent)',
+    'bd create --title="x" \\\n  --deps blocks:lode-1',
+    'NEW_ID=$(bd create --title="x" --description="y" \\\n  --type=task --deps blocks:lode-1 --silent)',
     'bd create \\\n  -t task \\\n  "x" \\\n  --deps blocks:lode-1',  # --deps on its own continued line
     # lode-m6px: a ';', '&' or '|' INSIDE a quoted --title/--description is ordinary prose, not a
     # statement separator -- and these ids are exactly the prose-heavy shape a real agent files
@@ -105,7 +103,7 @@ DENIED = [
     'bd create --title="A | B" --deps blocks:lode-1',
     'bd create --title="A & B" --deps blocks:lode-1',
     'bd create --title="x" --description="one; two" --deps blocks:lode-1',
-    'rtk bd create --title="t" --description="a; b" \\\n  --deps blocks:lode-1',
+    'bd create --title="t" --description="a; b" \\\n  --deps blocks:lode-1',
 ]
 
 # lode-m6px: KNOWN, ACCEPTED false denies. A regex cannot parse shell quoting, so it cannot
@@ -128,12 +126,12 @@ ACCEPTED_FALSE_DENIES = [
 #   2. legitimate bd usage, including the correct two-step remedy the guard itself prescribes.
 ALLOWED = [
     # -- prose quoting the pattern --
-    'rtk git commit -m "Guard: deny bd create --deps blocks:<id>"',
-    'rtk bd update lode-x --notes "bug: bd create --deps blocks:y inverts the edge"',
-    'rtk bd update lode-x --notes "also bd new --deps blocks:y inverts"',
-    'rtk bd update lode-1 --set-metadata land_summary="denies bd create --deps blocks:<id>"',
-    "rtk grep 'bd create --deps blocks:' docs/",
-    'rtk git commit -m "guard `bd create --deps blocks:x`"',  # markdown inline code
+    'git commit -m "Guard: deny bd create --deps blocks:<id>"',
+    'bd update lode-x --notes "bug: bd create --deps blocks:y inverts the edge"',
+    'bd update lode-x --notes "also bd new --deps blocks:y inverts"',
+    'bd update lode-1 --set-metadata land_summary="denies bd create --deps blocks:<id>"',
+    "grep 'bd create --deps blocks:' docs/",
+    'git commit -m "guard `bd create --deps blocks:x`"',  # markdown inline code
     # -- legitimate bd usage --
     'bd create -t task "x"',  # the correct first step: no --deps at all
     "bd dep add lode-new lode-1 --type blocks",  # the correct second step

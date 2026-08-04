@@ -178,7 +178,7 @@ implementable acceptance criteria of its own). Plain `bd ready` renders no label
 the frontier as JSON — on **every** auto-select path, including `--single`:
 
 ```bash
-rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
 ```
 
 `bd ready` is already priority-ordered, so this list's first entry is the highest-priority buildable
@@ -343,7 +343,7 @@ flowchart TD
 
 ### Gating from an isolated worktree (lode-6874)
 
-**Agents gate with `rtk ./venv/bin/nox -t fix` / `-s tests`, and never activate the venv at all.**
+**Agents gate with `./venv/bin/nox -t fix` / `-s tests`, and never activate the venv at all.**
 The isolation guard refuses any command that sources a file (`. ./venv/bin/activate` — "runs a
 string through `.`, which can't be verified to stay inside the worktree"), so the once-documented
 `./scripts/python-init.sh && . ./venv/bin/activate` was unrunnable by the very agents the docs
@@ -359,7 +359,7 @@ beside `noxfile.py` itself, so pytest imports *this* checkout's `src` whatever `
 enforced by `tests/test_noxfile_venv_tool.py`, not left to convention.
 
 **Verified empirically from a worktree-isolated dispatch, not inferred** — the question had already
-survived two review attempts on inference alone. The guard *accepts* `rtk ./venv/bin/nox …` and
+survived two review attempts on inference alone. The guard *accepts* `./venv/bin/nox …` and
 *refuses* `. ./venv/bin/activate`; un-activated `-s tests` runs 2096 tests green with
 `tests/conftest.py`'s lode-jh80 guard 0 satisfied; `-t fix` resolves the venv's ruff over a stale
 ambient `~/.local/bin/ruff` that sat ahead of it on `PATH`.
@@ -373,11 +373,11 @@ steps later). Once `nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries t
 way the remedy is one command the agent can run itself: `./scripts/python-init.sh`.
 
 **One residual skew, verified and deliberately not papered over.** A branch whose base predates
-lode-0yfn has a `noxfile.py` without `_venv_tool()`, so `rtk ./venv/bin/nox -s tests` on it dies with
+lode-0yfn has a `noxfile.py` without `_venv_tool()`, so `./venv/bin/nox -s tests` on it dies with
 `Program pytest not found` — measured, not inferred, on this ticket's own branch. It fails *loudly*
 and cannot produce a false PASS, which is the property that matters; the set is also shrinking, since
 every new worktree branches from `origin/trunk` and so always carries `_venv_tool()`. The
-guard-friendly fallback for such a branch is `rtk ./venv/bin/pytest` directly — a plain command, and
+guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
 `tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
 base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
 not the general problem, which is lode-828x's subject.
@@ -385,7 +385,7 @@ not the general problem, which is lode-828x's subject.
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
 grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
 falls to the explicit-path form above. The "cd to the checkout root" value that looked like a residue
-is nil too: the wrapper would have been invoked as `rtk scripts/nox.sh`, a relative path presupposing
+is nil too: the wrapper would have been invoked as `scripts/nox.sh`, a relative path presupposing
 exactly the cwd it was meant to establish. What a committed wrapper *does* add is a base-skew problem
 with a long tail — every branch already in flight predates the new file, so the documented gate
 command exits 127 on all of them, which then needs a restore/undo dance in both agent files whose
@@ -1222,9 +1222,9 @@ not a default, and the choice trades one property for the other:
   unattended agent may never read. Provenance goes in the description, not the edge:
 
   ```bash
-  NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <parent>. …" \
+  NEW_ID=$(bd create --title="…" --description="Discovered while building <parent>. …" \
     --type=task --silent)
-  rtk bd dep add "$NEW_ID" <parent> --type blocks
+  bd dep add "$NEW_ID" <parent> --type blocks
   ```
 
   `bd dep add <child> <parent> --type blocks` (positional args, or the equivalent `--blocked-by
@@ -1239,7 +1239,7 @@ not a default, and the choice trades one property for the other:
   `PreToolUse` (matcher `Bash`) hook in [`.claude/settings.json`](../.claude/settings.json) denies any
   Bash call that invokes `bd create … --deps …blocks:…` and returns the two-step remedy above as the
   deny reason. It travels with the clone, so every agent on every machine gets it. It covers the
-  `bd new` alias, an `rtk` prefix, and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
+  `bd new` alias and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
   table is pinned by `tests/test_bd_deps_guard.py`, which executes the hook as shipped.
 
   Two deliberate boundaries. It matches only at a **command position** (start of line, or after
@@ -1368,7 +1368,7 @@ exactly those verbs) is **superseded, closed, not built** — reopen it only if 
 ever abandoned, since the gaps it names are real and this is the only thing currently closing them.
 
 It matches `gh` at a *command position*: after `;`/`&&`/`||`/`|`/`(`/`` ` ``/`{` or at line start,
-through the `rtk` prefix, a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
+through a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
 `if`/`then`, …), an absolute or relative path to the binary (`/usr/bin/gh`), and `gh`'s global
 `-R`/`--repo`/`--hostname` flags inserted before the subcommand (the same shape of gap the `blocks:`
 guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table is pinned by
@@ -1418,13 +1418,13 @@ Residual gaps that remain — honest about what the inversion does **not** close
 
 - **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
-  own prose about the rule (`rtk grep "gh issue create" docs/`, a commit message quoting the verb) — a
+  own prose about the rule (`grep "gh issue create" docs/`, a commit message quoting the verb) — a
   worse trade than the residual.
 - **`gh` reached from a command position the matcher does not recognize.** The *inversion* is
   default-deny on the **subcommand** — but the decision to look at a line at all still rests on
   matching `gh` at a command position, and that matcher is an enumeration: a leading `VAR=x`, a path
   (`/usr/bin/gh`), gh's global `-R`/`--repo`/`--hostname`, and a fixed wrapper list (`env`, `sudo`,
-  `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`, `rtk`). A wrapper *outside* that list
+  `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`). A wrapper *outside* that list
   (`timeout 5 gh issue create`, `nice gh …`, `exec gh …`) or a shell-escaped/quoted binary name
   (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the bullet
   above and it predates the inversion (`lode-o29m`'s original matcher, unchanged here): generalizing it
@@ -1855,10 +1855,11 @@ is the wrong weight for this workload. Full rationale and the revisit trigger ar
 [decisions.md](decisions.md).
 
 **lode-83d's own enumeration was prefix-blind (lode-bpl).** It found its four files with
-`grep -rl "rtk bd dolt push" .claude/`, which cannot see a call written without the `rtk` prefix —
-CLAUDE.md's golden rule says to always prefix with `rtk`, but that's a human convention, not
-something a literal grep enforces. A prefix-agnostic re-audit
-(`grep -rnE '(rtk +)?bd +dolt +push'` over `.claude/`, `docs/`, and `scripts/`, worktrees excluded)
+`grep -rl "rtk bd dolt push" .claude/`, which could not see a call written without the `rtk` prefix
+that the repo then mandated — a human convention, not something a literal grep enforces. (The `rtk`
+proxy has since been removed from the repo entirely, so every call site is now the plain form.) A
+prefix-agnostic re-audit (`grep -rnE '(rtk +)?bd +dolt +push'` over `.claude/`, `docs/`, and
+`scripts/`, worktrees excluded)
 turned up two more unwrapped call sites inside unattended loops, now also routed through the
 wrapper: `.claude/skills/land/SKILL.md`'s exit-(a) re-entry step (a bare call added by lode-08g,
 after lode-83d's audit ran) and `.claude/skills/sweep/SKILL.md`'s publish step (a skill that didn't

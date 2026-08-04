@@ -48,7 +48,7 @@ CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 # lode-o29m gh-write guard), keep only segments that are a bd/git invocation,
 # and extract lowercase 40-hex tokens from those. Real `git rev-parse` output is
 # always lowercase, so an uppercase token was never meant as a SHA.
-INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((rtk|sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
+INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
 TOKENS=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n' \
   | grep -E "$INVOKE_RE" \
