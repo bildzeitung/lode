@@ -98,7 +98,16 @@ _DOC_ANCHOR_REF_RE = re.compile(r"\bdocs/[\w./-]+\.md#[\w-]+")
 # Extensions skipped when walking tracked files OUTSIDE SCAN_DIRS for a bare
 # docs/ anchor reference -- data/lock formats that are never meant to be read
 # as text citing a doc, even though none currently contain the byte sequence.
-_OTHER_SKIP_EXTENSIONS = {".lock", ".jsonl", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".ico"}
+_OTHER_SKIP_EXTENSIONS = {
+    ".lock",
+    ".jsonl",
+    ".csv",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+}
 
 
 @dataclass(frozen=True)
