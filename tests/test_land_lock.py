@@ -261,6 +261,91 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# A rev-parse failure must land inside the documented 0/1/2 contract, never
+# escape as git's own bare 128 (lode-8qkb)
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """The bug: `$LOCK="$(git rev-parse ...)/land.lock"` at the top of the
+    script is a bare command substitution under `set -euo pipefail`. Run from
+    outside any git repository, that `rev-parse` fails, and PRE-FIX the
+    script exits with git's own raw 128 and a bare `fatal:` -- outside the
+    documented 0/1/2 contract and indistinguishable to a caller from those
+    three (MEASURED, ticket lode-8qkb: exit=128, message 'fatal: not a git
+    repository...'). `tmp_path` is not itself inside a git repository (unlike
+    a checkout under this repo's own tree), so no `GIT_CEILING_DIRECTORIES`
+    dance is needed -- same fixture shape as
+    tests/test_assert_main_checkout.py's
+    test_not_inside_any_repository_is_exit_2_not_a_raw_git_128, adjusted for
+    THIS script's own contract: land-lock.sh reserves exit 2 for a caller/
+    usage bug only ("never a lock verdict", per its own header), so acquire
+    maps this onto its existing exit-1 MACHINE FAULT branch instead of
+    assert-main-checkout.sh's exit 2.
+
+    Sabotage-verified: reverting the `if ! GIT_COMMON_DIR=...` wrap back to
+    the bare `LOCK="$(git rev-parse ...)/land.lock"` form turns this red --
+    returncode becomes 128, and "MACHINE FAULT" no longer appears in stderr.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("acquire", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: MACHINE FAULT" in result.stderr
+    assert "skipping this tick" in result.stderr.lower()
+    # The actual bug: never git's own undocumented, bare status.
+    assert result.returncode != 128
+
+
+def test_heartbeat_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """Same underlying `$LOCK` line, reached via the `heartbeat` subcommand --
+    which has its own documented exit-1 "could not write the lock file"
+    branch (distinct wording from acquire's MACHINE FAULT branch; both must
+    land inside the same 0/1/2 contract).
+
+    Sabotage-verified the same way as the `acquire` test above: reverting the
+    `$LOCK` wrap reproduces returncode 128 here too.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("heartbeat", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: heartbeat" in result.stderr
+    assert result.returncode != 128
+
+
+def test_release_outside_any_git_repository_still_exits_0(tmp_path: Path) -> None:
+    """`release` is documented to ALWAYS exit 0 ("rm -f is idempotent"), and
+    that promise must survive this fix too: with no repository here, there is
+    by definition no lock file this pass could have created, so release
+    stays a harmless no-op -- but it must print a land-lock-attributed
+    diagnostic instead of silently succeeding via a code path that never
+    ran (pre-fix this raised git's raw 128 instead, which is NOT the
+    documented exit 0 either -- so this is a genuine regression pin, not a
+    no-op-by-construction check).
+
+    Sabotage-verified: reverting the `$LOCK` wrap turns this red --
+    returncode becomes 128, not 0.
+    """
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("release", repo=outside)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "land-lock: release" in result.stderr
+    assert result.returncode != 128
+
+
+# ---------------------------------------------------------------------------
 # Repo-global lock path (lode-xkpd) -- `--git-dir` is worktree-PRIVATE
 # ---------------------------------------------------------------------------
 
