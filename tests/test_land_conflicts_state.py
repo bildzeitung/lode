@@ -223,3 +223,80 @@ def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
         "missing/empty conflicts record could still produce a kick-back note "
         "with a blank paths section"
     )
+
+
+def test_section_3_regate_precedes_section_4_push_origin_trunk() -> None:
+    """lode-youi: pin lode-rlz8's declined option (b) mechanically after all.
+
+    lode-rlz8 chose a prose cross-reference over this assertion, on the stated
+    reason that it "would require new test scaffolding ... a materially bigger
+    and riskier change." That premise is false -- `_skill_blocks()` /
+    `_only_block_with()` are exactly this scaffolding, already in this file.
+
+    This is a DOCUMENT-ORDER pin, not an execution-order guarantee: an agent
+    that skips a section could still push un-gated content to `origin/trunk`
+    even with this test green (the same insufficiency
+    `test_assert_main_checkout.py`'s `_assert_guard_precedes` docstring raises
+    for its own, narrower, intra-block pin). It is still worth having because
+    the threat model Section 4's own prose names is exactly a document edit
+    ("if a future edit ever reorders push and gate") -- document order is
+    precisely what would change if someone made that edit, so a document-order
+    assertion is well matched to the actual failure mode even though it says
+    nothing about what an agent executes at runtime.
+
+    Owned here, as a property of `/land`'s Section 3 -> Section 4 sequencing,
+    not framed as serving `scripts/recycled-worktree-guard.sh`: that script's
+    own precondition ("origin/trunk only ever advances to already-gated
+    content") is established by every launch worktree branching from
+    `origin/trunk` (`.claude/settings.json`'s `worktree.baseRef: "fresh"`), so
+    a reorder's blast radius is every fresh agent worktree, not just this
+    guard's reset path.
+    """
+    blocks = _skill_blocks()
+    regate_indices = [i for i, b in enumerate(blocks) if "nox -s lock_currency" in b]
+    push_indices = [i for i, b in enumerate(blocks) if "rtk git push origin trunk" in b]
+    assert len(regate_indices) == 2, (
+        f"expected exactly 2 fenced blocks mentioning `nox -s lock_currency` "
+        f"(Section 3's Green re-gate + the Red isolation-replay re-gate), found "
+        f"{len(regate_indices)} -- this test's assumption about SKILL.md's "
+        "structure has drifted; re-check by hand before adjusting the count"
+    )
+    assert len(push_indices) == 1, (
+        f"expected exactly 1 fenced block running `rtk git push origin trunk`, "
+        f"found {len(push_indices)} -- this test's assumption about SKILL.md's "
+        "structure has drifted; re-check by hand before adjusting the count"
+    )
+    assert max(regate_indices) < push_indices[0], (
+        "Section 3's re-gate (`nox -s lock_currency`) no longer precedes "
+        "Section 4's `rtk git push origin trunk` in document order -- "
+        f"regate blocks at {regate_indices}, push block at {push_indices[0]}. "
+        "A reorder here would let un-gated content reach `origin/trunk`, and "
+        "every fresh agent worktree branches from it (lode-youi, lode-rlz8)"
+    )
+
+
+def test_section_3_regate_precedes_push_is_sabotage_proven() -> None:
+    """Proves the pin above is non-vacuous: reordering the two block sets in a
+    fixture copy of the parsed block list must make the assertion fail.
+
+    Operates on the actual parsed blocks from the shipped file (not a
+    hand-written fixture string) so this stays coupled to the real parser and
+    the real document, the same way the rest of this module does -- only the
+    ORDER is sabotaged, by swapping the push block to the front."""
+    blocks = _skill_blocks()
+    regate_indices = [i for i, b in enumerate(blocks) if "nox -s lock_currency" in b]
+    push_indices = [i for i, b in enumerate(blocks) if "rtk git push origin trunk" in b]
+
+    sabotaged = [blocks[push_indices[0]]] + [
+        b for i, b in enumerate(blocks) if i != push_indices[0]
+    ]
+    sabotaged_regate_indices = [
+        i for i, b in enumerate(sabotaged) if "nox -s lock_currency" in b
+    ]
+    sabotaged_push_indices = [
+        i for i, b in enumerate(sabotaged) if "rtk git push origin trunk" in b
+    ]
+    assert not (max(sabotaged_regate_indices) < sabotaged_push_indices[0]), (
+        "sabotage (moving the push block to the front) did not make the "
+        "ordering assertion fail -- the real pin above would be vacuous"
+    )

@@ -226,13 +226,20 @@ stops being the block's **last** command — no block here runs under `set -e`, 
 status is the only machine-readable signal the block gives, and `rm -rf` reports success even on a
 path that does not exist.
 
-**This reset is also load-bearing for a downstream consumer, and only half of that is pinned.**
+**This reset is also load-bearing for a downstream consumer, and both halves are now pinned.**
 `scripts/recycled-worktree-guard.sh` resets recycled agent worktrees onto `origin/trunk`, on the
 premise that `/land` only ever advances that ref with already-gated content — a property of this
-skill's step order, not of any lock. This reset's own placement is pinned, by the very test named
-above; the *other* half — [Section 4](#4-land-the-survivors)'s push waiting on
-[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s re-gate — is enforced by
-nothing but an agent following this skill. Full dependency in the guard's header (lode-rlz8).
+skill's step order, not of any lock (and the same property every fresh launch worktree relies on:
+`.claude/settings.json`'s `worktree.baseRef: "fresh"` branches from `origin/trunk`, so a reorder's
+blast radius is every fresh agent worktree, not just this guard's reset path). This reset's own
+placement is pinned by the test named above; the *other* half — [Section
+4](#4-land-the-survivors)'s push waiting on [Section
+3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s re-gate — is now pinned too, by
+`tests/test_land_conflicts_state.py::test_section_3_regate_precedes_section_4_push_origin_trunk`
+(lode-youi, re-costing lode-rlz8's declined option (b)): a **document-order** assertion, which is not
+an execution-order guarantee (an agent that skips a section could still push un-gated content even
+with this test green) but is well matched to the actual threat this note names — a *document edit*
+that reorders push and gate. Full dependency in the guard's header (lode-rlz8).
 
 Then read the queue — every ticket carrying the **`ready-for-land`** label (it stays `in_progress`;
 the label, not a status, is the queue):
@@ -1052,9 +1059,12 @@ publish bd state, then GC branches **and the local builder worktrees**.
 **Do not hoist this push above
 [Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s re-gate.**
 `scripts/recycled-worktree-guard.sh` is load-bearing on `origin/trunk` only ever advancing to
-already-gated content, and nothing here would catch the break — see
-[Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s note (lode-rlz8). The
-push-before-close order above is a separate bd-sync concern.
+already-gated content — a property every fresh launch worktree relies on too, not just the guard —
+and `tests/test_land_conflicts_state.py::test_section_3_regate_precedes_section_4_push_origin_trunk`
+now catches a document edit that reorders them (lode-youi, re-costing lode-rlz8's declined option
+(b); the test is a document-order pin, not an execution-order guarantee — see its docstring and
+[Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s note). The push-before-close order
+above is a separate bd-sync concern.
 
 First, check whether the re-gate's `nox -t fix` (above) actually changed anything:
 
