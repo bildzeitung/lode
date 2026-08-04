@@ -745,19 +745,14 @@ def _batch_collect_enrich(
     :func:`drain`, which catches it all the same. ``docs/storage.md``
     "Transient vs. permanent job failures" owns the full rationale.
 
-    **Consecutive-failure budget (lode-u6he).** A handle whose poll keeps
-    raising (as opposed to succeeding but reporting an errored/expired/
-    canceled *result*, which already goes through the normal attempts/
-    backoff/dead-letter accounting) has no other path to a terminal state —
-    :func:`_reclaim_stale_running` deliberately excludes any row with
-    ``batch_handle`` set, so it would otherwise re-poll and re-fail forever.
-    Each non-auth failure here calls :func:`_record_batch_collect_failure`,
-    which increments ``jobs.batch_collect_failures`` for every still-``running``
-    row on that handle; at ``settings.batch_collect_failure_budget``
-    consecutive failures, those rows are dead-lettered outright (no final
-    salvage collect attempt — the simplest option from this ticket's own
-    Options list). A poll that does NOT raise — batch still in progress, or
-    ended and processed — resets the counter back to 0 for that handle.
+    **Consecutive-failure budget (lode-u6he).** The counter's two events live
+    here: every non-auth failure below calls
+    :func:`_record_batch_collect_failure` (dead-lettering the handle's
+    still-``running`` rows once ``settings.batch_collect_failure_budget`` is
+    reached), and every poll that does NOT raise — batch still in progress,
+    or ended and processed — calls :func:`_reset_batch_collect_failures`.
+    ``docs/storage.md`` "Transient vs. permanent job failures" owns why the
+    budget exists and what dead-lettering does and does not discard.
     """
     batch_ids: list[str] = [
         row[0]
@@ -819,15 +814,16 @@ def _reset_batch_collect_failures(conn: sqlite3.Connection, batch_id: str) -> No
     """Zero ``batch_collect_failures`` for ``batch_id`` after a poll that did
     not raise (lode-u6he).
 
-    Cheap and idempotent even when the count is already 0 (the common case) —
-    a plain ``UPDATE`` rather than a read-then-maybe-write, since the row set
-    (``running`` jobs on this handle) is the same one the failure path below
-    increments.
+    ``AND batch_collect_failures != 0`` keeps the steady state free: a healthy
+    handle is polled on every tick for as long as the batch is in flight (up
+    to the Batches API's 24h SLA), and without that clause each of those
+    polls would dirty and re-commit every row on the handle to rewrite 0 as 0.
     """
     with conn:
         conn.execute(
             "UPDATE jobs SET batch_collect_failures = 0 "
-            "WHERE batch_handle = ? AND status = 'running'",
+            "WHERE batch_handle = ? AND status = 'running' "
+            "AND batch_collect_failures != 0",
             (batch_id,),
         )
 
@@ -839,32 +835,30 @@ def _record_batch_collect_failure(
     dead-letter its still-``running`` jobs once the budget is exhausted
     (lode-u6he).
 
-    Denormalized onto every row sharing ``batch_handle`` (there is no
-    separate batches table) rather than kept in-memory, so the count
-    survives a restart the same way ``batch_handle`` itself does — each
-    ``lode work`` invocation re-polls every persisted handle from scratch
-    (the resume-on-restart contract above), so an in-memory counter would
-    reset to 0 on every new process and the budget would never bite.
+    Why the count is a column and why there is no final salvage collect call
+    is owned by ``docs/storage.md`` "Transient vs. permanent job failures"
+    (Consecutive-failure budget) — read it before changing either.
 
-    Dead-lettering here gives up on the whole batch outright rather than
-    attempting one final salvage ``collect_batch`` call — the simplest of
-    this ticket's own Options, and consistent with the fact that
-    ``collect_enrich_batch`` itself is what's been failing: a call that has
-    raised ``settings.batch_collect_failure_budget`` times in a row is not
-    expected to suddenly succeed on one more try.
+    Two local notes that doc does not own. The bulk ``UPDATE`` deliberately
+    does not go through :func:`lode.jobs.cas_update_running`: that primitive
+    guards one ``id`` + ``claimed_at`` against the reclaim/re-claim ABA race,
+    and a ``running`` row with ``batch_handle`` set is exactly the row
+    :func:`_reclaim_stale_running` excludes, so it cannot cycle out and back
+    under us. And no :func:`_run_dead_letter_hook` fires here: the registry
+    is keyed by job type and only ``refresh`` registers one, so for these
+    (always ``enrich``) rows it would be a no-op.
     """
     with conn:
-        conn.execute(
+        rows = conn.execute(
             "UPDATE jobs SET batch_collect_failures = batch_collect_failures + 1 "
-            "WHERE batch_handle = ? AND status = 'running'",
+            "WHERE batch_handle = ? AND status = 'running' "
+            "RETURNING batch_collect_failures",
             (batch_id,),
-        )
-        row = conn.execute(
-            "SELECT batch_collect_failures FROM jobs "
-            "WHERE batch_handle = ? AND status = 'running' LIMIT 1",
-            (batch_id,),
-        ).fetchone()
-        failures = row[0] if row is not None else 0
+        ).fetchall()
+        # Every row on a handle is incremented and reset together, so MAX is
+        # just "the" count -- but it is also the safe read if that ever stops
+        # holding, and it needs no ORDER BY to say so.
+        failures = max((r[0] for r in rows), default=0)
 
         if failures >= settings.batch_collect_failure_budget:
             error_msg = f"batch collect failed {failures} time(s) in a row: {exc}"
@@ -1117,9 +1111,12 @@ def drain(
     rationale, including why the collect arm's catch is deliberately wider
     than the taxonomy named above.
 
-    Neither of those makes a stuck batch un-stuck — there is still no failure
-    budget or dead-letter path for one; it stays wedged until a human
-    intervenes (lode-u6he, discovered-from lode-knnt).
+    **Consecutive-failure budget (lode-u6he).** Neither of those, on its own,
+    makes a stuck batch un-stuck — that is what the budget adds: a handle
+    whose poll keeps *raising* is dead-lettered after
+    ``settings.batch_collect_failure_budget`` consecutive failures, so it
+    reaches a terminal state without a human. See
+    :func:`_batch_collect_enrich`.
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1211,8 +1208,9 @@ def drain(
     # keeps failing on the same bad data), not just a missing credential, so the
     # catch below is LLMProviderError rather than LLMAuthError. Widening is
     # strict -- LLMAuthError subclasses it -- and it degrades the stuck step
-    # rather than aborting the pass. It does not make the batch un-stuck; see
-    # drain's docstring for the limits that leaves standing.
+    # rather than aborting the pass. It does not by itself make the batch
+    # un-stuck -- lode-u6he's consecutive-failure budget does; see drain's
+    # docstring.
     #
     # lode-knnt: each pre-step gets its OWN try, so a collect-side failure no
     # longer also skips the submit step. `permanent` keeps whichever raised

@@ -270,16 +270,11 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- NULL for jobs never claimed (still 'pending') or that predate this column.
 --
 -- batch_collect_failures (lode-u6he): consecutive collect_enrich_batch()
--- FAILURES (the poll call itself raising -- a malformed results line, a
--- provider bug -- not an individual result's succeeded/errored outcome,
--- which already goes through the normal attempts/backoff/dead-letter
--- accounting). Denormalized onto every row sharing a batch_handle (there is
--- no separate batches table) rather than kept in-memory, so it survives a
--- restart the same way batch_handle itself does. Reset to 0 the moment a
--- poll of that handle succeeds (ended or still pending); at
--- settings.batch_collect_failure_budget consecutive failures, every running
--- job on that handle is dead-lettered outright -- see
--- lode.worker._batch_collect_enrich.
+-- FAILURES (the poll call itself raising, not an individual result's
+-- outcome), denormalized onto every row sharing a batch_handle since there
+-- is no separate batches table. Why it exists and when it bites is owned by
+-- docs/storage.md "Transient vs. permanent job failures"; the increment and
+-- reset events are in lode.worker._batch_collect_enrich.
 CREATE TABLE IF NOT EXISTS jobs (
     id                     INTEGER PRIMARY KEY,
     type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),

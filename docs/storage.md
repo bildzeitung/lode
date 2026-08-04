@@ -708,10 +708,17 @@ denormalized onto every row sharing a `batch_handle`, since there is no
 separate batches table) counts consecutive raises from `collect_enrich_batch`
 for that handle; a poll that does *not* raise (still in progress, or ended and
 processed) resets it to 0. At `settings.batch_collect_failure_budget`
-(default 5) consecutive failures, every still-`running` job on that handle is
-dead-lettered outright — no final salvage collect attempt, the simplest of
-`lode-knnt`'s own Options for this axis — via
-`lode.worker._record_batch_collect_failure`. The budget bounds only the
+(default 5) consecutive failures — so N-1 are tolerated and the Nth is fatal —
+every still-`running` job on that handle is dead-lettered via
+`lode.worker._record_batch_collect_failure`. There is **no final salvage
+collect attempt**, and it forfeits less than that sounds: `collect_enrich_batch`
+commits *per result*, so everything it reached before raising is already
+persisted (a bad *payload* is charged to its own job via `_mark_job_failed` and
+never raises here at all). What a raise loses is the un-reached *suffix* of the
+results stream — and because the same malformed line aborts at the same point
+every tick, one more identical call would salvage exactly nothing. Reaching the
+budget therefore implies a deterministic failure, not a flaky one (any
+non-raising poll resets the count). The budget bounds only the
 *poll-raises* case; a batch whose results keep arriving as individual
 errored/expired/canceled outcomes was already bounded by the ordinary
 per-job `retry_max_attempts` dead-letter path.

@@ -259,12 +259,11 @@ class Settings(BaseModel):
         5,
         Kind.RUNTIME,
         "Consecutive collect_enrich_batch() failures (the poll call itself "
-        "raising, not an individual result outcome) tolerated for one "
-        "batch_handle before its still-running jobs are dead-lettered "
-        "outright, without a final salvage attempt (lode-u6he). A per-result "
-        "failure (errored/expired/canceled result, or a parse error) already "
-        "goes through the normal attempts/backoff/dead-letter accounting via "
-        "record_job_failure and is unaffected by this budget.",
+        "raising, not an individual result outcome) at which one "
+        "batch_handle's still-running jobs are dead-lettered -- so N-1 are "
+        "tolerated and the Nth is fatal. A per-result failure is unaffected: "
+        "it goes through the ordinary attempts/backoff/dead-letter accounting "
+        "instead (lode-u6he; docs/storage.md owns the rationale).",
         ge=1,
     )
     enrichment_batch_flush_interval_s: int = _knob(
