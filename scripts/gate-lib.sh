@@ -1,10 +1,11 @@
 #!/bin/bash
 #
-# Shared gate_could_not_run() helper for the "exit 2 means the GATE could not
-# run, never that the CONTENT is bad" convention (lode-9i2p). Sourced by every
-# scripts/*.sh gate that draws this distinction -- discover the current set
-# rather than naming it here, since a named list goes stale on every migration
-# -- the same way scripts/python-init.sh already sources
+# Shared helpers for the "exit 2 means the GATE could not run, never that the
+# CONTENT is bad" convention (lode-9i2p): gate_could_not_run(), and built on
+# it escalate_unless_content() (lode-1mea, at the foot of this file).
+# Sourced by every scripts/*.sh gate that draws this distinction -- discover
+# the current set rather than naming it here, since a named list goes stale on
+# every migration -- the same way scripts/python-init.sh already sources
 # scripts/venv-install.sh. Ask for the SOURCE LINE, not the library's name:
 # `grep -l gate-lib.sh scripts/*.sh` also returns this file plus any script
 # that merely explains why it does NOT source the library (lode-pcee), so use
@@ -145,4 +146,43 @@ gate_could_not_run() {
   for line in "$@"; do echo "$line" >&2; done
   for line in "${GATE_ADVISORY[@]}"; do echo "$line" >&2; done
   exit 2
+}
+
+# escalate_unless_content() -- lode-1mea. The shared partition of a command's
+# OWN exit code: 1 = CONTENT ("no match"), anything else = MACHINE fault.
+# Extracted once the idiom had reached six open-coded copies, double this
+# repo's own extract-at-three precedent (lode-090f, lode-3pyo). Find the
+# current call sites with `grep -n escalate_unless_content scripts/*.sh`
+# rather than trusting a list here, for the same reason this file's own
+# header above refuses to name its consumer set.
+#
+# Only the `rc=$?`/`-ne 1` test moves here -- the caller keeps its own
+# `if`/`else`, so its success arm and no-match arm stay open-coded
+# byte-for-byte at the call site.
+#
+# Usage (caller's `else` arm, after capturing `rc=$?`):
+#   escalate_unless_content "$rc" "cause line 1" "cause line 2" ...
+# `rc=$?` must be the FIRST command in that arm; anything above it clobbers
+# `$?`. And never `if ! cmd; then rc=$?`: `! cmd`'s `$?` is cmd's status
+# LOGICALLY NEGATED (0<->1), not cmd's own status -- so a machine fault
+# arrives here reading as a clean "no match", the exact inversion this
+# partition exists to prevent. Measured while writing lode-yoc3's tests, the
+# fix that introduced the first copy of this idiom.
+#
+# Returns 0 on the content path rather than merely declining to escalate:
+# scripts/validate-mermaid.sh runs under `set -e`, where a nonzero return
+# here would abort that gate mid-loop with exit 1 -- which in THAT script
+# means "invalid mermaid", i.e. a fabricated content verdict. Pinned by
+# tests/test_gate_lib.py's `-e` case.
+#
+# Does NOT cover scripts/merge-precheck.sh's exit-code checks: that script
+# has TWO live content codes (0 = clean, 1 = conflict), and its rc is
+# captured from a command substitution, not an `else` arm's `$?`. More
+# generally: a caller with more than one live content code, or whose rc does
+# not come from an `if`/`else` arm's `$?`, does not fit.
+escalate_unless_content() {
+  local rc="$1"
+  shift
+  [ "$rc" -eq 1 ] && return 0
+  gate_could_not_run "$@"
 }

@@ -334,9 +334,11 @@ def test_usage_with_two_args_is_also_exit_2() -> None:
 
 # ---------------------------------------------------------------------------
 # lode-umtc: the four grep call sites that consume read_log's output. Why the
-# partition is drawn at exit 1, and why it is open-coded per site rather than
-# extracted, is argued at the greps in scripts/release-bump.sh -- not repeated
-# here.
+# partition is drawn at exit 1 is argued at the greps in
+# scripts/release-bump.sh -- not repeated here. The shared `rc=$?`/`-ne 1`
+# body those sites now call is gate-lib.sh's escalate_unless_content()
+# (lode-1mea); the tests below still drive the REAL script, so they cover the
+# partition end-to-end at each site regardless of where that body lives.
 #
 # Each fake grep below delegates to the REAL grep for every call except the
 # one call site under test (matched on grep's own PATTERN argument, `$2` --
