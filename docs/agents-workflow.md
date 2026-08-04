@@ -1900,12 +1900,12 @@ of occasional retry for a standing per-machine daemon (`dolt sql-server` + lifec
 is the wrong weight for this workload. Full rationale and the revisit trigger are in
 [decisions.md](decisions.md).
 
-**lode-83d's own enumeration was prefix-blind (lode-bpl).** It found its four files with
-`grep -rl "rtk bd dolt push" .claude/`, which could not see a call written without the `rtk` prefix
-that the repo then mandated — a human convention, not something a literal grep enforces. (The `rtk`
-proxy has since been removed from the repo entirely, so every call site is now the plain form.) A
-prefix-agnostic re-audit (`grep -rnE '(rtk +)?bd +dolt +push'` over `.claude/`, `docs/`, and
-`scripts/`, worktrees excluded)
+**lode-83d's own enumeration matched only ONE SPELLING of the call, and so missed real sites
+(lode-bpl).** It found its four files with a fixed-string `grep -rl` for the call as it was written
+in the sites it already knew about — a shape enforced by convention rather than by anything
+mechanical, so a site written in any other equivalent form was invisible to the search that was
+supposed to find every site. A re-audit with a *pattern* rather than a fixed string
+(`grep -rnE 'bd +dolt +push'` over `.claude/`, `docs/`, and `scripts/`, worktrees excluded)
 turned up two more unwrapped call sites inside unattended loops, now also routed through the
 wrapper: `.claude/skills/land/SKILL.md`'s exit-(a) re-entry step (a bare call added by lode-08g,
 after lode-83d's audit ran) and `.claude/skills/sweep/SKILL.md`'s publish step (a skill that didn't
@@ -1914,9 +1914,9 @@ exemptions**, not oversights: `.claude/skills/challenge/SKILL.md` (`/challenge` 
 interactive — a failed push is observed directly, unlike the unattended loops above — see the
 in-line note at its persist step), and `.beads/README.md` / `AGENTS.md` (generic, beads-generated
 quick-reference boilerplate demonstrating the base `bd` CLI to a human reader, not an automated call
-site in any skill). Any future "where do we call X" audit across `.claude/` should grep
-prefix-agnostically from the start — the failure mode was the enumeration method, not any one
-missed file.
+site in any skill). Any future "where do we call X" audit across `.claude/` should match on a
+pattern covering every way the call can legitimately be spelled, from the start — the failure mode
+was the enumeration method, not any one missed file.
 
 ### The code-review pass — `code-reviewer` (Opus)
 

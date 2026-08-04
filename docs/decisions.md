@@ -3218,3 +3218,15 @@ while erasing it here would lose the record of what was believed, and when.
   pattern-substitution-specific instead of a blanket `${` ban, since the wrapper legitimately uses
   POSIX `${CLAUDE_PROJECT_DIR:-…}`; the sabotage test proving dash dies on the bash-only form was
   retargeted at the wrapper, not dropped.
+
+  **Update (2026-08-04, maintainer decision)** — a follow-up sweep removed the last `rtk` mention
+  from `docs/` outside this file. The one site that had been *deliberately* kept — the `lode-bpl`
+  paragraph in [agents-workflow.md](agents-workflow.md), which quoted the literal
+  `grep -rl "rtk bd dolt push"` that the original audit ran — was rewritten to state the durable
+  lesson (an enumeration that matches only one spelling of a call misses every site written
+  another way) without naming the tool. Nothing was lost: the specific spelling was incidental to
+  the failure, and no reader can now reach a dead tool name from an operational doc.
+  **This file remains the sole exception, on purpose:** it is a dated log, so its `rtk` entries are
+  the record of what was believed and when, and erasing them is exactly what its preamble forbids.
+  `.claude/agents/` and `.claude/skills/` were swept in the same pass and were already clean; the
+  passive `.beads/issues.jsonl` export is a historical snapshot and is never hand-edited (lode-6ra).
