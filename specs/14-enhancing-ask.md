@@ -85,3 +85,10 @@ The CLI should focus on dispatch, not logic. There is bare SQL, helper
 functions, and sophisticated logic that all should live in their own modules.
 Re-factor into src/lode/cli/**.
 
+## scroll behaviour on related notes window
+
+When editing or creating a note, if the cursor is at the bottom of the window
+and the related notes window expands, then the bottom line of the edit window
+is swallowed and not visible. The user must cursor down to see what they're
+working on. The related notes list must not interfere with the user's actions.
+

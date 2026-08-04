@@ -42,7 +42,7 @@ from lode.config import Settings
 
 def cache_key() -> str:
     s = Settings()
-    ids = "-".join((s.embedding_model, s.rerank_model, s.entailment_model))
+    ids = f"{s.embedding_model}-{s.rerank_model}-{s.entailment_model}"
     return "models-" + ids.replace("/", "_")
 
 

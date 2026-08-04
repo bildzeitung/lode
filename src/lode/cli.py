@@ -78,7 +78,7 @@ from lode.fetch_outcome import HttpOutcome, classify_http_status
 from lode.ids import SHORT_VERSION_ID_LENGTH, short_version_id
 from lode.jira_fetch import JiraHttpFetcher, fetch_jira_issue
 from lode.lexical import LexicalCacheBackend
-from lode.llm_provider import provider_identity
+from lode.llm_provider import LLMProviderError, provider_identity
 from lode.lock import LockHeld, WorkerLock
 from lode.logconfig import configure_logging
 from lode.notes_read import (
@@ -573,17 +573,13 @@ def ask(
             for claim in answer.claims
             for support in claim.support
         }
-    except AuthError as err:
-        # Fail gracefully on missing credentials: a clean, actionable line to the
-        # user (no traceback) and the underlying cause to the log for debugging.
-        # No exc_info -- the root logger mirrors to stderr, so dumping frames there
-        # would re-introduce the very traceback we're suppressing for the user.
-        logging.getLogger(__name__).error(
-            "ask aborted — could not resolve Anthropic credentials: %s",
-            err.__cause__ or err,
-        )
-        typer.echo(str(err), err=True)
-        raise typer.Exit(code=1) from None
+    except (AuthError, LLMProviderError) as err:
+        # `ask` is one-shot with no retry machinery, so every provider failure
+        # ends the command -- both the credential case and any other
+        # LLMProviderError. AuthError must be named alongside it: they are
+        # sibling RuntimeError subclasses, neither an ancestor of the other, so
+        # naming only one silently misses the other (lode-yx1c).
+        _abort_on_provider_error("ask", err)
     finally:
         conn.close()
     for line in _format_cited_answer(answer, as_of):
@@ -893,6 +889,34 @@ def _report_ambiguous_prefix(
             f"{escape(row.summary + marker)}",
             soft_wrap=True,
         )
+    raise typer.Exit(code=1) from None
+
+
+def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
+    """Render a cloud-LLM provider failure as one actionable line, then exit 1.
+
+    The one shared body for ``ask``'s and ``work``'s
+    ``except (AuthError, LLMProviderError)`` arms (lode-yx1c). Shared rather
+    than copied because the copies had already forked once: each hardcoded
+    ``"could not resolve Anthropic credentials"``, which became wrong the
+    moment a non-Anthropic provider (lode-568v.3) or a non-credential failure
+    could reach them. Every provider exception this repo raises already carries
+    a self-describing message -- ``auth.MISSING_CREDENTIALS_MESSAGE`` names
+    every resolution path; ``LLMProviderError``'s embeds the underlying SDK
+    error -- so ``str(err)`` alone is the actionable line, with no per-command
+    framing to keep in sync.
+
+    No ``exc_info``: the root logger mirrors to stderr, so dumping frames there
+    would re-introduce the very traceback being suppressed for the user. The
+    cause is logged instead, since the user-facing message deliberately does
+    not carry it.
+
+    ``docs/storage.md`` "Transient vs. permanent job failures" owns *which*
+    errors reach here, and why a non-auth ``LLMProviderError`` raised by a job
+    handler never does.
+    """
+    logging.getLogger(__name__).error("%s aborted — %s", command, err.__cause__ or err)
+    typer.echo(str(err), err=True)
     raise typer.Exit(code=1) from None
 
 
@@ -1877,11 +1901,16 @@ def reenrich(
         typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
+#: ``jobs --status`` option: narrows the listing to jobs in one status.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_JOBS_STATUS_OPTION = typer.Option(
+    None, "--status", help="Only list jobs in this status (default: all)."
+)
+
+
 @app.command(name="jobs")
 def jobs_(
-    status: JobStatus | None = typer.Option(
-        None, "--status", help="Only list jobs in this status (default: all)."
-    ),
+    status: JobStatus | None = _JOBS_STATUS_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List the derive jobs on the work queue (see docs/storage.md).
@@ -1920,11 +1949,16 @@ def jobs_(
         typer.echo(line)
 
 
+#: ``egress --purpose`` option: narrows the listing to sends of one purpose.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_EGRESS_PURPOSE_OPTION = typer.Option(
+    None, "--purpose", help="Only list sends of this purpose (default: all)."
+)
+
+
 @app.command()
 def egress(
-    purpose: EgressPurpose | None = typer.Option(
-        None, "--purpose", help="Only list sends of this purpose (default: all)."
-    ),
+    purpose: EgressPurpose | None = _EGRESS_PURPOSE_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List what content has left the box for the cloud, and when.
@@ -2159,6 +2193,16 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
+#: ``dump-html --dir`` option: where ``--file`` writes its per-note dumps.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_DUMP_HTML_DIR_OPTION = typer.Option(
+    None,
+    "--dir",
+    help="Directory to write files into with --file (created if "
+    "absent). Default: the current directory. Only valid with --file.",
+)
+
+
 @app.command(name="dump-html")
 def dump_html(
     target: str | None = typer.Argument(
@@ -2185,12 +2229,7 @@ def dump_html(
         "see --dir) instead of printing to stdout. Valid with or without "
         "--all.",
     ),
-    dir_: Path | None = typer.Option(
-        None,
-        "--dir",
-        help="Directory to write files into with --file (created if "
-        "absent). Default: the current directory. Only valid with --file.",
-    ),
+    dir_: Path | None = _DUMP_HTML_DIR_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """Print a note's drawn-down external's raw HTML (its captured snapshot).
@@ -3131,18 +3170,14 @@ def work(
                         time.sleep(interval)
                 except KeyboardInterrupt:
                     typer.echo("worker interrupted", err=True)
-                except AuthError as err:
-                    # Permanent, user-actionable failure (lode-9yy): drain()
-                    # surfaces it once the offending job is reset to 'pending'
-                    # uncharged (docs/storage.md "Transient vs. permanent job
-                    # failures"). Rendered exactly as `ask` does above — see that
-                    # handler for why there is no exc_info.
-                    logging.getLogger(__name__).error(
-                        "work aborted — could not resolve Anthropic credentials: %s",
-                        err.__cause__ or err,
-                    )
-                    typer.echo(str(err), err=True)
-                    raise typer.Exit(code=1) from None
+                except (AuthError, LLMProviderError) as err:
+                    # Either arm of what drain() re-raises: an AuthError/
+                    # LLMAuthError once the offending job is reset to 'pending'
+                    # uncharged (lode-9yy, lode-568v.3), or the non-auth
+                    # LLMProviderError it stashes from a stuck batch pre-step
+                    # and re-raises at the end of the pass (lode-5zqa,
+                    # lode-yx1c). Same pair, same rendering as `ask` above.
+                    _abort_on_provider_error("work", err)
         except LockHeld as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from None

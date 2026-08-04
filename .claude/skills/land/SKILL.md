@@ -226,6 +226,14 @@ stops being the block's **last** command — no block here runs under `set -e`, 
 status is the only machine-readable signal the block gives, and `rm -rf` reports success even on a
 path that does not exist.
 
+**This reset is also load-bearing for a downstream consumer, and only half of that is pinned.**
+`scripts/recycled-worktree-guard.sh` resets recycled agent worktrees onto `origin/trunk`, on the
+premise that `/land` only ever advances that ref with already-gated content — a property of this
+skill's step order, not of any lock. This reset's own placement is pinned, by the very test named
+above; the *other* half — [Section 4](#4-land-the-survivors)'s push waiting on
+[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s re-gate — is enforced by
+nothing but an agent following this skill. Full dependency in the guard's header (lode-rlz8).
+
 Then read the queue — every ticket carrying the **`ready-for-land`** label (it stays `in_progress`;
 the label, not a status, is the queue):
 
@@ -1040,6 +1048,13 @@ machine. A red gate is content; exit 2 is the machine.
 Only now — combined `trunk` is green — do I write the world. Order matters (see
 [bd-sync discipline](#bd-sync-discipline-non-negotiable)): push `trunk` first, then close, then
 publish bd state, then GC branches **and the local builder worktrees**.
+
+**Do not hoist this push above
+[Section 3](#3-batch-merge-the-accepted-set-re-gate-once-isolate-on-red)'s re-gate.**
+`scripts/recycled-worktree-guard.sh` is load-bearing on `origin/trunk` only ever advancing to
+already-gated content, and nothing here would catch the break — see
+[Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s note (lode-rlz8). The
+push-before-close order above is a separate bd-sync concern.
 
 First, check whether the re-gate's `nox -t fix` (above) actually changed anything:
 

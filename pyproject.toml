@@ -119,11 +119,5 @@ lode = ["*.sql"]
 
 [tool.ruff.lint]
 ignore = [
-  "B008",
-  "B017",
   "BLE001",
-  "C402",
-  "C408",
-  "FLY002",
-  "ISC004",
 ]

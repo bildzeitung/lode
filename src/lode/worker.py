@@ -728,6 +728,22 @@ def _batch_collect_enrich(
     line for each succeeded result — the batch pre-step runs ahead of
     :func:`drain`'s main claim/run loop, so this is the only channel that
     surfaces those outcomes to the caller.
+
+    **Per-handle isolation (lode-knnt).** Each ``batch_handle`` is polled
+    inside its own ``try``, so one poisoned handle cannot stop the OTHER,
+    healthy handles in the same pass from being collected. The catch is
+    **consequence-scoped, not type-scoped** — it absorbs whatever type
+    ``collect_enrich_batch`` raises — and the failure is **deferred, not
+    swallowed**: the first one is re-raised once every handle has had its
+    turn, so :func:`drain` still sees it. ``AuthError``/``LLMAuthError`` is
+    the exception, re-raised immediately mid-loop: a missing credential is
+    not handle-specific, so there is nothing to gain from attempting the
+    rest.
+
+    Note the ``SELECT`` and imports above sit OUTSIDE that per-handle ``try``,
+    so a failure there is not isolated per handle — it propagates to
+    :func:`drain`, which catches it all the same. ``docs/storage.md``
+    "Transient vs. permanent job failures" owns the full rationale.
     """
     batch_ids: list[str] = [
         row[0]
@@ -744,16 +760,41 @@ def _batch_collect_enrich(
     # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
     # keeps an embed-only drain SDK-free is that lode.enrich and lode.auth are both
     # cheap to import (their `import anthropic` is TYPE_CHECKING-guarded).
+    from lode.auth import AuthError
     from lode.enrich import collect_enrich_batch
+    from lode.llm_provider import LLMAuthError
 
     kwargs: dict = {}
     if _client is not None:
         kwargs["provider"] = _client
 
     ended = 0
+    deferred_exc: Exception | None = None
     for batch_id in batch_ids:
-        if collect_enrich_batch(conn, batch_id, settings, outcomes=outcomes, **kwargs):
-            ended += 1
+        try:
+            if collect_enrich_batch(
+                conn, batch_id, settings, outcomes=outcomes, **kwargs
+            ):
+                ended += 1
+        except AuthError, LLMAuthError:
+            # Not handle-specific -- every remaining handle shares the same
+            # credentials and would fail identically. Propagate immediately;
+            # drain()'s own stash-and-continue contract takes it from here.
+            raise
+        except Exception as exc:
+            log.warning(
+                "_batch_collect_enrich: batch=%s poll failed, skipping this "
+                "pass (will retry next tick): %s",
+                batch_id,
+                exc,
+            )
+            # Deferred, not swallowed: every OTHER handle still gets its turn
+            # (per-handle isolation, lode-knnt) before this is raised below.
+            if deferred_exc is None:
+                deferred_exc = exc
+
+    if deferred_exc is not None:
+        raise deferred_exc
 
     return ended
 
@@ -960,11 +1001,11 @@ def drain(
     (``--loop`` or ``--wait``) pays once per process. The mechanism, and why a
     test-injected ``embed`` stub never sees it, is commented at the swap below.
 
-    The trade, both halves accepted (``docs/decisions.md``, lode-j5r2): a
-    long-lived embedder keeps the ONNX model resident, and latches its *first*
-    ``model_revision()`` result — failures included — for its whole lifetime, so
-    a single failed probe stamps ``model_revision = NULL`` on every version
-    indexed for the rest of that process, not just the job that hit it.
+    The trade (``docs/decisions.md``, lode-j5r2): a long-lived embedder keeps
+    the ONNX model resident for the whole process — intended, and unchanged. A
+    long-lived ``model_revision()`` latch was the other half, and is no longer
+    accepted: a FAILED probe is re-armed once per call (lode-fxse), commented
+    at the same swap below.
 
     Returns the total number of jobs claimed and run by the **main loop**
     (including failures and dead-letters). Batch pre-step and reclaim activity
@@ -978,26 +1019,23 @@ def drain(
     But it raises **last**, not on the spot: the error is stashed and
     re-raised only after the reclaim, the retry reset, and the main claim/run
     loop have all run, so the credential-free ``embed`` jobs are never
-    starved by a missing key or by a batch wedged on bad data.
+    starved by a missing key or by a batch wedged on bad data. The collect
+    pre-step's own ``try`` (below) in fact catches wider than this named
+    taxonomy — see "Per-handle isolation" next for why that is deliberate
+    and still bounded.
 
-    Two limits worth knowing at this call site:
+    **Per-handle isolation + independent pre-steps (lode-knnt).** One stuck
+    ``batch_handle`` no longer stops any *other* handle in the same pass
+    (:func:`_batch_collect_enrich` isolates each one; see its docstring), and
+    the two pre-steps below now run under their **own** ``try`` each rather
+    than sharing one, so a collect-side failure no longer skips the submit
+    step. ``docs/storage.md`` "Transient vs. permanent job failures" owns the
+    rationale, including why the collect arm's catch is deliberately wider
+    than the taxonomy named above.
 
-    * The catch is scoped by exception *type*, so it bounds only failures that
-      reach it as an ``LLMProviderError``. A provider-side failure that
-      escapes as some other type — e.g. a well-formed but wrong-shape
-      batch-results line, which surfaces from ``collect_batch``'s loop body as
-      a raw ``AttributeError``/``TypeError`` (lode-t7en, open) — still aborts
-      the pass exactly as before.
-    * Both pre-steps share one ``try``, so a collect failure also skips the
-      submit step: while any handle is stuck, no *new* enrich batch is
-      submitted either.
-
-    Neither this nor the widening makes a stuck batch un-stuck — there is no
-    failure budget or dead-letter path for one; it stays wedged until a human
-    intervenes (lode-knnt). Note ``lode work`` has no handler for
-    ``LLMProviderError`` (only ``AuthError``), so unlike the credential case it
-    surfaces as an unhandled traceback rather than a clean actionable line
-    (lode-yx1c).
+    Neither of those makes a stuck batch un-stuck — there is still no failure
+    budget or dead-letter path for one; it stays wedged until a human
+    intervenes (lode-u6he, discovered-from lode-knnt).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1042,6 +1080,23 @@ def drain(
             from lode.embedding import FastEmbedEmbedder
 
             embedder = FastEmbedEmbedder(settings)
+        # Retry a FAILED HF revision probe once per drain() call -- once per
+        # poll tick of a --loop/--wait session, not once per job -- so a
+        # single failed probe no longer latches model_revision = NULL for a
+        # shared embedder's whole process lifetime (lode-fxse; the
+        # accepted-but-unfixed half of lode-j5r2's trade, docs/decisions.md).
+        # Unconditional, including for the instance just constructed above:
+        # what to re-arm is FastEmbedEmbedder.reset_revision_probe()'s own
+        # decision (a no-op on a fresh instance, and on a SUCCESSFUL prior
+        # probe), which keeps worker.py blind to the embedder's internal probe
+        # state -- never reach into `_revision_probed` here. Duck-typed, not
+        # required, exactly like _embedder_model_revision's model_revision()
+        # probe; tests/test_network_guard.py pins that the shared test stub
+        # mirrors this method, and tests/test_worker.py's real_embedder test
+        # pins that the string below still names a method the real class has.
+        reset_probe = getattr(embedder, "reset_revision_probe", None)
+        if reset_probe is not None:
+            reset_probe()
         run_registry = dict(registry)
         run_registry["embed"] = functools.partial(_embed_handler, embedder=embedder)
 
@@ -1075,6 +1130,17 @@ def drain(
     # rather than aborting the pass. It does not make the batch un-stuck; see
     # drain's docstring for the limits that leaves standing.
     #
+    # lode-knnt: each pre-step gets its OWN try, so a collect-side failure no
+    # longer also skips the submit step. `permanent` keeps whichever raised
+    # FIRST; a second one is dropped rather than overwriting it.
+    #
+    # The two catches are deliberately asymmetric -- collect is bare
+    # `Exception`, submit is the narrow tuple. WHY (per-handle isolation,
+    # what can reach each arm, why narrowing collect would re-break lode-5zqa)
+    # is owned by docs/storage.md "Transient vs. permanent job failures";
+    # _batch_collect_enrich's own docstring covers the loop side. Do not
+    # narrow the collect arm without reading those.
+    #
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
     # so the embeds land before any residual enrich job re-raises out of run_one.
@@ -1085,7 +1151,7 @@ def drain(
     # The reclaim/reset sweeps between them are left uninstrumented on purpose:
     # they are fast local UPDATEs with no network or model call to stall on.
     heartbeat_interval_s = settings.progress_heartbeat_interval_s
-    permanent: AuthError | LLMProviderError | None = None
+    permanent: Exception | None = None
     try:
         with op_progress(
             "drain.batch_collect", heartbeat_interval_s=heartbeat_interval_s
@@ -1093,12 +1159,17 @@ def drain(
             _batch_collect_enrich(
                 conn, settings, _client=_batch_client, outcomes=outcomes
             )
+    except Exception as exc:
+        permanent = exc
+
+    try:
         with op_progress(
             "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
     except (AuthError, LLMProviderError) as exc:
-        permanent = exc
+        if permanent is None:
+            permanent = exc
 
     reclaimed = _reclaim_stale_running(conn, settings)
     if reclaimed:

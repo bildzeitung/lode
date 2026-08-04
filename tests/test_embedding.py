@@ -584,6 +584,112 @@ def test_fast_embed_embedder_model_revision_none_on_probe_failure(
     assert embedder.model_revision() is None
 
 
+def test_reset_revision_probe_rearms_a_failed_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A FAILED probe is retried after reset_revision_probe() -- self-heals (lode-fxse).
+
+    Regression test for the trade lode-j5r2 accepted and left unfixed:
+    FastEmbedEmbedder.model_revision() used to latch a failed probe for the
+    instance's whole lifetime, with no way back short of a new instance. Once
+    ``lode work`` started sharing one instance across a whole
+    ``--loop``/``--wait`` process, a single transient blip stamped
+    ``model_revision = NULL`` on every version indexed for the rest of that
+    process. ``reset_revision_probe()`` re-arms exactly a failed probe.
+
+    Counts calls rather than asserting via a raising stub -- this file's own
+    history (lode-dj6m, lode-r4r2) has hit the trap where a stub that raises
+    is silently swallowed into a false pass by whichever ``except Exception``
+    sits between the probe and the assertion.
+    """
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    probe_calls = 0
+
+    class _FakeModelInfo:
+        sha = "resolved-after-retry"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            raise OSError("transient network blip")
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(_settings())
+    assert embedder.model_revision() is None
+    assert probe_calls == 1
+
+    # Still cached -- no reset yet, so a second call must NOT re-probe.
+    assert embedder.model_revision() is None
+    assert probe_calls == 1
+
+    embedder.reset_revision_probe()
+
+    assert embedder.model_revision() == "resolved-after-retry"
+    assert probe_calls == 2
+
+    # The healed result now latches again, same as any successful probe.
+    assert embedder.model_revision() == "resolved-after-retry"
+    assert probe_calls == 2
+
+
+def test_reset_revision_probe_is_a_noop_after_a_successful_probe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A SUCCESSFUL probe stays cached for the process -- reset is a no-op (lode-fxse).
+
+    The other half of the trade: lode-fxse retries only a FAILED probe, never
+    reintroducing a probe on every ``drain()`` pass for the happy path -- that
+    would silently undo lode-j5r2's "once per process" amortization for every
+    successfully-resolved installation, not just the ones that hit a blip.
+    """
+    import fastembed
+    import huggingface_hub
+
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+
+    class _FakeTextEmbedding:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    probe_calls = 0
+
+    class _FakeModelInfo:
+        sha = "stable-sha"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(_settings())
+    assert embedder.model_revision() == "stable-sha"
+    assert probe_calls == 1
+
+    embedder.reset_revision_probe()
+
+    # A no-op: the prior probe succeeded, so the cached SHA is untouched and
+    # no second network call is made.
+    assert embedder.model_revision() == "stable-sha"
+    assert probe_calls == 1
+
+
 def test_embed_query_never_probes_the_revision_even_with_a_warm_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
