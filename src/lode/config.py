@@ -287,17 +287,41 @@ class Settings(BaseModel):
     llm_call_timeout_s: float = _knob(
         120.0,
         Kind.RUNTIME,
-        "Per-call client-side timeout (seconds) passed to EVERY cloud-LLM call "
-        "through the LLMProvider seam (lode-568v.2), immediate and batch alike: "
-        "the enrichment calls reachable from 'lode work' (enrich.py -- the "
-        "Batches API pre-steps and the immediate Haiku call a residual enrich "
-        "job can take in drain()'s main loop) and the Q&A synthesis call "
-        "(qa.py) -- bounds a hung network call rather than letting it block "
-        "forever (lode-olmi.15). Renamed vendor-neutral from "
-        "anthropic_call_timeout_s (lode-568v.1/.2); a config.toml still "
-        "carrying the old key is remapped by load_settings(). Distinct from "
-        "fetch_timeout_s, which governs web draw-down HTTP fetches, not LLM "
-        "provider calls.",
+        "Per-call client-side timeout (seconds) passed to every ENRICHMENT "
+        "cloud-LLM call through the LLMProvider seam (lode-568v.2), immediate "
+        "and batch alike: the calls reachable from 'lode work' (enrich.py -- "
+        "the Batches API pre-steps and the immediate Haiku call a residual "
+        "enrich job can take in drain()'s main loop) -- bounds a hung network "
+        "call rather than letting it block forever (lode-olmi.15). Renamed "
+        "vendor-neutral from anthropic_call_timeout_s (lode-568v.1/.2); a "
+        "config.toml still carrying the old key is remapped by "
+        "load_settings(). Distinct from fetch_timeout_s, which governs web "
+        "draw-down HTTP fetches, not LLM provider calls. NO LONGER REACHES "
+        "the Q&A synthesis call (qa.py) -- that call has its own "
+        "qa_call_timeout_s below, split off in lode-wfyx because one shared "
+        "value couldn't serve both a foreground TUI call with adaptive "
+        "thinking and background enrichment work without either loosening "
+        "enrichment's hang-detection or under-timing Q&A.",
+        gt=0.0,
+    )
+    qa_call_timeout_s: float = _knob(
+        300.0,
+        Kind.RUNTIME,
+        "Per-call client-side timeout (seconds) for the Q&A synthesis call "
+        "ONLY (qa.py's structured_call) -- split off llm_call_timeout_s "
+        "(lode-wfyx), which still governs every enrich.py call site "
+        "unchanged. Needed because lode-3dlt let the think-harder tier "
+        "(qa_think_harder_llm, Opus 5 by default) run adaptive thinking it "
+        "previously never did, while llm_call_timeout_s stayed at 120s -- "
+        "plausibly too short once thinking shares qa.MAX_TOKENS with the "
+        "claims response. The default is DERIVED, NOT a measured p95 (a live "
+        "p95 benchmark was deliberately declined on cost/value, not for lack "
+        "of capability). The derivation, the SDK-retry interaction it was "
+        "chosen alongside, and the ModelTier.max_tokens override that "
+        "invalidates it all live in ONE place -- docs/configuration.md 'Q&A "
+        "call timeout split from llm_call_timeout_s' -- deliberately not "
+        "restated here, because the numbers have already drifted once across "
+        "the copies.",
         gt=0.0,
     )
     llm_provider: Literal["anthropic", "openai"] = _knob(

@@ -30,9 +30,10 @@ pure local computation (a SQL scan, an in-process ONNX load) there is no safe
 way to abort mid-flight without cooperation from the callee, so making the
 wait *visible* (never silent) is the fix there. Network calls that *can* be
 given a real client-side timeout still get one directly at the call site
-(e.g. the cloud-LLM calls in ``enrich.py``/``qa.py``, via
-``Settings.llm_call_timeout_s``) -- ``op_progress`` and an explicit
-timeout are complementary, not alternatives.
+(``enrich.py``'s cloud-LLM calls via ``Settings.llm_call_timeout_s``;
+``qa.py``'s synthesis call via ``Settings.qa_call_timeout_s``, split off it
+in lode-wfyx) -- ``op_progress`` and an explicit timeout are complementary,
+not alternatives.
 """
 
 from __future__ import annotations

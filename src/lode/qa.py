@@ -74,22 +74,35 @@ OPUS_MODEL = "claude-opus-5"
 #: Fable-class override now run adaptive thinking.
 #:
 #: What bounds this call in practice is
-#: :attr:`~lode.config.Settings.llm_call_timeout_s` (120s), NOT the Anthropic
+#: :attr:`~lode.config.Settings.qa_call_timeout_s` (300s), NOT the Anthropic
 #: SDK's non-streaming guard: that guard is skipped outright whenever an
 #: explicit ``timeout`` is passed, and the provider seam always passes one. (Its
 #: threshold is also ~21K output tokens for the models lode uses, not the ~16K
 #: once claimed here -- see ``_calculate_nonstreaming_timeout``.) So this value
-#: is headroom, not a hard truncation guarantee; exhausting it raises
-#: :class:`~lode.llm_provider.LLMProviderError` from the provider rather than
-#: yielding a malformed answer. See that class's docstring for the full
+#: is headroom, not a hard truncation guarantee; exhausting **this budget**
+#: raises :class:`~lode.llm_provider.LLMProviderError` from the provider rather
+#: than yielding a malformed answer. See that class's docstring for the full
 #: rationale.
 #:
 #: Raising this cap while also allowing adaptive thinking pushes wall-clock up
-#: on the think-harder path twice over, and ``llm_call_timeout_s`` (120s) was
-#: NOT raised to match -- so the realistic failure mode on that path is now an
-#: ``anthropic.APITimeoutError`` rather than a truncated answer. Whether that
-#: timeout should rise, split per-call, or stay is a measurement-backed
-#: decision tracked in lode-wfyx, not settled here.
+#: on the think-harder path twice over. ``qa_call_timeout_s`` (lode-wfyx) is
+#: the call's own timeout knob, split off the shared
+#: :attr:`~lode.config.Settings.llm_call_timeout_s` (which still bounds only
+#: ``enrich.py``'s calls) specifically because 120s was no longer enough
+#: headroom once thinking could share this budget. Its default is **derived,
+#: not a measured p95** -- a live-API p95 benchmark was deliberately declined
+#: on cost/value grounds, not skipped for lack of capability. The derivation,
+#: why SDK retry-on-timeout (``max_retries=2`` default) was left uncapped, and
+#: the fact that a ``max_tokens`` override below invalidates the whole
+#: derivation all live in ONE place, deliberately not restated here:
+#: ``docs/configuration.md`` "Q&A call timeout split from llm_call_timeout_s"
+#: (lode-wfyx).
+#:
+#: Exhausting ``qa_call_timeout_s`` raises a **raw**
+#: ``anthropic.APITimeoutError``, not an
+#: :class:`~lode.llm_provider.LLMProviderError`: the seam wraps
+#: ``APIStatusError`` and pydantic ``ValidationError``, but deliberately not
+#: the non-status errors.
 #:
 #: **This is the fallback, not the last word (lode-d70n):** the active tier's
 #: :attr:`~lode.llm_provider.ModelTier.max_tokens` overrides this constant
@@ -219,7 +232,7 @@ def answer_question(
         question,
         egress.sent,
         is_external,
-        settings.llm_call_timeout_s,
+        settings.qa_call_timeout_s,
     )
     return QaResult(
         answer=Answer(envelope.claims),
