@@ -201,6 +201,15 @@ _KNOWN_ENV_VARS = {
 # would break every time anyone inserted a block earlier in the file, failing on
 # unrelated edits until someone "fixed" it by widening the entry. Keep entries rare and
 # keep the names specific; a generic name here is much costlier than a specific one.
+#
+# LIVENESS, not just reason text (lode-e49j): a reason string stays convincing even
+# after the violation it excuses is fixed -- exactly what happened to $CONFLICTS above
+# (see the "no whole-file escape hatch" paragraph earlier in this docstring). An entry
+# going stale is not inert; it is a MASK that silently re-excuses a brand-new
+# reintroduction of the same bug. `test_every_allowlist_entry_still_matches_a_real_
+# violation`, below the gate itself, pins that every key here still corresponds to a
+# real, unfiltered violation today; `test_every_allowlist_entry_is_provably_checked_by_
+# sabotage` proves that pin is not vacuous.
 ALLOWLIST: dict[tuple[str, str], str] = {
     ("skills/release/SKILL.md", "PROPOSED"): (
         "The human-confirmed version string from Section 3's confirmation dialogue. "
@@ -650,6 +659,122 @@ def test_two_separate_blocks_are_returned_separately() -> None:
 def test_allowlist_entries_all_have_a_reason() -> None:
     for key, reason in ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {key} has an empty reason"
+
+
+def _dead_allowlist_keys(
+    allowlist: dict[tuple[str, str], str],
+    *,
+    sources: list[Path] | None = None,
+) -> list[tuple[str, str]]:
+    """(file, var) keys in `allowlist` that no longer correspond to any real,
+    UNFILTERED violation across `sources` (default: the real shipped skill/agent
+    corpus, `_source_files()`) -- i.e. `find_violations` run without ALLOWLIST
+    filtering at all, exactly what `test_no_cross_block_shell_state_outside_the_
+    allowlist` filters BY. A key returned here is dead: the (file, var) pair it names
+    does not exist as a cross-block use anywhere today, so it currently excuses
+    nothing -- but the entry stays in `ALLOWLIST` regardless, ready to silently
+    re-excuse a BRAND-NEW reintroduction of the exact same bug the moment one lands
+    (lode-p1r3's own review demonstrated this: `land/SKILL.md`'s `$CONFLICTS` entry
+    went dead the moment `lode-rfon` fixed the violation it was written for, and then
+    sat masking for however long it took a human to notice by hand -- nothing failed
+    in between).
+
+    `allowlist` and `sources` are both parameters, not read from the module globals
+    directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage` below
+    can exercise this exact primitive -- the same one the real pin uses -- against a
+    deliberately bogus key and a deliberately "already fixed" synthetic file, without
+    needing to mutate any real `.claude/` file on disk (out of this ticket's
+    footprint, and it would make the pin's own correctness depend on real-file state
+    changing underneath it later).
+
+    Relative-path keys mirror `test_no_cross_block_shell_state_outside_the_allowlist`
+    exactly (relative to `CLAUDE_DIR`) when a source lives under it; a synthetic
+    `tmp_path` source (used only by the sabotage test) falls back to its bare
+    filename, since it has no meaningful path relative to `CLAUDE_DIR` at all.
+    """
+    if sources is None:
+        sources = _source_files()
+    live: set[tuple[str, str]] = set()
+    for source_md in sources:
+        try:
+            rel = str(source_md.relative_to(CLAUDE_DIR))
+        except ValueError:
+            rel = source_md.name
+        for _block_index, var in find_violations(source_md):
+            live.add((rel, var))
+    return sorted(set(allowlist) - live)
+
+
+def test_every_allowlist_entry_still_matches_a_real_violation() -> None:
+    """The liveness pin lode-e49j adds. `test_allowlist_entries_all_have_a_reason`
+    above only asserts the reason string is non-empty -- it cannot distinguish a live
+    entry from a dead one, and a dead entry's reason string reads exactly as
+    convincing as a live one's (lode-p1r3's `$CONFLICTS` had a perfectly good reason
+    the entire time it was masking). This closes that gap: every key in the real
+    `ALLOWLIST` must still correspond to a real, unfiltered violation found by
+    `find_violations` today. When one doesn't, the remedy is to DELETE the entry --
+    never to change any code -- which is why the message below says so explicitly.
+
+    Passes unmodified against current trunk: both `ALLOWLIST` entries are live,
+    independently verified by `test_every_allowlist_entry_is_provably_checked_by_
+    sabotage` below (which proves this pin is not vacuous) and by lode-p1r3's own
+    review (exactly two violations repo-wide, exactly two keys, at that branch's tip).
+    """
+    dead = _dead_allowlist_keys(ALLOWLIST)
+    assert dead == [], (
+        "these ALLOWLIST entries no longer correspond to any real cross-block "
+        "violation -- they mask nothing today, but they will silently re-mask a "
+        "brand-new reintroduction of the exact same bug the moment one is written. "
+        f"Delete them from ALLOWLIST (do not change any other code): {dead}"
+    )
+
+
+def test_every_allowlist_entry_is_provably_checked_by_sabotage(
+    tmp_path: Path,
+) -> None:
+    """Non-vacuousness proof for the pin above, per lode-e49j's own acceptance
+    criteria: a test that passes both before and after the regression it's meant to
+    catch is worthless here -- that is the exact failure mode this ticket exists to
+    close. Two sabotage shapes, both run directly against `_dead_allowlist_keys` (the
+    same primitive the real pin calls) rather than by mutating any real `.claude/`
+    file on disk:
+
+    1. ADDING A BOGUS KEY -- a (file, var) pair that matches no real violation
+       anywhere -- must be reported dead.
+    2. FIXING THE UNDERLYING VIOLATION -- modeled with a synthetic pair of files
+       sharing one variable name: `live.md` has the real cross-block shape (assigned
+       in one fenced block, used in a separate one -- still a violation), `fixed.md`
+       has the identical assignment and use collapsed into a SINGLE block (no longer
+       a violation, the same fix shape `lode-rfon` applied to the real `$CONFLICTS`
+       instance). The same key is live against `live.md` and dead against `fixed.md`
+       -- proving the helper tracks the file's actual content, not just the key's
+       shape, and that "fix the violation" is exactly the transition that flips a
+       live entry to dead.
+
+    Sabotage recipe for this ticket's own future maintenance, recorded here per the
+    acceptance criteria: delete either assertion below, or replace `_dead_allowlist_
+    keys`'s body with `return []` unconditionally, and this test goes red.
+    """
+    live_source = tmp_path / "live.md"
+    live_source.write_text(
+        '```bash\nFOO=1\n```\n\n```bash\necho "$FOO"\n```\n', encoding="utf-8"
+    )
+    fixed_source = tmp_path / "fixed.md"
+    fixed_source.write_text('```bash\nFOO=1\necho "$FOO"\n```\n', encoding="utf-8")
+
+    key = ("live.md", "FOO")
+    assert _dead_allowlist_keys({key: "fixture"}, sources=[live_source]) == [], (
+        "fixture assumption broken: FOO is not actually a live cross-block "
+        "violation in live.md"
+    )
+    assert _dead_allowlist_keys({key: "fixture"}, sources=[fixed_source]) == [key], (
+        "fixing the underlying violation must flip the same key from live to dead"
+    )
+
+    bogus = ("live.md", "THIS_VAR_DOES_NOT_EXIST_ANYWHERE_lode_e49j")
+    assert _dead_allowlist_keys({bogus: "fixture"}, sources=[live_source]) == [bogus], (
+        "a bogus key matching no real violation must be reported dead"
+    )
 
 
 def test_every_skill_and_agent_file_is_covered() -> None:
