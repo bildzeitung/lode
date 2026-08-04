@@ -614,27 +614,41 @@ def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
     proposed was reverted for exactly that reason (see scripts/land-lock.sh,
     CAVEAT 1). Lowering it is lode-cp4o's job, and requires the measurement.
 
-    Asserted behaviourally, from the outside: a lock 1799s old is still held,
-    a lock 1801s old is stale. Deliberately not a grep for the literal -- this
+    Asserted behaviourally, from the outside: a lock 1700s old is still held,
+    a lock 1900s old is stale. Deliberately not a grep for the literal -- this
     fails if the semantics change, not merely if the digits move.
+
+    The offsets are 100s off the actual 1800s boundary rather than 1s (as
+    they once were), on purpose (lode-44cq): the lock's age is stamped from
+    ONE clock read here, in Python, but measured against a SECOND, later
+    clock read inside `land-lock.sh`'s own subprocess. Under load (`-n 8`
+    parallelism, interpreter/bash startup, git work) that gap can exceed a
+    second, which was enough to push a 1799s-old lock past 1800s by the time
+    the script measured it -- a false, one-sided red with nothing wrong
+    (observed and diagnosed in lode-44cq). A 100s margin comfortably absorbs
+    that gap without requiring the two clock reads to be pinned to a single
+    shared reading. The trade: this no longer catches every change to the
+    default (e.g. a lowering to 1750s would slip through undetected) -- only
+    a change that moves the default outside (1700s, 1900s). That's a
+    deliberate precision-for-reliability trade, not an oversight.
     """
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
 
-    lock.write_text(f"12345 host {int(time.time()) - 1799} 2026-01-01T00:00:00Z\n")
+    lock.write_text(f"12345 host {int(time.time()) - 1700} 2026-01-01T00:00:00Z\n")
     just_inside = _run("acquire", repo=repo)
     assert just_inside.returncode == 1, (
-        "a lock 1799s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
-        "below 1800s. That is lode-cp4o's decision to make, with measurements "
-        "(scripts/land-lock.sh, CAVEAT 1)."
+        "a lock 1700s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
+        "well below 1800s. That is lode-cp4o's decision to make, with "
+        "measurements (scripts/land-lock.sh, CAVEAT 1)."
     )
 
-    lock.write_text(f"12345 host {int(time.time()) - 1801} 2026-01-01T00:00:00Z\n")
+    lock.write_text(f"12345 host {int(time.time()) - 1900} 2026-01-01T00:00:00Z\n")
     just_outside = _run("acquire", repo=repo)
     assert just_outside.returncode == 0, (
-        "a lock 1801s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
-        "raised above 1800s, so an abandoned lock now blocks landing for longer "
-        f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+        "a lock 1900s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
+        "raised well above 1800s, so an abandoned lock now blocks landing for "
+        f"much longer than the documented 30min: {just_outside.stdout + just_outside.stderr}"
     )
 
 
