@@ -648,12 +648,18 @@ results, which arrives as a raw `httpx`/`json` exception outside any `anthropic`
 (`lode-3gtu`, open). `OpenAIProvider` catches bare `Exception` around its single call and has
 neither gap.
 
-**Consumer-side blast radius (`lode-5zqa`).** Whatever this seam raises lands in
-`lode.worker.drain`'s batch pre-step, which catches `(AuthError, LLMProviderError)` and stashes it
-until the credential-free `embed` jobs have run. So an `LLMProviderError` from the poll path degrades
-that step rather than aborting the pass — but only because it arrives as *that type*: a failure that
-escapes as something else (`lode-t7en`) still aborts the whole drain, which is the consumer-side
-reason the classes above are worth closing at this seam rather than downstream. `docs/storage.md`
+**Consumer-side blast radius (`lode-5zqa`, `lode-knnt`).** Whatever this seam raises lands in
+`lode.worker.drain`'s batch pre-step. Originally that pre-step caught only `(AuthError,
+LLMProviderError)`, so a failure escaping this seam as something else (`lode-t7en`) still aborted the
+whole drain — a *consumer-side* reason (on top of the diagnosability one above) the classes this
+section names were worth closing at the seam rather than downstream. `lode-knnt` closed that
+consumer-side gap instead: `_batch_collect_enrich` now isolates each batch handle in its own try
+(consequence-scoped, not type-scoped) and `drain`'s own catch on that pre-step widened to bare
+`Exception` to match, so a failure arriving as *any* type — including one still escaping this seam raw
+— no longer starves the credential-free `embed` jobs or blocks a new enrich submission. Closing a
+class named above at the seam is therefore no longer required for that reason; it remains worth doing
+for the diagnosability reason this section opens with (`.status_code`/`.request_id`/`__cause__`, a
+clean message instead of a raw traceback — `lode-yx1c`, still open). `docs/storage.md`
 "Transient vs. permanent job failures" owns the policy and the limits it leaves standing.
 
 ### Implemented: `OpenAIProvider` (`lode-568v.3`)

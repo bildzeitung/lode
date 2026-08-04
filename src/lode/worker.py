@@ -728,6 +728,32 @@ def _batch_collect_enrich(
     line for each succeeded result — the batch pre-step runs ahead of
     :func:`drain`'s main claim/run loop, so this is the only channel that
     surfaces those outcomes to the caller.
+
+    **Per-handle isolation (lode-knnt).** Each ``batch_handle`` is polled
+    inside its own ``try``, so one poisoned handle (stuck on a permanently
+    malformed results line, or any other failure) cannot stop the OTHER,
+    healthy handles in the same pass from being collected — before this fix, a
+    single raise anywhere in the loop aborted the whole function, and with it
+    every remaining handle, for as long as the poisoned one stayed stuck. The
+    catch is deliberately **consequence-scoped, not type-scoped**: it absorbs
+    whatever exception type ``collect_enrich_batch`` raises (a well-formed but
+    wrong-shape results line surfaces as a raw ``AttributeError``/``TypeError``,
+    not an ``LLMProviderError`` — lode-t7en), so this handle-level bound holds
+    regardless of what a future provider bug happens to raise.
+
+    A poisoned handle's failure is **deferred, not swallowed**: every other
+    handle still gets its turn this pass, but once the loop finishes, the
+    first such failure is re-raised anyway, so the caller (:func:`drain`)
+    still sees it and the existing "surfaces, non-zero exit" contract for a
+    stuck batch (``docs/storage.md`` "Transient vs. permanent job failures")
+    is unchanged — the fix bounds *whose* work a poisoned handle blocks
+    (nobody else's, now), not *whether* the pass as a whole still reports the
+    failure. The one exception re-raised **immediately**, mid-loop, rather
+    than deferred, is ``AuthError``/``LLMAuthError``: a missing credential is
+    not handle-specific — every remaining handle would fail identically — so
+    there is nothing to gain from attempting the rest, and letting it
+    propagate right away lets :func:`drain`'s own stash-and-continue contract
+    handle it exactly as before.
     """
     batch_ids: list[str] = [
         row[0]
@@ -744,16 +770,42 @@ def _batch_collect_enrich(
     # no enrich work at all (lode-4q97). Hygiene, not the load-bearing fix -- what
     # keeps an embed-only drain SDK-free is that lode.enrich and lode.auth are both
     # cheap to import (their `import anthropic` is TYPE_CHECKING-guarded).
+    from lode.auth import AuthError
     from lode.enrich import collect_enrich_batch
+    from lode.llm_provider import LLMAuthError
 
     kwargs: dict = {}
     if _client is not None:
         kwargs["provider"] = _client
 
     ended = 0
+    deferred_exc: Exception | None = None
     for batch_id in batch_ids:
-        if collect_enrich_batch(conn, batch_id, settings, outcomes=outcomes, **kwargs):
-            ended += 1
+        try:
+            if collect_enrich_batch(
+                conn, batch_id, settings, outcomes=outcomes, **kwargs
+            ):
+                ended += 1
+        except AuthError, LLMAuthError:
+            # Not handle-specific -- every remaining handle shares the same
+            # credentials and would fail identically. Propagate immediately;
+            # drain()'s own stash-and-continue contract takes it from here.
+            raise
+        except Exception as exc:
+            log.warning(
+                "_batch_collect_enrich: batch=%s poll failed, skipping this "
+                "pass (will retry next tick): %s",
+                batch_id,
+                exc,
+            )
+            # Deferred, not swallowed: every OTHER handle still gets its turn
+            # (per-handle isolation, lode-knnt) before this is raised below.
+            if deferred_exc is None:
+                deferred_exc = exc
+            continue
+
+    if deferred_exc is not None:
+        raise deferred_exc
 
     return ended
 
@@ -978,26 +1030,32 @@ def drain(
     But it raises **last**, not on the spot: the error is stashed and
     re-raised only after the reclaim, the retry reset, and the main claim/run
     loop have all run, so the credential-free ``embed`` jobs are never
-    starved by a missing key or by a batch wedged on bad data.
+    starved by a missing key or by a batch wedged on bad data. The collect
+    pre-step's own ``try`` (below) in fact catches wider than this named
+    taxonomy — see "Per-handle isolation" next for why that is deliberate
+    and still bounded.
 
-    Two limits worth knowing at this call site:
+    **Per-handle isolation + independent pre-steps (lode-knnt).**
+    :func:`_batch_collect_enrich` polls each ``batch_handle`` inside its own
+    ``try`` (consequence-scoped, not type-scoped — it bounds a poisoned
+    handle's blast radius to itself regardless of what exception type the
+    failure arrives as, e.g. lode-t7en's raw ``AttributeError``/``TypeError``
+    from a wrong-shape results line), so one stuck handle no longer stops any
+    *other* handle in the same pass; the first such failure is then re-raised
+    once every handle has had its turn — deferred, not swallowed, so this
+    call's own ``except`` (bare ``Exception``, not the narrower permanent-
+    failure tuple above) still stashes it exactly like an ``AuthError``. And
+    the two pre-steps below now run in their **own** ``try`` each, rather than
+    sharing one: a collect-side failure no longer skips the submit step, so a
+    stuck batch no longer blocks *new* enrich jobs from being submitted
+    either.
 
-    * The catch is scoped by exception *type*, so it bounds only failures that
-      reach it as an ``LLMProviderError``. A provider-side failure that
-      escapes as some other type — e.g. a well-formed but wrong-shape
-      batch-results line, which surfaces from ``collect_batch``'s loop body as
-      a raw ``AttributeError``/``TypeError`` (lode-t7en, open) — still aborts
-      the pass exactly as before.
-    * Both pre-steps share one ``try``, so a collect failure also skips the
-      submit step: while any handle is stuck, no *new* enrich batch is
-      submitted either.
-
-    Neither this nor the widening makes a stuck batch un-stuck — there is no
-    failure budget or dead-letter path for one; it stays wedged until a human
-    intervenes (lode-knnt). Note ``lode work`` has no handler for
-    ``LLMProviderError`` (only ``AuthError``), so unlike the credential case it
-    surfaces as an unhandled traceback rather than a clean actionable line
-    (lode-yx1c).
+    Neither of those makes a stuck batch un-stuck — there is still no failure
+    budget or dead-letter path for one; it stays wedged until a human
+    intervenes (lode-u6he, discovered-from lode-knnt). Note ``lode work`` has
+    no handler for ``LLMProviderError`` (only ``AuthError``), so unlike the
+    credential case it surfaces as an unhandled traceback rather than a clean
+    actionable line (lode-yx1c).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1075,6 +1133,35 @@ def drain(
     # rather than aborting the pass. It does not make the batch un-stuck; see
     # drain's docstring for the limits that leaves standing.
     #
+    # lode-knnt: each pre-step gets its OWN try, not one shared over both --
+    # a collect-side failure must not also skip the submit step (that would
+    # mean "one stuck batch" silently becomes "no new enrich batch is ever
+    # submitted either"). `permanent` keeps whichever one raised first; if
+    # both raise, the second is dropped rather than overwriting the first --
+    # they're essentially always the same underlying condition (e.g. both
+    # calls resolve credentials via the same build_provider()), so there is
+    # nothing to gain from preferring the later one.
+    #
+    # The COLLECT try's except is deliberately bare `Exception`, wider than
+    # the submit try's below -- not a re-widening of the AuthError/
+    # LLMProviderError tuple, but a consequence of _batch_collect_enrich's own
+    # per-handle isolation (lode-knnt, see its docstring): that function's
+    # loop already absorbs and defers everything except AuthError/
+    # LLMAuthError per handle, so the ONLY things that can ever reach this
+    # `except` are (a) an immediate AuthError/LLMAuthError, or (b) the one
+    # deferred failure left over after every handle got its turn -- of
+    # WHATEVER type collect_enrich_batch happened to raise (e.g. lode-t7en's
+    # raw AttributeError/TypeError from a wrong-shape results line, which is
+    # not an LLMProviderError). A narrower tuple here would silently
+    # reintroduce the exact starvation lode-5zqa fixed, just for any type
+    # outside that tuple -- the failure would again escape straight past the
+    # reclaim/retry-reset/main loop below, starving `embed` jobs, without this
+    # `except` ever seeing it to stash it. The SUBMIT try below is not widened
+    # to match: it has no per-handle loop, and `_batch_submit_enrich`'s own
+    # `except Exception` already fully absorbs a non-auth failure itself
+    # (revert + return 0, no raise) -- so nothing but AuthError/LLMProviderError
+    # can ever reach its caller in the first place.
+    #
     # So: stash it, finish the work that CAN succeed, and re-raise at the end.
     # The main loop drains `embed` ahead of `enrich` (_claim_one orders on type),
     # so the embeds land before any residual enrich job re-raises out of run_one.
@@ -1085,7 +1172,7 @@ def drain(
     # The reclaim/reset sweeps between them are left uninstrumented on purpose:
     # they are fast local UPDATEs with no network or model call to stall on.
     heartbeat_interval_s = settings.progress_heartbeat_interval_s
-    permanent: AuthError | LLMProviderError | None = None
+    permanent: Exception | None = None
     try:
         with op_progress(
             "drain.batch_collect", heartbeat_interval_s=heartbeat_interval_s
@@ -1093,12 +1180,17 @@ def drain(
             _batch_collect_enrich(
                 conn, settings, _client=_batch_client, outcomes=outcomes
             )
+    except Exception as exc:
+        permanent = exc
+
+    try:
         with op_progress(
             "drain.batch_submit", heartbeat_interval_s=heartbeat_interval_s
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
     except (AuthError, LLMProviderError) as exc:
-        permanent = exc
+        if permanent is None:
+            permanent = exc
 
     reclaimed = _reclaim_stale_running(conn, settings)
     if reclaimed:
