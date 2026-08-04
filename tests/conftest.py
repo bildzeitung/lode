@@ -627,10 +627,8 @@ def _reset_jobs_clock_anchor() -> None:
     stays as defence in depth against the next one, not because anything leaks
     today. Deleting it turns nothing red on its own, and since lode-e8lo it no
     longer turns ``tests/test_conftest_jobs_clock_anchor.py``'s nested repro
-    red either (see that file's NON-VACUITY section); the only live pin left
-    there is ``test_the_anchor_reset_fixture_is_armed_for_every_test``, which
-    asserts this fixture is autouse rather than exercising it. Restoring a
-    behavioural pin is lode-up8x.
+    red either -- that file's NON-VACUITY section is where the measurement
+    lives, and it owns what is and is not pinned today, plus the follow-up.
 
     SCOPE OF THAT CLAIM, stated precisely, because an unbounded version of it
     is what let this bug survive three sightings:

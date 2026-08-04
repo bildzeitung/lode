@@ -5556,6 +5556,14 @@ def _patch_cli_clock_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     anywhere else reachable through it, now or in the future) precede the deadline read; no
     call-ordering assumption remains, and the counting predicate is gone.
 
+    The step is a bare literal, deliberately NOT derived from the setting -- and what that
+    decoupling costs is bounded rather than fatal, so raising the setting past it is not a
+    trap: readings climb one ``step`` per call unconditionally, so the check trips within
+    ``ceil(work_wait_timeout_s / step)`` passes for ANY pair of values, and only a
+    NON-advancing clock can spin. The magnitude buys SPEED (trip on the *first* check), not
+    termination. Measured during lode-e8lo's review: with ``work_wait_timeout_s`` raised to
+    2_500_000 both tests below still pass, taking three loop passes instead of one.
+
     This rebinds the *name* ``time`` inside ``lode.cli``; it never sets an attribute on
     the shared ``time`` module object, so no other module observes this fake. What that
     narrowed exposure costs this suite is owned by ``tests/conftest.py``'s
