@@ -176,9 +176,11 @@ class TestCheck:
 
         assert check(tmp_path) == []
 
-    def test_files_outside_scan_dirs_are_not_walked_but_are_valid_targets(
-        self, tmp_path
-    ):
+    def test_files_outside_scan_dirs_are_valid_link_targets(self, tmp_path):
+        """Files outside SCAN_DIRS don't get the full markdown-link walk
+        (see TestBareDocAnchorRefs below for what they DO get: a bare
+        docs/-anchor citation check) -- but they remain valid *targets* for
+        a link written inside a SCAN_DIRS document."""
         _write(tmp_path, "docs/a.md", "[readme](../README.md)\n")
         _write(tmp_path, "README.md", "# Readme\n")
         _git_init(tmp_path)
@@ -194,6 +196,103 @@ def test_gate_scans_both_docs_and_dot_claude(tmp_path, scan_dir):
     errors = check(tmp_path)
 
     assert len(errors) == 1
+
+
+#: Assembled at runtime rather than written as a contiguous literal -- if
+#: this test module's own SOURCE spelled out a bare docs-dir-slash-anchor
+#: string, it would itself become a hit when check_links.py's real-repo
+#: self-test (below) walks tests/ as a tracked file outside SCAN_DIRS
+#: (lode-v10i's own new mechanism). Splitting the literal keeps this test
+#: file from citing itself.
+_DOCS = "doc" + "s"
+
+
+class TestBareDocAnchorRefs:
+    """lode-v10i: a bare-text `docs/<path>.md#<anchor>` reference -- no
+    markdown brackets -- cited from any tracked file OUTSIDE SCAN_DIRS (a
+    .github/workflows/*.yml comment, a scripts/*.sh comment, ...) must also
+    be gated. This is the exact shape that was silently ungated before this
+    ticket: the anchor is referenced exclusively from files check_links.py
+    never scanned."""
+
+    def test_bare_reference_in_workflow_yaml_to_valid_anchor_passes(self, tmp_path):
+        _write(tmp_path, f"{_DOCS}/release.md", "# Release\n\n## CI Trigger Scope\n")
+        _write(
+            tmp_path,
+            ".github/workflows/build.yml",
+            f"# See {_DOCS}/release.md#ci-trigger-scope for details.\n",
+        )
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_bare_reference_in_workflow_yaml_to_broken_anchor_is_reported(
+        self, tmp_path
+    ):
+        _write(tmp_path, f"{_DOCS}/release.md", "# Release\n\n## CI Trigger Scope\n")
+        _write(
+            tmp_path,
+            ".github/workflows/build.yml",
+            f"# See {_DOCS}/release.md#no-such-anchor for details.\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert errors[0].target == f"{_DOCS}/release.md#no-such-anchor"
+        assert "no heading slug" in errors[0].reason
+
+    def test_bare_reference_to_missing_file_is_reported(self, tmp_path):
+        _write(
+            tmp_path,
+            "scripts/foo.sh",
+            f"# {_DOCS}/does-not-exist.md#anything\n",
+        )
+        _git_init(tmp_path)
+
+        errors = check(tmp_path)
+
+        assert len(errors) == 1
+        assert "does not exist" in errors[0].reason
+
+    def test_bare_reference_is_root_relative_regardless_of_citing_files_depth(
+        self, tmp_path
+    ):
+        """A scripts/*.sh comment writes a bare docs/x.md-style reference --
+        meant relative to the repo root, NOT to scripts/'s own directory
+        (which would look for scripts/docs/x.md and never find it)."""
+        _write(tmp_path, f"{_DOCS}/x.md", "# X\n\n## Anchor\n")
+        _write(tmp_path, "scripts/foo.sh", f"# {_DOCS}/x.md#anchor\n")
+        _git_init(tmp_path)
+
+        assert check(tmp_path) == []
+
+    def test_reference_inside_scan_dirs_is_not_double_scanned_by_bare_pass(
+        self, tmp_path
+    ):
+        """A SCAN_DIRS file's own bare-text mention of a docs/ anchor (e.g.
+        prose, not a markdown link) is not something the bare pass needs to
+        check independently -- it's outside this pass's remit either way,
+        confirming the two passes don't produce duplicate/contradictory
+        errors for the same file."""
+        _write(tmp_path, f"{_DOCS}/a.md", f"# A\n\nSee {_DOCS}/a.md#no-such-anchor.\n")
+        _git_init(tmp_path)
+
+        # The bare-text mention inside a SCAN_DIRS file is not walked by the
+        # bare pass (SCAN_DIRS is excluded from _tracked_other_files), and
+        # the full markdown-link walk only matches `[text](target)` syntax,
+        # so a plain-prose mention like this produces no error either way.
+        assert check(tmp_path) == []
+
+    def test_real_repo_workflow_and_script_doc_citations_pass_the_gate(self):
+        """The acceptance criterion: every real docs/ anchor citation from
+        .github/workflows/*.yml and scripts/*.sh in this repo resolves."""
+        errors = check(REPO_ROOT)
+
+        assert errors == [], "broken doc citation(s):\n" + "\n".join(
+            str(e) for e in errors
+        )
 
 
 def test_real_repo_docs_and_dot_claude_pass_the_gate():

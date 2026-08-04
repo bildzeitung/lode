@@ -19,7 +19,7 @@ regression lock on the slug algorithm itself.
 
 Usage::
 
-    python scripts/check_links.py            # scan this repo's docs/ + .claude/
+    python scripts/check_links.py            # scan this repo's docs/ + .claude/ + every other tracked file
     python scripts/check_links.py --root DIR # scan a different tree (tests)
 
 Exits 1 and prints one ``file:line: reason -> target`` line per broken link
@@ -33,6 +33,27 @@ acceptance criteria is about cross-document *links*); an ``#anchor`` is only
 checked against a target's headings when the target is itself a ``.md``
 file -- a link into a non-markdown file (a script, a config) has no heading
 model to check the anchor against, so only its file-existence is verified.
+
+SCOPE DECISION (lode-v10i): a ``docs/`` anchor is cited from plenty of files
+that are neither under ``docs/`` nor ``.claude/`` -- a bare-text pointer like
+``docs/release.md#ci-workflow-trigger-scope-push-and-pull_request`` inside a
+``# comment`` in ``.github/workflows/*.yml`` or ``scripts/*.sh``, with no
+markdown ``[text](...)`` brackets at all. The general form was chosen over
+special-casing ``.github/workflows/``: EVERY tracked file outside
+``SCAN_DIRS`` is scanned for a bare ``docs/<path>.md#<anchor>`` text
+reference (``_bare_doc_anchor_refs`` / ``_tracked_other_files`` below), not
+just workflow YAML -- ``scripts/`` cites docs/ anchors the identical way
+(``scripts/code-concurrency-cap.sh``, ``scripts/venv-install.sh``, ...), so
+special-casing one directory would have left the other silently ungated
+again. This second pass is intentionally narrower than the full markdown-
+link walk SCAN_DIRS gets: it only recognizes a literal bare
+``docs/<path-to-file>.md#<anchor>`` substring (root-relative, matching how
+every real instance in this repo is
+written, regardless of the citing file's own directory depth) and only
+verifies that target -- it does not resolve arbitrary relative links the way
+the SCAN_DIRS walk does, since the acceptance criteria here is specifically
+about *citations into docs/*, not link-checking every non-doc file in the
+repo generally.
 """
 
 from __future__ import annotations
@@ -70,6 +91,14 @@ _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 # (which doesn't exist -- it's a bullet inside a numbered step, not a
 # heading). These ids are literal, never slugified.
 _HTML_ANCHOR_RE = re.compile(r'<a\s+(?:id|name)=["\']([^"\']+)["\']', re.IGNORECASE)
+# A bare (no markdown brackets) `docs/<path>.md#<anchor>` text reference --
+# what a `.github/workflows/*.yml` or `scripts/*.sh` comment actually writes.
+# Always root-relative; see the SCOPE DECISION note in the module docstring.
+_DOC_ANCHOR_REF_RE = re.compile(r"\bdocs/[\w./-]+\.md#[\w-]+")
+# Extensions skipped when walking tracked files OUTSIDE SCAN_DIRS for a bare
+# docs/ anchor reference -- data/lock formats that are never meant to be read
+# as text citing a doc, even though none currently contain the byte sequence.
+_OTHER_SKIP_EXTENSIONS = {".lock", ".jsonl", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".ico"}
 
 
 @dataclass(frozen=True)
@@ -104,6 +133,39 @@ def _tracked_markdown_files(root: Path) -> list[Path]:
         check=True,
     ).stdout
     return sorted(root / p for p in out.split() if p.endswith(".md"))
+
+
+def _tracked_other_files(root: Path) -> list[Path]:
+    """Every tracked file OUTSIDE ``SCAN_DIRS`` -- the general form the scope
+    decision in the module docstring calls for. Any of these can cite a
+    ``docs/`` anchor in a bare-text comment (CI workflow YAML, a shell
+    script, ...); a handful of clearly non-text extensions are skipped."""
+    out = subprocess.run(
+        ["git", "-C", str(root), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    files = []
+    for p in out.split():
+        rel = Path(p)
+        if rel.parts and rel.parts[0] in SCAN_DIRS:
+            continue
+        if rel.suffix in _OTHER_SKIP_EXTENSIONS:
+            continue
+        files.append(root / rel)
+    return sorted(files)
+
+
+def _bare_doc_anchor_refs(text: str) -> list[tuple[int, str]]:
+    """``(line_number, target)`` for every bare ``docs/<path>.md#<anchor>``
+    text reference in a file outside ``SCAN_DIRS`` -- no markdown link
+    brackets required."""
+    refs = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for m in _DOC_ANCHOR_REF_RE.finditer(line):
+            refs.append((line_no, m.group(0)))
+    return refs
 
 
 def github_slug(heading_text: str) -> str:
@@ -224,6 +286,31 @@ def check(root: Path) -> list[LinkError]:
                             f"no heading slug '#{anchor}' in {display}",
                         )
                     )
+
+    for source in _tracked_other_files(root):
+        try:
+            source_text = source.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line_no, target in _bare_doc_anchor_refs(source_text):
+            file_part, _, anchor = target.partition("#")
+            target_path = (root / file_part).resolve()
+            if not target_path.exists():
+                errors.append(
+                    LinkError(source, line_no, target, "target file does not exist")
+                )
+                continue
+            if target_path not in slug_cache:
+                slug_cache[target_path] = _slugs_for_file(target_path)
+            if anchor not in slug_cache[target_path]:
+                errors.append(
+                    LinkError(
+                        source,
+                        line_no,
+                        target,
+                        f"no heading slug '#{anchor}' in {file_part}",
+                    )
+                )
     return errors
 
 
@@ -240,7 +327,9 @@ _ROOT_OPTION = typer.Option(
 def main(
     root: Path = _ROOT_OPTION,
 ) -> None:
-    """Fail if any relative markdown link in docs/ (and .claude/) is broken."""
+    """Fail if any relative markdown link in docs/ (and .claude/) is broken, or
+    any docs/ anchor cited elsewhere in the tree (e.g. .github/workflows/,
+    scripts/) does not resolve."""
     target_root = (root or REPO_ROOT).resolve()
     errors = check(target_root)
     if errors:
@@ -248,7 +337,10 @@ def main(
             print(str(error), file=sys.stderr)
         print(f"\n{len(errors)} broken markdown link(s) found", file=sys.stderr)
         raise typer.Exit(1)
-    print("OK: every relative markdown link in docs/ and .claude/ resolves")
+    print(
+        "OK: every relative markdown link in docs/ and .claude/ resolves, and every "
+        "docs/ anchor citation elsewhere in the tree resolves"
+    )
 
 
 if __name__ == "__main__":
