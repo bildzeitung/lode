@@ -1695,6 +1695,18 @@ rationale and each one's revisit trigger. `/sweep` itself is the detector for th
 would surface a stuck bounce or rebase lineage the moment one actually occurs, well before a cap
 would trigger.
 
+**A `land-escalated` ticket that is also `deferred` (lode-o7ai, decided) — surfaced, notified once,
+never silently dropped.** `/sweep`'s §1 `land-escalated` query carries no `--status` filter, so it
+can return a ticket a human has since parked with `bd defer` — `bd defer` is not one of
+`land-escalated`'s three resolution exits ([below](#the-landing-loop--build-review-land), "Resolving
+`land-escalated`"), so deferring never actually resolves the escalation. The row stays in `$CURRENT`/the digest exactly as before (dropping it would silently
+delete a real, unresolved escalation from the durable record); `/sweep`'s `PushNotification` is
+suppressed for such a row (a human has already seen it, by construction — deferred tickets are
+hidden from `bd ready`, so nothing can re-escalate one without a human touching it first), but the
+report still lists it, annotated `(deferred)`, alongside its unconditional appearance in the
+deferred-ticket section. Full rationale, including the accepted un-defer residual, in
+[decisions.md](decisions.md) (search "lode-o7ai").
+
 ---
 
 ## The landing loop — build, review, land
