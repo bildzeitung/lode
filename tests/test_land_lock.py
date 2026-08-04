@@ -1265,6 +1265,21 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     took land/SKILL.md to 25 parsed against 24 markers. What stays independent
     is the METHOD -- a flat per-line marker count, no state machine, no call
     into the parser -- not the grammar.
+
+    KNOWN GAP on one axis, opened by lode-kjei and left deliberately unfixed:
+    the parser now refuses to open a bash fence NESTED inside an enclosing
+    non-bash fence (CommonMark -- a fence cannot open inside an open fence), but
+    a flat per-line count cannot see nesting and still counts the inner marker.
+    Measured on this exact file while reviewing lode-kjei: as shipped, 24
+    markers / 24 parsed, green; append one illustrative ````text block
+    containing a ```bash example and it becomes 25 markers / 24 parsed, so this
+    test goes RED blaming the parser for missing a fence it correctly declined.
+    Latent -- zero nested fence openers exist across the repo's 58 tracked .md
+    files. Not fixed here because the only fix is to make the count
+    nesting-aware, i.e. give it a state machine, which is precisely the
+    independence this test trades on. If someone ever adds such a block to
+    land/SKILL.md, the answer is to re-derive the expected count some third way,
+    NOT to relax the parser.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")

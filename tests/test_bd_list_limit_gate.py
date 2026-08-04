@@ -67,7 +67,7 @@ reason plus one more: its only `bd list` mention
 (`docs/agents-workflow.md:1502`) is a citation of `/sweep`'s query, and `docs/` is where
 historical decision records deliberately quote pre-change commands.
 
-## Blockquoted fences: the two paths normalize at different layers
+## Blockquoted fences: both paths normalize in one shared place
 
 `.claude/skills/code/SKILL.md` writes four of its nine executable bash blocks inside
 markdown blockquotes (`> ```bash`). A `>` survives `.strip()`, so a scanner testing
@@ -76,24 +76,24 @@ regex pairs the delimiters and removes the block from the inline scan too -- the
 once invisible to BOTH paths, the same shape of blind spot `lode-ovgs` records for
 `tests/test_land_lock.py`'s column-0 `line.startswith`.
 
-The FENCED path needs nothing from this file any more: `lode-wroz` moved the strip inside
-the shared `tests/conftest.py::bash_fence_blocks`, which unmarks every line (delimiters
-AND content), so every caller gets it -- and `test_skill_bash_state.py` now gates those
-same four blocks directly. `lode-3pyo` therefore dropped the `_strip_blockquote`
-pre-pass that used to run ahead of `_bash_blocks` here. That pre-pass was not merely
-redundant: stripping twice is a no-op only on today's corpus, since a `>>`-leading line
-loses one marker per pass (`>> log` would have reached this gate as `log`).
+Neither path normalizes in this file any more. `lode-wroz` moved the blockquote strip
+into the shared conftest parser, which unmarks every line (delimiters AND content) so
+every caller gets it; `lode-3pyo` then dropped the `_strip_blockquote` pre-pass that ran
+ahead of the fenced path here, and `lode-kjei` dropped the last one, ahead of the inline
+path. That matters beyond tidiness: stripping twice is a no-op only on today's corpus,
+since a `>>`-leading line loses one marker per pass (`>> log` would have reached this
+gate as `log`).
 
-The INLINE path still normalizes its own input, and `_strip_blockquote` exists solely for
-it: `inline_violations` never calls `_bash_blocks`, tracking fences itself line by line
-(see its docstring for why), so without the strip a `> ```bash` fence is not a fence to
-it and the block's contents get scanned as prose -- measured, one false positive on
-`> echo "`bd list --json`"`. `test_inline_scan_skips_blockquoted_fenced_content` pins
-exactly that. `_BLOCKQUOTE_MARKER` is one of THREE definitions both paths take from
-conftest rather than re-declare -- the other two, `_FENCE_MARKER_RE` and `_closes_fence`,
-fix where a fence opens and closes (lode-xqc7). A one-sided change to any of them would
-make the two paths partition the same file differently, double-reporting fenced content
-as prose.
+Both paths now read every line through the single `_BLOCKQUOTE_MARKER.sub` call inside
+`conftest.fence_scan`, the one generator that also decides where a fence opens and closes
+(lode-xqc7's `_FENCE_MARKER_RE`/`_closes_fence`, folded into it by lode-kjei). So the
+"one-sided change makes the two paths partition one file differently" hazard is closed by
+construction rather than by keeping declarations in sync -- there is no second definition
+left to fork. Without the strip a `> ```bash` fence would not be a fence to the inline
+scan and the block's contents would be scanned as prose -- measured, one false positive on
+`> echo "`bd list --json`"`; `test_inline_scan_skips_blockquoted_fenced_content` pins
+exactly that, and `test_skill_bash_state.py` gates the same four blocks on the fenced
+side.
 
 ## Why fenced/`.sh` comments are stripped but inline backtick spans are not
 
@@ -385,20 +385,12 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
 
     Built on `conftest.fence_scan` (lode-kjei): scans only the lines it yields with
     `enclosing_info is None` -- i.e. every line OUTSIDE every fence, of ANY info string,
-    matching this function's own "OUTSIDE any fence" contract exactly. Before lode-kjei this
-    ran its own line-by-line state machine sharing only the three fence CONSTANTS
-    (`_BLOCKQUOTE_MARKER`, `_FENCE_MARKER_RE`, `_closes_fence`) with `_bash_blocks`'s
-    separate loop -- close enough to agree on every real site (lode-xqc7 measured 0
-    divergences across the repo's 58 tracked .md files), but not close enough to agree
-    in general: `_bash_blocks` opened on a bash/sh info string ONLY, so it never tracked
-    an ENCLOSING non-bash fence and read a ```bash run nested inside a ````text block as
-    executable, where this loop's independent tracking correctly read the whole thing as
-    literal text -- a false POSITIVE (latent: zero nested fence openers existed in the
-    corpus when found). One shared generator with a single "currently open fence,
-    regardless of its info string" state closes that gap by construction: `fence_scan`
-    itself, not either caller, is now the one place fence rules live.
+    matching this function's own "OUTSIDE any fence" contract exactly. This used to run a
+    line-by-line state machine of its own, sharing only the fence CONSTANTS with the
+    fenced path; why one shared generator replaced the two loops is in `fence_scan`'s
+    docstring, not restated here.
 
-    `_INLINE_SPAN_RE` (single-backtick spans) is applied to `fence_scan`'s `stripped`
+    `_INLINE_SPAN_RE` (single-backtick spans) is applied to `fence_scan`'s `line`
     output directly, which is why a region-regex approach was never on the table here
     either: a `` ```...``` `` region regex pairs delimiters by POSITION, so a single stray
     ``` inside a block (`.claude/agents/coding.md:447` has one, in a comment) inverts
@@ -409,13 +401,14 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     prints). `fence_scan` reports the real `lineno` for every content line, fence or no
     fence, so that failure mode cannot recur.
 
-    The trailing-blank-line round-trip divergence lode-xqc7 measured between this loop's
-    own `_strip_blockquote` (a join-then-resplit over the WHOLE document) and
-    `_bash_blocks`'s per-line strip -- 10 diffs, all a dropped final blank line, inert
-    since a blank line carries no backtick span -- is now STRUCTURALLY GONE rather than
-    merely inert: both paths read every line through the exact same
-    `_BLOCKQUOTE_MARKER.sub(..., count=1)` call inside `fence_scan`, once, so there is no
-    second normalization pass left to disagree with the first."""
+    Decided deliberately (lode-kjei acceptance criteria): the trailing-blank-line
+    divergence lode-xqc7 measured -- 10 files where the deleted `_strip_blockquote`
+    join-then-resplit dropped a final blank line the fenced path kept, inert since a blank
+    line carries no backtick span -- is resolved by DELETION, not by matching the old
+    behaviour. Both paths now share one `_BLOCKQUOTE_MARKER.sub` call inside `fence_scan`,
+    so the inline scan sees those 10 blank lines too; re-measured on this branch, that is
+    the ONLY old-vs-new difference across all 58 tracked .md files, and it strictly ADDS
+    scanned lines rather than dropping any."""
     found: list[tuple[str, int]] = []
     for lineno, line, info, _ordinal in fence_scan(markdown):
         if info is not None:

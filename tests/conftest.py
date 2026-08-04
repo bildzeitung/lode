@@ -1206,30 +1206,33 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
 # regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
-# caller gets the fix, not just one. tests/test_bd_list_limit_gate.py IMPORTS this
-# constant (rather than declaring its own) for its inline-backtick scan -- a path that
-# never reaches this helper and so must unmark its own input to the SAME shape, or the
-# two would partition one document differently. Its pre-pass ahead of this helper was
-# removed by lode-3pyo: stripping twice is a no-op on today's corpus, measured, but not
-# in general -- a `>>`-leading line double-strips to a bare one.
+# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site --
+# `fence_scan` below, which every consumer (fenced and inline alike) reads its lines
+# through -- so the "both paths must unmark to the same shape" hazard this comment used
+# to describe is structural rather than a convention: there is no second pass left to
+# disagree. That also keeps lode-3pyo's finding moot: stripping twice is a no-op on
+# today's corpus, measured, but not in general -- a `>>`-leading line double-strips to a
+# bare one -- and nothing strips twice any more.
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus
 # whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
 # as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
-# imported. THREE state machines now consume a marker of this shape and they do
-# not all agree. This one and tests/test_bd_list_limit_gate.py's inline-span
-# scan import BOTH this constant and ``_closes_fence`` below (lode-xqc7), so
-# they agree by construction -- sharing only the marker would have pinned where
-# a fence opens and left where it closes free to fork. ``check_links.py``
-# toggles on ANY marker, so there a ``~~~`` line does close a ```-opened block;
-# do not read that one as documentation for these two.
+# imported. TWO state machines consume a marker of this shape and they do not
+# agree. This one is `fence_scan` below, the single partitioner every test-side
+# consumer now runs through (lode-kjei folded tests/test_bd_list_limit_gate.py's
+# inline-span scan into it, so it no longer keeps a loop -- or an import of this
+# constant -- of its own). ``check_links.py`` toggles on ANY marker, so there a
+# ``~~~`` line does close a ```-opened block; do not read that one as
+# documentation for this one.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
 def _closes_fence(stripped: str, fence: str) -> bool:
     """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
-    rule, stated in ``fence_scan``'s docstring below.
+    rule, stated in ``fence_scan``'s docstring below. Kept a named helper, though
+    ``fence_scan`` is now its only caller, because that docstring's
+    unterminated-fence and four-backtick rules cite it by name.
     """
     return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
 
@@ -1244,18 +1247,17 @@ def fence_scan(
     partition one document identically by construction rather than by two
     loops staying in sync by hand (lode-kjei).
 
-    Yields ``(lineno, stripped, enclosing_info, block_ordinal)`` per content
+    Yields ``(lineno, line, enclosing_info, block_ordinal)`` per content
     line, in document order:
 
     * ``lineno`` -- 1-based, into the ORIGINAL ``markdown`` (not shifted by
       any fence removal).
-    * ``stripped`` -- the line with one leading blockquote marker removed
+    * ``line`` -- the line with one leading blockquote marker removed
       (``_BLOCKQUOTE_MARKER``), matching ``bash_fence_blocks``'s existing
       normalization -- a fence nested inside a blockquote is an ordinary
-      fence. Despite the name, this is NOT ``.strip()``-ed; only the
-      blockquote marker is removed, so leading/trailing whitespace inside a
-      fenced block survives untouched (a caller matching *content* against a
-      pattern still normally ``.strip()``s again itself).
+      fence. Only that marker is removed; leading/trailing whitespace inside a
+      fenced block survives untouched, so a caller matching *content* against a
+      pattern normally ``.strip()``s it itself.
     * ``enclosing_info`` -- the still-open fence's info string (``"bash"``,
       ``"text"``, ``""`` for a bare fence with nothing after it, ...) for a
       line INSIDE a fence, or ``None`` for a line outside every fence.
