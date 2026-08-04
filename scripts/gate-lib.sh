@@ -75,7 +75,13 @@
 # correctly (e.g. release-bump.sh's `read_log() { ...; } ... || exit $?`
 # propagation out of its own command-substitution subshell).
 #
-# GATE_ADVISORY (lode-ysr6): a bash array of fixed, domain-specific advisory
+# GATE_ADVISORY (lode-ysr6): this section is the OPERATIVE record of the
+# contract -- correct it in place. docs/decisions.md (search "lode-ysr6") also
+# carries a dated snapshot of the decision and the alternative that was
+# weighed; changing anything below means marking that entry superseded rather
+# than editing it, per that file's own preamble.
+#
+# GATE_ADVISORY is a bash array of fixed, domain-specific advisory
 # lines appended after every caller-supplied cause on a gate_could_not_run
 # call -- e.g. merge-precheck.sh's "do not kick this branch back needs-rebase
 # in place of diagnosing it." SET STRUCTURALLY, at source time, from the
