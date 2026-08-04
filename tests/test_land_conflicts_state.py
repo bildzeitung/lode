@@ -284,7 +284,6 @@ def test_section_3_regate_precedes_push_is_sabotage_proven() -> None:
     the real document, the same way the rest of this module does -- only the
     ORDER is sabotaged, by swapping the push block to the front."""
     blocks = _skill_blocks()
-    regate_indices = [i for i, b in enumerate(blocks) if "nox -s lock_currency" in b]
     push_indices = [i for i, b in enumerate(blocks) if "rtk git push origin trunk" in b]
 
     sabotaged = [blocks[push_indices[0]]] + [
