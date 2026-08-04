@@ -1170,10 +1170,13 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # lode-ovgs unified them here and lode-p4qb folded in the fourth
 # (tests/test_assert_main_checkout.py).
 #
-# Consumers: tests/test_land_lock.py, tests/test_land_conflicts_state.py,
-# tests/test_skill_bash_state.py, tests/test_assert_main_checkout.py. A change
-# to the rules below changes what all four gates consider "executed", so the
-# rules are stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
+# Consumers of the FUNCTION: tests/test_land_lock.py,
+# tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
+# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py is a
+# fifth consumer of the constants and `_closes_fence` but not of the function
+# itself -- its inline-span scan runs its own loop (lode-xqc7). A change to the
+# rules below changes what all five gates consider "executed", so the rules are
+# stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1196,21 +1199,24 @@ _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus
 # whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
 # as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
-# imported, and the two state machines that consume them do NOT agree: this one
-# applies CommonMark's closing rule (a closing run must be the SAME character
-# as the opening one and AT LEAST AS LONG, which is what lets a four-backtick
-# block hold an ordinary ```-prefixed content line as literal text), while
-# check_links.py toggles on ANY marker, so there a ``~~~`` line does close a
-# ```-opened block. Do not read one as documentation for the other.
-#
-# UNPINNED, ONE-SIDED DIVERGENCE, filed as lode-xqc7: this widening is not
-# mirrored in tests/test_bd_list_limit_gate.py's own inline-span fence tracker,
-# which still toggles on `startswith("```")`. That is the exact failure mode
-# `_BLOCKQUOTE_MARKER` above is SHARED to prevent -- two paths partitioning one
-# document differently -- so a ``~~~bash`` block would read as executed to this
-# helper and as prose to that scan. Latent only: zero tilde and zero
-# four-plus-backtick fences exist across the gated corpus, measured.
+# imported. THREE state machines now consume a marker of this shape and they do
+# not all agree. This one and tests/test_bd_list_limit_gate.py's inline-span
+# scan import BOTH this constant and ``_closes_fence`` below (lode-xqc7), so
+# they agree by construction -- sharing only the marker would have pinned where
+# a fence opens and left where it closes free to fork. ``check_links.py``
+# toggles on ANY marker, so there a ``~~~`` line does close a ```-opened block;
+# do not read that one as documentation for these two.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def _closes_fence(stripped: str, fence: str) -> bool:
+    """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
+    rule, stated in ``bash_fence_blocks``'s docstring below.
+
+    A named helper rather than an inline conjunction because
+    tests/test_bd_list_limit_gate.py applies the same rule in its own loop.
+    """
+    return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
 
 
 def bash_fence_blocks(markdown: str) -> list[str]:
@@ -1271,9 +1277,7 @@ def bash_fence_blocks(markdown: str) -> list[str]:
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
         if current is not None:
-            # A closing run: nothing but the opening character, and at least
-            # as long. An empty line has neither property, so it is content.
-            if len(stripped) >= len(fence) and set(stripped) == {fence[0]}:
+            if _closes_fence(stripped, fence):
                 blocks.append("\n".join(current))
                 current = None
             else:
