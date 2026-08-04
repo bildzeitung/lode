@@ -58,30 +58,19 @@ create --graph`. What the inversion DOES close, structurally rather than by enum
 
 QUOTE-AWARE SPLIT (lode-obox). The guard's own scanning logic now lives in
 scripts/gh-write-guard.sh (extracted from settings.json, mirroring scripts/sha-fabrication-guard.sh
--- lode-fpmi's precedent), specifically so the control-operator split it does (";&|(){}`" -> a
-candidate invocation boundary) can be made QUOTE-AWARE. The old inline `tr`-based split was
-quoting-unaware: a control character sitting inside a single- or double-quoted STRING ARGUMENT
-(a commit message, a grep pattern) still split the string, and if a `gh <verb>` phrase then
-landed at the START of one of the resulting synthetic fragments, the guard evaluated it as a real
-invocation. Confirmed false-denies under the PRE-FIX guard, pure prose/search text with no actual
-`gh` invocation anywhere on the line:
-  git commit -m "See `gh release create` for context (lode-w35h)"
-  rtk grep -E "(gh issue create)" docs/
-  rtk bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"
-`scripts/gh-write-guard.sh`'s `_split_unquoted` fixes this by tracking quote state (and a
-backslash escaping the very next character) and only treating a control character as a split
-point OUTSIDE any quote. This does NOT touch the "quoted indirection" residual above -- a `gh`
-phrase INSIDE a quoted string was never at a segment start under the OLD splitter either unless a
-control character happened to precede it INSIDE the quotes, which is exactly the false-positive
-class this closes, not a new gap it opens. Regression coverage that the fix did not widen
-anything: every case in `DENIED` below (94 cases, unchanged) still denies against the new script
--- see the `test_..._is_denied` parametrization, which now runs against the delegating hook.
+-- lode-fpmi's precedent) so its control-operator split can be QUOTE-AWARE: the old inline `tr`
+split fired on control characters inside quoted string arguments too, manufacturing a fake segment
+start and denying pure prose. Mechanism, the confirmed repros, and the `$(...)`/backtick carve-out
+(inside DOUBLE quotes those two are live command substitution and MUST still split, unlike `;`
+`|` `(` `{`) are documented once, canonically, in docs/agents-workflow.md -- see the
+"False-positive class" subsection under the lode-o29m section. What lives only here: the two
+tables below are the guard's entire memory of what "known safe" looks like, and every `DENIED`
+case still denies against the new script, so the fix demonstrably narrowed nothing.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -252,6 +241,17 @@ DENIED = [
     "gh --repo owner/repo issue create --title x",  # global -R/--repo flag before the subcommand
     "gh -R owner/repo pr comment 1 -b x",
     "gh --hostname github.example.com issue create --title x",
+    # -- lode-obox, review: command substitution is LIVE inside double quotes. `$(...)` and an
+    #    unescaped backtick pair are executed by the shell there (unlike `;`, `|`, `(`, `{`,
+    #    which are literal inside double quotes), so these lines really do file an issue. The
+    #    pre-lode-obox `tr` splitter caught them incidentally, by splitting blind; a quote-aware
+    #    splitter that treated everything inside double quotes as inert would have SILENTLY
+    #    dropped that coverage -- an unargued narrowing of the guard, which lode-obox's own
+    #    acceptance criteria forbid. Pinned here so it cannot regress again.
+    'echo "$(gh issue create --title x)"',
+    'echo "the guard denies `gh issue create --title x`"',
+    'X="$(gh pr comment 1 -b x)"',
+    'git commit -m "See `gh release create v1 --notes x` for context"',
 ]
 
 # Commands that must NOT be denied. Three families, all load-bearing:
@@ -306,9 +306,13 @@ ALLOWED = [
     #    from the discovering session -- a backtick pair in commit prose, and parens in a
     #    quoted grep pattern -- plus an alternation ('|') carrying TWO forbidden verbs in one
     #    quoted string. None of these lines invokes `gh` at all.
-    'git commit -m "See `gh release create` for context (lode-w35h)"',
-    'git commit -m "note: `gh release create` publishes"',
-    'echo "the guard denies `gh issue create`"',
+    #    NOTE the quoting: a backtick pair is INERT only in single quotes or when
+    #    backslash-escaped. Inside DOUBLE quotes it is live command substitution, and
+    #    the guard denies it -- correctly; see DENIED's own lode-obox block.
+    "git commit -m 'See `gh release create` for context (lode-w35h)'",
+    "git commit -m 'note: `gh release create` publishes'",
+    'git commit -m "note: \\`gh release create\\` publishes"',
+    "echo 'the guard denies `gh issue create`'",
     'rtk bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"',
     'git commit -m "(gh issue create) is forbidden"',
     'rtk grep -E "(gh issue create)" docs/',
@@ -452,34 +456,23 @@ def test_read_only_noun_with_unlisted_verb_is_still_denied() -> None:
 # i.e. sabotaging the quote-awareness reproduces every one of these denials.
 
 
-def test_quoted_backtick_prose_naming_a_write_verb_is_not_denied() -> None:
-    """The lode-w35h builder repro: a commit message backtick-quoting a forbidden verb.
+def test_live_command_substitution_inside_double_quotes_is_still_denied() -> None:
+    """lode-obox, review: quote-awareness must not be applied to `$(...)` / an unescaped backtick
+    inside DOUBLE quotes -- those are executed by the shell, not literal text.
 
-    No `gh` invocation anywhere on this line -- it is prose citing the verb name, inside a `-m`
-    string argument. The backtick pair sits INSIDE the double-quoted argument, so a quote-aware
-    split must not treat it as a command-substitution boundary.
+    Inside double quotes `;`, `|`, `(`, `)`, `{`, `}` are literal (that is the false-positive class
+    lode-obox closes), but `$(` and a bare backtick are not. The pre-lode-obox `tr` splitter caught
+    these by accident; treating the whole double-quoted region as inert would have narrowed the
+    guard's deny surface with no argument, which lode-obox's acceptance criteria explicitly forbid.
     """
-    assert (
-        _run('git commit -m "See `gh release create` for context (lode-w35h)"') is None
-    )
-
-
-def test_quoted_paren_alternation_prose_is_not_denied() -> None:
-    """The reviewer's repro shape: parens (an alternation-like grouping) inside a quoted string,
-    immediately preceding a forbidden-verb phrase, with no real `gh` invocation on the line."""
+    assert _run('echo "$(gh issue create --title x)"') == "deny"
+    assert _run('echo "the guard denies `gh issue create --title x`"') == "deny"
+    # ...and the discrimination is real: a bare paren inside double quotes stays literal, so the
+    # quoted-alternation false positive is still fixed rather than traded away for the line above.
     assert _run('rtk grep -E "(gh issue create)" docs/') is None
-
-
-def test_quoted_alternation_naming_two_write_verbs_is_not_denied() -> None:
-    """A quoted `|`-alternation carrying TWO forbidden verbs in one string -- worst case for the
-    old splitter, since it manufactures two false segments instead of one, each independently
-    denied. Still pure prose in a `bd --notes` string; no real invocation of either verb."""
-    assert (
-        _run(
-            'rtk bd update lode-x --notes "mentions (gh issue create|gh pr comment) both denied"'
-        )
-        is None
-    )
+    # An allowlisted READ inside a live substitution is still allowed -- this denies writes, not
+    # command substitution as such.
+    assert _run('echo "$(gh issue view 123)"') is None
 
 
 def test_real_invocation_after_quoted_control_chars_is_still_denied() -> None:
@@ -528,15 +521,9 @@ class TestGhWriteGuardScriptDirectly:
             return None
         return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
 
-    def test_script_is_valid_bash(self) -> None:
-        proc = subprocess.run(
-            ["bash", "-n", str(GH_WRITE_GUARD_SCRIPT)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert proc.returncode == 0, f"script is not valid bash: {proc.stderr}"
+    # (No `bash -n` parse test here: `nox -s shellcheck` already lints every tracked shell
+    # script at --severity=warning, in the default session list, and picks up new scripts
+    # automatically -- a per-file parse test would be a second, weaker copy of that gate.)
 
     def test_script_denies_every_case_in_denied_table(self) -> None:
         for command in DENIED:
@@ -580,26 +567,10 @@ class TestGhWriteGuardScriptDirectly:
 
 
 def _run_hook_with_project_dir(command: str, project_dir: str) -> dict | None:
-    """Like `_hook_output`, but overriding CLAUDE_PROJECT_DIR instead of PATH -- the hook prefers
-    CLAUDE_PROJECT_DIR over `git rev-parse --show-toplevel` when resolving the guard script."""
-    payload = json.dumps(
-        {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
-    )
-    env = dict(os.environ)
-    env["CLAUDE_PROJECT_DIR"] = project_dir
-    proc = subprocess.run(
-        [SH, "-c", _hook_command()],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=env,
-        check=False,
-    )
-    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
-    if not proc.stdout.strip():
-        return None
-    return json.loads(proc.stdout)["hookSpecificOutput"]
+    """The hook, run with CLAUDE_PROJECT_DIR pointed at `project_dir` -- which it prefers over
+    `git rev-parse --show-toplevel` when resolving the guard script. `run_hook` owns the
+    subprocess contract (dash, payload shape, exit-0 assert); this only names the override."""
+    return run_hook(_hook_command(), command, project_dir=project_dir)
 
 
 def test_hook_fails_closed_when_guard_script_is_missing(tmp_path: Path) -> None:
@@ -608,6 +579,24 @@ def test_hook_fails_closed_when_guard_script_is_missing(tmp_path: Path) -> None:
     assert out is not None and out["permissionDecision"] == "deny"
     assert "gh-write-guard.sh" in out["permissionDecisionReason"]
     assert "unrecoverable" in out["permissionDecisionReason"]
+
+
+def test_unresolvable_guard_script_does_not_brick_every_bash_call(
+    tmp_path: Path,
+) -> None:
+    """Fail-closed, but scoped to the risk surface (review of lode-obox).
+
+    Unlike a missing jq (a machine prerequisite, installed once), an unresolvable guard SCRIPT is
+    reachable from ordinary VCS state -- an older checkout, a partial revert, a stash that catches
+    scripts/. Denying EVERY Bash call there would brick the session over a source-tree condition,
+    and unbricking it needs Bash. Any real `gh` invocation necessarily spells out the binary name,
+    so scoping the deny to commands containing it keeps fail-closed exactly where it matters.
+    """
+    assert _run_hook_with_project_dir("ls -la", str(tmp_path)) is None
+    assert _run_hook_with_project_dir("git status --short", str(tmp_path)) is None
+    # ...while the risk surface is still denied on that same broken checkout.
+    out = _run_hook_with_project_dir("gh issue create --title x", str(tmp_path))
+    assert out is not None and out["permissionDecision"] == "deny"
 
 
 def test_hook_fails_closed_when_guard_script_is_not_executable(tmp_path: Path) -> None:

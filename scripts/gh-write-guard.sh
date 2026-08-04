@@ -45,11 +45,18 @@
 # either, unless a control character happened to precede it INSIDE the quotes
 # -- which is exactly the false-positive class this fix closes, not a new gap
 # it opens. The fix only stops manufacturing a false segment start where none
-# exists in the real shell grammar; it creates no new segment starts (the set
-# of positions treated as "outside quotes" by `_split_unquoted` is a subset of
-# the positions the old blind `tr` treated as splittable), so it cannot let
-# through anything the old splitter would have caught. Differential and
-# mutation coverage: tests/test_gh_write_guard.py.
+# exists in the real shell grammar; it creates no NEW segment starts.
+#
+# But fewer segment starts is not automatically safe, and one case had to be
+# put back: `$(...)` and an UNESCAPED backtick are live command substitution
+# INSIDE double quotes (`;`, `|`, `(`, `{` are literal there; these two are
+# not). The old blind `tr` split them incidentally and so denied
+# `echo "$(gh issue create ...)"`; treating the whole double-quoted region as
+# inert would have dropped that silently -- an unargued narrowing of the deny
+# surface, which this ticket's own acceptance criteria forbid. So
+# `_split_unquoted` splits on those two inside double quotes and only those
+# two, which is exactly where the real shell would. Differential and mutation
+# coverage: tests/test_gh_write_guard.py.
 
 set -euo pipefail
 
@@ -57,7 +64,8 @@ CMD="${1:-}"
 
 # Emit $1 with every UNQUOTED occurrence of ; & | ( ) { } ` replaced by a
 # newline; occurrences inside '...' or "..." (and any backslash-escaped
-# character, in or out of quotes) are left untouched. Unbalanced quotes at
+# character, in or out of quotes) are left untouched -- EXCEPT `$(` and a bare
+# backtick inside "...", which the shell really does execute. Unbalanced quotes at
 # end-of-string leave the tail "inside" a quote (no further splits) rather
 # than guessing -- the conservative direction, since fewer splits means fewer
 # segments are ever offered to the `gh` matcher at all.
@@ -66,11 +74,9 @@ _split_unquoted() {
   len=${#s}
   while ((i < len)); do
     c="${s:i:1}"
-    if [[ "$state" == "none" && "$c" == '\' ]]; then
-      out+="$c"
-      i=$((i + 1))
-      ((i < len)) && out+="${s:i:1}"
-    elif [[ "$state" == "double" && "$c" == '\' ]]; then
+    if [[ "$state" != "single" && "$c" == '\' ]]; then
+      # A backslash escapes the next character outside quotes and inside double
+      # quotes alike; inside SINGLE quotes it is literal, so that state is excluded.
       out+="$c"
       i=$((i + 1))
       ((i < len)) && out+="${s:i:1}"
@@ -86,6 +92,17 @@ _split_unquoted() {
     elif [[ "$state" == "double" && "$c" == '"' ]]; then
       state=none
       out+="$c"
+    elif [[ "$state" == "double" && "$c" == '`' ]]; then
+      # Command substitution IS live inside double quotes (only a backslash --
+      # handled above -- makes a backtick literal there). Splitting here is not
+      # a false positive: the shell really does run what follows.
+      out+=$'\n'
+    elif [[ "$state" == "double" && "$c" == '$' && "${s:i+1:1}" == '(' ]]; then
+      # Same for `$( ... )`. Note a bare `(` inside double quotes is NOT a split
+      # point (it is literal there) -- that is what keeps a quoted grep
+      # alternation like "(gh issue create)" from being denied.
+      out+=$'\n'
+      i=$((i + 1))
     elif [[ "$state" == "none" && ';&|(){}`' == *"$c"* ]]; then
       out+=$'\n'
     else
@@ -96,7 +113,14 @@ _split_unquoted() {
   printf '%s' "$out"
 }
 
-[ -n "$CMD" ] || exit 0
+# This guard runs on EVERY Bash tool call, and the split + five greps below cost
+# ~45ms each time. Any real `gh` invocation necessarily contains the substring
+# `gh`, so a command without it cannot be one -- bailing here cannot weaken the
+# guard and takes the common (no-`gh`) path to ~2ms. Subsumes an empty $CMD.
+case "$CMD" in
+  *gh*) ;;
+  *) exit 0 ;;
+esac
 
 SEG=$(_split_unquoted "$CMD")
 P='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((if|then|else|do|env|command|sudo|nohup|time|xargs|rtk)[[:space:]]+)*([^[:space:]]*/)?gh([[:space:]]+(-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+)*[[:space:]]+'
@@ -106,6 +130,10 @@ APIWRITE='api[[:space:]]+(.*[[:space:]])?(-[fF]|(--field|--raw-field|--input)([[
 APIGET='api[[:space:]]+(.*[[:space:]])?(-X[[:space:]]*|--method[[:space:]=]+)GET\b'
 
 GH=$(printf '%s' "$SEG" | grep -iE "$P" || true)
+# No segment sits at a `gh` command position -- the remaining four greps would all
+# be operating on an empty string. (`gh` appears inside ordinary words like
+# "through"/"highlight", so the substring pre-filter above lets plenty through here.)
+[ -n "$GH" ] || exit 0
 API_LINES=$(printf '%s' "$GH" | grep -iE "$P$API" || true)
 NONAPI_LINES=$(printf '%s' "$GH" | grep -ivE "$P$API" || true)
 UNSAFE_API=$(printf '%s' "$API_LINES" | grep -iE "$P$APIWRITE" | grep -ivE "$P$APIGET" || true)

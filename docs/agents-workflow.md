@@ -1446,7 +1446,9 @@ commit message whose prose *named* a forbidden verb, or a plain read-only `grep`
 *mentioned* one. Two independent reproductions in one session: a `lode-w35h` builder's commit
 message backtick-quoted the release-publishing subcommand and was denied (it reworded around it);
 a reviewer's read-only `grep` pattern happened to contain a two-word `gh` subcommand name inside an
-alternation and was denied too.
+alternation and was denied too. (Of those two, only the `grep` was a true false positive: the commit
+message used *double* quotes around a bare backtick pair, which the shell would really have executed
+— see the carve-out below. The fix covers the genuine class; that one wants single quotes.)
 
 **Mechanism (fixed by `lode-obox`, was live before it).** The guard splits the command into
 candidate "invocation segments" at shell control-operator characters (`; & | ( ) { } \``) so a `gh
@@ -1466,24 +1468,35 @@ the `lode-fpmi` fabricated-SHA guard's own extraction, and for the same reason: 
 single-/double-quote state (and a backslash escaping the very next character, in or out of quotes)
 and only treats a control character as a split point **outside** any quote — i.e. it mirrors where
 the real shell would treat that character as an operator, instead of splitting blind. This closes
-the false-positive class structurally: the set of positions `_split_unquoted` treats as "outside
-quotes" is a strict subset of what the old blind `tr` treated as splittable, so it can only produce
-**fewer** segments than before, never new ones — it cannot let through anything the old splitter
-would have caught.
+the false-positive class structurally: `_split_unquoted` never manufactures a segment start where
+the real shell grammar has none, so it can only produce **fewer** segments than the old blind `tr`,
+never new ones.
+
+**"Quote-aware" is not "everything inside a quote is inert" — one case had to be put back.** Inside
+**double** quotes, `;`, `|`, `(`, `)`, `{`, `}` really are literal (that is the false-positive class
+above), but `$(...)` and an **unescaped** backtick are *not*: they are live command substitution the
+shell executes. The old blind `tr` split those incidentally, so it denied
+`echo "$(gh issue create …)"`; a splitter that skipped the whole double-quoted region would have
+dropped that denial **silently** — an unargued narrowing of the guard's deny surface, exactly what
+`lode-obox`'s own acceptance criteria forbid. So `_split_unquoted` splits on those two forms inside
+double quotes and on nothing else, and both are pinned as `DENIED` regression cases. Fewer segments
+is *not* automatically the safe direction; it has to be checked case by case, which is what this
+carve-out is. (Practical consequence for prose: to *name* a `gh` verb in a commit message, use
+**single** quotes or escape the backticks — inside double quotes an unescaped backtick pair is a
+command your shell runs, not a citation.)
 
 **Proof of no widening — this was the load-bearing constraint, not the false-positive fix itself.**
 A `gh` write guard's failure modes are asymmetric: a false ALLOW is a public write under the user's
 identity (unrecoverable, `lode-o29m`); a false DENY costs a reword. So the fix was verified, not
 just written:
 
-- Every one of the guard's existing 94 `DENIED` / 36 `ALLOWED` regression-pin cases
+- Every one of the guard's existing `DENIED` / `ALLOWED` regression-pin cases
   (`tests/test_gh_write_guard.py`) still decides identically against the new script — zero
   regressions, checked directly (script-level) and through the delegating hook (hook-level).
 - **Sabotage-verified**: swapping `_split_unquoted` back out for the old `tr ';&|(){}\`' '\n'`
-  one-liner turns exactly the new false-positive-fix tests red (10 failures — the six confirmed
-  repro commands plus four tests pinning the mechanism) while every other test in the file stays
-  green. That is the property a fix is supposed to have: diagnostic of the specific mechanism, not
-  incidentally passing.
+  one-liner turns exactly the new false-positive-fix tests red while every other test in the file
+  stays green. That is the property a fix is supposed to have: diagnostic of the specific
+  mechanism, not incidentally passing.
 - A dedicated boundary test (`test_real_invocation_after_quoted_control_chars_is_still_denied`)
   pins that a *real* `gh` write reached via `&&` **after** a heavily-metacharacter-laden quoted
   string is still denied — the fix stops at the closing quote and resumes normal splitting, it does
