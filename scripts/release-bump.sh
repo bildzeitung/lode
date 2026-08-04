@@ -133,15 +133,14 @@ read_log() {   # read_log <pretty-format> -> stdout, or exit 2 with git's own st
   gate_could_not_run "git log failed" "${lines[@]}"
 }
 
-# Each of the four greps below partitions its OWN exit code (lode-umtc): 1 is
-# grep's "no match" -- a CONTENT answer -- and anything else is a MACHINE
-# fault, the distinction the exit-2 contract above exists to draw. The
-# `rc=$?`-capture-then-escalate shared with scripts/validate-mermaid.sh's
-# per-doc loop is extracted into gate-lib.sh's escalate_unless_content()
+# Each of the four greps below partitions its OWN exit code (lode-umtc), the
+# distinction the exit-2 contract above exists to draw. That
+# `rc=$?`-capture-then-escalate is gate-lib.sh's escalate_unless_content()
 # (lode-1mea) -- see that function's own header for the rationale, including
-# why the command is never tested with `!`. Each call below still states its
-# own cause once more for the OPERATOR, which is the only audience that does
-# not have this file open.
+# why `rc=$?` must be the first command in the `else` arm and why the command
+# is never tested with `!`. Each call below still states its own cause once
+# more for the OPERATOR, which is the only audience that does not have this
+# file open.
 #
 # Each site's regex is held in a PAT_* variable so the live `grep` and the
 # "Diagnose with:" line the operator is handed cannot fork.

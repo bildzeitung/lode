@@ -252,9 +252,10 @@ for f in "$REPO"/docs/*.md; do
   # below still green (they run against the real docs/, which always matches).
   #
   # The `rc=$?`-capture-then-escalate here (and at the docker run site below)
-  # is scripts/gate-lib.sh's escalate_unless_content() (lode-1mea) -- see its
-  # own header for why `rc=$?` is captured in the `else` arm rather than by
-  # testing `! cmd` (which negates the status, not the status itself).
+  # is scripts/gate-lib.sh's escalate_unless_content() (lode-1mea) -- see that
+  # function's own header for the rationale, including why `rc=$?` must be the
+  # first command in the `else` arm and why the command is never tested with
+  # `!`.
   if grep -q '```mermaid' "$f"; then
     found=1
   else
