@@ -320,7 +320,32 @@ def _command_segments(line: str) -> list[str]:
 
 
 def _is_unguarded(text: str) -> bool:
-    """True if any single command within `text` runs `bd ... list` without `--limit`."""
+    """True if any single command within `text` runs `bd ... list` without `--limit`.
+
+    Whole-text reject before the per-character `_command_segments` split, which most
+    lines only ever pay to learn they had nothing to find (MEASURED, lode-vzj7: only
+    3.2% of scanned `.sh` lines mention `bd` at all; `_scan_corpus` ~30% faster, and
+    26 of its 8046 `_is_unguarded` calls still reach `_command_segments`, from all 8046).
+
+    Sound by CONSTRUCTION, for any pattern and any flags: every segment is a contiguous
+    substring of `text` cut only at `;|&`, which are all non-word characters, so a
+    word-boundary assertion reads the same at a segment edge as it does mid-line -- a
+    match inside any segment is therefore a match inside `text`, and no match here means
+    no segment can match. Findings are byte-identical to the unguarded version because
+    of that, not because the corpus was measured and happened to agree.
+
+    Deliberately NOT the obvious `if "bd" not in text`. That spelling is ~8% faster
+    again (~1ms; this one still keeps ~85% of the total win) and wrong in a way no
+    corpus differential can see: it hand-copies `BD_LIST_RE`'s head into a
+    case-SENSITIVE test sitting 120 lines from the regex, so adding `re.IGNORECASE` --
+    or a `bd|beads` alternation -- would silently cancel its own widening instead of
+    failing. Fuzzed over 300k strings against 8 plausible variants of the regex, that
+    spelling diverges from the unguarded function on 5 of them; this one on none.
+    Hoisting the reject up into `_line_snippet`, ahead of `_strip_comment`, is sound and
+    another ~7%; into `inline_violations` it is a 15% LOSS (a full regex scan of a prose
+    line costs more than the `findall` it saves). Both measured, neither taken."""
+    if not BD_LIST_RE.search(text):
+        return False
     return any(
         BD_LIST_RE.search(segment) and not _LIMIT_RE.search(segment)
         for segment in _command_segments(text)
