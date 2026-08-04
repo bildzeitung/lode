@@ -2185,7 +2185,10 @@ while erasing it here would lose the record of what was believed, and when.
   distinct from the correctness question in the canonical account).
 
   **Fix, mirroring lode-nt98 exactly:** `land-review.md`'s frontmatter role now carries the identical
-  guard the builder and reviewer already carry, closing the **ancestry** axis only. Left open on the
+  guard the builder and reviewer already carry, closing the **ancestry** axis only. Why lode-nt98 had
+  not already covered it: it explicitly scoped `land-review` **out** — that same nil exposure read, at
+  the time, as *no* exposure at all, and unpicking that conflation is what lode-qv5t was filed for.
+  Left open on the
   **dirt** axis — a worktree recycled onto an already-landed `land/<other-id>` still slips past
   undetected — tracked separately as **lode-3v1p**, below.
 
