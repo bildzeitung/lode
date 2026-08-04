@@ -302,19 +302,10 @@ class FastEmbedEmbedder:
         became a session-wide trap once "next job" became "next process
         restart".
 
-        **Why "failed" and "deliberately offline" can share one check safely**,
-        even though :func:`resolve_model_revision` cannot (yet) tell them
-        apart — the rejected, bigger option (c) in ``lode-fxse``; see
-        ``docs/decisions.md``. Both outcomes cache as ``None``, so this method
-        re-arms either alike. For a deliberately offline installation
-        (``HF_HUB_OFFLINE`` set, or an out-of-pinned-set
-        :func:`lode.config.model_cache_identity`), :func:`resolve_model_revision`
-        short-circuits *before* touching ``huggingface_hub`` at all, so
-        re-arming it costs nothing beyond a cheap local check on next probe —
-        never a live network call. Only a probe that would otherwise make a
-        real, ``settings.hf_probe_timeout_s``-bounded network round trip pays
-        anything for the retry, and at most once per poll tick with pending
-        embed work, never once per job.
+        A retry is free for a *deliberately* offline install and bounded for
+        every other failure, which is why this needs no "was it transient?"
+        distinction (``lode-fxse``'s rejected option (c)) —
+        ``docs/decisions.md`` owns that argument and its measurements.
 
         Thread-safe the same way :meth:`model_revision` and :meth:`_load` are
         (lode-0wj.4): guarded on :attr:`_load_lock`, so this can never race a

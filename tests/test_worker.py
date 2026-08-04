@@ -2532,54 +2532,121 @@ def test_drain_retries_a_failed_revision_probe_on_the_next_call(
     assert statuses == ["done", "done"]
 
 
-def test_drain_does_not_reprobe_a_successful_revision_across_calls(
+@pytest.mark.real_embedder
+def test_drain_reset_seam_resolves_on_the_real_fastembedembedder(
     conn: sqlite3.Connection,
     db_path: Path,
-    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """A SUCCESSFUL probe stays cached across drain() calls -- no reset (lode-fxse).
+    """The genuine FastEmbedEmbedder self-heals through drain() (lode-fxse).
 
-    The other half of the trade: retrying only a FAILED probe must not
-    silently undo lode-j5r2's "once per process" amortization for the common,
-    successfully-resolved case by re-probing on every poll tick regardless of
-    outcome. If this test's ``probes`` count ever exceeds 1, drain()'s reset
-    call has stopped being conditional -- see
-    ``FastEmbedEmbedder.reset_revision_probe``'s own "no-op on success"
-    contract.
+    Pins the SEAM, not just the logic. ``drain()`` reaches the retry through
+    ``getattr(embedder, "reset_revision_probe", None)`` -- a string literal
+    that no rename refactor and no type checker follows. Every other test of
+    this fix substitutes a stub that defines whichever name the literal
+    happens to say, so the literal agreeing with the real class's actual
+    method name was, until this test, pinned by nothing: renaming
+    ``FastEmbedEmbedder.reset_revision_probe`` (updating its real call sites,
+    which a rename does automatically) left the ``getattr`` resolving to
+    ``None``, ``drain()`` silently no-opping, lode-fxse's bug fully back --
+    and the whole suite green. Measured, not hypothesised: that exact
+    sabotage passed 135/135 before this test existed.
+
+    So this drives the REAL class end-to-end -- ``@pytest.mark.real_embedder``
+    opts out of conftest's autouse offline stub -- with only the two genuine
+    egress points faked (the ONNX load and ``huggingface_hub.model_info``),
+    and asserts on the ``model_revision`` actually written to the vector rows,
+    which is the ticket's own acceptance criterion: a first-pass probe failure
+    must not poison a later pass.
+
+    Also covers the OTHER half in the same three passes, where a stub cannot:
+    that a healed (successful) probe then stays cached for the process rather
+    than being re-probed every poll tick, undoing lode-j5r2's amortization.
+    That half is only meaningful against the real class -- a stub's own
+    ``reset_revision_probe`` would be asserting on itself.
+
+    Counts calls rather than asserting via a raising stub -- the trap this
+    area has hit four times (lode-dj6m, lode-r4r2, this ticket's own
+    description, and this branch's first cut of this very test).
     """
-    from conftest import _OfflineQueryEmbedder
+    import fastembed
+    import huggingface_hub
+    import lancedb
+    import numpy as np
 
-    class _StableEmbedder(_OfflineQueryEmbedder):
-        probe_calls = 0
+    from lode.config import lance_dir as _lance_dir
+    from lode.embedding import FastEmbedEmbedder
 
-        def __init__(self, settings: Settings) -> None:
-            super().__init__(settings)
-            self._probed = False
+    settings = Settings(embedding_vector_dim=4)
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    # The probe short-circuits before huggingface_hub under this flag
+    # (lode-r4r2), which would make the retry unobservable here.
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
 
-        def model_revision(self) -> str | None:
-            if not self._probed:
-                _StableEmbedder.probe_calls += 1
-                self._probed = True
-            return "stable-sha"
+    class _FakeTextEmbedding:
+        """Stands in for the ONNX load only -- everything else is the real class."""
 
-        def reset_revision_probe(self) -> None:
-            # Mirrors the real class: a no-op once a probe has succeeded.
+        def __init__(self, **kwargs: object) -> None:
             pass
 
-    embedder = _StableEmbedder(settings)
+        def embed(self, texts: list[str]):
+            return [
+                np.zeros(settings.embedding_vector_dim, dtype=np.float32) for _ in texts
+            ]
 
-    _insert_note_worker(conn, note_id="note-0", version_id="ver-0", body="body 0")
-    enqueue_derive_jobs(conn, "ver-0", types=("embed",))
-    drain(conn, db_path, settings, embedder=embedder)
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
 
-    _insert_note_worker(conn, note_id="note-1", version_id="ver-1", body="body 1")
-    enqueue_derive_jobs(conn, "ver-1", types=("embed",))
-    drain(conn, db_path, settings, embedder=embedder)
+    probe_calls = 0
 
-    assert _StableEmbedder.probe_calls == 1, (
-        "a successful probe must stay cached across drain() calls, got "
-        f"{_StableEmbedder.probe_calls} probe(s)"
+    class _FakeModelInfo:
+        sha = "healed-sha"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            raise OSError("transient network blip")
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(settings)
+
+    def _pass(i: int) -> None:
+        """One poll tick of `lode work --loop`: same embedder, a fresh version."""
+        _insert_note_worker(
+            conn, note_id=f"note-{i}", version_id=f"ver-{i}", body=f"body {i}"
+        )
+        enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
+        assert drain(conn, db_path, settings, embedder=embedder) == 1
+
+    def _revisions_for(version: str) -> set[str | None]:
+        rows = lancedb.connect(_lance_dir(db_path)).open_table("embeddings")
+        return {
+            r["model_revision"]
+            for r in rows.to_arrow().to_pylist()
+            if r["target_version"] == version
+        }
+
+    _pass(0)
+    assert probe_calls == 1
+    assert _revisions_for("ver-0") == {None}, "the blip's own pass records NULL"
+
+    _pass(1)
+    assert probe_calls == 2, (
+        "expected the failed probe to be retried on the next drain() call, got "
+        f"{probe_calls} probe(s) -- drain()'s getattr seam is not reaching "
+        "FastEmbedEmbedder.reset_revision_probe"
     )
+    assert _revisions_for("ver-1") == {"healed-sha"}, "the next pass must self-heal"
+
+    _pass(2)
+    assert probe_calls == 2, (
+        "a HEALED probe must stay cached for the process (lode-j5r2's "
+        f"amortization), got {probe_calls} probe(s)"
+    )
+    assert _revisions_for("ver-2") == {"healed-sha"}
 
 
 # ---------------------------------------------------------------------------

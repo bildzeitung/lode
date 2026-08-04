@@ -436,10 +436,22 @@ def test_real_embedder_marker_hands_back_the_genuine_class() -> None:
     assert embedding_module.FastEmbedEmbedder.__name__ == "FastEmbedEmbedder"
 
 
+@pytest.mark.real_embedder
 def test_the_stub_mirrors_the_duck_typed_surface_lode_probes() -> None:
-    """``warm``/``model_revision`` are probed by ``hasattr``, so an omission
-    would not fail -- it would silently route the code under test down the
-    absent-method branch, which production never takes."""
+    """``warm``/``model_revision``/``reset_revision_probe`` are probed by
+    ``hasattr``, so an omission would not fail -- it would silently route the
+    code under test down the absent-method branch, which production never
+    takes.
+
+    Asserted against the REAL class's surface rather than a hand-kept list, so
+    a fourth duck-typed method cannot be added to
+    :class:`~lode.embedding.FastEmbedEmbedder` without this stub growing it too
+    (lode-fxse review: ``reset_revision_probe`` was the third such method, and
+    the hand-kept version of this test was not extended alongside it). Needs
+    ``@pytest.mark.real_embedder`` for exactly that reason -- without it the
+    autouse fixture has already replaced ``embedding_module.FastEmbedEmbedder``
+    with the stub, and the sweep would compare the stub against itself. Reads
+    the class only, never constructs it (same as the marker test above)."""
     embedder = _OfflineQueryEmbedder(Settings())
 
     assert len(embedder.embed_query("anything")) == Settings().embedding_vector_dim
@@ -449,6 +461,18 @@ def test_the_stub_mirrors_the_duck_typed_surface_lode_probes() -> None:
     )
     assert embedder.warm() is None
     assert embedder.model_revision() is None
+    assert embedder.reset_revision_probe() is None
+
+    missing = [
+        name
+        for name in vars(embedding_module.FastEmbedEmbedder)
+        if not name.startswith("_") and not hasattr(embedder, name)
+    ]
+    assert not missing, (
+        "tests/conftest.py's _OfflineQueryEmbedder must mirror every public "
+        "method of the real FastEmbedEmbedder -- lode probes them by hasattr, "
+        f"so an omission silently changes the path under test. Missing: {missing}"
+    )
 
 
 def test_related_notes_panel_never_reaches_the_real_embedder(

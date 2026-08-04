@@ -2823,6 +2823,16 @@ while erasing it here would lose the record of what was believed, and when.
     what `lode-w5nr` already bounds it to (`settings.hf_probe_timeout_s`, 5.0s default) — once per
     poll tick with pending embed work, not once per job, self-healing within one
     `--loop`/`--wait` interval instead of needing a restart.
+  - **Known and accepted: a SUSTAINED real outage has no backoff of its own** (review finding). The
+    retry cadence is whatever `--interval` happens to be (`work_poll_interval_s`, 5.0s default) —
+    a job-polling knob, now doubling as a network-retry cadence nothing explicitly owns. Through a
+    multi-hour HF outage with embed work continuously pending, each tick adds up to
+    `hf_probe_timeout_s` (5.0s) of blocking probe. Accepted rather than fixed: it is bounded per
+    tick by `lode-w5nr`, costs nothing on an idle queue or a `HF_HUB_OFFLINE` install, and the
+    obvious remedy (exponential backoff on consecutive failures) is state this seam deliberately
+    does not carry — the whole point of (b) over (c) was that `drain()` owns *when* to retry and
+    `FastEmbedEmbedder` owns *whether*, with neither modelling failure history. Revisit only with a
+    real report; a user hitting it can set `HF_HUB_OFFLINE` and pay nothing.
   - **Test proven non-vacuous the way this area's own history demands** (lode-dj6m, lode-r4r2,
     and this ticket's own description each name the same trap): a stub that *raises* is swallowed
     by `_embedder_model_revision`'s `except Exception: return None`, so every new test here counts
@@ -2831,8 +2841,24 @@ while erasing it here would lose the record of what was believed, and when.
     successful probe is untouched by a reset (probe count stays 1). `tests/test_worker.py` pins the
     `drain()`-level integration — two `drain()` calls against the *same* embedder (mirroring
     `cli.py`'s `work` command holding one embedder across every poll pass) prove a first-call
-    failure is retried on the second call, and a mirror test proves a first-call success is never
-    reprobed on the second.
+    failure is retried on the second call.
+  - **Counting calls is necessary but not sufficient — the seam needed its own test (review
+    finding).** `drain()` reaches the retry through `getattr(embedder, "reset_revision_probe",
+    None)`, a string literal that no rename refactor and no type checker follows, and every
+    `drain()`-level test above substitutes a stub defining whichever name that literal happens to
+    say. So the literal agreeing with the real class was pinned by nothing: renaming
+    `FastEmbedEmbedder.reset_revision_probe` (updating its real call sites, as a rename does
+    automatically) left the `getattr` resolving to `None`, `drain()` silently no-opping, this whole
+    fix dead — and the suite green, 135/135, measured. The branch's original stub-based mirror test
+    for the *success* half was vacuous for the same family of reason, one step removed from the
+    raising-stub trap: it hard-coded the "no-op on success" contract into its own stub's
+    `reset_revision_probe`, so it asserted on itself and passed against the pre-fix code unchanged.
+    Both are now replaced by one test driving the **genuine** `FastEmbedEmbedder` through three
+    `drain()` passes (`@pytest.mark.real_embedder`, with only the ONNX load and
+    `huggingface_hub.model_info` faked), asserting on the `model_revision` actually written to the
+    vector rows: NULL on the blip's own pass, healed on the next, and still cached on the third. It
+    is the only test that can pin the success half honestly, and it fails under all three sabotages
+    (method renamed, `drain()`'s call removed, the reset made unconditional).
   - **The live record moved.** `docs/storage.md`'s async work-queue section (not this dated log)
     now describes the fixed, self-healing behavior instead of the unfixed latch — per this file's
     own preamble routing rule. `FastEmbedEmbedder.model_revision()`'s and `warm()`'s docstrings
