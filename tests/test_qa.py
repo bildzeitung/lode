@@ -223,13 +223,15 @@ def test_qa_think_harder_llm_max_tokens_override_reaches_the_call(conn) -> None:
 
 
 def test_qa_call_timeout_s_default_reaches_the_call(conn) -> None:
-    # lode-wfyx: the Q&A synthesis call is timed by its own qa_call_timeout_s
-    # knob (default 300s), split off the shared llm_call_timeout_s.
+    # lode-wfyx: with no Settings passed at all, the Q&A synthesis call is
+    # timed by its own qa_call_timeout_s knob, split off the shared
+    # llm_call_timeout_s. The default's *value* is pinned by test_config.py's
+    # test_documented_defaults_load, so derive it rather than retype it.
     client = _FakeClient(_envelope([]))
     answer_question(
         conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
     )
-    assert client.messages.calls[0]["timeout"] == 300.0
+    assert client.messages.calls[0]["timeout"] == Settings().qa_call_timeout_s
 
 
 def test_qa_call_timeout_s_override_reaches_the_call(conn) -> None:
@@ -250,7 +252,11 @@ def test_qa_call_timeout_s_override_reaches_the_call(conn) -> None:
 def test_llm_call_timeout_s_no_longer_reaches_the_qa_call(conn) -> None:
     # lode-wfyx: llm_call_timeout_s now bounds only enrich.py's call sites --
     # overriding it must NOT change the Q&A call's timeout, which stays on
-    # qa_call_timeout_s's own (unrelated) default.
+    # qa_call_timeout_s's own (unrelated) default. The mirror direction (the
+    # qa knob not leaking into enrich's three sites) needs no test of its own:
+    # test_enrich.py's three *_call_timeout_* tests pin llm_call_timeout_s=42
+    # and assert 42 on the wire, so they already fail (300 != 42) if any of
+    # those sites reads qa_call_timeout_s -- verified by sabotage.
     settings = Settings(llm_call_timeout_s=999.0)
     client = _FakeClient(_envelope([]))
     answer_question(
@@ -260,7 +266,7 @@ def test_llm_call_timeout_s_no_longer_reaches_the_qa_call(conn) -> None:
         provider=AnthropicProvider(client),
         settings=settings,
     )
-    assert client.messages.calls[0]["timeout"] == 300.0
+    assert client.messages.calls[0]["timeout"] == settings.qa_call_timeout_s
 
 
 def test_no_egress_passage_excluded_from_context(conn) -> None:

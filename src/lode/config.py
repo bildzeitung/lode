@@ -296,14 +296,12 @@ class Settings(BaseModel):
         "vendor-neutral from anthropic_call_timeout_s (lode-568v.1/.2); a "
         "config.toml still carrying the old key is remapped by "
         "load_settings(). Distinct from fetch_timeout_s, which governs web "
-        "draw-down HTTP fetches, not LLM provider calls. **No longer reaches "
-        "the Q&A synthesis call** (qa.py) -- that call has its own "
-        "qa_call_timeout_s below, split off lode-wfyx (see "
-        "docs/configuration.md 'Q&A call timeout split from "
-        "llm_call_timeout_s'): one shared value couldn't serve both a "
-        "foreground TUI call with adaptive thinking and background "
-        "enrichment work without either loosening enrichment's "
-        "hang-detection or under-timing Q&A.",
+        "draw-down HTTP fetches, not LLM provider calls. NO LONGER REACHES "
+        "the Q&A synthesis call (qa.py) -- that call has its own "
+        "qa_call_timeout_s below, split off in lode-wfyx because one shared "
+        "value couldn't serve both a foreground TUI call with adaptive "
+        "thinking and background enrichment work without either loosening "
+        "enrichment's hang-detection or under-timing Q&A.",
         gt=0.0,
     )
     qa_call_timeout_s: float = _knob(
@@ -315,13 +313,15 @@ class Settings(BaseModel):
         "unchanged. Needed because lode-3dlt let the think-harder tier "
         "(qa_think_harder_llm, Opus 5 by default) run adaptive thinking it "
         "previously never did, while llm_call_timeout_s stayed at 120s -- "
-        "plausibly too short once thinking shares qa.MAX_TOKENS (8192) with "
-        "the claims response. 300s is THRESHOLD-DERIVED, not a measured "
-        "p95 -- a live p95 benchmark was deliberately declined (cost/value, "
-        "not a capability gap); see docs/configuration.md 'Q&A call timeout "
-        "split from llm_call_timeout_s' for the full decision record, "
-        "including the derivation and the SDK-retry interaction this value "
-        "was chosen alongside.",
+        "plausibly too short once thinking shares qa.MAX_TOKENS with the "
+        "claims response. The default is DERIVED, NOT a measured p95 (a live "
+        "p95 benchmark was deliberately declined on cost/value, not for lack "
+        "of capability). The derivation, the SDK-retry interaction it was "
+        "chosen alongside, and the ModelTier.max_tokens override that "
+        "invalidates it all live in ONE place -- docs/configuration.md 'Q&A "
+        "call timeout split from llm_call_timeout_s' -- deliberately not "
+        "restated here, because the numbers have already drifted once across "
+        "the copies.",
         gt=0.0,
     )
     llm_provider: Literal["anthropic", "openai"] = _knob(
