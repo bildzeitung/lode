@@ -38,9 +38,12 @@
 # That premise is a property of `/land`'s step ORDER, enforced by an agent
 # following its skill rather than by any lock or assertion: see
 # `.claude/skills/land/SKILL.md` Section 1 (the pass-start reset) and
-# Section 4 (push before `bd close`). If a future edit ever reorders push
-# and gate, nothing here fails loudly -- this guard is load-bearing on that
-# discipline.
+# Section 4 (the push, which waits on Section 3's re-gate). If a future
+# edit ever reorders push and gate, nothing here fails loudly -- this guard
+# is load-bearing on that discipline. Naming the landmark that way is
+# deliberate (lode-rlz8): it used to read "push before `bd close`", which
+# invited the misreading that the CLOSE order is what the premise rests on.
+# It does not -- closing first would leave `origin/trunk` just as gated.
 #
 # AND IT DELIBERATELY DOES NOT FETCH FIRST (lode-isl3). `origin/trunk` is read
 # from the local ref cache, as of whenever this repo last fetched. That is not
