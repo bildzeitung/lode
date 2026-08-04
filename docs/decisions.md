@@ -3097,3 +3097,58 @@ while erasing it here would lose the record of what was believed, and when.
     `is None` assertion passed whether or not the stub ran. Proven by bypassing the `identity is None`
     early return and watching the raising form still pass; rewritten to count calls and assert
     `probe_calls == 0`. Counting, never raising, is the rule for this function.
+- **2026-08-04 (lode-o7ai) — HUMAN DECISION: a `land-escalated` + `deferred` ticket stays in
+  `/sweep`'s digest and current queue, but its `PushNotification` is suppressed; the report keeps
+  double-listing it (the `NEW HUMAN-DECISION ITEMS` block, when it's new, plus §2a's unconditional
+  deferred section) and now annotates the loud-block row `(deferred)`.** `lode-1q2i` settled only the
+  FORWARD direction (a ticket entering/leaving `deferred` never itself drives `$CURRENT`/the
+  digest/`PushNotification`) and deliberately left the CONVERSE open: `/sweep` §1's `land-escalated`
+  query carries no `--status` filter, so a ticket that is independently BOTH `land-escalated` and
+  `deferred` still flows into `$CURRENT` → the digest → (if new) the notify path, and is ALSO listed
+  in §2a's unconditional deferred section. This entry is the resolution, on all three sub-questions
+  the escalation that filed this ticket recorded as unsettled:
+  - **Stay in `$CURRENT`/the digest? YES — §1 keeps no `--status` filter; option (a) (filter it out
+    of §1) is REJECTED.** Two reasons: (i) the digest-deletion risk the ticket itself named —
+    dropping the row from `$CURRENT_IDS` makes §5 see a removal and rewrite the digest WITHOUT it,
+    silently deleting a real, still-open escalation from the durable cross-machine record; (ii)
+    **`bd defer` is not one of `land-escalated`'s three documented resolution exits** (land-as-is /
+    rebuild / drop — [agents-workflow.md](agents-workflow.md#the-landing-loop--build-review-land),
+    "Resolving `land-escalated`"). Deferring therefore does not resolve the escalation — the label
+    stays on — so filtering it out of §1 would leave an UNRESOLVED escalation with no surface
+    anywhere in the system, defeating `/sweep`'s entire purpose rather than merely risking a
+    deletion.
+  - **Still notify? NO for the push, YES for the report row.** §7's `PushNotification` call is
+    filtered: a row in `$NEW_IDS` whose `bd list` status is `deferred` is excluded from what gets
+    pushed. Rationale: `deferred` status means a human has already said "I've seen this, deal with
+    later" — re-pushing is noise about something already acknowledged. This is safe specifically
+    because escalation always precedes defer in practice: `deferred` tickets are hidden from `bd
+    ready` by design, so `/code` cannot pick one up to build and re-escalate it, meaning by the time
+    a ticket is both `land-escalated` and `deferred`, a human necessarily saw the escalation before
+    parking it. Scope: only the `PushNotification` tool call is filtered — the row still enters
+    `$CURRENT`, `$CURRENT_IDS`, and the digest exactly as before, and `$NEW_IDS` itself is computed
+    unfiltered, so the dedup state (what counts as "new" on a later pass) is unaffected by this
+    filter.
+  - **Double-listed in the report? YES, DELIBERATELY — but now annotated.** Neither the `NEW
+    HUMAN-DECISION ITEMS` listing nor §2a's deferred listing is suppressed; a row appearing in both
+    is information (an escalation that is parked), not redundancy needing cleanup. The `NEW
+    HUMAN-DECISION ITEMS` block marks a deferred row's title with a trailing `(deferred)` so a reader
+    sees at a glance why it wasn't pushed, and so the §2a duplicate reads as intentional rather than
+    as a bug a later edit should tidy away. The **persisted digest body** is intentionally left
+    unannotated and unfiltered — annotating it would go stale the moment a ticket's `deferred` status
+    flips without its id entering or leaving `$CURRENT_IDS` (the digest only rewrites on an id-set
+    change, per §5), so the annotation lives only in the freshly-recomputed, per-pass report, never
+    in the persisted record.
+  - **Accepted residual, recorded rather than left to be discovered:** if a deferred escalation is
+    later un-deferred, it is already in `LAST_IDS` from the prior digest, so no fresh notification
+    fires when it becomes active again. Accepted — the human un-deferred it themselves, so they
+    already know it's back.
+  - **State at decision time: latent, not live.** Verified in the 2026-07-28 `/sweep` pass that
+    produced this decision: the open `land-escalated` set and the open `deferred` set had zero
+    overlap. Nothing was misbehaving; this closes the gap before it can fire.
+  - **Implementation:** `.claude/skills/sweep/SKILL.md` §1 (the `land-escalated` query's `jq` now
+    also captures `.status`, `$ESCALATED`-only, into a 4th tab field — the value is already present
+    on every row that query returns, no extra `bd` call), §7 (re-derives `$NEW_IDS` in its own
+    fenced block per this skill's own cross-block-shell-state discipline — lode-sfnb / lode-x495 —
+    filters the push, and produces the annotated report rows), §8 (report format documents the
+    annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
+    describe the decided behavior instead of pointing at this ticket as still open).

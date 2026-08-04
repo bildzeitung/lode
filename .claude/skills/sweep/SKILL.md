@@ -45,11 +45,13 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
   are neither: no git command, no path inside this repo's working tree.)
 - **Never promotes a ticket to a human-decision item *because* it is `deferred`.** §2a is
   visibility only: nothing it reads enters `$CURRENT`/`$NEW_IDS`, touches the digest, or fires a
-  `PushNotification`. The converse is **not** guaranteed and this section does not claim it — §1
-  passes no `--status` filter and `bd list` shows `deferred` rows by default, so a ticket that
-  *independently* carries `land-escalated` still reaches the digest and notify path through §1, and
-  is then listed twice in the report. Whether that intersection should be filtered is an open
-  decision, tracked in `lode-o7ai` — not something this section silently settles.
+  `PushNotification`. The converse — a ticket that *independently* carries `land-escalated` and is
+  *also* `deferred` — is a **decided**, deliberate exception, not a gap: it still reaches `$CURRENT`
+  and the digest through §1 (which passes no `--status` filter), §7 suppresses only its
+  `PushNotification`, and it is listed twice in the report — §7/§8's `NEW HUMAN-DECISION ITEMS`
+  block (annotated `(deferred)`) and §2a (unannotated). That is information about a parked
+  escalation, not redundancy to tidy away. Full rationale: lode-o7ai in
+  [docs/decisions.md](../../../docs/decisions.md).
 
 ## 0. Setup — Dolt-authoritative, fresh scratch state
 
@@ -77,7 +79,7 @@ Two sources, per the epic's decided scope. I defensively exclude my own digest i
 SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
 
 ESCALATED=$(rtk bd list --label land-escalated --exclude-label sweep-digest --limit 0 --json \
-  | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)"')
+  | jq -r '(. // []) | .[] | "\(.id)\tland-escalated\t\(.title)\t\(.status)"')
 printf '%s' "$ESCALATED" > "$SWEEP_TMP/escalated"
 
 HUMAN=$(rtk bd human list --status open --json \
@@ -111,6 +113,15 @@ If either `bd` call errors, note the failure and **skip the digest rewrite for t
 than aborting — a failed query is not an empty queue (but a `null`-serialized *empty* result is not
 a failure — see above). See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
+
+**Why `$ESCALATED` carries a 4th tab field (`.status`) and `$HUMAN` doesn't:** the `land-escalated`
+query above passes no `--status` filter — deliberately, and unchanged by lode-o7ai — so it can
+return a ticket that is *also* `deferred`, and §7 needs that per-row status to suppress the push and
+annotate the report. The value is already on every row this query returns, so capturing it costs no
+extra `bd` call (the same derivable-state principle §2's `title` comment below relies on). `$HUMAN`
+never needs it — that query already filters to `--status open`, so a `human`-labeled row can never
+be `deferred` in the first place. Rationale: lode-o7ai in
+[docs/decisions.md](../../../docs/decisions.md).
 
 ## 2. Collect epics ready for a human close-decision
 
@@ -178,6 +189,12 @@ paragraph is documentation for a human reader, and deliberately does not restate
 - `$DEFERRED` is never written into the digest body (§6) and carries **no dedup state** of its
   own — it is recomputed fresh, in full, every pass, straight into the §8 report.
 
+**The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
+is listed here (unconditionally, unannotated) *and*, on the pass it first appears, also in §7/§8's
+`NEW HUMAN-DECISION ITEMS` block (there, annotated `(deferred)`) — decided, not a gap (lode-o7ai,
+[docs/decisions.md](../../../docs/decisions.md)). This section's own listing is unaffected either
+way — it stays exactly what it always was, every current `deferred` ticket, in full.
+
 If this query itself errors, the failure is isolated to this step alone — note it in the §8 report
 and continue. See [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
@@ -206,7 +223,10 @@ CURRENT=$(printf '%s\n%s\n%s\n' "$ESCALATED" "$HUMAN" "$CLOSABLE" | sed '/^$/d' 
 printf '%s' "$CURRENT" > "$SWEEP_TMP/current"
 ```
 
-Each line is `<id>\t<kind>\t<title>` — `<id>` is the dedup key throughout.
+Each line is `<id>\t<kind>\t<title>` — `<id>` is the dedup key throughout. A row sourced from
+`$ESCALATED` carries a 4th field (`.status`, see §1); `$HUMAN`/`$CLOSABLE` rows never do, since both
+are already filtered to `--status open`. Every downstream reader here (`awk -F'\t' '{print $1}'`,
+`sort -t$'\t' -k1,1`) only ever looks at field 1, so the extra field is inert until §7 reads it.
 
 ## 4. Find-or-create the digest issue (locator = reserved label `sweep-digest`)
 
@@ -314,7 +334,14 @@ SWEEP-ITEM <id> epic-ready-to-close <title>
 ```
 
 Where each section lists its `CURRENT` rows for that kind (`land-escalated`/`human` in the first,
-`epic-ready-to-close` in the second), or the literal `(none)` when a section is empty. Write it via
+`epic-ready-to-close` in the second), or the literal `(none)` when a section is empty. A
+`SWEEP-ITEM` line is always exactly `<id> <kind> <title>` (fields 1-3 of the `$CURRENT` row) —
+**never** the optional 4th `.status` field an `$ESCALATED` row may carry (§1). The persisted digest
+is deliberately left unannotated: annotating it would go stale the moment a ticket's `deferred`
+status flips without its id entering or leaving `$CURRENT_IDS`, since a rewrite here only fires on
+an id-set change (§5), not a content change to an unchanged id. The `(deferred)` annotation lives
+only in the freshly-recomputed, per-pass report (§7/§8) — see the decision in
+[docs/decisions.md](../../../docs/decisions.md) (lode-o7ai). Write it via
 `--body-file` (multi-line, avoids shell-quoting the body inline) — `BODY_FILE` and the re-derived
 `DIGEST_ID` are both real values only within THIS block (a fresh Bash invocation; nothing from §4/§5
 survives), so both are established here, not reused from an earlier one:
@@ -328,24 +355,74 @@ BODY_FILE="$(mktemp)"
 rtk bd update "$DIGEST_ID" --body-file "$BODY_FILE"
 ```
 
-## 7. Notify (only when `$NEW_IDS` is non-empty)
+## 7. Notify (only when there is a new item to push)
 
 I run as a **skill in the main conversation**, so I have the main session's tools — including
 `PushNotification`, which reaches a human who is away from the terminal. That is the entire point of
 this leg: the `land-escalated` and `human` labels already sat in `bd`, where nobody was looking.
 
+**First, re-derive `$NEW_IDS` and split it on deferred status.** This is its own, separate Bash tool
+invocation — nothing from §5 survives into it (lode-sfnb; §0's governing rule) — so everything it
+needs is re-derived from the scratch files §1/§3 already wrote, the sanctioned remedy for
+cross-block state (re-deriving is cheap and deterministic; see this skill's own §0 and
+`docs/agents-workflow.md`'s cross-block-shell-state section):
+
+```bash
+SWEEP_TMP="${TMPDIR:-/tmp}/lode-sweep-state"   # re-derive -- fresh Bash invocation, see §0
+
+DIGEST_ID="$(rtk scripts/sweep-digest-id.sh)" || exit 1
+CURRENT="$(cat "$SWEEP_TMP/current")" || {
+  echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
+  exit 1
+}
+
+LAST_BODY=$(rtk bd show "$DIGEST_ID" --json | jq -r '.[0].description')
+LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
+CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
+NEW_IDS=$(comm -13 <(printf '%s\n' "$LAST_IDS") <(printf '%s\n' "$CURRENT_IDS"))
+
+# Split $NEW_IDS into "report it" (all of them) vs "push it" (not the deferred ones)
+# -- decided, lode-o7ai; rationale in docs/decisions.md. Only $ESCALATED-sourced rows
+# carry a 4th field (§1/§3), so a $HUMAN/$CLOSABLE row's empty $4 is correctly never
+# "deferred" and $CURRENT alone is enough -- no second read of $SWEEP_TMP/escalated.
+# Emit ONLY fields 1-3: §8's report format is `<id> <kind> <title>`, so passing the
+# row through whole would leak the raw status ("<title>\topen") into every escalated
+# row. Truncate both outputs first, so a zero-match pass leaves them empty, not stale.
+printf '%s\n' "$NEW_IDS" | sed '/^$/d' > "$SWEEP_TMP/new_ids"
+: > "$SWEEP_TMP/new_annotated"
+: > "$SWEEP_TMP/push_ids"
+awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
+  NR == FNR      { new[$1] = 1; next }          # pass 1: the new ids
+  !($1 in new)   { next }                       # pass 2: $CURRENT, new rows only
+  { row = $1 "\t" $2 "\t" $3 }
+  $4 == "deferred" { print row " (deferred)" > ann; next }
+                   { print row > ann; print $1 > push }
+' "$SWEEP_TMP/new_ids" "$SWEEP_TMP/current"
+```
+
+`$SWEEP_TMP/new_annotated` is the full **NEW HUMAN-DECISION ITEMS** report content (§8) — every row
+newly in `$CURRENT_IDS` this pass, `<id> <kind> <title>`, with a trailing `(deferred)` marker on any
+row whose status is `deferred`. `$SWEEP_TMP/push_ids` is the (possibly smaller, possibly empty)
+subset actually eligible for a push — a `deferred` row is dropped from it, never from
+`$SWEEP_TMP/new_annotated`.
+
 `PushNotification` is a **deferred** tool — its schema is not loaded up front, so load it before the
-first call, then send **one** notification per pass (not one per item):
+first call, then send **one** notification per pass (not one per item), and **only if
+`$SWEEP_TMP/push_ids` is non-empty**:
 
 - `ToolSearch` with query `select:PushNotification` — this returns its schema and makes it callable.
-- Call it once with a short summary: how many new items, and their ids/kinds — e.g.
-  `2 new human-decision items: lode-abc (land-escalated), lode-xyz (human)`.
+- Call it once with a short summary covering only the ids in `$SWEEP_TMP/push_ids`: how many, and
+  their ids/kinds — e.g. `2 new human-decision items: lode-abc (land-escalated), lode-xyz (human)`.
+  A row excluded from `push_ids` for being `deferred` is never named in the push — it is still
+  reported (below), just not pushed.
 
-Then **also** lead the §8 report with a loud, explicit **NEW HUMAN-DECISION ITEMS** block listing the
-`$NEW_IDS` rows (id, kind, title). The two are complementary, not alternatives: the push reaches an
-away human; the report block is what they read when they return to the `/loop` transcript. If
-`ToolSearch` cannot resolve `PushNotification` in the session I am actually running in, fall back to
-the report block alone and say so plainly in the report — never fail a pass over the notify channel.
+Then **also** include a loud, explicit **NEW HUMAN-DECISION ITEMS** block in the §8 report: every row
+from `$SWEEP_TMP/new_annotated` (id, kind, title, `(deferred)` when applicable) — the full set,
+deferred rows included, not just what got pushed. The two are complementary, not alternatives: the
+push reaches an away human; the report block is what they (and anyone reading a deferred row) read
+when they return to the `/loop` transcript. If `ToolSearch` cannot resolve `PushNotification` in the
+session I am actually running in, fall back to the report block alone and say so plainly in the
+report — never fail a pass over the notify channel.
 
 ## 8. Publish and report
 
@@ -367,6 +444,23 @@ sweep: queue depth <len $CURRENT_IDS>, <len $NEW_IDS> new, <count of epic-ready-
 
 The deferred section lists every current `$DEFERRED` row (id + title) each pass, in full, with no
 dedup — or the literal `(none)` when `$DEFERRED` is empty.
+
+When `$SWEEP_TMP/new_annotated` (§7) is non-empty, follow the deferred section above with:
+
+```
+## NEW HUMAN-DECISION ITEMS (<count of rows in new_annotated>)
+<id> <kind> <title>
+<id> <kind> <title> (deferred)
+...
+```
+
+Every row from `$SWEEP_TMP/new_annotated`, verbatim — a trailing `(deferred)` on a row means it is
+new to `$CURRENT_IDS` this pass but its status is `deferred`: per the decided behavior (lode-o7ai,
+[docs/decisions.md](../../../docs/decisions.md)), it was **not** included in the `PushNotification`
+(a human already saw and parked it), but it is not dropped from the report either — and it may *also*
+appear in the `## Deferred (surfaced, not reviewed)` section above. That double appearance is
+deliberate (the two sections answer different questions — "what's new" vs. "what's parked" — and a
+row can honestly be both), not a bug for a later edit to "fix" by suppressing either listing.
 
 If §4 found `N > 1` duplicate digests, any sub-step in §1/§2 failed, or the §2a deferred query
 failed, say so plainly in the same report (see below) — the pass still ends cleanly either way.
@@ -409,6 +503,6 @@ real items from the durable record a human relies on.
 ## Stop and report
 
 When the pass ends I report: the one-line summary (§8), the deferred section (§2a, always present),
-the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty, any duplicate-digest
-anomaly, and any sub-step that failed. A clean, unchanged queue is a valid, common outcome — I say
-so plainly and stop.
+the full **NEW HUMAN-DECISION ITEMS** block when `$NEW_IDS` is non-empty (annotated `(deferred)`
+per-row where applicable, per §7 — lode-o7ai), any duplicate-digest anomaly, and any sub-step that
+failed. A clean, unchanged queue is a valid, common outcome — I say so plainly and stop.
