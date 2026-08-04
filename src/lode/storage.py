@@ -68,6 +68,11 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
         # convention, no backfill needed for pre-existing rows.
         "ALTER TABLE annotations ADD COLUMN provider TEXT",
         "ALTER TABLE egress_log ADD COLUMN provider TEXT",
+        # lode-u6he: consecutive collect_enrich_batch() failure budget per
+        # batch_handle (see schema.sql's comment on the column). Nullable is
+        # unnecessary here (unlike next_attempt_at above) -- 0 is a valid,
+        # constant default SQLite accepts on ADD COLUMN.
+        "ALTER TABLE jobs ADD COLUMN batch_collect_failures INTEGER NOT NULL DEFAULT 0",
     ]
     for ddl in _migrations:
         try:

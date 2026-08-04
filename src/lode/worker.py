@@ -744,6 +744,20 @@ def _batch_collect_enrich(
     so a failure there is not isolated per handle — it propagates to
     :func:`drain`, which catches it all the same. ``docs/storage.md``
     "Transient vs. permanent job failures" owns the full rationale.
+
+    **Consecutive-failure budget (lode-u6he).** A handle whose poll keeps
+    raising (as opposed to succeeding but reporting an errored/expired/
+    canceled *result*, which already goes through the normal attempts/
+    backoff/dead-letter accounting) has no other path to a terminal state —
+    :func:`_reclaim_stale_running` deliberately excludes any row with
+    ``batch_handle`` set, so it would otherwise re-poll and re-fail forever.
+    Each non-auth failure here calls :func:`_record_batch_collect_failure`,
+    which increments ``jobs.batch_collect_failures`` for every still-``running``
+    row on that handle; at ``settings.batch_collect_failure_budget``
+    consecutive failures, those rows are dead-lettered outright (no final
+    salvage collect attempt — the simplest option from this ticket's own
+    Options list). A poll that does NOT raise — batch still in progress, or
+    ended and processed — resets the counter back to 0 for that handle.
     """
     batch_ids: list[str] = [
         row[0]
@@ -776,6 +790,7 @@ def _batch_collect_enrich(
                 conn, batch_id, settings, outcomes=outcomes, **kwargs
             ):
                 ended += 1
+            _reset_batch_collect_failures(conn, batch_id)
         except AuthError, LLMAuthError:
             # Not handle-specific -- every remaining handle shares the same
             # credentials and would fail identically. Propagate immediately;
@@ -788,6 +803,7 @@ def _batch_collect_enrich(
                 batch_id,
                 exc,
             )
+            _record_batch_collect_failure(conn, batch_id, exc, settings)
             # Deferred, not swallowed: every OTHER handle still gets its turn
             # (per-handle isolation, lode-knnt) before this is raised below.
             if deferred_exc is None:
@@ -797,6 +813,74 @@ def _batch_collect_enrich(
         raise deferred_exc
 
     return ended
+
+
+def _reset_batch_collect_failures(conn: sqlite3.Connection, batch_id: str) -> None:
+    """Zero ``batch_collect_failures`` for ``batch_id`` after a poll that did
+    not raise (lode-u6he).
+
+    Cheap and idempotent even when the count is already 0 (the common case) —
+    a plain ``UPDATE`` rather than a read-then-maybe-write, since the row set
+    (``running`` jobs on this handle) is the same one the failure path below
+    increments.
+    """
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_collect_failures = 0 "
+            "WHERE batch_handle = ? AND status = 'running'",
+            (batch_id,),
+        )
+
+
+def _record_batch_collect_failure(
+    conn: sqlite3.Connection, batch_id: str, exc: Exception, settings: Settings
+) -> None:
+    """Bump the consecutive collect-failure count for ``batch_id`` and
+    dead-letter its still-``running`` jobs once the budget is exhausted
+    (lode-u6he).
+
+    Denormalized onto every row sharing ``batch_handle`` (there is no
+    separate batches table) rather than kept in-memory, so the count
+    survives a restart the same way ``batch_handle`` itself does — each
+    ``lode work`` invocation re-polls every persisted handle from scratch
+    (the resume-on-restart contract above), so an in-memory counter would
+    reset to 0 on every new process and the budget would never bite.
+
+    Dead-lettering here gives up on the whole batch outright rather than
+    attempting one final salvage ``collect_batch`` call — the simplest of
+    this ticket's own Options, and consistent with the fact that
+    ``collect_enrich_batch`` itself is what's been failing: a call that has
+    raised ``settings.batch_collect_failure_budget`` times in a row is not
+    expected to suddenly succeed on one more try.
+    """
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_collect_failures = batch_collect_failures + 1 "
+            "WHERE batch_handle = ? AND status = 'running'",
+            (batch_id,),
+        )
+        row = conn.execute(
+            "SELECT batch_collect_failures FROM jobs "
+            "WHERE batch_handle = ? AND status = 'running' LIMIT 1",
+            (batch_id,),
+        ).fetchone()
+        failures = row[0] if row is not None else 0
+
+        if failures >= settings.batch_collect_failure_budget:
+            error_msg = f"batch collect failed {failures} time(s) in a row: {exc}"
+            cur = conn.execute(
+                "UPDATE jobs SET status = 'dead', last_error = ? "
+                "WHERE batch_handle = ? AND status = 'running'",
+                (error_msg, batch_id),
+            )
+            log.error(
+                "_record_batch_collect_failure: batch=%s dead-lettered %d job(s) "
+                "after %d consecutive collect failure(s): %s",
+                batch_id,
+                cur.rowcount,
+                failures,
+                exc,
+            )
 
 
 def _batch_submit_enrich(

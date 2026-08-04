@@ -255,6 +255,18 @@ class Settings(BaseModel):
         "Accumulated enrich jobs submitted as one Claude Batch (size policy).",
         gt=0,
     )
+    batch_collect_failure_budget: int = _knob(
+        5,
+        Kind.RUNTIME,
+        "Consecutive collect_enrich_batch() failures (the poll call itself "
+        "raising, not an individual result outcome) tolerated for one "
+        "batch_handle before its still-running jobs are dead-lettered "
+        "outright, without a final salvage attempt (lode-u6he). A per-result "
+        "failure (errored/expired/canceled result, or a parse error) already "
+        "goes through the normal attempts/backoff/dead-letter accounting via "
+        "record_job_failure and is unaffected by this budget.",
+        ge=1,
+    )
     enrichment_batch_flush_interval_s: int = _knob(
         60,
         Kind.RUNTIME,

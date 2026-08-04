@@ -695,12 +695,26 @@ case does, since `lode-yx1c` widened `lode work`'s handler to
 covers the *typed* failures only: a poisoned handle now bounded by the
 consequence-scoped catch above can still be of a type no CLI handler names (say
 lode-t7en's raw `AttributeError`), and that one does still surface as a raw
-traceback. And none of the above
-makes a stuck batch un-stuck: the batch re-fails every tick with no failure
-budget and no dead-letter path (`lode-u6he`, discovered-from `lode-knnt`) — only
-its *blast radius* is bounded now (blocks no other handle, blocks no new
-submission), not the wedge itself. A permanently stuck batch still needs a
-human.
+traceback.
+
+**Consecutive-failure budget (`lode-u6he`).** A handle whose *poll itself*
+keeps raising — as opposed to succeeding but reporting an
+errored/expired/canceled *result*, which already goes through the normal
+`attempts`/backoff/dead-letter accounting via `record_job_failure` — has no
+other path to a terminal state: `_reclaim_stale_running` (below) deliberately
+excludes any row with `batch_handle` set, so before this it would re-poll and
+re-fail identically forever. `jobs.batch_collect_failures` (a column
+denormalized onto every row sharing a `batch_handle`, since there is no
+separate batches table) counts consecutive raises from `collect_enrich_batch`
+for that handle; a poll that does *not* raise (still in progress, or ended and
+processed) resets it to 0. At `settings.batch_collect_failure_budget`
+(default 5) consecutive failures, every still-`running` job on that handle is
+dead-lettered outright — no final salvage collect attempt, the simplest of
+`lode-knnt`'s own Options for this axis — via
+`lode.worker._record_batch_collect_failure`. The budget bounds only the
+*poll-raises* case; a batch whose results keep arriving as individual
+errored/expired/canceled outcomes was already bounded by the ordinary
+per-job `retry_max_attempts` dead-letter path.
 
 ### The queue's clock must never go backward — nor lag the wall clock (lode-t1y)
 

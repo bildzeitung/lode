@@ -268,19 +268,32 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- to every claim query (selects 'pending' only) and every reconcile gap query
 -- (excludes anything != 'dead'), so nothing would ever pick it back up.
 -- NULL for jobs never claimed (still 'pending') or that predate this column.
+--
+-- batch_collect_failures (lode-u6he): consecutive collect_enrich_batch()
+-- FAILURES (the poll call itself raising -- a malformed results line, a
+-- provider bug -- not an individual result's succeeded/errored outcome,
+-- which already goes through the normal attempts/backoff/dead-letter
+-- accounting). Denormalized onto every row sharing a batch_handle (there is
+-- no separate batches table) rather than kept in-memory, so it survives a
+-- restart the same way batch_handle itself does. Reset to 0 the moment a
+-- poll of that handle succeeds (ended or still pending); at
+-- settings.batch_collect_failure_budget consecutive failures, every running
+-- job on that handle is dead-lettered outright -- see
+-- lode.worker._batch_collect_enrich.
 CREATE TABLE IF NOT EXISTS jobs (
-    id              INTEGER PRIMARY KEY,
-    type            TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
-    target_version  TEXT NOT NULL,
-    prompt_ver      TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead')),
-    attempts        INTEGER NOT NULL DEFAULT 0,
-    last_error      TEXT,
-    batch_handle    TEXT,
-    claimed_at      TEXT,
-    next_attempt_at TEXT NOT NULL,
-    created         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    id                     INTEGER PRIMARY KEY,
+    type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
+    target_version         TEXT NOT NULL,
+    prompt_ver             TEXT,
+    status                 TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead')),
+    attempts               INTEGER NOT NULL DEFAULT 0,
+    last_error             TEXT,
+    batch_handle           TEXT,
+    batch_collect_failures INTEGER NOT NULL DEFAULT 0,
+    claimed_at             TEXT,
+    next_attempt_at        TEXT NOT NULL,
+    created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
