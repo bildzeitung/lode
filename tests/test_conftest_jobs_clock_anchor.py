@@ -29,7 +29,8 @@ WHAT IS PINNED, and by which half:
   the end-to-end mechanism check.
 - ``test_the_anchor_reset_fixture_is_armed_for_every_test`` is the cheap in-process half: it
   catches the fixture being renamed, deleted, or losing ``autouse=True`` immediately, without
-  paying for a subprocess.
+  paying for a subprocess -- and, since lode-up8x added the escape hatch below, also catches that
+  hatch being set ambiently, which would leave the fixture attached but resetting nothing.
 
 THE SYNTHETIC POISONER (lode-up8x). lode-x10m's original repro chained onto ``test_cli.py``'s and
 ``test_worker.py``'s real tests, which was fine while ``test_cli.py`` still carried a real,
@@ -65,6 +66,14 @@ close to the wall clock -- it instead reads the poisoner's far-future sentinel, 
 reset ``jobs._now_epoch`` between the two tests. ``test_poisoner_no_longer_flips_its_victims``
 below runs both arms itself and asserts they disagree, so this is a live, executable pin rather
 than a recorded one-off measurement -- it re-verifies on every run, not just at review time.
+
+That disagreement is asserted SPECIFICALLY, not as "the disabled arm exited non-zero somehow": the
+disabled arm must exit 1 (pytest's "tests failed") *and* its output must carry
+``_VICTIM_POISON_SURVIVED_MARKER``, the victim's own assertion text. A bare ``returncode != 0``
+would also be satisfied by a subprocess that never started, an import or collection error, a
+renamed node id (exit 4), or a timeout kill -- each of which would leave this arm passing while
+measuring nothing, which is the very defect (a vacuous pin) that this file exists to not have. The
+enabled arm's ``returncode == 0`` independently catches any breakage symmetric across both arms.
 
 OLD REPRO, FOR THE RECORD (lode-x10m / lode-e8lo, retired by lode-up8x rather than kept alongside
 the new one -- chaining onto ``test_cli.py``'s and ``test_worker.py``'s tests is now vacuous, so a
@@ -112,6 +121,12 @@ _POISON_SENTINEL = datetime(2999, 1, 1, tzinfo=UTC)
 #: guards against the far-future sentinel above, not against ordinary test-run latency.
 _SANE_DRIFT_TOLERANCE = timedelta(minutes=5)
 
+#: A substring of the victim's own assertion message, SHARED with it rather than hand-copied, so a
+#: later reword of that message cannot silently decouple the two (nor produce a confusing false red
+#: here). Why the exit code alone is not enough to trust the fixture-disabled arm: see the module
+#: docstring's NON-VACUITY section.
+_VICTIM_POISON_SURVIVED_MARKER = "jobs._now_epoch was not reset before this test ran"
+
 #: lode-up8x's synthetic repro, in this order: the poisoner first, then its one victim. Order IS
 #: the whole point -- see the module docstring's THE SYNTHETIC POISONER section.
 _SYNTHETIC_REPRO = (
@@ -121,12 +136,15 @@ _SYNTHETIC_REPRO = (
     "test_synthetic_victim_reads_a_sane_now_after_the_poisoner",
 )
 
-#: The nested run measures well under a second unloaded (two tests, one process, no I/O). Raised
-#: well above that, and above ``pyproject.toml``'s global ``timeout = 120``, because it competes
-#: with 7 xdist siblings and this test runs it twice; at the default cap it would itself become
-#: the load-sensitive false red this ticket is about. Kept under the outer ``@pytest.mark.timeout``
-#: so a wedged subprocess surfaces as a legible ``TimeoutExpired`` from here rather than as an
-#: opaque outer kill.
+#: Wall-clock cap on ONE nested arm. Measured unloaded in this worktree: ~2.1s per arm end to end
+#: (pytest's own reported time is ~1.0s; the rest is interpreter start, conftest import and plugin
+#: registration, which ``subprocess.run`` pays and pytest does not count), so ~4.3s for both arms.
+#: Raised far above that, and above ``pyproject.toml``'s global ``timeout = 120``, because it
+#: competes with 7 xdist siblings; at the default cap it would itself become the load-sensitive
+#: false red this ticket is about. Kept under the outer ``@pytest.mark.timeout`` so a wedged
+#: subprocess surfaces as a legible ``TimeoutExpired`` from here rather than as an opaque outer
+#: kill -- note that budget covers BOTH arms (2 x 150 = 300 < 360), so the outer mark must stay
+#: above twice this value, not once.
 _NESTED_TIMEOUT_S = 150
 
 
@@ -175,10 +193,18 @@ def test_poisoner_no_longer_flips_its_victims() -> None:
     measured (1 passed, 1 failed) vs (2 passed) split this is pinning.
     """
     disabled = _run_synthetic_repro(fixture_disabled=True)
-    assert disabled.returncode != 0, (
+    assert disabled.returncode == 1, (
         "expected the synthetic poisoner/victim repro to FAIL with "
-        "tests/conftest.py's _reset_jobs_clock_anchor fixture disabled -- got a clean pass "
-        "instead, which means the repro no longer exercises the fixture at all. "
+        "tests/conftest.py's _reset_jobs_clock_anchor fixture disabled -- got exit "
+        f"{disabled.returncode} instead. Exit 0 means the repro no longer exercises the fixture at "
+        "all; any other exit (2 interrupted, 3 internal error, 4 usage/bad node id, 5 nothing "
+        "collected) means the nested run broke before it could measure anything, which would make "
+        f"this arm vacuous rather than red. stdout:\n{disabled.stdout}\nstderr:\n{disabled.stderr}"
+    )
+    assert _VICTIM_POISON_SURVIVED_MARKER in disabled.stdout, (
+        "the fixture-disabled repro exited 1, but not from the victim's own clock-anchor "
+        f"assertion -- {_VICTIM_POISON_SURVIVED_MARKER!r} is absent from its output, so some other "
+        "test failure is standing in for the measurement and this arm proves nothing. "
         f"stdout:\n{disabled.stdout}\nstderr:\n{disabled.stderr}"
     )
 
@@ -221,22 +247,43 @@ def test_synthetic_victim_reads_a_sane_now_after_the_poisoner() -> None:
     drift = abs(reading - datetime.now(UTC))
     assert drift < _SANE_DRIFT_TOLERANCE, (
         f"jobs.now() returned {reading.isoformat()}, {drift} away from the wall clock -- "
-        "jobs._now_epoch was not reset before this test ran, i.e. the previous test's poison "
-        "survived. Check tests/conftest.py's _reset_jobs_clock_anchor fixture."
+        f"{_VICTIM_POISON_SURVIVED_MARKER}, i.e. the previous test's poison survived. "
+        "Check tests/conftest.py's _reset_jobs_clock_anchor fixture."
     )
 
 
 def test_the_anchor_reset_fixture_is_armed_for_every_test(
     request: pytest.FixtureRequest,
 ) -> None:
-    """The reset must reach every test by being autouse, not by being requested.
+    """The reset must reach every test by being autouse, not by being requested, AND be armed.
 
     This is what makes the guarantee independent of ``--dist`` mode and worker count: the reset
     runs per TEST, so no scheduling decision can place a victim where it does not reach. A
     narrower fixture that tests had to opt into would protect only the three victims lode-x10m
     happened to find.
+
+    "Armed" is two conditions, not one, since lode-up8x gave the fixture an env-var escape hatch:
+    it must be attached to this test, AND that hatch must not be set. Being attached is worthless
+    if the fixture returns early -- an ambient
+    ``_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR`` exported into a shell, a CI job, or a
+    ``.env`` would disable the protection for EVERY test in the run while
+    ``request.fixturenames`` still lists it, i.e. exactly the silent re-opening of lode-x10m that
+    the hatch's defensive naming only makes unlikely rather than impossible. Asserting it here
+    costs nothing and converts that silence into an immediate red.
+
+    Safe to assert unconditionally: ``_SYNTHETIC_REPRO`` names only the two synthetic tests, so
+    the nested run that legitimately sets the hatch never collects this test.
     """
     assert "_reset_jobs_clock_anchor" in request.fixturenames, (
         "the autouse jobs-clock anchor reset is not active for this test -- it was renamed, "
         "deleted, or lost autouse=True in tests/conftest.py (lode-x10m)"
+    )
+    # Mirrors the fixture's own truthiness check exactly (``os.environ.get``, not ``in
+    # os.environ``): an empty-string value does NOT disable it, so it must not fail here either.
+    assert not os.environ.get(_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR), (
+        f"{_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR} is set in this test run's environment, so "
+        "tests/conftest.py's _reset_jobs_clock_anchor fixture is returning early and resetting "
+        "nothing -- the whole suite is running unprotected against a poisoned jobs._now_epoch "
+        "(lode-x10m). That variable is for tests/test_conftest_jobs_clock_anchor.py's own nested "
+        "subprocess ONLY (lode-up8x); unset it."
     )
