@@ -604,9 +604,9 @@ def test_four_backtick_fence_is_scanned_the_lode_p4qb_shape() -> None:
 
     Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `{3,}`
     -> exact `{3}` and the open marker no longer matches, so
-    `_bash_blocks(markdown) == []`; or drop the `len(stripped) >= len(fence)` conjunct
-    and the ``` content line closes the block early, so the `"```" in blocks[0]`
-    assertion goes red."""
+    `_bash_blocks(markdown) == []`; or drop `_closes_fence`'s `len(stripped) >=
+    len(fence)` conjunct and the ``` content line closes the block early, so the
+    `"```" in blocks[0]` assertion goes red."""
     markdown = '````bash\necho "$UNASSIGNED"\n```\necho done\n````\n'
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1, blocks
@@ -624,9 +624,9 @@ def test_tilde_fence_is_scanned_and_backticks_do_not_close_it() -> None:
 
     Sabotage recipe (each half, separately): in `_FENCE_MARKER_RE`, drop the `~{3,}`
     alternative and the open marker no longer matches, so
-    `_bash_blocks(markdown) == []`; or relax `set(stripped) == {fence[0]}` to accept
-    any fence character and the ``` line closes the tilde block early, so the
-    `"```" in blocks[0]` assertion goes red."""
+    `_bash_blocks(markdown) == []`; or relax `_closes_fence`'s `set(stripped) ==
+    {fence[0]}` to accept any fence character and the ``` line closes the tilde block
+    early, so the `"```" in blocks[0]` assertion goes red."""
     markdown = '~~~bash\necho "$UNASSIGNED"\n```\necho done\n~~~\n'
     blocks = _bash_blocks(markdown)
     assert len(blocks) == 1, blocks

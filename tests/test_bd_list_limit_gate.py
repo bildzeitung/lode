@@ -89,10 +89,11 @@ it: `inline_violations` never calls `_bash_blocks`, tracking fences itself line 
 (see its docstring for why), so without the strip a `> ```bash` fence is not a fence to
 it and the block's contents get scanned as prose -- measured, one false positive on
 `> echo "`bd list --json`"`. `test_inline_scan_skips_blockquoted_fenced_content` pins
-exactly that. Both paths therefore share ONE marker definition, conftest's
-`_BLOCKQUOTE_MARKER`, imported rather than re-declared: a one-sided change to the marker
-shape would make the two paths partition the same file differently, double-reporting
-fenced content as prose.
+exactly that. `_BLOCKQUOTE_MARKER` is one of THREE definitions both paths take from
+conftest rather than re-declare -- the other two, `_FENCE_MARKER_RE` and `_closes_fence`,
+fix where a fence opens and closes (lode-xqc7). A one-sided change to any of them would
+make the two paths partition the same file differently, double-reporting fenced content
+as prose.
 
 ## Why fenced/`.sh` comments are stripped but inline backtick spans are not
 
@@ -164,11 +165,11 @@ from pathlib import Path
 
 import pytest
 
-# The blockquote-marker and fence-marker shapes the INLINE scan normalizes with.
-# Imported, never re-declared: `bash_fence_blocks` uses the same two constants for the
-# fenced path, and the two paths must partition the same document identically (module
-# docstring: "Blockquoted fences").
-from conftest import _BLOCKQUOTE_MARKER, _FENCE_MARKER_RE
+# How the INLINE scan unmarks a blockquoted line, and where it starts and stops treating
+# one as fenced. Imported, never re-declared: `bash_fence_blocks` applies these same three
+# to the fenced path, so the two partition a document's FENCES identically by construction
+# (module docstring: "Blockquoted fences").
+from conftest import _BLOCKQUOTE_MARKER, _FENCE_MARKER_RE, _closes_fence
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
@@ -374,21 +375,25 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     reported as line 96, sending a reader to the wrong place in the only message this
     gate ever prints).
 
-    This state machine is NOT the same job as `_bash_blocks` (this one excludes any
-    fence from the inline scan; that one extracts only ```bash/```sh content), so it
-    stays a separate loop here -- but it shares `_FENCE_MARKER_RE`'s marker shape and
-    CommonMark closing rule (a closing run must be the same character as the opening one
-    and at least as long) with it, for the same reason `_strip_blockquote` shares
-    `_BLOCKQUOTE_MARKER`: a one-sided divergence would make the two paths partition one
-    document differently."""
+    FINDING the fences is the same job `_bash_blocks` does, so both halves of it come
+    from conftest -- `_FENCE_MARKER_RE` for where one opens, `_closes_fence` for where it
+    closes -- and neither is re-implemented here, for the same reason `_strip_blockquote`
+    shares `_BLOCKQUOTE_MARKER`: a one-sided divergence would make the two paths
+    partition one document differently. What differs is what each does with the regions
+    it found, which is why this stays a separate loop: `_bash_blocks` KEEPS only
+    ```bash/```sh content, this one EXCLUDES every fence from the inline scan.
+
+    One asymmetry survives that sharing, filed as lode-kjei: `_bash_blocks` opens only on
+    a bash/sh info string, so it never tracks an ENCLOSING non-bash fence and reads a
+    ```bash run nested inside a ````text block as executable, where this scan correctly
+    reads the whole block as literal text. Latent -- zero nested fence openers exist
+    across the repo's 58 markdown files, measured."""
     found: list[tuple[str, int]] = []
-    fence = (
-        ""  # the opening run, e.g. "```" or "````" or "~~~"; "" means not in a fence
-    )
+    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"
     for lineno, line in enumerate(_strip_blockquote(markdown).splitlines(), 1):
         stripped = line.strip()
         if fence:
-            if len(stripped) >= len(fence) and set(stripped) == {fence[0]}:
+            if _closes_fence(stripped, fence):
                 fence = ""
             continue
         m = _FENCE_MARKER_RE.match(stripped)
@@ -592,22 +597,20 @@ def test_inline_scan_skips_blockquoted_fenced_content() -> None:
 
 
 def test_inline_scan_agrees_with_fenced_scan_on_a_tilde_fence() -> None:
-    """The tilde twin of `test_inline_scan_skips_blockquoted_fenced_content` (lode-xqc7):
-    both paths must partition a `~~~bash` fence the same way, or such a block reads as
-    executed to `fenced_violations` and as prose to `inline_violations`."""
+    """The tilde twin of `test_inline_scan_skips_blockquoted_fenced_content` (lode-xqc7).
+    SABOTAGE-VERIFIED: under a bare `startswith("```")` toggle the `~~~` lines never open
+    a fence at all, so the invocation is reported as prose at line 2."""
     markdown = '~~~bash\necho "`bd list --json`"\n~~~\n'
     assert inline_violations(markdown) == []
     assert len(fenced_violations(markdown)) == 1
 
 
 def test_inline_scan_agrees_with_fenced_scan_on_a_four_backtick_fence() -> None:
-    """The four-backtick twin (lode-xqc7). A bare ``` line -- shorter than the four-
-    backtick opening run -- is CONTENT under CommonMark's closing rule, not a close, and
-    that is the whole reason an author reaches for four backticks. A three-backtick
-    toggle gets this wrong: it closes on that bare ``` line, then scans the real
-    invocation on the next line as prose (SABOTAGE-VERIFIED: reverting `inline_violations`
-    to a bare `startswith("```")` toggle turns this green assertion into a reported
-    violation)."""
+    """The four-backtick twin (lode-xqc7). A bare ``` line -- shorter than the opening
+    run -- is CONTENT under CommonMark's closing rule, not a close, which is the whole
+    reason an author reaches for four backticks. SABOTAGE-VERIFIED: a bare
+    `startswith("```")` toggle closes on that line, then reports the real invocation on
+    the next one as prose at line 3."""
     markdown = '````bash\n```\necho "`bd list --json`"\n````\n'
     assert inline_violations(markdown) == []
     assert len(fenced_violations(markdown)) == 1
