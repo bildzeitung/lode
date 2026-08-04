@@ -505,11 +505,10 @@ read as an unretried conflict rather than what it was). Frontmatter `isolation: 
 reviewer already cwd'd inside its own `.claude/worktrees/agent-<hash>`, branched from `origin/trunk`
 HEAD (`worktree.baseRef: "fresh"`, lode-jzbz) — the same *kind* of disposable launch worktree `code/SKILL.md` mandates for the `coding` and
 `code-reviewer` dispatches. Those two now carry the same `isolation: worktree` frontmatter key
-(`lode-ojsr`), and frontmatter is now confirmed the **sole** enforcement point for them too — two
-dedicated top-level probes (`lode-09td`, 2026-07-28/29) measured `coding` and `code-reviewer` each
-isolating from frontmatter alone, against a keyless `claude` control that did not. `code/SKILL.md`'s
-call-site `isolation: "worktree"` option was dropped for both roles as a result — see
-[docs/decisions.md](../../../docs/decisions.md) (search "lode-09td").
+(`lode-ojsr`), and frontmatter is now the **sole** enforcement point for them too — measured
+sufficient for both by dedicated top-level probes (`lode-09td`), so their call-site option was
+dropped just as this one was. See [docs/decisions.md](../../../docs/decisions.md) (search
+"lode-09td").
 From there it `git fetch`es `origin/land/<id>` (and `origin/land/<base-id>` if
 stacked) and diffs entirely by ref — it never needs to check anything
 out — so under isolation any tree mutation it performs (accidental or not) lands in that disposable

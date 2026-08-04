@@ -752,7 +752,8 @@ the one that reviewed `lode-ska2` itself) received their worktrees normally thro
 path — so the mechanism cannot be the whole story.
 
 **Probed by `lode-ojsr` (2026-07-27), then resolved by `lode-09td` (2026-07-28/29).** The
-frontmatter-vs-call-site confound raised above is now **closed for `coding` and `code-reviewer`.**
+frontmatter-vs-call-site confound raised above is now **closed on its sufficiency half for `coding`
+and `code-reviewer`** — frontmatter alone provisions the worktree for both.
 `lode-ojsr` shipped `isolation: worktree` into both agents' frontmatter (closing the *asymmetry* with
 `land-review`) but its own probe was structurally invalid: it ran as a `coding` producer, so its
 dispatches were necessarily **nested** inside an already-isolated session, where a
@@ -763,26 +764,32 @@ the probe `lode-ojsr` could not: from the **top-level orchestrating session** (m
 `trunk` — the same vantage `lode-p2vi` used and `/code`'s Phase 1/2 dispatch from), with **no
 call-site `isolation` option**, dispatching `coding` (2026-07-28) and separately `code-reviewer`
 (2026-07-29) each alongside a concurrent, identically-dispatched `claude` negative control. Both
-roles **isolated** (linked worktree, own branch, `HEAD == origin/trunk`); the control in both runs
-landed unisolated in the main checkout on `trunk`. Since the only difference between control and test
-case in each run was the frontmatter key, frontmatter alone — not nested-dispatch cwd inheritance —
-is what provisions the worktree for both roles. As a result, `code/SKILL.md`'s call-site
-`isolation: "worktree"` option for `coding` and `code-reviewer` — which had zero demonstrated
-protective value against `lode-ska2`'s own 6-of-6 failure (it was present throughout) — was **dropped**
-as redundant, matching `land-review`'s treatment after `lode-p2vi`. Full probe detail, both
-runs' results, and the two explicit limits on what this licenses: [`docs/decisions.md`](decisions.md)
-(search "lode-09td").
+roles **isolated** (linked worktree, own branch, `HEAD ==` the dispatching session's `trunk`); the
+control in both runs landed unisolated in the main checkout on `trunk`. Since the only
+isolation-*relevant* difference between control and test case in each run was the frontmatter key,
+frontmatter alone — not nested-dispatch cwd inheritance — is what provisions the worktree for both
+roles. As a result, `code/SKILL.md`'s call-site `isolation: "worktree"` option for `coding` and
+`code-reviewer` was **dropped** as redundant, matching `land-review`'s treatment after `lode-p2vi`.
+Full probe detail, both runs' results, and the two explicit limits on what this licenses — the
+contrast is between *whole* agent definitions rather than a single-variable ablation of the key, and
+the load was light — are in [`docs/decisions.md`](decisions.md) (search "lode-09td").
 
-**Root cause: still not fully determinable from this repo — the confound is closed, the fan-out
-question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
+**Root cause: still not fully determinable from this repo — the sufficiency question is closed, the
+fan-out question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
 nothing in `lode`'s own source, skills, or agent definitions controls whether the harness actually
 provisions a worktree before handing control to a dispatched subagent. What *is* now determinable:
-the frontmatter-vs-call-site mechanism is **not** the explanation for `lode-ska2`'s 6-of-6 — both
-mechanisms were present at the time of that incident (the call-site option was live, and by the time
-of the incident so was nothing else distinguishing the two paths), and `lode-09td`'s probes show
-frontmatter alone reliably isolates both roles under light, non-concurrent load. What remains
-unmeasured: **`lode-09td`'s probes were single- and two-dispatch, not a fan-out.** They establish the
-mechanism works under light load; they say nothing about concurrency pressure. The harness-side
+**asking at the call site does not guarantee isolation** — the call-site option was live throughout
+`lode-ska2`'s 6-of-6 and every one of those dispatches failed anyway — and `lode-09td`'s probes show
+the *other* mechanism, frontmatter, reliably isolates both roles under light, non-concurrent load.
+
+What is **not** determinable, and must not be read into the above: **whether frontmatter would have
+prevented `lode-ska2`.** Two independent reasons, both still open. First, the key was not present on
+either role at the time of that incident — `lode-ojsr` added it on 2026-07-27, after the fact — so
+the frontmatter-vs-call-site hypothesis raised earlier in this section has never been tested against
+the failure itself: neither confirmed nor refuted. Second, **each `lode-09td` probe was a single
+two-dispatch run (one test role, one control), never a fan-out.** The probes establish the mechanism
+works under light load; they say nothing about concurrency pressure. `lode-09td` closed the
+*sufficiency* question (frontmatter alone provisions a worktree), not the *robustness* one. The harness-side
 race/resource-pressure condition under concurrent fan-out — `lode-ska2`'s own incident was a 6-way
 fan-out — remains the best-supported explanation this repo can offer for *that* incident specifically,
 and is **not** refuted by `lode-09td`: dropping the redundant call-site option is not claimed to

@@ -2184,7 +2184,8 @@ while erasing it here would lose the record of what was believed, and when.
 
   **Probe 1 (2026-07-28), `coding` vs a `claude` control:** `coding` landed in a linked worktree
   (`git rev-parse --show-toplevel` differed from the main checkout, `--git-common-dir` confirmed a
-  linked worktree, branch `worktree-agent-<hash>`, `HEAD == origin/trunk`). The `claude` control —
+  linked worktree, branch `worktree-agent-<hash>`, `HEAD ==` the dispatching session's local `trunk`).
+  The `claude` control —
   carrying **no** isolation frontmatter key at all — landed unisolated in the main checkout on
   `trunk`. **Probe 2 (2026-07-29), `code-reviewer` vs a `claude` control:** identical design, identical
   result — `code-reviewer` isolated, the control did not. `code-reviewer` is the role with the actual
@@ -2197,11 +2198,13 @@ while erasing it here would lose the record of what was believed, and when.
   roles. Three roles (`land-review` via `lode-p2vi`, `coding` and `code-reviewer` via `lode-09td`) now
   measure frontmatter alone as sufficient, against a keyless control that does not isolate.
 
-  **What this does NOT establish — carry both limits verbatim wherever this result is cited:**
+  **What this does NOT establish — this entry owns the full text; a citing site must carry at least
+  the gist of both limits, and link here rather than re-narrate the probes:**
   (1) each probe contrasts the target role's *whole* agent definition (system prompt, model, tools)
   against `claude`'s, not a single-variable ablation of the isolation key on one fixed definition —
   the key is the only isolation-*relevant* difference, but the probe design does not isolate it in the
-  strict sense. (2) **both probes were light-load — two concurrent dispatches, never a fan-out.** They
+  strict sense. (2) **each probe was a single two-dispatch run — one test role, one control, issued
+  concurrently — never a fan-out.** They
   establish the mechanism works under light load; they say **nothing** about concurrency pressure, and
   do **not** refute the harness-side race/resource-pressure hypothesis in
   [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
@@ -2215,10 +2218,19 @@ while erasing it here would lose the record of what was believed, and when.
   `land-review`, `coding`, `code-reviewer` — exactly the same rule everywhere. Reasoning: the call-site
   option was added *for* `lode-ska2` and had zero demonstrated protective value against it; frontmatter
   travels with the role, so every dispatch site benefits, not just `/code`'s; the call site only
-  protects the sites that remember to ask for it. `code/SKILL.md`'s four call sites (step 0's
-  rebase-pickup dispatch, step 1's stranded-review dispatch, Phase 1, Phase 2) and
-  `land/SKILL.md`'s now-stale "no top-level probe confirming frontmatter alone suffices for them"
-  sentence were updated to match. This does not touch the open fan-out question above — see limit (2).
+  protects the sites that remember to ask for it. Every `code/SKILL.md` dispatch site was updated to
+  match, as was `land/SKILL.md`'s then-stale "no top-level probe confirming frontmatter alone
+  suffices for them" sentence. This does not touch the open fan-out question above — see limit (2).
+
+  **What makes a single enforcement point acceptable here** (the question a reader should ask, since
+  the failure mode — a builder or reviewer writing the main checkout on `trunk` — is unrecoverable):
+  the surviving point is *gated* and the dropped one never was, so this removes the ungated mechanism
+  and keeps the gated one — the reverse of how "belt and braces" is usually worth defending.
+  `tests/test_isolation_guard.py::test_every_agent_definition_pins_isolation_in_frontmatter` fails if
+  any `.claude/agents/*.md` loses the key (parsing the frontmatter block, not the whole file — see its
+  helper's docstring for why a substring check is not enough), and `scripts/isolation-guard.sh` still
+  hard-stops any dispatch that arrives unisolated regardless of *why*. Nothing ever failed on a
+  deleted call-site option.
 - **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking
