@@ -2534,7 +2534,9 @@ def test_drain_still_runs_embed_jobs_when_the_submit_pre_claim_cas_raises_unclas
     """
     _insert_job(conn, job_type="embed", target_version="ver-1")
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    enrich_job_id = _insert_enrich_job_worker(conn, version_id="ver-1", status="pending")
+    enrich_job_id = _insert_enrich_job_worker(
+        conn, version_id="ver-1", status="pending"
+    )
 
     poisoned = _PoisonSubmitCASConn(conn, poison_job_id=enrich_job_id)
 
