@@ -280,7 +280,8 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
-# This module carried the last private copy of that parser until lode-p4qb
+# This module carried the last private copy of the ```bash fence parser until
+# lode-p4qb
 # folded it into `tests/conftest.py::bash_fence_blocks`. Why the four copies
 # existed and what the shared parser's rules now are live next to the parser
 # itself -- deliberately not restated here, per the same no-second-copy rule
@@ -299,19 +300,18 @@ def _fenced_bash(markdown: str) -> str:
     return "\n".join(bash_fence_blocks(markdown))
 
 
+_GUARD = "scripts/assert-main-checkout.sh"
+
+
 def test_land_skill_section1_calls_the_script() -> None:
     """Section 1 must actually invoke the guard, not just describe it in
     prose -- the defect this ticket fixes lived in a markdown fence, where no
     other gate reaches it."""
     executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
-    assert "scripts/assert-main-checkout.sh" in executed, (
-        "land/SKILL.md Section 1 never calls scripts/assert-main-checkout.sh -- "
+    assert _GUARD in executed, (
+        f"land/SKILL.md Section 1 never calls {_GUARD} -- "
         "the main-checkout identity check is not wired up (lode-pcee)"
     )
-
-
-_GUARD = "scripts/assert-main-checkout.sh"
-_MERGE_ONE = "scripts/land-merge-one.sh"
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
@@ -338,22 +338,27 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard-coverage SWEEP (lode-1d2y, generalized in lode-8p3c) -- catches a NEW
-# unguarded fence, not just the four fences four hand-anchored pins used to
-# pin individually before lode-8p3c replaced them with this sweep.
+# Guard-coverage SWEEP (lode-1d2y; superseded the four per-fence pins in
+# lode-8p3c) -- open-world: catches a NEW unguarded fence, not only the
+# already-known ones. `_unguarded_mutations` owns its mechanics.
 #
-# This module used to pin each already-discovered guarded fence individually,
-# by anchoring on the commands it contained (a `_the_one_block` /
-# `_the_two_reset_blocks` / `_assert_guard_precedes` trio, one pin per fence).
-# That was precise, but closed-world: a genuinely NEW class of unguarded
-# mutation -- `git clean -fdx`, `git rebase`, a `git checkout -f` with no
-# accompanying reset, a bare `git commit -m` missing `--no-verify` -- matched
-# none of those hand-picked selectors and was caught by NOTHING. That is
-# exactly how lode-pxyt's own two exposures survived a full ticket cycle
-# before a human noticed them by inspection. The sweep below is the
-# open-world replacement -- lode-8p3c deleted the four per-fence pins outright
-# once this sweep subsumed them, so there is now ONE answer to "is this fence
-# covered", not five; `_unguarded_mutations` owns its mechanics.
+# Until lode-8p3c this module also pinned each already-discovered guarded fence
+# individually, anchored on the commands it contained. That was precise, but
+# closed-world: a genuinely NEW class of unguarded mutation -- `git clean -fdx`,
+# `git rebase`, a `git checkout -f` with no accompanying reset, a bare `git
+# commit -m` missing `--no-verify` -- matched none of those hand-picked
+# selectors and was caught by NOTHING. That is exactly how lode-pxyt's own two
+# exposures survived a full ticket cycle before a human noticed them by
+# inspection.
+#
+# Subsumption was NOT free, and was not true as first written. Measured during
+# lode-8p3c's technical review by replaying each deleted pin's sabotages against
+# this sweep: the Section 1 pin also protected `bd dolt pull` and `git fetch
+# origin`, and hoisting either into an unguarded fence of its own left the sweep
+# GREEN while the deleted pin went RED. Both were added to `_MUTATING_CMD_RE` at
+# zero allowlist cost, since the file's only occurrences of each were already
+# guarded. Before deleting any future pin, diff its protected set against that
+# pattern the same way.
 #
 # KNOWN LIMITATIONS (lode-1d2y):
 #
@@ -362,15 +367,15 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    mutates; it only sees commands written directly in the fence. It would
 #    NOT have caught lode-pxyt's first exposure on its own merits: Section
 #    3's first-pass merge loop contains zero bare mutating git commands --
-#    its only mutation is inside `scripts/land-merge-one.sh`, special-cased
-#    below (`_MERGE_ONE`). A brand-new script reference is caught by nothing
+#    its only mutation is inside `scripts/land-merge-one.sh`, named literally
+#    in `_MUTATING_CMD_RE`. A brand-new script reference is caught by nothing
 #    here and would need the same manual discovery lode-pxyt's did. Measured
-#    while writing this: of the scripts referenced
-#    from an UNGUARDED fence today, none runs a cwd-resolved mutating git
-#    command -- their only git calls are `merge-base --is-ancestor` and
-#    `merge-tree --write-tree`, both read-only -- so the gap is latent, not
-#    live. Re-measure rather than assume.
-# 2. THE MUTATING-VERB REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
+#    while writing this: of the scripts referenced from an UNGUARDED fence
+#    today, none runs a cwd-resolved mutating git command -- their only git
+#    calls are `merge-base --is-ancestor` and `merge-tree --write-tree`, both
+#    read-only -- so the gap is latent, not live. Re-measure rather than
+#    assume.
+# 2. THE MUTATING-COMMAND REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
 #    matches `git branch`, `git worktree`, and `git merge` as whole verbs,
 #    not just the destructive subcommands (`branch -D`, `worktree remove`,
 #    a bare `merge`) -- so it also flags read-only lookalikes: `git merge-
@@ -398,9 +403,21 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    helper owns the rule and the measurement; do not restate either here.
 # ---------------------------------------------------------------------------
 
-_MUTATING_VERB_RE = re.compile(
-    r"\bgit\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|merge"
-    r"|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)\b"
+# Every command shape that mutates cwd's repo. Not git-only, deliberately:
+# `bd dolt pull` writes cwd's OWN `.beads/` Dolt DB (each worktree carries its
+# own copy), so a wrong-directory run updates the wrong database, and
+# `scripts/land-merge-one.sh` reaches a bare `git merge --no-ff` the same way.
+# The sweep asks ONE question -- does this line mutate cwd's repo -- so all
+# three classes belong in one pattern rather than a git list plus side checks.
+#
+# The bd WRITE side is out of scope here, not overlooked: `land/SKILL.md` only
+# ever reaches it through `rtk scripts/bd-dolt-push.sh`, which is KNOWN
+# LIMITATION 1's territory (no script following), not this pattern's.
+_MUTATING_CMD_RE = re.compile(
+    r"\b(?:git\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|fetch"
+    r"|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)"
+    r"|bd\s+dolt\s+pull"
+    r"|scripts/land-merge-one\.sh)\b"
 )
 
 # Exact command text (comment-stripped, `.strip()`'d) -> why it needs no
@@ -494,7 +511,7 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
             if _GUARD in cmd:
                 guarded = True
                 continue
-            if not (_MUTATING_VERB_RE.search(cmd) or _MERGE_ONE in cmd):
+            if not _MUTATING_CMD_RE.search(cmd):
                 continue
             if guarded or cmd in allowlist:
                 continue
@@ -553,7 +570,7 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
     while every other test here stays green. `git pull` and `git add` are in
     the list by measurement, not taste -- an earlier draft of this sweep
     omitted both, and `git add` is the omission lode-pxyt's review had already
-    had to fix once in the per-fence pin next door.
+    had to fix once in the per-fence pin lode-8p3c has since deleted.
     """
     for command in (
         "rtk git add .",
@@ -563,6 +580,7 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
         "rtk git cherry-pick deadbeef",
         "rtk git clean -fdx",
         "rtk git commit -m wip",
+        "rtk git fetch origin",
         "rtk git merge --no-ff origin/land/x",
         "rtk git pull --rebase",
         "rtk git rebase origin/trunk",
@@ -571,6 +589,9 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
         "rtk git revert HEAD",
         "rtk git stash pop",
         "rtk git switch trunk",
+        # Not git, but a cwd-resolved mutation the sweep must still see -- see
+        # `_MUTATING_CMD_RE`'s non-git alternatives (lode-8p3c).
+        "rtk bd dolt pull",
     ):
         markdown = f"1. Some new step:\n\n   ```bash\n   {command}\n   ```\n"
 

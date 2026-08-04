@@ -2752,8 +2752,9 @@ assumption would not have closed it.
   `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
   `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
   asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
-  (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
-  reordering within the block leave every other pin in that module green.
+  (`bd dolt pull` and each `git` write). Verified by mutation — splitting the fences apart, hoisting
+  a single protected command into an unguarded fence, and reordering within the block are each
+  caught.
 
   **This mechanism now protects four fenced blocks, not one — the paragraph above describes only
   Section 1's.** `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
@@ -2762,18 +2763,18 @@ assumption would not have closed it.
   `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
   in the script's header** — both went stale within one ticket of being written, which is the whole
   reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` is the authoritative list, and it no
-  longer keeps it via four hand-anchored per-fence pins: `lode-1d2y` added an open-world sweep that
-  enumerates every fenced block in `land/SKILL.md`, classifies which contain a cwd-resolved mutation,
-  and asserts each carries the guard before it; `lode-8p3c` then deleted the four per-fence pins
-  outright once that sweep subsumed them, so a genuinely new unguarded fence is caught by the sweep
-  itself rather than by adding yet another hand-anchored pin the next time one is discovered. This
-  paragraph deliberately does not restate the module's contents.
-  Since `lode-1d2y` that module is also the authoritative record of the **exempt** half: the old
-  per-fence pins were closed-world, so a genuinely new unguarded fence matched no selector and failed
-  nothing, while every exemption was prose that no gate could falsify. The open-world sweep now flags
-  every mutating command in every fence unless it is guarded or carries a
-  reasoned entry in that module's allowlist — so the paragraphs below are the *reasoning*, not the
-  roster, and an exemption that stops being true fails a test rather than aging quietly in this file.
+  longer keeps it via four hand-anchored per-fence pins. Those were closed-world: a genuinely new
+  unguarded fence matched none of their hand-picked selectors and failed nothing, while every
+  exemption was prose no gate could falsify. `lode-1d2y` added the open-world replacement — a sweep
+  that enumerates every fenced block in `land/SKILL.md`, flags every command that mutates cwd's repo,
+  and passes only where each is guarded earlier in its own block or carries a reasoned entry in that
+  module's allowlist — and `lode-8p3c` then deleted the four per-fence pins outright, but only after
+  widening the sweep's command pattern to cover commands the pins protected and the pattern did not
+  yet match. That generalizes, and is the trap to remember whenever a named pin is retired in favour
+  of a pattern: **a sweep subsumes a pin only for the commands its pattern matches**, so diff the
+  pin's protected set against the pattern *before* deleting it. This paragraph deliberately does not
+  restate the module's contents — it is the *reasoning*, not the roster, and an exemption that stops
+  being true fails a test rather than aging quietly here.
 
   **`lode-gczf`'s "Section 4's worktree/branch GC is exempt" is right as scoped and wrong if
   generalized — the distinction is the point.** Its literal text: those commands "operate on specific
