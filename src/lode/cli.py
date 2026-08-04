@@ -1901,11 +1901,16 @@ def reenrich(
         typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
+#: ``jobs --status`` option: narrows the listing to jobs in one status.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_JOBS_STATUS_OPTION = typer.Option(
+    None, "--status", help="Only list jobs in this status (default: all)."
+)
+
+
 @app.command(name="jobs")
 def jobs_(
-    status: JobStatus | None = typer.Option(
-        None, "--status", help="Only list jobs in this status (default: all)."
-    ),
+    status: JobStatus | None = _JOBS_STATUS_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List the derive jobs on the work queue (see docs/storage.md).
@@ -1944,11 +1949,16 @@ def jobs_(
         typer.echo(line)
 
 
+#: ``egress --purpose`` option: narrows the listing to sends of one purpose.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_EGRESS_PURPOSE_OPTION = typer.Option(
+    None, "--purpose", help="Only list sends of this purpose (default: all)."
+)
+
+
 @app.command()
 def egress(
-    purpose: EgressPurpose | None = typer.Option(
-        None, "--purpose", help="Only list sends of this purpose (default: all)."
-    ),
+    purpose: EgressPurpose | None = _EGRESS_PURPOSE_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List what content has left the box for the cloud, and when.
@@ -2183,6 +2193,16 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
+#: ``dump-html --dir`` option: where ``--file`` writes its per-note dumps.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_DUMP_HTML_DIR_OPTION = typer.Option(
+    None,
+    "--dir",
+    help="Directory to write files into with --file (created if "
+    "absent). Default: the current directory. Only valid with --file.",
+)
+
+
 @app.command(name="dump-html")
 def dump_html(
     target: str | None = typer.Argument(
@@ -2209,12 +2229,7 @@ def dump_html(
         "see --dir) instead of printing to stdout. Valid with or without "
         "--all.",
     ),
-    dir_: Path | None = typer.Option(
-        None,
-        "--dir",
-        help="Directory to write files into with --file (created if "
-        "absent). Default: the current directory. Only valid with --file.",
-    ),
+    dir_: Path | None = _DUMP_HTML_DIR_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """Print a note's drawn-down external's raw HTML (its captured snapshot).

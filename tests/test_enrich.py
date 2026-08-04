@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from pydantic import ValidationError
 
 from lode.config import Settings
 from lode.curation import delete_annotation, delete_edge
@@ -253,7 +254,7 @@ def test_inferred_edge_confidence_validation(
     confidence: float, should_raise: bool
 ) -> None:
     if should_raise:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             InferredEdge(to_id="x", reason="y", confidence=confidence)
     else:
         InferredEdge(to_id="x", reason="y", confidence=confidence)
