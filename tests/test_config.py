@@ -596,9 +596,8 @@ def test_knob_rows_appends_both_effort_and_max_tokens_when_both_set() -> None:
 
 def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
     # Acceptance: works with no config.toml present (shows defaults).
-    rows = knob_rows(Settings())
-    assert rows  # non-empty
-    values = {name: value for name, value, _ in rows}
+    values = _knob_values(Settings())
+    assert values  # non-empty
     assert values["retrieval_top_k"] == "20"
     assert values["rerank_enabled"] == "True"
 

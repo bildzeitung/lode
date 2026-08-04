@@ -50,15 +50,6 @@ app = typer.Typer(add_completion=False)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: ``main --root`` option, hoisted to a module-level singleton default (ruff
-#: B008: a ``typer.Option(...)`` call is not allowed directly in an argument
-#: default).
-_ROOT_OPTION = typer.Option(
-    None,
-    "--root",
-    help="Repo root to scan (defaults to this checkout's root).",
-)
-
 SCAN_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
@@ -234,6 +225,15 @@ def check(root: Path) -> list[LinkError]:
                         )
                     )
     return errors
+
+
+#: ``--root`` option: the repo root to scan, overriding this checkout's own.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_ROOT_OPTION = typer.Option(
+    None,
+    "--root",
+    help="Repo root to scan (defaults to this checkout's root).",
+)
 
 
 @app.command()

@@ -1901,9 +1901,8 @@ def reenrich(
         typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
-#: ``jobs --status`` option, hoisted to a module-level singleton default
-#: (ruff B008: a ``typer.Option(...)`` call is not allowed directly in an
-#: argument default).
+#: ``jobs --status`` option: narrows the listing to jobs in one status.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
 _JOBS_STATUS_OPTION = typer.Option(
     None, "--status", help="Only list jobs in this status (default: all)."
 )
@@ -1950,9 +1949,8 @@ def jobs_(
         typer.echo(line)
 
 
-#: ``egress --purpose`` option, hoisted to a module-level singleton default
-#: (ruff B008: a ``typer.Option(...)`` call is not allowed directly in an
-#: argument default).
+#: ``egress --purpose`` option: narrows the listing to sends of one purpose.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
 _EGRESS_PURPOSE_OPTION = typer.Option(
     None, "--purpose", help="Only list sends of this purpose (default: all)."
 )
@@ -2195,9 +2193,8 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
-#: ``dump-html --dir`` option, hoisted to a module-level singleton default
-#: (ruff B008: a ``typer.Option(...)`` call is not allowed directly in an
-#: argument default).
+#: ``dump-html --dir`` option: where ``--file`` writes its per-note dumps.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
 _DUMP_HTML_DIR_OPTION = typer.Option(
     None,
     "--dir",
