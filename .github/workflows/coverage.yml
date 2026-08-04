@@ -22,12 +22,13 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Same convention as tests.yml/build.yml:
+# Cancels a superseded run on the same ref, as in tests.yml/build.yml.
+# Convention + rationale:
 # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
-# The one consumer this leg adds over its siblings is the README's Codecov badge, which
-# reads Codecov's dashboard for `trunk` rather than Actions status: a cancel
-# does skip that run's upload, but the push that cancelled it uploads in turn,
-# so the badge can lag one push and no more.
+# The one consumer this leg adds over its siblings is the README's Codecov
+# badge, which reads Codecov's dashboard for `trunk` rather than Actions
+# status: a cancel does skip that run's upload, but the push that cancelled it
+# uploads in turn, so the badge can lag one push and no more.
 #
 # No need for the split-step precaution tests.yml takes (see its `!cancelled()`
 # comment): actions/cache@v4 declares its save (post) step `post-if: success()`
@@ -60,12 +61,11 @@ env:
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    # Same cap as tests.yml (ladder + rationale:
-    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request) -- coverage
-    # is within noise of tests, not slower. A hang catcher, not a perf budget --
-    # warm runs land at ~2-4min, and cold is no different: tests.yml run
-    # 29783519618 populated the shared 958MB weights cache in 135s end to end
-    # (lode-s1ia).
+    # Same cap as tests.yml -- coverage is within noise of tests, not slower. A
+    # hang catcher, not a perf budget: warm runs land at ~2-4min, and cold is no
+    # different (tests.yml run 29783519618 populated the shared 958MB weights
+    # cache in 135s end to end, lode-s1ia). Ladder + rationale:
+    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
     timeout-minutes: 30
     steps:
       - name: Checkout

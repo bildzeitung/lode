@@ -26,9 +26,9 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Cancels a superseded run on the same ref -- each push here is heavy (full
-# -e .[dev] install + reranker/embedder weights), so this is the workflow that
-# benefits most. Convention + full rationale:
+# Cancels a superseded run on the same ref; leaving one running on the repo's
+# heaviest workflow (see the trigger comment above) wastes real wall-clock, not
+# just a queue slot. Convention + rationale:
 # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -85,6 +85,9 @@ jobs:
   # any real pyproject.toml change.
   lock-currency:
     runs-on: ubuntu-latest
+    # Caps a hung `uv` resolve; 5 is the cheapest rung (no model download).
+    # Ladder + rationale:
+    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -116,9 +119,8 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
-    # Caps a hung model download (the exact failure the weights cache exists
-    # to mitigate) well below GitHub's 360-minute default -- ~3x an observed
-    # green run. Ladder + rationale:
+    # Caps a hung model download (the exact failure the weights cache exists to
+    # mitigate); 30 is ~3x an observed green run. Ladder + rationale:
     # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
     timeout-minutes: 30
     steps:

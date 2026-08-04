@@ -24,8 +24,7 @@ on:
   pull_request:
 
 # Cancels a superseded run on the same ref -- safe because nothing in the
-# landing loop reads these check results, so cancelling one discards no
-# information anyone reads. Convention + full rationale:
+# landing loop reads these check results. Convention + rationale:
 # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,8 +33,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Caps a hung step (e.g. a stalled pip/PyPI fetch) well below GitHub's
-    # 360-minute default. Ladder + rationale:
+    # Caps a hung step (e.g. a stalled pip/PyPI fetch). Ladder + rationale:
     # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
     timeout-minutes: 15
     steps:
