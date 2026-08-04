@@ -599,7 +599,7 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
+def test_default_staleness_threshold_is_still_about_1800s(tmp_path: Path) -> None:
     """Pin the DEFAULT itself, not just that it exceeds two minutes.
 
     Every other test here passes LAND_LOCK_STALE_SECONDS explicitly, and the
@@ -618,37 +618,44 @@ def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
     a lock 1900s old is stale. Deliberately not a grep for the literal -- this
     fails if the semantics change, not merely if the digits move.
 
-    The offsets are 100s off the actual 1800s boundary rather than 1s (as
-    they once were), on purpose (lode-44cq): the lock's age is stamped from
-    ONE clock read here, in Python, but measured against a SECOND, later
-    clock read inside `land-lock.sh`'s own subprocess. Under load (`-n 8`
-    parallelism, interpreter/bash startup, git work) that gap can exceed a
-    second, which was enough to push a 1799s-old lock past 1800s by the time
-    the script measured it -- a false, one-sided red with nothing wrong
-    (observed and diagnosed in lode-44cq). A 100s margin comfortably absorbs
-    that gap without requiring the two clock reads to be pinned to a single
-    shared reading. The trade: this no longer catches every change to the
-    default (e.g. a lowering to 1750s would slip through undetected) -- only
-    a change that moves the default outside (1700s, 1900s). That's a
-    deliberate precision-for-reliability trade, not an oversight.
+    The 100s margins are deliberate, and were 1s until lode-44cq: the age is
+    stamped from ONE clock read here, in Python, then measured against a
+    SECOND, later read inside `land-lock.sh`'s own subprocess, so under load
+    (`-n 8`, interpreter/bash startup, git work) that gap could exceed a
+    second and age a 1799s lock past 1800s -- a false, one-sided red. This is
+    the same hazard `test_fresh_lock_is_not_reclaimed_under_a_large_threshold`
+    calls out for its own boundary; the margin is how this file has always
+    handled it (every other threshold test here uses a 2x-or-wider ratio).
+
+    The trade is real: the pin now catches only a default outside
+    (1700s, 1900s), so a lowering to e.g. 1750s would slip through. Measured
+    on this branch -- defaults of 900s and 3600s each turn it red, 1750s does
+    not.
+
+    Rejected as worse: injecting a pinned "now" into the script. That would
+    put a test-only env var directly into the *decision* input of a
+    production lock's staleness path, unlike the existing
+    LAND_LOCK_TEST_STALL_SECONDS hook, which can only sleep and cannot change
+    a decision.
     """
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
 
     lock.write_text(f"12345 host {int(time.time()) - 1700} 2026-01-01T00:00:00Z\n")
-    just_inside = _run("acquire", repo=repo)
-    assert just_inside.returncode == 1, (
+    well_inside = _run("acquire", repo=repo)
+    assert well_inside.returncode == 1, (
         "a lock 1700s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
         "well below 1800s. That is lode-cp4o's decision to make, with "
         "measurements (scripts/land-lock.sh, CAVEAT 1)."
     )
 
     lock.write_text(f"12345 host {int(time.time()) - 1900} 2026-01-01T00:00:00Z\n")
-    just_outside = _run("acquire", repo=repo)
-    assert just_outside.returncode == 0, (
+    well_outside = _run("acquire", repo=repo)
+    assert well_outside.returncode == 0, (
         "a lock 1900s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
         "raised well above 1800s, so an abandoned lock now blocks landing for "
-        f"much longer than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+        f"much longer than the documented 30min: "
+        f"{well_outside.stdout + well_outside.stderr}"
     )
 
 
