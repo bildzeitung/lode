@@ -214,6 +214,13 @@ exactly the crash case this reset exists to heal.
 Full write-up, including the writer this does **not** cover:
 [docs/agents-workflow.md — Mechanics (decided)](../../../docs/agents-workflow.md#mechanics-decided).
 
+**This section's ordering is also load-bearing for a downstream consumer.**
+`scripts/recycled-worktree-guard.sh` reads `origin/trunk` rather than bare local `trunk` on the
+premise that "`/land` only advances `origin/trunk` with an already-gated, already-pushed `trunk`" —
+true only because this section resets `trunk` to `origin/trunk` before anything runs, and because
+[Section 4](#4-land-the-survivors) pushes before it closes. Nothing here enforces that order beyond
+an agent following this skill; see the guard script's own header for the full dependency (lode-rlz8).
+
 **The same block also wipes `$STATE_DIR` (lode-wjw4).** `.git/land-state/` is per-pass scratch the
 reset cannot clear, and a leftover from a crashed prior pass is the same *residue* category as a
 leftover merge commit; Section 0's lock is already held by this point, so this is its altitude. The
@@ -1039,7 +1046,11 @@ machine. A red gate is content; exit 2 is the machine.
 
 Only now — combined `trunk` is green — do I write the world. Order matters (see
 [bd-sync discipline](#bd-sync-discipline-non-negotiable)): push `trunk` first, then close, then
-publish bd state, then GC branches **and the local builder worktrees**.
+publish bd state, then GC branches **and the local builder worktrees**. Push-before-close here is
+also what `scripts/recycled-worktree-guard.sh`'s header leans on in asserting `origin/trunk` is
+always already-gated, already-pushed (see [Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin)'s
+note on the same dependency) — reordering it would silently invalidate that guard's premise, with
+nothing here to catch it (lode-rlz8).
 
 First, check whether the re-gate's `nox -t fix` (above) actually changed anything:
 
