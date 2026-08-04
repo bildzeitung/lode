@@ -49,6 +49,16 @@ import typer
 app = typer.Typer(add_completion=False)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: ``main --root`` option, hoisted to a module-level singleton default (ruff
+#: B008: a ``typer.Option(...)`` call is not allowed directly in an argument
+#: default).
+_ROOT_OPTION = typer.Option(
+    None,
+    "--root",
+    help="Repo root to scan (defaults to this checkout's root).",
+)
+
 SCAN_DIRS = ("docs", ".claude")
 
 # A markdown inline link: `[text](target)`, never an image (`![...]`).
@@ -228,11 +238,7 @@ def check(root: Path) -> list[LinkError]:
 
 @app.command()
 def main(
-    root: Path = typer.Option(
-        None,
-        "--root",
-        help="Repo root to scan (defaults to this checkout's root).",
-    ),
+    root: Path = _ROOT_OPTION,
 ) -> None:
     """Fail if any relative markdown link in docs/ (and .claude/) is broken."""
     target_root = (root or REPO_ROOT).resolve()

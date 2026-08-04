@@ -87,7 +87,7 @@ def test_resolve_max_tokens_prefers_the_tier_override() -> None:
 
 def test_model_tier_is_frozen() -> None:
     tier = ModelTier(model="x")
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         tier.model = "y"
 
 
@@ -517,17 +517,17 @@ def test_effort_levels_match_the_installed_sdk_literal() -> None:
 
 
 def _batch_request(**overrides: object) -> BatchRequest:
-    defaults: dict = dict(
-        custom_id="ver-1",
-        model="claude-haiku-4-5",
-        reasoning_effort=None,
-        system="sys",
-        user_prompt="prompt",
-        output_schema=_Widget,
-        max_tokens=100,
-        tool_name="extract_widget",
-        tool_description="Extract a widget.",
-    )
+    defaults: dict = {
+        "custom_id": "ver-1",
+        "model": "claude-haiku-4-5",
+        "reasoning_effort": None,
+        "system": "sys",
+        "user_prompt": "prompt",
+        "output_schema": _Widget,
+        "max_tokens": 100,
+        "tool_name": "extract_widget",
+        "tool_description": "Extract a widget.",
+    }
     defaults.update(overrides)
     return BatchRequest(**defaults)
 

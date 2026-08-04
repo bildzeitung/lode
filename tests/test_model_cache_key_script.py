@@ -31,9 +31,10 @@ def test_cache_key_matches_pinned_settings() -> None:
     from lode.config import Settings
 
     s = Settings()
-    expected = "models-" + "-".join(
-        (s.embedding_model, s.rerank_model, s.entailment_model)
-    ).replace("/", "_")
+    expected = (
+        "models-"
+        + f"{s.embedding_model}-{s.rerank_model}-{s.entailment_model}".replace("/", "_")
+    )
     assert model_cache_key.cache_key() == expected
 
 

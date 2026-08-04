@@ -81,8 +81,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "01-postgres-autovacuum",
-                "an UPDATE does not overwrite a row in place: it writes a new row "
-                "version and marks the old one as a dead tuple",
+                (
+                    "an UPDATE does not overwrite a row in place: it writes a new row "
+                    "version and marks the old one as a dead tuple"
+                ),
             ),
         ),
     ),
@@ -91,8 +93,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "01-postgres-autovacuum",
-                "The default scale factor is 0.2, which means a large table is "
-                "vacuumed only after 20 percent of its rows are dead",
+                (
+                    "The default scale factor is 0.2, which means a large table is "
+                    "vacuumed only after 20 percent of its rows are dead"
+                ),
             ),
         ),
     ),
@@ -110,9 +114,11 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "02-python-gil",
-                "Threads are therefore useful for I/O-bound work, where they "
-                "overlap waiting on the network or disk, but they do not speed up "
-                "CPU-bound pure Python code",
+                (
+                    "Threads are therefore useful for I/O-bound work, where they "
+                    "overlap waiting on the network or disk, but they do not speed up "
+                    "CPU-bound pure Python code"
+                ),
             ),
         ),
     ),
@@ -121,8 +127,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "02-python-gil",
-                "For CPU-bound work the standard answer is multiprocessing, which "
-                "runs separate interpreter processes each with its own GIL",
+                (
+                    "For CPU-bound work the standard answer is multiprocessing, which "
+                    "runs separate interpreter processes each with its own GIL"
+                ),
             ),
         ),
     ),
@@ -140,8 +148,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "03-incident-checkout-latency",
-                "a deploy that added a synchronous call to the fraud-scoring "
-                "service inside the request path, with no timeout configured",
+                (
+                    "a deploy that added a synchronous call to the fraud-scoring "
+                    "service inside the request path, with no timeout configured"
+                ),
             ),
         ),
     ),
@@ -150,9 +160,11 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "03-incident-checkout-latency",
-                "Because the HTTP client had no timeout, threads were held until "
-                "the upstream eventually closed the connection, exhausting the "
-                "checkout thread pool",
+                (
+                    "Because the HTTP client had no timeout, threads were held until "
+                    "the upstream eventually closed the connection, exhausting the "
+                    "checkout thread pool"
+                ),
             ),
         ),
     ),
@@ -161,9 +173,11 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "03-incident-checkout-latency",
-                "set a 250ms timeout on the fraud call, turn on the async-scoring "
-                "fallback flag, and add a circuit breaker that trips after five "
-                "consecutive timeouts",
+                (
+                    "set a 250ms timeout on the fraud call, turn on the async-scoring "
+                    "fallback flag, and add a circuit breaker that trips after five "
+                    "consecutive timeouts"
+                ),
             ),
         ),
     ),
@@ -185,8 +199,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "04-k8s-probes",
-                "If the database is down, every pod fails liveness and restarts in "
-                "a storm, which makes the outage worse",
+                (
+                    "If the database is down, every pod fails liveness and restarts in "
+                    "a storm, which makes the outage worse"
+                ),
             ),
         ),
     ),
@@ -195,8 +211,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "05-git-bisect",
-                "git bisect does a binary search through commit history to find "
-                "the commit that introduced a bug",
+                (
+                    "git bisect does a binary search through commit history to find "
+                    "the commit that introduced a bug"
+                ),
             ),
         ),
     ),
@@ -218,8 +236,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ),
             (
                 "06-tls-cert-renewal",
-                "cert-manager controller in the cluster requests renewal "
-                "automatically once a certificate is within 30 days of expiry",
+                (
+                    "cert-manager controller in the cluster requests renewal "
+                    "automatically once a certificate is within 30 days of expiry"
+                ),
             ),
         ),
     ),
@@ -228,9 +248,11 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "06-tls-cert-renewal",
-                "DNS-01 proves control of the domain by creating a TXT record, "
-                "which is why it works for wildcard certificates where HTTP-01 "
-                "does not",
+                (
+                    "DNS-01 proves control of the domain by creating a TXT record, "
+                    "which is why it works for wildcard certificates where HTTP-01 "
+                    "does not"
+                ),
             ),
         ),
     ),
@@ -239,8 +261,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "07-redis-eviction",
-                "For a pure cache we use allkeys-lru, which evicts the "
-                "least-recently-used key regardless of whether it has a TTL",
+                (
+                    "For a pure cache we use allkeys-lru, which evicts the "
+                    "least-recently-used key regardless of whether it has a TTL"
+                ),
             ),
         ),
     ),
@@ -262,8 +286,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "08-http-idempotency",
-                "an Idempotency-Key header, a client-generated unique value that "
-                "the client reuses on every retry of the same logical request",
+                (
+                    "an Idempotency-Key header, a client-generated unique value that "
+                    "the client reuses on every retry of the same logical request"
+                ),
             ),
             (
                 "08-http-idempotency",
@@ -276,8 +302,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "08-http-idempotency",
-                "If a client reuses a key with a different amount, that is a client "
-                "bug, and the server returns a 422",
+                (
+                    "If a client reuses a key with a different amount, that is a client "
+                    "bug, and the server returns a 422"
+                ),
             ),
         ),
     ),
@@ -299,8 +327,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "09-oncall-escalation",
-                "skip the timed escalation: the incident commander pulls in the "
-                "secondary and the manager immediately",
+                (
+                    "skip the timed escalation: the incident commander pulls in the "
+                    "secondary and the manager immediately"
+                ),
             ),
         ),
     ),
@@ -309,8 +339,10 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "10-feature-flag-cleanup",
-                "every new feature flag must carry an expiry date in its "
-                "definition, defaulting to 90 days out",
+                (
+                    "every new feature flag must carry an expiry date in its "
+                    "definition, defaulting to 90 days out"
+                ),
             ),
         ),
     ),
@@ -319,26 +351,34 @@ _ANSWERABLE: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             (
                 "10-feature-flag-cleanup",
-                "Permanent operational toggles, such as a kill switch for an "
-                "external dependency, are exempt",
+                (
+                    "Permanent operational toggles, such as a kill switch for an "
+                    "external dependency, are exempt"
+                ),
             ),
         ),
     ),
     # Multi-note synthesis: a correct answer must retrieve and cite both notes.
     (
-        "Across our notes, how does a single slow dependency without a timeout "
-        "cascade into a wider outage?",
+        (
+            "Across our notes, how does a single slow dependency without a timeout "
+            "cascade into a wider outage?"
+        ),
         (
             (
                 "03-incident-checkout-latency",
-                "Because the HTTP client had no timeout, threads were held until "
-                "the upstream eventually closed the connection, exhausting the "
-                "checkout thread pool",
+                (
+                    "Because the HTTP client had no timeout, threads were held until "
+                    "the upstream eventually closed the connection, exhausting the "
+                    "checkout thread pool"
+                ),
             ),
             (
                 "04-k8s-probes",
-                "If the database is down, every pod fails liveness and restarts in "
-                "a storm, which makes the outage worse",
+                (
+                    "If the database is down, every pod fails liveness and restarts in "
+                    "a storm, which makes the outage worse"
+                ),
             ),
         ),
     ),
