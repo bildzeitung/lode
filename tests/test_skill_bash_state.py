@@ -203,8 +203,8 @@ _KNOWN_ENV_VARS = {
 # keep the names specific; a generic name here is much costlier than a specific one.
 #
 # LIVENESS, not just reason text (lode-e49j): a reason string stays convincing even
-# after the violation it excuses is fixed -- exactly what happened to $CONFLICTS above
-# (see the "no whole-file escape hatch" paragraph earlier in this docstring). An entry
+# after the violation it excuses is fixed -- exactly what happened to $CONFLICTS (see
+# the "no whole-file escape hatch" paragraph in the module docstring above). An entry
 # going stale is not inert; it is a MASK that silently re-excuses a brand-new
 # reintroduction of the same bug. `test_every_allowlist_entry_still_matches_a_real_
 # violation`, below the gate itself, pins that every key here still corresponds to a
@@ -665,6 +665,7 @@ def _dead_allowlist_keys(
     allowlist: dict[tuple[str, str], str],
     *,
     sources: list[Path] | None = None,
+    root: Path = CLAUDE_DIR,
 ) -> list[tuple[str, str]]:
     """(file, var) keys in `allowlist` that no longer correspond to any real,
     UNFILTERED violation across `sources` (default: the real shipped skill/agent
@@ -674,32 +675,30 @@ def _dead_allowlist_keys(
     does not exist as a cross-block use anywhere today, so it currently excuses
     nothing -- but the entry stays in `ALLOWLIST` regardless, ready to silently
     re-excuse a BRAND-NEW reintroduction of the exact same bug the moment one lands
-    (lode-p1r3's own review demonstrated this: `land/SKILL.md`'s `$CONFLICTS` entry
-    went dead the moment `lode-rfon` fixed the violation it was written for, and then
-    sat masking for however long it took a human to notice by hand -- nothing failed
-    in between).
+    (the `$CONFLICTS` history in the module docstring above is this exact sequence,
+    observed).
 
-    `allowlist` and `sources` are both parameters, not read from the module globals
-    directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage` below
-    can exercise this exact primitive -- the same one the real pin uses -- against a
-    deliberately bogus key and a deliberately "already fixed" synthetic file, without
-    needing to mutate any real `.claude/` file on disk (out of this ticket's
+    `allowlist`, `sources` and `root` are all parameters, not read from the module
+    globals directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage`
+    below can exercise this exact primitive -- the same one the real pin uses --
+    against a deliberately bogus key and a deliberately "already fixed" synthetic
+    file, without mutating any real `.claude/` file on disk (out of this ticket's
     footprint, and it would make the pin's own correctness depend on real-file state
     changing underneath it later).
 
-    Relative-path keys mirror `test_no_cross_block_shell_state_outside_the_allowlist`
-    exactly (relative to `CLAUDE_DIR`) when a source lives under it; a synthetic
-    `tmp_path` source (used only by the sabotage test) falls back to its bare
-    filename, since it has no meaningful path relative to `CLAUDE_DIR` at all.
+    `root` is what keys are derived relative to, and it exists so the sabotage test
+    runs the SAME `str(path.relative_to(root))` expression the real pin does rather
+    than a lookalike -- a proof over a key-derivation path production never takes
+    would prove nothing about production, which is the very failure mode this module
+    is about. Keys are therefore relative to `CLAUDE_DIR` here exactly as in
+    `test_no_cross_block_shell_state_outside_the_allowlist`, and relative to
+    `tmp_path` there.
     """
     if sources is None:
         sources = _source_files()
     live: set[tuple[str, str]] = set()
     for source_md in sources:
-        try:
-            rel = str(source_md.relative_to(CLAUDE_DIR))
-        except ValueError:
-            rel = source_md.name
+        rel = str(source_md.relative_to(root))
         for _block_index, var in find_violations(source_md):
             live.add((rel, var))
     return sorted(set(allowlist) - live)
@@ -741,39 +740,54 @@ def test_every_allowlist_entry_is_provably_checked_by_sabotage(
 
     1. ADDING A BOGUS KEY -- a (file, var) pair that matches no real violation
        anywhere -- must be reported dead.
-    2. FIXING THE UNDERLYING VIOLATION -- modeled with a synthetic pair of files
-       sharing one variable name: `live.md` has the real cross-block shape (assigned
-       in one fenced block, used in a separate one -- still a violation), `fixed.md`
-       has the identical assignment and use collapsed into a SINGLE block (no longer
-       a violation, the same fix shape `lode-rfon` applied to the real `$CONFLICTS`
-       instance). The same key is live against `live.md` and dead against `fixed.md`
-       -- proving the helper tracks the file's actual content, not just the key's
-       shape, and that "fix the violation" is exactly the transition that flips a
-       live entry to dead.
+    2. FIXING THE UNDERLYING VIOLATION -- ONE synthetic file, rewritten in place, so
+       the derived key is held constant and the file's CONTENT is the only thing that
+       varies between the two assertions. First it carries the real cross-block shape
+       (assigned in one fenced block, used in a separate one -- a violation); then the
+       identical assignment and use collapsed into a SINGLE block (no longer a
+       violation, the same fix shape `lode-rfon` applied to the real `$CONFLICTS`
+       instance). The same key is live before and dead after, which is what proves the
+       helper tracks content rather than the key's shape.
+
+       Two files, one "live" and one "fixed", would NOT prove that and must not be
+       reintroduced: distinct filenames derive distinct keys, so the "fixed" assertion
+       would pass on a name mismatch and hold just as green with the violation left
+       fully intact -- a vacuous proof of non-vacuity, the exact self-refuting shape
+       this module exists to catch. Measured, not theorized (lode-e49j review).
+
+    Both shapes run through `_dead_allowlist_keys` (the same primitive the real pin
+    calls), passing `root=tmp_path` so key derivation runs the identical
+    `str(path.relative_to(root))` expression production runs -- and against a fixture
+    path with the same multi-segment shape as a real key -- rather than mutating any
+    real `.claude/` file on disk.
 
     Sabotage recipe for this ticket's own future maintenance, recorded here per the
     acceptance criteria: delete either assertion below, or replace `_dead_allowlist_
     keys`'s body with `return []` unconditionally, and this test goes red.
     """
-    live_source = tmp_path / "live.md"
-    live_source.write_text(
+    source = tmp_path / "skills" / "fixture" / "SKILL.md"
+    source.parent.mkdir(parents=True)
+    key = ("skills/fixture/SKILL.md", "FOO")
+
+    def dead(k: tuple[str, str]) -> list[tuple[str, str]]:
+        return _dead_allowlist_keys({k: "fixture"}, sources=[source], root=tmp_path)
+
+    source.write_text(
         '```bash\nFOO=1\n```\n\n```bash\necho "$FOO"\n```\n', encoding="utf-8"
     )
-    fixed_source = tmp_path / "fixed.md"
-    fixed_source.write_text('```bash\nFOO=1\necho "$FOO"\n```\n', encoding="utf-8")
-
-    key = ("live.md", "FOO")
-    assert _dead_allowlist_keys({key: "fixture"}, sources=[live_source]) == [], (
-        "fixture assumption broken: FOO is not actually a live cross-block "
-        "violation in live.md"
-    )
-    assert _dead_allowlist_keys({key: "fixture"}, sources=[fixed_source]) == [key], (
-        "fixing the underlying violation must flip the same key from live to dead"
+    assert dead(key) == [], (
+        "fixture assumption broken: FOO is not actually a live cross-block violation "
+        "in the unfixed fixture"
     )
 
-    bogus = ("live.md", "THIS_VAR_DOES_NOT_EXIST_ANYWHERE_lode_e49j")
-    assert _dead_allowlist_keys({bogus: "fixture"}, sources=[live_source]) == [bogus], (
+    bogus = ("skills/fixture/SKILL.md", "THIS_VAR_DOES_NOT_EXIST_ANYWHERE_lode_e49j")
+    assert dead(bogus) == [bogus], (
         "a bogus key matching no real violation must be reported dead"
+    )
+
+    source.write_text('```bash\nFOO=1\necho "$FOO"\n```\n', encoding="utf-8")
+    assert dead(key) == [key], (
+        "fixing the underlying violation must flip the SAME key from live to dead"
     )
 
 
