@@ -12,17 +12,19 @@ on:
 permissions:
   contents: write # gh release create needs to publish a release + upload assets
 
+# Deliberately carries no `concurrency:` block, unlike build.yml/tests.yml/
+# coverage.yml -- a version tag is pushed once, not superseded 2-3x the way a
+# producer's land/<id> push is, so there is no legitimate same-ref run to
+# cancel. Full rationale:
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    # Well below GitHub's 360-minute default -- caps the tail if a step hangs
-    # (a stalled PyPI fetch, or this job's own `gh release create`). Every
-    # release run to date finished in 14-30s of job time, so 20 is ~40x the
-    # worst observed: a trip means a hang, not a slow-but-healthy run. Sits
-    # above build.yml's cap and below tests.yml's on CONSEQUENCE, not runtime
-    # -- a false trip here fails a PUBLISH, where build.yml's fails an
-    # advisory check nothing in the landing loop reads (docs/release.md).
-    # (lode-w35h)
+    # Caps a hung step (a stalled PyPI fetch, or this job's own `gh release
+    # create`). Every release run to date finished in 14-30s of job time, so
+    # 20 is ~40x the worst observed. Ladder position + why: docs/release.md
+    # #ci-workflow-trigger-scope-push-and-pull_request (lode-w35h).
     timeout-minutes: 20
     steps:
       - name: Checkout

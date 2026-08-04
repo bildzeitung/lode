@@ -26,12 +26,10 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Producers push land/<id> ~2-3x per ticket (builder, code-reviewer, sometimes a
-# rebase), and each push fires a fresh, heavy run. Nothing in the landing loop
-# reads these check results -- /land re-gates locally and never consults
-# GitHub Actions (docs/release.md) -- so a superseded run on an older commit
-# of the same ref has zero consumers; cancelling it cannot lose information
-# (lode-2ouz).
+# Cancels a superseded run on the same ref -- each push here is heavy (full
+# -e .[dev] install + reranker/embedder weights), so this is the workflow that
+# benefits most. Convention + full rationale:
+# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -118,9 +116,10 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
-    # Well below GitHub's 360-minute default -- a hung model download (the
-    # exact failure the weights cache exists to mitigate) would otherwise burn
-    # six hours producing nothing. ~3x an observed green run (lode-2ouz).
+    # Caps a hung model download (the exact failure the weights cache exists
+    # to mitigate) well below GitHub's 360-minute default -- ~3x an observed
+    # green run. Ladder + rationale:
+    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
     timeout-minutes: 30
     steps:
       - name: Checkout

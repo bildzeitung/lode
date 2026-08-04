@@ -143,6 +143,36 @@ on:
 
   Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
   safe to leave in place; there is no badge-hygiene reason to drop it.
+- **`concurrency: cancel-in-progress` and `timeout-minutes` are the same kind of convention as the
+  `branches:` narrowing above — recorded once here rather than re-derived in each workflow file.**
+  `build.yml`, `tests.yml`, and `coverage.yml` all carry `concurrency: { group:
+  ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`; every job across all five
+  workflows (including `release.yml` and `tests.yml`'s `lock-currency`) carries a `timeout-minutes`.
+  - **`cancel-in-progress: true` is safe for the same reason the trigger narrowing above is safe.**
+    "Nothing in the landing loop reads these check results" (the bullet above) — so a superseded run
+    on an older commit of the same `land/<id>` or `trunk` ref has zero consumers by the time a newer
+    push replaces it; cancelling it cannot discard information anyone would otherwise read. This is
+    not a rare case: producers push `land/<id>` ~2-3x per ticket (builder, code-reviewer, sometimes a
+    rebase pickup), each firing a fresh run (lode-2ouz).
+  - **`release.yml` is deliberately EXCLUDED from `concurrency:`.** It is tag-triggered
+    (`push: tags: [v*]`), not branch-triggered: a version tag is pushed once, not superseded 2-3x the
+    way a `land/<id>` ref is, and each tag is itself a distinct `github.ref` — so a
+    `${{ github.workflow }}-${{ github.ref }}` group has no legitimate same-ref run to collide with in
+    normal use. Adding it would buy nothing while risking an interrupted `gh release create` (a
+    genuine in-progress publish, not an advisory check) on the one path — a repushed tag — where the
+    group key would ever actually collide.
+  - **The `timeout-minutes` ladder, sized on CONSEQUENCE, not runtime:** `lock-currency` = 5 (no model
+    download, cheapest check), `build` = 15, `release` = 20, `tests` = 30, `coverage` = 30. Each is well
+    below GitHub's 360-minute default, capping the tail if a step hangs (a stalled fetch, a hung model
+    download) rather than burning hours for nothing.
+    `release` sits above `build` and below `tests`/`coverage` on what a timed-out run *costs*, not how
+    long it usually *takes* — measured across all release runs to date, `release.yml` finishes in
+    14-30s of job time, at or below `build.yml`'s recent 26-38s, so "release does build's work plus a
+    publish step, therefore it needs longer" is refuted by the data. It sits above `build.yml` because
+    a false trip there fails a PUBLISH, whereas `build.yml`'s fails an advisory check nothing in the
+    landing loop reads (the bullet above); it sits below `tests.yml`/`coverage.yml` because it has no
+    model download to hang on. Use this consequence-based reasoning, not the numbers alone, to size a
+    future workflow's cap (lode-w35h).
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 
