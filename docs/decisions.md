@@ -2172,6 +2172,53 @@ while erasing it here would lose the record of what was believed, and when.
   prevent. Documented in
   [`coding.md`](../.claude/agents/coding.md), [`code-reviewer.md`](../.claude/agents/code-reviewer.md),
   and [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44).
+- **Confirmed and dropped for `coding` and `code-reviewer` (lode-09td, 2026-07-28/29) — the
+  frontmatter-vs-call-site confound `lode-ojsr` could not reach is now resolved, the same way
+  `lode-p2vi` resolved it for `land-review`.** Two dispatches, run on separate days, both from the
+  **top-level orchestrating session** (main checkout, on `trunk`) — not nested inside any dispatched
+  subagent's worktree, which is the vantage point `lode-ojsr`'s own probe could not achieve. Both
+  dispatches in each run were issued in the same message (concurrent, identical conditions), neither
+  carried a call-site `isolation` option, and the precondition (`isolation: worktree` live in the
+  target agent's frontmatter on `trunk`) was re-verified with `git show` before each run rather than
+  assumed.
+
+  **Probe 1 (2026-07-28), `coding` vs a `claude` control:** `coding` landed in a linked worktree
+  (`git rev-parse --show-toplevel` differed from the main checkout, `--git-common-dir` confirmed a
+  linked worktree, branch `worktree-agent-<hash>`, `HEAD == origin/trunk`). The `claude` control —
+  carrying **no** isolation frontmatter key at all — landed unisolated in the main checkout on
+  `trunk`. **Probe 2 (2026-07-29), `code-reviewer` vs a `claude` control:** identical design, identical
+  result — `code-reviewer` isolated, the control did not. `code-reviewer` is the role with the actual
+  failure history (`lode-ska2` was 6-of-6 `code-reviewer` dispatches failing to isolate), so this
+  closes the more consequential half of the question, not merely the cheaper one.
+
+  **Conclusion:** since the only difference between control and test case in each run was the
+  presence of the frontmatter key, the frontmatter key — not nested-dispatch inheritance of a parent
+  cwd, which is what made `lode-ojsr`'s own probe invalid — is what provisions the worktree, for both
+  roles. Three roles (`land-review` via `lode-p2vi`, `coding` and `code-reviewer` via `lode-09td`) now
+  measure frontmatter alone as sufficient, against a keyless control that does not isolate.
+
+  **What this does NOT establish — carry both limits verbatim wherever this result is cited:**
+  (1) each probe contrasts the target role's *whole* agent definition (system prompt, model, tools)
+  against `claude`'s, not a single-variable ablation of the isolation key on one fixed definition —
+  the key is the only isolation-*relevant* difference, but the probe design does not isolate it in the
+  strict sense. (2) **both probes were light-load — two concurrent dispatches, never a fan-out.** They
+  establish the mechanism works under light load; they say **nothing** about concurrency pressure, and
+  do **not** refute the harness-side race/resource-pressure hypothesis in
+  [agents-workflow.md — Isolation guard](agents-workflow.md#isolation-guard-lode-ska2--lode-jk44)'s
+  root-cause section. The sharp edge cuts both ways: `lode-ska2`'s 6 failures happened *with* the
+  call-site option present, so that option demonstrably did not prevent them either — dropping it is
+  not claimed to reduce fan-out risk, only to remove a mechanism with no measured protective effect
+  against the one incident it was added for.
+
+  **Decision (human, 2026-07-29): drop `code/SKILL.md`'s call-site `isolation: "worktree"` option for
+  `coding` and `code-reviewer`.** Frontmatter is now the sole enforcement point for all three roles —
+  `land-review`, `coding`, `code-reviewer` — exactly the same rule everywhere. Reasoning: the call-site
+  option was added *for* `lode-ska2` and had zero demonstrated protective value against it; frontmatter
+  travels with the role, so every dispatch site benefits, not just `/code`'s; the call site only
+  protects the sites that remember to ask for it. `code/SKILL.md`'s four call sites (step 0's
+  rebase-pickup dispatch, step 1's stranded-review dispatch, Phase 1, Phase 2) and
+  `land/SKILL.md`'s now-stale "no top-level probe confirming frontmatter alone suffices for them"
+  sentence were updated to match. This does not touch the open fan-out question above — see limit (2).
 - **Update (lode-nt98, lode-qv5t, 2026-07-20) — the "qualifies by construction" / "no dedicated
   cleanup" claim above is falsified; lode-qv5t closes the gap it left open.** Everything above this
   entry reasoned about `land-review`'s scratch worktree correctly on the axis it was checking

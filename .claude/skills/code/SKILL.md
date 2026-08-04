@@ -125,10 +125,11 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
    capped read would silently strand kick-backs past the 50th, every invocation.
 
-   For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
-   "worktree"`** — required for the same reason as Phase 1 below: a subagent is pinned at the repo
-   root and **cannot** call `EnterWorktree` to *create* its own, so the harness must hand it a launch
-   worktree at dispatch). From there it fetches `origin/land/<id>` and checks it out **into that same
+   For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"` — no call-site
+   `isolation` option needed: `coding.md`'s own agent-definition frontmatter carries `isolation:
+   worktree`, which two dedicated top-level probes (`lode-09td`) confirmed is sufficient on its own,
+   so the harness hands it a launch worktree at dispatch regardless of what this call site asks for).
+   From there it fetches `origin/land/<id>` and checks it out **into that same
    launch worktree** — no `EnterWorktree`, no `git -C` into anything else needed; `Edit`/`Write`/`nox`
    all work natively once the branch is checked out locally. Tell it explicitly this is a **rebase
    pickup**, not a fresh build, e.g.:
@@ -244,7 +245,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    If it's empty (this can only happen for a build-time escalation predating the coding.md fix for
    lode-t83's Gap 1), don't guess a head SHA — leave the label alone and surface it in the final
    report as needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
-   exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, **`isolation: "worktree"`**, same
+   exactly as Phase 2 does below (`subagent_type: "code-reviewer"` — no call-site `isolation` option
+   needed, per the same probe-confirmed frontmatter sufficiency noted at Phase 2 below), same
    prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree, own
    correctness pass + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
    Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this
@@ -347,10 +349,15 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > re-gating them here would strand in-flight work behind a retroactively-applied check.
 
 3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
-   `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a subagent is
-   pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own, so the harness must
-   hand each builder a worktree at dispatch — `isolation: "worktree"` launches it already cwd'd inside
-   `.claude/worktrees/agent-<hash>` on its own branch off `trunk` HEAD.
+   `subagent_type: "coding"` — **no call-site `isolation` option.** A subagent is pinned at the repo
+   root and **cannot** call `EnterWorktree` to *create* its own, so it needs the harness to hand it a
+   launch worktree at dispatch — but that requirement now travels with the *role*, not the call site:
+   `coding.md`'s own agent-definition frontmatter carries `isolation: worktree` (`lode-ojsr`), and two
+   dedicated top-level probes (`lode-09td`, 2026-07-28/29) measured frontmatter alone sufficient —
+   `coding` isolated from a keyless `claude` control with no call-site option in play — so the
+   call-site option was dropped as redundant, matching `land-review`'s treatment after `lode-p2vi`.
+   Every `coding` dispatch launches already cwd'd inside `.claude/worktrees/agent-<hash>` on its own
+   branch off `origin/trunk` HEAD regardless.
 
    > **Claim each resolved ticket from *here*, before dispatch — don't rely on the builder to do it
    > (lode-xr8v).** `coding.md` step 2 also runs `bd update <id> --claim`, but that is an unverified
@@ -440,8 +447,12 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    back without new evidence that it beats the reviewer's own pass per token.
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
-   **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
-   never writes `trunk`. From there it fetches `origin/land/<id>` and checks the branch out **into that
+   — **no call-site `isolation` option.** `code-reviewer.md`'s own agent-definition frontmatter
+   carries `isolation: worktree` (`lode-ojsr`), confirmed sufficient on its own by a dedicated
+   top-level probe (`lode-09td`, 2026-07-29) — `code-reviewer` isolated from a keyless `claude`
+   control with no call-site option in play, so the call-site option was dropped as redundant,
+   matching `land-review`'s treatment after `lode-p2vi`. The frontmatter still gives it a launch
+   worktree off the repo root, so it never writes `trunk`. From there it fetches `origin/land/<id>` and checks the branch out **into that
    same launch worktree** — no `EnterWorktree`, no `git -C` into the builder's worktree; the builder's
    worktree is never opened by the reviewer under this architecture. Match the build cadence: one
    reviewer in the foreground for a solo build; one reviewer per ticket concurrently
