@@ -64,6 +64,7 @@ def test_documented_defaults_load() -> None:
     assert s.no_egress_default is False
     assert s.progress_heartbeat_interval_s == 15.0
     assert s.llm_call_timeout_s == 120.0
+    assert s.qa_call_timeout_s == 300.0
 
 
 # --- load_settings() reads config.toml (lode-40g) ----------------------------
@@ -617,6 +618,7 @@ def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
         {"retry_max_attempts": 0},  # ge=1
         {"progress_heartbeat_interval_s": 0},  # gt=0.0
         {"llm_call_timeout_s": 0},  # gt=0.0
+        {"qa_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
         {"jira_base_url": "not-a-url"},  # malformed base URL (lode-gpzn.1)
         {"confluence_base_url": "ftp://wrong-scheme.example"},  # non-http(s)

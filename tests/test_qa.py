@@ -222,6 +222,47 @@ def test_qa_think_harder_llm_max_tokens_override_reaches_the_call(conn) -> None:
     assert client.messages.calls[0]["max_tokens"] == 4321
 
 
+def test_qa_call_timeout_s_default_reaches_the_call(conn) -> None:
+    # lode-wfyx: the Q&A synthesis call is timed by its own qa_call_timeout_s
+    # knob (default 300s), split off the shared llm_call_timeout_s.
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn, "q", [QaPassage("v1", "text")], provider=AnthropicProvider(client)
+    )
+    assert client.messages.calls[0]["timeout"] == 300.0
+
+
+def test_qa_call_timeout_s_override_reaches_the_call(conn) -> None:
+    # lode-wfyx: a Kind.RUNTIME override of qa_call_timeout_s must actually
+    # change the timeout sent on the wire.
+    settings = Settings(qa_call_timeout_s=45.0)
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert client.messages.calls[0]["timeout"] == 45.0
+
+
+def test_llm_call_timeout_s_no_longer_reaches_the_qa_call(conn) -> None:
+    # lode-wfyx: llm_call_timeout_s now bounds only enrich.py's call sites --
+    # overriding it must NOT change the Q&A call's timeout, which stays on
+    # qa_call_timeout_s's own (unrelated) default.
+    settings = Settings(llm_call_timeout_s=999.0)
+    client = _FakeClient(_envelope([]))
+    answer_question(
+        conn,
+        "q",
+        [QaPassage("v1", "text")],
+        provider=AnthropicProvider(client),
+        settings=settings,
+    )
+    assert client.messages.calls[0]["timeout"] == 300.0
+
+
 def test_no_egress_passage_excluded_from_context(conn) -> None:
     client = _FakeClient(_envelope([]))
     result = answer_question(
