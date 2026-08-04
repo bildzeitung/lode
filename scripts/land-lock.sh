@@ -398,25 +398,15 @@ cmd="$1"
 # Forcing absolute makes the path identical from every cwd AND every worktree.
 # Same flag pair, for the same reason, as scripts/assert-main-checkout.sh
 # (lode-pcee), which reads the shared .git for its own identity check -- and,
-# as of lode-8qkb, the SAME failure discipline too: the `rev-parse` below is
-# now wrapped (see the `if ! GIT_COMMON_DIR=...` a few lines down) rather than
-# left to `set -e`, so a git failure (most likely: cwd is outside any git
-# repository at all, the same class of harness misdispatch that motivated
-# scripts/isolation-guard.sh, lode-ska2) is mapped onto THIS script's OWN
-# documented 0/1/2 contract instead of escaping as git's bare, undocumented
-# 128. Unlike assert-main-checkout.sh, that mapping does NOT land on exit 2
-# here: this script's own header reserves exit 2 for a caller/usage bug
-# ("never a lock verdict"), so a rev-parse failure is instead folded into the
-# SAME MACHINE FAULT class as the existing "cannot create $LOCK" branch a
-# little further down -- acquire and heartbeat both land on their
-# already-documented exit 1 (unable to determine/write the lock), and
-# release -- documented to always exit 0 -- stays exit 0 too (there is by
-# definition no repository here for a lock to have lived in), but now with a
-# diagnostic on stderr rather than silence. SKILL.md's caller still collapses
-# any non-zero to "skip the tick" either way, so mutual exclusion was never
-# at risk from this gap -- what it closes is observability: the diagnostic
-# now names the actual cause (and which subcommand hit it) instead of a bare
-# `fatal:` a caller cannot attribute to this script at all.
+# as of lode-8qkb, the same failure discipline too: the `rev-parse` below is
+# wrapped rather than left to `set -e`, so a git failure (most likely: cwd is
+# outside any git repository at all) cannot escape as git's bare, undocumented
+# 128. Unlike assert-main-checkout.sh, that maps onto exit 1, NOT exit 2 --
+# the header above reserves exit 2 for a caller/usage bug, so this is folded
+# into the same MACHINE FAULT class as the "cannot create $LOCK" branch below.
+# Mutual exclusion was never at risk (SKILL.md's caller collapses any non-zero
+# to "skip the tick"); what this closes is observability -- the diagnostic now
+# names the cause, and which subcommand hit it, instead of a bare `fatal:`.
 #
 # STILL LATENT rather than live -- but NOT because assert-main-checkout.sh
 # covers it. That guard runs in land/SKILL.md **Section 1**, and this lock is
@@ -429,10 +419,8 @@ cmd="$1"
 # theory that the Section 1 guard already handles it.
 if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; then
   # git's own diagnostic already went to stderr above (this command
-  # substitution captures only stdout). Most likely cause: cwd is not inside
-  # any git repository at all. Map onto the documented 0/1/2 contract
-  # per-subcommand (lode-8qkb) -- see the comment above for why this lands on
-  # exit 1 for acquire/heartbeat rather than assert-main-checkout.sh's exit 2.
+  # substitution captures only stdout). `$cmd` is validated to exactly these
+  # three values above, so no `*)` arm is reachable.
   case "$cmd" in
     acquire)
       echo "land-lock: MACHINE FAULT -- 'git rev-parse --git-common-dir'" \
