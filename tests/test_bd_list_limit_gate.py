@@ -165,11 +165,11 @@ from pathlib import Path
 
 import pytest
 
-# How the INLINE scan unmarks a blockquoted line, and where it starts and stops treating
-# one as fenced. Imported, never re-declared: `bash_fence_blocks` applies these same three
-# to the fenced path, so the two partition a document's FENCES identically by construction
-# (module docstring: "Blockquoted fences").
-from conftest import _BLOCKQUOTE_MARKER, _FENCE_MARKER_RE, _closes_fence
+# The shared fence-partition generator (lode-kjei): both the fenced path (`_bash_blocks`,
+# imported below) and this file's own INLINE scan are built on it, so the two partition a
+# document's FENCES identically by construction -- one state machine, not two kept in sync
+# by hand (module docstring: "Blockquoted fences").
+from conftest import fence_scan
 
 # Reuse lode-x495's fence-extraction and comment-stripping rather than adding a second,
 # competing implementation of either -- this ticket's assertion (flag PRESENCE) is
@@ -291,13 +291,6 @@ SKIP_PROSE: dict[tuple[str, str], str] = {
 }
 
 
-def _strip_blockquote(markdown: str) -> str:
-    """Drop one leading `> ` blockquote marker from every line. The INLINE scan's own
-    normalization, and its only caller -- the fenced path gets this from `_bash_blocks`
-    itself (module docstring: "Blockquoted fences")."""
-    return "\n".join(_BLOCKQUOTE_MARKER.sub("", line) for line in markdown.splitlines())
-
-
 def _command_segments(line: str) -> list[str]:
     """`line` split at unquoted shell command separators (`;`, `|`, `&`, and thereby
     `&&`/`||`), so a `--limit` can only excuse the `bd ... list` it actually belongs to.
@@ -390,40 +383,42 @@ def inline_violations(markdown: str) -> list[tuple[str, int]]:
     """(span, 1-based line number) for every unguarded `bd ... list` in an inline
     single-backtick span OUTSIDE any fence.
 
-    Fence tracking is a line-by-line state machine on `_FENCE_MARKER_RE` (imported from
-    conftest -- see the import comment above) rather than a `` ```...``` `` region regex.
-    Two reasons, both load-bearing: a region regex pairs delimiters by position, so a
-    single stray ``` inside a block (`.claude/agents/coding.md:447` has one, in a
-    comment) inverts every pairing after it and starts stripping PROSE instead of code --
-    a silent false negative; and substituting the regions away destroys line numbers,
-    which is not cosmetic here (the release/SKILL.md inline site really at line 129 was
-    reported as line 96, sending a reader to the wrong place in the only message this
-    gate ever prints).
+    Built on `conftest.fence_scan` (lode-kjei): scans only the lines it yields with
+    `enclosing_info is None` -- i.e. every line OUTSIDE every fence, of ANY info string,
+    matching this function's own "OUTSIDE any fence" contract exactly. Before lode-kjei this
+    ran its own line-by-line state machine sharing only the three fence CONSTANTS
+    (`_BLOCKQUOTE_MARKER`, `_FENCE_MARKER_RE`, `_closes_fence`) with `_bash_blocks`'s
+    separate loop -- close enough to agree on every real site (lode-xqc7 measured 0
+    divergences across the repo's 58 tracked .md files), but not close enough to agree
+    in general: `_bash_blocks` opened on a bash/sh info string ONLY, so it never tracked
+    an ENCLOSING non-bash fence and read a ```bash run nested inside a ````text block as
+    executable, where this loop's independent tracking correctly read the whole thing as
+    literal text -- a false POSITIVE (latent: zero nested fence openers existed in the
+    corpus when found). One shared generator with a single "currently open fence,
+    regardless of its info string" state closes that gap by construction: `fence_scan`
+    itself, not either caller, is now the one place fence rules live.
 
-    FINDING the fences is the same job `_bash_blocks` does, so both halves of it come
-    from conftest -- `_FENCE_MARKER_RE` for where one opens, `_closes_fence` for where it
-    closes -- and neither is re-implemented here, for the same reason `_strip_blockquote`
-    shares `_BLOCKQUOTE_MARKER`: a one-sided divergence would make the two paths
-    partition one document differently. What differs is what each does with the regions
-    it found, which is why this stays a separate loop: `_bash_blocks` KEEPS only
-    ```bash/```sh content, this one EXCLUDES every fence from the inline scan.
+    `_INLINE_SPAN_RE` (single-backtick spans) is applied to `fence_scan`'s `stripped`
+    output directly, which is why a region-regex approach was never on the table here
+    either: a `` ```...``` `` region regex pairs delimiters by POSITION, so a single stray
+    ``` inside a block (`.claude/agents/coding.md:447` has one, in a comment) inverts
+    every pairing after it and starts stripping PROSE instead of code -- a silent false
+    negative; and substituting the regions away destroys line numbers, which is not
+    cosmetic here (the release/SKILL.md inline site really at line 129 was once reported
+    as line 96, sending a reader to the wrong place in the only message this gate ever
+    prints). `fence_scan` reports the real `lineno` for every content line, fence or no
+    fence, so that failure mode cannot recur.
 
-    One asymmetry survives that sharing, filed as lode-kjei: `_bash_blocks` opens only on
-    a bash/sh info string, so it never tracks an ENCLOSING non-bash fence and reads a
-    ```bash run nested inside a ````text block as executable, where this scan correctly
-    reads the whole block as literal text. Latent -- zero nested fence openers exist
-    across the repo's 58 markdown files, measured."""
+    The trailing-blank-line round-trip divergence lode-xqc7 measured between this loop's
+    own `_strip_blockquote` (a join-then-resplit over the WHOLE document) and
+    `_bash_blocks`'s per-line strip -- 10 diffs, all a dropped final blank line, inert
+    since a blank line carries no backtick span -- is now STRUCTURALLY GONE rather than
+    merely inert: both paths read every line through the exact same
+    `_BLOCKQUOTE_MARKER.sub(..., count=1)` call inside `fence_scan`, once, so there is no
+    second normalization pass left to disagree with the first."""
     found: list[tuple[str, int]] = []
-    fence = ""  # the opening run, e.g. "```" or "````" or "~~~"
-    for lineno, line in enumerate(_strip_blockquote(markdown).splitlines(), 1):
-        stripped = line.strip()
-        if fence:
-            if _closes_fence(stripped, fence):
-                fence = ""
-            continue
-        m = _FENCE_MARKER_RE.match(stripped)
-        if m:
-            fence = m.group(1)
+    for lineno, line, info, _ordinal in fence_scan(markdown):
+        if info is not None:
             continue
         for span in _INLINE_SPAN_RE.findall(line):
             if _is_unguarded(span):
@@ -639,6 +634,25 @@ def test_inline_scan_agrees_with_fenced_scan_on_a_four_backtick_fence() -> None:
     markdown = '````bash\n```\necho "`bd list --json`"\n````\n'
     assert inline_violations(markdown) == []
     assert len(fenced_violations(markdown)) == 1
+
+
+def test_bash_fence_nested_inside_an_enclosing_non_bash_fence_is_not_executed() -> None:
+    """The lode-kjei pin: a ```bash fence nested inside an ENCLOSING ````text block is
+    literal illustrative text, not something an agent executes -- `fenced_violations`
+    (built on `_bash_blocks`/`fence_scan`) must not report it, and `inline_violations`
+    must not report it as prose either, since it is still inside the outer fence.
+
+    SABOTAGE-VERIFIED against the pre-lode-kjei implementation: the old `_bash_blocks`
+    tracked its own `current is None` state and opened on a bash/sh info string
+    regardless of whether it was already inside another (non-bash) fence, since it never
+    recorded that fact at all -- so it read the inner ```bash run as a fresh, executable
+    block and `fenced_violations` reported the `bd list --json` line as a finding. The
+    outer ````text fence's closing run intentionally does not match the inner ```bash
+    fence's shorter run (CommonMark: a close must be >= the opening length), so the outer
+    fence really does enclose the whole thing."""
+    markdown = '````text\n```bash\necho "`bd list --json`"\n```\n````\n'
+    assert fenced_violations(markdown) == []
+    assert inline_violations(markdown) == []
 
 
 def test_inline_line_numbers_survive_a_preceding_fence() -> None:
