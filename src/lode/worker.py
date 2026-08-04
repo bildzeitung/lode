@@ -994,10 +994,7 @@ def drain(
 
     Neither this nor the widening makes a stuck batch un-stuck — there is no
     failure budget or dead-letter path for one; it stays wedged until a human
-    intervenes (lode-knnt). Note ``lode work`` has no handler for
-    ``LLMProviderError`` (only ``AuthError``), so unlike the credential case it
-    surfaces as an unhandled traceback rather than a clean actionable line
-    (lode-yx1c).
+    intervenes (lode-knnt).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
