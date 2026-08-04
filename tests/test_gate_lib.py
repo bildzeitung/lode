@@ -1,8 +1,10 @@
 """Tests for scripts/gate-lib.sh (lode-090f).
 
 Why the shared `gate_could_not_run()` helper was extracted, and what the
-GATE_ADVISORY contract is: see that script's own header. It is the single
-source for both -- not restated here.
+GATE_ADVISORY contract is: see that script's own header. It owns the live
+contract for both -- not restated here. (docs/decisions.md carries a dated
+snapshot of the lode-ysr6 decision, which is a log entry, not a second
+source: the header is what gets corrected when the contract changes.)
 
 The tests in the first half exercise the library directly, under `bash -c
 '...'` sourcing it the same way every real caller does
@@ -51,7 +53,7 @@ the line number of a consumer's separate `GATE_ADVISORY=(...)` statement
 against its `gate_could_not_run` call sites. No consumer has such a statement
 any more -- gate-lib.sh binds GATE_ADVISORY itself, at source time -- so the
 sweep has nothing left to compare and was deleted rather than rewritten. The
-hazard it swept for, and why it is now unrepresentable, is recorded once in
+hazard it swept for, and why it is now unrepresentable, is owned by
 gate-lib.sh's own header. The narrower discipline that replaces it is swept
 below.
 """

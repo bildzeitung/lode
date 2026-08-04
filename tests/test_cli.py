@@ -27,6 +27,7 @@ tombstone/no-HTML snapshot cleanly rather than dumping empty).
 """
 
 import io
+import itertools
 import json
 import logging
 import os
@@ -58,7 +59,7 @@ from lode.externals import ingest_snapshot
 from lode.hashing import NO_PARENT, content_version_id
 from lode.ids import short_version_id
 from lode.jobs import enqueue_derive_jobs, now_iso
-from lode.llm_provider import AnthropicProvider
+from lode.llm_provider import AnthropicProvider, LLMAuthError, LLMProviderError
 from lode.redact import REDACTION_MARKER
 from lode.storage import init_db
 from lode.versions import delete, save
@@ -4484,6 +4485,66 @@ def test_ask_out_of_corpus_question_abstains(
     assert cli._ABSTAIN_LINE in result.stdout
 
 
+def test_ask_exits_nonzero_with_actionable_message_on_llm_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode ask' fails loud and clean on a non-auth LLMProviderError (lode-yx1c).
+
+    AuthError and LLMProviderError are SIBLING RuntimeError subclasses -- neither
+    is an ancestor of the other -- so a handler that only named AuthError let a
+    raw traceback through here too. ``cited_answer.ask`` is stubbed to raise
+    directly; an empty corpus (retrieval finds nothing to rerank) keeps the
+    offline embedder stub sufficient without pulling in the real cross-encoder.
+
+    The ``result.exception`` assertion is the load-bearing one, here and in the
+    three tests below it, for the reason spelled out at
+    ``test_work_rejects_an_invalid_config_file``: ``CliRunner`` reports
+    ``exit_code == 1`` for an *unhandled* exception too, so only the exception's
+    type distinguishes a clean error from a crash. (An ``assert "Traceback" not
+    in result.stdout`` cannot do that job -- ``CliRunner`` captures an escaping
+    exception rather than rendering it, so no traceback text reaches either
+    stream either way.)
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _offline_embedder(monkeypatch)
+
+    def _raise(*args, **kwargs):
+        raise LLMProviderError("provider returned 500", provider="anthropic")
+
+    monkeypatch.setattr("lode.cited_answer.ask", _raise)
+
+    result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert "provider returned 500" in result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_ask_exits_nonzero_with_actionable_message_on_llm_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode ask' fails loud and clean on LLMAuthError too (lode-568v.3, lode-yx1c).
+
+    LLMAuthError subclasses LLMProviderError, not AuthError, so it hit the same
+    gap as the plain LLMProviderError case above.
+    """
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()  # empty corpus: nothing to retrieve
+    _offline_embedder(monkeypatch)
+
+    def _raise(*args, **kwargs):
+        raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
+
+    monkeypatch.setattr("lode.cited_answer.ask", _raise)
+
+    result = runner.invoke(app, ["ask", "anything at all?", "--db", str(db_path)])
+
+    assert result.exit_code == 1
+    assert "no OpenAI/Azure credentials (test)" in result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
 @pytest.mark.slow
 def test_retrieve_dense_leg_surfaces_a_vector_only_match(tmp_path: Path) -> None:
     """A passage matched only by the dense leg still reaches the Q&A context (lode-bkc).
@@ -5311,6 +5372,99 @@ def test_work_exits_nonzero_with_actionable_message_on_auth_error(
     assert attempts == 0  # uncharged — never retried, never dead-lettered
 
 
+def test_work_exits_nonzero_with_actionable_message_on_llm_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' fails loud and clean on a non-auth LLMProviderError too (lode-yx1c).
+
+    AuthError and LLMProviderError are SIBLING RuntimeError subclasses -- neither
+    is an ancestor of the other -- so the handler above (which only named
+    AuthError) let a raw traceback through for any LLMProviderError ``drain()``
+    re-raises that is not a credential failure (a rate limit, a 500, ...).
+    ``drain()`` itself is stubbed to raise directly, isolating the CLI handler;
+    the real stash-and-re-raise path it re-raises *from* is exercised by
+    ``test_work_renders_a_stuck_batch_poll_cleanly_through_the_real_drain``.
+    """
+
+    def _raise(*args, **kwargs):
+        raise LLMProviderError("provider returned 500", provider="anthropic")
+
+    monkeypatch.setattr("lode.worker.drain", _raise)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "provider returned 500" in result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_work_exits_nonzero_with_actionable_message_on_llm_auth_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'lode work' fails loud and clean on LLMAuthError too (lode-568v.3, lode-yx1c).
+
+    LLMAuthError subclasses LLMProviderError, not AuthError, so it hit the same
+    gap as the plain LLMProviderError case above -- the ``except AuthError``
+    handler could not catch it either.
+    """
+
+    def _raise(*args, **kwargs):
+        raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
+
+    monkeypatch.setattr("lode.worker.drain", _raise)
+
+    db_path = tmp_path / "lode.db"
+    init_db(db_path).close()
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "no OpenAI/Azure credentials (test)" in result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
+def test_work_renders_a_stuck_batch_poll_cleanly_through_the_real_drain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stuck-batch path reaches the user as one clean line, end to end.
+
+    The two ``LLMProviderError`` ``work`` tests above stub ``drain`` itself,
+    isolating the CLI handler, so neither exercises the compose
+    ``docs/storage.md`` actually promises: ``drain`` STASHES a non-auth
+    ``LLMProviderError`` raised inside a batch pre-step, finishes the
+    credential-free work, and re-raises it only at the end of the pass
+    (lode-5zqa) -- and only then does the CLI handler render it (lode-yx1c).
+    Both halves run for real here; the single stub is ``collect_enrich_batch``,
+    standing in for a permanently malformed batch-results line.
+    """
+    db_path = tmp_path / "lode.db"
+    conn = init_db(db_path)
+    try:
+        with conn:
+            enqueue_derive_jobs(conn, "ver-1", types=("enrich",))
+            # Park it exactly as a submitted batch leaves it: 'running' with a
+            # handle, which is what _batch_collect_enrich selects on.
+            conn.execute(
+                "UPDATE jobs SET status = 'running', batch_handle = 'batch-stuck' "
+                "WHERE type = 'enrich'"
+            )
+    finally:
+        conn.close()
+
+    def _poison(*args, **kwargs):
+        raise LLMProviderError(
+            "batch results line 3 is not valid JSON", provider="anthropic"
+        )
+
+    monkeypatch.setattr("lode.enrich.collect_enrich_batch", _poison)
+
+    result = runner.invoke(app, ["work", "--db", str(db_path)])
+    assert result.exit_code == 1
+    assert "batch results line 3 is not valid JSON" in result.stderr
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+
+
 def _embed_outcome_registry() -> dict:
     """A stub registry whose embed handler mimics the real one's outcome return
     (lode-1gr.4) -- a one-line human-readable summary of what it produced.
@@ -5527,6 +5681,57 @@ def test_work_holds_ONE_embedder_across_every_poll_pass(
     assert seen[0] is seen[1], "each poll pass got a different embedder instance"
 
 
+def _patch_cli_clock_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake ``lode.cli``'s clock so ``work --wait``'s deadline trips on the first check.
+
+    ``work()``'s ``deadline = time.monotonic() + timeout_s`` is set by whichever call to
+    ``time.monotonic()`` happens first; every later call must read past that deadline so
+    the loop's first timeout check trips immediately. A CONSTANT fake clock is wrong here:
+    the deadline calc and the check would then read the identical value, so
+    ``now >= deadline`` (now == deadline - timeout_s) would never hold and the loop would
+    spin for real -- sleeping ``--interval`` seconds -- forever.
+
+    A two-value counter (0.0 on call #1, a huge constant after) was tried and rejected
+    (lode-e8lo): it is order-proof only by luck, because ``work()`` happens to call
+    ``time.monotonic()`` for the deadline before anything else reachable from it does. A
+    ``time.monotonic()`` added anywhere upstream of that read -- e.g. inside
+    ``cli._resolve_settings()`` (``src/lode/cli.py``, called before the deadline calc, in
+    ``cli``'s own namespace) -- would consume call #1 itself, making call #2 the deadline
+    instead; the counter's "call #1 is special" premise would then be exactly backwards,
+    and the loop would spin forever rather than time out.
+
+    This clock is order-proof BY CONSTRUCTION instead: an unboundedly advancing source
+    whose step exceeds ``Settings.work_wait_timeout_s`` (default 1800,
+    ``src/lode/config.py``). Whichever call establishes the deadline, the very next call
+    is guaranteed to read at least one full ``step`` past it -- and ``step`` alone already
+    exceeds the timeout -- so the first read after the deadline is set always trips the
+    check. That holds no matter how many ``time.monotonic()`` calls (from ``cli`` or
+    anywhere else reachable through it, now or in the future) precede the deadline read; no
+    call-ordering assumption remains, and the counting predicate is gone.
+
+    The step is a bare literal, deliberately NOT derived from the setting -- and what that
+    decoupling costs is bounded rather than fatal, so raising the setting past it is not a
+    trap: readings climb one ``step`` per call unconditionally, so the check trips within
+    ``ceil(work_wait_timeout_s / step)`` passes for ANY pair of values, and only a
+    NON-advancing clock can spin. The magnitude buys SPEED (trip on the *first* check), not
+    termination. Measured during lode-e8lo's review: with ``work_wait_timeout_s`` raised to
+    2_500_000 both tests below still pass, taking three loop passes instead of one.
+
+    This rebinds the *name* ``time`` inside ``lode.cli``; it never sets an attribute on
+    the shared ``time`` module object, so no other module observes this fake. What that
+    narrowed exposure costs this suite is owned by ``tests/conftest.py``'s
+    ``_reset_jobs_clock_anchor`` (lode-x10m, lode-e8lo). A ``time`` member this namespace
+    omits raises ``AttributeError``, which surfaces as a failed ``result.stderr``
+    assertion in both callers below rather than as a hang.
+    """
+    clock = itertools.count(0.0, 1_000_000.0)
+    monkeypatch.setattr(
+        cli,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None),
+    )
+
+
 def test_work_wait_times_out_naming_outstanding_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5554,23 +5759,7 @@ def test_work_wait_times_out_naming_outstanding_jobs(
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
 
-    # The FIRST call to time.monotonic() establishes the deadline (work()'s
-    # `deadline = time.monotonic() + timeout_s`); every call AFTER that must
-    # read as far in the future so the loop's first timeout check trips
-    # immediately. A constant fake clock would be wrong here: both the
-    # deadline calc and the check would read the identical value, so
-    # `now >= deadline` (now == deadline - timeout_s) would never hold and
-    # the loop would spin for real (sleeping --interval seconds) forever.
-    calls = {"n": 0}
-
-    def _fake_monotonic() -> float:
-        calls["n"] += 1
-        return 0.0 if calls["n"] == 1 else 1_000_000.0
-
-    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
-    # Belt-and-suspenders: never really sleep in this test even if the
-    # timeout check above didn't fire on the first pass.
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    _patch_cli_clock_past_deadline(monkeypatch)
 
     result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
     assert result.exit_code == 1
@@ -5673,14 +5862,7 @@ def test_work_wait_does_not_duplicate_the_one_shot_outstanding_line(
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
 
-    calls = {"n": 0}
-
-    def _fake_monotonic() -> float:
-        calls["n"] += 1
-        return 0.0 if calls["n"] == 1 else 1_000_000.0
-
-    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    _patch_cli_clock_past_deadline(monkeypatch)
 
     result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
     assert result.exit_code == 1

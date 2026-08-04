@@ -589,14 +589,16 @@ def _reset_jobs_clock_anchor() -> None:
     :func:`lode.jobs.now` and ``docs/storage.md`` -- read either for *why* it
     ratchets; this only covers what that costs the test suite). That is fine
     as long as nothing patches the *inputs* to ``now()``'s anchor computation
-    (``time.monotonic()``) out from under it, but something does:
+    (``time.monotonic()``) out from under it, and until lode-e8lo something did:
     ``tests/test_cli.py``'s ``test_work_wait_times_out_naming_outstanding_jobs``
-    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line``
-    both do ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``.
-    Because ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the
-    shared ``time`` module object, not a module-local alias -- so that patch
-    is PROCESS-GLOBAL and reaches ``lode.jobs`` (which also did a plain
-    ``import time``) too, not just ``lode.cli``.
+    and ``test_work_wait_does_not_duplicate_the_one_shot_outstanding_line`` both
+    did ``monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)``. Because
+    ``lode/cli.py`` does a plain ``import time``, ``cli.time`` IS the shared
+    ``time`` module object, not a module-local alias -- so that patch was
+    PROCESS-GLOBAL and reached ``lode.jobs`` (which also does a plain
+    ``import time``) too, not just ``lode.cli``. Both now rebind the *name*
+    ``time`` inside ``lode.cli`` instead (``test_cli.py``'s
+    ``_patch_cli_clock_past_deadline``), so no poisoner is live today.
 
     With the fake monotonic substituted, ``now()``'s anchor computation
     (``real_now - fake_monotonic``) comes out far larger than the true anchor
@@ -620,8 +622,13 @@ def _reset_jobs_clock_anchor() -> None:
     instead of outliving the test that created it. Tests that drive
     ``jobs.now()`` directly (``tests/test_worker.py``'s own ``clock`` fixture,
     which resets this same anchor) still run after this and still see a
-    freshly reset anchor. Deleting this fixture turns nothing red on its own,
-    so ``tests/test_conftest_jobs_clock_anchor.py`` is what would catch it.
+    freshly reset anchor. That forward-looking half is now the WHOLE of this
+    fixture's justification: lode-e8lo removed the only live poisoner, so this
+    stays as defence in depth against the next one, not because anything leaks
+    today. Deleting it turns nothing red on its own, and since lode-e8lo it no
+    longer turns ``tests/test_conftest_jobs_clock_anchor.py``'s nested repro
+    red either -- that file's NON-VACUITY section is where the measurement
+    lives, and it owns what is and is not pinned today, plus the follow-up.
 
     SCOPE OF THAT CLAIM, stated precisely, because an unbounded version of it
     is what let this bug survive three sightings:
@@ -640,10 +647,12 @@ def _reset_jobs_clock_anchor() -> None:
       whatever the previous test left behind -- reachable today only via
       ``tests/test_capture_lag_diagnosis.py``'s ``seeded_db``, which is
       ``skipif``-gated and asserts nothing about job timestamps.
-    - It bounds the poison's lifetime; it does not prevent the leak. The
-      poisoning test still runs with a process-global fake clock, so anything
-      *it* observes is still affected (lode-y7gk fixes the leak at its source
-      -- the two are complementary, not alternatives).
+    - It bounds a poison's lifetime; it does not prevent the leak. lode-e8lo
+      fixed the leak at its source for the two ``test_cli.py`` tests, so no
+      test currently runs under a process-global fake clock -- but a future
+      one that does would still see the poison for its own duration, and only
+      this fixture stops that outliving it. The two are complementary, not
+      alternatives.
     """
     jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
@@ -1170,10 +1179,13 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # lode-ovgs unified them here and lode-p4qb folded in the fourth
 # (tests/test_assert_main_checkout.py).
 #
-# Consumers: tests/test_land_lock.py, tests/test_land_conflicts_state.py,
-# tests/test_skill_bash_state.py, tests/test_assert_main_checkout.py. A change
-# to the rules below changes what all four gates consider "executed", so the
-# rules are stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
+# Consumers of the FUNCTION: tests/test_land_lock.py,
+# tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
+# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py is a
+# fifth consumer of the constants and `_closes_fence` but not of the function
+# itself -- its inline-span scan runs its own loop (lode-xqc7). A change to the
+# rules below changes what all five gates consider "executed", so the rules are
+# stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1196,21 +1208,24 @@ _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus
 # whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
 # as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
-# imported, and the two state machines that consume them do NOT agree: this one
-# applies CommonMark's closing rule (a closing run must be the SAME character
-# as the opening one and AT LEAST AS LONG, which is what lets a four-backtick
-# block hold an ordinary ```-prefixed content line as literal text), while
-# check_links.py toggles on ANY marker, so there a ``~~~`` line does close a
-# ```-opened block. Do not read one as documentation for the other.
-#
-# UNPINNED, ONE-SIDED DIVERGENCE, filed as lode-xqc7: this widening is not
-# mirrored in tests/test_bd_list_limit_gate.py's own inline-span fence tracker,
-# which still toggles on `startswith("```")`. That is the exact failure mode
-# `_BLOCKQUOTE_MARKER` above is SHARED to prevent -- two paths partitioning one
-# document differently -- so a ``~~~bash`` block would read as executed to this
-# helper and as prose to that scan. Latent only: zero tilde and zero
-# four-plus-backtick fences exist across the gated corpus, measured.
+# imported. THREE state machines now consume a marker of this shape and they do
+# not all agree. This one and tests/test_bd_list_limit_gate.py's inline-span
+# scan import BOTH this constant and ``_closes_fence`` below (lode-xqc7), so
+# they agree by construction -- sharing only the marker would have pinned where
+# a fence opens and left where it closes free to fork. ``check_links.py``
+# toggles on ANY marker, so there a ``~~~`` line does close a ```-opened block;
+# do not read that one as documentation for these two.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def _closes_fence(stripped: str, fence: str) -> bool:
+    """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
+    rule, stated in ``bash_fence_blocks``'s docstring below.
+
+    A named helper rather than an inline conjunction because
+    tests/test_bd_list_limit_gate.py applies the same rule in its own loop.
+    """
+    return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
 
 
 def bash_fence_blocks(markdown: str) -> list[str]:
@@ -1271,9 +1286,7 @@ def bash_fence_blocks(markdown: str) -> list[str]:
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
         if current is not None:
-            # A closing run: nothing but the opening character, and at least
-            # as long. An empty line has neither property, so it is content.
-            if len(stripped) >= len(fence) and set(stripped) == {fence[0]}:
+            if _closes_fence(stripped, fence):
                 blocks.append("\n".join(current))
                 current = None
             else:
