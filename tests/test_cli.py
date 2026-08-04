@@ -504,22 +504,43 @@ def test_add_llm_auth_error_is_non_fatal(
 ) -> None:
     """LLMAuthError (a non-Anthropic missing-credential) is non-fatal too (lode-s08c).
 
-    'LLMAuthError' subclasses 'LLMProviderError', not 'AuthError', so it hit
-    the same gap as the plain 'LLMProviderError' case above. Same isolation
-    approach as that test -- see its docstring.
+    'LLMAuthError' subclasses 'LLMProviderError', not 'AuthError', so the old
+    bare 'except AuthError' let it out of 'lode add' as a raw traceback. This
+    is the case the widening actually fixes, and unlike the plain
+    'LLMProviderError' above it IS reachable end to end -- run_one re-raises
+    '(AuthError, LLMAuthError)'. So it is driven the same way its AuthError
+    twin is (test_add_auth_error_is_non_fatal): stub the real 'enrich_version'
+    handler and let the genuine run_one / claim_and_run_one path carry it up,
+    rather than stubbing claim_and_run_one itself. That also lets the same
+    uncharged-reset assertions apply.
     """
-    import lode.worker as worker_mod
+    import lode.enrich as enrich_mod
 
-    def _no_credentials(conn, db_path, settings, *, types, target_version=None):
+    def _no_credentials(conn, version_id, settings, *, client=None):
         raise LLMAuthError("no OpenAI/Azure credentials (test)", provider="openai")
 
-    monkeypatch.setattr(worker_mod, "claim_and_run_one", _no_credentials)
+    monkeypatch.setattr(enrich_mod, "enrich_version", _no_credentials)
 
     db_path = tmp_path / "lode.db"
     result = runner.invoke(app, ["add", "note body", "--db", str(db_path)])
     assert result.exit_code == 0, result.output
     note_id = result.stdout.strip()
     assert note_id
+
+    (version_id,) = _rows(
+        db_path, "SELECT head_version_id FROM notes WHERE note_id = ?", (note_id,)
+    )[0]
+    jobs_by_type = {
+        r[0]: (r[1], r[2])
+        for r in _rows(
+            db_path,
+            "SELECT type, status, attempts FROM jobs WHERE target_version = ?",
+            (version_id,),
+        )
+    }
+    assert jobs_by_type["embed"] == ("pending", 0)
+    # Uncharged and left claimable, unlike a transient failure's ("failed", 1).
+    assert jobs_by_type["enrich"] == ("pending", 0)
 
 
 def test_add_reads_body_from_stdin_verbatim(

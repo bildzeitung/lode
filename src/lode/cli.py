@@ -423,27 +423,30 @@ def _enrich_immediately(
     :class:`~lode.llm_provider.LLMProviderError` — lode-s08c, mirroring
     lode-yx1c's identical fix to ``ask``/``work``) is different: ``run_one``
     resets the job straight back to ``pending`` (uncharged) and re-raises it,
-    but capture must stay instant regardless of whether Anthropic credentials
-    are configured (``docs/design.md`` §1) — so it is caught and dropped here
-    rather than surfaced on every single ``add``. ``AuthError`` must be named
-    alongside ``LLMProviderError``: they are sibling ``RuntimeError``
-    subclasses, neither an ancestor of the other, so naming only one silently
-    misses the other. The job is already back at ``pending``, uncharged, for
-    the next explicit ``lode work`` to report loudly (``docs/storage.md``
-    "Transient vs. permanent job failures").
+    but capture must stay instant regardless of whether the **active
+    provider's** credentials are configured (``docs/design.md`` §1) — so it is
+    caught and dropped here rather than surfaced on every single ``add``,
+    unlike ``ask``/``work``, which abort. The job is already back at
+    ``pending``, uncharged, for the next explicit ``lode work`` to report
+    loudly. ``docs/storage.md`` "Transient vs. permanent job failures" owns
+    *which* errors reach here — and why a non-auth ``LLMProviderError`` raised
+    by a job handler never does.
     """
     from lode.auth import AuthError
-    from lode.llm_provider import LLMProviderError
     from lode.worker import claim_and_run_one
 
     try:
         claim_and_run_one(
             conn, db_path, settings, types=("enrich",), target_version=version_id
         )
-    except AuthError, LLMProviderError:
+    except (AuthError, LLMProviderError) as err:
+        # `err`, not a hardcoded cause: this arm is no longer Anthropic-only.
+        # Same forked-message trap `_abort_on_provider_error` was extracted to
+        # close -- see its docstring (lode-yx1c).
         logging.getLogger(__name__).debug(
-            "immediate-enrich skipped — no Anthropic credentials configured; "
-            "note saved, job left pending for a future 'lode work'"
+            "immediate-enrich skipped — %s; note saved, job left pending for a "
+            "future 'lode work'",
+            err.__cause__ or err,
         )
 
 
