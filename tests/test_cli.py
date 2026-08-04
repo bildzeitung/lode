@@ -27,6 +27,7 @@ tombstone/no-HTML snapshot cleanly rather than dumping empty).
 """
 
 import io
+import itertools
 import json
 import logging
 import os
@@ -5680,6 +5681,57 @@ def test_work_holds_ONE_embedder_across_every_poll_pass(
     assert seen[0] is seen[1], "each poll pass got a different embedder instance"
 
 
+def _patch_cli_clock_past_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake ``lode.cli``'s clock so ``work --wait``'s deadline trips on the first check.
+
+    ``work()``'s ``deadline = time.monotonic() + timeout_s`` is set by whichever call to
+    ``time.monotonic()`` happens first; every later call must read past that deadline so
+    the loop's first timeout check trips immediately. A CONSTANT fake clock is wrong here:
+    the deadline calc and the check would then read the identical value, so
+    ``now >= deadline`` (now == deadline - timeout_s) would never hold and the loop would
+    spin for real -- sleeping ``--interval`` seconds -- forever.
+
+    A two-value counter (0.0 on call #1, a huge constant after) was tried and rejected
+    (lode-e8lo): it is order-proof only by luck, because ``work()`` happens to call
+    ``time.monotonic()`` for the deadline before anything else reachable from it does. A
+    ``time.monotonic()`` added anywhere upstream of that read -- e.g. inside
+    ``cli._resolve_settings()`` (``src/lode/cli.py``, called before the deadline calc, in
+    ``cli``'s own namespace) -- would consume call #1 itself, making call #2 the deadline
+    instead; the counter's "call #1 is special" premise would then be exactly backwards,
+    and the loop would spin forever rather than time out.
+
+    This clock is order-proof BY CONSTRUCTION instead: an unboundedly advancing source
+    whose step exceeds ``Settings.work_wait_timeout_s`` (default 1800,
+    ``src/lode/config.py``). Whichever call establishes the deadline, the very next call
+    is guaranteed to read at least one full ``step`` past it -- and ``step`` alone already
+    exceeds the timeout -- so the first read after the deadline is set always trips the
+    check. That holds no matter how many ``time.monotonic()`` calls (from ``cli`` or
+    anywhere else reachable through it, now or in the future) precede the deadline read; no
+    call-ordering assumption remains, and the counting predicate is gone.
+
+    The step is a bare literal, deliberately NOT derived from the setting -- and what that
+    decoupling costs is bounded rather than fatal, so raising the setting past it is not a
+    trap: readings climb one ``step`` per call unconditionally, so the check trips within
+    ``ceil(work_wait_timeout_s / step)`` passes for ANY pair of values, and only a
+    NON-advancing clock can spin. The magnitude buys SPEED (trip on the *first* check), not
+    termination. Measured during lode-e8lo's review: with ``work_wait_timeout_s`` raised to
+    2_500_000 both tests below still pass, taking three loop passes instead of one.
+
+    This rebinds the *name* ``time`` inside ``lode.cli``; it never sets an attribute on
+    the shared ``time`` module object, so no other module observes this fake. What that
+    narrowed exposure costs this suite is owned by ``tests/conftest.py``'s
+    ``_reset_jobs_clock_anchor`` (lode-x10m, lode-e8lo). A ``time`` member this namespace
+    omits raises ``AttributeError``, which surfaces as a failed ``result.stderr``
+    assertion in both callers below rather than as a hang.
+    """
+    clock = itertools.count(0.0, 1_000_000.0)
+    monkeypatch.setattr(
+        cli,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None),
+    )
+
+
 def test_work_wait_times_out_naming_outstanding_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5707,23 +5759,7 @@ def test_work_wait_times_out_naming_outstanding_jobs(
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
 
-    # The FIRST call to time.monotonic() establishes the deadline (work()'s
-    # `deadline = time.monotonic() + timeout_s`); every call AFTER that must
-    # read as far in the future so the loop's first timeout check trips
-    # immediately. A constant fake clock would be wrong here: both the
-    # deadline calc and the check would read the identical value, so
-    # `now >= deadline` (now == deadline - timeout_s) would never hold and
-    # the loop would spin for real (sleeping --interval seconds) forever.
-    calls = {"n": 0}
-
-    def _fake_monotonic() -> float:
-        calls["n"] += 1
-        return 0.0 if calls["n"] == 1 else 1_000_000.0
-
-    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
-    # Belt-and-suspenders: never really sleep in this test even if the
-    # timeout check above didn't fire on the first pass.
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    _patch_cli_clock_past_deadline(monkeypatch)
 
     result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
     assert result.exit_code == 1
@@ -5826,14 +5862,7 @@ def test_work_wait_does_not_duplicate_the_one_shot_outstanding_line(
 
     monkeypatch.setattr(worker_mod, "_REGISTRY", _noop_embed_registry())
 
-    calls = {"n": 0}
-
-    def _fake_monotonic() -> float:
-        calls["n"] += 1
-        return 0.0 if calls["n"] == 1 else 1_000_000.0
-
-    monkeypatch.setattr(cli.time, "monotonic", _fake_monotonic)
-    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+    _patch_cli_clock_past_deadline(monkeypatch)
 
     result = runner.invoke(app, ["work", "--db", str(db_path), "--wait"])
     assert result.exit_code == 1
