@@ -261,6 +261,77 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# A rev-parse failure must land inside the documented 0/1/2 contract, never
+# escape as git's own bare 128 (lode-8qkb)
+#
+# PRE-FIX, `$LOCK="$(git rev-parse ...)/land.lock"` was a bare command
+# substitution under `set -euo pipefail`, so running from outside any git
+# repository exited with git's raw 128 and a bare `fatal:` -- a status the
+# script's own header says it never returns. Each subcommand maps that failure
+# onto a DIFFERENT documented exit (the whole reason these are three tests and
+# not one), so the script's exit code IS the assertion here; the stderr
+# substring pins that the diagnostic is attributed to land-lock rather than
+# left as git's unattributable `fatal:`. Why exit 1 and not
+# assert-main-checkout.sh's exit 2 lives in the script, next to the code.
+#
+# `tmp_path` is not itself inside a git repository (unlike a checkout under
+# this repo's own tree), so no `GIT_CEILING_DIRECTORIES` dance is needed --
+# same fixture shape as tests/test_assert_main_checkout.py's
+# test_not_inside_any_repository_is_exit_2_not_a_raw_git_128.
+#
+# All three sabotage-verified together: reverting the `if ! GIT_COMMON_DIR=...`
+# wrap back to the bare form turns all three red with returncode 128.
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """`acquire` maps the failure onto its existing exit-1 MACHINE FAULT
+    branch -- the same class as "cannot create the lockfile", so a caller is
+    never told "another lander is running" when the machine is at fault."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("acquire", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: MACHINE FAULT" in result.stderr
+    assert "skipping this tick" in result.stderr.lower()
+
+
+def test_heartbeat_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """`heartbeat` has its own documented exit-1 "could not write the lock
+    file" branch, with wording distinct from acquire's MACHINE FAULT one --
+    heartbeat is bookkeeping, so its diagnostic must not read as a landing
+    verdict."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("heartbeat", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: heartbeat" in result.stderr
+
+
+def test_release_outside_any_git_repository_still_exits_0(tmp_path: Path) -> None:
+    """`release` is documented to ALWAYS exit 0 ("rm -f is idempotent"), and
+    that promise must survive this fix -- so this is the one subcommand whose
+    documented exit is unchanged by the wrap, yet it still went 128 pre-fix.
+    It must reach 0 through the new branch, with a diagnostic, rather than
+    silently."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("release", repo=outside)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "land-lock: release" in result.stderr
+
+
+# ---------------------------------------------------------------------------
 # Repo-global lock path (lode-xkpd) -- `--git-dir` is worktree-PRIVATE
 # ---------------------------------------------------------------------------
 
