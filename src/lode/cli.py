@@ -440,7 +440,7 @@ def _enrich_immediately(
         claim_and_run_one(
             conn, db_path, settings, types=("enrich",), target_version=version_id
         )
-    except (AuthError, LLMProviderError):
+    except AuthError, LLMProviderError:
         logging.getLogger(__name__).debug(
             "immediate-enrich skipped — no Anthropic credentials configured; "
             "note saved, job left pending for a future 'lode work'"
