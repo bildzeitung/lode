@@ -36,7 +36,7 @@
 #        retry). Nothing on stdout.
 #   1 -- a REAL textual conflict. The conflicting path(s) (one per line, no
 #        other chatter) are printed to STDOUT for the caller to capture as
-#        $CONFLICTS -- e.g. `CONFLICTS=$(rtk scripts/land-merge-one.sh "$id"
+#        $CONFLICTS -- e.g. `CONFLICTS=$(scripts/land-merge-one.sh "$id"
 #        "$MSG_DIR")`. The merge is already aborted (working tree left clean)
 #        before this script returns.
 #   2 -- could not even attempt the merge: bad usage, a missing/empty message

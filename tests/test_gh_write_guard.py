@@ -47,7 +47,7 @@ Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz 
 `blocks:` guard). A guard that reads only the command STRING cannot see through:
   - quoted indirection -- `sh -c "gh issue create ..."`, or the command held in a shell
     variable. Closing this would mean treating a quote as a command boundary, which would
-    false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
+    false-deny this repo's own prose about the rule (`grep "gh issue create" docs/`, a
     commit message quoting the verb) -- a worse trade than the residual.
   - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
 Both residuals are honest, structural, and unaffected by the denylist -> allowlist inversion --
@@ -209,8 +209,6 @@ DENIED = [
     # GET exemption is scoped to the SAME command segment that supplied the fields.
     "gh api repos/x/y/issues -X GET && gh api repos/x/y/issues -f title=x -f body=y",
     # -- shell shapes: gh still at a command position --
-    "rtk gh issue create --title x",  # the repo's mandated rtk prefix
-    "rtk gh pr comment 1 -b x",
     "cd /r && gh issue create --title x",  # not the first command on the line
     "echo hi; gh pr comment 1 -b x",
     "`gh issue create --title x`",  # command substitution, backtick form
@@ -264,17 +262,16 @@ ALLOWED = [
     # to send a GET query string. Read-only, and it must survive the implicit-POST rule.
     "gh api search/issues -X GET -f q=repo:o/r",
     "gh api search/issues --method GET -f q=x",
-    "rtk gh pr view 123",
     "gh --repo owner/repo issue view 123",
     # -- prose quoting the pattern --
     'git commit -m "guard: deny gh issue create"',
-    'rtk bd update lode-x --notes "denies gh issue create writes"',
-    'rtk bd update lode-x --notes "also gh pr comment posts publicly"',
-    'rtk grep "gh issue create" docs/',
+    'bd update lode-x --notes "denies gh issue create writes"',
+    'bd update lode-x --notes "also gh pr comment posts publicly"',
+    'grep "gh issue create" docs/',
     # -- legitimate internal bd usage, unaffected --
-    "rtk bd create --title x --description y --type=task",
-    "rtk bd update lode-1 --add-label ready-for-code-review",
-    "rtk bd dep add lode-new lode-1 --type blocks",
+    "bd create --title x --description y --type=task",
+    "bd update lode-1 --add-label ready-for-code-review",
+    "bd dep add lode-new lode-1 --type blocks",
 ]
 
 # The hook must never *approve* anything: a non-matching command falls through silently so

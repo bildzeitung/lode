@@ -75,7 +75,7 @@ goes in the relevant `docs/` design doc — the litmus is in that file's preambl
 
 Everything portable travels on two wires from the same git remote: **git** (code, docs, committed `.claude/` config — settings, skills, agents) and **Dolt** (`refs/dolt/data` — the bd issue DB *and* `bd remember` memories). Project-scope permissions and auto-mode consent rules travel with the clone in the committed [`.claude/settings.json`](.claude/settings.json); machine-local one-offs go in `.claude/settings.local.json` (gitignored).
 
-Full walkthrough — prerequisites (**jq** is required, not optional), the venv, the `bd init` commit you must drop, rtk exclusions, and the user-scope pieces that do *not* travel: **[`docs/onboarding.md`](docs/onboarding.md)**.
+Full walkthrough — prerequisites (**jq** is required, not optional), the venv, the `bd init` commit you must drop, and the user-scope pieces that do *not* travel: **[`docs/onboarding.md`](docs/onboarding.md)**.
 
 ## Workflow gotchas (learned the hard way)
 
@@ -104,61 +104,6 @@ Claude Code gives each session an automatic, per-project memory store — no set
 - **Design facts and decisions → `docs/`**, never memory. Settled architecture goes in the relevant doc; open questions in [`docs/decisions.md`](docs/decisions.md) (corrections there are appended, not rewritten in place — see that file's preamble); tunables in [`docs/configuration.md`](docs/configuration.md). A design fact that lives only in memory **forks the record** — the next reader trusts the docs and misses it.
 - **Memory is for working context and user preferences** that don't belong in the design — how the user likes things done, in-flight task state, cross-session reminders. Not a second home for architecture.
 - When a conversation settles something architectural, the deliverable is a **doc edit (in a worktree)**, not a memory entry.
-
-# RTK (Rust Token Killer) — Token-Optimized Commands
-
-## Golden Rule
-
-**Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it; otherwise it passes through unchanged, so RTK is always safe. This holds **even inside `&&` chains**:
-
-```bash
-# ❌ Wrong
-git add . && git commit -m "msg" && git push
-# ✅ Correct
-rtk git add . && rtk git commit -m "msg" && rtk git push
-```
-
-**One known exception — `git log` is NOT a faithful passthrough (lode-eza9).** `rtk git log`
-**silently drops merge commits** (upstream [rtk-ai/rtk#2305](https://github.com/rtk-ai/rtk/issues/2305)):
-measured on a real range, 7 commits → 4, all three `--no-ff` merges gone, with no marker, no count,
-and exit status 0. So the "passes through unchanged, so RTK is always safe" premise above does not
-hold here. Use **bare `git log`** wherever a *missing* merge commit would change a decision — history
-audits, residue checks before a destructive reset, anything reasoning about merge structure. The
-divergence is scoped to `log`: `rev-list` (including `--first-parent`) and `show` are faithful and
-stay on `rtk`. Live exception sites are commented at the call site; the load-bearing one is
-[`.claude/skills/land/SKILL.md`](.claude/skills/land/SKILL.md) Section 1's pass-start residue print.
-
-## Commands by workflow
-
-```bash
-# Git (59–80% savings) — every subcommand is accepted, but see the `git log` exception above:
-# `rtk git log` DROPS MERGE COMMITS. Faithful passthrough is not guaranteed per-subcommand.
-rtk git status | diff | show | add | commit | push | pull | branch | worktree
-git log   # ← BARE, not `rtk git log`, when a missing merge commit would change a decision
-
-# GitHub
-rtk gh pr view <n> | gh pr checks | gh run list | gh issue list | gh api
-
-# Tests / build / lint (60–99%)
-rtk pytest | nox -s tests        # Python test failures only
-rtk ruff                          # lint violations grouped
-
-# Files & search (60–75%) — format flags (-c, -l, -o, -Z) run raw
-rtk ls <path> | read <file> | grep <pattern> | find <pattern>
-
-# Infra / analysis
-rtk docker ps | docker images | docker logs <c>
-rtk err <cmd> | log <file> | json <file> | env
-
-# Meta
-rtk gain            # token-savings analytics
-rtk gain --history  # command history with savings
-rtk discover        # find missed RTK opportunities
-rtk proxy <cmd>     # run raw, unfiltered (debugging)
-```
-
-Overall **60–90% token reduction** on common dev operations. `rtk --version` / `which rtk` to verify the binary (name collision: a different `rtk` exists — if `rtk gain` fails, you have the wrong one).
-
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker

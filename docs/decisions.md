@@ -3161,3 +3161,29 @@ while erasing it here would lose the record of what was believed, and when.
     filters the push, and produces the annotated report rows), §8 (report format documents the
     annotation and the deliberate double-listing), §2a and the Non-goals bullet (both restated to
     describe the decided behavior instead of pointing at this ticket as still open).
+
+- **RTK (the token-optimizing command proxy) is removed from this repo — decided, done
+  (2026-08-04, maintainer decision).** The `rtk` golden rule and command reference are gone from
+  `CLAUDE.md`, every `rtk`-prefixed call site across `.claude/` skills and agents is now the plain
+  command, `scripts/rtk-setup.sh` and the installer line in `scripts/update-tools.sh` are deleted,
+  and the `Bash(rtk *)` project permission is dropped. The `rtk` tolerance was also stripped from
+  the three guards that carried it (the two `PreToolUse` hooks in `.claude/settings.json` and
+  `scripts/sha-fabrication-guard.sh`) and from their pinning tests — a deliberate call: with no
+  `rtk` on any machine there is nothing for the alternation to match, and the residual risk is only
+  a stale `rtk` binary surviving on some machine and carrying a `bd create --deps blocks:`, a `gh`
+  write, or a fabricated SHA past its guard.
+
+  **Update (2026-08-04, maintainer decision)** — this supersedes, in *effect* but not in *record*,
+  every entry above that reasons about `rtk`: the `"rtk bd dolt push"` prefix-blind audit
+  (`lode-bpl`), `rtk`'s reformatting of `git worktree list --porcelain` (`lode-9j7`), and the `rtk`
+  member of the `gh`/`bd` guard wrapper enumerations (`lode-o29m`, `lode-9mbt`, `lode-ij24`). Those
+  entries stand as written — they record what was true and why. What changed is only that the tool
+  they reason about is no longer installed or referenced.
+
+  The `git log` merge-commit caveat (`lode-eza9`) dies with it: `rtk git log` silently dropped
+  `--no-ff` merge commits, which is the *only* reason `CLAUDE.md` carried a bare-`git log` exception
+  and `.claude/skills/land/SKILL.md` §1 carried a call-site comment defending it. With `rtk` gone
+  every `git log` is faithful, so the caveat and the comment are removed rather than preserved as a
+  rule with no live cause. The residue print in `land/SKILL.md` §1 keeps its *substantive* comment
+  (residue there is by construction merge commits, and the reset below destroys them) — that fact
+  outlives `rtk`.

@@ -111,19 +111,19 @@ def _script_decision(command: str, *, cwd: Path = REPO_ROOT) -> str | None:
 
 # Commands carrying the FABRICATED sha in a bd/git invocation -- every one MUST be denied.
 DENIED = [
-    f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",
+    f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",
     f"bd update lode-1 --set-metadata review_head={FABRICATED_SHA}",
-    f'rtk bd update lode-1 --set-metadata land_head="{FABRICATED_SHA}"',
+    f'bd update lode-1 --set-metadata land_head="{FABRICATED_SHA}"',
     f"git show {FABRICATED_SHA}",
     f"git checkout {FABRICATED_SHA}",
-    f"rtk git merge {FABRICATED_SHA}",
+    f"git merge {FABRICATED_SHA}",
     f"git cat-file -p {FABRICATED_SHA}",
     f"bd -C /wt update lode-1 --set-metadata land_head={FABRICATED_SHA}",  # bd's global -C
-    f"cd /r && rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",  # not first cmd
+    f"cd /r && bd update lode-1 --set-metadata land_head={FABRICATED_SHA}",  # not first cmd
     f"cd /r; git show {FABRICATED_SHA}",
     # lode-m6px-style backslash continuation: the NORMAL shape for a real multi-line bd call.
-    f"rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}",
-    f"NEW=$(rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA} --json)",
+    f"bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}",
+    f"NEW=$(bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA} --json)",
 ]
 
 # Commands that must NOT be denied. Three families:
@@ -131,11 +131,11 @@ DENIED = [
 #   2. the fabricated-looking sha appears, but not in a bd/git invocation at all -- out of scope.
 #   3. no bd/git command, or no 40-hex token, or not a git repo.
 ALLOWED = [
-    f"rtk bd update lode-1 --set-metadata land_head={REAL_SHA}",
+    f"bd update lode-1 --set-metadata land_head={REAL_SHA}",
     f"bd update lode-1 --set-metadata review_head={REAL_SHA}",
     f"git show {REAL_SHA}",
     f"git checkout {REAL_SHA}",
-    f"rtk git rev-parse {REAL_SHA}",
+    f"git rev-parse {REAL_SHA}",
     # fabricated-looking sha, but not inside a bd/git segment -- never even scanned.
     f"echo 'the sha is {FABRICATED_SHA}'",
     f"cat some-file.txt  # mentions {FABRICATED_SHA}",
@@ -145,7 +145,7 @@ ALLOWED = [
     'bd create -t task "x"',
     "git status",
     "git log --oneline -5",
-    "rtk bd show lode-1",
+    "bd show lode-1",
     "",
 ]
 
@@ -161,9 +161,7 @@ def test_everything_else_falls_through_silently(command: str) -> None:
 
 
 def test_deny_reason_names_the_sha_and_says_derive_dont_retype() -> None:
-    out = _script_output(
-        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
-    )
+    out = _script_output(f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}")
     assert out is not None and out["permissionDecision"] == "deny"
     reason = out["permissionDecisionReason"]
     assert FABRICATED_SHA in reason
@@ -216,7 +214,7 @@ def test_known_accepted_over_match_prose_with_fabricated_looking_hex() -> None:
 def test_multiple_fabricated_shas_are_all_named() -> None:
     other = "cafebabecafebabecafebabecafebabecafebabe"
     out = _script_output(
-        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA},review_head={other}"
+        f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA},review_head={other}"
     )
     assert out is not None and out["permissionDecision"] == "deny"
     assert FABRICATED_SHA in out["permissionDecisionReason"]
@@ -239,9 +237,7 @@ def test_longer_hex_digests_are_not_treated_as_shas() -> None:
     contains 40-hex runs -- the `\\b` word boundaries mean only a STANDALONE 40-hex token counts.
     This is the largest realistic false-positive class, and a false deny here blocks real work."""
     sha256 = "a" * 64
-    assert (
-        _script_decision(f"rtk bd update lode-1 --set-metadata digest={sha256}") is None
-    )
+    assert _script_decision(f"bd update lode-1 --set-metadata digest={sha256}") is None
     assert _script_decision(f"git log --grep={sha256}") is None
 
 
@@ -253,12 +249,12 @@ def test_no_hex_early_out_does_not_change_any_decision() -> None:
     one after. Pinned here because a bug in the early-out fails OPEN and silently."""
     # Backslash-newline sitting inside what would otherwise be a 40-hex run: no standalone 40-hex
     # token exists either before or after the collapse, so this must fall through both ways.
-    split_hex = f"rtk bd update lode-1 --set-metadata h={'a' * 20}\\\n{'b' * 20}"
+    split_hex = f"bd update lode-1 --set-metadata h={'a' * 20}\\\n{'b' * 20}"
     assert _script_decision(split_hex) is None
     # ...while the ordinary continuation shape, whose SHA survives the collapse intact, denies.
     assert (
         _script_decision(
-            f"rtk bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}"
+            f"bd update lode-1 \\\n  --set-metadata land_head={FABRICATED_SHA}"
         )
         == "deny"
     )
@@ -285,18 +281,13 @@ def _hook_output(command: str, *, path: str | None = None) -> dict | None:
 
 
 def test_hook_denies_fabricated_sha_end_to_end_under_dash() -> None:
-    out = _hook_output(
-        f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
-    )
+    out = _hook_output(f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}")
     assert out is not None and out["permissionDecision"] == "deny"
     assert FABRICATED_SHA in out["permissionDecisionReason"]
 
 
 def test_hook_allows_real_sha_end_to_end_under_dash() -> None:
-    assert (
-        _hook_output(f"rtk bd update lode-1 --set-metadata land_head={REAL_SHA}")
-        is None
-    )
+    assert _hook_output(f"bd update lode-1 --set-metadata land_head={REAL_SHA}") is None
 
 
 def test_hook_allows_unrelated_commands_end_to_end_under_dash() -> None:
@@ -355,7 +346,7 @@ def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
         {
             "tool_name": "Bash",
             "tool_input": {
-                "command": f"rtk bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
+                "command": f"bd update lode-1 --set-metadata land_head={FABRICATED_SHA}"
             },
         }
     )

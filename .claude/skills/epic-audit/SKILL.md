@@ -37,7 +37,7 @@ I write bd (gap tickets, escalations, label changes), so I follow the same sync 
 `CLAUDE.md` / lode-6ra). Pull at the start, push after every batch of writes.
 
 ```bash
-rtk bd dolt pull
+bd dolt pull
 ```
 
 ## 2. Select the auditable epics
@@ -50,9 +50,9 @@ An epic is **auditable** when ALL hold:
 
 ```bash
 # Fast path — epics /land flagged:
-rtk bd list --type=epic --label epic-ready-to-audit --status open --limit 0 --json
+bd list --type=epic --label epic-ready-to-audit --status open --limit 0 --json
 # Safety net — any open epic whose children are all closed but which was never flagged:
-rtk bd list --type=epic --status open --exclude-label epic-audited --limit 0 --json
+bd list --type=epic --status open --exclude-label epic-audited --limit 0 --json
 ```
 
 **`--limit 0` on both — load-bearing, not noise** — canonical reason + measurements, and why this is
@@ -75,7 +75,7 @@ guaranteed those two fields — the child-completion answer is the whole verdict
 nothing left for a second `bd show` to re-check:
 
 ```bash
-if [ "$(rtk scripts/epic-children-closed.sh <epic>)" = "true" ]; then
+if [ "$(scripts/epic-children-closed.sh <epic>)" = "true" ]; then
   echo "AUDITABLE"
 else
   echo "SKIP"
@@ -123,7 +123,7 @@ looks like. File it as a child of the epic so it surfaces in `bd ready` and flow
 Use `--no-inherit-labels` so it does **not** pick up `epic-audited`/`epic-ready-to-audit` from the parent:
 
 ```bash
-rtk bd create --type=<task|bug|feature> --parent=<epic> --no-inherit-labels --label=epic-audit-gap \
+bd create --type=<task|bug|feature> --parent=<epic> --no-inherit-labels --label=epic-audit-gap \
   --title="<what's missing> (epic-audit gap on <epic>)" \
   --description="Found by /epic-audit closing-side review of <epic>.
 
@@ -141,7 +141,7 @@ carrying the **`human`** label, which is lode's escalation mechanism (`bd human 
 respond`/`dismiss` resolves it):
 
 ```bash
-rtk bd create --type=decision --parent=<epic> --no-inherit-labels --label=human,epic-audit-gap \
+bd create --type=decision --parent=<epic> --no-inherit-labels --label=human,epic-audit-gap \
   --title="DECISION: <the question> (epic-audit on <epic>)" \
   --description="/epic-audit needs a human call before it can file work for <epic>.
 
@@ -162,9 +162,9 @@ However the review came out, retire the work signal and stamp the epic so no fut
 re-files the same gaps:
 
 ```bash
-rtk bd label add <epic> epic-audited
-rtk bd label remove <epic> epic-ready-to-audit   # drop the work signal (no-op if it wasn't set)
-rtk scripts/bd-dolt-push.sh                      # publish gap tickets + escalations + label changes over refs/dolt/data
+bd label add <epic> epic-audited
+bd label remove <epic> epic-ready-to-audit   # drop the work signal (no-op if it wasn't set)
+scripts/bd-dolt-push.sh                      # publish gap tickets + escalations + label changes over refs/dolt/data
 ```
 
 `scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
