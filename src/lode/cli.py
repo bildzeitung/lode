@@ -574,16 +574,12 @@ def ask(
             for support in claim.support
         }
     except (AuthError, LLMProviderError) as err:
-        # Fail gracefully on a permanent, user-actionable provider failure: missing
-        # credentials (AuthError, or a provider's own LLMAuthError -- a subclass of
-        # LLMProviderError, so this arm catches it too), or any other permanent
-        # LLMProviderError (lode-yx1c) -- a clean, actionable line to the user (no
-        # traceback) and the underlying cause to the log for debugging. No
-        # exc_info -- the root logger mirrors to stderr, so dumping frames there
-        # would re-introduce the very traceback we're suppressing for the user.
-        logging.getLogger(__name__).error("ask aborted — %s", err.__cause__ or err)
-        typer.echo(str(err), err=True)
-        raise typer.Exit(code=1) from None
+        # `ask` is one-shot with no retry machinery, so every provider failure
+        # ends the command -- both the credential case and any other
+        # LLMProviderError. AuthError must be named alongside it: they are
+        # sibling RuntimeError subclasses, neither an ancestor of the other, so
+        # naming only one silently misses the other (lode-yx1c).
+        _abort_on_provider_error("ask", err)
     finally:
         conn.close()
     for line in _format_cited_answer(answer, as_of):
@@ -893,6 +889,34 @@ def _report_ambiguous_prefix(
             f"{escape(row.summary + marker)}",
             soft_wrap=True,
         )
+    raise typer.Exit(code=1) from None
+
+
+def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
+    """Render a cloud-LLM provider failure as one actionable line, then exit 1.
+
+    The one shared body for ``ask``'s and ``work``'s
+    ``except (AuthError, LLMProviderError)`` arms (lode-yx1c). Shared rather
+    than copied because the copies had already forked once: each hardcoded
+    ``"could not resolve Anthropic credentials"``, which became wrong the
+    moment a non-Anthropic provider (lode-568v.3) or a non-credential failure
+    could reach them. Every provider exception this repo raises already carries
+    a self-describing message -- ``auth.MISSING_CREDENTIALS_MESSAGE`` names
+    every resolution path; ``LLMProviderError``'s embeds the underlying SDK
+    error -- so ``str(err)`` alone is the actionable line, with no per-command
+    framing to keep in sync.
+
+    No ``exc_info``: the root logger mirrors to stderr, so dumping frames there
+    would re-introduce the very traceback being suppressed for the user. The
+    cause is logged instead, since the user-facing message deliberately does
+    not carry it.
+
+    ``docs/storage.md`` "Transient vs. permanent job failures" owns *which*
+    errors reach here, and why a non-auth ``LLMProviderError`` raised by a job
+    handler never does.
+    """
+    logging.getLogger(__name__).error("%s aborted — %s", command, err.__cause__ or err)
+    typer.echo(str(err), err=True)
     raise typer.Exit(code=1) from None
 
 
@@ -3132,18 +3156,13 @@ def work(
                 except KeyboardInterrupt:
                     typer.echo("worker interrupted", err=True)
                 except (AuthError, LLMProviderError) as err:
-                    # Permanent, user-actionable failure: an AuthError/LLMAuthError
-                    # (lode-9yy, lode-568v.3) that drain() surfaces once the
-                    # offending job is reset to 'pending' uncharged (docs/storage.md
-                    # "Transient vs. permanent job failures"), or any other
-                    # LLMProviderError that escapes drain() unstashed -- e.g. from
-                    # a batch pre-step (lode-yx1c). Rendered exactly as `ask` does
-                    # above — see that handler for why there is no exc_info.
-                    logging.getLogger(__name__).error(
-                        "work aborted — %s", err.__cause__ or err
-                    )
-                    typer.echo(str(err), err=True)
-                    raise typer.Exit(code=1) from None
+                    # Either arm of what drain() re-raises: an AuthError/
+                    # LLMAuthError once the offending job is reset to 'pending'
+                    # uncharged (lode-9yy, lode-568v.3), or the non-auth
+                    # LLMProviderError it stashes from a stuck batch pre-step
+                    # and re-raises at the end of the pass (lode-5zqa,
+                    # lode-yx1c). Same pair, same rendering as `ask` above.
+                    _abort_on_provider_error("work", err)
         except LockHeld as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(code=1) from None

@@ -576,10 +576,13 @@ config-shape error belongs here too, same treatment) — never retried, never
 charged against `attempts`, must reach the operator directly. Everything else is
 **transient** — the existing `except Exception` accounting, unchanged.
 
-Exactly one call site reads that roster wider: `drain`'s *batch pre-step* treats the
-whole `LLMProviderError` base class as permanent (`lode-5zqa`), not just its
-`LLMAuthError` subclass — see "must not starve the credential-free work" below. The
-two sites named next keep the narrow pair deliberately, because each has a transient
+Exactly one call site *inside the queue machinery* reads that roster wider: `drain`'s
+*batch pre-step* treats the whole `LLMProviderError` base class as permanent
+(`lode-5zqa`), not just its `LLMAuthError` subclass — see "must not starve the
+credential-free work" below. (`cli.py`'s own catch is wider still, but it decides
+only how an already-escaped error is *rendered*, not job accounting — see the
+`lode work` bullet below.) The two sites named next keep the narrow pair
+deliberately, because each has a transient
 `except Exception` path of its own that a non-auth provider error *should* fall into;
 the batch *collect* path has none, which is what makes the difference. Note the
 roster is by exception **type**, so it bounds nothing arriving as another type — e.g.
@@ -595,22 +598,12 @@ decides how loud "surface it" should be:
 - `lode work` (`lode.worker.drain`) lets it reach the CLI, which prints the active
   provider's actionable message to stderr and exits non-zero — the same clean,
   traceback-free treatment `lode ask` already gives `AuthError`/`LLMAuthError`.
-  **The CLI's own catch is wider than this section's permanent-job taxonomy**
-  (`lode-yx1c`): `cli.py`'s `ask` and `work` handlers name `(AuthError,
-  LLMProviderError)`, not just `AuthError`/`LLMAuthError` — `LLMProviderError`
-  is `LLMAuthError`'s own base class, so naming it also catches the subclass,
-  and additionally catches a **non-auth** `LLMProviderError` that reaches the
-  CLI without having gone through `run_one`/`_batch_submit_enrich`'s permanent
-  handling at all (e.g. straight out of a batch pre-step, or any other
-  provider call `drain` doesn't wrap). `AuthError` is named explicitly
-  alongside it — it is a sibling `RuntimeError` subclass, not a
-  `LLMProviderError` ancestor or descendant, so it would not otherwise be
-  caught. This CLI-level widening is a safety net on top of the taxonomy
-  above, not a change to it: a job handler raising a non-auth
-  `LLMProviderError` is still transient by that taxonomy (retried, then
-  dead-lettered by `run_one`'s generic `except Exception` — it never reaches
-  this catch that way); the CLI catch only matters for a `LLMProviderError`
-  that already escaped the queue machinery uncaught.
+  **Both CLI handlers name `(AuthError, LLMProviderError)`** (`lode-yx1c`, one
+  shared body in `cli._abort_on_provider_error`), so the **non-auth**
+  `LLMProviderError` `drain` re-raises from a stuck batch pre-step (`lode-5zqa`,
+  below) renders the same way. A non-auth `LLMProviderError` raised by a **job
+  handler** never reaches it — `run_one`'s generic `except Exception` retries and
+  dead-letters that one, per the taxonomy above.
 - `lode add`'s opportunistic immediate-enrich fast path
   (`lode.cli._enrich_immediately`) catches and discards it instead: capture must
   stay instant (`design.md` §1) regardless of whether the active provider's
@@ -653,12 +646,10 @@ operator with no credentials, or with a batch wedged on bad data: embeds keep
 draining, enrichment stays pending and uncharged (or the batch stays `'running'`,
 unresolved), and `lode work` still exits non-zero.
 
-What the stuck-batch case does **not** get, and the credential case does: a clean
-message. `lode work` handles only `AuthError` (`cli.py`), so a non-auth
-`LLMProviderError` — and, today, an `LLMAuthError` too — escapes every handler and
-surfaces as a raw traceback, which is why the bullet above promises traceback-free
-treatment the batch path does not yet honour (`lode-yx1c`). And the widening bounds
-the *starvation*, not the wedge itself: the batch re-fails every tick with no
+The stuck-batch case gets the same clean, traceback-free rendering the credential
+case does, since `lode-yx1c` (the `lode work` bullet above owns it). But the
+widening bounds the *starvation*, not the wedge itself: the batch re-fails every
+tick with no
 failure budget and no dead-letter path, one shared `try` means a stuck collect also
 blocks new submissions, and a single poisoned handle blocks the other healthy ones
 (`lode-knnt`). A permanently stuck batch still needs a human.
