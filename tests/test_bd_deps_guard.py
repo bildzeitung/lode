@@ -33,11 +33,17 @@ already.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from _hookharness import SH, pretooluse_hook, run_hook
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "bd-deps-blocks-guard.sh"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -223,12 +229,37 @@ def test_jq_missing_deny_reason_names_jq_and_points_at_the_fix() -> None:
 
 
 def test_collapse_step_uses_no_bash_only_syntax() -> None:
-    """Static guard for the AC's own wording: no `${var//pat/repl}`, no `$'...'` ANYWHERE."""
+    """Static guard for the AC's own wording: no `${var//pat/repl}`, no `$'...'`.
+
+    Scoped to the WRAPPER, which is the part dash actually executes. Since the scanning logic
+    was extracted to `scripts/bd-deps-blocks-guard.sh`, the collapse itself now runs under
+    `bash "$SCRIPT"`, where bash-only syntax would be harmless -- so the portability bar that
+    matters is the wrapper's, and that is what this pins.
+
+    Note the check is pattern-substitution-specific rather than a blanket `${` ban: the wrapper
+    legitimately uses POSIX `${CLAUDE_PROJECT_DIR:-...}` to resolve the script, exactly as the
+    lode-fpmi wrapper does, and dash handles that fine. A blanket ban would forbid the portable
+    construct while catching nothing extra.
+    """
     hook = _hook_command()
-    assert "${" not in hook, (
+    assert not re.search(r"\$\{[^}]*//", hook), (
         f"bash-only pattern-substitution syntax found in hook: {hook!r}"
     )
     assert "$'" not in hook, f"bash-only ANSI-C-quoting syntax found in hook: {hook!r}"
+
+
+def test_extracted_script_still_uses_the_portable_sed_collapse() -> None:
+    """The collapse moved out of the wrapper -- prove it did not simply VANISH in the move.
+
+    Without this, deleting the collapse entirely would leave every test above green except the
+    multi-line DENIED cases, and lode-m6px is precisely the bug where a backslash-continued
+    `bd create ... \\` reached the live DB unseen.
+    """
+    body = SCRIPT.read_text()
+    assert "sed -e :a" in body, (
+        "the portable sed-based backslash-continuation collapse (lode-m6px) is gone from "
+        f"{SCRIPT}"
+    )
 
 
 def _sabotage_with_m6px_bash_only_collapse(hook: str) -> str:
@@ -250,16 +281,13 @@ def _sabotage_with_m6px_bash_only_collapse(hook: str) -> str:
     ], "byte-exact reconstruction of the m6px collapse drifted"
     old_collapse = "CMD=\"${CMD//$'" + three_backslashes_then_n + "'/ }\""
 
-    anchor_start = "empty'); "
-    anchor_end = "; if printf '%s' \"$CMD\" | grep -qE"
-    start = hook.index(anchor_start) + len(anchor_start)
-    end = hook.index(anchor_end)
-    assert start < end, "could not locate the collapse expression in the shipped hook"
-    shipped_collapse = hook[start:end]
-    assert "sed" in shipped_collapse, (
-        f"expected the portable sed-based collapse, found: {shipped_collapse!r}"
-    )
-    return hook[:start] + old_collapse + hook[end:]
+    # The collapse now lives in the extracted script (run under bash), so there is no longer a
+    # collapse expression IN the wrapper to replace. Splice the bash-only line into the wrapper
+    # instead: the proof is unchanged and if anything sharper -- a bash-ism ANYWHERE in the
+    # dash-executed wrapper bricks the Bash tool, which is the live incident being reproduced.
+    anchor = "empty'); "
+    start = hook.index(anchor) + len(anchor)
+    return hook[:start] + old_collapse + "; " + hook[start:]
 
 
 def test_m6px_bash_only_collapse_fails_under_dash_sabotage() -> None:
@@ -344,3 +372,90 @@ def test_shipped_hook_runs_cleanly_under_dash_end_to_end() -> None:
     )
     assert proc.returncode == 0, f"guard errored under dash: {proc.stderr}"
     assert "Bad substitution" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Script-level tests: drive scripts/bd-deps-blocks-guard.sh directly (lode-fpmi's pattern,
+# applied here when this guard's logic was extracted out of settings.json).
+#
+# The hook-level tests above remain the end-to-end proof -- they run the SHIPPED
+# wrapper through dash, so they exercise wrapper + script together and would catch
+# a delegation that silently stopped working. These add fast, precise coverage of
+# the scanning logic in isolation, and are what makes the extraction worth doing.
+# ---------------------------------------------------------------------------
+
+
+def _script_decision(command: str) -> str | None:
+    """Run the extracted script against `command`; return its decision, or None if allowed."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+@pytest.mark.parametrize("command", DENIED + ACCEPTED_FALSE_DENIES)
+def test_script_denies(command: str) -> None:
+    assert _script_decision(command) == "deny", f"script failed to deny: {command}"
+
+
+@pytest.mark.parametrize("command", ALLOWED + NEVER_AUTO_APPROVED)
+def test_script_allows(command: str) -> None:
+    assert _script_decision(command) is None, f"script wrongly decided: {command}"
+
+
+def test_script_is_executable_so_the_wrapper_can_resolve_it() -> None:
+    """The wrapper gates on `[ -x "$SCRIPT" ]` and fails OPEN if it is not executable, so a
+    lost exec bit would silently disable this guard with every test above still green."""
+    assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} is not executable"
+
+
+def test_wrapper_delegates_and_embeds_no_scanning_logic() -> None:
+    """lode-fpmi's acceptance criterion, now applied to this guard: "the guard logic lives in a
+    tested script, not untested inline shell"."""
+    hook = _hook_command()
+    assert "scripts/bd-deps-blocks-guard.sh" in hook
+    for inline in ("--deps", "[[:space:]]", "grep -qE"):
+        assert inline not in hook, (
+            f"scanning logic {inline!r} is still embedded inline in the wrapper"
+        )
+
+
+def test_wrapper_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
+    """DELIBERATE asymmetry, pinned so it stays visible (the same trade lode-fpmi's wrapper
+    already makes): this wrapper fails CLOSED when jq is missing (lode-oii9) but fails OPEN when
+    the guard script itself cannot be resolved or is not executable.
+
+    Denying there would brick EVERY Bash call in the repo on a machine where CLAUDE_PROJECT_DIR is
+    unset outside a work tree -- a worse failure than the guard being off. This path is NEW with
+    the extraction: while the logic was inline in settings.json it could not fail this way at all.
+    The trade was taken deliberately (maintainer decision, 2026-08-04), on the sha guard's precedent. If this test ever goes red, the tradeoff was
+    changed -- re-read docs/agents-workflow.md before accepting it.
+    """
+    payload = json.dumps(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'bd create -t task "x" --deps blocks:lode-1'},
+        }
+    )
+    proc = subprocess.run(
+        [SH, "-c", _hook_command()],
+        input=payload,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": "/nonexistent-root"},
+        check=False,
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    assert proc.stdout.strip() == "", (
+        "guard denied when its script was unresolvable -- that bricks every Bash call in the repo"
+    )

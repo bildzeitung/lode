@@ -59,11 +59,17 @@ create --graph`. What the inversion DOES close, structurally rather than by enum
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from _hookharness import SH, pretooluse_hook, run_hook
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "gh-write-guard.sh"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -395,3 +401,89 @@ def test_read_only_noun_with_unlisted_verb_is_still_denied() -> None:
     # is not one of the allowed verbs, so it must still be denied. This is the allowlist actually
     # discriminating per-verb, not just per-noun.
     assert _run("gh issue develop 123") == "deny"
+
+
+# ---------------------------------------------------------------------------
+# Script-level tests: drive scripts/gh-write-guard.sh directly (lode-fpmi's pattern,
+# applied here when this guard's logic was extracted out of settings.json).
+#
+# The hook-level tests above remain the end-to-end proof -- they run the SHIPPED
+# wrapper through dash, so they exercise wrapper + script together and would catch
+# a delegation that silently stopped working. These add fast, precise coverage of
+# the scanning logic in isolation, and are what makes the extraction worth doing.
+# ---------------------------------------------------------------------------
+
+
+def _script_decision(command: str) -> str | None:
+    """Run the extracted script against `command`; return its decision, or None if allowed."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+@pytest.mark.parametrize("command", DENIED)
+def test_script_denies(command: str) -> None:
+    assert _script_decision(command) == "deny", f"script failed to deny: {command}"
+
+
+@pytest.mark.parametrize("command", ALLOWED + NEVER_AUTO_APPROVED)
+def test_script_allows(command: str) -> None:
+    assert _script_decision(command) is None, f"script wrongly decided: {command}"
+
+
+def test_script_is_executable_so_the_wrapper_can_resolve_it() -> None:
+    """The wrapper gates on `[ -x "$SCRIPT" ]` and fails OPEN if it is not executable, so a
+    lost exec bit would silently disable this guard with every test above still green."""
+    assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} is not executable"
+
+
+def test_wrapper_delegates_and_embeds_no_scanning_logic() -> None:
+    """lode-fpmi's acceptance criterion, now applied to this guard: "the guard logic lives in a
+    tested script, not untested inline shell"."""
+    hook = _hook_command()
+    assert "scripts/gh-write-guard.sh" in hook
+    for inline in ("--raw-field", "[[:space:]]", "ssh-key"):
+        assert inline not in hook, (
+            f"scanning logic {inline!r} is still embedded inline in the wrapper"
+        )
+
+
+def test_wrapper_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
+    """DELIBERATE asymmetry, pinned so it stays visible (the same trade lode-fpmi's wrapper
+    already makes): this wrapper fails CLOSED when jq is missing (lode-oii9) but fails OPEN when
+    the guard script itself cannot be resolved or is not executable.
+
+    Denying there would brick EVERY Bash call in the repo on a machine where CLAUDE_PROJECT_DIR is
+    unset outside a work tree -- a worse failure than the guard being off. This path is NEW with
+    the extraction: while the logic was inline in settings.json it could not fail this way at all.
+    The trade was taken deliberately by the maintainer (2026-08-04) after being raised
+    explicitly, on the sha guard's precedent -- accepting that on such a machine a `gh` write is
+    gated only by CLAUDE.md's prose rule. If this test ever goes red, the tradeoff was
+    changed -- re-read docs/agents-workflow.md before accepting it.
+    """
+    payload = json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": "gh issue create --title x"}}
+    )
+    proc = subprocess.run(
+        [SH, "-c", _hook_command()],
+        input=payload,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": "/nonexistent-root"},
+        check=False,
+    )
+    assert proc.returncode == 0, f"hook exited {proc.returncode}: {proc.stderr}"
+    assert proc.stdout.strip() == "", (
+        "guard denied when its script was unresolvable -- that bricks every Bash call in the repo"
+    )

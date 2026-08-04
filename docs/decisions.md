@@ -3187,3 +3187,34 @@ while erasing it here would lose the record of what was believed, and when.
   rule with no live cause. The residue print in `land/SKILL.md` §1 keeps its *substantive* comment
   (residue there is by construction merge commits, and the reset below destroys them) — that fact
   outlives `rtk`.
+
+- **All three `PreToolUse(Bash)` guards extracted from inline config into tested scripts — decided,
+  done (2026-08-04, maintainer decision).** The `lode-ij24` (`bd create --deps blocks:` inversion)
+  and `lode-o29m`/`lode-9mbt` (external-tracker write) guards had their scanning logic inline in
+  `.claude/settings.json` as ~1.4KB and ~3.3KB shell one-liners; they now live in
+  `scripts/bd-deps-blocks-guard.sh` and `scripts/gh-write-guard.sh`, reached by the same thin
+  wrapper shape `lode-fpmi` already shipped for `scripts/sha-fabrication-guard.sh`. Behaviour is
+  unchanged — same regexes, same deny JSON, byte for byte — and the pre-existing hook-level tests
+  passed untouched through the refactor, which is what establishes that. Rationale is `lode-fpmi`'s
+  own acceptance criterion, applied to the two guards it left behind: *"the guard logic lives in a
+  tested script, not untested inline shell"*, because ungated inline shell in config is where this
+  repo has already shipped silent undetected-for-months bugs (`lode-mh9g`, `lode-54mo`). Full
+  write-up: [agents-workflow.md](agents-workflow.md#all-three-pretooluse-guards-live-in-tested-scripts-not-inline-config-2026-08-04).
+
+  **The fail-open path is new, was raised before landing, and was accepted knowingly.** Inline logic
+  could not fail to run; a delegating wrapper can — if `CLAUDE_PROJECT_DIR` is unset *and*
+  `git rev-parse` cannot resolve a root, or the script is missing/non-executable, the guard is
+  silently skipped. The alternative considered and **rejected** was making the `gh` guard fail
+  *closed* on an unresolvable script (consistent with `lode-oii9`'s reasoning for missing `jq`),
+  which would brick every Bash call on such a machine. The maintainer chose fail-open for all three,
+  matching `lode-fpmi`. **Accepted residual, recorded rather than left to be discovered:** on a
+  machine where the root does not resolve, a `gh` write — whose whole premise is that a false allow
+  is an unrecoverable public action under the user's name — is gated only by `CLAUDE.md`'s prose
+  rule. Each wrapper's fail-open is pinned by a test, as is the exec bit, whose loss would otherwise
+  disable a guard with every other test green.
+
+  **`lode-9gm2`'s dash-safety bar moved with the logic** and now binds the wrapper (the part dash
+  executes) rather than the collapse step, which runs under `bash "$SCRIPT"`. The static check is
+  pattern-substitution-specific instead of a blanket `${` ban, since the wrapper legitimately uses
+  POSIX `${CLAUDE_PROJECT_DIR:-…}`; the sabotage test proving dash dies on the bash-only form was
+  retargeted at the wrapper, not dropped.

@@ -1527,6 +1527,52 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
+
+**No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
+the three is a thin wrapper that resolves and delegates to a script under `scripts/`:
+
+| Guard | Wrapper in `.claude/settings.json` delegates to | Pinned by |
+|---|---|---|
+| `bd create --deps blocks:` inversion (`lode-ij24`) | [`scripts/bd-deps-blocks-guard.sh`](../scripts/bd-deps-blocks-guard.sh) | `tests/test_bd_deps_guard.py` |
+| External-tracker write (`lode-o29m` / `lode-9mbt`) | [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) | `tests/test_gh_write_guard.py` |
+| Fabricated SHA (`lode-fpmi`) | [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh) | `tests/test_sha_fabrication_guard.py` |
+
+`lode-fpmi` established this shape and stated the reason as its own acceptance criterion —
+*"the guard logic lives in a tested script, not untested inline shell"* — because **ungated inline
+shell embedded in config is exactly where this repo has already shipped silent,
+undetected-for-months bugs** (`lode-mh9g`, `lode-54mo`). It shipped that way for one guard and left
+the other two inline; this change finishes the job. Behaviour of both extracted guards is unchanged
+— the same regexes, the same deny JSON, byte for byte.
+
+**What the wrapper still owns, and must:** the `jq`-missing preamble (`lode-oii9`), which fails
+*closed*. That cannot move into the script, because the script is reached via a `jq`-dependent path
+in the first place.
+
+**Each guard now has two test layers**, and both are load-bearing:
+- **Hook-level** — drives the *shipped* wrapper out of the committed `settings.json` through
+  `/bin/sh` (dash, **never** bash — `lode-9gm2`), so it exercises wrapper + script together and
+  catches a delegation that silently stopped working.
+- **Script-level** — drives the script directly by subprocess, fast and precise, over the same
+  DENIED/ALLOWED corpus.
+
+**Dash-safety moved with the logic.** `lode-9gm2`'s bar — no `${var//pat/repl}`, no `$'…'` — now
+binds the **wrapper**, which is the part dash actually executes; the scripts run under
+`bash "$SCRIPT"` and may use bash syntax. The static check is pattern-substitution-specific rather
+than a blanket `${` ban, since every wrapper legitimately uses POSIX `${CLAUDE_PROJECT_DIR:-…}` to
+resolve its script. The sabotage test that proves the point (splice the original bash-only collapse
+in, watch dash die with "Bad substitution" while the shipped form survives) was retargeted at the
+wrapper rather than dropped.
+
+**The fail-open path is NEW with this change, and was taken deliberately.** While the logic was
+inline, a guard could not fail to run at all; now, if `CLAUDE_PROJECT_DIR` is unset *and*
+`git rev-parse` cannot resolve a root, or the script is missing or loses its exec bit, the wrapper
+silently skips the guard. This was raised explicitly and decided by the maintainer (2026-08-04) in
+favour of matching `lode-fpmi`'s precedent for all three, rather than making the `gh` guard fail
+closed. The accepted residual: on such a machine a `gh` write is gated only by `CLAUDE.md`'s prose
+rule. Each wrapper's fail-open is pinned by its own test, and a lost exec bit — which would disable
+a guard with every other test still green — has a dedicated one.
+
 ### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
 
 **No fenced `bash` block in a `SKILL.md` may depend on shell state from another.** An agent executing
