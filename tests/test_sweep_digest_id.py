@@ -160,14 +160,11 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     with no `.[0].id` in it, so any occurrence is a re-inlined selection.
 
     Three call sites as of lode-o7ai (up from two): §5's read, §6's write, and
-    §7's re-derivation of `$DIGEST_ID` to recompute `$NEW_IDS` in its own,
-    separate fenced block (this skill's own cross-block-shell-state discipline,
-    lode-sfnb / lode-x495 -- §7 cannot reuse §5's `$DIGEST_ID`, so it re-derives
-    it the same sanctioned way §5/§6 do, via this script rather than a fresh
-    `.[0].id` guess). The name in this test's title predates that third site and
-    is retained rather than renamed, since the property under test -- every
-    fenced-bash selection of the digest goes through the script -- is unchanged
-    by how many sites there are."""
+    §7's, which cannot reuse §5's `$DIGEST_ID` across fenced blocks (lode-sfnb)
+    and so re-derives it the same sanctioned way. The "both" in this test's name
+    predates that third site; the property under test -- every fenced-bash
+    selection of the digest goes through the script -- is unchanged by the
+    count."""
     skill = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 

@@ -46,14 +46,12 @@ complete rarely, so a slow tick is fine), or invoked ad hoc as bare `/sweep`.
 - **Never promotes a ticket to a human-decision item *because* it is `deferred`.** §2a is
   visibility only: nothing it reads enters `$CURRENT`/`$NEW_IDS`, touches the digest, or fires a
   `PushNotification`. The converse — a ticket that *independently* carries `land-escalated` and is
-  *also* `deferred` — is a **decided**, deliberate exception, not a gap (lode-o7ai,
-  `docs/decisions.md`): §1 passes no `--status` filter, so such a ticket still reaches `$CURRENT`
-  and the digest through §1 regardless of its `deferred` status. Dropping it would delete a real,
-  unresolved escalation from the durable record — and `bd defer` is not one of `land-escalated`'s
-  three resolution exits, so deferring never actually resolves it. §7 suppresses only the
-  `PushNotification` for such a row (never the report), and it is deliberately listed twice in the
-  report — once in §7/§8's `NEW HUMAN-DECISION ITEMS` block (annotated `(deferred)`), once in §2a
-  (unannotated) — information about a parked escalation, not redundancy to tidy away.
+  *also* `deferred` — is a **decided**, deliberate exception, not a gap: it still reaches `$CURRENT`
+  and the digest through §1 (which passes no `--status` filter), §7 suppresses only its
+  `PushNotification`, and it is listed twice in the report — §7/§8's `NEW HUMAN-DECISION ITEMS`
+  block (annotated `(deferred)`) and §2a (unannotated). That is information about a parked
+  escalation, not redundancy to tidy away. Full rationale: lode-o7ai in
+  [docs/decisions.md](../../../docs/decisions.md).
 
 ## 0. Setup — Dolt-authoritative, fresh scratch state
 
@@ -116,15 +114,14 @@ than aborting — a failed query is not an empty queue (but a `null`-serialized 
 a failure — see above). See
 [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
 
-**Why `$ESCALATED` carries a 4th tab field (`.status`) and `$HUMAN` doesn't (decided, lode-o7ai —
-see [docs/decisions.md](../../../docs/decisions.md)):** the `land-escalated` query above passes no
-`--status` filter — deliberately, unchanged from before this decision — so it can return a ticket
-that is *also* `deferred`. That per-row status is already present on every row this query returns
-(no second call needed, the same derivable-state principle §2's `title` comment below relies on),
-and §7 needs it to decide two things: whether to include the row in the `PushNotification`, and
-whether to annotate it `(deferred)` in the report. `$HUMAN` never needs this field — its own query
-already filters to `--status open`, so a `human`-labeled row can never be `deferred` in the first
-place.
+**Why `$ESCALATED` carries a 4th tab field (`.status`) and `$HUMAN` doesn't:** the `land-escalated`
+query above passes no `--status` filter — deliberately, and unchanged by lode-o7ai — so it can
+return a ticket that is *also* `deferred`, and §7 needs that per-row status to suppress the push and
+annotate the report. The value is already on every row this query returns, so capturing it costs no
+extra `bd` call (the same derivable-state principle §2's `title` comment below relies on). `$HUMAN`
+never needs it — that query already filters to `--status open`, so a `human`-labeled row can never
+be `deferred` in the first place. Rationale: lode-o7ai in
+[docs/decisions.md](../../../docs/decisions.md).
 
 ## 2. Collect epics ready for a human close-decision
 
@@ -195,10 +192,8 @@ paragraph is documentation for a human reader, and deliberately does not restate
 **The one deliberate overlap:** a ticket that is simultaneously `land-escalated` (§1) and `deferred`
 is listed here (unconditionally, unannotated) *and*, on the pass it first appears, also in §7/§8's
 `NEW HUMAN-DECISION ITEMS` block (there, annotated `(deferred)`) — decided, not a gap (lode-o7ai,
-[docs/decisions.md](../../../docs/decisions.md)). §1 passes no `--status` filter on purpose: `bd
-defer` is not one of `land-escalated`'s three resolution exits, so dropping the row out of `$CURRENT`
-would delete a real, unresolved escalation from the digest. This section's own listing is unaffected
-either way — it stays exactly what it always was, every current `deferred` ticket, in full.
+[docs/decisions.md](../../../docs/decisions.md)). This section's own listing is unaffected either
+way — it stays exactly what it always was, every current `deferred` ticket, in full.
 
 If this query itself errors, the failure is isolated to this step alone — note it in the §8 report
 and continue. See [Failure handling](#failure-handling--a-sub-step-fails-the-loop-survives).
@@ -380,40 +375,29 @@ CURRENT="$(cat "$SWEEP_TMP/current")" || {
   echo "GATE COULD NOT RUN: $SWEEP_TMP/current missing -- §3 did not run this pass" >&2
   exit 1
 }
-ESCALATED="$(cat "$SWEEP_TMP/escalated")" || {
-  echo "GATE COULD NOT RUN: $SWEEP_TMP/escalated missing -- §1 did not run this pass" >&2
-  exit 1
-}
 
 LAST_BODY=$(rtk bd show "$DIGEST_ID" --json | jq -r '.[0].description')
 LAST_IDS=$(printf '%s\n' "$LAST_BODY" | grep '^SWEEP-ITEM' | awk '{print $2}' | sort -u)
 CURRENT_IDS=$(printf '%s\n' "$CURRENT" | awk -F'\t' '{print $1}' | sort -u)
 NEW_IDS=$(comm -13 <(printf '%s\n' "$LAST_IDS") <(printf '%s\n' "$CURRENT_IDS"))
 
-# A NEW land-escalated row whose §1 status is "deferred" (decided, lode-o7ai -- see
-# docs/decisions.md): keep it in the report, annotated -- but exclude it from what
-# gets pushed. `deferred` means a human already saw this and parked it; re-pushing
-# is noise. Only $ESCALATED rows can carry a 4th field (§1) -- a $NEW_IDS id absent
-# from $ESCALATED, or present with an empty 4th field, is correctly never treated as
-# deferred.
-NEW_ANNOTATED=""
-PUSH_IDS=""
-while IFS= read -r nid; do
-  [ -n "$nid" ] || continue
-  ROW=$(printf '%s\n' "$CURRENT" | awk -F'\t' -v id="$nid" '$1 == id { print; exit }')
-  STATUS=$(printf '%s\n' "$ESCALATED" | awk -F'\t' -v id="$nid" '$1 == id { print $4; exit }')
-  if [ "$STATUS" = "deferred" ]; then
-    NEW_ANNOTATED="${NEW_ANNOTATED}${ROW} (deferred)
-"
-  else
-    NEW_ANNOTATED="${NEW_ANNOTATED}${ROW}
-"
-    PUSH_IDS="${PUSH_IDS}${nid}
-"
-  fi
-done <<< "$NEW_IDS"
-printf '%s' "$NEW_ANNOTATED" > "$SWEEP_TMP/new_annotated"
-printf '%s' "$PUSH_IDS" > "$SWEEP_TMP/push_ids"
+# Split $NEW_IDS into "report it" (all of them) vs "push it" (not the deferred ones)
+# -- decided, lode-o7ai; rationale in docs/decisions.md. Only $ESCALATED-sourced rows
+# carry a 4th field (§1/§3), so a $HUMAN/$CLOSABLE row's empty $4 is correctly never
+# "deferred" and $CURRENT alone is enough -- no second read of $SWEEP_TMP/escalated.
+# Emit ONLY fields 1-3: §8's report format is `<id> <kind> <title>`, so passing the
+# row through whole would leak the raw status ("<title>\topen") into every escalated
+# row. Truncate both outputs first, so a zero-match pass leaves them empty, not stale.
+printf '%s\n' "$NEW_IDS" | sed '/^$/d' > "$SWEEP_TMP/new_ids"
+: > "$SWEEP_TMP/new_annotated"
+: > "$SWEEP_TMP/push_ids"
+awk -F'\t' -v ann="$SWEEP_TMP/new_annotated" -v push="$SWEEP_TMP/push_ids" '
+  NR == FNR      { new[$1] = 1; next }          # pass 1: the new ids
+  !($1 in new)   { next }                       # pass 2: $CURRENT, new rows only
+  { row = $1 "\t" $2 "\t" $3 }
+  $4 == "deferred" { print row " (deferred)" > ann; next }
+                   { print row > ann; print $1 > push }
+' "$SWEEP_TMP/new_ids" "$SWEEP_TMP/current"
 ```
 
 `$SWEEP_TMP/new_annotated` is the full **NEW HUMAN-DECISION ITEMS** report content (§8) — every row
