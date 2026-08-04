@@ -789,12 +789,16 @@ class _OfflineQueryEmbedder:
     It mirrors the real class's whole **duck-typed** surface, not just the two
     :class:`~lode.embedding.Embedder` protocol methods, because lode probes the
     rest by ``hasattr``: ``warm()`` is what ``lode models pull`` calls
-    (``cli.py``), and ``model_revision()`` is what ``embedding.py``'s
+    (``cli.py``), ``model_revision()`` is what ``embedding.py``'s
     ``_embedder_model_revision`` duck-types on to stamp provenance on written
-    vectors. Omitting either does not fail loudly — it silently routes the code
-    under test down the *absent-method* branch, which is a different path from
-    production. ``None`` is the honest revision for a stub, and is exactly what
-    that helper already documents an absent method to mean.
+    vectors, and ``reset_revision_probe()`` is what ``worker.drain()`` calls
+    once per pass to retry a failed probe (``lode-fxse``). Omitting any of
+    these does not fail loudly — it silently routes the code under test down
+    the *absent-method* branch, which is a different path from production.
+    ``None`` is the honest revision for a stub, and is exactly what that
+    helper already documents an absent method to mean; ``reset_revision_probe``
+    is a genuine no-op here since this stub's ``model_revision()`` never
+    caches anything to reset in the first place.
     """
 
     def __init__(self, settings: object) -> None:
@@ -811,6 +815,9 @@ class _OfflineQueryEmbedder:
         return None
 
     def model_revision(self) -> str | None:
+        return None
+
+    def reset_revision_probe(self) -> None:
         return None
 
 

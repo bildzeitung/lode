@@ -2515,6 +2515,207 @@ def test_drain_shares_one_embedder_across_all_embed_jobs_in_the_loop(
     assert statuses == ["done"] * 3
 
 
+def test_drain_retries_a_failed_revision_probe_on_the_next_call(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    settings: Settings,
+) -> None:
+    """A failed HF probe in one drain() call self-heals on the next (lode-fxse).
+
+    Regression test for the trade lode-j5r2 accepted and left unfixed: a
+    shared FastEmbedEmbedder used to latch a failed ``model_revision()``
+    probe for its whole process lifetime, so one transient blip at the head
+    of an hours-long ``lode work --loop`` stamped ``model_revision = NULL``
+    on every version indexed for the rest of that process. ``drain()`` now
+    retries a failed probe once per call -- once per poll tick, not once per
+    job -- via ``FastEmbedEmbedder.reset_revision_probe()``, called on the
+    shared embedder before this call's jobs run.
+
+    Two ``drain()`` calls against the SAME embedder instance simulate two
+    poll passes of ``lode work --loop``/``--wait`` -- exactly the scenario
+    ``cli.py``'s ``work`` command sets up (one embedder constructed before the
+    polling loop, passed into every ``drain()`` call it makes).
+
+    Counts calls rather than asserting via a raising stub -- the trap this
+    file's own history has hit three times already (lode-dj6m, lode-r4r2,
+    and this ticket's own description): a stub that raises is swallowed by
+    ``lode.embedding._embedder_model_revision``'s ``except Exception: return
+    None``, which would pass whether or not the retry actually ran.
+    """
+    from conftest import _OfflineQueryEmbedder
+
+    class _FlakyEmbedder(_OfflineQueryEmbedder):
+        """First probe (of the whole test) fails; every later one succeeds --
+        a transient blip. Mirrors the real class's own per-instance latch,
+        including ``reset_revision_probe()``'s "only re-arm a failure"
+        contract.
+        """
+
+        probe_calls = 0
+
+        def __init__(self, settings: Settings) -> None:
+            super().__init__(settings)
+            self._probed = False
+            self._cached: str | None = None
+
+        def model_revision(self) -> str | None:
+            if not self._probed:
+                _FlakyEmbedder.probe_calls += 1
+                self._cached = None if _FlakyEmbedder.probe_calls == 1 else "healed-sha"
+                self._probed = True
+            return self._cached
+
+        def reset_revision_probe(self) -> None:
+            if self._probed and self._cached is None:
+                self._probed = False
+
+    embedder = _FlakyEmbedder(settings)
+
+    _insert_note_worker(conn, note_id="note-0", version_id="ver-0", body="body 0")
+    enqueue_derive_jobs(conn, "ver-0", types=("embed",))
+    n1 = drain(conn, db_path, settings, embedder=embedder)  # real _REGISTRY
+
+    assert n1 == 1
+    assert _FlakyEmbedder.probe_calls == 1
+    assert embedder.model_revision() is None  # this pass's poisoned result
+
+    _insert_note_worker(conn, note_id="note-1", version_id="ver-1", body="body 1")
+    enqueue_derive_jobs(conn, "ver-1", types=("embed",))
+    n2 = drain(conn, db_path, settings, embedder=embedder)
+
+    assert n2 == 1
+    # A second drain() call is a second poll tick -- the failed probe must
+    # have been retried, not replayed from cache.
+    assert _FlakyEmbedder.probe_calls == 2, (
+        "expected the failed probe to be retried on the second drain() call, "
+        f"got {_FlakyEmbedder.probe_calls} probe(s) total"
+    )
+    assert embedder.model_revision() == "healed-sha"
+
+    statuses = [
+        r[0]
+        for r in conn.execute("SELECT status FROM jobs WHERE type = 'embed'").fetchall()
+    ]
+    assert statuses == ["done", "done"]
+
+
+@pytest.mark.real_embedder
+def test_drain_reset_seam_resolves_on_the_real_fastembedembedder(
+    conn: sqlite3.Connection,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The genuine FastEmbedEmbedder self-heals through drain() (lode-fxse).
+
+    Pins the SEAM, not just the logic. ``drain()`` reaches the retry through
+    ``getattr(embedder, "reset_revision_probe", None)`` -- a string literal
+    that no rename refactor and no type checker follows. Every other test of
+    this fix substitutes a stub that defines whichever name the literal
+    happens to say, so the literal agreeing with the real class's actual
+    method name was, until this test, pinned by nothing: renaming
+    ``FastEmbedEmbedder.reset_revision_probe`` (updating its real call sites,
+    which a rename does automatically) left the ``getattr`` resolving to
+    ``None``, ``drain()`` silently no-opping, lode-fxse's bug fully back --
+    and the whole suite green. Measured, not hypothesised: that exact
+    sabotage passed 135/135 before this test existed.
+
+    So this drives the REAL class end-to-end -- ``@pytest.mark.real_embedder``
+    opts out of conftest's autouse offline stub -- with only the two genuine
+    egress points faked (the ONNX load and ``huggingface_hub.model_info``),
+    and asserts on the ``model_revision`` actually written to the vector rows,
+    which is the ticket's own acceptance criterion: a first-pass probe failure
+    must not poison a later pass.
+
+    Also covers the OTHER half in the same three passes, where a stub cannot:
+    that a healed (successful) probe then stays cached for the process rather
+    than being re-probed every poll tick, undoing lode-j5r2's amortization.
+    That half is only meaningful against the real class -- a stub's own
+    ``reset_revision_probe`` would be asserting on itself.
+
+    Counts calls rather than asserting via a raising stub -- the trap this
+    area has hit four times (lode-dj6m, lode-r4r2, this ticket's own
+    description, and this branch's first cut of this very test).
+    """
+    import fastembed
+    import huggingface_hub
+    import lancedb
+    import numpy as np
+
+    from lode.config import lance_dir as _lance_dir
+    from lode.embedding import FastEmbedEmbedder
+
+    settings = Settings(embedding_vector_dim=4)
+    monkeypatch.setenv("LODE_HOME", str(tmp_path / "root"))
+    # The probe short-circuits before huggingface_hub under this flag
+    # (lode-r4r2), which would make the retry unobservable here.
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+
+    class _FakeTextEmbedding:
+        """Stands in for the ONNX load only -- everything else is the real class."""
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def embed(self, texts: list[str]):
+            return [
+                np.zeros(settings.embedding_vector_dim, dtype=np.float32) for _ in texts
+            ]
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+
+    probe_calls = 0
+
+    class _FakeModelInfo:
+        sha = "healed-sha"
+
+    def _fake_model_info(repo_id: str, *, timeout: float) -> _FakeModelInfo:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            raise OSError("transient network blip")
+        return _FakeModelInfo()
+
+    monkeypatch.setattr(huggingface_hub, "model_info", _fake_model_info)
+
+    embedder = FastEmbedEmbedder(settings)
+
+    def _pass(i: int) -> None:
+        """One poll tick of `lode work --loop`: same embedder, a fresh version."""
+        _insert_note_worker(
+            conn, note_id=f"note-{i}", version_id=f"ver-{i}", body=f"body {i}"
+        )
+        enqueue_derive_jobs(conn, f"ver-{i}", types=("embed",))
+        assert drain(conn, db_path, settings, embedder=embedder) == 1
+
+    def _revisions_for(version: str) -> set[str | None]:
+        rows = lancedb.connect(_lance_dir(db_path)).open_table("embeddings")
+        return {
+            r["model_revision"]
+            for r in rows.to_arrow().to_pylist()
+            if r["target_version"] == version
+        }
+
+    _pass(0)
+    assert probe_calls == 1
+    assert _revisions_for("ver-0") == {None}, "the blip's own pass records NULL"
+
+    _pass(1)
+    assert probe_calls == 2, (
+        "expected the failed probe to be retried on the next drain() call, got "
+        f"{probe_calls} probe(s) -- drain()'s getattr seam is not reaching "
+        "FastEmbedEmbedder.reset_revision_probe"
+    )
+    assert _revisions_for("ver-1") == {"healed-sha"}, "the next pass must self-heal"
+
+    _pass(2)
+    assert probe_calls == 2, (
+        "a HEALED probe must stay cached for the process (lode-j5r2's "
+        f"amortization), got {probe_calls} probe(s)"
+    )
+    assert _revisions_for("ver-2") == {"healed-sha"}
+
+
 # ---------------------------------------------------------------------------
 # registered_types / module-level registry
 # ---------------------------------------------------------------------------
