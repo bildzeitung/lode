@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import bash_fence_blocks
+from conftest import _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -1302,26 +1302,6 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
         "land/SKILL.md never heartbeats the single-lander lock -- the TTL is "
         "back to measuring acquisition age, not idle time (lode-m87j)"
     )
-
-
-def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only, concatenated into one string -- what an agent
-    actually EXECUTES.
-
-    Scanning the whole file would match the prose that *explains* the old
-    defect (it necessarily quotes `trap` and `kill -0`), so the pin has to
-    separate what is executed from what is merely described. That split is
-    also the point: the fence is the one part of this skill no gate parses,
-    which is how the bug survived unnoticed in the first place.
-
-    Thin wrapper over the shared `tests/conftest.py::bash_fence_blocks`
-    parser; this function used to carry its own column-0 copy, which silently
-    checked 20 of this file's 24 bash blocks (lode-ovgs). Why it was unified
-    rather than patched in place, and the parser's known blind spots, live
-    next to the parser itself -- deliberately not restated here, per this
-    module's own no-second-copy rule above.
-    """
-    return "\n".join(bash_fence_blocks(markdown))
 
 
 def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
