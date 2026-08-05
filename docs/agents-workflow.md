@@ -400,6 +400,32 @@ forms at once; rather than hoist an agent-only rule into the project-wide file, 
 `code-reviewer.md` each state outright that their explicit-path rule **overrides** that section. The
 audience split is the reason the two texts differ, not an oversight in either.
 
+**Finding B answered empirically (lode-828x).** lode-6874's technical review raised, but explicitly
+could not test (it came up in the main checkout, not a worktree — that fault was lode-jk44), whether
+the isolation guard refuses an `if/then/fi` compound containing a `source` (`.`) in a branch that
+would never execute — load-bearing for a restore/undo dance that (at the time) gated `scripts/nox.sh`
+back in with `if [ ! -x scripts/nox.sh ]; then git checkout origin/trunk -- scripts/nox.sh; fi`. A
+genuinely worktree-isolated agent ran the equivalent shape directly:
+
+```
+if [ -x /nonexistent-path-xyz ]; then . ./venv/bin/activate; fi
+```
+
+**Refused**, with the same message the bare sourced form gets: *"this command runs a string through
+`.`, which can't be verified to stay inside the worktree."* The guard rejects the compound on shape
+alone, before the condition is ever evaluated — it does not distinguish a `source` sitting in a
+taken branch from one sitting in a branch that can never run. So the answer to Finding B is **yes,
+the guard would have refused that compound too**, which would have made the restore/undo dance
+`lode-6874`'s original commit added *unrunnable by the very agents it targeted* — the same failure
+mode `lode-6874` existed to close in the first place, just relocated.
+
+This is now moot for the mechanism it was raised about: `scripts/nox.sh` was never landed (`lode-6874`'s
+re-examination deleted it, see above), so no `if/then/fi` restore/undo compound is prescribed to any
+agent any more, and there is nothing left that this finding could break. It's recorded here rather than
+left implicit because a future wrapper-shaped fix would walk straight back into the same guard refusal —
+this paragraph is the empirical record that closes that question, so nobody has to re-derive it from
+inference a third time.
+
 ### Recycled-worktree guard (lode-nt98)
 
 `isolation: "worktree"` is supposed to hand a dispatched agent a **fresh** worktree, branched off
