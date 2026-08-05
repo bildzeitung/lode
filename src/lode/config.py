@@ -237,12 +237,10 @@ class Settings(BaseModel):
     vectorstore_optimize_interval: int = _knob(
         200,
         Kind.RUNTIME,
-        "How often a VectorStore holding its opened Table across many "
-        "replace_vectors() calls (lode-2brb -- a caller sharing one instance "
-        "across a drain, e.g. lode.worker.drain's store= seam) runs "
-        "table.optimize() to prune old versions. Bounds the held Table's "
-        "version-history-linked memory growth, which is otherwise linear and "
-        "unbounded over a long-running process (measured, docs/decisions.md).",
+        "How many replace_vectors() calls a shared VectorStore makes before "
+        "pruning its held Table's version history, which bounds that Table's "
+        "memory growth over a long-running process (lode-2brb; "
+        "docs/configuration.md).",
         gt=0,
     )
     stale_running_timeout_s: int = _knob(

@@ -341,12 +341,10 @@ def test_matching_schema_table_is_not_dropped(tmp_path: Path) -> None:
 
 # --- held-table staleness gate (lode-2brb) ---------------------------------
 #
-# VectorStore now caches its opened Table across calls on the same instance
-# (docs/decisions.md, lode-2brb) instead of reopening it every call. A held
-# LanceDB Table handle is a fixed snapshot -- it does NOT see a write made
-# through a different connection/instance until `checkout_latest()` is
-# called. These pin that the cache calls it on every use, so a shared
-# instance never reads stale data.
+# VectorStore caches its opened Table across calls (lode-2brb). A held LanceDB
+# Table handle is a fixed snapshot -- it does NOT see a write made through a
+# different connection until `checkout_latest()` is called. These pin that the
+# cache calls it on every use, so a shared instance never reads stale data.
 
 
 def test_a_second_connection_writing_is_still_visible_through_the_first(
@@ -363,6 +361,43 @@ def test_a_second_connection_writing_is_still_visible_through_the_first(
 
     # The first instance's cached Table must see it -- not a stale snapshot.
     assert store.vectors_for("v2") == [[0.0, 1.0, 0.0, 0.0]]
+
+
+def test_periodic_optimize_prunes_history_without_losing_current_rows(
+    tmp_path: Path,
+) -> None:
+    """The every-N-writes `optimize()` prunes history and keeps the live rows.
+
+    The interval defaults to 200 (`vectorstore_optimize_interval`), so nothing
+    else in the suite reaches this branch -- it shipped entirely unexercised
+    despite running a destructive prune against the live store (found on
+    technical review). Driven here with a small interval.
+    """
+    settings = load_settings(embedding_vector_dim=DIM, vectorstore_optimize_interval=2)
+    store = VectorStore(tmp_path / "vectors", settings)
+
+    for i in range(2):
+        store.replace_vectors("v1", [_row(f"a{i}", "v1", [1.0, 0.0, 0.0, 0.0])])
+
+    # The prune fired on the 2nd write and re-armed its counter.
+    assert store._writes_since_optimize == 0
+    # ...and the history it pruned is genuinely gone, from an independent
+    # connection -- not just invisible through the held handle.
+    versions = (
+        lancedb.connect(tmp_path / "vectors").open_table("embeddings").list_versions()
+    )
+    assert len(versions) == 1, (
+        f"expected history pruned to the latest version, got {versions}"
+    )
+
+    # The current rows survived the prune, through the held handle and a fresh one.
+    assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
+    assert _store(tmp_path).vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
+
+    # And the store keeps working across the boundary.
+    store.replace_vectors("v1", [_row("b", "v1", [0.0, 1.0, 0.0, 0.0])])
+    assert store._writes_since_optimize == 1
+    assert store.vectors_for("v1") == [[0.0, 1.0, 0.0, 0.0]]
 
 
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ implies a full re-embed (lode-txh.6). sqlite-vec is the documented fallback-down
 """
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import pyarrow as pa
@@ -71,22 +72,16 @@ class VectorStore:
     serves the write side (:meth:`replace_vectors`) and the read side
     (:meth:`search`); both go through one schema, so the table is created once with
     the pinned shape and reused. A caller that shares one instance across many
-    calls (e.g. :func:`lode.embedding.embed`'s ``store=`` seam, threaded from
-    :func:`lode.worker.drain`, lode-2brb) gets the opened-table caching
-    described in :meth:`_open_or_create_table`.
+    calls gets the opened-table caching described in
+    :meth:`_open_or_create_table`.
     """
 
     def __init__(self, lance_dir: str | Path, settings: Settings | None = None) -> None:
         self._lance_dir = lance_dir
         self._settings = settings or Settings()
-        # The opened Table, held across calls once first opened (lode-2brb) so
-        # a caller sharing one VectorStore across a drain (embed.py's
-        # ``store=`` seam, mirroring lode-j5r2's ``embedder=``) skips
-        # ``list_tables`` + ``open_table`` + the schema compare on every call
-        # -- see :meth:`_open_or_create_table`. ``None`` until first use.
+        # The opened Table (None until first use) and the writes since it was
+        # last pruned -- see _open_or_create_table and replace_vectors.
         self._table = None
-        # Writes since the held Table was last optimize()'d -- see
-        # :meth:`replace_vectors`'s periodic prune.
         self._writes_since_optimize = 0
 
     def _schema(self) -> pa.Schema:
@@ -139,29 +134,19 @@ class VectorStore:
         No flag, no separate rebuild command: this is the single place LanceDB
         is touched, so healing it here covers every call path uniformly.
 
-        **Caches the opened Table across calls on this instance (lode-2brb).**
-        A fresh ``VectorStore`` per embed job meant a full
-        ``lancedb.connect()`` + ``list_tables()`` + ``open_table()`` + schema
-        compare on *every* job -- the same "rebuilt per job instead of hoisted
-        across the drain" shape lode-j5r2 fixed for the embedder. Once this
-        instance has opened the table, every later call reuses that Table
-        object and just calls ``checkout_latest()`` to pick up whatever
-        another connection/instance wrote since -- LanceDB tables are
-        snapshot-versioned, so a held handle otherwise reads a stale version
-        (verified: a second connection's write is invisible to a held handle
-        until ``checkout_latest()``; see ``test_vectorstore.py``'s
-        ``test_a_second_connection_writing_is_still_visible_through_the_first``
-        and ``test_model_revisions_scopes_to_the_requested_model``). This is
-        cheap relative to the reopen it replaces and keeps ``list_tables`` +
-        ``open_table`` + the schema compare to *first call only* for this
-        instance.
+        **Caches the opened Table across calls on this instance (lode-2brb),**
+        so a shared ``VectorStore`` pays ``list_tables`` + ``open_table`` +
+        the schema compare on its *first* call only instead of on every embed
+        job. LanceDB tables are snapshot-versioned, so a held handle would
+        otherwise read a stale version; ``checkout_latest()`` on every reuse
+        is what makes holding it safe, and ``tests/test_vectorstore.py``'s
+        held-table staleness gate pins that. Note the consequence for the
+        schema self-heal above: it too is first-call-only per instance, which
+        is sound because ``Settings`` (and so the pinned schema) is fixed for
+        an instance's lifetime.
 
-        Deliberately does **not** cache the ``lancedb.connect()`` handle
-        itself across calls -- a prior design here that cached the connection
-        (rather than the Table) was measured to grow process RSS
-        unboundedly, and accelerating, over hundreds of ``replace_vectors``
-        calls (``docs/decisions.md``, lode-2brb); a fresh connection per
-        first-open is cheap (~0.7ms) and does not carry that growth.
+        Why the Table and not the ``lancedb.connect()`` handle, and the
+        measurements behind that: ``docs/decisions.md`` (lode-2brb).
         """
         import lancedb
 
@@ -197,17 +182,17 @@ class VectorStore:
         — an empty list just clears the version.
 
         **Periodically prunes the held Table's version history (lode-2brb).**
-        Each call is a delete + add = 2 new LanceDB versions; a Table held
-        across many calls (a shared ``VectorStore``, e.g. via
-        :func:`lode.worker.drain`'s ``store=`` seam) otherwise accumulates
-        that history in memory without bound -- measured linear, unbounded
-        growth over a long ``lode work --loop`` process (``docs/decisions.md``).
-        Every ``settings.vectorstore_optimize_interval`` calls, this runs
-        ``table.optimize()`` (prune all but the latest version -- this store's
-        vectors are a regenerable cache, module docstring, so nothing here
-        needs history) and re-checks out latest, which was measured to bound
-        that growth. A no-op on a freshly opened table, since
-        :meth:`_open_or_create_table` already returns the latest version.
+        Each call is a delete + add = 2 new LanceDB versions, and a Table held
+        across many calls accumulates that history in memory. Every
+        ``settings.vectorstore_optimize_interval`` calls this prunes all but
+        the latest version -- safe because this store's vectors are a
+        regenerable cache (module docstring), so nothing here needs history.
+
+        Deliberately does **not** pass ``delete_unverified=True``: it would
+        lift LanceDB's protection for young files that may belong to *another
+        process's* in-progress transaction (its own docs warn that "the
+        dataset could be put into a corrupted state"), and it was measured to
+        buy nothing here. Measurements: ``docs/decisions.md`` (lode-2brb).
         """
         table = self._open_or_create_table()
         table.delete(f"target_version = '{target_version}'")
@@ -215,9 +200,7 @@ class VectorStore:
             table.add(rows)
         self._writes_since_optimize += 1
         if self._writes_since_optimize >= self._settings.vectorstore_optimize_interval:
-            from datetime import timedelta
-
-            table.optimize(cleanup_older_than=timedelta(0), delete_unverified=True)
+            table.optimize(cleanup_older_than=timedelta(0))
             table.checkout_latest()
             self._writes_since_optimize = 0
 

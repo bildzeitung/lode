@@ -451,12 +451,10 @@ def embed(
     passage vectors in the LanceDB store under ``lance_dir``.
 
     ``store``, if given, is a :class:`~lode.vectorstore.VectorStore` used as-is
-    instead of constructing a fresh one (lode-2brb, mirroring this function's
-    own ``embedder=`` seam, lode-j5r2) -- :func:`lode.worker.drain` binds one
-    instance across a whole drain's ``embed`` jobs so they share the opened
-    LanceDB table (:meth:`~lode.vectorstore.VectorStore._open_or_create_table`'s
-    caching) instead of each reopening it. ``None`` (the default) preserves the
-    prior per-call construction.
+    instead of constructing a fresh one -- mirroring this function's own
+    ``embedder=`` seam (lode-2brb), so :func:`lode.worker.drain` can bind one
+    instance across a whole drain's ``embed`` jobs and share its opened LanceDB
+    table. ``None`` (the default) preserves the prior per-call construction.
 
     Idempotent: running twice on the same head version converges to the same
     passages and vectors. Returns the number of passages embedded (0 for a body

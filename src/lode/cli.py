@@ -3111,10 +3111,8 @@ def work(
     # lock, on a run that may exit on LockHeld, costs nothing.
     embedder = FastEmbedEmbedder(settings)
     # ONE VectorStore for this whole process too (lode-2brb), same reasoning:
-    # its cached opened Table (checkout_latest() on every use) means every
-    # poll pass shares one opened LanceDB table instead of each embed job
-    # reopening it. Measured bound on the held-Table growth this relies on:
-    # docs/decisions.md (lode-2brb).
+    # every poll pass shares one opened LanceDB table instead of each embed
+    # job reopening it. See VectorStore._open_or_create_table.
     store = VectorStore(lance_dir(db_path), settings)
     try:
         try:

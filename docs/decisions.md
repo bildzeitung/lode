@@ -3448,7 +3448,7 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     at ~188-193 MB over 3000 calls in the same script). Linear-but-indefinite is still an unbounded
     cost over an hours-long `lode work --loop` process, so a bound was still needed, not just a
     smaller leak.
-  - **The bound: periodic `table.optimize(cleanup_older_than=timedelta(0), delete_unverified=True)`.**
+  - **The bound: periodic `table.optimize(cleanup_older_than=timedelta(0))`.**
     Each `replace_vectors` call is a delete + add = 2 new LanceDB versions; the held Table's
     version-history-linked in-memory state is what grows with call count.  `optimize()` prunes all but
     the latest version. Measured (same live-RSS methodology, 3000 calls, `optimize()` every 100 calls):
@@ -3457,18 +3457,27 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     the same span with no mitigation. Wired as `settings.vectorstore_optimize_interval` (default
     `200`, `docs/configuration.md`) rather than hardcoded, so the interval is tunable without a code
     change if a different workload needs it.
-  - **`delete_unverified=True`'s safety rests on `WorkerLock`, not proven independently.** This flag
-    lifts `optimize()`'s default protection for files younger than 7 days that "may appear to be part
-    of an in-progress operation," which is exactly the case here (writes seconds apart). It is safe
-    against the write side because `WorkerLock` (`docs/storage.md`) already ensures only one
-    `lode-work` process embeds at a time -- no concurrent writer's in-progress files can be mistaken
-    for stale ones. It is not proven safe against every conceivable concurrent *reader*: every other
-    `VectorStore` construction in the codebase (`retrieval.py`, `tui/services/related.py`, `cli.py`'s
-    non-`work` commands) is a fresh, per-call instance that opens the *latest* table state at read
-    time, so a reader can never be holding a stale handle to files `optimize()` is about to remove --
-    but this reasoning was not empirically stress-tested against e.g. a `lode work --loop` process
-    truncating history while a long-running reader process (not currently a shape lode has) holds an
-    old snapshot mid-read. Revisit if a long-lived reader process is ever added.
+  - **`delete_unverified=True` was dropped on technical review — it bought nothing and carried a
+    documented corruption risk.** The build first passed it, reasoning that `WorkerLock` makes it safe
+    because only one `lode-work` process embeds at a time. The review declined that trade on two
+    grounds. First, it is not measurably load-bearing: re-running the growth experiment with the flag
+    on versus off is indistinguishable (194 MB vs 193 MB at 900 single-row calls; 200 MB vs 199 MB at
+    1200 twenty-row calls), which is what the flag's own semantics predict -- it only collects files
+    left behind by *failed* transactions, and a clean run leaves none. Second, LanceDB's own
+    `optimize()` docs carry an explicit warning that it "should only be set to True if you can
+    guarantee that no other process is currently working on this dataset. Otherwise the dataset could
+    be put into a corrupted state" -- and `WorkerLock` guarantees only that one `lode work` process
+    runs, not that nothing else touches the LanceDB directory (`embedding.py`'s indexer seam,
+    `retrieval.py`, `tui/services/related.py` and `cli.py`'s non-`work` commands all open the same
+    store from other processes). Paying a corruption risk on the user's real vector store for no
+    measured benefit is the wrong side of that trade; `cleanup_older_than=timedelta(0)` alone is what
+    prunes the version history the bound actually needs.
+  - **The periodic-prune path had no test at all** (default interval `200`, so no existing test ever
+    reached it) -- an unexercised branch that runs a destructive `optimize()` against the live store.
+    The review added `tests/test_vectorstore.py`'s
+    `test_periodic_optimize_prunes_history_without_losing_current_rows`, which drives a small
+    `vectorstore_optimize_interval` across the boundary and pins that the current rows survive, the
+    old versions are actually pruned, and the counter re-arms.
   - **The `store=` seam itself is not where the win is.** `VectorStore.__init__` does no I/O, so a
     caller passing `store=` versus letting `embed()` construct its own costs nothing extra on its own
     -- mirrored from `embedding.embed()`'s own `embedder=` seam (lode-j5r2) purely so

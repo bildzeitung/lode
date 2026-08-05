@@ -1141,8 +1141,8 @@ def drain(
     **One shared VectorStore per call too (lode-2brb), same shape.** ``store``
     if given, else one constructed here, is threaded into every ``embed`` job
     the same way ``embedder`` is, so a drain's jobs share one opened LanceDB
-    table (:meth:`~lode.vectorstore.VectorStore._open_or_create_table`'s
-    caching) instead of each job reopening it.
+    table instead of each job reopening it
+    (:meth:`~lode.vectorstore.VectorStore._open_or_create_table`).
 
     ``_registry`` is injectable for tests; production callers omit it and the
     module-level :data:`_REGISTRY` is used. ``_batch_client`` is injectable for
@@ -1204,9 +1204,7 @@ def drain(
         reset_probe = getattr(embedder, "reset_revision_probe", None)
         if reset_probe is not None:
             reset_probe()
-        # Same hoist for the VectorStore (lode-2brb) -- one instance shares its
-        # opened LanceDB table across this call's embed jobs (VectorStore's own
-        # checkout_latest()-on-every-use keeps it seeing fresh writes).
+        # Same hoist for the VectorStore (lode-2brb) -- see the docstring above.
         if store is None:
             from lode.vectorstore import VectorStore
 
@@ -1376,11 +1374,9 @@ def _embed_handler(
     (the default) preserves the per-call construction, so a caller that invokes
     this handler directly is unaffected.
 
-    ``store``, likewise, is threaded straight through to
-    :func:`lode.embedding.embed`'s own ``store=`` seam (lode-2brb) instead of
-    letting it construct a fresh :class:`~lode.vectorstore.VectorStore` per job
-    — :func:`drain` binds this the same way it binds ``embedder``. ``None``
-    preserves the per-call construction.
+    ``store`` is threaded straight through to :func:`lode.embedding.embed`'s
+    own ``store=`` seam (lode-2brb), bound by :func:`drain` the same way it
+    binds ``embedder``. ``None`` preserves the per-call construction.
     """
     from lode.embedding import embed
     from lode.externals import gate_reenrich

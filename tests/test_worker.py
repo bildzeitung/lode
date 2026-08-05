@@ -2698,6 +2698,15 @@ def test_drain_shares_one_vectorstore_across_all_embed_jobs_in_the_loop(
     instance across its main loop (the real, un-overridden module-level
     registry) and threads it into every ``embed`` job through the handler's
     own ``store=`` seam.
+
+    Patches the name in ``lode.embedding`` as well as in ``lode.vectorstore``,
+    and that is load-bearing: ``embedding.py`` binds ``VectorStore`` at import
+    time, so patching only ``lode.vectorstore`` leaves ``embed()``'s fallback
+    construction resolving to the *real* class -- uncounted. Under that
+    single-patch form this test still passed with ``store=store`` deleted from
+    ``drain``'s ``functools.partial`` outright, i.e. it could not see the very
+    threading it exists to pin (found on technical review). With both names
+    patched, that sabotage yields 4 constructions, not 1.
     """
     from conftest import _OfflineQueryEmbedder
 
@@ -2716,6 +2725,7 @@ def test_drain_shares_one_vectorstore_across_all_embed_jobs_in_the_loop(
             _CountingVectorStore.constructions += 1
 
     monkeypatch.setattr(vectorstore_mod, "VectorStore", _CountingVectorStore)
+    monkeypatch.setattr(embedding_mod, "VectorStore", _CountingVectorStore)
 
     for i in range(3):
         _insert_note_worker(
