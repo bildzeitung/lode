@@ -24,6 +24,7 @@ shared (lode-zlg8).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -59,6 +60,7 @@ def run_hook(
     *,
     path: str | None = None,
     cwd: Path | None = None,
+    project_dir: str | None = None,
 ) -> dict | None:
     """Run `hook` (a PreToolUse shell one-liner, as returned by `pretooluse_hook`) against a
     synthetic Bash-tool-call payload carrying `command`; return its `hookSpecificOutput`, or
@@ -72,10 +74,19 @@ def run_hook(
 
     `cwd`, when given, overrides the subprocess's working directory -- used by guards (like
     lode-fpmi's) whose logic depends on `git rev-parse --show-toplevel` resolving a real repo.
+
+    `project_dir`, when given, sets `CLAUDE_PROJECT_DIR` -- used by the guards that resolve a
+    helper script under it (lode-obox), to point them at a directory where that script is
+    missing or non-executable and check they fail closed.
     """
     payload = json.dumps(
         {"session_id": "t", "tool_name": "Bash", "tool_input": {"command": command}}
     )
+    env: dict[str, str] | None = None
+    if path is not None or project_dir is not None:
+        env = dict(os.environ) if path is None else {"PATH": path}
+        if project_dir is not None:
+            env["CLAUDE_PROJECT_DIR"] = project_dir
     proc = subprocess.run(
         [SH, "-c", hook],
         input=payload,
@@ -83,7 +94,7 @@ def run_hook(
         capture_output=True,
         text=True,
         timeout=30,
-        env=None if path is None else {"PATH": path},
+        env=env,
         check=False,
     )
     # A PreToolUse hook must always exit 0; a nonzero exit is itself a defect.

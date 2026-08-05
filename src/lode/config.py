@@ -304,7 +304,7 @@ class Settings(BaseModel):
         "aborted outright.",
         gt=0.0,
     )
-    llm_call_timeout_s: float = _knob(
+    enrich_call_timeout_s: float = _knob(
         120.0,
         Kind.RUNTIME,
         "Per-call client-side timeout (seconds) passed to every ENRICHMENT "
@@ -313,10 +313,13 @@ class Settings(BaseModel):
         "the Batches API pre-steps and the immediate Haiku call a residual "
         "enrich job can take in drain()'s main loop) -- bounds a hung network "
         "call rather than letting it block forever (lode-olmi.15). Renamed "
-        "vendor-neutral from anthropic_call_timeout_s (lode-568v.1/.2); a "
-        "config.toml still carrying the old key is remapped by "
-        "load_settings(). Distinct from fetch_timeout_s, which governs web "
-        "draw-down HTTP fetches, not LLM provider calls. NO LONGER REACHES "
+        "vendor-neutral from anthropic_call_timeout_s (lode-568v.1/.2), then "
+        "renamed again from llm_call_timeout_s to enrich_call_timeout_s "
+        "(lode-7y6s) once the qa_call_timeout_s split (lode-wfyx) left the "
+        "general name covering only this enrichment subset. A config.toml "
+        "still carrying either old key is remapped by load_settings(). "
+        "Distinct from fetch_timeout_s, which governs web "
+        "draw-down HTTP fetches, not LLM provider calls. Does NOT reach "
         "the Q&A synthesis call (qa.py) -- that call has its own "
         "qa_call_timeout_s below, split off in lode-wfyx because one shared "
         "value couldn't serve both a foreground TUI call with adaptive "
@@ -328,11 +331,11 @@ class Settings(BaseModel):
         300.0,
         Kind.RUNTIME,
         "Per-call client-side timeout (seconds) for the Q&A synthesis call "
-        "ONLY (qa.py's structured_call) -- split off llm_call_timeout_s "
+        "ONLY (qa.py's structured_call) -- split off enrich_call_timeout_s "
         "(lode-wfyx), which still governs every enrich.py call site "
         "unchanged. Needed because lode-3dlt let the think-harder tier "
         "(qa_think_harder_llm, Opus 5 by default) run adaptive thinking it "
-        "previously never did, while llm_call_timeout_s stayed at 120s -- "
+        "previously never did, while enrich_call_timeout_s stayed at 120s -- "
         "plausibly too short once thinking shares qa.MAX_TOKENS with the "
         "claims response. The default is DERIVED, NOT a measured p95 (a live "
         "p95 benchmark was deliberately declined on cost/value, not for lack "
@@ -720,13 +723,19 @@ def load_settings(**overrides: object) -> Settings:
     if path.is_file():
         with path.open("rb") as handle:
             file_values = tomllib.load(handle)
-    # Back-compat rename (lode-568v.2): a config.toml still carrying the old
-    # Anthropic-named key keeps working rather than tripping extra="forbid" --
-    # docs/stack.md "Config shape". Only applies to the file layer; overrides
+    # Back-compat rename chain (lode-568v.2, then lode-7y6s): a config.toml
+    # still carrying either old key keeps working rather than tripping
+    # extra="forbid" -- docs/stack.md "Config shape". The hops run
+    # oldest-first so each one's output feeds the next; that ORDER IS
+    # LOAD-BEARING, not incidental. Only applies to the file layer; overrides
     # (CLI flags, tests) are expected to already use the current name.
     if "anthropic_call_timeout_s" in file_values:
         file_values.setdefault(
             "llm_call_timeout_s", file_values.pop("anthropic_call_timeout_s")
+        )
+    if "llm_call_timeout_s" in file_values:
+        file_values.setdefault(
+            "enrich_call_timeout_s", file_values.pop("llm_call_timeout_s")
         )
     supplied = {
         k: v

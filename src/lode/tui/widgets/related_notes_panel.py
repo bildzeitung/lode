@@ -238,7 +238,12 @@ class RelatedNotesPanel(Static):
         find_related_notes`'s ``db_path.exists()`` guard, lode-e1s) and its
         result was always discarded here (nothing left mounted to render
         into) -- this just stops the wasted embed + FTS5 + LanceDB pass from
-        running at all.
+        running at all -- but only for the part that *can* be stopped: a pass
+        already inside :meth:`_search_related`'s ``asyncio.to_thread`` call
+        runs to completion regardless, and cancelling merely discards its
+        result. See :meth:`_cancel_related_pass` and docs/tui.md's
+        "RelatedNotesPanel's background pass" section for the
+        tolerate-the-straggler decision that accepts that residual.
         """
         self._cancel_related_pass()
 
@@ -255,6 +260,14 @@ class RelatedNotesPanel(Static):
         that follows, so a cancelled worker cannot resume and repaint in the
         gap -- it wakes with ``CancelledError`` at its ``await`` inside
         :meth:`_search_related` instead of returning results.
+
+        "Prompt enough" is a claim about the coroutine side only. The
+        ``asyncio.to_thread`` work it awaits is uncancellable: a pass already
+        running in its thread keeps executing to completion on its own
+        schedule, so this discards that pass's result rather than stopping
+        its work. See docs/tui.md's "RelatedNotesPanel's background pass"
+        section for the tolerate-the-straggler decision that accepts this
+        residual.
         """
         if self._related_timer is not None:
             self._related_timer.stop()

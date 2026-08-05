@@ -23,7 +23,7 @@ from unittest import mock
 
 import httpx
 import pytest
-from conftest import (
+from _anthropic_rig import (
     _jsonl,
     _payload_without,
     _real_anthropic_client,
@@ -109,13 +109,14 @@ def _insert_enrich_job(
     conn: sqlite3.Connection,
     version_id: str = "ver-1",
     status: str = "pending",
+    prompt_ver: str | None = None,
 ) -> int:
-    """Insert a pending enrich job row; return the job id."""
+    """Insert an enrich job row; return the job id."""
     with conn:
         cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, now_iso()),
+            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?, ?)",
+            (version_id, status, prompt_ver, now_iso()),
         )
     return cur.lastrowid
 
@@ -429,14 +430,14 @@ def test_enrich_version_returns_result(
 def test_enrich_version_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """The immediate Haiku call is bounded by Settings.llm_call_timeout_s
+    """The immediate Haiku call is bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- this call is reachable from 'lode work's drain loop (a
     residual enrich job claimed by the main claim/run loop), so with no
     client-side timeout it could otherwise hang the drain forever.
     """
     _insert_note(conn)
     result = EnrichmentResult(tags=["design"], entities=[], inferred_edges=[])
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_client(result)
     enrich_version(conn, "ver-1", settings, provider=AnthropicProvider(client))
 
@@ -1108,25 +1109,6 @@ def test_enrich_gap_multiple_versions(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _insert_done_enrich_job(
-    conn: sqlite3.Connection,
-    *,
-    target_version: str = "ver-1",
-    prompt_ver: str | None = None,
-) -> None:
-    """Insert a ``status='done'`` enrich job row with the given ``prompt_ver``.
-
-    ``prompt_ver=None`` (the default) reproduces a job that completed before
-    lode-q47 stamped it, or one the schema left NULL at enqueue time.
-    """
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status, prompt_ver, next_attempt_at) "
-            "VALUES ('enrich', ?, 'done', ?, ?)",
-            (target_version, prompt_ver, now_iso()),
-        )
-
-
 def test_enrich_gap_done_job_missing_prompt_ver_is_gap(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1137,7 +1119,7 @@ def test_enrich_gap_done_job_missing_prompt_ver_is_gap(
     version produced it, so reconcile must re-enqueue.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=None)
+    _insert_enrich_job(conn, status="done", prompt_ver=None)
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1155,7 +1137,7 @@ def test_enrich_gap_done_job_with_current_prompt_ver_is_not_a_gap(
     ENRICH_PROMPT_VER is NOT a gap -- reconcile must not re-enqueue
     enrichment that is already current."""
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=ENRICH_PROMPT_VER)
+    _insert_enrich_job(conn, status="done", prompt_ver=ENRICH_PROMPT_VER)
     assert _enrich_gap_step(conn) == 0
     # No new job was enqueued.
     rows = conn.execute(
@@ -1174,7 +1156,7 @@ def test_enrich_gap_reenqueues_on_stale_prompt_ver(
     reconcile scan drives corpus-wide re-enrichment.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver="some-older-prompt-ver")
+    _insert_enrich_job(conn, status="done", prompt_ver="some-older-prompt-ver")
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1199,7 +1181,7 @@ def test_enrich_gap_empty_summary_with_current_prompt_ver_is_not_a_gap(
     every reconcile tick, forever.
     """
     _insert_note(conn)
-    _insert_done_enrich_job(conn, prompt_ver=ENRICH_PROMPT_VER)
+    _insert_enrich_job(conn, status="done", prompt_ver=ENRICH_PROMPT_VER)
     # Deliberately no summary annotation inserted at all.
     assert _enrich_gap_step(conn) == 0
     rows = conn.execute(
@@ -1294,14 +1276,14 @@ def test_submit_enrich_batch_returns_batch_id(
 def test_submit_enrich_batch_passes_anthropic_call_timeout_to_create(
     conn: sqlite3.Connection,
 ) -> None:
-    """create() is bounded by Settings.llm_call_timeout_s (lode-olmi.15) --
+    """create() is bounded by Settings.enrich_call_timeout_s (lode-olmi.15) --
     the network call that commits the spend must not be able to hang forever
     with no client-side timeout at all.
     """
     _insert_note(conn)
     job_id = _insert_enrich_job(conn)
 
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(batch_id="batch-xyz")
     submit_enrich_batch(
         conn, [(job_id, "ver-1")], settings, provider=AnthropicProvider(client)
@@ -1616,7 +1598,7 @@ def test_collect_enrich_batch_returns_false_when_in_progress(
 def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_results(
     conn: sqlite3.Connection,
 ) -> None:
-    """retrieve()/results() are bounded by Settings.llm_call_timeout_s
+    """retrieve()/results() are bounded by Settings.enrich_call_timeout_s
     (lode-olmi.15) -- with no client-side timeout either call could otherwise
     hang forever with no signal back to 'lode work'.
     """
@@ -1626,7 +1608,7 @@ def test_collect_enrich_batch_passes_anthropic_call_timeout_to_retrieve_and_resu
         conn.execute(
             "UPDATE jobs SET batch_handle = 'batch-done' WHERE id = ?", (job_id,)
         )
-    settings = Settings(llm_call_timeout_s=42.0)
+    settings = Settings(enrich_call_timeout_s=42.0)
     client = _fake_batch_client(results=[])
     collect_enrich_batch(
         conn, "batch-done", settings, provider=AnthropicProvider(client)

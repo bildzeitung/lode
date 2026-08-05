@@ -177,6 +177,16 @@ carries a `timeout-minutes` (all five are named in the ladder below).
   `tests`/`coverage` because it has no model download to hang on. So: size a future cap by expected
   runtime plus headroom, and depart from that ordering only where a false trip's *consequence*
   justifies it, as `release` does (lode-w35h).
+- **`release.yml` also declines the pip cache `build.yml`'s `setup-python` step carries**
+  (`cache: pip` + `cache-dependency-path: pyproject.toml`) — **on clean-room grounds**, which is a
+  *different* reason from the `concurrency:` exclusion above (that one is about tag refs never
+  colliding, not about isolation). `setup-python`'s cache key comes from
+  OS/arch/python-version/dependency-file-hash, not the workflow name, so enabling it on `release.yml`
+  would restore a cache `build.yml` populated on `trunk` rather than build a fresh one — taking the
+  publishing leg's dependencies from a non-publishing workflow's cache is exactly what the clean-room
+  framing exists to avoid. Distinct again from `tests.yml`/`coverage.yml`, which skip `cache: pip`
+  only because their `uv`-based install would leave it empty. As with the timeout ladder, this is not
+  a runtime call: release runs measure 14-30s of job time regardless (lode-le9e).
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 

@@ -1288,9 +1288,10 @@ kind of op it is:**
   calls (Anthropic's `client.beta.messages.batches.create`/`retrieve`/`results`
   under the default provider; serialized immediate calls under a provider with
   no batch API) and the immediate `structured_call` a residual `enrich` job can
-  take in `drain()`'s main claim/run loop — one is: `Settings.llm_call_timeout_s`
+  take in `drain()`'s main claim/run loop — one is: `Settings.enrich_call_timeout_s`
   (default 120s; renamed vendor-neutral from `anthropic_call_timeout_s`,
-  `lode-568v.1`/`.2` — a `config.toml` still carrying the old key is remapped),
+  `lode-568v.1`/`.2`, then renamed again from `llm_call_timeout_s` in
+  `lode-7y6s` — a `config.toml` still carrying either old key is remapped),
   the same pattern `fetch_timeout_s` already established for web draw-down HTTP
   fetches. A timed-out call now raises rather than hanging forever; the existing
   transient-failure retry/backoff accounting handles it like any other failure.
