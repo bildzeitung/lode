@@ -205,10 +205,13 @@ gate_could_not_run() {
 # partition exists to prevent. Measured while writing lode-yoc3's tests, the
 # fix that introduced the first copy of this idiom.
 #
-# Returns 0 on the content path rather than merely declining to escalate:
-# scripts/validate-mermaid.sh runs under `set -e`, where a nonzero return
-# here would abort that gate mid-loop with exit 1 -- which in THAT script
-# means "invalid mermaid", i.e. a fabricated content verdict. Pinned by
+# Returns 0 on the content path rather than merely declining to escalate: a
+# consumer may run under `set -e`, where a nonzero return here would abort
+# that gate mid-loop with exit 1 -- which in a gate whose content verdict IS
+# exit 1 is a fabricated content verdict. Stated as a property of the
+# contract, not of one caller: scripts/validate-mermaid.sh was the original
+# such caller and dropped `-e` in lode-6znq, but this guarantee must not
+# depend on which consumers currently set it. Pinned by
 # tests/test_gate_lib.py's `-e` case.
 #
 # Does NOT cover scripts/merge-precheck.sh's exit-code checks: that script
