@@ -708,6 +708,43 @@ def test_allowlist_entries_all_have_a_reason() -> None:
         assert reason.strip(), f"allowlist entry {key} has an empty reason"
 
 
+def _unfiltered_live_pairs(
+    sources: list[Path] | None = None,
+) -> set[tuple[Path, str]]:
+    """(source path, var) for every used-and-unassigned occurrence anywhere in
+    `sources` (default: the real shipped skill/agent corpus, `_source_files()`),
+    computed with NO filtering at all -- neither ALLOWLIST nor `_KNOWN_ENV_VARS`.
+
+    This is the ONE shared, unfiltered scan both liveness pins below project from
+    (lode-dutt). Before this, `_dead_allowlist_keys` routed through `find_violations`
+    (which subtracts `_KNOWN_ENV_VARS` internally) while `_dead_known_env_vars` called
+    `_unassigned_uses` directly with `known` left empty -- two different primitives
+    that happened to agree only because ALLOWLIST filtering lives outside
+    `find_violations` while `_KNOWN_ENV_VARS` filtering lives inside it. That was an
+    accident of where two filters currently sit, not a property either primitive
+    actually pinned: the day someone moved `_KNOWN_ENV_VARS` filtering out of
+    `find_violations` (a reasonable symmetry cleanup), `_dead_allowlist_keys` would
+    silently start reporting any allowlist key whose var name is also a known env var
+    as dead, with nothing catching it. Routing both pins through this single scan and
+    letting each apply its OWN filter on top (see the two call sites below) removes
+    that hazard structurally: each pin's semantics are now pinned in ITS OWN code,
+    not inherited from where a filter happens to live elsewhere.
+
+    Paths are returned as given (not made root-relative) so this primitive commits to
+    no particular key shape -- `_dead_allowlist_keys` derives a root-relative key from
+    them; `_dead_known_env_vars` only needs the var name and never looks at the path.
+    """
+    if sources is None:
+        sources = _source_files()
+    pairs: set[tuple[Path, str]] = set()
+    for source_md in sources:
+        text = source_md.read_text(encoding="utf-8")
+        for block in _bash_blocks(text):
+            for var in _unassigned_uses(block):
+                pairs.add((source_md, var))
+    return pairs
+
+
 def _dead_allowlist_keys(
     allowlist: dict[tuple[str, str], str],
     *,
@@ -715,15 +752,22 @@ def _dead_allowlist_keys(
     root: Path = CLAUDE_DIR,
 ) -> list[tuple[str, str]]:
     """(file, var) keys in `allowlist` that no longer correspond to any real,
-    UNFILTERED violation across `sources` (default: the real shipped skill/agent
-    corpus, `_source_files()`) -- i.e. `find_violations` run without ALLOWLIST
-    filtering at all, exactly what `test_no_cross_block_shell_state_outside_the_
-    allowlist` filters BY. A key returned here is dead: the (file, var) pair it names
-    does not exist as a cross-block use anywhere today, so it currently excuses
+    unfiltered violation across `sources` (default: the real shipped skill/agent
+    corpus, `_source_files()`) whose var name is NOT also a `_KNOWN_ENV_VARS` entry.
+    A key returned here is dead: the (file, var) pair it names does not exist as a
+    live, non-known-env cross-block use anywhere today, so it currently excuses
     nothing -- but the entry stays in `ALLOWLIST` regardless, ready to silently
     re-excuse a BRAND-NEW reintroduction of the exact same bug the moment one lands
     (the `$CONFLICTS` history in the module docstring above is this exact sequence,
     observed).
+
+    DELIBERATE, explicit asymmetry with `_dead_known_env_vars` below (lode-dutt): a
+    var also present in `_KNOWN_ENV_VARS` is excluded from `live` here, mirroring
+    production (`find_violations` subtracts `_KNOWN_ENV_VARS` before ALLOWLIST is
+    ever consulted, so no genuine ALLOWLIST key would legitimately name a known env
+    var). `test_allowlist_key_for_a_known_env_var_name_is_reported_dead` pins this
+    filter directly, so it can no longer regress silently if the two pins' shared
+    scan (`_unfiltered_live_pairs`) is ever refactored again.
 
     `allowlist`, `sources` and `root` are all parameters, not read from the module
     globals directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage`
@@ -741,13 +785,12 @@ def _dead_allowlist_keys(
     `test_no_cross_block_shell_state_outside_the_allowlist`, and relative to
     `tmp_path` there.
     """
-    if sources is None:
-        sources = _source_files()
-    live: set[tuple[str, str]] = set()
-    for source_md in sources:
-        rel = str(source_md.relative_to(root))
-        for _block_index, var in find_violations(source_md):
-            live.add((rel, var))
+    pairs = _unfiltered_live_pairs(sources)
+    live = {
+        (str(path.relative_to(root)), var)
+        for path, var in pairs
+        if var not in _KNOWN_ENV_VARS
+    }
     return sorted(set(allowlist) - live)
 
 
@@ -838,6 +881,44 @@ def test_every_allowlist_entry_is_provably_checked_by_sabotage(
     )
 
 
+def test_allowlist_key_for_a_known_env_var_name_is_reported_dead(
+    tmp_path: Path,
+) -> None:
+    """The gap lode-dutt closes: an ALLOWLIST key whose var name is ALSO a
+    `_KNOWN_ENV_VARS` entry must be reported dead by the allowlist liveness pin, even
+    though the name is a live UNFILTERED cross-block occurrence in the fixture --
+    because `_KNOWN_ENV_VARS` filtering happens before ALLOWLIST is ever consulted in
+    production (inside `find_violations`), so no genuine ALLOWLIST key would ever
+    legitimately name a known env var.
+
+    Before lode-dutt this filtering was an accident of `_dead_allowlist_keys` routing
+    through `find_violations`; the two pins now share one unfiltered scan
+    (`_unfiltered_live_pairs`), so this filter is pinned directly in
+    `_dead_allowlist_keys`'s own code instead of being inherited from where
+    `_KNOWN_ENV_VARS` filtering happens to live. Uses a REAL `_KNOWN_ENV_VARS` name
+    (`TMPDIR`) rather than a synthetic one, since `_dead_allowlist_keys` reads
+    `_KNOWN_ENV_VARS` from the module global, not as a parameter.
+
+    Sabotage recipe: drop the `if var not in _KNOWN_ENV_VARS` filter from
+    `_dead_allowlist_keys` and this test goes red (TMPDIR would count as live).
+    """
+    assert "TMPDIR" in _KNOWN_ENV_VARS, (
+        "fixture assumption: TMPDIR must be a real _KNOWN_ENV_VARS entry"
+    )
+    source = tmp_path / "skills" / "fixture" / "SKILL.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        '```bash\nTMPDIR=1\n```\n\n```bash\necho "$TMPDIR"\n```\n', encoding="utf-8"
+    )
+    key = ("skills/fixture/SKILL.md", "TMPDIR")
+    assert _dead_allowlist_keys({key: "fixture"}, sources=[source], root=tmp_path) == [
+        key
+    ], (
+        "an ALLOWLIST key naming a _KNOWN_ENV_VARS var must be reported dead even "
+        "though TMPDIR is a live unfiltered cross-block occurrence in the fixture"
+    )
+
+
 def test_known_env_vars_all_have_a_reason() -> None:
     for name, reason in _KNOWN_ENV_VARS.items():
         assert reason.strip(), f"_KNOWN_ENV_VARS entry {name!r} has an empty reason"
@@ -857,17 +938,17 @@ def _dead_known_env_vars(
     that exact name the moment one is written (`LAND_LOCK_STALE_SECONDS`, deleted
     above, was measured in exactly this state at this ticket's build, lode-rscn).
 
-    Deliberately NOT built on `find_violations` (unlike `_dead_allowlist_keys`,
-    which safely can be -- ALLOWLIST filtering is orthogonal to `_KNOWN_ENV_VARS`
-    filtering): `find_violations` already subtracts `_KNOWN_ENV_VARS` from `used`
-    before computing violations, so running it here would always report every name
-    in `known` as dead regardless of real corpus content -- the exact
-    self-defeating shape this helper exists to avoid. It calls `_unassigned_uses`
-    with `known` left empty instead, which is the SAME primitive `find_violations`
-    itself computes findings with, just unfiltered -- so "would this name have been
-    a finding" is answered by the gate's own notion of a finding and cannot drift
-    away from it (code-review, lode-rscn), mirroring `_dead_allowlist_keys`'s own
-    use of `find_violations` run "without ALLOWLIST filtering at all".
+    Now shares `_unfiltered_live_pairs` with `_dead_allowlist_keys` above (lode-dutt) --
+    the same unfiltered scan, projected to just the var names since entries here are
+    bare names, not (file, var) keys. Deliberately does NOT apply `_dead_allowlist_
+    keys`'s `_KNOWN_ENV_VARS` filter: that filter exists there because a genuine
+    ALLOWLIST key would never legitimately name a known env var (production filters
+    `_KNOWN_ENV_VARS` before ALLOWLIST is ever consulted); it has no meaning here,
+    where `known` IS `_KNOWN_ENV_VARS` itself -- applying it would make every name in
+    `known` report dead regardless of real corpus content, the exact self-defeating
+    shape this helper exists to avoid. This asymmetry is deliberate, not an oversight
+    (see `_unfiltered_live_pairs`'s own docstring), and is pinned by `test_allowlist_
+    key_for_a_known_env_var_name_is_reported_dead` on the ALLOWLIST side.
 
     `known` and `sources` are parameters, not read from module globals directly, so
     `test_every_known_env_var_is_provably_checked_by_sabotage` below can exercise
@@ -877,15 +958,11 @@ def _dead_known_env_vars(
     liveness is a question about the NAMES only, and typing it that way keeps a
     caller (the sabotage test) from having to invent a reason string the function
     never reads. No `root` parameter (unlike `_dead_allowlist_keys`): entries here
-    are bare names, not (file, var) keys, so there is no relative path to derive.
+    are bare names, not (file, var) keys, so there is no relative path to derive, and
+    `_unfiltered_live_pairs` is called without one for the same reason.
     """
-    if sources is None:
-        sources = _source_files()
-    live: set[str] = set()
-    for source_md in sources:
-        text = source_md.read_text(encoding="utf-8")
-        for block in _bash_blocks(text):
-            live.update(_unassigned_uses(block))
+    pairs = _unfiltered_live_pairs(sources)
+    live = {var for _path, var in pairs}
     return sorted(set(known) - live)
 
 
