@@ -153,10 +153,10 @@ ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`; and every
 carries a `timeout-minutes` (all five are named in the ladder below).
 
 - **`cancel-in-progress: true` is safe for the same reason the trigger narrowing above is safe.**
-  "Nothing in the landing loop reads these check results" (the section above) — so cancelling a
-  superseded run on an older commit of the same `land/<id>` or `trunk` ref discards nothing anyone
-  would have read. Nor is this a rare case: it fires on every one of the ~2-3 producer pushes per
-  ticket counted above (lode-2ouz).
+  "Nothing in the landing loop reads these check results" (the trigger-scope section above) — so
+  cancelling a superseded run on an older commit of the same `land/<id>` or `trunk` ref discards
+  nothing anyone would have read. Nor is this a rare case: it fires on every one of the ~2-3
+  producer pushes per ticket counted in that same section (lode-2ouz).
 - **`release.yml` is deliberately EXCLUDED from `concurrency:`.** It is tag-triggered
   (`push: tags: [v*]`), not branch-triggered, and each tag is its own distinct `github.ref` — so a
   `${{ github.workflow }}-${{ github.ref }}` group has no legitimate same-ref run to collide with in
@@ -173,7 +173,7 @@ carries a `timeout-minutes` (all five are named in the ladder below).
   `release` finishes in 14-30s of job time, at or below `build`'s recent 26-38s, so "release does
   build's work plus a publish step, therefore it needs longer" is refuted by the data. It sits
   above `build` because a false trip in `release` fails a PUBLISH, whereas one in `build` fails an
-  advisory check nothing in the landing loop reads (the bullet above); it sits below
+  advisory check nothing in the landing loop reads (the trigger-scope section above); it sits below
   `tests`/`coverage` because it has no model download to hang on. So: size a future cap by expected
   runtime plus headroom, and depart from that ordering only where a false trip's *consequence*
   justifies it, as `release` does (lode-w35h).
