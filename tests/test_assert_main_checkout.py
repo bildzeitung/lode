@@ -338,21 +338,17 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #
 # 1. INLINE COMMANDS ONLY -- SCRIPT-REFERENCE FOLLOWING IS DELIBERATELY OUT
 #    OF SCOPE. This sweep does not open `scripts/*.sh` and classify what it
-#    mutates; it only sees commands written directly in the fence. It did NOT
-#    catch lode-pxyt's first exposure on its own merits: Section 3's
-#    first-pass merge loop contained zero bare mutating git commands -- its
-#    only mutation was inside `scripts/land-merge-one.sh`, which this pattern
-#    special-cased by literal name at the time so the sweep could still catch
-#    it. As of **lode-1nty**, that special case is gone: `land-merge-one.sh`
-#    now asserts its own main-checkout identity internally (see that script's
-#    own header), so this sweep no longer needs to know about it, and neither
-#    of its two call sites in `land/SKILL.md` is flagged. A brand-new
-#    script REFERENCE (one this pattern does not special-case) is still
-#    caught by nothing here and would need the same manual discovery
-#    lode-pxyt's did. Measured while writing this: of the scripts referenced
-#    from an UNGUARDED fence today, none runs a cwd-resolved mutating git
-#    command -- their only git calls are `merge-base --is-ancestor` and
-#    `merge-tree --write-tree`, both read-only -- so the gap is latent, not
+#    mutates; it only sees commands written directly in the fence. It would
+#    NOT have caught lode-pxyt's exposure: that fence contained zero bare
+#    mutating git commands -- its only mutation was inside a referenced
+#    script. A script reference is caught by nothing here and would need the
+#    same manual discovery lode-pxyt's did. Measured while writing this, and
+#    re-measured for lode-1nty: of the scripts referenced from an UNGUARDED
+#    fence today, the only one running a cwd-resolved mutating git command is
+#    `scripts/land-merge-one.sh`, which asserts its OWN main-checkout identity
+#    internally (see that script's header) rather than depending on this
+#    sweep; every other one's git calls are `merge-base --is-ancestor` and
+#    `merge-tree --write-tree`, both read-only. So the gap is latent, not
 #    live. Re-measure rather than assume.
 # 2. THE MUTATING-COMMAND REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
 #    matches `git branch`, `git worktree`, and `git merge` as whole verbs,
@@ -395,15 +391,11 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 # asks ONE question -- does this line mutate cwd's repo -- so both classes
 # belong in one pattern rather than a git list plus side checks.
 #
-# `scripts/land-merge-one.sh` USED to be named literally here too (a
-# deliberate special case for KNOWN LIMITATION 1's script-following gap,
-# since its own bare `git merge --no-ff` is the fence's only mutation). As of
-# **lode-1nty** that script asserts its own main-checkout identity
-# internally, so it no longer needs this sweep's protection at all -- neither
-# of its two `land/SKILL.md` call sites is a violation without a preceding
-# `assert-main-checkout.sh` in its own fence, guarded or not. Do not re-add
-# it here without re-litigating that decision (docs/agents-workflow.md's
-# main-checkout section).
+# Do NOT re-add `scripts/land-merge-one.sh` here: it was named literally as a
+# special case until lode-1nty, and now asserts its own main-checkout identity
+# internally instead, so this sweep does not need to know it exists. Re-adding
+# it means re-litigating that decision (docs/agents-workflow.md's main-checkout
+# section).
 #
 # The bd WRITE side is out of scope here, not overlooked: `land/SKILL.md` only
 # ever reaches it through `scripts/bd-dolt-push.sh`, which is KNOWN

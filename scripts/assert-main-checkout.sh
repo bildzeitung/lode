@@ -7,11 +7,10 @@
 # another's. Do NOT maintain the call-site list here: it went stale within one
 # ticket of being written, which is why this header now names the RULE instead.
 # tests/test_assert_main_checkout.py's sweep is the authoritative list for
-# land/SKILL.md's own fences. As of lode-1nty, this script also has a
-# non-land/SKILL.md caller: scripts/land-merge-one.sh asserts its own
-# main-checkout identity internally (its first real action), rather than
-# relying on every one of its call sites to fence-guard it -- see that
-# script's own header. Note that not every caller opens with a `git reset
+# land/SKILL.md's own fences. The same rule covers a caller that is itself a
+# script rather than a fence: a tool whose whole body assumes the main
+# checkout calls this as its own first action instead of making every one of
+# its call sites remember to. Note that not every caller opens with a `git reset
 # --hard` -- the reset is the worst case the diagnostic below narrates, not the
 # only thing this guard protects (see lode-ibfw on that message's wording).
 #
