@@ -1412,14 +1412,14 @@ def _fenced_bash(markdown: str) -> str:
     return "\n".join(bash_fence_blocks(markdown))
 
 
-#: The land skill doc, read by several test modules that parse its fenced bash
-#: blocks (via :func:`bash_fence_blocks`/:func:`_fenced_bash` above). Was
-#: defined byte-identically in four modules (test_worktree_gc_classify.py,
+#: The land skill doc. Three of its readers parse its fenced bash blocks (via
+#: :func:`bash_fence_blocks`/:func:`_fenced_bash` above), which is why it lives
+#: here; test_worktree_gc_classify.py reads the same file but scans its
+#: ``case "$BUCKET"`` dispatch directly rather than through the fence parser.
+#: Was defined byte-identically in four modules (test_worktree_gc_classify.py,
 #: test_land_conflicts_state.py, test_land_lock.py,
 #: test_assert_main_checkout.py) until lode-va47 consolidated it here.
-LAND_SKILL = (
-    Path(__file__).resolve().parent.parent / ".claude" / "skills" / "land" / "SKILL.md"
-)
+LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------
