@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
+from conftest import _BLOCKQUOTE_MARKER, LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -1350,11 +1350,24 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     independence this test trades on. If someone ever adds such a block to
     land/SKILL.md, the answer is to re-derive the expected count some third way,
     NOT to relax the parser.
+
+    lode-wroz widened the parser again -- one leading blockquote marker is
+    stripped from every line -- so the count strips it too, through the SAME
+    `_BLOCKQUOTE_MARKER` the parser normalizes with. Sharing the marker shape
+    is not sharing the method: still a flat per-line count, no scan loop.
+    Verified against a scratch copy with one illustrative `> ```bash` /
+    `> echo hi` / `> ``` ` block appended: without the strip, one fewer
+    marker than parsed blocks, and this test goes red blaming the parser for
+    finding a fence the counter simply could not see under its blockquote;
+    with it, the two agree. No blockquoted fence exists in land/SKILL.md
+    today, so the strip is a measured no-op as shipped.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
     expected_marker_count = sum(
-        1 for line in text.splitlines() if opening_marker.match(line.strip())
+        1
+        for raw_line in text.splitlines()
+        if opening_marker.match(_BLOCKQUOTE_MARKER.sub("", raw_line, count=1).strip())
     )
     # A sanity floor on the independent count itself -- if this ever drops to
     # 0 the file lost every bash fence, which is a different, louder bug this
@@ -1366,8 +1379,11 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     assert parsed_block_count == expected_marker_count, (
         f"parsed {parsed_block_count} ```bash/```sh fenced blocks but "
         f"{expected_marker_count} opening ```bash/```sh markers exist in the "
-        "file -- the parser is missing some, e.g. an INDENTED fence a "
-        "column-0-anchored scanner cannot see (lode-ovgs)"
+        "file -- EITHER the parser is missing some (e.g. an INDENTED fence a "
+        "column-0-anchored scanner cannot see, lode-ovgs) OR this test's own "
+        "independent counter has drifted from the parser's fence-shape/"
+        "blockquote rules and is over- or under-counting -- check both "
+        "before assuming the parser is at fault"
     )
 
 
