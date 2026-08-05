@@ -1,20 +1,20 @@
 """Shared real-SDK Anthropic batch-results test rig (lode-a9x3, lode-qnfp).
 
-Moved here from `tests/conftest.py` rather than left there: none of these six
-names is a pytest fixture -- they are plain functions imported by an explicit
-`from _anthropic_rig import ...`, exactly like `tests/_gitrepo.py`'s `_git`
-and `tests/_hookharness.py`'s harness, this repo's precedent for a
+Moved here from `tests/conftest.py` rather than left there (lode-qnfp): none
+of these names is a pytest fixture -- they are plain functions imported by an
+explicit `from _anthropic_rig import ...`, exactly like `tests/_gitrepo.py`'s
+`_git` and `tests/_hookharness.py`'s harness, this repo's precedent for a
 cross-module SHARED TEST HELPER that needs none of conftest's collection
-magic. Living in conftest.py meant ~130 lines of Anthropic-batch-wire fixture
-trivia in the one module auto-loaded for every test in the suite; a dedicated
-module costs one file plus two import lines and keeps conftest.py's contents
-meaning "fixtures and collection hooks."
+magic. The specific reason to move THIS block: it is a large body of
+Anthropic-batch-wire fixture trivia relevant only to its own callers, sitting
+in the one module every test module sees. That is not a general "conftest.py
+holds no plain helpers" rule -- conftest.py deliberately keeps several
+(docs/tui.md "One home: tests/conftest.py", lode-lcju).
 
-Both callers drive a REAL `anthropic.Anthropic` client answered in-process by
-`httpx.MockTransport`, because a MagicMock-based fake client can't reproduce
-the SDK's own `construct_type_unchecked` leniency for a wrong-shape line --
-`_wrong_shape_result`'s docstring in src/lode/llm_provider.py owns that
-reasoning, deferring in turn to docs/stack.md "Error contract".
+Its callers drive a REAL `anthropic.Anthropic` client answered in-process by
+`httpx.MockTransport` rather than a MagicMock -- `_real_anthropic_client`
+below has the reasoning, deferring to `_wrong_shape_result`'s docstring in
+src/lode/llm_provider.py and in turn to docs/stack.md "Error contract".
 
 Hoisted at TWO copies, under the three-copy bar tests/_gitrepo.py records:
 the second copy was a ~40-line hand-duplication of SDK-shaped fixture data
@@ -39,8 +39,10 @@ def _real_anthropic_client(
     The ``MagicMock`` ``collect_batch`` tests raise from the call by
     construction, so they cannot see *when* the SDK resolves status or decodes
     a line -- and that timing is the entire subject of the real-SDK tests. Each
-    caller carries ``@pytest.mark.network`` to lift the autouse
-    real-client-construction guard above (lode-85q); ``httpx.MockTransport``
+    caller carries ``@pytest.mark.network`` to lift
+    ``tests/conftest.py``'s autouse
+    ``_block_unmocked_network_and_llm_access`` guard (lode-85q);
+    ``httpx.MockTransport``
     answers in-process, so no socket is ever opened.
     """
     import anthropic
