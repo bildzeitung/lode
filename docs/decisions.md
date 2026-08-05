@@ -3419,12 +3419,15 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   canonicalized (fixing a real symmetry gap), THREE sites kept as WONTFIX literals.** Filed while
   technically reviewing `lode-do3q` (entry above), which deliberately scoped out this second,
   distinct cluster: `git restore --staged [--worktree] .beads/issues.jsonl` at four sites —
-  `scripts/land-merge-one.sh`, two bash blocks in `.claude/skills/land/SKILL.md`, one bash block in
-  `.claude/skills/release/SKILL.md`, and a command-string allowlist entry in
+  `scripts/land-merge-one.sh`, an executable bash fence in `.claude/skills/land/SKILL.md`, one bash
+  block in `.claude/skills/release/SKILL.md`, and a command-string allowlist entry in
   `tests/test_land_skill_guard_coverage.py` (the ticket's own text named
   `tests/test_assert_main_checkout.py` for the fourth site; that file exists but has no such
   reference — the allowlist actually lives in `test_land_skill_guard_coverage.py`, confirmed by
-  `grep` during this ticket; noted here so the record doesn't repeat the stale pointer).
+  `grep` during this ticket; and the ticket claimed *two* executable bash blocks in
+  `.claude/skills/land/SKILL.md`, where `grep -n 'restore --staged'` returns one — the file's other
+  mentions of the export are prose. Noted so the record doesn't carry the ticket's stale pointers
+  forward).
 
   **Investigated first: does the pre-commit hook ever stage `.beads/interactions.jsonl` too, or only
   `.beads/issues.jsonl`?** The ticket's own guidance offered a WONTFIX-shaped out if the answer were
@@ -3446,29 +3449,42 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     does. `restore` on a path that isn't staged is a harmless no-op (`2>/dev/null || true`), so this
     changes nothing on the common one-file case and only helps on the rarer case where
     `interactions.jsonl` is the one caught mid-trap.
-  - The two `.claude/skills/land/SKILL.md` bash blocks, the one `.claude/skills/release/SKILL.md`
+  - The `.claude/skills/land/SKILL.md` bash fence, the one `.claude/skills/release/SKILL.md`
     bash block, and the `tests/test_land_skill_guard_coverage.py` allowlist entry are left as literal
-    copies — WONTFIX, not simply missed. Per the ticket's own framing: bash embedded in a markdown
-    skill cannot read a data file as cheaply as a real script can (no `$(dirname "$0")`-relative
-    sourcing available the way a script has), and the test allowlist is a hand-authored sabotage-sweep
-    key matched on exact command text, not a place that reads files at runtime at all — canonicalizing
-    it would mean redesigning the sweep to accept a family of equivalent strings, well past what this
-    ticket asked for. Two of these three sites are also narrower in scope than the merge-retry trap:
-    `.claude/skills/land/SKILL.md`'s Section 3a is a *pre-check* — "if the only dirty path is
-    `.beads/issues.jsonl`, discard it and proceed; if anything else is dirty, stop and surface it" —
-    deliberately narrow to that one file today, and widening it to also silently discard a dirty
-    `.beads/interactions.jsonl` is a separate scope decision this ticket does not make unilaterally.
-  - **No behavior change to the release path.** `.claude/skills/release/SKILL.md`'s bash block is
-    untouched.
-  - **No behavior change to `/land`'s merge path beyond the one deliberate widening above.** The
-    retry-once shape, the real-conflict detection (`git ls-files -u`), and the exit-code contract are
-    all unchanged; only the *set of paths* the retry restores grew from one to the canonical two, and
-    only in the one script that can cheaply source the canonical list.
-  - This keeps the RENAME cost `lode-do3q`'s entry cites (a four-file edit) intact — a hypothetical
-    rename of `.beads/issues.jsonl` would still need to touch all four sites (three literal, one now
-    reading a list keyed on the same literal name) — canonicalizing one site does not change that
-    figure, since the WONTFIX sites still hardcode the string.
-  - Pinned by `tests/test_land_merge_one_passive_exports.py`, in the same shape as
-    `tests/test_beads_passive_exports.py`: no literal `.beads/issues.jsonl` or
-    `.beads/interactions.jsonl` string survives in `scripts/land-merge-one.sh`, and the script still
-    names `scripts/beads-passive-exports.txt` by filename.
+    copies — WONTFIX, not simply missed. A markdown fence cannot read a data file the way a script
+    can (no `$(dirname "$0")` to resolve against), so canonicalizing one would mean adding a *second*
+    literal — moving the cluster backwards. The test allowlist is a hand-authored sabotage-sweep key
+    matched on exact command text and reads no files at runtime; canonicalizing it would mean
+    redesigning the sweep to accept a family of equivalent strings. **The two skill fences are
+    WONTFIX for different reasons, and the distinction matters to whoever revisits this:**
+    - `.claude/skills/land/SKILL.md`'s fence is an *unconditional* `git restore --staged --worktree
+      … || true` run before the merge loop. Widening it to the second export would be exactly as
+      harmless as the widening made in `scripts/land-merge-one.sh` above — it is left alone purely
+      on the cost above, not because widening is risky.
+    - `.claude/skills/release/SKILL.md`'s block is a genuine *conditional pre-check*: "when the
+      **only** dirty path is `.beads/issues.jsonl`, discard it and proceed; if anything else is
+      dirty, stop and surface it." Widening that one changes what counts as a clean tree for a
+      release — a real scope decision this ticket does not make unilaterally.
+
+    A future editor who wants both exports covered in either place should reach for a script, the
+    way `lode-sfnb` already moved the retry logic out of a fence.
+  - **No behavior change to the release path** (untouched), and none to `/land`'s merge path beyond
+    the one deliberate widening above: the retry-once shape, the real-conflict detection
+    (`git ls-files -u`), and the exit-code contract are all unchanged; only the *set of paths* the
+    retry restores grew.
+  - The RENAME cost `lode-do3q`'s entry cites is unchanged: the WONTFIX sites still hardcode the
+    string, and the canonicalized site now reads a list keyed on it, so a rename still touches the
+    same set of files.
+  - **Pinned in two layers.** Textually, `scripts/land-merge-one.sh` is registered as a consumer in
+    `tests/test_beads_passive_exports.py` — the existing module that already loops over the list's
+    consumers — rather than in a parallel module of its own: no literal relpath survives in the
+    script, and it still names the canonical list by filename. Behaviourally,
+    `tests/test_land_merge_one.py::test_staged_interactions_jsonl_trap_is_retried_and_succeeds`
+    springs the real trap with the *second* export and runs the real script, because a text
+    assertion cannot tell whether the restore actually reaches that path.
+  - **One `git restore` per entry, never one call listing them all.** `git restore` is atomic over
+    its pathspecs: if any single one is unknown to git in that repo state — an export on the list
+    that was never committed to this repo — it errors and restores **nothing**, silently, behind the
+    `2>/dev/null || true`. The merge then fails again and the script exits 2 blaming an "unexpected
+    git failure." Found and reproduced during this ticket's review, when the batched form was tried
+    as a simplification; the per-entry loop is load-bearing, not stylistic.

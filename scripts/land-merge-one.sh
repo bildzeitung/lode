@@ -182,19 +182,31 @@ if [[ "$err" == *"would be overwritten by merge"* ]] \
   # Passive-export trap, not a conflict (see docs/decisions.md, lode-6ra /
   # lode-bns3 / lode-2nw5): a passive beads export got (re-)staged by
   # something other than this merge. Restore every entry on the canonical
-  # passive-export list (scripts/beads-passive-exports.txt, lode-do3q) -- each
-  # is by invariant never real work -- and retry the SAME merge once. Sourced
-  # from the canonical list rather than hardcoding a single relpath (lode-2nw5):
-  # the pre-commit hook regenerates+restages BOTH entries on that list in the
-  # same commit (confirmed empirically -- both files change together in every
-  # "bd: export ... — passive jsonl" commit), so the identical trap can in
-  # principle hit either. `restore` on an entry that is not staged is a
-  # harmless no-op (`|| true`), so widening the set costs nothing on the
-  # common one-entry case.
-  while IFS= read -r export_path; do
+  # list (scripts/beads-passive-exports.txt, lode-do3q) rather than one
+  # hardcoded relpath, then retry the SAME merge once.
+  #
+  # ONE `git restore` PER ENTRY, deliberately -- NOT one call listing them
+  # all. `git restore` is atomic over its pathspecs: if any single one is
+  # unknown to git in this repo state (an export that exists on the list but
+  # has never been committed here), it errors and restores NOTHING, silently
+  # via the `2>/dev/null || true` below. Per entry, an unknown path is a
+  # harmless no-op and the others still restore. VERIFIED by experiment.
+  #
+  # FAIL LOUD if the list is unreadable or empty, the same way
+  # scripts/worktree-gc-classify.sh's gate does: restoring nothing here would
+  # otherwise surface as the generic "merge failed, no unmerged paths" exit 2
+  # below, naming the wrong cause.
+  exports_list="$(dirname "$0")/beads-passive-exports.txt"
+  [ -r "$exports_list" ] || gate_could_not_run \
+    "cannot read the canonical passive-export list at '$exports_list'." \
+    "The merge retry cannot know which paths to unstage without it."
+  mapfile -t exports < "$exports_list"
+  [ "${#exports[@]}" -gt 0 ] || gate_could_not_run \
+    "the canonical passive-export list at '$exports_list' has no entries."
+  for export_path in "${exports[@]}"; do
     [ -n "$export_path" ] || continue
     git restore --staged --worktree "$export_path" 2>/dev/null || true
-  done < "$(dirname "$0")/beads-passive-exports.txt"
+  done
   err="$(git merge --no-ff "origin/land/$id" -m "$msg" 2>&1)" && exit 0
 fi
 
