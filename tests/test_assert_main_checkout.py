@@ -685,9 +685,7 @@ def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> 
     # `_MUTATING_CMD_RE` (via `_mutating_line`, the SAME primitive
     # `_unguarded_mutations` uses), so a key present only as a non-mutating
     # line excuses nothing and must be reported dead.
-    assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [
-        key
-    ], (
+    assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [key], (
         "a key present only as a non-mutating line must be reported dead -- "
         "mere textual presence does not make an allowlist entry live"
     )
