@@ -1188,10 +1188,15 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
 # THE ONE parser for "which bash does an agent actually execute", for the four
-# gates listed below, after four private copies of it drifted apart. NOT the
-# only such state machine left in the repo: a fifth, hand-rolled inline, is in
-# tests/test_sweep_digest_id.py -- measured byte-identical on sweep/SKILL.md
-# today, and filed as lode-jm4a rather than absorbed here.
+# gates listed below, after four private copies of it drifted apart (a fifth,
+# tests/test_sweep_digest_id.py, was folded in later -- lode-k5qb). That claim
+# was made and falsified from this same prose comment five separate times
+# (lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw) before lode-k5qb
+# stopped asserting it here on comment authority alone: it is now a mechanical,
+# AST-based gate, tests/test_no_private_fence_state_machine.py, that fails the
+# suite the moment ANY module under tests/*.py or scripts/*.py (other than
+# this file) hand-rolls a fence-toggle open/close flag again. Trust that gate,
+# not this paragraph.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence

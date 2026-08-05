@@ -23,6 +23,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from conftest import bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "sweep-digest-id.sh"
@@ -164,22 +165,23 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
     and so re-derives it the same sanctioned way. The "both" in this test's name
     predates that third site; the property under test -- every fenced-bash
     selection of the digest goes through the script -- is unchanged by the
-    count."""
+    count.
+
+    Fence-partitioning itself is `conftest.bash_fence_blocks` (lode-kjei), not
+    a private state machine here (lode-k5qb) -- see its docstring for the full
+    rule set (indentation, blockquotes, four-backtick/tilde fences,
+    unterminated fences, the nested-fence fix)."""
     skill = REPO_ROOT / ".claude" / "skills" / "sweep" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
 
     executed = []
-    in_block = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            in_block = False if in_block else stripped in {"```bash", "```sh"}
-            continue
-        # Comments are not executed, and these blocks deliberately EXPLAIN the
-        # `.[0].id` guess they no longer make -- scanning that prose would make
-        # this pin fire on its own rationale.
-        if in_block and not stripped.startswith("#"):
-            executed.append(line)
+    for block in bash_fence_blocks(text):
+        for line in block.splitlines():
+            # Comments are not executed, and these blocks deliberately EXPLAIN
+            # the `.[0].id` guess they no longer make -- scanning that prose
+            # would make this pin fire on its own rationale.
+            if not line.strip().startswith("#"):
+                executed.append(line)
     body = "\n".join(executed)
 
     assert body.count("scripts/sweep-digest-id.sh") == 3, (
