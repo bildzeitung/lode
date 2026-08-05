@@ -404,6 +404,74 @@ def test_read_only_noun_with_unlisted_verb_is_still_denied() -> None:
 
 
 # ---------------------------------------------------------------------------
+# lode-d5je: a QUOTED heredoc body is inert text -- the shell performs no
+# substitution in it at all -- but neither splitter (this one, nor bd-deps-
+# guard's sed continuation-folder) modeled heredocs, so a command-substitution-
+# wrapped `gh` invocation written as a worked example inside such a body
+# manufactured a fake segment start and got scanned as if it were live shell.
+# Reproduced live, twice, against both the pre-lode-obox splitter and the fixed
+# one -- this is the SAME false-positive class lode-obox closed for quoted
+# string arguments, in the one shape lode-obox did not cover.
+# ---------------------------------------------------------------------------
+
+# A gh-write invocation, command-substitution-wrapped, as a worked example inside
+# a heredoc body -- the exact shape from the ticket's own repro.
+_GH_WRITE_EXAMPLE = "Example: $(gh issue create --title x --body y)"
+
+QUOTED_HEREDOC_BODIES = [
+    # <<'EOF' -- single-quoted delimiter, the canonical "fully inert" form.
+    f"git commit -F - <<'EOF'\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<"EOF" -- double-quoted delimiter, also inert (no expansion inside).
+    f'git commit -F - <<"EOF"\n{_GH_WRITE_EXAMPLE}\nEOF',
+    # <<\\EOF -- a backslash-escaped delimiter, the third quoted spelling POSIX
+    # shells accept; also inert.
+    f"git commit -F - <<\\EOF\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<-'EOF' -- the tab-stripping variant, still quoted.
+    f"cat <<-'EOF'\n\t{_GH_WRITE_EXAMPLE}\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_BODIES)
+def test_quoted_heredoc_body_is_not_scanned_as_live_shell(command: str) -> None:
+    """AC1: a gh-write phrase appearing only inside a QUOTED heredoc body must not deny --
+    the shell performs no substitution there, so it is inert text, not a command position."""
+    assert _run(command) is None, f"quoted heredoc body false-denied: {command!r}"
+
+
+UNQUOTED_HEREDOC_BODIES = [
+    # <<EOF -- substitution IS real here; the gh call inside must still be denied.
+    f"cat <<EOF\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<-EOF -- tab-stripping, still unquoted.
+    f"cat <<-EOF\n\t{_GH_WRITE_EXAMPLE}\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", UNQUOTED_HEREDOC_BODIES)
+def test_unquoted_heredoc_body_is_still_denied(command: str) -> None:
+    """AC2: an UNQUOTED heredoc keeps its current (pre-fix) behaviour -- substitution is real,
+    so a gh-write invocation inside it must still deny. Pins the direction the fix must NOT
+    touch: this is not a broadening that risks under-denying real gh-write attempts."""
+    assert _run(command) == "deny", (
+        f"unquoted heredoc body wrongly allowed: {command!r}"
+    )
+
+
+def test_quoted_string_argument_behaviour_from_lode_obox_is_unchanged() -> None:
+    """AC3 (regression): the heredoc fix must not disturb lode-obox's own fix -- a gh phrase
+    quoted inside an ordinary string argument (no heredoc involved at all) still falls through."""
+    assert _run('git commit -m "guard: deny gh issue create"') is None
+    assert _run('bd update lode-x --notes "also gh pr comment posts publicly"') is None
+
+
+def test_heredoc_after_a_live_gh_write_does_not_hide_it() -> None:
+    """A quoted heredoc earlier or later in the same command must not swallow a genuine, live
+    gh-write call sitting outside it -- the sanitizer only strips the heredoc BODY, never
+    anything before/after the operator on the same or other lines."""
+    command = "gh issue create --title x --body y; cat <<'EOF'\nnote\nEOF"
+    assert _run(command) == "deny"
+
+
+# ---------------------------------------------------------------------------
 # Script-level tests: drive scripts/gh-write-guard.sh directly (lode-fpmi's pattern,
 # applied here when this guard's logic was extracted out of settings.json).
 #
@@ -438,6 +506,20 @@ def test_script_denies(command: str) -> None:
 @pytest.mark.parametrize("command", ALLOWED + NEVER_AUTO_APPROVED)
 def test_script_allows(command: str) -> None:
     assert _script_decision(command) is None, f"script wrongly decided: {command}"
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_BODIES)
+def test_script_allows_quoted_heredoc_bodies(command: str) -> None:
+    assert _script_decision(command) is None, (
+        f"script false-denied quoted heredoc: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", UNQUOTED_HEREDOC_BODIES)
+def test_script_denies_unquoted_heredoc_bodies(command: str) -> None:
+    assert _script_decision(command) == "deny", (
+        f"script wrongly allowed unquoted heredoc: {command!r}"
+    )
 
 
 def test_script_is_executable_so_the_wrapper_can_resolve_it() -> None:

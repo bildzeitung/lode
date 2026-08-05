@@ -30,9 +30,53 @@ set -euo pipefail
 CMD="${1:-}"
 [ -n "$CMD" ] || exit 0
 
+# A QUOTED heredoc body (<<'EOF', <<"EOF", <<\EOF) is inert text -- the shell
+# performs NO substitution in it at all -- but the segment split below (on
+# `` ` ``/`(`/`)`/etc.) does not know that, so a command substitution written as
+# a worked example inside such a body manufactures a fake segment start and gets
+# scanned as if it were live shell (lode-d5je). An UNQUOTED heredoc (<<EOF) is the
+# opposite: substitution IS real there, so its body must keep being scanned
+# exactly as before -- this function only ever removes QUOTED heredoc bodies.
+# Fence, not fix, same character as the other residuals in docs/agents-workflow.md:
+# this only recognizes a heredoc operator that is not itself inside an earlier
+# quoted heredoc body (those lines are already dropped before this ever inspects
+# them), so nested/re-opened heredocs on the same line are not modeled.
+strip_quoted_heredoc_bodies() {
+  local in_hd=0 delim="" strip_tabs=0 line check flag d
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_hd" -eq 1 ]; then
+      check="$line"
+      if [ "$strip_tabs" -eq 1 ]; then
+        while [ "${check:0:1}" = "$(printf '\t')" ]; do
+          check="${check:1}"
+        done
+      fi
+      if [ "$check" = "$delim" ]; then
+        in_hd=0
+      fi
+      continue
+    fi
+    printf '%s\n' "$line"
+    # Match the FIRST heredoc operator on the line whose delimiter is quoted:
+    # <<[-]'DELIM', <<[-]"DELIM", or <<[-]\DELIM. An unquoted <<DELIM does not
+    # match any of these three alternatives and is deliberately left alone.
+    if [[ "$line" =~ \<\<(-)?[[:space:]]*(\'([A-Za-z_][A-Za-z0-9_]*)\'|\"([A-Za-z_][A-Za-z0-9_]*)\"|\\([A-Za-z_][A-Za-z0-9_]*)) ]]; then
+      flag="${BASH_REMATCH[1]}"
+      d="${BASH_REMATCH[3]}${BASH_REMATCH[4]}${BASH_REMATCH[5]}"
+      [ -n "$d" ] || continue
+      strip_tabs=0
+      [ -n "$flag" ] && strip_tabs=1
+      delim="$d"
+      in_hd=1
+    fi
+  done <<<"$1"
+}
+
+CMD_SANITIZED=$(strip_quoted_heredoc_bodies "$CMD")
+
 # Split into command segments on shell control operators, so `gh` is only ever
 # judged at a command position.
-SEG=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n')
+SEG=$(printf '%s' "$CMD_SANITIZED" | tr ';&|(){}`' '\n')
 
 # `gh` at a command position: through a leading VAR=x assignment, a fixed wrapper
 # list, an absolute/relative path to the binary, and gh's global -R/--repo/
