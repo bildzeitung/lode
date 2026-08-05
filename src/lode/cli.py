@@ -313,7 +313,7 @@ def _tabular_table() -> SafeTable:
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
 #: DEBUG-gated diagnostic (e.g. ``lode.tui.latency_probe``'s event-loop-lag probe,
 #: gated on ``log.isEnabledFor(logging.DEBUG)``) -- see main()'s docstring.
-DebugOption = Annotated[
+_DebugOption = Annotated[
     bool,
     typer.Option(
         "--debug",
@@ -328,7 +328,7 @@ DebugOption = Annotated[
 
 
 @app.callback()
-def main(ctx: typer.Context, debug: DebugOption = False) -> None:
+def main(ctx: typer.Context, debug: _DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
     # subcommands. Configure logging once, here, so every subcommand (and the
@@ -359,7 +359,7 @@ def _open_db(db: Path | None) -> sqlite3.Connection:
 
 #: Shared ``--db`` option for the db-backed commands — an explicit per-invocation
 #: override of just the DB file; the default root is ``$LODE_HOME`` (lode.config).
-DbOption = Annotated[
+_DbOption = Annotated[
     Path | None,
     typer.Option(
         "--db",
@@ -462,7 +462,7 @@ def add(
         str | None,
         typer.Argument(help="Note body. Omit to read the note verbatim from stdin."),
     ] = None,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Capture a note, enqueue its derive jobs, and fast-track enrichment.
 
@@ -551,7 +551,7 @@ def ask(
             help="Use the higher-quality 'think harder' Q&A model (Claude Opus).",
         ),
     ] = False,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Answer a question from your notes -- retrieve, synthesize, gate, then cite.
 
@@ -745,7 +745,7 @@ def purge(
             help="Note id, or an unambiguous prefix of one, to hard-delete."
         ),
     ],
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Hard-delete a note and its derived data (see docs/externals.md).
 
@@ -781,7 +781,7 @@ def recover(
         str,
         typer.Argument(help="Note id, or an unambiguous prefix of one, to recover."),
     ],
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Undo a soft-delete: repoint a tombstoned note's head past the tombstone.
 
@@ -954,7 +954,7 @@ def notes_(
             help="List only tombstoned (soft-deleted) notes, instead of live ones.",
         ),
     ] = False,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """List notes -- live by default, tombstoned with --deleted.
 
@@ -1076,7 +1076,7 @@ def show_(
     target: Annotated[
         str, typer.Argument(help="Note id, or an unambiguous prefix of one, to show.")
     ],
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Show a note's head body plus its derived enrichment (on-demand introspection).
 
@@ -1532,9 +1532,7 @@ def _enrichment_model_stale(
 
 
 @app.command()
-def status(
-    db: DbOption = None,
-) -> None:
+def status(db: _DbOption = None) -> None:
     """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
 
     Counts of jobs in each status (pending, running, done, failed, dead --
@@ -1750,9 +1748,7 @@ def status(
 
 
 @app.command()
-def reembed(
-    db: DbOption = None,
-) -> None:
+def reembed(db: _DbOption = None) -> None:
     """Force a fresh embed job for every live head (lode-g274.7).
 
     The deliberate counterpart to ``lode status``'s "the index is mixed" /
@@ -1848,9 +1844,7 @@ def reembed(
 
 
 @app.command()
-def reenrich(
-    db: DbOption = None,
-) -> None:
+def reenrich(db: _DbOption = None) -> None:
     """Force a fresh enrich job for every live head whose annotations are stale (lode-14jr).
 
     The enrichment-LLM counterpart to ``lode reembed`` (``lode-g274.7``) --
@@ -1938,7 +1932,7 @@ def jobs_(
         JobStatus | None,
         typer.Option("--status", help="Only list jobs in this status (default: all)."),
     ] = None,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """List the derive jobs on the work queue (see docs/storage.md).
 
@@ -1984,7 +1978,7 @@ def egress(
             "--purpose", help="Only list sends of this purpose (default: all)."
         ),
     ] = None,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """List what content has left the box for the cloud, and when.
 
@@ -2036,7 +2030,7 @@ def no_egress_(
             help="Clear no_egress instead of setting it (source becomes cloud-eligible again).",
         ),
     ] = False,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Mark (or --clear) an external source no_egress (see docs/externals.md).
 
@@ -2265,7 +2259,7 @@ def dump_html(
             "absent). Default: the current directory. Only valid with --file.",
         ),
     ] = None,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Print a note's drawn-down external's raw HTML (its captured snapshot).
 
@@ -2457,9 +2451,7 @@ def _config_knob_table(rows: list[tuple[str, str, str]]) -> SafeTable:
 
 
 @app.command()
-def config(
-    db: DbOption = None,
-) -> None:
+def config(db: _DbOption = None) -> None:
     """Show the resolved on-disk locations and every runtime/tune knob.
 
     A read-out of the single-root layout under $LODE_HOME (default
@@ -2836,10 +2828,7 @@ def verify(
 
 
 @app.command()
-def tui(
-    ctx: typer.Context,
-    db: DbOption = None,
-) -> None:
+def tui(ctx: typer.Context, db: _DbOption = None) -> None:
     """Launch the Textual TUI, starting on the instant capture screen.
 
     Logs go to $LODE_HOME/logs/lode.log instead of the terminal, since the
@@ -3049,7 +3038,7 @@ def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
 
 @app.command()
 def work(
-    db: DbOption = None,
+    db: _DbOption = None,
     loop: Annotated[
         bool,
         typer.Option(
@@ -3268,7 +3257,7 @@ def backfill(
             ),
         ),
     ] = False,
-    db: DbOption = None,
+    db: _DbOption = None,
 ) -> None:
     """Re-run a connector's draw-down for its already-processed links under CURRENT routing.
 
