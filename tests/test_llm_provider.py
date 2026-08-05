@@ -7,6 +7,7 @@ the OpenAIProvider (lode-568v.3) Responses API mapping + serialize-batch, and
 build_provider's provider resolution for both providers.
 """
 
+import copy
 import json
 from collections.abc import Callable, Iterator
 from types import SimpleNamespace
@@ -804,6 +805,58 @@ def _succeeded_jsonl_line(custom_id: str) -> bytes:
     ).encode()
 
 
+def _succeeded_payload(custom_id: str = "ver-shape") -> dict:
+    """The success payload as a plain dict, pre-JSON-encoding (lode-i821).
+
+    Byte-for-byte the same shape :func:`_succeeded_jsonl_line` encodes --
+    kept as a separate dict-returning helper so :func:`_payload_without` can
+    delete a field from it before encoding.
+    """
+    return {
+        "custom_id": custom_id,
+        "result": {
+            "type": "succeeded",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "emit",
+                        "input": {"name": "w", "count": 1},
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+    }
+
+
+def _payload_without(payload: dict, *path: str | int) -> dict:
+    """A deep copy of ``payload`` with the field at ``path`` deleted (lode-i821).
+
+    Every wrong-shape test case below is built as :func:`_succeeded_payload`
+    minus exactly one field, via this helper, so a case cannot drift into
+    failing over a different field than the one it names.
+    """
+    result = copy.deepcopy(payload)
+    node = result
+    for key in path[:-1]:
+        node = node[key]
+    del node[path[-1]]
+    return result
+
+
+def _jsonl(payload: dict) -> bytes:
+    """Encode ``payload`` as one JSONL line, the wire shape ``batches.results`` streams."""
+    return (json.dumps(payload) + "\n").encode()
+
+
 def _real_anthropic_client(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> Any:
@@ -958,6 +1011,119 @@ def test_collect_batch_discards_partial_results_on_a_mid_stream_transport_failur
     assert "batch-1" in str(err)
     assert "1 result(s) already decoded" in str(err)
     assert isinstance(err.__cause__, httpx.HTTPError)
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    "path,expected_detail_substring",
+    [
+        (("result",), "missing 'result' field"),
+        (("result", "message", "content"), "message.content"),
+        (("result", "message", "content", 0, "input"), "missing 'input' field"),
+    ],
+    ids=[
+        "missing-result-field",
+        "missing-message-content-field",
+        "content-block-missing-input-field",
+    ],
+)
+def test_collect_batch_degrades_a_wrong_shape_line_missing_a_field(
+    path: tuple[str | int, ...], expected_detail_substring: str
+) -> None:
+    """lode-i821: each case is the success payload MINUS exactly one field.
+
+    `construct_type_unchecked` (jsonl.py) does not validate, so each of these
+    missing fields leaves the corresponding attribute absent/`None` rather
+    than raising a pydantic `ValidationError` at decode time -- the resulting
+    `AttributeError`/`TypeError`/(pydantic) `ValidationError` surfaces from
+    `collect_batch`'s loop BODY. A `MagicMock` can't reproduce this leniency,
+    so this drives the real SDK. Non-vacuous against the pre-fix code for
+    each case: 'missing-result' escaped as a raw `AttributeError`,
+    'missing-message-content' as a raw `TypeError`, and
+    'content-block-missing-input' as a raw pydantic `ValidationError`.
+    """
+    payload = _payload_without(_succeeded_payload("ver-shape"), *path)
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+    )
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-shape"
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert isinstance(result.error, LLMProviderError)
+    assert "wrong-shape" in str(result.error)
+    assert expected_detail_substring in str(result.error)
+
+
+@pytest.mark.network
+def test_collect_batch_degrades_a_wrong_shape_line_with_a_non_object_content_block() -> (
+    None
+):
+    """lode-i821: `b.type` inside `next(b for b in ... if b.type == "tool_use")`.
+
+    A content block missing just its `type` *key* still decodes to a
+    `BetaTextBlock` with `type=None` -- `b.type == "tool_use"` is simply
+    `False`, no exception, already handled by the pre-existing "no tool_use
+    block" `StopIteration` arm. The chain actually breaks when a content
+    *item* is not object-shaped at all (e.g. `null`): construct_type_unchecked
+    then can't build any union member, so `b.type` raises a raw
+    `AttributeError` -- confirmed against the real SDK before writing this
+    test. Non-vacuous against the pre-fix code (this `AttributeError`
+    escaped raw).
+    """
+    payload = _succeeded_payload("ver-shape")
+    payload["result"]["message"]["content"] = [None]
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, content=_jsonl(payload)))
+    )
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id == "ver-shape"
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert isinstance(result.error, LLMProviderError)
+    assert "wrong-shape" in str(result.error)
+    assert "message.content" in str(result.error)
+
+
+@pytest.mark.network
+def test_collect_batch_substitutes_a_placeholder_for_a_line_that_is_not_an_object() -> (
+    None
+):
+    """lode-i821 finding 2: `BatchResult.custom_id` is declared `str`, not
+    `str | None`. A JSONL line that decodes to something other than an
+    object (e.g. `null`) has no `custom_id` attribute at all --
+    `construct_type_unchecked` returns the decoded value verbatim, not even
+    wrapped in a model -- confirmed against the real SDK before writing this
+    test. `_wrong_shape_result` must substitute a non-`None` placeholder
+    rather than propagate `None` (which broke
+    `enrich.collect_enrich_batch`'s `short_version_id(version_id)` call
+    downstream with a raw `TypeError` -- see
+    `test_collect_enrich_batch_survives_a_non_object_results_line` in
+    `test_enrich.py`, which drives this same line through that seam).
+    """
+    line = (json.dumps(None) + "\n").encode()
+    client = _real_anthropic_client(
+        _results_handler(lambda: httpx.Response(200, content=line))
+    )
+
+    status, results = AnthropicProvider(client).collect_batch("batch-1", timeout_s=10.0)
+
+    assert status == "ended"
+    (result,) = results
+    assert result.custom_id is not None
+    assert isinstance(result.custom_id, str)
+    assert result.outcome == "errored"
+    assert result.parsed is None
+    assert isinstance(result.error, LLMProviderError)
+    assert "wrong-shape" in str(result.error)
 
 
 def _succeeded_result(custom_id: str, payload: dict) -> mock.MagicMock:

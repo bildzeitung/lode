@@ -659,14 +659,38 @@ already decoded is discarded rather than returned partially: `batches.results` r
 JSONL from the start on every call (not a resumable cursor), so nothing already-good is permanently
 lost, only re-done on the next poll.
 
-**Two classes remain open**, both measured against the pinned SDK, neither yet bounded:
+**A results line that is *well-formed* JSON but the wrong *shape* (`lode-i821`, rebuild of
+`lode-t7en`)** is a different class again — it does not come from the iteration at all. The SDK
+builds each line with `construct_type_unchecked`, which by design does **not** validate, so a missing
+or malformed field leaves the corresponding attribute simply absent (or `None`) rather than raising a
+pydantic `ValidationError` at decode time. The failure this produces — a raw `AttributeError`,
+`TypeError`, or (one step later, inside `RootModel`'s own validation) pydantic `ValidationError` —
+surfaces from the loop **body**, on attribute access, not from `_stream`'s iteration; deliberately not
+swept up by the three types above, since catching it there would also swallow a real bug in the loop
+body. Every attribute chain the loop body reads off the unvalidated model is guarded — narrow
+`except`, degrading the *one* item to an `errored` `BatchResult` rather than failing the whole
+collection, the same treatment the pre-existing "no `tool_use` block" arm already gets:
+
+| Chain | Failure mode | Guard |
+|---|---|---|
+| `result.result.type` | missing `result` field → `AttributeError` | `except AttributeError` |
+| `result.result.message.content` (iterated) | missing/`None` `content` → `TypeError` | `except (AttributeError, TypeError)` |
+| `b.type` (each content block, inside the same iteration) | a content item that isn't object-shaped at all (e.g. `null`) → `AttributeError` | same `except (AttributeError, TypeError)` above — one combined arm, since either failure means the line can't be trusted |
+| `tool_block.input` | missing `input` → `None`, and `RootModel[dict[str, Any]](None)` → pydantic `ValidationError` | `except ValidationError` |
+
+`result.custom_id` itself is read directly (not guarded) on the succeeded/errored/other branches —
+`construct_type_unchecked` never raises on a *missing* declared field, only leaves it `None`, so this
+never breaks the loop body. It **is** the field the guard's own placeholder exists for: a wrong-shape
+line's `custom_id` can be `None` (or absent a `result` at all) same as any other field, and
+`BatchResult.custom_id` is declared `str`, not `str | None` — `_wrong_shape_result` substitutes
+`"<unknown>"` rather than propagating `None`, which is what keeps
+`enrich.collect_enrich_batch`'s unconditional `short_version_id(result.custom_id)` call safe on this
+path without widening the type or touching that consumer.
+
+**One class remains open**, measured against the pinned SDK, not yet bounded:
 
 - `anthropic`'s *non*-status errors (`APITimeoutError`, `APIConnectionError` — a timeout is not a
   rejected request; see `qa.MAX_TOKENS`).
-- A results line that is *well-formed* JSON but the wrong *shape* (`lode-t7en`). The SDK builds each
-  line with `construct_type_unchecked`, which by design does **not** validate, so a missing field
-  surfaces in the loop body as a raw `AttributeError`/`TypeError` — a different class from the three
-  above, and deliberately not swept up by them, since catching it would also swallow real bugs.
 
 `OpenAIProvider` needs none of this: its `collect_batch` makes no network call and decodes no stream
 (`submit_batch` already ran every request and self-encoded the results into the handle), and it

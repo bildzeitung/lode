@@ -1720,6 +1720,85 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
     assert row[1] is not None
 
 
+@pytest.mark.network
+def test_collect_enrich_batch_survives_a_non_object_results_line(
+    conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """lode-i821 criterion 4: drives a non-object batch-results line all the
+    way through ``collect_enrich_batch`` (not just ``AnthropicProvider.
+    collect_batch``), against the REAL SDK -- a ``MagicMock``-based
+    ``_fake_batch_client`` can't reproduce ``construct_type_unchecked``'s
+    leniency, so this uses ``httpx.MockTransport`` instead.
+
+    A JSONL results line that decodes to something other than an object
+    (here, a bare ``null``) leaves ``result.custom_id`` absent entirely.
+    ``AnthropicProvider.collect_batch`` degrades it to an ``errored``
+    ``BatchResult`` with a placeholder ``custom_id`` (lode-i821 finding 2) --
+    this test's job is to confirm that placeholder then flows safely through
+    ``collect_enrich_batch``'s ``job_map.get(version_id)`` miss and
+    ``short_version_id(version_id)`` call without raising. Non-vacuous: a
+    placeholder of ``None`` (the pre-rebuild behavior) makes
+    ``short_version_id`` -- ``version_id[:12]`` -- raise a raw ``TypeError``
+    right here.
+    """
+    import anthropic
+
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-nonobj' WHERE id = ?", (job_id,)
+        )
+
+    line = (json.dumps(None) + "\n").encode()
+
+    def handler(request: object) -> httpx.Response:
+        import httpx
+
+        if request.url.path.endswith("/results"):  # type: ignore[attr-defined]
+            return httpx.Response(200, content=line)
+        return httpx.Response(
+            200,
+            json={
+                "id": "batch-nonobj",
+                "type": "message_batch",
+                "processing_status": "ended",
+                "results_url": (
+                    "https://api.anthropic.com/v1/messages/batches/batch-nonobj/results"
+                ),
+                "created_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-01-02T00:00:00Z",
+                "request_counts": {
+                    "canceled": 0,
+                    "errored": 0,
+                    "expired": 0,
+                    "processing": 0,
+                    "succeeded": 1,
+                },
+            },
+        )
+
+    import httpx
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    ended = collect_enrich_batch(
+        conn, "batch-nonobj", settings, provider=AnthropicProvider(client)
+    )
+    assert ended is True
+
+    # No matching job_map entry for the placeholder custom_id -- the running
+    # job is untouched, and nothing raised getting here.
+    (status,) = conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert status == "running"
+
+
 def test_collect_enrich_batch_dead_letters_at_max_attempts(
     conn: sqlite3.Connection, settings: Settings
 ) -> None:
