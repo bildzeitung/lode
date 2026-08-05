@@ -30,6 +30,11 @@ it. The rest of the suite likewise exercises
 `scripts/epic-completion-check.sh` via a fake `bd` executable on PATH, exactly
 like tests/test_epic_debate_gate.py does for the sibling epic-debate-gate.sh --
 no real bd database is touched.
+
+This module's `_fake_bd` is deliberately NOT unified with
+tests/test_blocks_dependents.py's and tests/test_epic_children_closed.py's --
+see the "RATIFIED DEFERRAL" paragraph in test_blocks_dependents.py's
+docstring for the reasoning (lode-863q, ratified by lode-ea5b).
 """
 
 from __future__ import annotations

@@ -34,6 +34,15 @@ two differently-shaped `_init_repo`s duplicated twice each is not four copies
 of anything, and hoisting them under one name would leave this directory with
 differently-shaped `_init_repo`s sharing that name rather than one helper. A
 body under the three-copy bar both precedents above fired at is left alone.
+
+This question was asked directly, by name, in lode-ea5b (the residual of
+lode-y8u0 that lode-863q's own scope note deferred): is there an honest
+shared builder across the (by then seven) `_init_repo` copies, or should they
+stay separate? Re-measured there against seven bodies -- same rule, same
+outcome, nothing hoisted. That finding is deliberately not repeated as a
+count here, for the same staleness reason the roster paragraphs above give;
+re-measure per-module when it next matters rather than trusting a number
+written down once.
 """
 
 from __future__ import annotations

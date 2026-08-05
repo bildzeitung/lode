@@ -22,6 +22,20 @@ tests below, which exercise `scripts/blocks-dependents.sh` directly and
 fail if the script's own `--include-dependents` flag is ever dropped.
 Same fake-`bd`-on-PATH pattern as tests/test_epic_completion_check.py and
 tests/test_epic_children_closed.py.
+
+RATIFIED DEFERRAL (lode-863q's technical review, ratified durably here by
+lode-ea5b -- the residual ticket lode-863q's own scope note deliberately
+left this cluster to): the `_fake_bd` bodies in these three modules are NOT
+unified into one shared fake-`bd` builder, despite looking alike at a
+glance. Each embeds a genuinely different `bd` subcommand contract inside
+its shell script -- this module's fake `bd` serves only `bd show
+--include-dependents` and actively REJECTS a call missing that flag (the
+whole point of the regression guard above); test_epic_children_closed.py's
+serves only `bd list --parent`; test_epic_completion_check.py's dispatches
+both `show` and `list`. A shared builder would have to be parameterized
+over three different fake-CLI validation rules for ~25 lines x3 -- added
+complexity, not a clean extraction like `_git` (tests/_gitrepo.py). Do not
+re-litigate this without a concrete shape that beats that trade.
 """
 
 from __future__ import annotations
