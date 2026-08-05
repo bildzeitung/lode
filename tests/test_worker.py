@@ -2087,8 +2087,8 @@ def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
     from lode.enrich import EnrichmentResult, format_enrich_outcome
 
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    job_id = _insert_enrich_job_worker(
-        conn, version_id="ver-1", status="running", batch_handle="collect-batch"
+    job_id = _insert_job(
+        conn, "enrich", "ver-1", status="running", batch_handle="collect-batch"
     )
 
     enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
@@ -2190,7 +2190,7 @@ def test_drain_enrich_never_dead_lettered(
     this test goes red.
     """
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     # Transient API failure: the batch create raises on every pass.
     client = mock.MagicMock()
@@ -2379,15 +2379,13 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_is_stuck(
     # submit step to actually submit, so its assertion below is meaningful.
     _insert_job(conn, job_type="embed", target_version="ver-1")
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    _insert_enrich_job_worker(
-        conn, version_id="ver-1", status="running", batch_handle="poison-batch"
-    )
+    _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="poison-batch")
     # A DIFFERENT version -- idx_jobs_live's partial unique index (type,
     # target_version, prompt_ver) spans both 'pending' and 'running', so a
     # second live enrich job for the SAME version_id would collide with the
     # one above.
     _insert_note_worker(conn, note_id="note-2", version_id="ver-2")
-    pending_job = _insert_enrich_job_worker(conn, version_id="ver-2", status="pending")
+    pending_job = _insert_job(conn, "enrich", "ver-2", status="pending")
 
     embedded: list[str] = []
 
@@ -2450,7 +2448,7 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_fails_with_a_non_llm_erro
     monkeypatch.setattr("lode.enrich.collect_enrich_batch", _fake_collect)
 
     _insert_job(conn, job_type="embed", target_version="ver-1")
-    _insert_enrich_job_worker(conn, status="running", batch_handle="poison-batch")
+    _insert_job(conn, "enrich", status="running", batch_handle="poison-batch")
 
     embedded: list[str] = []
 
@@ -2539,9 +2537,7 @@ def test_drain_still_runs_embed_jobs_when_the_submit_pre_claim_cas_raises_unclas
     """
     _insert_job(conn, job_type="embed", target_version="ver-1")
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    enrich_job_id = _insert_enrich_job_worker(
-        conn, version_id="ver-1", status="pending"
-    )
+    enrich_job_id = _insert_job(conn, "enrich", "ver-1", status="pending")
 
     poisoned = _PoisonSubmitCASConn(conn, poison_job_id=enrich_job_id)
 
@@ -3029,26 +3025,6 @@ def _fake_batch_client_worker(
     return client
 
 
-def _insert_enrich_job_worker(
-    conn: sqlite3.Connection,
-    version_id: str = "ver-1",
-    status: str = "pending",
-    batch_handle: str | None = None,
-) -> int:
-    """Insert an enrich job; return job id.
-
-    Stamps ``next_attempt_at`` from ``_now_iso()`` -- the clock the claim
-    predicate reads -- exactly as the sibling ``_insert_job`` above does.
-    """
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, batch_handle, next_attempt_at) "
-            "VALUES ('enrich', ?, ?, ?, ?)",
-            (version_id, status, batch_handle, _now_iso()),
-        )
-    return cur.lastrowid
-
-
 def _insert_note_worker(
     conn: sqlite3.Connection,
     note_id: str = "note-1",
@@ -3073,7 +3049,7 @@ def test_batch_submit_claims_pending_enrich_jobs(
 ) -> None:
     """_batch_submit_enrich claims pending enrich jobs and marks them running."""
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     client = _fake_batch_client_worker(batch_id="test-batch")
     submitted = _batch_submit_enrich(conn, settings, _client=AnthropicProvider(client))
@@ -3088,7 +3064,7 @@ def test_batch_submit_stamps_claimed_at(
 ) -> None:
     """_batch_submit_enrich stamps claimed_at, exactly as _claim_one does (lode-uhu)."""
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     before = _now_iso()
     client = _fake_batch_client_worker(batch_id="test-batch")
@@ -3116,7 +3092,7 @@ def test_batch_submit_survives_crash_before_batch_handle_persist(
     claimed_at but before any batch_handle would be persisted.
     """
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     with (
         mock.patch("lode.enrich.submit_enrich_batch", side_effect=SystemExit),
@@ -3180,7 +3156,7 @@ def test_batch_submit_reverts_on_api_failure(
 ) -> None:
     """_batch_submit_enrich reverts jobs to 'failed' if the API call raises."""
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     # Client that raises on create.
     client = mock.MagicMock()
@@ -3207,7 +3183,7 @@ def test_batch_submit_auth_error_resets_to_pending_and_reraises(
     import lode.llm_provider as llm_provider_mod
 
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
 
     def _no_credentials() -> object:
         raise AuthError("no credentials (test)")
@@ -3238,7 +3214,7 @@ def test_batch_submit_llm_auth_error_resets_to_pending_and_reraises(
     monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
 
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(conn)
+    job_id = _insert_job(conn, "enrich")
     openai_settings = settings.model_copy(update={"llm_provider": "openai"})
 
     # No explicit _client -- forces submit_enrich_batch's own build_provider()
@@ -3311,8 +3287,8 @@ def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(
     """
     _insert_note_worker(conn, note_id="note-a", version_id="ver-a")
     _insert_note_worker(conn, note_id="note-b", version_id="ver-b")
-    raced_job = _insert_enrich_job_worker(conn, version_id="ver-a")
-    won_job = _insert_enrich_job_worker(conn, version_id="ver-b")
+    raced_job = _insert_job(conn, "enrich", "ver-a")
+    won_job = _insert_job(conn, "enrich", "ver-b")
 
     client = _fake_batch_client_worker(batch_id="race-batch")
     racing = _RacingSelectConn(conn, race_job_id=raced_job)
@@ -3344,7 +3320,7 @@ def test_batch_collect_returns_false_when_in_progress(
 ) -> None:
     """_batch_collect_enrich returns 0 for in-progress batches."""
     _insert_note_worker(conn)
-    _insert_enrich_job_worker(conn, status="running", batch_handle="in-flight-batch")
+    _insert_job(conn, "enrich", status="running", batch_handle="in-flight-batch")
 
     client = _fake_batch_client_worker(
         batch_id="in-flight-batch", processing_status="in_progress"
@@ -3360,9 +3336,7 @@ def test_batch_collect_returns_count_of_ended_batches(
     from lode.enrich import EnrichmentResult
 
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="done-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="done-batch")
 
     # Build a succeeded result.
     enrichment = EnrichmentResult(tags=["test"])
@@ -3409,11 +3383,11 @@ def test_batch_collect_isolates_one_poisoned_handle_from_a_healthy_one(
     the healthy one below is never reached at all — that ordering is what
     makes the final assertion discriminating rather than incidental.
     """
-    poison_job = _insert_enrich_job_worker(
-        conn, version_id="ver-poison", status="running", batch_handle="poison-batch"
+    poison_job = _insert_job(
+        conn, "enrich", "ver-poison", status="running", batch_handle="poison-batch"
     )
-    healthy_job = _insert_enrich_job_worker(
-        conn, version_id="ver-healthy", status="running", batch_handle="healthy-batch"
+    healthy_job = _insert_job(
+        conn, "enrich", "ver-healthy", status="running", batch_handle="healthy-batch"
     )
 
     def _fake_collect(conn_, batch_id, settings_, *, outcomes=None):
@@ -3472,11 +3446,11 @@ def test_batch_collect_auth_error_is_not_caught_as_a_poisoned_handle(
     scan order ever changes, ``calls`` below fails loudly rather than quietly
     going vacuous again.
     """
-    auth_job = _insert_enrich_job_worker(
-        conn, version_id="ver-auth", status="running", batch_handle="auth-batch"
+    auth_job = _insert_job(
+        conn, "enrich", "ver-auth", status="running", batch_handle="auth-batch"
     )
-    healthy_job = _insert_enrich_job_worker(
-        conn, version_id="ver-healthy", status="running", batch_handle="healthy-batch"
+    healthy_job = _insert_job(
+        conn, "enrich", "ver-healthy", status="running", batch_handle="healthy-batch"
     )
 
     calls: list[str] = []
@@ -3529,9 +3503,7 @@ def test_batch_collect_dead_letters_after_consecutive_failure_budget(
     since _reclaim_stale_running excludes any row with batch_handle set.
     """
     settings = settings.model_copy(update={"batch_collect_failure_budget": 3})
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="poison-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="poison-batch")
 
     def _always_fails(conn_, batch_id, settings_, *, outcomes=None):
         raise LLMProviderError("malformed batch results (test)", provider="anthropic")
@@ -3579,9 +3551,7 @@ def test_batch_collect_resets_failure_count_on_a_successful_poll(
     failures, not a lifetime total.
     """
     settings = settings.model_copy(update={"batch_collect_failure_budget": 2})
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="flaky-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="flaky-batch")
 
     calls = {"n": 0}
 
@@ -3630,9 +3600,7 @@ def test_batch_collect_auth_error_does_not_count_against_the_failure_budget(
     wrong the same way isolating it per-handle would be.
     """
     settings = settings.model_copy(update={"batch_collect_failure_budget": 1})
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="auth-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="auth-batch")
 
     monkeypatch.setattr(
         "lode.enrich.collect_enrich_batch",
@@ -3669,9 +3637,7 @@ def test_batch_collect_resumes_after_restart_without_resubmit(
     from lode.enrich import EnrichmentResult
 
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="restart-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="restart-batch")
 
     enrichment = EnrichmentResult(tags=["resumed"])
     tool_block = mock.MagicMock()
@@ -3700,9 +3666,7 @@ def test_batch_collect_in_flight_handle_survives_restart_no_resubmit(
     repeated 'restart' passes, until the Batch actually ends (lode-i05.5).
     """
     _insert_note_worker(conn)
-    job_id = _insert_enrich_job_worker(
-        conn, status="running", batch_handle="slow-batch"
-    )
+    job_id = _insert_job(conn, "enrich", status="running", batch_handle="slow-batch")
 
     client = _fake_batch_client_worker(
         batch_id="slow-batch", processing_status="in_progress"
@@ -3738,7 +3702,7 @@ def test_worker_startup_resumes_batch_without_double_enqueue_or_resubmit(
     from lode.reconcile import reconcile as _reconcile
 
     _insert_note_worker(conn)
-    _insert_enrich_job_worker(conn, status="running", batch_handle="resume-batch")
+    _insert_job(conn, "enrich", status="running", batch_handle="resume-batch")
 
     enrichment = EnrichmentResult(tags=["resumed"])
     tool_block = mock.MagicMock()
