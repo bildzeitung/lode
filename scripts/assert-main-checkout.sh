@@ -6,8 +6,8 @@
 # is a separate Bash invocation (lode-sfnb), so one block's `exit` cannot stop
 # another's. Do NOT maintain the call-site list here: it went stale within one
 # ticket of being written, which is why this header now names the RULE instead.
-# tests/test_assert_main_checkout.py pins each guarded fence and is the
-# authoritative list. Note that not every caller opens with a `git reset
+# tests/test_land_skill_guard_coverage.py sweeps every fence and is the
+# authoritative record of which mutations are guarded and which are exempt. Note that not every caller opens with a `git reset
 # --hard` -- the reset is the worst case the diagnostic below narrates, not the
 # only thing this guard protects (see lode-ibfw on that message's wording).
 #

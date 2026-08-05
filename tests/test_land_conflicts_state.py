@@ -287,8 +287,9 @@ def test_section_3_regate_precedes_section_4_push_origin_trunk() -> None:
 
     A DOCUMENT-ORDER pin, not an execution-order guarantee: an agent that skips
     a section could still push un-gated content even with this test green (the
-    same insufficiency `test_land_skill_guard_coverage.py`'s `_unguarded_mutations`
-    docstring raises for its own, narrower, intra-block pin). It earns its keep
+    same insufficiency that bounds `test_land_skill_guard_coverage.py`'s
+    `_unguarded_mutations` sweep, whose "precedes" check is likewise document
+    order and, narrower still, only within one fence). It earns its keep
     anyway because the threat Section 4's prose names is exactly a document edit
     ("if a future edit ever reorders push and gate"), and document order is
     precisely what such an edit changes.

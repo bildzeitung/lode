@@ -36,9 +36,9 @@ catch a script that assumes `--git-common-dir` always ends in `/.git`.
 
 The SEPARATE text-gate half that used to live in this module -- assertions
 against `.claude/skills/land/SKILL.md`'s fenced ```bash blocks, running no
-script and touching no repo -- moved to `tests/test_land_skill_guard_coverage.
-py` (lode-2thl), alongside the other SKILL.md-text gates it actually
-resembles.
+script and touching no repo -- moved to
+`tests/test_land_skill_guard_coverage.py` (lode-2thl), alongside the other
+SKILL.md-text gates it actually resembles.
 """
 
 from __future__ import annotations

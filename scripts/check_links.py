@@ -224,7 +224,14 @@ def _content_lines(text: str) -> Iterator[tuple[int, str]]:
     the single home of the fence rule, shared by the heading and link scanners
     so they can never disagree about what counts as code (a shell comment like
     ``# run tests`` inside a ```bash``` fence must never read as a heading, nor
-    a literal ``[text](url)`` example inside a fence as a real link)."""
+    a literal ``[text](url)`` example inside a fence as a real link).
+
+    A SEPARATE single home from ``tests/conftest.py``'s ``fence_scan``, not a
+    competing claim: this is production code and cannot import anything under
+    ``tests/`` (lode-jm4a). The two do NOT agree on the rule, and are not meant
+    to -- this one toggles on ANY fence marker (so a ``~~~`` line closes a
+    ```-opened block) and does not strip blockquote markers; ``fence_scan``
+    does both differently. Do not read either as documentation for the other."""
     in_fence = False
     for line_no, line in enumerate(text.splitlines(), start=1):
         if _FENCE_RE.match(line):
