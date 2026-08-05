@@ -440,6 +440,7 @@ def embed(
     lance_dir: str | Path,
     embedder: Embedder | None = None,
     settings: Settings | None = None,
+    store: VectorStore | None = None,
 ) -> int:
     """Chunk, embed, and persist the passages of ``target_version``.
 
@@ -448,6 +449,14 @@ def embed(
     ``passages`` table, embeds each passage with ``embedder`` (default: the pinned
     local ONNX model via :class:`FastEmbedEmbedder`), and replaces the version's
     passage vectors in the LanceDB store under ``lance_dir``.
+
+    ``store``, if given, is a :class:`~lode.vectorstore.VectorStore` used as-is
+    instead of constructing a fresh one (lode-2brb, mirroring this function's
+    own ``embedder=`` seam, lode-j5r2) -- :func:`lode.worker.drain` binds one
+    instance across a whole drain's ``embed`` jobs so they share the opened
+    LanceDB table (:meth:`~lode.vectorstore.VectorStore._open_or_create_table`'s
+    caching) instead of each reopening it. ``None`` (the default) preserves the
+    prior per-call construction.
 
     Idempotent: running twice on the same head version converges to the same
     passages and vectors. Returns the number of passages embedded (0 for a body
@@ -488,7 +497,8 @@ def embed(
         }
         for p, vector in zip(passages, vectors, strict=True)
     ]
-    VectorStore(lance_dir, settings).replace_vectors(target_version, rows)
+    store = store or VectorStore(lance_dir, settings)
+    store.replace_vectors(target_version, rows)
     return len(rows)
 
 

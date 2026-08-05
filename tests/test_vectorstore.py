@@ -339,6 +339,32 @@ def test_matching_schema_table_is_not_dropped(tmp_path: Path) -> None:
     assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
 
 
+# --- held-table staleness gate (lode-2brb) ---------------------------------
+#
+# VectorStore now caches its opened Table across calls on the same instance
+# (docs/decisions.md, lode-2brb) instead of reopening it every call. A held
+# LanceDB Table handle is a fixed snapshot -- it does NOT see a write made
+# through a different connection/instance until `checkout_latest()` is
+# called. These pin that the cache calls it on every use, so a shared
+# instance never reads stale data.
+
+
+def test_a_second_connection_writing_is_still_visible_through_the_first(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.replace_vectors("v1", [_row("a", "v1", [1.0, 0.0, 0.0, 0.0])])
+    # Opens (and caches) the Table.
+    assert store.vectors_for("v1") == [[1.0, 0.0, 0.0, 0.0]]
+
+    # A second, independent VectorStore instance -- its own connection --
+    # writes a version the first instance has never touched.
+    _store(tmp_path).replace_vectors("v2", [_row("c", "v2", [0.0, 1.0, 0.0, 0.0])])
+
+    # The first instance's cached Table must see it -- not a stale snapshot.
+    assert store.vectors_for("v2") == [[0.0, 1.0, 0.0, 0.0]]
+
+
 def test_model_revisions_scopes_to_the_requested_model(tmp_path: Path) -> None:
     # A different model's rows must not bleed into this model's manifest read.
     store = _store(tmp_path)

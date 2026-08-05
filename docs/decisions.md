@@ -3415,3 +3415,74 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
     clear. Until then this is not re-raised as a defect each time a new paragraph lands in the header.
   - No code or test changes: `scripts/gate-lib.sh` and `tests/test_gate_lib.py` are unchanged by this
     ticket.
+- **2026-08-05 (lode-2brb) — RESOLVED: `VectorStore` caches its opened Table across calls, with a
+  periodic `optimize()` to bound the growth that caching alone was measured to cost.** Filed against
+  the same "rebuilt per job instead of hoisted across the drain" shape lode-j5r2 fixed for the
+  embedder: `embedding.embed()` built a fresh `VectorStore` (full `lancedb.connect()` +
+  `list_tables()` + `open_table()` + schema compare) on every embed job, ~4.5-7.3ms/job against a warm
+  table.
+  - **First attempt (rejected on technical review, superseded by this entry): cache only the
+    `lancedb.connect()` connection**, still reopening the table every call. Safe (holding the whole
+    opened `Table` was proven unsafe then — a held handle does not see a write committed via a
+    different connection, sabotage-proved by two tests going red when the Table was cached naively),
+    but the review measured the connection-only cache's actual cost/benefit on the workload this
+    ticket exists to serve (a large drain, or `lode work --loop` for hours): the saving was a FIXED
+    ~1ms/call that does not scale with drain size, while RSS grew unboundedly and *accelerating* --
+    +155 MB over 600 `replace_vectors` calls, 55/67/90 MB per 150-write increment. Rejected: a fixed,
+    small saving against unbounded, accelerating growth on exactly the workload that motivated the
+    ticket.
+  - **Taken: cache the opened `Table`, call `table.checkout_latest()` on every use.**
+    `checkout_latest()` is what makes holding the Table safe — verified directly: a second,
+    independent `VectorStore` (its own connection) writes a version; the first instance's *cached*
+    Table sees it immediately after `checkout_latest()` (`tests/test_vectorstore.py`'s
+    `test_a_second_connection_writing_is_still_visible_through_the_first`, and the pre-existing
+    `test_model_revisions_scopes_to_the_requested_model`, both pinned unmodified). This drops
+    `list_tables` + `open_table` + the schema compare to first-call-only per instance -- the win the
+    connection-only design left on the table.
+  - **Measured growth, corrected methodology.** The connection-only design's own measurement (and this
+    ticket's first pass at re-measuring it) used `resource.getrusage(...).ru_maxrss` -- **peak**, not
+    current, RSS, which cannot fall and so cannot distinguish a real leak from memory that was freed
+    and simply not returned to the OS. Re-measured with live `/proc/self/status` `VmRSS` instead:
+    holding the Table with no mitigation still grows, but *linearly*, not accelerating -- roughly
+    +19-20 MB per 300 `replace_vectors` calls, indefinitely (a fresh-store-per-call baseline stays flat
+    at ~188-193 MB over 3000 calls in the same script). Linear-but-indefinite is still an unbounded
+    cost over an hours-long `lode work --loop` process, so a bound was still needed, not just a
+    smaller leak.
+  - **The bound: periodic `table.optimize(cleanup_older_than=timedelta(0), delete_unverified=True)`.**
+    Each `replace_vectors` call is a delete + add = 2 new LanceDB versions; the held Table's
+    version-history-linked in-memory state is what grows with call count.  `optimize()` prunes all but
+    the latest version. Measured (same live-RSS methodology, 3000 calls, `optimize()` every 100 calls):
+    RSS grows once to an initial plateau (~385 MB, the cost of holding index/manifest structures for an
+    actively-optimized table) then stays flat -- +11 MB total over the next 2700 calls, vs. +170 MB for
+    the same span with no mitigation. Wired as `settings.vectorstore_optimize_interval` (default
+    `200`, `docs/configuration.md`) rather than hardcoded, so the interval is tunable without a code
+    change if a different workload needs it.
+  - **`delete_unverified=True`'s safety rests on `WorkerLock`, not proven independently.** This flag
+    lifts `optimize()`'s default protection for files younger than 7 days that "may appear to be part
+    of an in-progress operation," which is exactly the case here (writes seconds apart). It is safe
+    against the write side because `WorkerLock` (`docs/storage.md`) already ensures only one
+    `lode-work` process embeds at a time -- no concurrent writer's in-progress files can be mistaken
+    for stale ones. It is not proven safe against every conceivable concurrent *reader*: every other
+    `VectorStore` construction in the codebase (`retrieval.py`, `tui/services/related.py`, `cli.py`'s
+    non-`work` commands) is a fresh, per-call instance that opens the *latest* table state at read
+    time, so a reader can never be holding a stale handle to files `optimize()` is about to remove --
+    but this reasoning was not empirically stress-tested against e.g. a `lode work --loop` process
+    truncating history while a long-running reader process (not currently a shape lode has) holds an
+    old snapshot mid-read. Revisit if a long-lived reader process is ever added.
+  - **The `store=` seam itself is not where the win is.** `VectorStore.__init__` does no I/O, so a
+    caller passing `store=` versus letting `embed()` construct its own costs nothing extra on its own
+    -- mirrored from `embedding.embed()`'s own `embedder=` seam (lode-j5r2) purely so
+    `lode.worker.drain()` can share one instance across a drain's jobs, exactly as it already does for
+    the embedder. The counting AC (`tests/test_worker.py`'s
+    `test_drain_shares_one_vectorstore_across_all_embed_jobs_in_the_loop`, mirroring lode-j5r2's own
+    embedder-counting test) pins one `VectorStore` construction per drain call; the caching inside that
+    one instance is what does the work.
+  - **Scope respected:** discarded the connection-cache branch's design outright rather than amending
+    it (a NEW design per the escalation's own framing); the two staleness-gate tests were written fresh
+    against this design, not carried over; the ~70 lines of docstring prose `/simplify` had converged on
+    for the rejected design (restating the same rationale across seven sites, including a
+    reverted-experiment diary citing hardcoded test node ids) was not carried forward -- this entry and
+    the code's own (shorter) comments are the rationale now.
+  - `lance_dir(db_path)`'s `VectorStore` is now also held for the whole `lode work` process
+    (`cli.py`'s `work` command), same as the pre-existing `FastEmbedEmbedder` hoist (lode-j5r2) --
+    threaded into every `drain()` call across the polling loop.
