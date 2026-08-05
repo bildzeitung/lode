@@ -148,8 +148,10 @@
 # file's one documented, tested subtlety for a less-known, mode-dependent
 # one, and losing the bash array at the point the value is built (a
 # newline-joined string reconstituted with mapfile is more machinery, not
-# less). Not a demonstrated improvement over the sentinel above; full
-# reasoning in docs/decisions.md (search "lode-nwqb").
+# less). Not a demonstrated improvement over the sentinel below; full
+# reasoning in docs/decisions.md (search "lode-nwqb") -- and it is THAT
+# entry, not lode-ysr6's, that this paragraph's own scope note refers to:
+# revisiting the rejection means marking the lode-nwqb entry superseded.
 if [ "$#" -eq 1 ] && [ "$1" = "--no-advisory" ]; then
   GATE_ADVISORY=()
 else
