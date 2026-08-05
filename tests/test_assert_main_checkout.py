@@ -263,4 +263,3 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
     assert _git(wt, "rev-parse", "HEAD").stdout.strip() == head_before
     assert (wt / "untracked.txt").exists()
-
