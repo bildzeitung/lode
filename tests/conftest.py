@@ -1187,9 +1187,13 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# THE ONE parser for "which bash does an agent actually execute", for the five
-# gates listed below, after five private copies of it drifted apart -- no
-# private fence state machine survives under tests/ any more.
+# THE ONE parser for "which bash does an agent actually execute", for the gates
+# listed below, after five private copies of it drifted apart -- no private
+# fence state machine survives under tests/ any more -- verified by inspection,
+# NOT by a gate, which is why that claim has now been falsified five running
+# times; lode-k5qb is the mechanical version. The count is deliberately
+# not restated here: it has been hand-incremented (and gone stale) once per
+# unification ticket, so the list below carries it and nothing else does.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence
@@ -1206,10 +1210,10 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
 # tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
 # tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
-# a sixth consumer -- of `fence_scan` directly, since lode-kjei collapsed its
+# a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
 # own open/close loop onto the same generator `bash_fence_blocks` is now built
 # on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
-# docstring changes what all six gates consider "executed"/"fenced", so the
+# docstring changes what every gate above considers "executed"/"fenced", so the
 # rules are stated ONCE there and nowhere else -- on the TEST side.
 # `scripts/check_links.py`'s `_content_lines` makes the same "single home of
 # the fence rule" claim for its own two consumers (the heading and link

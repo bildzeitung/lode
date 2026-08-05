@@ -196,18 +196,20 @@ def test_both_sweep_call_sites_use_the_script_not_an_inline_query() -> None:
 
 
 def test_sweep_gate_still_sees_a_blockquoted_fence() -> None:
-    """The capability the lode-jm4a rewrite actually buys, pinned directly rather
-    than left silent: `.claude/skills/sweep/SKILL.md` carries zero blockquoted
-    fences today (measured), so the pin above cannot exercise this on the real
-    file -- a private, hand-rolled state machine here (the pre-lode-jm4a shape,
-    which only matched `stripped.startswith("```")`) would still pass it, and
-    would then silently go blind to a blockquoted fence the moment one is
-    added. `bash_fence_blocks` strips the leading `> ` blockquote marker
-    (`conftest._BLOCKQUOTE_MARKER`, lode-wroz) before matching either the fence
-    delimiter or its content, so a fence nested inside a blockquote is an
-    ordinary fence to it. Sabotage-verified: reverting `bash_fence_blocks` to a
-    bare `line.strip().startswith("```")` toggle (this test's old shape)
-    reddens this test."""
+    """This gate's own pin on the shared helper's blockquote handling -- the
+    capability the lode-jm4a rewrite buys, which the pin above cannot exercise
+    because `.claude/skills/sweep/SKILL.md` carries zero blockquoted fences
+    today (measured). Same per-consumer pattern, and for the same reason, as
+    `test_skill_bash_state.py`'s and `test_bd_list_limit_gate.py`'s: a change
+    to the shared helper must not silently take THIS gate's coverage with it.
+    Mechanism (`_BLOCKQUOTE_MARKER`, lode-wroz) is `fence_scan`'s to document,
+    not restated here. Sabotage-verified: dropping the blockquote strip from
+    `fence_scan` reddens this test and nothing else in this module.
+
+    What it deliberately does NOT pin: that this module still calls the shared
+    helper. Re-inlining a private state machine into the test above would leave
+    this one green -- the generic "no private fence state machine under tests/"
+    gate that would catch that is lode-k5qb."""
     markdown = textwrap.dedent(
         """\
         > ```bash
