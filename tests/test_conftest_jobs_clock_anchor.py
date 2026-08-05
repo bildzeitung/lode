@@ -130,10 +130,14 @@ _VICTIM_POISON_SURVIVED_MARKER = "jobs._now_epoch was not reset before this test
 #: lode-up8x's synthetic repro, in this order: the poisoner first, then its one victim. Order IS
 #: the whole point -- see the module docstring's THE SYNTHETIC POISONER section.
 _SYNTHETIC_REPRO = (
-    "tests/test_conftest_jobs_clock_anchor.py::"
-    "test_synthetic_poisoner_leaves_now_epoch_in_the_far_future",
-    "tests/test_conftest_jobs_clock_anchor.py::"
-    "test_synthetic_victim_reads_a_sane_now_after_the_poisoner",
+    (
+        "tests/test_conftest_jobs_clock_anchor.py::"
+        "test_synthetic_poisoner_leaves_now_epoch_in_the_far_future"
+    ),
+    (
+        "tests/test_conftest_jobs_clock_anchor.py::"
+        "test_synthetic_victim_reads_a_sane_now_after_the_poisoner"
+    ),
 )
 
 #: Wall-clock cap on ONE nested arm. Measured unloaded in this worktree: ~2.1s per arm end to end
