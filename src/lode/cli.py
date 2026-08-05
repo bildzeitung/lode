@@ -97,6 +97,8 @@ from lode.webfetch import (
     TransientFetchError,
 )
 
+log = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     # Type-only; the runtime imports live inside ``ask`` / ``_retrieve`` so the
     # capture-path commands (``add`` is "instant by design") never pay the cost of
@@ -443,7 +445,7 @@ def _enrich_immediately(
         # `err`, not a hardcoded cause: this arm is no longer Anthropic-only.
         # Same forked-message trap `_abort_on_provider_error` was extracted to
         # close -- see its docstring (lode-yx1c).
-        logging.getLogger(__name__).debug(
+        log.debug(
             "immediate-enrich skipped — %s; note saved, job left pending for a "
             "future 'lode work'",
             err.__cause__ or err,
@@ -924,7 +926,7 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
     errors reach here, and why a non-auth ``LLMProviderError`` raised by a job
     handler never does.
     """
-    logging.getLogger(__name__).error("%s aborted — %s", command, err.__cause__ or err)
+    log.error("%s aborted — %s", command, err.__cause__ or err)
     typer.echo(str(err), err=True)
     raise typer.Exit(code=1) from None
 
@@ -1295,9 +1297,7 @@ def _model_cache_probe(model_name: str) -> bool | None:
             return None
         return _cache_hit(hf_source, model_file)
     except Exception:
-        logging.getLogger(__name__).debug(
-            "_model_cache_probe: probe failed for %s", model_name, exc_info=True
-        )
+        log.debug("_model_cache_probe: probe failed for %s", model_name, exc_info=True)
         return None
 
 
@@ -1374,9 +1374,7 @@ def _model_revision_status(
         )
         return mixed, drift
     except Exception:
-        logging.getLogger(__name__).debug(
-            "_model_revision_status: probe failed", exc_info=True
-        )
+        log.debug("_model_revision_status: probe failed", exc_info=True)
         return False, False
 
 
@@ -1513,9 +1511,7 @@ def _enrichment_model_stale(
         finally:
             conn.close()
     except Exception:
-        logging.getLogger(__name__).debug(
-            "_enrichment_model_stale: probe failed", exc_info=True
-        )
+        log.debug("_enrichment_model_stale: probe failed", exc_info=True)
         return False
 
 
@@ -1668,9 +1664,7 @@ def status(
     try:
         settings = _resolve_settings()
     except Exception:
-        logging.getLogger(__name__).debug(
-            "status: _resolve_settings failed", exc_info=True
-        )
+        log.debug("status: _resolve_settings failed", exc_info=True)
         settings = None
     cache_cold = False if settings is None else _cold_model_cache(settings)
     # Same non-fatal contract as cache_cold above, and the same reason it stays
