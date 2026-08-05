@@ -2118,10 +2118,14 @@ passes no `isolation` option at all. Full reasoning: [docs/decisions.md](decisio
 **Confirmed by lode-p2vi (2026-07-20), call-site param dropped.** The dispatch initially kept passing
 an explicit `isolation: "worktree"` belt-and-braces, since frontmatter `isolation` was then unused
 repo-wide. A dedicated probe retired it: two dispatches differing only in `subagent_type`, both with
-no call-site `isolation` argument, isolated the variable cleanly — `subagent_type: "land-review"`
+no call-site `isolation` argument — `subagent_type: "land-review"`
 landed in its own `.claude/worktrees/agent-<hash>`, while the control
 (`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
-every agent by default" as a confound. Frontmatter isolation is therefore the sole enforcement point
+every agent by default" as a confound. As with `lode-09td`'s later probes of the same design (above),
+the contrast is between *whole* agent definitions, not a single-variable ablation of the isolation key
+alone — `subagent_type` differs in system prompt, model, and tools too — so `subagent_type` is the
+only isolation-*relevant* difference between control and test case, not the only difference full
+stop. Frontmatter isolation is therefore the sole enforcement point
 for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
 *with* the option, which is unfalsifiable evidence for the frontmatter.
 
