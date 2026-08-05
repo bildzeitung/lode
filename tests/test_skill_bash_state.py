@@ -750,10 +750,11 @@ def _dead_allowlist_keys(
     *,
     sources: list[Path] | None = None,
     root: Path = CLAUDE_DIR,
+    known: Collection[str] | None = None,
 ) -> list[tuple[str, str]]:
     """(file, var) keys in `allowlist` that no longer correspond to any real,
     unfiltered violation across `sources` (default: the real shipped skill/agent
-    corpus, `_source_files()`) whose var name is NOT also a `_KNOWN_ENV_VARS` entry.
+    corpus, `_source_files()`) whose var name is NOT also in `known`.
     A key returned here is dead: the (file, var) pair it names does not exist as a
     live, non-known-env cross-block use anywhere today, so it currently excuses
     nothing -- but the entry stays in `ALLOWLIST` regardless, ready to silently
@@ -761,16 +762,18 @@ def _dead_allowlist_keys(
     (the `$CONFLICTS` history in the module docstring above is this exact sequence,
     observed).
 
-    DELIBERATE, explicit asymmetry with `_dead_known_env_vars` below (lode-dutt): a
-    var also present in `_KNOWN_ENV_VARS` is excluded from `live` here, mirroring
-    production (`find_violations` subtracts `_KNOWN_ENV_VARS` before ALLOWLIST is
-    ever consulted, so no genuine ALLOWLIST key would legitimately name a known env
-    var). `test_allowlist_key_for_a_known_env_var_name_is_reported_dead` pins this
-    filter directly, so it can no longer regress silently if the two pins' shared
-    scan (`_unfiltered_live_pairs`) is ever refactored again.
+    Vars in `known` (default `_KNOWN_ENV_VARS`) are excluded from `live`, mirroring
+    production: `find_violations` subtracts `_KNOWN_ENV_VARS` before ALLOWLIST is ever
+    consulted, so no genuine ALLOWLIST key would legitimately name a known env var.
+    `_dead_known_env_vars` below deliberately applies no such filter -- see
+    `_unfiltered_live_pairs`'s docstring for why that asymmetry is intentional.
+    `test_allowlist_key_for_a_known_env_var_name_is_reported_dead` pins this filter
+    directly, so it can no longer regress silently if the shared scan is refactored
+    again.
 
-    `allowlist`, `sources` and `root` are all parameters, not read from the module
-    globals directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage`
+    `allowlist`, `sources`, `root` and `known` are all parameters, not read from the
+    module globals directly, so
+    `test_every_allowlist_entry_is_provably_checked_by_sabotage`
     below can exercise this exact primitive -- the same one the real pin uses --
     against a deliberately bogus key and a deliberately "already fixed" synthetic
     file, without mutating any real `.claude/` file on disk (out of this ticket's
@@ -785,11 +788,12 @@ def _dead_allowlist_keys(
     `test_no_cross_block_shell_state_outside_the_allowlist`, and relative to
     `tmp_path` there.
     """
-    pairs = _unfiltered_live_pairs(sources)
+    if known is None:
+        known = _KNOWN_ENV_VARS
     live = {
         (str(path.relative_to(root)), var)
-        for path, var in pairs
-        if var not in _KNOWN_ENV_VARS
+        for path, var in _unfiltered_live_pairs(sources)
+        if var not in known
     }
     return sorted(set(allowlist) - live)
 
@@ -886,36 +890,39 @@ def test_allowlist_key_for_a_known_env_var_name_is_reported_dead(
 ) -> None:
     """The gap lode-dutt closes: an ALLOWLIST key whose var name is ALSO a
     `_KNOWN_ENV_VARS` entry must be reported dead by the allowlist liveness pin, even
-    though the name is a live UNFILTERED cross-block occurrence in the fixture --
+    though the name IS a live unfiltered cross-block occurrence in the fixture --
     because `_KNOWN_ENV_VARS` filtering happens before ALLOWLIST is ever consulted in
     production (inside `find_violations`), so no genuine ALLOWLIST key would ever
-    legitimately name a known env var.
+    legitimately name a known env var. Before lode-dutt nothing pinned this: the
+    filtering was inherited from `_dead_allowlist_keys` routing through
+    `find_violations`, and the existing sabotage test's synthetic `FOO` is not a known
+    env var, so moving the filter would have gone unnoticed.
 
-    Before lode-dutt this filtering was an accident of `_dead_allowlist_keys` routing
-    through `find_violations`; the two pins now share one unfiltered scan
-    (`_unfiltered_live_pairs`), so this filter is pinned directly in
-    `_dead_allowlist_keys`'s own code instead of being inherited from where
-    `_KNOWN_ENV_VARS` filtering happens to live. Uses a REAL `_KNOWN_ENV_VARS` name
-    (`TMPDIR`) rather than a synthetic one, since `_dead_allowlist_keys` reads
-    `_KNOWN_ENV_VARS` from the module global, not as a parameter.
-
-    Sabotage recipe: drop the `if var not in _KNOWN_ENV_VARS` filter from
-    `_dead_allowlist_keys` and this test goes red (TMPDIR would count as live).
+    The name is taken FROM `_KNOWN_ENV_VARS` rather than hardcoded, so this test does
+    not go stale (or quietly vacuous) if a particular entry is ever deleted, and the
+    call uses the DEFAULT `known` so the default's binding to `_KNOWN_ENV_VARS` is
+    what's exercised. The second assertion is the in-line non-vacuity control: the
+    same key, same fixture, filter emptied via `known=()` -- it must flip to live, so
+    the first assertion cannot pass for any reason other than the filter.
     """
-    assert "TMPDIR" in _KNOWN_ENV_VARS, (
-        "fixture assumption: TMPDIR must be a real _KNOWN_ENV_VARS entry"
-    )
+    known_name = min(_KNOWN_ENV_VARS)
     source = tmp_path / "skills" / "fixture" / "SKILL.md"
     source.parent.mkdir(parents=True)
     source.write_text(
-        '```bash\nTMPDIR=1\n```\n\n```bash\necho "$TMPDIR"\n```\n', encoding="utf-8"
+        f'```bash\n{known_name}=1\n```\n\n```bash\necho "${known_name}"\n```\n',
+        encoding="utf-8",
     )
-    key = ("skills/fixture/SKILL.md", "TMPDIR")
-    assert _dead_allowlist_keys({key: "fixture"}, sources=[source], root=tmp_path) == [
-        key
-    ], (
-        "an ALLOWLIST key naming a _KNOWN_ENV_VARS var must be reported dead even "
-        "though TMPDIR is a live unfiltered cross-block occurrence in the fixture"
+    key = ("skills/fixture/SKILL.md", known_name)
+    allowlist = {key: "fixture"}
+    assert _dead_allowlist_keys(allowlist, sources=[source], root=tmp_path) == [key], (
+        f"an ALLOWLIST key naming the known env var {known_name} must be reported "
+        "dead even though it is a live unfiltered cross-block occurrence here"
+    )
+    assert (
+        _dead_allowlist_keys(allowlist, sources=[source], root=tmp_path, known=()) == []
+    ), (
+        "non-vacuity control: with the known-env filter emptied, the SAME key must be "
+        "live -- so the assertion above turns on the filter and nothing else"
     )
 
 
@@ -938,17 +945,12 @@ def _dead_known_env_vars(
     that exact name the moment one is written (`LAND_LOCK_STALE_SECONDS`, deleted
     above, was measured in exactly this state at this ticket's build, lode-rscn).
 
-    Now shares `_unfiltered_live_pairs` with `_dead_allowlist_keys` above (lode-dutt) --
-    the same unfiltered scan, projected to just the var names since entries here are
-    bare names, not (file, var) keys. Deliberately does NOT apply `_dead_allowlist_
-    keys`'s `_KNOWN_ENV_VARS` filter: that filter exists there because a genuine
-    ALLOWLIST key would never legitimately name a known env var (production filters
-    `_KNOWN_ENV_VARS` before ALLOWLIST is ever consulted); it has no meaning here,
-    where `known` IS `_KNOWN_ENV_VARS` itself -- applying it would make every name in
-    `known` report dead regardless of real corpus content, the exact self-defeating
-    shape this helper exists to avoid. This asymmetry is deliberate, not an oversight
-    (see `_unfiltered_live_pairs`'s own docstring), and is pinned by `test_allowlist_
-    key_for_a_known_env_var_name_is_reported_dead` on the ALLOWLIST side.
+    Shares `_unfiltered_live_pairs` with `_dead_allowlist_keys` above (lode-dutt),
+    projected to just the var names since entries here are bare names, not (file, var)
+    keys. Applies NO known-env filter of its own -- `known` IS `_KNOWN_ENV_VARS` here,
+    so filtering by it would report every name dead regardless of corpus content, the
+    self-defeating shape this helper exists to avoid. That asymmetry with
+    `_dead_allowlist_keys` is deliberate; see `_unfiltered_live_pairs`'s docstring.
 
     `known` and `sources` are parameters, not read from module globals directly, so
     `test_every_known_env_var_is_provably_checked_by_sabotage` below can exercise
@@ -958,11 +960,9 @@ def _dead_known_env_vars(
     liveness is a question about the NAMES only, and typing it that way keeps a
     caller (the sabotage test) from having to invent a reason string the function
     never reads. No `root` parameter (unlike `_dead_allowlist_keys`): entries here
-    are bare names, not (file, var) keys, so there is no relative path to derive, and
-    `_unfiltered_live_pairs` is called without one for the same reason.
+    are bare names, not (file, var) keys, so there is no relative path to derive.
     """
-    pairs = _unfiltered_live_pairs(sources)
-    live = {var for _path, var in pairs}
+    live = {var for _path, var in _unfiltered_live_pairs(sources)}
     return sorted(set(known) - live)
 
 
