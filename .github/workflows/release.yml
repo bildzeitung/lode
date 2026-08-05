@@ -15,7 +15,7 @@ permissions:
 # Deliberately carries no `concurrency:` block, unlike its push-triggered
 # siblings -- a tag is pushed once, so there is no superseded run to cancel.
 # Why, and why cancelling here would be actively wrong:
-# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request.
+# docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 
 jobs:
   build-and-release:
@@ -23,7 +23,7 @@ jobs:
     # Caps a hung step (a stalled PyPI fetch, or this job's own `gh release
     # create`). Every release run to date finished in 14-30s of job time, so
     # 20 is ~40x the worst observed. Ladder + rationale:
-    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-w35h).
+    # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 20
     steps:
       - name: Checkout

@@ -25,7 +25,7 @@ on:
 
 # Cancels a superseded run on the same ref -- safe because nothing in the
 # landing loop reads these check results. Convention + rationale:
-# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
+# docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -34,7 +34,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     # Caps a hung step (e.g. a stalled pip/PyPI fetch). Ladder + rationale:
-    # docs/release.md#ci-workflow-trigger-scope-push-and-pull_request (lode-2ouz).
+    # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 15
     steps:
       - name: Checkout
