@@ -842,6 +842,7 @@ def collect_enrich_batch(
                     batch_id,
                     short_version_id(version_id),
                     exc,
+                    exc_info=True,
                 )
                 continue
 

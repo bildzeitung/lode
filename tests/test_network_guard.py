@@ -226,8 +226,14 @@ def test_a_swallowed_guard_failure_is_still_recorded(
         try:
             sock.connect(("93.184.216.34", 443))  # example.com's IP -- never dialed
 
+        # Swallowing the raise silently, doing nothing at all, IS the behaviour
         # under test, so ruff's "don't do this" is exactly what to do here.
-        except BaseException:  # noqa: S110
+        # S110 (try-except-pass) and BLE001 (blind-except, which flags
+        # BaseException the same as Exception) both fire on it, and both are
+        # suppressed for that one reason: giving the handler a body -- even a
+        # log line -- would narrate the test's own contrivance and stop it
+        # simulating the *completely* silent caller the assertion is about.
+        except BaseException:  # noqa: S110, BLE001
             pass
     finally:
         sock.close()

@@ -605,6 +605,7 @@ def run_one(
             attempts + 1,
             settings.retry_max_attempts,
             err,
+            exc_info=True,
         )
         # Shared attempts/backoff/dead-letter transition (lode-ajda) — also used
         # by lode.enrich._mark_job_failed for a Batches API result, so there is
@@ -797,6 +798,7 @@ def _batch_collect_enrich(
                 "pass (will retry next tick): %s",
                 batch_id,
                 exc,
+                exc_info=True,
             )
             _record_batch_collect_failure(conn, batch_id, exc, settings)
             # Deferred, not swallowed: every OTHER handle still gets its turn
@@ -1034,7 +1036,11 @@ def _batch_submit_enrich(
         raise
 
     except Exception as exc:
-        log.warning("_batch_submit_enrich: API call failed: %s — reverting jobs", exc)
+        log.warning(
+            "_batch_submit_enrich: API call failed: %s — reverting jobs",
+            exc,
+            exc_info=True,
+        )
         # Revert all pre-claimed jobs to 'failed' with a short backoff so they
         # are retried on the next pass (not immediately — avoids hammering the API).
         # First-failure backoff (min(base * 2**0, cap) == min(base, cap)) via the
@@ -1251,6 +1257,7 @@ def drain(
                 conn, settings, _client=_batch_client, outcomes=outcomes
             )
     except Exception as exc:
+        log.debug("drain: batch_collect pre-step failed", exc_info=True)
         if pre_step_failure is None:
             pre_step_failure = exc
 
@@ -1260,6 +1267,7 @@ def drain(
         ):
             _batch_submit_enrich(conn, settings, _client=_batch_client)
     except Exception as exc:
+        log.debug("drain: batch_submit pre-step failed", exc_info=True)
         if pre_step_failure is None:
             pre_step_failure = exc
 
