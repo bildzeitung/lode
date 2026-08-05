@@ -34,21 +34,26 @@ stay green would have been to stop naming the library it was explaining it did
 not use. `_consumers()` therefore anchors on a real, non-comment SOURCE line,
 so what it computes matches the docstring it has always carried.
 
-Two invariants are swept, both of which were previously unenforceable
+Three invariants are swept, all of which were previously unenforceable
 mechanically and left to per-consumer convention:
 
 * every consumer GUARDS its source, so a missing/unreadable gate-lib.sh
   exits 2 rather than falling through to 0/1/127 (lode-bss5, Finding B);
 * every consumer's source line supplies either its advisory lines or the
   literal `--no-advisory` sentinel -- never a bare source with zero trailing
-  tokens (lode-ysr6, see below).
+  tokens (lode-ysr6, see below);
+* every consumer SOURCES the library above its first call site, so no
+  `gate_could_not_run`/`escalate_unless_content` call can hit an unbound
+  function (lode-b4md, see below).
 
-NON-VACUITY (acceptance criterion): sabotaging either gate -- reverting a
-consumer's guard to the bare source it had before lode-bss5, or stripping a
-no-advisory consumer's `--no-advisory` sentinel -- must make the sweep fail
-and, for the second one, must reproduce the actual leak on the real script.
-Both are proven below rather than asserted; a gate that cannot fail is not a
-gate.
+NON-VACUITY (acceptance criterion): sabotaging any of the three -- reverting
+a consumer's guard to the bare source it had before lode-bss5, stripping a
+no-advisory consumer's `--no-advisory` sentinel, or splicing a call site above
+the source -- must make the sweep fail, and for the two RUNTIME invariants must
+reproduce the actual consequence on the real script. All three are proven below
+rather than asserted; a gate that cannot fail is not a gate. The third is
+positional rather than behavioural, so its proof is textual -- see its own
+docstring for why a subprocess would add nothing there.
 
 WHY THE OLD "GATE_ADVISORY ORDERING" SWEEP IS GONE (lode-ysr6): it compared
 the line number of a consumer's separate `GATE_ADVISORY=(...)` statement
@@ -56,8 +61,11 @@ against its `gate_could_not_run` call sites. No consumer has such a statement
 any more -- gate-lib.sh binds GATE_ADVISORY itself, at source time -- so the
 sweep has nothing left to compare and was deleted rather than rewritten. The
 hazard it swept for, and why it is now unrepresentable, is owned by
-gate-lib.sh's own header. The narrower discipline that replaces it is swept
-below.
+gate-lib.sh's own header. The narrower discipline that replaces it is the
+advisory-or-sentinel sweep. Note this is NOT the same thing as the
+source-before-call-site sweep (lode-b4md), which is also an ordering check but
+over a different pair: the SOURCE line versus the call sites, not a separate
+`GATE_ADVISORY=` statement versus them.
 """
 
 from __future__ import annotations
@@ -493,6 +501,94 @@ def test_every_consumer_source_line_supplies_advisory_or_sentinel(script: Path):
         f"{script.name} sources gate-lib.sh with no trailing arguments -- "
         f"either its own advisory lines or the literal --no-advisory "
         f"sentinel is required (see gate-lib.sh's GATE_ADVISORY contract)."
+    )
+
+
+# Matches a call to either helper anywhere in a line, since a call site can
+# follow `||` or `if ! ` (e.g. `REPO="..." || gate_could_not_run ...`).
+# Unanchored means comments match too, so `_non_comment_lines` is what keeps a
+# comment that merely NAMES a helper from registering as a call site -- not a
+# hypothetical: validate-mermaid.sh's AUDIT header discusses gate_could_not_run
+# in prose on two lines ABOVE its own source block, which without that filter
+# would make the sweep below fail on trunk today.
+CALL_SITE_RE = re.compile(r"\b(?:gate_could_not_run|escalate_unless_content)\b")
+
+
+def _first_call_site_line(text: str) -> int | None:
+    """1-based line number of the first non-comment call site in `text`, or
+    None if there is none."""
+    for n, line in _non_comment_lines(text):
+        if CALL_SITE_RE.search(line):
+            return n
+    return None
+
+
+def _guard_line(text: str) -> int:
+    """1-based line number where the guarded-source block starts."""
+    return text.count("\n", 0, _guard_match(text).start()) + 1
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_source_precedes_every_call_site(script: Path):
+    """The successor to the ordering sweep lode-ysr6 deleted (lode-b4md):
+    nothing pinned SOURCE-BEFORE-FIRST-CALL-SITE, only guard-presence and
+    advisory-or-sentinel. `gate_could_not_run`/`escalate_unless_content` are
+    functions gate-lib.sh defines at source time -- a call site above the
+    guarded source line would hit an unbound function (exit 127, no banner
+    at all), a more severe regression than anything the two sweeps above
+    catch. The guarded source line itself can never be its own first match:
+    it names neither helper, only `. "$(dirname "$0")/gate-lib.sh"` and the
+    advisory arguments that follow it.
+
+    This does NOT backstop lode-dyq0's actual defect, which was a hardcoded
+    pre-library exit-2 block -- not a call site, so this sweep passes straight
+    over it. It catches a different, more severe failure mode: a genuine call
+    site landing above the source.
+    """
+    text = script.read_text()
+    call_line = _first_call_site_line(text)
+    guard_line = _guard_line(text)
+    assert call_line is not None, f"{script.name}: no call site discovered"
+    assert call_line > guard_line, (
+        f"{script.name}: a gate_could_not_run/escalate_unless_content call "
+        f"site sits at line {call_line}, above the guarded gate-lib.sh source "
+        f"at line {guard_line} -- that call would hit an unbound "
+        f"function (exit 127) rather than the fail-closed guard."
+    )
+
+
+@pytest.mark.parametrize("script", CONSUMERS, ids=lambda p: p.name)
+def test_source_precedes_call_site_sweep_is_not_vacuous(script: Path):
+    """NON-VACUITY for the test above: splicing a real call site immediately
+    above the guarded source must invert its assertion.
+
+    Proven TEXTUALLY, on a copy -- unlike this file's other two non-vacuity
+    tests, which run the sabotaged script as a subprocess and observe the
+    consequence in stderr. That is not a lowered bar: those two pin RUNTIME
+    invariants, where only execution can show the leak, while this one pins a
+    purely positional property of the source text, so a subprocess would
+    observe nothing the line numbers do not already say.
+
+    It is also not tautological. The spliced line calls
+    `escalate_unless_content`, which is NOT the helper any consumer's first
+    real call site uses (all five reach `gate_could_not_run` first), so this
+    exercises the alternation branch of CALL_SITE_RE that the sweep above
+    never reaches on trunk. Degrade that branch and the spliced line goes
+    undetected, `_first_call_site_line` reports the pre-existing call site
+    below the source instead, and this test -- not the sweep -- goes red.
+    """
+    text = script.read_text()
+    match = _guard_match(text)
+    sabotaged = (
+        text[: match.start()]
+        + 'escalate_unless_content 1 "x"\n'
+        + text[match.start() :]
+    )
+    call_line = _first_call_site_line(sabotaged)
+    assert call_line is not None, f"{script.name}: spliced call site not found"
+    assert call_line <= _guard_line(sabotaged), (
+        f"{script.name}: sabotaged call site did not land above the source -- "
+        f"this sweep proves nothing about this consumer."
     )
 
 

@@ -60,6 +60,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -359,18 +360,14 @@ def check(root: Path) -> list[LinkError]:
     return errors
 
 
-#: ``--root`` option: the repo root to scan, overriding this checkout's own.
-#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
-_ROOT_OPTION = typer.Option(
-    None,
-    "--root",
-    help="Repo root to scan (defaults to this checkout's root).",
-)
-
-
 @app.command()
 def main(
-    root: Path = _ROOT_OPTION,
+    root: Annotated[
+        Path | None,
+        typer.Option(
+            "--root", help="Repo root to scan (defaults to this checkout's root)."
+        ),
+    ] = None,
 ) -> None:
     """Fail if any relative markdown link in docs/ (and .claude/) is broken, or
     any docs/ anchor cited elsewhere in the tree (e.g. .github/workflows/,

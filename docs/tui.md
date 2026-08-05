@@ -226,3 +226,69 @@ cursor move with no read-back dependency) that `pilot.press()`'s own trailing dr
 correctly; forcing every site onto `_wait_until`/`_press_and_settle` would add ceremony with no
 mechanism behind it. Reach for one of the two helpers above only when a test hits the actual
 load-dependent failure mode this section describes.
+
+## RelatedNotesPanel's background pass: the straggler is tolerated, not joined (`lode-du4p`)
+
+`RelatedNotesPanel._search_related` runs its work as `await asyncio.to_thread(find_related_notes,
+...)` on the loop's shared default executor. `RelatedNotesPanel.on_unmount` cancels the awaiting
+coroutine (`lode-ivu`: `_cancel_related_pass()` stops the debounce timer and calls
+`workers.cancel_group(self, "related-notes")`), but `asyncio.to_thread` work is not cancellable —
+the OS thread already running `find_related_notes` inside the default `ThreadPoolExecutor` keeps
+running to completion regardless, on its own schedule, with nothing in the panel left to wait on
+it. `lode-du4p` was filed on the premise that this makes the pass a cross-test contamination
+hazard: a pass armed by one test could still be running, touching that test's own torn-down
+`tmp_path` (DB + LanceDB paths under `$LODE_HOME`), when a later test starts.
+
+**The premise was refuted by measurement, not accepted at face value.** Every TUI test in this
+suite drives the app via a synchronous `def test_...` calling `asyncio.run(_drive())` — there is no
+`pytest-asyncio` and no `async def test_` anywhere in `tests/`. `asyncio.run()`'s `Runner.close()`
+awaits `loop.shutdown_default_executor()` on the way out, which joins every thread the default
+executor is still running (bounded by `asyncio.constants.THREAD_JOIN_TIMEOUT`, 300s on 3.14 — a
+thread still running past that is abandoned with a loud `RuntimeWarning`, so the join is never
+silently skipped). Measured directly (Python 3.14.5, this repo): an `asyncio.to_thread`
+task cancelled mid-flight is still `finished=False` immediately after the cancel, but
+`finished=True` once `asyncio.run()` has returned, with zero surviving non-main threads. So a pass
+armed by one test's `asyncio.run()` call cannot in fact outlive that call — the straggler class this
+ticket was filed to close was already closed, by `Runner.close()`, before this ticket existed.
+`tests/conftest.py`'s lode-sx17 straggler-misattribution paragraph is intentionally left as-is by
+this decision (see its own text): the general backstop it describes covers any *other*
+straggler-producing worker, and stays accurate independent of this specific source.
+
+**A product-side fix was built, measured, and reverted — the numbers are why.** A prior pass at
+this ticket gave `RelatedNotesPanel` a private single-worker
+`concurrent.futures.ThreadPoolExecutor`, with `on_unmount` doing a synchronous, **unbounded**
+`concurrent.futures.wait()` on the in-flight future after cancelling the coroutine side — turning an
+escaped thread into a bounded (if slow) teardown. Measured on that branch:
+
+- `_cancel_related_pass` is not reached only from `on_unmount`: `reset()` (Ctrl+S, "Save & New") and
+  `update_draft("")` (an emptied draft, e.g. select-all-delete while typing). Both are mid-session,
+  event-loop-thread paths, not teardown. Measured: a 600ms stand-in pass blocked the event loop
+  514ms via `reset()` and 493ms via `update_draft("")` — the whole TUI freezes for most of a pass's
+  remaining duration on an ordinary interactive action.
+- `on_unmount` itself fires on every screen pop, not only app exit — `EditScreen` composes the
+  panel and is popped on Escape, on the discard-confirm answers, and on reconcile, with the app
+  still fully live. Measured: a 1000ms stand-in pass blocked the event loop 980ms on an `EditScreen`
+  pop, terminal still in raw mode, un-interruptible (Ctrl+C arrives as a keystroke, not `SIGINT`,
+  while the loop is blocked).
+- The justification written for making that join unbounded — "`find_related_notes` is local-only
+  work, no network call since `lode-7ypf`/`lode-sx17`" — is false in production. `lode-7ypf` and
+  `lode-sx17` closed that reach in **tests only** (an autouse offline embedder stub plus an offline
+  env var, both in `tests/conftest.py`). Production still reaches HuggingFace: on a cold
+  `$LODE_HOME/models/` cache, `find_related_notes → embed_query → FastEmbedEmbedder._load()`
+  downloads the pinned `nomic-ai/nomic-embed-text-v1.5` ONNX weights (hundreds of MB). So the
+  unbounded join's worst case is minutes, on the quit path and on every `EditScreen` exit, on a
+  fresh install — see `lode-06p2`, filed against that branch and dissolved (closed) once the branch
+  was reverted, since with no join there is no residual left to bound.
+
+**Decision: tolerate the straggler.** No product-side join. `_search_related` stays exactly as it
+is on trunk — `await asyncio.to_thread(find_related_notes, ...)` on the shared default executor —
+and `on_unmount` keeps `lode-ivu`'s cancel with no join added. Every join shape considered imposed
+the measured costs above to guard against a hazard the refutation above already closes. The
+cold-cache download itself is unaffected either way — it happens on the background pass, where it
+always has, rather than on a teardown path the user is waiting on.
+
+**What "provable" means here, given the refutation.** The ticket's acceptance bar asked to prove "a
+pass armed by one test cannot still be running when a later test starts." The `Runner.close()`
+measurement above establishes exactly that, per test, without any code change. A green full suite is
+not the evidence (nothing failed before this decision either); the `shutdown_default_executor()`
+mechanism is.

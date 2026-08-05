@@ -1188,12 +1188,17 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
 # THE ONE parser for "which bash does an agent actually execute", for the gates
-# listed below, after five private copies of it drifted apart -- no private
-# fence state machine survives under tests/ any more -- verified by inspection,
-# NOT by a gate, which is why that claim has now been falsified five running
-# times; lode-k5qb is the mechanical version. The count is deliberately
-# not restated here: it has been hand-incremented (and gone stale) once per
-# unification ticket, so the list below carries it and nothing else does.
+# listed below, after private copies of it drifted apart -- verified by
+# inspection, NOT by a gate, which is why that claim has been falsified from
+# this same prose comment five separate times (lode-ovgs, lode-p4qb, lode-kjei,
+# lode-jm4a, lode-oqqw) before lode-k5qb stopped asserting it here on comment
+# authority alone: it is now a mechanical, AST-based gate,
+# tests/test_no_private_fence_state_machine.py, that fails the suite the
+# moment ANY module under tests/*.py or scripts/*.py (other than this file)
+# hand-rolls a fence-toggle open/close flag again. Trust that gate, not this
+# paragraph. The count is deliberately not restated here either: it has been
+# hand-incremented (and gone stale) once per unification ticket, so the list
+# below carries it and nothing else does.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence
@@ -1203,12 +1208,14 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Four
 # other modules each rediscovered and re-fixed that independently before
 # lode-ovgs unified three of them here, lode-p4qb folded in the fourth
-# (tests/test_assert_main_checkout.py), and lode-jm4a folded in the fifth
+# (tests/test_assert_main_checkout.py's text-gate half, since split out to
+# tests/test_land_skill_guard_coverage.py by lode-2thl), and lode-jm4a folded
+# in the fifth
 # (tests/test_sweep_digest_id.py).
 #
 # Consumers of the FUNCTION: tests/test_land_lock.py,
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
-# tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
+# tests/test_land_skill_guard_coverage.py, tests/test_sweep_digest_id.py.
 # tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
 # a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
 # own open/close loop onto the same generator `bash_fence_blocks` is now built
