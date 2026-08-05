@@ -97,6 +97,21 @@ def _insert_note(
         )
 
 
+def _insert_enrich_job(
+    conn: sqlite3.Connection,
+    version_id: str = "ver-1",
+    status: str = "pending",
+) -> int:
+    """Insert a pending enrich job row; return the job id."""
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (version_id, status, now_iso()),
+        )
+    return cur.lastrowid
+
+
 def _insert_external(
     conn: sqlite3.Connection,
     *,
@@ -1023,12 +1038,7 @@ def test_enrich_gap_skips_disqualifying_note(
 def test_enrich_gap_skips_live_job(conn: sqlite3.Connection) -> None:
     """A version with a live (pending/running/done/failed) enrich job is not re-enqueued."""
     _insert_note(conn)
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, next_attempt_at) "
-            "VALUES ('enrich', 'ver-1', ?)",
-            (now_iso(),),
-        )
+    _insert_enrich_job(conn)
     assert _enrich_gap_step(conn) == 0
 
 
@@ -1059,12 +1069,7 @@ def test_enrich_gap_skips_in_flight_batch_job(conn: sqlite3.Connection) -> None:
 def test_enrich_gap_reenqueues_dead_job(conn: sqlite3.Connection) -> None:
     """A dead-lettered enrich job is treated as a gap and re-enqueued."""
     _insert_note(conn)
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', 'ver-1', 'dead', ?)",
-            (now_iso(),),
-        )
+    _insert_enrich_job(conn, status="dead")
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1213,21 +1218,6 @@ def test_enrich_gap_pending_job_not_reenqueued_regardless_of_prompt_ver(
 # ---------------------------------------------------------------------------
 # Batch API helpers — submit_enrich_batch (lode-npx.2)
 # ---------------------------------------------------------------------------
-
-
-def _insert_enrich_job(
-    conn: sqlite3.Connection,
-    version_id: str = "ver-1",
-    status: str = "pending",
-) -> int:
-    """Insert a pending enrich job row; return the job id."""
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, now_iso()),
-        )
-    return cur.lastrowid
 
 
 def _fake_batch_client(
