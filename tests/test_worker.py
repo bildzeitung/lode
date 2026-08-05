@@ -2088,11 +2088,7 @@ def test_drain_collects_enrich_batch_outcome_via_batch_pre_step(
 
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
     job_id = _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-1",
-        status="running",
-        batch_handle="collect-batch",
+        conn, "enrich", "ver-1", status="running", batch_handle="collect-batch"
     )
 
     enrichment = EnrichmentResult(tags=["python", "api"], entities=["FastAPI"])
@@ -2383,19 +2379,13 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_is_stuck(
     # submit step to actually submit, so its assertion below is meaningful.
     _insert_job(conn, job_type="embed", target_version="ver-1")
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-1",
-        status="running",
-        batch_handle="poison-batch",
-    )
+    _insert_job(conn, "enrich", "ver-1", status="running", batch_handle="poison-batch")
     # A DIFFERENT version -- idx_jobs_live's partial unique index (type,
     # target_version, prompt_ver) spans both 'pending' and 'running', so a
     # second live enrich job for the SAME version_id would collide with the
     # one above.
     _insert_note_worker(conn, note_id="note-2", version_id="ver-2")
-    pending_job = _insert_job(conn, "enrich", target_version="ver-2", status="pending")
+    pending_job = _insert_job(conn, "enrich", "ver-2", status="pending")
 
     embedded: list[str] = []
 
@@ -2546,9 +2536,7 @@ def test_drain_still_runs_embed_jobs_when_the_submit_pre_claim_cas_raises_unclas
     """
     _insert_job(conn, job_type="embed", target_version="ver-1")
     _insert_note_worker(conn, note_id="note-1", version_id="ver-1")
-    enrich_job_id = _insert_job(
-        conn, "enrich", target_version="ver-1", status="pending"
-    )
+    enrich_job_id = _insert_job(conn, "enrich", "ver-1", status="pending")
 
     poisoned = _PoisonSubmitCASConn(conn, poison_job_id=enrich_job_id)
 
@@ -3298,8 +3286,8 @@ def test_batch_submit_skips_job_claimed_by_concurrent_immediate_enrich(
     """
     _insert_note_worker(conn, note_id="note-a", version_id="ver-a")
     _insert_note_worker(conn, note_id="note-b", version_id="ver-b")
-    raced_job = _insert_job(conn, "enrich", target_version="ver-a")
-    won_job = _insert_job(conn, "enrich", target_version="ver-b")
+    raced_job = _insert_job(conn, "enrich", "ver-a")
+    won_job = _insert_job(conn, "enrich", "ver-b")
 
     client = _fake_batch_client_worker(batch_id="race-batch")
     racing = _RacingSelectConn(conn, race_job_id=raced_job)
@@ -3395,18 +3383,10 @@ def test_batch_collect_isolates_one_poisoned_handle_from_a_healthy_one(
     makes the final assertion discriminating rather than incidental.
     """
     poison_job = _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-poison",
-        status="running",
-        batch_handle="poison-batch",
+        conn, "enrich", "ver-poison", status="running", batch_handle="poison-batch"
     )
     healthy_job = _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-healthy",
-        status="running",
-        batch_handle="healthy-batch",
+        conn, "enrich", "ver-healthy", status="running", batch_handle="healthy-batch"
     )
 
     def _fake_collect(conn_, batch_id, settings_, *, outcomes=None):
@@ -3466,18 +3446,10 @@ def test_batch_collect_auth_error_is_not_caught_as_a_poisoned_handle(
     going vacuous again.
     """
     auth_job = _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-auth",
-        status="running",
-        batch_handle="auth-batch",
+        conn, "enrich", "ver-auth", status="running", batch_handle="auth-batch"
     )
     healthy_job = _insert_job(
-        conn,
-        "enrich",
-        target_version="ver-healthy",
-        status="running",
-        batch_handle="healthy-batch",
+        conn, "enrich", "ver-healthy", status="running", batch_handle="healthy-batch"
     )
 
     calls: list[str] = []
