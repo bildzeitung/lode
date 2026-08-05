@@ -366,6 +366,135 @@ def test_hook_fails_OPEN_when_the_script_is_unresolvable_deliberately() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# lode-dia6: the guard now sources scripts/shell-quote-split.sh (shared with
+# scripts/gh-write-guard.sh, lode-obox/lode-d5je) instead of its own
+# quoting-UNAWARE `tr ';&|(){}\`' '\n'` segment split. That old split let a
+# control character sitting inside a quoted STRING ARGUMENT or a QUOTED
+# HEREDOC body manufacture a fake segment start; if a `bd`/`git` invocation
+# then appeared to start at that fake boundary, a 40-hex token nearby got
+# scanned as if it sat inside a real bd/git call. These tests pin the two
+# false-positive shapes closed, plus a superset/no-fail-open invariant
+# mirroring tests/test_gh_write_guard.py's own coverage for the shared split.
+# ---------------------------------------------------------------------------
+
+QUOTED_ARG_FALSE_POSITIVE_SHAPES = [
+    # A control character (`;`) inside a double-quoted argument used to split
+    # the command into a fake segment `bd update x --sha <FAKE>` that starts
+    # with `bd` -- even though the REAL, only invocation here is `echo`.
+    f'echo "safe; bd update x --sha {FABRICATED_SHA}"',
+    # Same shape with a different control char and `git`.
+    f'echo "note (git show {FABRICATED_SHA})"',
+]
+
+QUOTED_HEREDOC_FALSE_POSITIVE_SHAPES = [
+    # A QUOTED heredoc body (inert text -- no shell substitution at all) that
+    # merely QUOTES a fabricated-looking SHA as a worked example, e.g. a doc
+    # or commit-message draft. Old behaviour: the heredoc body is plain text
+    # to `tr`, so a `bd update ... land_head=<FAKE>` line inside it was
+    # scanned and denied even though nothing here is live shell.
+    (
+        "cat <<'EOF'\n"
+        f"example: bd update lode-1 --set-metadata land_head={FABRICATED_SHA}\n"
+        "EOF"
+    ),
+    (f'cat <<"EOF"\nexample: git show {FABRICATED_SHA}\nEOF'),
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_ARG_FALSE_POSITIVE_SHAPES)
+def test_fabricated_sha_inside_quoted_argument_is_not_denied(command: str) -> None:
+    """AC (lode-dia6): a control character inside a quoted STRING ARGUMENT must not
+    manufacture a fake bd/git segment start -- the real invocation here is not bd/git at all."""
+    assert _script_decision(command) is None, (
+        f"quoted-argument false-denied: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_FALSE_POSITIVE_SHAPES)
+def test_fabricated_sha_inside_quoted_heredoc_body_is_not_denied(command: str) -> None:
+    """AC (lode-dia6): a QUOTED heredoc body is inert text -- a fabricated-looking SHA quoted
+    inside one as a worked example must not be scanned as if it were live shell."""
+    assert _script_decision(command) is None, (
+        f"quoted-heredoc false-denied: {command!r}"
+    )
+
+
+def test_unquoted_heredoc_body_with_fabricated_sha_is_still_denied() -> None:
+    """Regression guard: an UNQUOTED heredoc body IS live shell (substitution happens), so a
+    fabricated SHA inside one, in a real bd/git invocation, must still be denied -- the fix
+    only strips QUOTED heredoc bodies, never unquoted ones."""
+    command = (
+        f"cat <<EOF\nbd update lode-1 --set-metadata land_head={FABRICATED_SHA}\nEOF"
+    )
+    assert _script_decision(command) == "deny"
+
+
+def test_real_bd_invocation_after_quoted_control_chars_is_still_denied() -> None:
+    """The fix must not become an over-broad narrowing: a genuine bd/git invocation carrying a
+    fabricated SHA, reached via `&&` after a metacharacter-laden quoted string earlier in the
+    command, must still be denied."""
+    command = f'echo "safe; not a real command" && bd update lode-1 --set-metadata land_head={FABRICATED_SHA}'
+    assert _script_decision(command) == "deny"
+
+
+def test_known_accepted_over_match_still_denies_fabricated_hex_in_bd_line_prose() -> (
+    None
+):
+    """Regression pin for the EXISTING accepted over-match
+    (test_known_accepted_over_match_prose_with_fabricated_looking_hex above): this is a
+    heuristic guard, not a shell parser, and a fabricated-looking 40-hex run in free-text prose
+    that sits on the SAME segment as a real bd/git invocation (no control character separating
+    them) is still scanned and denied. Distinguishing this from the two false-positive shapes
+    above is the entire point of `_split_unquoted` being QUOTE-aware rather than simply
+    ignoring everything inside quotes."""
+    command = f'bd create --title="x" --notes="mentions {FABRICATED_SHA} in passing"'
+    assert _script_decision(command) == "deny"
+
+
+def test_script_sources_the_shared_quote_split_library() -> None:
+    """The script must delegate to scripts/shell-quote-split.sh, not re-embed its own private
+    split -- per this ticket's own scope (lode-dia6: extract, don't duplicate)."""
+    text = SCRIPT.read_text()
+    assert "shell-quote-split.sh" in text
+    assert "_split_unquoted" in text
+    assert "strip_quoted_heredoc_bodies" in text
+    # No re-embedded quoting-unaware `tr` segment split left behind.
+    assert "tr ';&|(){}" not in text
+
+
+def test_script_fails_closed_when_shared_library_is_unresolvable(
+    tmp_path: Path,
+) -> None:
+    """AC (lode-dia6): unlike a missing scripts/sha-fabrication-guard.sh itself (which the
+    WRAPPER deliberately fails OPEN on, per test_hook_fails_OPEN_when_the_script_is_unresolvable
+    _deliberately above), a missing/unresolvable scripts/shell-quote-split.sh -- the shared
+    library THIS script depends on -- must fail CLOSED. Adding a second file to the resolution
+    chain widens the missing-file surface; this is the extraction's own new hazard, and it must
+    never be treated as a reason to fall through unscanned."""
+    # Copy the guard script into an isolated directory with NO sibling shell-quote-split.sh.
+    isolated = tmp_path / "scripts"
+    isolated.mkdir()
+    isolated_script = isolated / "sha-fabrication-guard.sh"
+    isolated_script.write_text(SCRIPT.read_text())
+    isolated_script.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(isolated_script), f"git show {FABRICATED_SHA}"],
+        cwd=REPO_ROOT,  # still a real repo, so the git-repo early-out doesn't fire
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    assert proc.stdout.strip(), (
+        "expected a deny when the shared library is unresolvable"
+    )
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "shell-quote-split.sh" in out["permissionDecisionReason"]
+
+
 # The GLOBAL "which PreToolUse(Bash) guards are installed" inventory assertion (including this
 # guard's own presence) lives once, in tests/test_hook_guards_inventory.py, next to the shared
 # harness -- not here, where adding a FOURTH guard anywhere would turn this unrelated file red

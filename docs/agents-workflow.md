@@ -1671,6 +1671,22 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+**Segment split shared with the `gh` write guard (`lode-dia6`).** This script used to split into
+scan segments with its own quoting-*unaware* `tr` over the shell control-operator characters —
+byte-identical in shape to the splitter `scripts/gh-write-guard.sh` carried before `lode-obox` and
+`lode-d5je` fixed it there (a control character inside a quoted string argument, or inside a
+*quoted* heredoc body, could manufacture a fake segment start and get a nearby 40-hex token scanned
+as if it sat inside a real `bd`/`git` invocation). `lode-dia6`'s human decision, recorded on the
+ticket: **extract, don't re-port.** Porting the two fixes a second time would leave two copies of a
+splitter that must stay in lockstep across every future refinement — and the two guards already
+drifted once, because they started as byte-identical code. Both primitives
+(`_split_unquoted`, `strip_quoted_heredoc_bodies`) now live in one sourced library,
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh), and both guard scripts fail
+*closed* (deny) if that library cannot be resolved — the opposite asymmetry from the guard-script
+resolution above, deliberately: a missing *shared dependency* both guards need is a new hazard this
+extraction itself introduces, not a pre-existing one to be as permissive about as a missing
+top-level script.
+
 ### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
 
 **No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
@@ -1681,6 +1697,11 @@ the three is a thin wrapper that resolves and delegates to a script under `scrip
 | `bd create --deps blocks:` inversion (`lode-ij24`) | [`scripts/bd-deps-blocks-guard.sh`](../scripts/bd-deps-blocks-guard.sh) | `tests/test_bd_deps_guard.py` |
 | External-tracker write (`lode-o29m` / `lode-9mbt`) | [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) | `tests/test_gh_write_guard.py` |
 | Fabricated SHA (`lode-fpmi`) | [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh) | `tests/test_sha_fabrication_guard.py` |
+
+Both the `gh` write guard and the fabricated-SHA guard additionally source
+[`scripts/shell-quote-split.sh`](../scripts/shell-quote-split.sh) (`lode-dia6`) for their shared
+quote-aware segment split and quoted-heredoc pre-pass — see "Segment split shared with the `gh`
+write guard" above.
 
 `lode-fpmi` established this shape and stated the reason as its own acceptance criterion —
 *"the guard logic lives in a tested script, not untested inline shell"* — because **ungated inline

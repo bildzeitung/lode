@@ -19,6 +19,20 @@
 # and scripts/code-concurrency-cap.sh. Each scope narrowing below, and the one
 # deliberately accepted over-match, is documented in docs/agents-workflow.md
 # ("Guard against fabricated SHAs (lode-fpmi)") and pinned by the tests.
+#
+# QUOTE-AWARE SEGMENT SPLIT + QUOTED-HEREDOC PRE-PASS (lode-dia6). This guard
+# used to split into segments with a plain, quoting-UNAWARE `tr` over the
+# shell control-operator characters -- the same shape scripts/gh-write-guard.sh
+# carried before lode-obox and lode-d5je fixed it there: a control character
+# sitting inside a quoted
+# STRING ARGUMENT (a commit message, a doc quoting a real SHA) or inside a
+# QUOTED HEREDOC body could manufacture a fake segment start, and a 40-hex
+# token then landing in that fake segment got scanned as if it sat inside a
+# real bd/git invocation. Both primitives (`_split_unquoted`,
+# `strip_quoted_heredoc_bodies`) now live in scripts/shell-quote-split.sh,
+# shared with gh-write-guard.sh -- see that file's header for the full
+# rationale and the false-positive shapes each fix closes. Sourced below,
+# failing CLOSED if it cannot be resolved.
 
 set -euo pipefail
 
@@ -27,7 +41,7 @@ CMD="${1:-}"
 
 # Cheap fork-free early-out for the overwhelmingly common case: no 40-hex run
 # anywhere in the command, so nothing below can possibly deny. This runs on
-# EVERY Bash tool call, so it is placed first, ahead of the git/sed/tr/grep/sort
+# EVERY Bash tool call, so it is placed first, ahead of the git/sed/grep/sort
 # work it short-circuits. A bash builtin regex, deliberately kept here in the
 # tested script rather than inline in .claude/settings.json -- config is where
 # this repo has already shipped silent undetected bugs (lode-mh9g, lode-54mo),
@@ -40,17 +54,44 @@ CMD="${1:-}"
 # Not in a git work tree -> cat-file has nothing to check against.
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 
+# Fail CLOSED (deny) if the shared quote-aware split library cannot be
+# resolved -- a missing/unreadable copy here would silently disable both the
+# quoted-argument and quoted-heredoc fixes, reopening the exact
+# false-positive class this ticket (lode-dia6) exists to close. Resolved via
+# this script's OWN directory so it works regardless of the caller's cwd.
+# Placed AFTER the two cheap early-outs above so a command with no 40-hex run
+# (or one outside any git work tree) never pays even the cost of resolving it.
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_LIB="$_LIB_DIR/shell-quote-split.sh"
+if [ ! -r "$_LIB" ]; then
+  jq -n '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: "lode-dia6: scripts/shell-quote-split.sh (the shared quote-aware split library scripts/sha-fabrication-guard.sh depends on) could not be resolved -- denying this Bash call rather than silently scanning with the split disabled, since a false ALLOW here is unrecoverable. Surface this to a human; do not retry."}}'
+  exit 0
+fi
+# shellcheck source=scripts/shell-quote-split.sh
+source "$_LIB"
+
+# Strip QUOTED heredoc bodies first (line-based, operates on the real
+# multi-line command) before collapsing backslash-newline continuations --
+# mirroring gh-write-guard.sh's ordering, since the two are different
+# multi-line mechanisms and continuation-collapse must not run across a
+# heredoc boundary it hasn't yet recognized.
+case "$CMD" in
+  *'<<'*) CMD=$(strip_quoted_heredoc_bodies "$CMD") ;;
+esac
+
 # Collapse backslash-newline continuations so a real multi-line `bd update ... \`
 # metadata write is still seen as ONE bd invocation segment (lode-m6px).
 CMD=$(printf '%s' "$CMD" | sed -e :a -e '/\\$/N; s/\\\n/ /; ta')
 
-# Split into command segments on shell control operators (same technique as the
-# lode-o29m gh-write guard), keep only segments that are a bd/git invocation,
-# and extract lowercase 40-hex tokens from those. Real `git rev-parse` output is
-# always lowercase, so an uppercase token was never meant as a SHA.
+# Split into command segments with the shared quote-aware splitter (lode-dia6,
+# same technique as the lode-o29m gh-write guard -- see shell-quote-split.sh),
+# keep only segments that are a bd/git invocation, and extract lowercase
+# 40-hex tokens from those. Real `git rev-parse` output is always lowercase,
+# so an uppercase token was never meant as a SHA.
 INVOKE_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|command|time|nohup|xargs)[[:space:]]+)*(bd|git)([[:space:]]|$)'
 
-TOKENS=$(printf '%s' "$CMD" | tr ';&|(){}`' '\n' \
+TOKENS=$(_split_unquoted "$CMD" \
   | grep -E "$INVOKE_RE" \
   | grep -oE '\b[0-9a-f]{40}\b' \
   | sort -u || true)
