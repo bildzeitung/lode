@@ -63,7 +63,7 @@ def test_documented_defaults_load() -> None:
     assert s.content_hash == "xxh3-128"
     assert s.no_egress_default is False
     assert s.progress_heartbeat_interval_s == 15.0
-    assert s.llm_call_timeout_s == 120.0
+    assert s.enrich_call_timeout_s == 120.0
     assert s.qa_call_timeout_s == 300.0
 
 
@@ -163,24 +163,43 @@ def test_load_settings_config_toml_unknown_key_raises(
         load_settings()
 
 
-# --- llm_call_timeout_s back-compat rename (lode-568v.2) --------------------
+# --- enrich_call_timeout_s back-compat rename chain (lode-568v.2, lode-7y6s)-
 #
-# anthropic_call_timeout_s was renamed vendor-neutral ahead of the LLMProvider
-# seam; a config.toml still carrying the old key must keep working rather than
-# tripping extra="forbid" (docs/stack.md "Config shape").
+# anthropic_call_timeout_s was renamed vendor-neutral to llm_call_timeout_s
+# ahead of the LLMProvider seam (lode-568v.2); llm_call_timeout_s was renamed
+# again to enrich_call_timeout_s (lode-7y6s) once the qa_call_timeout_s split
+# (lode-wfyx) left the general name covering only enrich.py's call sites. A
+# config.toml still carrying any of these keys must keep working rather than
+# tripping extra="forbid" (docs/stack.md "Config shape"), and the OLDEST name
+# must still land on the CURRENT field even though it takes two remap hops to
+# get there.
 
 
 def test_load_settings_remaps_old_anthropic_timeout_key(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The oldest name (two hops back) still lands on the current field --
+    confirms the remaps chain rather than each hop only handling its own
+    immediate predecessor."""
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
     (tmp_path / "config.toml").write_text(
         "anthropic_call_timeout_s = 42.0\n", encoding="utf-8"
     )
-    assert load_settings().llm_call_timeout_s == 42.0
+    assert load_settings().enrich_call_timeout_s == 42.0
 
 
-def test_load_settings_new_key_wins_when_both_present(
+def test_load_settings_remaps_llm_call_timeout_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The middle name (one hop back) also lands on the current field."""
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        "llm_call_timeout_s = 42.0\n", encoding="utf-8"
+    )
+    assert load_settings().enrich_call_timeout_s == 42.0
+
+
+def test_load_settings_middle_key_wins_when_both_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("LODE_HOME", str(tmp_path))
@@ -188,7 +207,19 @@ def test_load_settings_new_key_wins_when_both_present(
         "anthropic_call_timeout_s = 42.0\nllm_call_timeout_s = 7.0\n",
         encoding="utf-8",
     )
-    assert load_settings().llm_call_timeout_s == 7.0
+    assert load_settings().enrich_call_timeout_s == 7.0
+
+
+def test_load_settings_newest_key_wins_when_all_present(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LODE_HOME", str(tmp_path))
+    (tmp_path / "config.toml").write_text(
+        "anthropic_call_timeout_s = 42.0\nllm_call_timeout_s = 7.0\n"
+        "enrich_call_timeout_s = 3.0\n",
+        encoding="utf-8",
+    )
+    assert load_settings().enrich_call_timeout_s == 3.0
 
 
 # --- ModelTier coercion from a bare config.toml string (lode-568v.2) --------
@@ -616,7 +647,7 @@ def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
         {"fetch_min_extract_chars": -1},  # ge=0
         {"retry_max_attempts": 0},  # ge=1
         {"progress_heartbeat_interval_s": 0},  # gt=0.0
-        {"llm_call_timeout_s": 0},  # gt=0.0
+        {"enrich_call_timeout_s": 0},  # gt=0.0
         {"qa_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
         {"jira_base_url": "not-a-url"},  # malformed base URL (lode-gpzn.1)
