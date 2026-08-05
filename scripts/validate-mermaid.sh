@@ -124,18 +124,52 @@
 #     - `basename "$f"` -> `${f##*/}` in the per-doc loop
 #
 #   SHOWN SAFE TO CONTINUE PAST -- deliberately unguarded:
-#     - `set -uo pipefail` itself, and the literal assignments
-#       `IMAGE="minlag/mermaid-cli:latest"` / `fail=0` / `found=0` -- a bash
-#       literal assignment to a plain variable cannot fail.
+#     - `set -uo pipefail` itself, and the literal/parameter-expansion
+#       assignments `IMAGE="minlag/mermaid-cli:latest"` / `fail=0` /
+#       `found=0` / `rel="docs/${f##*/}"` / `found=1` / `fail=1` / `rc=$?` --
+#       none of these can fail: a literal assignment to a plain variable
+#       can't, and parameter expansion (`${f##*/}`) can't either.
 #     - the `trap '...' EXIT` REGISTRATION statement -- registering a trap on
 #       a literal, always-valid signal spec cannot fail; only the trap BODY
 #       (guarded above with `|| :`) can.
-#     - BOTH `echo` statements ("OK $rel" / "FAIL $rel") -- a failing echo
+#     - the `[ ... ]` TEST conditions of every `if` in this file -- the
+#       tested condition of an `if` is always exempt from `-e` by bash's own
+#       rules (that's what makes an `if` an `if`), unlike the *body* of that
+#       same `if`, which -e does still govern absent a trailing `exit`
+#       (see the echo entries below).
+#
+#   ALL SEVEN `echo` STATEMENTS in this file (enumerated mechanically --
+#   `grep -n '^[[:space:]]*echo' scripts/validate-mermaid.sh` -- rather than
+#   re-derived from a prior version of this header, which is what let an
+#   earlier rewrite miss five of them):
+#     - the two-line "GATE COULD NOT RUN ... gate-lib.sh is missing or
+#       unreadable" / "next to $0 ..." pair, immediately above the hardcoded
+#       pre-library `exit 2` on the gate-lib.sh source guard -- a failing
+#       echo here does not change that exit: the `exit 2` is a separate,
+#       unconditional statement below both echoes, not their status.
+#     - "OK    $rel" / "FAIL  $rel" in the per-doc loop -- a failing echo
 #       means stdout is gone (closed or full); the exit status the script
-#       reports still carries the real verdict either way. These are the only
-#       two live fabrication sites left once every command above is either
-#       guarded, deleted, or inside an `if`, and wrapping them buys a
-#       vanishing case at real cost to readability.
+#       reports still carries the real verdict either way.
+#     - "no mermaid diagrams found in docs/ -- nothing to validate", in the
+#       `if [ "$found" -eq 0 ]` body, immediately followed by an explicit
+#       `exit 0` -- safe today because that `exit 0` is a separate statement,
+#       not the echo's own status. Noted explicitly rather than folded into
+#       "inside an `if`," since the exemption that actually matters here is
+#       the trailing `exit`, not the surrounding `if`.
+#     - "mermaid validation failed" >&2, in the `if [ "$fail" -ne 0 ]` body,
+#       immediately followed by an explicit `exit 1` -- same shape and same
+#       reasoning as the "no mermaid diagrams found" case above: safe because
+#       of the trailing `exit`, not because of the `if`.
+#     - "all mermaid diagrams valid" -- DIFFERENT from every echo above: it is
+#       the script's LAST command, at the top level, with no trailing `exit`
+#       of its own. Before this ticket, the script's own exit status WAS this
+#       echo's status -- so a failing echo on an otherwise fully-green run
+#       (stdout gone) would report exit 1, this gate's CONTENT verdict
+#       "invalid mermaid," on a run where every diagram validated. That is
+#       the lode-9i2p inversion, reachable on the fully-green path. Decision:
+#       closed outright with a trailing `exit 0` immediately below it -- it
+#       costs nothing and removes the last vanishing case in this file,
+#       rather than leaving it as an accepted one.
 #
 # What was missing, unlike every other gate-script consumer, was any
 # top-level `-u`/`pipefail`; added below for parity (lode-bss5). Inert today:
@@ -401,3 +435,4 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 echo "all mermaid diagrams valid"
+exit 0
