@@ -20,6 +20,10 @@
 # needs bash array/substring primitives dash (the harness's actual PreToolUse
 # interpreter, lode-9gm2) does not have -- has somewhere to live.
 #
+# NOTE: this file may use bash-only syntax -- it runs under `bash "$SCRIPT"`, not
+# under the harness's dash /bin/sh. The WRAPPER in settings.json is what must stay
+# POSIX (lode-9gm2), and its test pins that.
+#
 # QUOTE-AWARE SEGMENT SPLIT (lode-obox). The command is split into candidate
 # "invocation segments" at shell control-operator characters (; & | ( ) { } `)
 # so a `gh ...` phrase mid-command (after `&&`, inside `$(...)`, ...) is still
@@ -57,10 +61,107 @@
 # `_split_unquoted` splits on those two inside double quotes and only those
 # two, which is exactly where the real shell would. Differential and mutation
 # coverage: tests/test_gh_write_guard.py.
+#
+# QUOTED-HEREDOC PRE-PASS (lode-d5je). A QUOTED heredoc body (<<'EOF', <<"EOF",
+# <<\EOF) is inert text -- the shell performs NO substitution in it at all --
+# but the segment split above (on `` ` ``/`(`/`)`/etc.) does not know that, so
+# a command substitution written as a worked example inside such a body
+# manufactures a fake segment start and gets scanned as if it were live shell.
+# An UNQUOTED heredoc (<<EOF) is the opposite: substitution IS real there, so
+# its body must keep being scanned exactly as before -- `strip_quoted_heredoc_bodies`
+# below only ever removes QUOTED heredoc bodies, before the quote-aware split
+# above ever runs. Fence, not fix, same character as the other residuals in
+# docs/agents-workflow.md. Every deviation from real shell heredoc parsing is
+# deliberately biased toward stripping LESS, because stripping MORE than the
+# shell would is a false ALLOW -- a live `gh` write hidden from the scan, the
+# unrecoverable failure. Three rules enforce that bias, each closing a
+# fail-open found in this function's own review:
+#   1. A `<<<` HERESTRING is not a heredoc and consumes no body. The operator match
+#      is guarded so `<<<'EOF'` cannot be read as `<<` + `'EOF'`.
+#   2. An UNQUOTED heredoc's body is tracked (passed through verbatim, still
+#      scanned) but never inspected for operators, so a quoted-heredoc lookalike
+#      written INSIDE it cannot start a strip.
+#   3. A quoted heredoc that is never CLOSED strips nothing -- its held lines are
+#      emitted at end of input. This is what keeps a lookalike token appearing in a
+#      context the shell does not treat as an operator at all (most importantly,
+#      inside a quoted string -- this function is line-based, not quote-aware) from
+#      swallowing the remainder of the command.
+# The residual after those three: a lookalike token in a non-operator context whose
+# delimiter word ALSO appears alone on a later line, with a live gh write between
+# them. Documented in docs/agents-workflow.md alongside the other residuals.
 
 set -euo pipefail
 
 CMD="${1:-}"
+[ -n "$CMD" ] || exit 0
+
+# This guard runs on EVERY Bash tool call, and the split + five greps below cost
+# ~45ms each time. Any real `gh` invocation necessarily contains the substring
+# `gh`, so a command without it cannot be one -- bailing here cannot weaken the
+# guard and takes the common (no-`gh`) path to ~2ms.
+case "$CMD" in
+  *gh*) ;;
+  *) exit 0 ;;
+esac
+
+strip_quoted_heredoc_bodies() {
+  local mode=none delim="" strip_tabs=0 line check d
+  local -a held=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$mode" != none ]; then
+      check="$line"
+      if [ "$strip_tabs" -eq 1 ]; then
+        while [[ "$check" == $'\t'* ]]; do
+          check="${check:1}"
+        done
+      fi
+      # An unquoted body is emitted (it is live shell and must still be scanned);
+      # a quoted body is HELD, and only discarded once the delimiter is seen.
+      if [ "$mode" = unquoted ]; then
+        printf '%s\n' "$line"
+      else
+        held+=("$line")
+      fi
+      if [ "$check" = "$delim" ]; then
+        [ "$mode" = quoted ] && held=()
+        mode=none
+      fi
+      continue
+    fi
+    printf '%s\n' "$line"
+    # Both patterns below require a literal `<<`; skip the regex work without it.
+    [[ "$line" == *'<<'* ]] || continue
+    # Match the FIRST heredoc operator on the line. `(^|[^<])` keeps a `<<<`
+    # herestring from being read as `<<` plus a quoted word (rule 1 above).
+    # A QUOTED delimiter -- <<[-]'D', <<[-]"D", <<[-]\D -- opens a strippable body;
+    # a bare <<[-]D matches only the second pattern and is merely tracked, so its
+    # body keeps being scanned exactly as before (rule 2 above).
+    if [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*(\'([A-Za-z_][A-Za-z0-9_]*)\'|\"([A-Za-z_][A-Za-z0-9_]*)\"|\\([A-Za-z_][A-Za-z0-9_]*)) ]]; then
+      mode=quoted
+      d="${BASH_REMATCH[4]}${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
+    elif [[ "$line" =~ (^|[^<])\<\<(-)?[[:space:]]*([A-Za-z_][A-Za-z0-9_-]*) ]]; then
+      mode=unquoted
+      d="${BASH_REMATCH[3]}"
+    else
+      continue
+    fi
+    # Both patterns require [A-Za-z_] to start the delimiter, so `d` is never empty.
+    delim="$d"
+    # BASH_REMATCH[2] is the `-` of `<<-` in both patterns: strip leading TABS (only
+    # tabs, matching bash) from the closing delimiter line.
+    if [ -n "${BASH_REMATCH[2]}" ]; then strip_tabs=1; else strip_tabs=0; fi
+  done <<<"$1"
+  # Unterminated quoted heredoc: strip nothing (rule 3 above).
+  [ "${#held[@]}" -eq 0 ] || printf '%s\n' "${held[@]}"
+}
+
+# This hook runs on EVERY Bash call, so skip the fork entirely when there is no
+# heredoc operator to find: with no `<<` present the function is provably an
+# identity transform (it can only ever delete lines a `<<` match opened).
+case "$CMD" in
+  *'<<'*) CMD_SANITIZED=$(strip_quoted_heredoc_bodies "$CMD") ;;
+  *) CMD_SANITIZED="$CMD" ;;
+esac
 
 # Emit $1 with every UNQUOTED occurrence of ; & | ( ) { } ` replaced by a
 # newline; occurrences inside '...' or "..." (and any backslash-escaped
@@ -113,16 +214,7 @@ _split_unquoted() {
   printf '%s' "$out"
 }
 
-# This guard runs on EVERY Bash tool call, and the split + five greps below cost
-# ~45ms each time. Any real `gh` invocation necessarily contains the substring
-# `gh`, so a command without it cannot be one -- bailing here cannot weaken the
-# guard and takes the common (no-`gh`) path to ~2ms. Subsumes an empty $CMD.
-case "$CMD" in
-  *gh*) ;;
-  *) exit 0 ;;
-esac
-
-SEG=$(_split_unquoted "$CMD")
+SEG=$(_split_unquoted "$CMD_SANITIZED")
 P='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((if|then|else|do|env|command|sudo|nohup|time|xargs|rtk)[[:space:]]+)*([^[:space:]]*/)?gh([[:space:]]+(-R|--repo|--hostname)([[:space:]]+|=)[^[:space:]]+)*[[:space:]]+'
 API='api\b'
 R='(issue[[:space:]]+(view|list|status)\b|pr[[:space:]]+(view|list|checks|diff)\b|run[[:space:]]+(list|view)\b|release[[:space:]]+(list|view)\b|repo[[:space:]]+view\b|label[[:space:]]+list\b|workflow[[:space:]]+(list|view)\b|secret[[:space:]]+list\b|variable[[:space:]]+list\b|ssh-key[[:space:]]+list\b|gpg-key[[:space:]]+list\b|cache[[:space:]]+list\b)'

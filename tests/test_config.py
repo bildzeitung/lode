@@ -64,6 +64,7 @@ def test_documented_defaults_load() -> None:
     assert s.no_egress_default is False
     assert s.progress_heartbeat_interval_s == 15.0
     assert s.llm_call_timeout_s == 120.0
+    assert s.qa_call_timeout_s == 300.0
 
 
 # --- load_settings() reads config.toml (lode-40g) ----------------------------
@@ -596,9 +597,8 @@ def test_knob_rows_appends_both_effort_and_max_tokens_when_both_set() -> None:
 
 def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
     # Acceptance: works with no config.toml present (shows defaults).
-    rows = knob_rows(Settings())
-    assert rows  # non-empty
-    values = dict((name, value) for name, value, _ in rows)
+    values = _knob_values(Settings())
+    assert values  # non-empty
     assert values["retrieval_top_k"] == "20"
     assert values["rerank_enabled"] == "True"
 
@@ -617,6 +617,7 @@ def test_knob_rows_works_with_bare_defaults_no_config_toml() -> None:
         {"retry_max_attempts": 0},  # ge=1
         {"progress_heartbeat_interval_s": 0},  # gt=0.0
         {"llm_call_timeout_s": 0},  # gt=0.0
+        {"qa_call_timeout_s": 0},  # gt=0.0
         {"unknown_knob": 1},  # extra="forbid"
         {"jira_base_url": "not-a-url"},  # malformed base URL (lode-gpzn.1)
         {"confluence_base_url": "ftp://wrong-scheme.example"},  # non-http(s)

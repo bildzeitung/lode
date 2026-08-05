@@ -103,7 +103,7 @@ on:
   repo, free Actions minutes) — this is noise/latency, not spend — and `build.yml`'s own job is cheap
   (`pip install build nox` + `nox -s build`, ~4s, zero runtime deps). But `nox -s tests`
   (lode-qxdn.2) and coverage
-  (lode-qxdn.3) are heavy: a full `-e .[dev]` install (lancedb/fastembed/textual) plus a
+  (lode-qxdn.3) are heavy: a full locked dependency install (lancedb/fastembed/textual) plus a
   FastEmbedCrossEncoder model download, minutes per run. An unfiltered `push:` there would burn real
   wall-clock on every producer push — coding handoff, code-reviewer re-push, every rebase pickup —
   measured at ~2-3 pushes per landed ticket. Both MUST reuse this same narrowed trigger rather than
@@ -143,6 +143,40 @@ on:
 
   Either way, a `land/<id>` build cannot affect the README, so keeping `land/**` in the trigger is
   safe to leave in place; there is no badge-hygiene reason to drop it.
+
+## CI workflow concurrency and job timeouts (lode-2ouz, lode-w35h)
+
+`concurrency: cancel-in-progress` and `timeout-minutes` are the same kind of convention as the
+`branches:` narrowing in the section above — recorded once here rather than re-derived in each
+workflow file. `build.yml`, `tests.yml`, and `coverage.yml` all carry `concurrency: { group:
+${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }`; and every job in the repo
+carries a `timeout-minutes` (all five are named in the ladder below).
+
+- **`cancel-in-progress: true` is safe for the same reason the trigger narrowing above is safe.**
+  "Nothing in the landing loop reads these check results" (the trigger-scope section above) — so
+  cancelling a superseded run on an older commit of the same `land/<id>` or `trunk` ref discards
+  nothing anyone would have read. Nor is this a rare case: it fires on every one of the ~2-3
+  producer pushes per ticket counted in that same section (lode-2ouz).
+- **`release.yml` is deliberately EXCLUDED from `concurrency:`.** It is tag-triggered
+  (`push: tags: [v*]`), not branch-triggered, and each tag is its own distinct `github.ref` — so a
+  `${{ github.workflow }}-${{ github.ref }}` group has no legitimate same-ref run to collide with in
+  normal use. Adding it would buy nothing while risking an interrupted `gh release create` (a
+  genuine in-progress publish, not an advisory check) on the one path — a repushed tag — where the
+  group key would ever actually collide.
+- **The `timeout-minutes` ladder:** `lock-currency` = 5 (no model download, cheapest check),
+  `build` = 15, `release` = 20, `tests` = 30, `coverage` = 30. Each is well below GitHub's
+  360-minute default, capping the tail if a step hangs (a stalled fetch, a hung model download)
+  rather than burning hours for nothing. The ordering otherwise tracks how long a job can
+  legitimately take — the two model-downloading legs sit at the top, the dependency check at the
+  bottom — **with `release` as the deliberate exception: it is placed on what a timed-out run
+  *costs*, not on how long it usually *takes*.** Measured across all release runs to date,
+  `release` finishes in 14-30s of job time, at or below `build`'s recent 26-38s, so "release does
+  build's work plus a publish step, therefore it needs longer" is refuted by the data. It sits
+  above `build` because a false trip in `release` fails a PUBLISH, whereas one in `build` fails an
+  advisory check nothing in the landing loop reads (the trigger-scope section above); it sits below
+  `tests`/`coverage` because it has no model download to hang on. So: size a future cap by expected
+  runtime plus headroom, and depart from that ordering only where a false trip's *consequence*
+  justifies it, as `release` does (lode-w35h).
 
 ## Packaging assertion is a single implementation, shared by both workflows (lode-zuqp)
 

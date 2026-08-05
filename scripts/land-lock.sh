@@ -337,24 +337,33 @@
 #                     holder). Caller proceeds with its /land pass.
 #                     Diagnostic (if any) on stdout.
 #          exit 1 -> another /land is still (plausibly) running on this
-#                     machine, or the lock file could not be created at all.
-#                     Caller must skip this tick cleanly (exit 0 of its OWN,
-#                     per the "single lander" convention) -- do not queue, do
-#                     not run in parallel. Diagnostic on STDERR.
-#          exit 2 -> usage error (a caller bug, never a lock verdict).
+#                     machine, or the lock file could not be created at all --
+#                     including when the lock PATH itself could not even be
+#                     determined, e.g. run from outside any git repository
+#                     (lode-8qkb; see the $LOCK derivation below). Caller must
+#                     skip this tick cleanly (exit 0 of its OWN, per the
+#                     "single lander" convention) -- do not queue, do not run
+#                     in parallel. Diagnostic on STDERR.
+#          exit 2 -> usage error (a caller bug, never a lock verdict). NOT
+#                     where a rev-parse/machine failure lands -- see below.
 # heartbeat: re-stamps the lock this pass already holds, so the staleness
 #            check measures idle time from the LAST heartbeat rather than the
 #            original `acquire` (CAVEAT 1). Call it periodically from inside
 #            a still-running pass -- never as a substitute for `acquire`.
 #            exit 0 -> re-stamped (or created fresh, if the file was somehow
 #                       already gone -- see the subcommand's own comment).
-#            exit 1 -> could not write the lock file. NOT fatal to the
-#                       caller's own step by itself (this is bookkeeping, not
-#                       the work) -- log and continue; a human should still
-#                       look if it repeats every tick. Diagnostic on STDERR.
+#            exit 1 -> could not write the lock file -- including when the
+#                       lock path itself could not be determined (lode-8qkb).
+#                       NOT fatal to the caller's own step by itself (this is
+#                       bookkeeping, not the work) -- log and continue; a
+#                       human should still look if it repeats every tick.
+#                       Diagnostic on STDERR.
 # release: always exit 0 -- `rm -f` is idempotent, and a caller that never
 #           held the lock (e.g. it just skipped the tick above) must be able
-#           to call this harmlessly too.
+#           to call this harmlessly too. Still exit 0, with a diagnostic on
+#           STDERR rather than silence, when even the lock PATH could not be
+#           determined (lode-8qkb): with no repository here, there is by
+#           definition nothing to release either way.
 #
 # Lock file lives under .git/ (per-machine, never committed) -- the shared,
 # repo-global .git, not a worktree-private one (lode-xkpd; see below).
@@ -388,15 +397,16 @@ cmd="$1"
 # the operator-inspects-the-right-file reasoning at the bottom of this script.
 # Forcing absolute makes the path identical from every cwd AND every worktree.
 # Same flag pair, for the same reason, as scripts/assert-main-checkout.sh
-# (lode-pcee), which reads the shared .git for its own identity check -- but
-# NOT that script's failure discipline: it wraps its `rev-parse` calls to map a
-# git failure onto its documented exit 2, whereas the bare command substitution
-# below lets git's own 128 escape through `set -e`, outside the 0/1/2 contract
-# documented above. That gap is inherited from the `--git-dir` line this
-# replaces, not introduced here (SKILL.md's caller collapses any non-zero to
-# "skip the tick", so mutual exclusion is unaffected -- what is lost is the
-# machine-fault-vs-another-lander distinction). Tracked separately; do not read
-# the cross-reference above as a claim that this script is already that strict.
+# (lode-pcee), which reads the shared .git for its own identity check -- and,
+# as of lode-8qkb, the same failure discipline too: the `rev-parse` below is
+# wrapped rather than left to `set -e`, so a git failure (most likely: cwd is
+# outside any git repository at all) cannot escape as git's bare, undocumented
+# 128. Unlike assert-main-checkout.sh, that maps onto exit 1, NOT exit 2 --
+# the header above reserves exit 2 for a caller/usage bug, so this is folded
+# into the same MACHINE FAULT class as the "cannot create $LOCK" branch below.
+# Mutual exclusion was never at risk (SKILL.md's caller collapses any non-zero
+# to "skip the tick"); what this closes is observability -- the diagnostic now
+# names the cause, and which subcommand hit it, instead of a bare `fatal:`.
 #
 # STILL LATENT rather than live -- but NOT because assert-main-checkout.sh
 # covers it. That guard runs in land/SKILL.md **Section 1**, and this lock is
@@ -407,7 +417,35 @@ cmd="$1"
 # main checkout at all. That ordering gap is precisely why fixing the path here
 # is worth more than a cosmetic tidy -- do not "simplify" this back on the
 # theory that the Section 1 guard already handles it.
-LOCK="$(git rev-parse --path-format=absolute --git-common-dir)/land.lock"
+if ! GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"; then
+  # git's own diagnostic already went to stderr above (this command
+  # substitution captures only stdout). `$cmd` is validated to exactly these
+  # three values above, so no `*)` arm is reachable.
+  case "$cmd" in
+    acquire)
+      echo "land-lock: MACHINE FAULT -- 'git rev-parse --git-common-dir'" \
+        "failed (git's own error is above); cannot derive the lock path." \
+        "This is not another lander; landing stays blocked until it is" \
+        "fixed. Skipping this tick." >&2
+      exit 1
+      ;;
+    heartbeat)
+      echo "land-lock: heartbeat could not derive the lock path -- 'git" \
+        "rev-parse --git-common-dir' failed (git's own error is above)." \
+        "NOT fatal to this step by itself -- but a human should check why" \
+        "this ran outside a git repository if it repeats every tick." >&2
+      exit 1
+      ;;
+    release)
+      echo "land-lock: release -- 'git rev-parse --git-common-dir' failed" \
+        "(git's own error is above); cwd is most likely not inside any git" \
+        "repository. Nothing to release either way -- treating this as a" \
+        "harmless no-op." >&2
+      exit 0
+      ;;
+  esac
+fi
+LOCK="$GIT_COMMON_DIR/land.lock"
 STALE_SECONDS="${LAND_LOCK_STALE_SECONDS:-1800}"
 
 # The mkdir-based gate serializing a reclaim's destructive rm+write (CAVEAT

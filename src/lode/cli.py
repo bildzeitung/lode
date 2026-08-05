@@ -97,6 +97,8 @@ from lode.webfetch import (
     TransientFetchError,
 )
 
+log = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     # Type-only; the runtime imports live inside ``ask`` / ``_retrieve`` so the
     # capture-path commands (``add`` is "instant by design") never pay the cost of
@@ -419,13 +421,18 @@ def _enrich_immediately(
     :func:`~lode.worker.run_one`'s own attempts/backoff/dead-letter accounting
     — never re-raised here, and never hand-rolled a second time in this
     module. A **permanent, user-actionable** failure
-    (:class:`~lode.auth.AuthError`, lode-9yy) is different: ``run_one`` resets
-    the job straight back to ``pending`` (uncharged) and re-raises it, but
-    capture must stay instant regardless of whether Anthropic credentials are
-    configured (``docs/design.md`` §1) — so it is caught and dropped here
-    rather than surfaced on every single ``add``. The job is already back at
+    (:class:`~lode.auth.AuthError`, lode-9yy, or any other
+    :class:`~lode.llm_provider.LLMProviderError` — lode-s08c, mirroring
+    lode-yx1c's identical fix to ``ask``/``work``) is different: ``run_one``
+    resets the job straight back to ``pending`` (uncharged) and re-raises it,
+    but capture must stay instant regardless of whether the **active
+    provider's** credentials are configured (``docs/design.md`` §1) — so it is
+    caught and dropped here rather than surfaced on every single ``add``,
+    unlike ``ask``/``work``, which abort. The job is already back at
     ``pending``, uncharged, for the next explicit ``lode work`` to report
-    loudly (``docs/storage.md`` "Transient vs. permanent job failures").
+    loudly. ``docs/storage.md`` "Transient vs. permanent job failures" owns
+    *which* errors reach here — and why a non-auth ``LLMProviderError`` raised
+    by a job handler never does.
     """
     from lode.auth import AuthError
     from lode.worker import claim_and_run_one
@@ -434,10 +441,14 @@ def _enrich_immediately(
         claim_and_run_one(
             conn, db_path, settings, types=("enrich",), target_version=version_id
         )
-    except AuthError:
-        logging.getLogger(__name__).debug(
-            "immediate-enrich skipped — no Anthropic credentials configured; "
-            "note saved, job left pending for a future 'lode work'"
+    except (AuthError, LLMProviderError) as err:
+        # `err`, not a hardcoded cause: this arm is no longer Anthropic-only.
+        # Same forked-message trap `_abort_on_provider_error` was extracted to
+        # close -- see its docstring (lode-yx1c).
+        log.debug(
+            "immediate-enrich skipped — %s; note saved, job left pending for a "
+            "future 'lode work'",
+            err.__cause__ or err,
         )
 
 
@@ -915,7 +926,7 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
     errors reach here, and why a non-auth ``LLMProviderError`` raised by a job
     handler never does.
     """
-    logging.getLogger(__name__).error("%s aborted — %s", command, err.__cause__ or err)
+    log.error("%s aborted — %s", command, err.__cause__ or err)
     typer.echo(str(err), err=True)
     raise typer.Exit(code=1) from None
 
@@ -1286,6 +1297,7 @@ def _model_cache_probe(model_name: str) -> bool | None:
             return None
         return _cache_hit(hf_source, model_file)
     except Exception:
+        log.debug("_model_cache_probe: probe failed for %s", model_name, exc_info=True)
         return None
 
 
@@ -1362,6 +1374,7 @@ def _model_revision_status(
         )
         return mixed, drift
     except Exception:
+        log.debug("_model_revision_status: probe failed", exc_info=True)
         return False, False
 
 
@@ -1498,6 +1511,7 @@ def _enrichment_model_stale(
         finally:
             conn.close()
     except Exception:
+        log.debug("_enrichment_model_stale: probe failed", exc_info=True)
         return False
 
 
@@ -1650,6 +1664,7 @@ def status(
     try:
         settings = _resolve_settings()
     except Exception:
+        log.debug("status: _resolve_settings failed", exc_info=True)
         settings = None
     cache_cold = False if settings is None else _cold_model_cache(settings)
     # Same non-fatal contract as cache_cold above, and the same reason it stays
@@ -1901,11 +1916,16 @@ def reenrich(
         typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
+#: ``jobs --status`` option: narrows the listing to jobs in one status.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_JOBS_STATUS_OPTION = typer.Option(
+    None, "--status", help="Only list jobs in this status (default: all)."
+)
+
+
 @app.command(name="jobs")
 def jobs_(
-    status: JobStatus | None = typer.Option(
-        None, "--status", help="Only list jobs in this status (default: all)."
-    ),
+    status: JobStatus | None = _JOBS_STATUS_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List the derive jobs on the work queue (see docs/storage.md).
@@ -1944,11 +1964,16 @@ def jobs_(
         typer.echo(line)
 
 
+#: ``egress --purpose`` option: narrows the listing to sends of one purpose.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_EGRESS_PURPOSE_OPTION = typer.Option(
+    None, "--purpose", help="Only list sends of this purpose (default: all)."
+)
+
+
 @app.command()
 def egress(
-    purpose: EgressPurpose | None = typer.Option(
-        None, "--purpose", help="Only list sends of this purpose (default: all)."
-    ),
+    purpose: EgressPurpose | None = _EGRESS_PURPOSE_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """List what content has left the box for the cloud, and when.
@@ -2183,6 +2208,16 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
+#: ``dump-html --dir`` option: where ``--file`` writes its per-note dumps.
+#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
+_DUMP_HTML_DIR_OPTION = typer.Option(
+    None,
+    "--dir",
+    help="Directory to write files into with --file (created if "
+    "absent). Default: the current directory. Only valid with --file.",
+)
+
+
 @app.command(name="dump-html")
 def dump_html(
     target: str | None = typer.Argument(
@@ -2209,12 +2244,7 @@ def dump_html(
         "see --dir) instead of printing to stdout. Valid with or without "
         "--all.",
     ),
-    dir_: Path | None = typer.Option(
-        None,
-        "--dir",
-        help="Directory to write files into with --file (created if "
-        "absent). Default: the current directory. Only valid with --file.",
-    ),
+    dir_: Path | None = _DUMP_HTML_DIR_OPTION,
     db: Path | None = _DB_OPTION,
 ) -> None:
     """Print a note's drawn-down external's raw HTML (its captured snapshot).

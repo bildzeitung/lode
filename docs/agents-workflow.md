@@ -178,7 +178,7 @@ implementable acceptance criteria of its own). Plain `bd ready` renders no label
 the frontier as JSON — on **every** auto-select path, including `--single`:
 
 ```bash
-rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
 ```
 
 `bd ready` is already priority-ordered, so this list's first entry is the highest-priority buildable
@@ -343,13 +343,20 @@ flowchart TD
 
 ### Gating from an isolated worktree (lode-6874)
 
-**Agents gate with `rtk ./venv/bin/nox -t fix` / `-s tests`, and never activate the venv at all.**
+**Agents gate with `./venv/bin/nox -t fix` / `-s tests`, and never activate the venv at all.**
 The isolation guard refuses any command that sources a file (`. ./venv/bin/activate` — "runs a
 string through `.`, which can't be verified to stay inside the worktree"), so the once-documented
 `./scripts/python-init.sh && . ./venv/bin/activate` was unrunnable by the very agents the docs
 address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
 none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
 refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+The refusal is on **shape alone, before any condition is evaluated** — `if [ -x /nonexistent ]; then
+. ./venv/bin/activate; fi` draws the identical message, so burying a `source` in a branch that can
+never run does not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the
+same compound wrapping a plain `git` command is accepted. So a conditional gate step is available to
+an isolated agent, but never one that sources. (Both verified from a worktree-isolated dispatch,
+lode-828x — the case lode-6874's review raised but could not test, having come up in the main
+checkout rather than a worktree, the fault lode-jk44 later closed.)
 
 **Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
 for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
@@ -359,7 +366,7 @@ beside `noxfile.py` itself, so pytest imports *this* checkout's `src` whatever `
 enforced by `tests/test_noxfile_venv_tool.py`, not left to convention.
 
 **Verified empirically from a worktree-isolated dispatch, not inferred** — the question had already
-survived two review attempts on inference alone. The guard *accepts* `rtk ./venv/bin/nox …` and
+survived two review attempts on inference alone. The guard *accepts* `./venv/bin/nox …` and
 *refuses* `. ./venv/bin/activate`; un-activated `-s tests` runs 2096 tests green with
 `tests/conftest.py`'s lode-jh80 guard 0 satisfied; `-t fix` resolves the venv's ruff over a stale
 ambient `~/.local/bin/ruff` that sat ahead of it on `PATH`.
@@ -373,19 +380,19 @@ steps later). Once `nox` runs, `noxfile.py`'s `GATE_MACHINE_FAULT = 2` carries t
 way the remedy is one command the agent can run itself: `./scripts/python-init.sh`.
 
 **One residual skew, verified and deliberately not papered over.** A branch whose base predates
-lode-0yfn has a `noxfile.py` without `_venv_tool()`, so `rtk ./venv/bin/nox -s tests` on it dies with
+lode-0yfn has a `noxfile.py` without `_venv_tool()`, so `./venv/bin/nox -s tests` on it dies with
 `Program pytest not found` — measured, not inferred, on this ticket's own branch. It fails *loudly*
 and cannot produce a false PASS, which is the property that matters; the set is also shrinking, since
 every new worktree branches from `origin/trunk` and so always carries `_venv_tool()`. The
-guard-friendly fallback for such a branch is `rtk ./venv/bin/pytest` directly — a plain command, and
+guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
 `tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
 base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
-not the general problem, which is lode-828x's subject.
+not the general problem; lode-828x took that residue up and closed it as needing no further mechanism.
 
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
 grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
 falls to the explicit-path form above. The "cd to the checkout root" value that looked like a residue
-is nil too: the wrapper would have been invoked as `rtk scripts/nox.sh`, a relative path presupposing
+is nil too: the wrapper would have been invoked as `scripts/nox.sh`, a relative path presupposing
 exactly the cwd it was meant to establish. What a committed wrapper *does* add is a base-skew problem
 with a long tail — every branch already in flight predates the new file, so the documented gate
 command exits 127 on all of them, which then needs a restore/undo dance in both agent files whose
@@ -520,7 +527,12 @@ option at all). With the setting now explicitly `"fresh"`, those five assertions
 `coding.md`, `code-reviewer.md`, `land-review.md`, and this file — are corrected to say `origin/trunk`,
 with the staleness window stated plainly rather than implied away, wherever each file makes the claim.
 
-Given that, the assertion is defence in depth rather than the answer. `coding.md` (both cycles),
+#### Guard mechanics, scope, and the CC 2.1.216 data point (lode-nt98)
+
+Everything below holds regardless of which `baseRef` value is in effect — none of it is specific to
+the decision above.
+
+The guard's ancestry assertion is defence in depth, not the root-cause fix. `coding.md` (both cycles),
 `code-reviewer.md`, and `land-review.md` all assert, as the first thing they do after confirming
 they're in a worktree at all (never on `pwd` or the branch name alone — a recycled worktree's branch
 still looks like a normal `worktree-agent-…` name), that `HEAD` is an ancestor of `origin/trunk` —
@@ -585,6 +597,21 @@ understood:
   `HEAD` first makes the repair reversible and leaves the evidence inspectable; the hand-off names the
   ref. Note the asymmetry that motivates this: contamination is *recoverable* (bounce the branch),
   whereas an unrescued `reset --hard` is not.
+
+**The inline explanation at each guard call site stays deliberately duplicated prose, not a link
+(lode-zt62).** Only the *machinery* (`scripts/recycled-worktree-guard.sh`, lode-ivth) and the
+*quick-card row* were safe to consolidate; the canonical row is [below](#invariants-the-coding-loop-never-breaks),
+linked from `coding.md`'s and `code-reviewer.md`'s quick cards (`land-review.md` carries no such
+table). `coding.md`,
+`code-reviewer.md`, and `land-review.md` each carry their own multi-paragraph account of this guard,
+substantially overlapping across all three. Collapsing those paragraphs to a bare link was considered
+and rejected: each site is read fresh by a dispatched subagent with no other context, immediately
+before it runs a destructive `git reset --hard`/`git clean -fd` — the risk that the rationale (why the
+rescue branch matters, why `origin/trunk` and never bare `trunk`, why the `case` guard exists) silently
+fails to reach the agent that needs it, right when it needs it, outweighs the drift cost of three
+copies. `docs/decisions.md`'s three re-narrations of the same material carried no such argument —
+nothing reads `decisions.md` immediately before a destructive command — so those were trimmed to
+decision-timeline pointers instead (search "lode-zt62").
 
 **Scope: only the fresh-build start state (`coding.md` step 3) and each cycle's own pre-checkout start
 state (`coding.md`'s rebase-pickup step 2, `code-reviewer.md` step 2) — never a reason to avoid the
@@ -736,41 +763,49 @@ this repo forgot to make, and `code-reviewer` dispatches both before and after t
 the one that reviewed `lode-ska2` itself) received their worktrees normally through the same call-site
 path — so the mechanism cannot be the whole story.
 
-**Probed by `lode-ojsr` (2026-07-27) — still untested, and the reason why is itself the useful
-result.** The hypothesis above is now **half-closed**: `isolation: worktree` is in both `coding.md`'s
-and `code-reviewer.md`'s frontmatter, so the *asymmetry* with `land-review` is gone — but whether
-frontmatter alone would have prevented these failures is **neither confirmed nor refuted**. Testing it
-means dispatching with no call-site `isolation` option from the same *top-level* vantage `lode-p2vi`
-used and `/code`'s Phase 2 dispatches from; `lode-ojsr` was a `coding` producer, so its probe
+**Probed by `lode-ojsr` (2026-07-27), then resolved by `lode-09td` (2026-07-28/29).** The
+frontmatter-vs-call-site confound raised above is now **closed on its sufficiency half for `coding`
+and `code-reviewer`** — frontmatter alone provisions the worktree for both.
+`lode-ojsr` shipped `isolation: worktree` into both agents' frontmatter (closing the *asymmetry* with
+`land-review`) but its own probe was structurally invalid: it ran as a `coding` producer, so its
 dispatches were necessarily **nested** inside an already-isolated session, where a
 `subagent_type: "claude"` negative control carrying no isolation mechanism at all landed in the parent's
-own worktree exactly as the two test cases did. Nested dispatches inherit their parent's cwd, which
-makes the variable unobservable from any producer or reviewer session. The frontmatter shipped anyway
-because `lode-kt6g` had already recorded the trigger for it — "revisit only if a comparable incident
-shows up on one of those dispatches" — and `lode-ska2`'s 6-of-6 *is* that incident; it does not rest on
-the probe. `code/SKILL.md`'s call-site option for both roles is **deliberately left in place as
-belt-and-braces**, since no top-level confirmation exists for them yet. The top-level probe is
-`lode-09td`. Full reasoning, the evidence that both mechanisms at once is safe, and the precondition
-`lode-09td` must satisfy: [`docs/decisions.md`](decisions.md) (search "lode-ojsr").
+own worktree exactly as the two frontmatter-bearing test cases did — nested dispatches inherit their
+parent's cwd, making the variable unobservable from any producer or reviewer session. `lode-09td` ran
+the probe `lode-ojsr` could not: from the **top-level orchestrating session** (main checkout, on
+`trunk` — the same vantage `lode-p2vi` used and `/code`'s Phase 1/2 dispatch from), with **no
+call-site `isolation` option**, dispatching `coding` (2026-07-28) and separately `code-reviewer`
+(2026-07-29) each alongside a concurrent, identically-dispatched `claude` negative control. Both
+roles **isolated** (linked worktree, own branch, `HEAD ==` the dispatching session's `trunk`); the
+control in both runs landed unisolated in the main checkout on `trunk`. Since the only
+isolation-*relevant* difference between control and test case in each run was the frontmatter key,
+frontmatter alone — not nested-dispatch cwd inheritance — is what provisions the worktree for both
+roles. As a result, `code/SKILL.md`'s call-site `isolation: "worktree"` option for `coding` and
+`code-reviewer` was **dropped** as redundant, matching `land-review`'s treatment after `lode-p2vi`.
+Full probe detail, both runs' results, and the two explicit limits on what this licenses — the
+contrast is between *whole* agent definitions rather than a single-variable ablation of the key, and
+the load was light — are in [`docs/decisions.md`](decisions.md) (search "lode-09td").
 
-**Root cause: not determinable from this repo.** `isolation: "worktree"` is a harness feature
-implemented outside this codebase; nothing in `lode`'s own source, skills, or agent definitions
-controls whether the harness actually provisions a worktree before handing control to a dispatched
-subagent. What *is* determinable from this repo: **the step-1 stranded-review sweep and the normal
-Phase 2 dispatch pass identical `Agent`-tool parameters.** `code/SKILL.md`'s step 1 dispatches its
-stranded re-entries "exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, `isolation:
-"worktree"`, same prompt shape…)" (`code/SKILL.md`, step 1) — there is no branch in this repo's own
-dispatch logic that requests isolation differently between the two paths, and both incidents (`lode-ska2`
-via Phase 2, `lode-jk44` via the step-1 sweep) drew from the same code path in that regard. That rules
-out "lode's own skill forgets to pass `isolation: "worktree"` on one of the two paths" as the cause; it
-does not rule out (and this repo cannot rule in or out) a harness-side race or resource-pressure
-condition under concurrent fan-out that intermittently fails to provision the worktree regardless of
-which caller requested it. Given 6-of-6 in one invocation, "intermittent" undersells it — at minimum
-this incident's fan-out saw it as the *rule*, not the exception; whether that generalizes is unmeasured.
-`lode-ojsr`'s probe neither strengthens nor weakens this hypothesis — it couldn't reach the question at
-all from a nested vantage point — so the harness-side race/resource-pressure condition under concurrent
-fan-out remains the best-supported explanation this repo can offer, pending the top-level probe
-(`lode-09td`) that could actually test the frontmatter-vs-call-site mechanism directly.
+**Root cause: still not fully determinable from this repo — the sufficiency question is closed, the
+fan-out question is not.** `isolation: "worktree"` is a harness feature implemented outside this codebase;
+nothing in `lode`'s own source, skills, or agent definitions controls whether the harness actually
+provisions a worktree before handing control to a dispatched subagent. What *is* now determinable:
+**asking at the call site does not guarantee isolation** — the call-site option was live throughout
+`lode-ska2`'s 6-of-6 and every one of those dispatches failed anyway — and `lode-09td`'s probes show
+the *other* mechanism, frontmatter, reliably isolates both roles under light, non-concurrent load.
+
+What is **not** determinable, and must not be read into the above: **whether frontmatter would have
+prevented `lode-ska2`.** Two independent reasons, both still open. First, the key was not present on
+either role at the time of that incident — `lode-ojsr` added it on 2026-07-27, after the fact — so
+the frontmatter-vs-call-site hypothesis raised earlier in this section has never been tested against
+the failure itself: neither confirmed nor refuted. Second, **each `lode-09td` probe was a single
+two-dispatch run (one test role, one control), never a fan-out.** The probes establish the mechanism
+works under light load; they say nothing about concurrency pressure. `lode-09td` closed the
+*sufficiency* question (frontmatter alone provisions a worktree), not the *robustness* one. The harness-side
+race/resource-pressure condition under concurrent fan-out — `lode-ska2`'s own incident was a 6-way
+fan-out — remains the best-supported explanation this repo can offer for *that* incident specifically,
+and is **not** refuted by `lode-09td`: dropping the redundant call-site option is not claimed to
+reduce fan-out risk, only to remove a mechanism with no measured protective effect.
 
 **The decision this ticket had to make: is `git worktree add` + `git -C` the sanctioned recovery, or
 must the agent hard-stop and escalate?** `lode-ska2`'s own incident answered this empirically by
@@ -1199,9 +1234,9 @@ not a default, and the choice trades one property for the other:
   unattended agent may never read. Provenance goes in the description, not the edge:
 
   ```bash
-  NEW_ID=$(rtk bd create --title="…" --description="Discovered while building <parent>. …" \
+  NEW_ID=$(bd create --title="…" --description="Discovered while building <parent>. …" \
     --type=task --silent)
-  rtk bd dep add "$NEW_ID" <parent> --type blocks
+  bd dep add "$NEW_ID" <parent> --type blocks
   ```
 
   `bd dep add <child> <parent> --type blocks` (positional args, or the equivalent `--blocked-by
@@ -1216,7 +1251,7 @@ not a default, and the choice trades one property for the other:
   `PreToolUse` (matcher `Bash`) hook in [`.claude/settings.json`](../.claude/settings.json) denies any
   Bash call that invokes `bd create … --deps …blocks:…` and returns the two-step remedy above as the
   deny reason. It travels with the clone, so every agent on every machine gets it. It covers the
-  `bd new` alias, an `rtk` prefix, and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
+  `bd new` alias and bd's global `-C`/`--directory`/`--db` flags; the deny/allow
   table is pinned by `tests/test_bd_deps_guard.py`, which executes the hook as shipped.
 
   Two deliberate boundaries. It matches only at a **command position** (start of line, or after
@@ -1345,7 +1380,7 @@ exactly those verbs) is **superseded, closed, not built** — reopen it only if 
 ever abandoned, since the gaps it names are real and this is the only thing currently closing them.
 
 It matches `gh` at a *command position*: after `;`/`&&`/`||`/`|`/`(`/`` ` ``/`{` or at line start,
-through the `rtk` prefix, a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
+through a leading `VAR=x` assignment, a command wrapper (`env`, `sudo`, `xargs`,
 `if`/`then`, …), an absolute or relative path to the binary (`/usr/bin/gh`), and `gh`'s global
 `-R`/`--repo`/`--hostname` flags inserted before the subcommand (the same shape of gap the `blocks:`
 guard already closes for bd's `-C`/`--directory`/`--db`). The allow/deny table is pinned by
@@ -1390,18 +1425,45 @@ straight through; both the old denylist and the first cut of this allowlist did 
 caught in `lode-9mbt`'s technical review. `tests/test_gh_write_guard.py` pins all three spellings
 (`-f x=y`, `-fx=y`, `--field=x=y`).
 
+**A QUOTED heredoc body is inert text and is not scanned as live shell (`lode-d5je`).** Discovered
+during `lode-obox`'s own technical review: writing a commit message via a heredoc whose body
+contained a command-substitution-wrapped `gh` invocation as a worked example — `git commit -F -
+<<'EOF' … $(gh issue create …) … EOF` — was denied, on `trunk` and on the `lode-obox` branch alike,
+even though a *quoted* heredoc delimiter (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) means the shell performs
+**no** substitution in the body at all. The segment split (on `` ` ``/`(`/`)`/…) doesn't know that,
+so the `$(...)` inside the inert body manufactured a fake segment start and got scanned anyway —
+the same false-positive class `lode-obox` closed for quoted string *arguments*, in the one shape
+`lode-obox` did not cover (a heredoc *body*, not an argument). It was not a regression from
+`lode-obox`: the pre-fix guard denied it too. `scripts/gh-write-guard.sh` now pre-processes the
+command line-by-line before segmenting, dropping every line between a **quoted** heredoc operator
+and its closing delimiter (honoring `<<-`'s tab-stripping) before the existing scan ever sees them.
+An **unquoted** heredoc (`<<EOF`) is left untouched by this pre-pass — substitution *is* real there,
+so its body must keep being scanned exactly as before; `tests/test_gh_write_guard.py` pins both
+directions plus the existing quoted-string-argument behavior from `lode-obox` staying unchanged.
+
+Because that pre-pass *deletes* lines before the scan runs, an input where it strips **more** than
+the shell would is a fail-**open** — a live `gh` write hidden from the scanner, strictly worse than
+the false deny it exists to fix. The whole danger is heredoc *lookalikes*: a `<<'D'`-shaped token
+the shell does not treat as a body-consuming operator at all (a `<<<` herestring, a token inside a
+quoted string argument or inside an unquoted heredoc's body), or a delimiter line that does not
+actually close the heredoc. So the pre-pass is biased to strip *less* — its rules are in the
+function's own header, the load-bearing one being that a quoted heredoc which never **closes**
+strips nothing. Accepted residual, same character as the others listed below: a lookalike token in
+a non-operator context whose delimiter word *also* appears alone on a later line, with a live `gh`
+write between the two. Closing that needs a quote-aware parse, not a line-based pre-pass.
+
 Residual gaps that remain — honest about what the inversion does **not** close, same character as the
 `blocks:` guard's own (a guard that reads only the command *string* cannot see through indirection):
 
 - **Quoted indirection** — `sh -c "gh issue create …"`, or the command held in a shell variable.
   Closing this would mean treating a quote as a command boundary, which would false-deny this repo's
-  own prose about the rule (`rtk grep "gh issue create" docs/`, a commit message quoting the verb) — a
+  own prose about the rule (`grep "gh issue create" docs/`, a commit message quoting the verb) — a
   worse trade than the residual.
 - **`gh` reached from a command position the matcher does not recognize.** The *inversion* is
   default-deny on the **subcommand** — but the decision to look at a line at all still rests on
   matching `gh` at a command position, and that matcher is an enumeration: a leading `VAR=x`, a path
   (`/usr/bin/gh`), gh's global `-R`/`--repo`/`--hostname`, and a fixed wrapper list (`env`, `sudo`,
-  `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`, `rtk`). A wrapper *outside* that list
+  `command`, `xargs`, `time`, `nohup`, `if`/`then`/`else`/`do`). A wrapper *outside* that list
   (`timeout 5 gh issue create`, `nice gh …`, `exec gh …`) or a shell-escaped/quoted binary name
   (`\gh …`, `'gh' …`) is not seen, and falls through. This is the same shape of residual as the bullet
   above and it predates the inversion (`lode-o29m`'s original matcher, unchanged here): generalizing it
@@ -1593,6 +1655,70 @@ being off, given the fiat is the first line of defence and this guard is a backs
 documented prerequisite a human can install; a mis-resolved script path is not something an agent
 could act on. Pinned by a test so the choice stays visible.
 
+### All three PreToolUse guards live in tested scripts, not inline config (2026-08-04)
+
+**No `PreToolUse(Bash)` guard keeps its scanning logic inline in `.claude/settings.json`.** Each of
+the three is a thin wrapper that resolves and delegates to a script under `scripts/`:
+
+| Guard | Wrapper in `.claude/settings.json` delegates to | Pinned by |
+|---|---|---|
+| `bd create --deps blocks:` inversion (`lode-ij24`) | [`scripts/bd-deps-blocks-guard.sh`](../scripts/bd-deps-blocks-guard.sh) | `tests/test_bd_deps_guard.py` |
+| External-tracker write (`lode-o29m` / `lode-9mbt`) | [`scripts/gh-write-guard.sh`](../scripts/gh-write-guard.sh) | `tests/test_gh_write_guard.py` |
+| Fabricated SHA (`lode-fpmi`) | [`scripts/sha-fabrication-guard.sh`](../scripts/sha-fabrication-guard.sh) | `tests/test_sha_fabrication_guard.py` |
+
+`lode-fpmi` established this shape and stated the reason as its own acceptance criterion —
+*"the guard logic lives in a tested script, not untested inline shell"* — because **ungated inline
+shell embedded in config is exactly where this repo has already shipped silent,
+undetected-for-months bugs** (`lode-mh9g`, `lode-54mo`). It shipped that way for one guard and left
+the other two inline; this change finishes the job. Behaviour of both extracted guards is unchanged
+— the same regexes, the same deny JSON, byte for byte.
+
+**What the wrapper still owns, and must:** the `jq`-missing preamble (`lode-oii9`), which fails
+*closed*. That cannot move into the script, because the script is reached via a `jq`-dependent path
+in the first place.
+
+**Each guard now has two test layers**, and both are load-bearing:
+- **Hook-level** — drives the *shipped* wrapper out of the committed `settings.json` through
+  `/bin/sh` (dash, **never** bash — `lode-9gm2`), so it exercises wrapper + script together and
+  catches a delegation that silently stopped working.
+- **Script-level** — drives the script directly by subprocess, fast and precise, over the same
+  DENIED/ALLOWED corpus.
+
+**Dash-safety moved with the logic.** `lode-9gm2`'s bar — no `${var//pat/repl}`, no `$'…'` — now
+binds the **wrapper**, which is the part dash actually executes; the scripts run under
+`bash "$SCRIPT"` and may use bash syntax. The static check is pattern-substitution-specific rather
+than a blanket `${` ban, since every wrapper legitimately uses POSIX `${CLAUDE_PROJECT_DIR:-…}` to
+resolve its script. The sabotage test that proves the point (splice the original bash-only collapse
+in, watch dash die with "Bad substitution" while the shipped form survives) was retargeted at the
+wrapper rather than dropped.
+
+**The fail-open path is NEW with this change, and was taken deliberately — for two of the three.**
+While the logic was inline, a guard could not fail to run at all; now, if `CLAUDE_PROJECT_DIR` is
+unset *and* `git rev-parse` cannot resolve a root, or the script is missing or loses its exec bit,
+the wrapper can silently skip the guard. This was raised explicitly and decided by the maintainer
+(2026-08-04) in favour of matching `lode-fpmi`'s precedent, and it stands unchanged for the
+`bd create --deps blocks:` guard and the fabricated-SHA guard. Each of those two wrappers' fail-open
+is pinned by its own test, and a lost exec bit — which would disable a guard with every other test
+still green — has a dedicated one.
+
+**The `gh`-write guard is the deliberate exception: it fails *closed*, not open (`lode-obox`,
+2026-08-04, same day, decided after this section).** The 2026-08-04 decision above was reopened
+specifically for this guard once `lode-obox`'s own review pointed out that an unresolvable
+`scripts/gh-write-guard.sh` is reachable from ordinary VCS state (an older checkout, a partial
+revert, a mid-bisect tree) — not just a machine-level `CLAUDE_PROJECT_DIR` misconfiguration — and
+that a silent fail-open there is exactly the unrecoverable false-ALLOW this guard exists to prevent
+(`gh` is authed as the user; a fabricated-SHA miss or an inverted `blocks:` edge is recoverable in a
+way a public write under the user's name is not). The maintainer accepted the crossing of `lode-obox`'s
+own acceptance criterion 4 ("no change to `.claude/settings.json`'s deny behaviour") to ship it,
+scoped narrowly: the wrapper denies on an unresolvable script **only** when the command text also
+contains the substring `gh` (`case "$CMD" in *gh*) …`), so an unrelated Bash call on a broken
+checkout still falls through rather than bricking the whole session. Pinned by
+`test_hook_fails_closed_when_guard_script_is_missing` and
+`test_hook_fails_closed_when_guard_script_is_not_executable`
+(`tests/test_gh_write_guard.py`) — do not reintroduce a fail-open pin for this guard; see that
+ticket's own notes for the full option analysis (why "land the splitter, defer the mitigation" was
+rejected as incoherent).
+
 ### Guard against cross-block shell state in skill markdown (lode-sfnb / lode-x495)
 
 **No fenced `bash` block in a `SKILL.md` may depend on shell state from another.** An agent executing
@@ -1706,7 +1832,7 @@ A quick card; the full list is in [`.claude/agents/coding.md`](../.claude/agents
 | Worktrees | harness-made (`isolation: "worktree"`) under `.claude/worktrees/`, branched from **`origin/trunk`** (`worktree.baseRef: "fresh"`, `lode-jzbz`; can lag local `trunk` by however long since `/land`'s last push — usually small, never measured), pushed to `origin/land/<id>`; the **builder keeps its worktree** (the reviewer no longer drives it — it checks `land/<id>` out into its own worktree instead — and `/land`'s backstop sweep reclaims it after the land, lode-h1vn) |
 | Worktree lock | builder `git worktree lock`s it before step 4, `git worktree unlock`s it right after its first commit — closes the gap where a zero-divergence worktree reads as "merged into `trunk`" to `/land`'s backstop reclaim sweep (lode-oqr) |
 | Isolation guard | builder, reviewer, and `land-review` all run `scripts/isolation-guard.sh` (lode-ska2) as their FIRST action, before even the recycled-worktree guard — the harness has been observed handing a dispatched agent NO worktree at all (cwd on the main checkout, on `trunk`); a failure is a hard stop, never a self-provisioned `git worktree add` — [full account above](#isolation-guard-lode-ska2--lode-jk44) (lode-ska2, lode-jk44) |
-| Recycled-worktree guard | builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>`), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz) |
+| Recycled-worktree guard | **Canonical row (lode-zt62) — `coding.md`'s and `code-reviewer.md`'s quick cards link here rather than restate it.** Builder, reviewer, and `land-review` all run `scripts/recycled-worktree-guard.sh` (lode-ivth) as their first action in-worktree — the harness has handed out a worktree still on a *previous* ticket's build branch; a failure rescues the rewound ref (`rescue/recycled-<sha>` — the ref belongs to another ticket), resets onto `origin/trunk` HEAD (never bare local `trunk`, which `/land` can leave carrying un-pushed, un-gated merges for its whole merge window — lode-isl3) — only ever inside `.claude/worktrees/` — and is reported, never silently swallowed. `git clean -fd` then runs **unconditionally**, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip. A **mitigation, not a root-cause fix**: `settings.json`'s `worktree.baseRef` was investigated (lode-r7ow) and its reuse semantics found to be a documented, mechanism-level match for the recycling; the human decision to switch it has since been made and applied — it is now the explicit `"fresh"` (lode-jzbz), not the harness default by omission — [full account above](#recycled-worktree-guard-lode-nt98) (lode-nt98, lode-r7ow, lode-jzbz, lode-3v1p, lode-isl3, lode-ivth) |
 | Models | builder on **Sonnet** (cheap), code-reviewer on **Opus** (review quality); neither reviews work it authored |
 | Concurrency cap | `/code` never runs more than `CODE_MAX_CONCURRENT_AGENTS` agents (builders + reviewers + sweep dispatches) at once; memory-derived default (4 on the 15GiB/8-core WSL2 crash machine), overridable via `LODE_CODE_MAX_CONCURRENT_AGENTS` (env var / `.claude/settings.local.json`'s `"env"` block) — [full rationale above](#concurrency-cap-lode-2cf) (lode-2cf) |
 | Task tracker | **bd only** — no TodoWrite, no markdown checklists; file an issue *before* non-trivial work |
@@ -1783,6 +1909,18 @@ epic-auto-close mechanism was deliberately **rejected**; see [decisions.md](deci
 rationale and each one's revisit trigger. `/sweep` itself is the detector for the deferred caps: it
 would surface a stuck bounce or rebase lineage the moment one actually occurs, well before a cap
 would trigger.
+
+**A `land-escalated` ticket that is also `deferred` (lode-o7ai, decided) — surfaced, notified once,
+never silently dropped.** `/sweep`'s §1 `land-escalated` query carries no `--status` filter, so it
+can return a ticket a human has since parked with `bd defer` — `bd defer` is not one of
+`land-escalated`'s three resolution exits ([below](#the-landing-loop--build-review-land), "Resolving
+`land-escalated`"), so deferring never actually resolves the escalation. The row stays in `$CURRENT`/the digest exactly as before (dropping it would silently
+delete a real, unresolved escalation from the durable record); `/sweep`'s `PushNotification` is
+suppressed for such a row (a human has already seen it, by construction — deferred tickets are
+hidden from `bd ready`, so nothing can re-escalate one without a human touching it first), but the
+report still lists it, annotated `(deferred)`, alongside its unconditional appearance in the
+deferred-ticket section. Full rationale, including the accepted un-defer residual, in
+[decisions.md](decisions.md) (search "lode-o7ai").
 
 ---
 
@@ -1908,11 +2046,12 @@ of occasional retry for a standing per-machine daemon (`dolt sql-server` + lifec
 is the wrong weight for this workload. Full rationale and the revisit trigger are in
 [decisions.md](decisions.md).
 
-**lode-83d's own enumeration was prefix-blind (lode-bpl).** It found its four files with
-`grep -rl "rtk bd dolt push" .claude/`, which cannot see a call written without the `rtk` prefix —
-CLAUDE.md's golden rule says to always prefix with `rtk`, but that's a human convention, not
-something a literal grep enforces. A prefix-agnostic re-audit
-(`grep -rnE '(rtk +)?bd +dolt +push'` over `.claude/`, `docs/`, and `scripts/`, worktrees excluded)
+**lode-83d's own enumeration matched only ONE SPELLING of the call, and so missed real sites
+(lode-bpl).** It found its four files with a fixed-string `grep -rl` for the call as it was written
+in the sites it already knew about — a shape enforced by convention rather than by anything
+mechanical, so a site written in any other equivalent form was invisible to the search that was
+supposed to find every site. A re-audit with a *pattern* rather than a fixed string
+(`grep -rnE 'bd +dolt +push'` over `.claude/`, `docs/`, and `scripts/`, worktrees excluded)
 turned up two more unwrapped call sites inside unattended loops, now also routed through the
 wrapper: `.claude/skills/land/SKILL.md`'s exit-(a) re-entry step (a bare call added by lode-08g,
 after lode-83d's audit ran) and `.claude/skills/sweep/SKILL.md`'s publish step (a skill that didn't
@@ -1921,9 +2060,9 @@ exemptions**, not oversights: `.claude/skills/challenge/SKILL.md` (`/challenge` 
 interactive — a failed push is observed directly, unlike the unattended loops above — see the
 in-line note at its persist step), and `.beads/README.md` / `AGENTS.md` (generic, beads-generated
 quick-reference boilerplate demonstrating the base `bd` CLI to a human reader, not an automated call
-site in any skill). Any future "where do we call X" audit across `.claude/` should grep
-prefix-agnostically from the start — the failure mode was the enumeration method, not any one
-missed file.
+site in any skill). Any future "where do we call X" audit across `.claude/` should match on a
+pattern covering every way the call can legitimately be spelled, from the start — the failure mode
+was the enumeration method, not any one missed file.
 
 ### The code-review pass — `code-reviewer` (Opus)
 
@@ -2125,10 +2264,14 @@ passes no `isolation` option at all. Full reasoning: [docs/decisions.md](decisio
 **Confirmed by lode-p2vi (2026-07-20), call-site param dropped.** The dispatch initially kept passing
 an explicit `isolation: "worktree"` belt-and-braces, since frontmatter `isolation` was then unused
 repo-wide. A dedicated probe retired it: two dispatches differing only in `subagent_type`, both with
-no call-site `isolation` argument, isolated the variable cleanly — `subagent_type: "land-review"`
+no call-site `isolation` argument — `subagent_type: "land-review"`
 landed in its own `.claude/worktrees/agent-<hash>`, while the control
 (`subagent_type: "claude"`) ran in the main checkout on `trunk`, ruling out "the harness isolates
-every agent by default" as a confound. Frontmatter isolation is therefore the sole enforcement point
+every agent by default" as a confound. As with `lode-09td`'s later probes of the same design (above),
+the contrast is between *whole* agent definitions — varying `subagent_type` varies system prompt,
+model, and tools along with it — so the frontmatter key was the only isolation-*relevant* difference
+between control and test case, not a single-variable ablation of that key on one fixed definition.
+Frontmatter isolation is therefore the sole enforcement point
 for this dispatch. Note it took the probe, not a `/land` pass: every real pass dispatched `land-review`
 *with* the option, which is unfalsifiable evidence for the frontmatter.
 
@@ -2814,23 +2957,63 @@ assumption would not have closed it.
   `land/SKILL.md` is edited by several tickets concurrently, this is pinned rather than trusted:
   `tests/test_assert_main_checkout.py` parses the file's ```bash fences **as separate blocks** and
   asserts the guard call appears in the same block as, and before, every mutation Section 1 issues
-  (`bd dolt pull` and each `git` write). Verified by mutation — both splitting the fences apart and
-  reordering within the block leave every other pin in that module green.
+  (`bd dolt pull` and each `git` write). Verified by mutation — splitting the fences apart, hoisting
+  a single protected command into an unguarded fence, and reordering within the block are each
+  caught.
 
-  **This mechanism now protects four fenced blocks, not one — the paragraph above describes only
-  Section 1's.** `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
-  `git reset --hard origin/trunk`; `lode-pxyt` then added Section 3's first-pass ("Green") merge loop
-  and Section 4's reformat-commit block, which reach a bare `git merge --no-ff` (via
-  `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
-  in the script's header** — both went stale within one ticket of being written, which is the whole
-  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` pins each guarded fence
-  independently and is the authoritative list; this paragraph deliberately does not restate it.
-  Since `lode-1d2y` that module is the authoritative record of the **exempt** half too, and for the
-  same reason: the per-fence pins were closed-world, so a genuinely new unguarded fence matched no
-  selector and failed nothing, while every exemption below was prose that no gate could falsify. An
-  open-world sweep now flags every mutating command in every fence unless it is guarded or carries a
-  reasoned entry in that module's allowlist — so the paragraphs below are the *reasoning*, not the
-  roster, and an exemption that stops being true fails a test rather than aging quietly in this file.
+  **This mechanism protects three fenced blocks in `land/SKILL.md`, plus one script-level call inside
+  `scripts/land-merge-one.sh` itself — the paragraph above describes only Section 1's fenced block.**
+  `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
+  `git reset --hard origin/trunk`; `lode-pxyt` then added a fenced guard to Section 3's first-pass
+  ("Green") merge loop and to Section 4's reformat-commit block, which reach a bare `git merge --no-ff`
+  (via `scripts/land-merge-one.sh`) and a bare `git commit` respectively. `lode-1nty` (below) then moved
+  the Green loop's guard *into* `land-merge-one.sh` itself and deleted the fenced copy — that script now
+  asserts its own main-checkout identity as its first action, protecting both of its call sites (the
+  Green loop and the Red loop) by construction, so the Green loop's fence no longer needs a guard of its
+  own. The Red loop **keeps** its fenced guard regardless: it still runs a bare, unprotected
+  `git reset --hard` that `land-merge-one.sh` never touches. **Do not maintain the call-site list here,
+  or in either script's header** — both went stale within one ticket of being written, which is the
+  whole reason `lode-pxyt` (and now `lode-1nty`) exist. `tests/test_assert_main_checkout.py` is the
+  authoritative list for `land/SKILL.md`'s own fences, and it no longer keeps it via four
+  hand-anchored per-fence pins. Those were closed-world: a genuinely new unguarded fence matched none of
+  their hand-picked selectors and failed nothing, while every exemption was prose no gate could falsify.
+  `lode-1d2y` added the open-world replacement — a sweep that enumerates every fenced block in
+  `land/SKILL.md`, flags every command that mutates cwd's repo, and passes only where each is guarded
+  earlier in its own block or carries a reasoned entry in that module's allowlist — and `lode-8p3c` then
+  deleted the four per-fence pins outright, but only after widening the sweep's command pattern to cover
+  commands the pins protected and the pattern did not yet match. That generalizes, and is the trap to
+  remember whenever a named pin is retired in favour of a pattern: **a sweep subsumes a pin only for the
+  commands its pattern matches**, so diff the pin's protected set against the pattern *before* deleting
+  it. `lode-1nty` repeated this discipline in reverse: `scripts/land-merge-one.sh` was named literally
+  in the sweep's `_MUTATING_CMD_RE` pattern as a special case (since Section 3's Green loop had no bare
+  mutating git command of its own, only that script reference); once the script started guarding itself,
+  that special case was **removed** from the pattern rather than papered over with an allowlist entry —
+  the sweep no longer needs to know the script exists at all. This paragraph deliberately does not
+  restate the module's contents — it is the *reasoning*, not the roster, and an exemption that stops
+  being true fails a test rather than aging quietly here.
+
+  **Fence-level guard vs. script-level guard (`lode-1nty`) — a real decision, not a foregone one, with
+  arguments on both sides.** `lode-pxyt`'s original fix guarded Section 3's Green loop the same way as
+  every other fence: `assert-main-checkout.sh || exit 1` as the fence's first line, immediately ahead of
+  the ONE command that fence protects (`scripts/land-merge-one.sh`). That call-site fix protects the one
+  known caller but not a future one — any new caller of `land-merge-one.sh` would have to remember to
+  fence-guard it independently, the exact "discipline, not mechanism" shape this project has moved away
+  from elsewhere. The alternative — asserting main-checkout identity *inside* `land-merge-one.sh` itself,
+  since the script already sources `gate-lib.sh` and its caller already routes its exit 2 to a hard pass
+  abort — protects every current and future caller by construction, at the cost of two things: the pass
+  now aborts on the FIRST merge attempt instead of before `$ACCEPTED` even loads (a real earliness
+  regression, though nothing destructive happens in that gap — loading state and starting a loop are
+  reads, not writes), and it adds a new exit-2 condition to `land-merge-one.sh`'s own contract (a public
+  interface change, however small its measured blast radius: two known callers, both already routing
+  exit 2 to a hard abort). **Decided: script-level, not fence-level, for Section 3's Green loop.** House
+  precedent points the same way — `lode-09td` dropped `/code`'s redundant call-site `isolation: worktree`
+  option in favor of frontmatter as the SOLE enforcement point for all three producer/reviewer roles, on
+  an explicit gated-vs-ungated argument for why one enforcement point is acceptable against an
+  unrecoverable failure mode; choosing defense-in-depth here would re-litigate that in the opposite
+  direction for a materially similar hazard shape. Section 3's Red loop is deliberately **not** folded
+  into this: it keeps its own fence-level guard, because that fence protects a bare `git reset --hard`
+  that `land-merge-one.sh` does not reach — removing it would leave that command genuinely unguarded, not
+  merely redundantly guarded.
 
   **`lode-gczf`'s "Section 4's worktree/branch GC is exempt" is right as scoped and wrong if
   generalized — the distinction is the point.** Its literal text: those commands "operate on specific

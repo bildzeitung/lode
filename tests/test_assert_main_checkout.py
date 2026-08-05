@@ -48,7 +48,7 @@ import subprocess
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import bash_fence_blocks
+from conftest import LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 # Share lode-x495's quote-aware comment stripper rather than adding a second,
 # competing implementation -- the same reuse `tests/test_bd_list_limit_gate.py`
@@ -277,247 +277,15 @@ def test_refusal_never_mutates_anything(tmp_path: Path) -> None:
 # Call-site pin against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
 
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
-
-# Block boundaries are load-bearing here in a way they are not for
-# `_fenced_bash` below: per land/SKILL.md's governing rule (lode-sfnb) each
-# fence is executed as its own Bash invocation, so two commands are guaranteed
-# to share a shell -- and therefore `||` short-circuiting -- only if they are
-# in the same block. A pin that flattens the blocks first cannot tell
-# "guarded" from "merely preceded somewhere in the document". That is why
-# `_the_one_block`/`_assert_guard_precedes` below work over the block LIST
-# (`bash_fence_blocks`) rather than `_fenced_bash` (joined).
-#
-# This module carried the last private copy of that parser until lode-p4qb
+# This module carried the last private copy of the ```bash fence parser until
+# lode-p4qb
 # folded it into `tests/conftest.py::bash_fence_blocks`. Why the four copies
 # existed and what the shared parser's rules now are live next to the parser
 # itself -- deliberately not restated here, per the same no-second-copy rule
 # tests/test_land_lock.py and tests/test_land_conflicts_state.py follow.
 
 
-def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only, concatenated into one string -- what an agent
-    actually EXECUTES.
-
-    Scanning the whole file would match the prose that *explains* the old
-    defect (it necessarily quotes the broken `-C "$(git rev-parse
-    --show-toplevel)"` idiom), so the pin has to separate what is executed
-    from what is merely described.
-    """
-    return "\n".join(bash_fence_blocks(markdown))
-
-
-def test_land_skill_section1_calls_the_script() -> None:
-    """Section 1 must actually invoke the guard, not just describe it in
-    prose -- the defect this ticket fixes lived in a markdown fence, where no
-    other gate reaches it."""
-    executed = _fenced_bash(LAND_SKILL.read_text(encoding="utf-8"))
-    assert "scripts/assert-main-checkout.sh" in executed, (
-        "land/SKILL.md Section 1 never calls scripts/assert-main-checkout.sh -- "
-        "the main-checkout identity check is not wired up (lode-pcee)"
-    )
-
-
 _GUARD = "scripts/assert-main-checkout.sh"
-_PASS_START_RESET = "git reset --hard origin/trunk"
-_SECTION1_ONLY = "git checkout -f trunk"
-_MERGE_ONE = "scripts/land-merge-one.sh"
-_REFORMAT_COMMIT = "git commit --no-verify"
-
-
-def _the_one_block(
-    *, contains: tuple[str, ...], excludes: tuple[str, ...] = (), label: str
-) -> str:
-    """The single executed fence matching `contains` and not `excludes`.
-
-    Every guarded block in land/SKILL.md is located this way, so the selection
-    lives here once. Anchoring on the COMMANDS a block runs, rather than on
-    section headings, keeps the pins working while the surrounding prose is
-    rewritten -- which it is constantly, by concurrent tickets.
-
-    The `len(...) == 1` assertion is the load-bearing half, not a tidiness
-    check: it is what makes a SECOND, unguarded copy of an already-guarded
-    exposure fail loudly here instead of being silently absorbed by whichever
-    narrower pin still happens to match one of them.
-    """
-    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
-    candidates = [
-        b
-        for b in blocks
-        if all(s in b for s in contains) and not any(s in b for s in excludes)
-    ]
-    assert len(candidates) == 1, (
-        f"expected exactly one executed fence containing {list(contains)}"
-        + (f" and none of {list(excludes)}" if excludes else "")
-        + f" ({label}), found {len(candidates)} -- land/SKILL.md's layout has "
-        "drifted and this pin needs re-anchoring, not deleting"
-    )
-    return candidates[0]
-
-
-def _the_two_reset_blocks() -> tuple[str, str]:
-    """`(Section 1's pass-start block, Section 3's isolation-replay block)`.
-
-    Both open with `git reset --hard origin/trunk`, so that command does NOT
-    identify Section 1 on its own -- an earlier column-0 fence scanner could
-    not see Section 3's indented block and made it look as though it did
-    (lode-ovgs). Only Section 1's block also runs `git checkout -f trunk`, so
-    that pair is what tells the two apart. Reverting the shared parser to that
-    column-0 shape now makes this helper's second `_the_one_block` call fail
-    loudly with "found 0", not silently agree -- which is why the synthetic
-    indented-fence pin this module used to carry was dropped as a fifth copy
-    of a claim `tests/test_skill_bash_state.py` and `tests/test_land_lock.py`
-    already own (lode-p4qb).
-    """
-    return (
-        _the_one_block(
-            contains=(_PASS_START_RESET, _SECTION1_ONLY),
-            label="Section 1's pass-start block",
-        ),
-        _the_one_block(
-            contains=(_PASS_START_RESET,),
-            excludes=(_SECTION1_ONLY,),
-            label="Section 3's isolation-replay block",
-        ),
-    )
-
-
-def _assert_guard_precedes(
-    block: str, *, protects: tuple[str, ...], section: str, ticket: str
-) -> None:
-    """Assert `block` calls the guard, and that every command in `protects` is
-    still IN `block` and after it.
-
-    Both halves are load-bearing, and the presence half is the easier one to
-    lose. Per `land/SKILL.md`'s governing rule (lode-sfnb) each fenced block is
-    a SEPARATE Bash invocation with no shell state carried between them, so a
-    guard sitting in its own block can only `exit` that block's shell -- whether
-    the destructive block then runs is an agent's judgment call made while
-    reading prose, which is exactly the strength of assurance lode-pcee exists
-    to delete. Sharing one block makes `|| exit 1` mechanical instead: each
-    protected command is unreachable unless the assertion passed, with no
-    decision in between.
-
-    So an ordering-only pin is not enough. Refactoring a protected command out
-    into a fence of its own re-opens the defect while leaving the ordering
-    assertion perfectly green, which is why presence is checked too. Verified by
-    mutation on land/SKILL.md: deleting the guard, reordering it after the reset,
-    splitting it into its own fence, and splitting the replay loop (or the
-    `land-merge-one.sh` call) out of Section 3's block are each caught by one of
-    these two assertions -- and the last two by the presence half alone.
-    """
-    guard_at = block.find(_GUARD)
-    assert guard_at >= 0, (
-        f"{section}'s fenced block does not call {_GUARD} at all ({ticket}). A "
-        "guard in a SEPARATE block cannot stop this one -- per lode-sfnb each "
-        "block is its own Bash invocation, so its `exit` ends only "
-        f"itself.\n\n{block}"
-    )
-    for mutation in protects:
-        at = block.find(mutation)
-        assert at >= 0, (
-            f"`{mutation}` left {section}'s block -- if it moved to a fence of "
-            "its own it is now reached with nothing having established where it "
-            f"runs, which is the lode-pcee defect returning by another route "
-            f"({ticket})\n\n{block}"
-        )
-        assert guard_at < at, (
-            f"{_GUARD} runs AFTER `{mutation}` in {section}'s block ({ticket}) "
-            f"-- the assertion no longer protects it.\n\n{block}"
-        )
-
-
-def test_guard_shares_one_block_with_the_commands_it_protects() -> None:
-    """Section 1's pass-start block: the guard must be the first line of the
-    SAME fence as every mutation it protects -- not merely present, and not
-    merely earlier in the document. This is the property lode-pcee turns on;
-    `_assert_guard_precedes` carries the reasoning and the mutation evidence.
-    """
-    section1, _ = _the_two_reset_blocks()
-
-    # `bd dolt pull` writes the local Dolt DB; the rest write git. Only
-    # `reset --hard` is unrecoverable, but a wrong-directory `checkout -f` is
-    # destructive too.
-    _assert_guard_precedes(
-        section1,
-        protects=(
-            "bd dolt pull",
-            _SECTION1_ONLY,
-            "git fetch origin",
-            _PASS_START_RESET,
-        ),
-        section="Section 1",
-        ticket="lode-pcee",
-    )
-
-
-def test_section3_isolation_replay_block_shares_guard_with_its_reset() -> None:
-    """Section 3's isolation-replay block (the 'Red' path's per-branch replay
-    loop) runs its OWN `git reset --hard origin/trunk` -- a second, distinct
-    exposure of the exact class lode-pcee fixed in Section 1, filed separately
-    as lode-gczf since it could not be built until
-    `scripts/assert-main-checkout.sh` existed on trunk.
-    """
-    _, section3 = _the_two_reset_blocks()
-
-    # The pass-start reset is NOT this block's only cwd-assuming destructive
-    # command, and `scripts/land-merge-one.sh` belongs on the list even though
-    # it is a script rather than an inline git command: it runs a bare `git
-    # merge --no-ff` plus `git restore --staged --worktree .beads/issues.jsonl`
-    # and `git merge --abort`, all resolved against cwd.
-    _assert_guard_precedes(
-        section3,
-        protects=(
-            _PASS_START_RESET,
-            _MERGE_ONE,
-            "git reset --hard HEAD~1",
-        ),
-        section="Section 3",
-        ticket="lode-gczf",
-    )
-
-
-def test_section3_first_pass_merge_loop_shares_guard_with_land_merge_one() -> None:
-    """Section 3's FIRST-PASS ('Green') merge loop runs `land-merge-one.sh` --
-    a bare `git merge --no-ff` against cwd -- in its own fresh Bash invocation
-    that Section 1's guard cannot reach (lode-pxyt).
-
-    The isolation-replay ('Red') loop lode-gczf already guarded calls the same
-    script, and only IT also runs `_PASS_START_RESET`; excluding that is what
-    tells the two apart.
-    """
-    _assert_guard_precedes(
-        _the_one_block(
-            contains=(_MERGE_ONE,),
-            excludes=(_PASS_START_RESET,),
-            label="Section 3's first-pass merge loop",
-        ),
-        protects=(_MERGE_ONE,),
-        section="Section 3's first-pass merge loop",
-        ticket="lode-pxyt",
-    )
-
-
-def test_section4_reformat_commit_block_shares_guard_with_its_commit() -> None:
-    """Section 4's reformat-commit block commits `nox -t fix`'s output directly
-    to whatever branch cwd's `HEAD` happens to be on -- the one `git` write in
-    that section naming no ref or path at all, so a wrong-directory run commits
-    there silently instead of failing loudly (lode-pxyt).
-
-    `git add` is protected as well as the commit: it is the block's other
-    cwd-resolved write, and without it here, splitting it out into a fence of
-    its own leaves this whole module green (measured).
-    """
-    _assert_guard_precedes(
-        _the_one_block(
-            contains=(_REFORMAT_COMMIT,),
-            label="Section 4's reformat-commit block",
-        ),
-        protects=("git add", _REFORMAT_COMMIT),
-        section="Section 4's reformat-commit block",
-        ticket="lode-pxyt",
-    )
 
 
 def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
@@ -544,36 +312,45 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard-coverage SWEEP (lode-1d2y) -- catches a NEW unguarded fence, not just
-# the four already-known ones pinned above.
+# Guard-coverage SWEEP (lode-1d2y; superseded the four per-fence pins in
+# lode-8p3c) -- open-world: catches a NEW unguarded fence, not only the
+# already-known ones. `_unguarded_mutations` owns its mechanics.
 #
-# Everything above this point pins a SPECIFIC, already-discovered fence by
-# anchoring on the commands it contains (`_the_one_block` /
-# `_the_two_reset_blocks`). That is precise, but closed-world: a genuinely NEW
-# class of unguarded mutation -- `git clean -fdx`, `git rebase`, a `git
-# checkout -f` with no accompanying reset, a bare `git commit -m` missing
-# `--no-verify` -- matches none of the four `contains=` selectors above and is
-# caught by NOTHING. That is exactly how lode-pxyt's own two exposures survived
-# a full ticket cycle before a human noticed them by inspection. The sweep
-# below is the open-world complement; `_unguarded_mutations` owns its
-# mechanics.
+# Until lode-8p3c this module also pinned each already-discovered guarded fence
+# individually, anchored on the commands it contained. That was precise, but
+# closed-world: a genuinely NEW class of unguarded mutation -- `git clean -fdx`,
+# `git rebase`, a `git checkout -f` with no accompanying reset, a bare `git
+# commit -m` missing `--no-verify` -- matched none of those hand-picked
+# selectors and was caught by NOTHING. That is exactly how lode-pxyt's own two
+# exposures survived a full ticket cycle before a human noticed them by
+# inspection.
+#
+# Subsumption was NOT free, and was not true as first written. Measured during
+# lode-8p3c's technical review by replaying each deleted pin's sabotages against
+# this sweep: the Section 1 pin also protected `bd dolt pull` and `git fetch
+# origin`, and hoisting either into an unguarded fence of its own left the sweep
+# GREEN while the deleted pin went RED. Both were added to `_MUTATING_CMD_RE` at
+# zero allowlist cost, since the file's only occurrences of each were already
+# guarded. Before deleting any future pin, diff its protected set against that
+# pattern the same way.
 #
 # KNOWN LIMITATIONS (lode-1d2y):
 #
 # 1. INLINE COMMANDS ONLY -- SCRIPT-REFERENCE FOLLOWING IS DELIBERATELY OUT
 #    OF SCOPE. This sweep does not open `scripts/*.sh` and classify what it
 #    mutates; it only sees commands written directly in the fence. It would
-#    NOT have caught lode-pxyt's first exposure on its own merits: Section
-#    3's first-pass merge loop contains zero bare mutating git commands --
-#    its only mutation is inside `scripts/land-merge-one.sh`, special-cased
-#    below (`_MERGE_ONE`, already pinned above). A brand-new script reference
-#    is caught by nothing here and would need the same manual discovery
-#    lode-pxyt's did. Measured while writing this: of the scripts referenced
-#    from an UNGUARDED fence today, none runs a cwd-resolved mutating git
-#    command -- their only git calls are `merge-base --is-ancestor` and
-#    `merge-tree --write-tree`, both read-only -- so the gap is latent, not
+#    NOT have caught lode-pxyt's exposure: that fence contained zero bare
+#    mutating git commands -- its only mutation was inside a referenced
+#    script. A script reference is caught by nothing here and would need the
+#    same manual discovery lode-pxyt's did. Measured while writing this, and
+#    re-measured for lode-1nty: of the scripts referenced from an UNGUARDED
+#    fence today, the only one running a cwd-resolved mutating git command is
+#    `scripts/land-merge-one.sh`, which asserts its OWN main-checkout identity
+#    internally (see that script's header) rather than depending on this
+#    sweep; every other one's git calls are `merge-base --is-ancestor` and
+#    `merge-tree --write-tree`, both read-only. So the gap is latent, not
 #    live. Re-measure rather than assume.
-# 2. THE MUTATING-VERB REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
+# 2. THE MUTATING-COMMAND REGEX IS DELIBERATELY OVER-BROAD, BY DESIGN. It
 #    matches `git branch`, `git worktree`, and `git merge` as whole verbs,
 #    not just the destructive subcommands (`branch -D`, `worktree remove`,
 #    a bare `merge`) -- so it also flags read-only lookalikes: `git merge-
@@ -599,11 +376,34 @@ def test_land_skill_never_reintroduces_the_false_dash_c_idiom() -> None:
 #    silently CORRUPTED by the blockquote strip, not skipped. A mutating
 #    command written that way would reach this sweep in mangled form. That
 #    helper owns the rule and the measurement; do not restate either here.
+#
+# `test_every_allowlist_entry_still_matches_a_real_command` below is a hand-written
+# liveness pin, mirroring the precedent `test_skill_bash_state.py::_dead_allowlist_keys`
+# set. Whether these hand-written pins should share one mechanism was decided
+# (rejected extraction, in favor of shared discipline instead) in
+# docs/decisions.md, search "The three hand-written liveness pins stay separate"
+# (lode-7zap). Do not re-litigate here.
 # ---------------------------------------------------------------------------
 
-_MUTATING_VERB_RE = re.compile(
-    r"\bgit\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|merge"
-    r"|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)\b"
+# Every command shape that mutates cwd's repo. Not git-only, deliberately:
+# `bd dolt pull` writes cwd's OWN `.beads/` Dolt DB (each worktree carries its
+# own copy), so a wrong-directory run updates the wrong database. The sweep
+# asks ONE question -- does this line mutate cwd's repo -- so both classes
+# belong in one pattern rather than a git list plus side checks.
+#
+# Do NOT re-add `scripts/land-merge-one.sh` here: it was named literally as a
+# special case until lode-1nty, and now asserts its own main-checkout identity
+# internally instead, so this sweep does not need to know it exists. Re-adding
+# it means re-litigating that decision (docs/agents-workflow.md's main-checkout
+# section).
+#
+# The bd WRITE side is out of scope here, not overlooked: `land/SKILL.md` only
+# ever reaches it through `scripts/bd-dolt-push.sh`, which is KNOWN
+# LIMITATION 1's territory (no script following), not this pattern's.
+_MUTATING_CMD_RE = re.compile(
+    r"\b(?:git\s+(?:add|am|apply|branch|checkout|cherry-pick|clean|commit|fetch"
+    r"|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch|worktree)"
+    r"|bd\s+dolt\s+pull)\b"
 )
 
 # Exact command text (comment-stripped, `.strip()`'d) -> why it needs no
@@ -612,11 +412,11 @@ _MUTATING_VERB_RE = re.compile(
 # records what that keying does and does not catch.
 _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
     # --- read-only false positives of the broad verb regex (limitation 2) ---
-    'for mb in $(rtk git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
+    'for mb in $(git merge-base --all "origin/land/<X>" "origin/land/<Y>"); do': (
         "read-only: enumerates merge-bases, mutates nothing (1a stacked-branch "
         "detection)"
     ),
-    'rtk git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
+    'git merge-base --is-ancestor "$mb" origin/trunk || OFF_TRUNK="$OFF_TRUNK $mb"': (
         "read-only: --is-ancestor is a pure query, mutates nothing"
     ),
     'LOCK_REASON=$(git worktree list --porcelain | awk -v want="$WT" \'': (
@@ -635,14 +435,14 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
     # --- explicit ref/path-addressed writes: cwd-independent by construction,
     #     the same reasoning Section 4's own prose gives for these commands
     #     ("each names its own target") ---
-    "rtk git push origin trunk": (
+    "git push origin trunk": (
         "ref-addressed (explicit remote+branch); Section 4's own text: cwd-independent"
     ),
-    'rtk git push origin --delete "land/$id"': (
+    'git push origin --delete "land/$id"': (
         "ref-addressed delete (explicit remote+branch); cwd-independent "
         "(Section 4's per-ticket branch GC)"
     ),
-    'rtk git push origin --delete "land/<id>"': (
+    'git push origin --delete "land/<id>"': (
         "ref-addressed delete (explicit remote+branch); cwd-independent "
         "(Bounce / Escalate-exit-(b) / Escalate-exit-(c))"
     ),
@@ -666,12 +466,27 @@ _KNOWN_LAND_SKILL_MUTATIONS: dict[str, str] = {
         "from disk; never removes real content or a live worktree"
     ),
     # --- path-addressed to the passive bd export, never real work ---
-    "rtk git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
+    "git restore --staged --worktree .beads/issues.jsonl 2>/dev/null || true": (
         "path-addressed to the passive .beads/issues.jsonl export only -- "
         "never real work (import.auto: false, lode-6ra); a wrong-directory "
         "run only restores that worktree's own copy of a regenerated artifact"
     ),
 }
+
+
+def _normalized_line(raw_line: str) -> str:
+    """A raw fenced-block line reduced to its command text: comment-stripped
+    and `.strip()`'d. Empty means the line carries no command at all.
+    """
+    return _strip_comment(raw_line).strip()
+
+
+def _is_mutating(cmd: str) -> bool:
+    """Whether a `_normalized_line` result is a mutating command -- i.e.
+    whether an allowlist entry keyed on this exact text could excuse
+    anything.
+    """
+    return bool(cmd) and bool(_MUTATING_CMD_RE.search(cmd))
 
 
 def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
@@ -691,13 +506,13 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
     for block_index, block in enumerate(bash_fence_blocks(markdown)):
         guarded = False
         for raw_line in block.splitlines():
-            cmd = _strip_comment(raw_line).strip()
+            cmd = _normalized_line(raw_line)
             if not cmd:
                 continue
             if _GUARD in cmd:
                 guarded = True
                 continue
-            if not (_MUTATING_VERB_RE.search(cmd) or _MERGE_ONE in cmd):
+            if not _is_mutating(cmd):
                 continue
             if guarded or cmd in allowlist:
                 continue
@@ -713,14 +528,52 @@ def _unguarded_mutations(markdown: str, *, allowlist: dict[str, str]) -> list[st
 def test_land_skill_guard_covers_every_known_mutating_fence() -> None:
     """The sweep, run against the REAL land/SKILL.md with the real allowlist.
     Zero violations means every mutating command in the file is either
-    guarded or a recorded, reasoned exemption -- not just the four fences the
-    pins above happen to anchor on.
+    guarded or a recorded, reasoned exemption -- across every fence in the
+    file, not just a hand-picked few.
+
+    This also subsumes the Section 1 existence pin lode-pcee added and
+    lode-0mkv deleted ("does SKILL.md call the guard at all"): measured,
+    dropping Section 1's guard line leaves that pin GREEN -- the string still
+    appears in three other fences -- while this sweep reports 4 named
+    violations. Do not re-add a per-section duplicate.
     """
     violations = _unguarded_mutations(
         LAND_SKILL.read_text(encoding="utf-8"),
         allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
     )
     assert violations == [], "\n".join(violations)
+
+
+def _dead_allowlist_entries(markdown: str, *, allowlist: dict[str, str]) -> list[str]:
+    """Allowlist keys in `allowlist` that no longer match any real MUTATING command
+    line in `markdown`'s fenced ```bash blocks. The live set is built from the SAME
+    two primitives `_unguarded_mutations` applies before a line is even a mutation
+    candidate -- `_normalized_line` then `_is_mutating` -- so this pin's notion of
+    "live" cannot drift from what the sweep actually excuses (lode-dkak; before that
+    fix the live set was every comment-stripped line, UNFILTERED, so a key present
+    only as a non-mutating line read as live while excusing nothing). A key
+    returned here is dead: it currently excuses nothing, but stays in the allowlist
+    regardless, ready to silently re-excuse a brand-new command that happens to
+    share its exact text. Argument order deliberately matches `_unguarded_mutations`
+    above -- same two inputs, same shape.
+
+    The parameterized-helper-plus-sabotage shape here is lode-e49j's, whose
+    `test_skill_bash_state.py::_dead_allowlist_keys` modeled its own pin on THIS
+    module's (lode-1d2y) and then shipped the non-vacuity half this module lacked;
+    lode-7zap brings that half back the other way.
+
+    `allowlist` and `markdown` are parameters, not read from the module globals
+    directly, so `test_every_allowlist_entry_is_provably_checked_by_sabotage` below
+    can exercise this exact primitive -- the same one the real pin calls -- against
+    a synthetic fixture, without mutating the real `land/SKILL.md` on disk.
+    """
+    live = {
+        cmd
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+        if _is_mutating(cmd := _normalized_line(raw))
+    }
+    return sorted(set(allowlist) - live)
 
 
 def test_every_allowlist_entry_still_matches_a_real_command() -> None:
@@ -731,18 +584,115 @@ def test_every_allowlist_entry_still_matches_a_real_command() -> None:
     over text that no longer exists. Both leave `_KNOWN_LAND_SKILL_MUTATIONS`
     entries matching nothing, so requiring every entry to still hit a real
     line is what makes the green above mean something.
-    """
-    blocks = bash_fence_blocks(LAND_SKILL.read_text(encoding="utf-8"))
-    live = {
-        _strip_comment(raw).strip() for block in blocks for raw in block.splitlines()
-    }
 
-    orphaned = sorted(set(_KNOWN_LAND_SKILL_MUTATIONS) - live)
+    Non-vacuousness of THIS pin is proven separately, by
+    `test_every_allowlist_entry_is_provably_checked_by_sabotage` below (lode-7zap) --
+    a liveness pin is a negative assertion over data expected to be empty in the
+    healthy case, so its interesting branch never runs on real data and this test
+    alone cannot show it would catch a real regression.
+    """
+    orphaned = _dead_allowlist_entries(
+        LAND_SKILL.read_text(encoding="utf-8"),
+        allowlist=_KNOWN_LAND_SKILL_MUTATIONS,
+    )
 
     assert orphaned == [], (
         "these allowlist entries no longer match any command in land/SKILL.md, "
         "so they exempt nothing and the sweep's green is that much emptier -- "
         f"delete them or re-derive them from the current file: {orphaned}"
+    )
+
+
+def test_every_allowlist_entry_is_provably_checked_by_sabotage() -> None:
+    """Non-vacuousness proof for the pin above (lode-7zap): a test that passes both
+    before and after the regression it's meant to catch is worthless. Mirrors the
+    precedent this ticket exists to bring this module up to par with (lode-e49j),
+    `test_skill_bash_state.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
+    including its measured fix: hold ONE key/fixture constant and
+    vary only the markdown CONTENT between the live and dead assertions. Two
+    differently-named fixtures would derive two different keys, so the "now dead"
+    assertion would pass on a name mismatch alone and prove nothing about whether
+    `_dead_allowlist_entries` actually tracks content -- the exact vacuous-sabotage
+    shape lode-e49j's review caught and lode-1d2y's own pin (until now) had no
+    counterpart to guard against at all.
+
+    Sabotage recipe for this ticket's own future maintenance, recorded here per its
+    acceptance criteria: replace the body of `_dead_allowlist_entries` with an
+    unconditional `return []`, or delete any one of the three assertions below, and
+    this test goes red. Both mutations were re-run independently at technical review
+    (lode-7zap), as was a third -- a name-only helper, blind to content, which the
+    LAST assertion is what catches. That last assertion is the one carrying the
+    non-vacuity weight; the first two alone would not distinguish it.
+    """
+    key = "git push origin trunk"
+    markdown_live = f"```bash\n{key}\n```\n"
+    assert _dead_allowlist_entries(markdown_live, allowlist={key: "fixture"}) == [], (
+        "fixture assumption broken: the key is not actually a live command in the "
+        "unfixed markdown fixture"
+    )
+
+    bogus = "git push origin THIS_BRANCH_DOES_NOT_EXIST_ANYWHERE_lode_7zap"
+    assert _dead_allowlist_entries(markdown_live, allowlist={bogus: "fixture"}) == [
+        bogus
+    ], "a bogus key matching no real command must be reported dead"
+
+    markdown_fixed = f"```bash\n# {key}\n```\n"  # commented out -- no longer live
+    assert _dead_allowlist_entries(markdown_fixed, allowlist={key: "fixture"}) == [
+        key
+    ], "removing the command from the corpus must flip the SAME key from live to dead"
+
+
+def test_dead_allowlist_entries_requires_a_mutating_line_not_mere_presence() -> None:
+    """Non-vacuity proof for lode-dkak's fix: before this ticket,
+    `_dead_allowlist_entries` computed its live set as every comment-stripped,
+    `.strip()`'d line in a fenced ```bash block -- with NO `_MUTATING_CMD_RE`
+    filter, unlike `_unguarded_mutations`. So a key present in the corpus only as
+    a line that never matches `_MUTATING_CMD_RE` (and therefore excuses nothing
+    in the sweep -- `_unguarded_mutations` never even reaches its allowlist check
+    for such a line) still read as LIVE and passed the liveness pin. That is
+    precisely the dead-entry class the pin exists to catch, surviving the pin.
+
+    Sabotage: hold ONE key constant, and use the exact PRE-FIX live-set
+    computation (every comment-stripped line, unfiltered -- reproduced inline
+    below, not imported, since the fixed `_dead_allowlist_entries` no longer
+    computes it) to prove this fixture's key would have read as live before
+    this ticket. Then run the SAME key/markdown through the fixed
+    `_dead_allowlist_entries` and require it now report the key dead --
+    proving the regex filter, not mere textual presence, is what "live" means.
+
+    Recorded mutation (re-run it if you touch this): restore
+    `_dead_allowlist_entries`' live set to the unfiltered comprehension
+    reproduced below and run this module -- this test, and ONLY this test,
+    must go red. Verified at review of lode-dkak: 1 failed, 16 passed.
+    """
+    key = "echo this line never matches _MUTATING_CMD_RE at all"
+    markdown = f"```bash\n{key}\n```\n"
+
+    assert not _MUTATING_CMD_RE.search(key), (
+        "fixture assumption broken: the chosen text matches _MUTATING_CMD_RE "
+        "after all, so it does not exercise the non-mutating-line case"
+    )
+
+    # Reproduce the PRE-FIX live-set computation (unfiltered, comment-stripped
+    # lines only) to prove this exact key/markdown pair would have read as
+    # live before lode-dkak -- i.e. that the sabotage is not vacuous.
+    pre_fix_live = {
+        _strip_comment(raw).strip()
+        for block in bash_fence_blocks(markdown)
+        for raw in block.splitlines()
+    }
+    assert key in pre_fix_live, (
+        "fixture assumption broken: before lode-dkak's fix this key would not "
+        "actually have read as live, so the sabotage proves nothing"
+    )
+
+    # The fix: the fixed `_dead_allowlist_entries` filters by `_is_mutating`,
+    # the SAME primitive `_unguarded_mutations` uses, so a key present only
+    # as a non-mutating
+    # line excuses nothing and must be reported dead.
+    assert _dead_allowlist_entries(markdown, allowlist={key: "fixture"}) == [key], (
+        "a key present only as a non-mutating line must be reported dead -- "
+        "mere textual presence does not make an allowlist entry live"
     )
 
 
@@ -756,24 +706,28 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
     while every other test here stays green. `git pull` and `git add` are in
     the list by measurement, not taste -- an earlier draft of this sweep
     omitted both, and `git add` is the omission lode-pxyt's review had already
-    had to fix once in the per-fence pin next door.
+    had to fix once in the per-fence pin lode-8p3c has since deleted.
     """
     for command in (
-        "rtk git add .",
-        "rtk git am /tmp/p.patch",
-        "rtk git apply /tmp/p.patch",
-        "rtk git checkout -f trunk",
-        "rtk git cherry-pick deadbeef",
-        "rtk git clean -fdx",
-        "rtk git commit -m wip",
-        "rtk git merge --no-ff origin/land/x",
-        "rtk git pull --rebase",
-        "rtk git rebase origin/trunk",
-        "rtk git reset --hard HEAD~1",
-        "rtk git restore --worktree .",
-        "rtk git revert HEAD",
-        "rtk git stash pop",
-        "rtk git switch trunk",
+        "git add .",
+        "git am /tmp/p.patch",
+        "git apply /tmp/p.patch",
+        "git checkout -f trunk",
+        "git cherry-pick deadbeef",
+        "git clean -fdx",
+        "git commit -m wip",
+        "git fetch origin",
+        "git merge --no-ff origin/land/x",
+        "git pull --rebase",
+        "git rebase origin/trunk",
+        "git reset --hard HEAD~1",
+        "git restore --worktree .",
+        "git revert HEAD",
+        "git stash pop",
+        "git switch trunk",
+        # Not git, but a cwd-resolved mutation the sweep must still see -- see
+        # `_MUTATING_CMD_RE`'s non-git alternatives (lode-8p3c).
+        "bd dolt pull",
     ):
         markdown = f"1. Some new step:\n\n   ```bash\n   {command}\n   ```\n"
 
@@ -789,11 +743,8 @@ def test_sweep_catches_a_brand_new_unguarded_mutation() -> None:
 
 def test_sweep_requires_the_guard_precede_not_merely_be_present() -> None:
     """A guard call present in the block but AFTER the mutating command does
-    not protect it -- ordering matters, exactly as `_assert_guard_precedes`
-    already checks for the four pinned fences above."""
-    markdown = (
-        f"```bash\nrtk git reset --hard origin/trunk\nrtk {_GUARD} || exit 1\n```\n"
-    )
+    not protect it -- ordering matters."""
+    markdown = f"```bash\ngit reset --hard origin/trunk\n{_GUARD} || exit 1\n```\n"
     violations = _unguarded_mutations(markdown, allowlist={})
     assert violations, "a guard AFTER the mutation must not count as coverage"
 
@@ -811,7 +762,7 @@ def test_sweep_allowlist_match_is_exact_text_not_shape() -> None:
     allowlist were never consulted at all, so the unperturbed half is what
     proves the exemption is real and the flag is caused by the perturbation.
     """
-    original = "rtk git push origin trunk"
+    original = "git push origin trunk"
     perturbed = original + " --porcelain"
 
     assert (

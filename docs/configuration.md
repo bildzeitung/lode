@@ -132,9 +132,10 @@ Runs the same read pipeline as `lode ask` ([retrieval.md](retrieval.md)) minus t
 | Retry backoff + max attempts | runtime | exp backoff, capped | Transient-failure retry before dead-lettering a job. |
 | Stale-running reclaim timeout | runtime | `900s` (15 min) | A job stuck in `status='running'` this long (no claim update, e.g. a worker crash) is reclaimed — same retry/dead-letter accounting as a handler failure. Excludes batch-backed enrich jobs. ([storage.md](storage.md#crash-reclaim-a-job-stuck-in-running--pinned-lode-aor)) |
 | Enrichment batch flush policy | runtime | size/time | When accumulated `enrich` jobs are submitted through the active provider's batch path (Anthropic's Batches API by default, or serialized sequential calls under a provider with no batch API — [LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)). |
+| Batch collect failure budget (`batch_collect_failure_budget`) | runtime | `5` | Consecutive `collect_enrich_batch()` failures (the poll call itself raising, not an individual result's errored/expired/canceled outcome) at which one `batch_handle`'s still-`running` jobs are dead-lettered — so N-1 are tolerated and the Nth is fatal. Resets to 0 on any poll that doesn't raise, so it counts *consecutive* failures, not a lifetime total. Closes the last of the three poison-pill axes `_batch_collect_enrich`'s per-handle isolation left open (`lode-u6he`; [storage.md](storage.md#transient-vs-permanent-job-failures--pinned-lode-9yy)). |
 | `work --wait` timeout | runtime | `1800s` (30 min) | Max time `lode work --wait` blocks polling for the queue to fully drain (incl. collected Batches API enrich results) before exiting non-zero and naming the still-pending/running jobs. The Batches API SLA is up to 24h, so `--wait` can legitimately time out on a large enrich load -- that's expected, not a bug; it suits embed-heavy or small-batch cases, and a big async enrich backlog may need a plain re-run of `lode work` instead. |
 | Progress heartbeat interval (`progress_heartbeat_interval_s`) | runtime | `15s` | How often `lode work` logs a "still running" heartbeat line (`lode.progress.op_progress`) for a named long-running op -- a `reconcile()` step, a `drain()` batch pre-step, or the main claim/run loop -- that hasn't finished yet (`lode-olmi.15`). Makes a stuck op visible instead of silent, even where it can't be safely aborted outright (e.g. a local ONNX model load or a SQL scan). |
-| LLM call timeout (`llm_call_timeout_s`) | runtime | `120s` | Per-call client-side timeout passed to EVERY cloud-LLM call through the `LLMProvider` seam (`lode-568v.2`/`.3`), immediate and batch alike, under whichever provider is active: the enrichment calls reachable from `lode work` (`enrich.py` -- the batch-path pre-steps and the immediate structured-output call a residual enrich job can take in `drain()`'s main loop) and the Q&A synthesis call (`qa.py`) -- bounds a hung network call rather than letting it block forever (`lode-olmi.15`). Renamed vendor-neutral from `anthropic_call_timeout_s` (`lode-568v.1`/`.2`); a `config.toml` still carrying the old key is remapped by `load_settings()`. Distinct from Fetch timeout below, which governs web draw-down HTTP fetches, not LLM provider calls. |
+| LLM call timeout (`llm_call_timeout_s`) | runtime | `120s` | Per-call client-side timeout passed to every **enrichment** cloud-LLM call through the `LLMProvider` seam (`lode-568v.2`/`.3`), immediate and batch alike, under whichever provider is active: the calls reachable from `lode work` (`enrich.py` -- the batch-path pre-steps and the immediate structured-output call a residual enrich job can take in `drain()`'s main loop) -- bounds a hung network call rather than letting it block forever (`lode-olmi.15`). Renamed vendor-neutral from `anthropic_call_timeout_s` (`lode-568v.1`/`.2`); a `config.toml` still carrying the old key is remapped by `load_settings()`. Distinct from Fetch timeout below, which governs web draw-down HTTP fetches, not LLM provider calls. **No longer reaches the Q&A synthesis call** (`qa.py`) -- see [`qa_call_timeout_s`](#models) (`lode-wfyx`). |
 
 ## Externals (with connectors)
 
@@ -197,6 +198,7 @@ Presence is computed from the env var / the resolver's inputs, not read back off
 | Enrichment LLM (`enrichment_llm`) | runtime | Claude Haiku 4.5 (default provider) | High-volume background extraction. A `(model, reasoning_effort, max_tokens)` `ModelTier` (`lode-568v.2`; `max_tokens` `lode-d70n`) — a bare TOML string still coerces to a `ModelTier` with `reasoning_effort=None` and `max_tokens=None`. `model` is interpreted **against the active `llm_provider`**: an Anthropic model id under the default provider, or an Azure/OpenAI deployment name under `llm_provider = "openai"`. `max_tokens`, when set, overrides [`enrich.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (2048) for both the immediate and batch enrichment calls. Persists into the DB (`annotations`/`edges`) — DB-affecting; the model (and, once non-Anthropic, the provider) is recorded per-row on `annotations.model`/`annotations.provider` and drift is detected from it, never pinned. ([below](#model-provenance-the-enrichment-llm-decided-lode-g2745)) |
 | Q&A LLM (`qa_llm`) | runtime | Claude Sonnet 4.6 (default provider) | Default interactive synthesis model. A `ModelTier`, same shape as Enrichment LLM — `model` is likewise interpreted against the active `llm_provider` (an Azure/OpenAI deployment name under `llm_provider = "openai"`). `max_tokens`, when set, overrides [`qa.MAX_TOKENS`](#per-tier-max_tokens-override-decided-lode-d70n) (8192). Answer-time only, persists nothing — recorded default, no provenance machinery. |
 | Q&A "think harder" (`qa_think_harder_llm`) | runtime | Opus 5 (toggle, default provider) | Higher-quality, higher-cost synthesis on demand. A `ModelTier`, same provider-relative interpretation as the two knobs above — "think harder" can be a deployment swap (today's Anthropic Sonnet→Opus default), a `reasoning_effort` bump, a `max_tokens` override, or any combination, on the same deployment. Answer-time only, persists nothing — recorded default, no provenance machinery. |
+| Q&A call timeout (`qa_call_timeout_s`) | runtime | `300s` | Per-call client-side timeout for the Q&A synthesis call **only** (`qa.py`'s `structured_call`), split off `llm_call_timeout_s` (`lode-wfyx`) — [below](#qa-call-timeout-split-from-llm_call_timeout_s-decided-lode-wfyx). **Derived, not a measured p95.** Does not reach `enrich.py`'s three call sites — those stay on `llm_call_timeout_s` (120s) unchanged. The derivation, the retained SDK retry-on-timeout it was chosen alongside, and the `ModelTier.max_tokens` override that invalidates it are all in the write-up linked above, deliberately not restated here. |
 | HF probe timeout (`hf_probe_timeout_s`) | runtime | `5s` | Per-call timeout passed to `huggingface_hub.model_info()` by the indexing-side revision probe (`resolve_model_revision`, below). Bounds a black-holed network to this instead of the OS TCP connect timeout, which the probe used to block for before falling back to `model_revision = NULL` anyway (`lode-w5nr`). Matches `httpx`'s own default rather than the Fetch timeout below (`10s`, web content fetches) — this is a small metadata GET, not a page fetch. Bounds the probe only, **not** `fastembed`'s weights download (next section). What a float timeout actually bounds in `httpx`, with the measurement: `docs/decisions.md`, the `lode-w5nr` entry. |
 
 The **local** models — embedder, [reranker](#retrieval-and-ranking), [faithfulness NLI](#faithfulness-gate) — all run **in-process on the ONNX runtime via `fastembed`** (no model server/daemon, **not Ollama**). The **only** remote models are the enrichment + Q&A LLMs — Anthropic by default, or an OpenAI/Azure deployment under `llm_provider = "openai"` ([LLM provider seam](stack.md#llm-provider-seam-decided-lode-568v1)). See [stack.md](stack.md).
@@ -276,6 +278,109 @@ unraised) `max_tokens=1024` between thinking and the forced tool-call JSON —
 was then unreachable and tracked as a follow-up; it is now closed, see
 [below](#enrichment_llm-max_tokens-headroom-for-a-thinking-capable-override-decided-lode-jgus).
 
+### Q&A call timeout split from `llm_call_timeout_s` (decided, lode-wfyx)
+
+`lode-3dlt` (see [above](#thinking-on-the-qa-synthesis-call-decided-lode-3dlt)) raised
+`qa.MAX_TOKENS` 4096 → 8192 and stopped disabling thinking on the Q&A
+`messages.parse` branch, which lets Opus 5 (`qa_think_harder_llm` default) run
+adaptive thinking it previously never did. That pushes wall-clock on the
+think-harder path up in two ways at once, and `llm_call_timeout_s` (120s) —
+the *actual* bound on this call, since the Anthropic SDK's own non-streaming
+timeout guard is skipped outright whenever an explicit `timeout` is passed,
+which the provider seam always does — was left unchanged. Generating up to
+8192 tokens of thinking+answer on Opus 5 can plausibly exceed 120s, so the
+realistic new failure mode on that path is `anthropic.APITimeoutError`, not
+truncation.
+
+**Three decisions (human, 2026-07-28):**
+
+1. **No p95 measurement — declined deliberately, not skipped for lack of
+   capability.** The ticket's original acceptance criteria required this
+   decision be backed by a measured p95 latency of the think-harder call at
+   `MAX_TOKENS=8192`. That bar is withdrawn by the human, knowingly: live API
+   access was available at decision time, and running the benchmark was
+   judged not worth the spend, not impossible. The value below is **derived,
+   not measured** — cite it that way everywhere, and link back here for the
+   derivation rather than restating the numbers.
+
+2. **The knob is split, not raised in place.** `llm_call_timeout_s` used to
+   reach four call sites — the Q&A synthesis call (`qa.py`) and all three
+   enrichment call sites (`enrich.py`'s immediate call, batch submit, batch
+   poll). Q&A is a foreground TUI call on Opus 5 with adaptive thinking and up
+   to 8192 output tokens; enrichment is background work with a different
+   latency profile entirely. Raising the shared knob to cover the first would
+   silently loosen hang-detection on the second — a regression disguised as a
+   fix, and correct regardless of what any p95 would have said. The Q&A
+   synthesis call now reads its own `qa_call_timeout_s` ([Models](#models)
+   above), wired only to `qa.py`'s `structured_call`; `llm_call_timeout_s` is
+   untouched and still governs all three `enrich.py` sites exactly as before.
+
+   `qa_call_timeout_s` defaults to **300s**, derived — not measured — from the
+   pinned SDK's own model of how long this call should take.
+   `_calculate_nonstreaming_timeout` (`anthropic` 0.117.1) prices generation at
+   3600s per 128000 output tokens (~35.6 tok/s), which puts the SDK's own
+   *expected* wall-clock for a full `MAX_TOKENS`=8192 response at **~230s** —
+   already ~1.9x the old 120s. 300s is that ~230s expectation plus ~30%
+   headroom, rounded.
+
+   Two things ~230s is **not**, checked against the installed SDK: it is not a
+   timeout the SDK would ever apply, and clearing it does not mean lode stops
+   tripping before the SDK would consider the request unreasonable.
+   `_calculate_nonstreaming_timeout` returns a **flat** `Timeout(600,
+   connect=5.0)` and never a per-token value; the ~230s figure is an internal
+   estimate it compares against its own 600s `default_time`, raising
+   "Streaming is required for operations that may take longer than 10 minutes"
+   only above that. So the SDK's actual refusal line is `max_tokens` > ~21333
+   — the same ~21K figure `qa.MAX_TOKENS`'s note already carries — and at 8192
+   the SDK finds the request entirely reasonable, with 600s the bound it would
+   apply. 300s is therefore deliberately **tighter** than the SDK's own, not
+   looser: it tracks the SDK's expected-duration model, not its refusal
+   threshold. Moving it to 600s would match the SDK exactly, at the cost of
+   doubling the worst case in the flagged risk below — a trade not taken here.
+
+   **The derivation is against the *default* cap, and one legal config line
+   invalidates it.** What `qa.py` actually sends is
+   `ModelTier.resolve_max_tokens(MAX_TOKENS)` (`lode-d70n`) — a per-tier
+   `max_tokens` override in the same [Models](#models) table above wins over
+   the 8192 this 300s was derived from, and is validated only `gt=0`. Set
+   `qa_think_harder_llm = {model = "claude-opus-5", max_tokens = 20000}` —
+   still under the SDK's ~21333 refusal line — and the SDK's own expected
+   wall-clock becomes ~562s against a 300s bound, i.e. `APITimeoutError`
+   becomes the *expected* outcome of every think-harder ask rather than an
+   exceptional one, three attempts deep. **Raise `qa_call_timeout_s` alongside
+   any `max_tokens` override** — the two knobs are coupled and nothing
+   enforces it.
+
+3. **SDK retry-on-timeout left at the default (`max_retries=2`), not capped
+   for this path.** Transient-blip self-healing was judged worth the
+   worst-case wall clock.
+
+**Flagged risk, surfaced at decision time and not overridden — recorded so
+it isn't rediscovered as a surprise.** (2) and (3) together mean a single Q&A
+call can retry twice at up to 300s each: **worst case ~900s (~15 minutes)**
+on a foreground TUI call, with no intermediate feedback before an error
+surfaces. `lode.progress.op_progress` — the heartbeat mechanism `lode work`
+already uses for exactly this kind of "long, maybe-stuck" visibility
+([Async work queue](#async-work-queue) above) — is **not** wired into the
+Q&A call today.
+
+**That worst case lands on *both* Q&A tiers, not just the one the derivation
+argues from.** The reasoning above is entirely about `qa_think_harder_llm`
+(Opus 5, adaptive thinking, 8192 tokens), but `qa_call_timeout_s` bounds the
+single Q&A call site, so the default `qa_llm` tier moves with it. Sonnet 4.6
+does *not* think when `thinking` is omitted — it gained nothing from
+`lode-3dlt` — yet a wedged default `lode ask` now sits 300s instead of 120s
+per attempt, ~900s instead of ~360s across retries. That is the same
+"silently loosen hang-detection on a path that didn't need it" the split
+refuses to do to enrichment, applied one level down; it is accepted here
+rather than split a third time, but it is a cost of this decision and not an
+edge case. If it bites, the lever is a per-tier bound, not a lower shared one.
+If the 15-minute silent worst case proves unacceptable in
+practice, the cheapest levers, in rough order, are: cap retries on the Q&A
+path only (declined here), lower `qa_call_timeout_s`, or wire `op_progress`
+around the Q&A call. None of those is done by this decision — it is left as
+a known, accepted trade-off, not a follow-up ticket.
+
 ### enrichment_llm max_tokens headroom for a thinking-capable override (decided, lode-jgus)
 
 `lode-3dlt` named a real but then-unreachable risk on the enrichment
@@ -303,9 +408,10 @@ hard truncation guarantee.
 mode to expect.** Neither is bounded by the Anthropic SDK's non-streaming
 timeout guard — that guard is skipped outright whenever an explicit `timeout`
 is passed, and the provider seam always passes one. Beyond that they diverge:
-the *immediate* call passes [`llm_call_timeout_s`](#async-work-queue) (120s),
-as `qa.MAX_TOKENS`'s own path does, so a runaway thinking budget there tends to
-surface as a timeout before it exhausts the cap. The *batch* call has no
+the *immediate* call passes [`llm_call_timeout_s`](#async-work-queue) (120s) —
+the Q&A path no longer does, having split off onto `qa_call_timeout_s`
+(`lode-wfyx`) — so a runaway thinking budget there tends to surface as a
+timeout before it exhausts the cap. The *batch* call has no
 equivalent bound — a `BatchRequest` carries no per-item timeout (the `timeout_s`
 on `submit_batch`/`collect_batch` bounds only their own HTTP calls) and
 generation runs server-side — so `enrich.MAX_TOKENS` is the only thing bounding

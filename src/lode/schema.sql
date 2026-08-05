@@ -268,19 +268,27 @@ CREATE INDEX IF NOT EXISTS idx_edges_to ON edges (to_id);
 -- to every claim query (selects 'pending' only) and every reconcile gap query
 -- (excludes anything != 'dead'), so nothing would ever pick it back up.
 -- NULL for jobs never claimed (still 'pending') or that predate this column.
+--
+-- batch_collect_failures (lode-u6he): consecutive collect_enrich_batch()
+-- FAILURES (the poll call itself raising, not an individual result's
+-- outcome), denormalized onto every row sharing a batch_handle since there
+-- is no separate batches table. Why it exists and when it bites is owned by
+-- docs/storage.md "Transient vs. permanent job failures"; the increment and
+-- reset events are in lode.worker._batch_collect_enrich.
 CREATE TABLE IF NOT EXISTS jobs (
-    id              INTEGER PRIMARY KEY,
-    type            TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
-    target_version  TEXT NOT NULL,
-    prompt_ver      TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead')),
-    attempts        INTEGER NOT NULL DEFAULT 0,
-    last_error      TEXT,
-    batch_handle    TEXT,
-    claimed_at      TEXT,
-    next_attempt_at TEXT NOT NULL,
-    created         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    id                     INTEGER PRIMARY KEY,
+    type                   TEXT NOT NULL CHECK (type IN ('embed', 'enrich', 'refresh')),
+    target_version         TEXT NOT NULL,
+    prompt_ver             TEXT,
+    status                 TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (status IN ('pending', 'running', 'done', 'failed', 'dead')),
+    attempts               INTEGER NOT NULL DEFAULT 0,
+    last_error             TEXT,
+    batch_handle           TEXT,
+    batch_collect_failures INTEGER NOT NULL DEFAULT 0,
+    claimed_at             TEXT,
+    next_attempt_at        TEXT NOT NULL,
+    created                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);

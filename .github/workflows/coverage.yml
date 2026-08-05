@@ -22,15 +22,13 @@ on:
     branches: [trunk, "land/**"]
   pull_request:
 
-# Same guard as tests.yml/build.yml, for the same reason (lode-2ouz): producers
-# push land/<id> ~2-3x per ticket, and a superseded run on an older commit of
-# the same ref has zero consumers, because nothing in the landing loop reads
-# these check results -- see
-# docs/release.md#ci-workflow-trigger-scope-push-and-pull_request. The one
-# consumer this leg adds over its siblings is the README's Codecov badge, which
-# reads Codecov's dashboard for `trunk` rather than Actions status: a cancel
-# does skip that run's upload, but the push that cancelled it uploads in turn,
-# so the badge can lag one push and no more.
+# Cancels a superseded run on the same ref, as in tests.yml/build.yml.
+# Convention + rationale:
+# docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
+# The one consumer this leg adds over its siblings is the README's Codecov
+# badge, which reads Codecov's dashboard for `trunk` rather than Actions
+# status: a cancel does skip that run's upload, but the push that cancelled it
+# uploads in turn, so the badge can lag one push and no more.
 #
 # No need for the split-step precaution tests.yml takes (see its `!cancelled()`
 # comment): actions/cache@v4 declares its save (post) step `post-if: success()`
@@ -63,13 +61,11 @@ env:
 jobs:
   coverage:
     runs-on: ubuntu-latest
-    # Well below GitHub's 360-minute default -- a hung model download (the
-    # exact failure the weights cache exists to mitigate) would otherwise burn
-    # six hours producing nothing. Same 30 as tests.yml: one cap for both heavy
-    # legs, which measure the same (coverage is within noise of tests, not
-    # slower). A hang catcher, not a perf budget -- warm runs land at ~2-4min,
-    # and cold is no different: tests.yml run 29783519618 populated the shared
-    # 958MB weights cache in 135s end to end (lode-s1ia).
+    # Same cap as tests.yml -- coverage is within noise of tests, not slower. A
+    # hang catcher, not a perf budget: warm runs land at ~2-4min, and cold is no
+    # different (tests.yml run 29783519618 populated the shared 958MB weights
+    # cache in 135s end to end, lode-s1ia). Ladder + rationale:
+    # docs/release.md#ci-workflow-concurrency-and-job-timeouts-lode-2ouz-lode-w35h.
     timeout-minutes: 30
     steps:
       - name: Checkout

@@ -580,6 +580,14 @@ def _restore_root_logger_state():
             handler.close()
 
 
+#: Set ONLY by ``tests/test_conftest_jobs_clock_anchor.py``'s own nested-subprocess repro, to
+#: measure this fixture's own effect on demand (lode-up8x) -- never set in a real test run, and
+#: never read anywhere else. Prefixed and namespaced defensively precisely because it disables a
+#: safety fixture: an accidental ambient hit would silently re-open the class of bug lode-x10m
+#: exists to close.
+_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR = "_LODE_TEST_DISABLE_JOBS_CLOCK_ANCHOR_RESET"
+
+
 @pytest.fixture(autouse=True)
 def _reset_jobs_clock_anchor() -> None:
     """Reset ``lode.jobs``'s process-global clock anchor before every test (lode-x10m).
@@ -653,7 +661,16 @@ def _reset_jobs_clock_anchor() -> None:
       one that does would still see the poison for its own duration, and only
       this fixture stops that outliving it. The two are complementary, not
       alternatives.
+
+    ESCAPE HATCH (lode-up8x): returns early, doing nothing, when
+    ``_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR`` is set in the environment. This exists solely so
+    ``tests/test_conftest_jobs_clock_anchor.py`` can measure this fixture's own effect on demand,
+    from a nested subprocess it controls -- see that file's NON-VACUITY section for what it drives
+    and why lode-e8lo left this fixture with no live poisoner to prove it against otherwise. Never
+    set this in a real test run; nothing else reads it.
     """
+    if os.environ.get(_DISABLE_JOBS_CLOCK_ANCHOR_RESET_ENV_VAR):
+        return
     jobs._now_epoch = datetime.min.replace(tzinfo=UTC)
 
 
@@ -1170,29 +1187,39 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# THE ONE parser for "which bash does an agent actually execute", for the four
-# gates listed below, after four private copies of it drifted apart. NOT the
-# only such state machine left in the repo: a fifth, hand-rolled inline, is in
-# tests/test_sweep_digest_id.py -- measured byte-identical on sweep/SKILL.md
-# today, and filed as lode-jm4a rather than absorbed here.
+# THE ONE parser for "which bash does an agent actually execute", for the gates
+# listed below, after five private copies of it drifted apart -- no private
+# fence state machine survives under tests/ any more -- verified by inspection,
+# NOT by a gate, which is why that claim has now been falsified five running
+# times; lode-k5qb is the mechanical version. The count is deliberately
+# not restated here: it has been hand-incremented (and gone stale) once per
+# unification ticket, so the list below carries it and nothing else does.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence
 # marker with `line.startswith("```")`, so a fence INDENTED under a markdown
 # list item (e.g. `.claude/skills/land/SKILL.md`'s Section 3 isolation-replay
 # merge loop) never opened at all -- 4 of that file's 24 bash fences were
-# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Three
+# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Four
 # other modules each rediscovered and re-fixed that independently before
-# lode-ovgs unified them here and lode-p4qb folded in the fourth
-# (tests/test_assert_main_checkout.py).
+# lode-ovgs unified three of them here, lode-p4qb folded in the fourth
+# (tests/test_assert_main_checkout.py), and lode-jm4a folded in the fifth
+# (tests/test_sweep_digest_id.py).
 #
 # Consumers of the FUNCTION: tests/test_land_lock.py,
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
-# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py is a
-# fifth consumer of the constants and `_closes_fence` but not of the function
-# itself -- its inline-span scan runs its own loop (lode-xqc7). A change to the
-# rules below changes what all five gates consider "executed", so the rules are
-# stated ONCE, in `bash_fence_blocks`'s docstring, and nowhere else.
+# tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
+# tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
+# a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
+# own open/close loop onto the same generator `bash_fence_blocks` is now built
+# on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
+# docstring changes what every gate above considers "executed"/"fenced", so the
+# rules are stated ONCE there and nowhere else -- on the TEST side.
+# `scripts/check_links.py`'s `_content_lines` makes the same "single home of
+# the fence rule" claim for its own two consumers (the heading and link
+# scanners) -- deliberately a SEPARATE single home, not a competing one: it is
+# production code and cannot import anything under `tests/` (lode-jm4a). Two
+# homes, each sole owner of its own side of the import boundary.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1204,44 +1231,74 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
 # regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
-# caller gets the fix, not just one. tests/test_bd_list_limit_gate.py IMPORTS this
-# constant (rather than declaring its own) for its inline-backtick scan -- a path that
-# never reaches this helper and so must unmark its own input to the SAME shape, or the
-# two would partition one document differently. Its pre-pass ahead of this helper was
-# removed by lode-3pyo: stripping twice is a no-op on today's corpus, measured, but not
-# in general -- a `>>`-leading line double-strips to a bare one.
+# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site on
+# any PARSING path -- `fence_scan` below, which every consumer (fenced and inline alike)
+# reads its lines through -- so the "both paths must unmark to the same shape" hazard this comment used
+# to describe is structural rather than a convention: there is no second pass left to
+# disagree. That also keeps lode-3pyo's finding moot: stripping twice is a no-op on
+# today's corpus, measured, but not in general -- a `>>`-leading line double-strips to a
+# bare one -- and nothing strips twice any more. (tests/test_land_lock.py's independent
+# fence COUNTER strips through this same constant off-path, by design: it must not call
+# `fence_scan` at all, and must not re-type the marker shape either -- lode-bi9h.)
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus
 # whatever info string follows (lode-p4qb). Deliberately the same ALTERNATION
 # as ``scripts/check_links.py``'s ``_FENCE_RE`` -- but re-declared, not
-# imported. THREE state machines now consume a marker of this shape and they do
-# not all agree. This one and tests/test_bd_list_limit_gate.py's inline-span
-# scan import BOTH this constant and ``_closes_fence`` below (lode-xqc7), so
-# they agree by construction -- sharing only the marker would have pinned where
-# a fence opens and left where it closes free to fork. ``check_links.py``
-# toggles on ANY marker, so there a ``~~~`` line does close a ```-opened block;
-# do not read that one as documentation for these two.
+# imported. TWO state machines consume a marker of this shape and they do not
+# agree. This one is `fence_scan` below, the single partitioner every test-side
+# consumer now runs through (lode-kjei folded tests/test_bd_list_limit_gate.py's
+# inline-span scan into it, so it no longer keeps a loop -- or an import of this
+# constant -- of its own). ``check_links.py`` toggles on ANY marker, so there a
+# ``~~~`` line does close a ```-opened block; do not read that one as
+# documentation for this one.
 _FENCE_MARKER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
 def _closes_fence(stripped: str, fence: str) -> bool:
     """Whether ``stripped`` closes an open ``fence`` -- CommonMark's closing
-    rule, stated in ``bash_fence_blocks``'s docstring below.
-
-    A named helper rather than an inline conjunction because
-    tests/test_bd_list_limit_gate.py applies the same rule in its own loop.
+    rule, stated in ``fence_scan``'s docstring below. Kept a named helper, though
+    ``fence_scan`` is now its only caller, because that docstring's
+    unterminated-fence and four-backtick rules cite it by name.
     """
     return len(stripped) >= len(fence) and set(stripped) == {fence[0]}
 
 
-def bash_fence_blocks(markdown: str) -> list[str]:
-    """Every fenced ```bash/```sh block in ``markdown``, as separate strings,
-    in document order -- what an agent actually EXECUTES, one Bash tool
-    invocation per block.
+def fence_scan(
+    markdown: str,
+) -> Iterator[tuple[int, str, str | None, int]]:
+    """Partition every CONTENT line of ``markdown`` by which fence, if any, it
+    sits inside -- the ONE state machine both ``bash_fence_blocks`` (fenced
+    ```bash/```sh execution) and ``tests/test_bd_list_limit_gate.py``'s
+    ``inline_violations`` (inline-backtick prose) are built on, so the two
+    partition one document identically by construction rather than by two
+    loops staying in sync by hand (lode-kjei).
 
-    Matches the fence marker on the STRIPPED line, never
-    ``line.startswith("```")``: a fence nested under a markdown list item is
+    Yields ``(lineno, line, enclosing_info, block_ordinal)`` per content
+    line, in document order:
+
+    * ``lineno`` -- 1-based, into the ORIGINAL ``markdown`` (not shifted by
+      any fence removal).
+    * ``line`` -- the line with one leading blockquote marker removed
+      (``_BLOCKQUOTE_MARKER``), matching ``bash_fence_blocks``'s existing
+      normalization -- a fence nested inside a blockquote is an ordinary
+      fence. Only that marker is removed; leading/trailing whitespace inside a
+      fenced block survives untouched, so a caller matching *content* against a
+      pattern normally ``.strip()``s it itself.
+    * ``enclosing_info`` -- the still-open fence's info string (``"bash"``,
+      ``"text"``, ``""`` for a bare fence with nothing after it, ...) for a
+      line INSIDE a fence, or ``None`` for a line outside every fence.
+    * ``block_ordinal`` -- 0-based count of fence blocks opened so far in the
+      document. Meaningful only while ``enclosing_info is not None``; lets a
+      caller regroup content lines by which physical fence produced them
+      without re-deriving fence boundaries of its own.
+
+    A fence DELIMITER line itself (the opening ```` ```lang ```` or the
+    closing ```` ``` ````) is never yielded -- neither consumer has ever
+    wanted the delimiter text, only what is inside it.
+
+    Matches the fence marker on the stripped line, never
+    ``line.startswith("```")``: a fence indented under a markdown list item is
     legitimately indented, and a column-0-anchored scanner reports such a file
     as carrying no bash at all -- the lode-ovgs bug. Measured on
     ``.claude/skills/code/SKILL.md``, the one consumed file that exercises
@@ -1249,11 +1306,7 @@ def bash_fence_blocks(markdown: str) -> list[str]:
     indented AND inside a blockquote, and one (line 65) is a top-level
     blockquote with no indentation at all. Not one of the nine puts its
     backticks at column 0, which is why a column-0 scanner sees zero blocks
-    there. A leading blockquote marker (``> ```bash``) is stripped the same
-    way, from both fence delimiters and content lines (lode-wroz; see
-    ``_BLOCKQUOTE_MARKER`` above) -- ``>`` survives a bare ``.strip()``, so
-    without this a blockquoted fence would stay invisible the same way an
-    indented one used to.
+    there.
 
     Three further rules, all settled by lode-p4qb and all latent on today's
     corpus -- zero instances of any of them exist in any of the repo's
@@ -1266,46 +1319,117 @@ def bash_fence_blocks(markdown: str) -> list[str]:
       block is content, not a close -- which is the whole reason an author
       reaches for the four-backtick form.
     * an UNTERMINATED final fence is FLUSHED, not dropped. Dropping is the
-      same false-assurance shape this helper exists to delete: a gate would
-      report "clean" for a block it never parsed.
+      same false-assurance shape this generator exists to delete: a gate
+      would report "clean" for a block it never parsed.
 
-    A caller that wants every block concatenated into one string (e.g. to
-    check for an offending token whose position within the file doesn't
-    matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the result.
+    **Only ONE fence is ever tracked open at a time (lode-kjei)** -- this is
+    what closes the asymmetry that survived lode-xqc7's constant-sharing: the
+    old ``bash_fence_blocks`` opened ``current`` (its own tracking state) only
+    on a bash/sh info string, so it never recorded that it was already inside
+    an ENCLOSING non-bash fence, and read a ```bash run nested inside a
+    ````text block as executable -- a false POSITIVE, not a silent miss
+    (measured latent: zero nested fence openers across all 58 tracked .md
+    files, 203 top-level fences scanned, at the time this was found). This
+    state machine tracks the CURRENTLY OPEN fence regardless of its info
+    string, so a ```bash-looking line encountered while ``enclosing_info`` is
+    already ``"text"`` is correctly reported as a content line of that outer
+    ``text`` fence (i.e. never opens its own nested tracking), matching what
+    CommonMark itself does: a fence cannot open inside an already-open fence,
+    only close it (or fail to, and remain content).
 
     One remaining known boundary, and the only one left of the OPPOSITE kind
-    -- corruption rather than a silent skip: the
-    blockquote strip cannot tell a blockquote marker from a redirection, so it
-    also fires on a CONTENT line whose first non-blank character is ``>``.
-    ``>&2 echo hi`` extracts as ``&2 echo hi``, ``>> log`` as ``> log``,
-    ``> out`` as ``out``. Unlike the three above this is silent CORRUPTION,
-    not a silent skip, so a gate asserting on exact command text would assert
-    against the mangled form. Measured under lode-wroz: no consumed file has
-    such a line today -- every block the pre-strip parser saw is
-    byte-identical after it, across every ``.claude/skills/*/SKILL.md`` and
-    ``.claude/agents/*.md`` -- so re-measure rather than assume if one is ever
-    added.
+    -- corruption rather than a silent skip: the blockquote strip cannot tell
+    a blockquote marker from a redirection, so it also fires on a CONTENT line
+    whose first non-blank character is ``>``. ``>&2 echo hi`` extracts as
+    ``&2 echo hi``, ``>> log`` as ``> log``, ``> out`` as ``out``. Unlike the
+    three above this is silent CORRUPTION, not a silent skip, so a gate
+    asserting on exact command text would assert against the mangled form.
+    Measured under lode-wroz: no consumed file has such a line today -- every
+    block the pre-strip parser saw is byte-identical after it, across every
+    ``.claude/skills/*/SKILL.md`` and ``.claude/agents/*.md`` -- so re-measure
+    rather than assume if one is ever added.
     """
-    blocks: list[str] = []
-    current: list[str] | None = None
     fence = ""  # the opening run, e.g. "```" or "````" or "~~~"
-    for raw_line in markdown.splitlines():
+    info: str | None = None
+    ordinal = -1
+    for lineno, raw_line in enumerate(markdown.splitlines(), 1):
         line = _BLOCKQUOTE_MARKER.sub("", raw_line, count=1)
         stripped = line.strip()
-        if current is not None:
+        if fence:
             if _closes_fence(stripped, fence):
-                blocks.append("\n".join(current))
-                current = None
-            else:
-                current.append(line)
+                fence = ""
+                info = None
+                continue
+            yield (lineno, line, info, ordinal)
             continue
         m = _FENCE_MARKER_RE.match(stripped)
-        if m and m.group(2).strip() in {"bash", "sh"}:
+        if m:
             fence = m.group(1)
+            info = m.group(2).strip()
+            ordinal += 1
+            continue
+        yield (lineno, line, None, ordinal)
+
+
+def bash_fence_blocks(markdown: str) -> list[str]:
+    """Every fenced ```bash/```sh block in ``markdown``, as separate strings,
+    in document order -- what an agent actually EXECUTES, one Bash tool
+    invocation per block.
+
+    Built on :func:`fence_scan` (lode-kjei): groups its content lines whose
+    ``enclosing_info`` is ``"bash"`` or ``"sh"`` by ``block_ordinal``, in
+    document order. A caller that wants every block concatenated into one
+    string (e.g. to check for an offending token whose position within the
+    file doesn't matter) can ``"\\n".join(bash_fence_blocks(markdown))`` the
+    result. See :func:`fence_scan`'s docstring for the full rule set
+    (indentation, blockquotes, four-backtick/tilde fences, unterminated
+    fences, the nested-fence fix, and the known blockquote/redirection
+    corruption boundary) -- stated once, there, not duplicated here.
+    """
+    blocks: list[str] = []
+    current: list[str] = []
+    current_ordinal: int | None = None
+    for _lineno, line, info, ordinal in fence_scan(markdown):
+        if info not in {"bash", "sh"}:
+            continue
+        if ordinal != current_ordinal:
+            if current_ordinal is not None:
+                blocks.append("\n".join(current))
             current = []
-    if current is not None:  # unterminated final fence -- flushed, not dropped
+            current_ordinal = ordinal
+        current.append(line)
+    if current_ordinal is not None:  # unterminated final fence -- flushed
         blocks.append("\n".join(current))
     return blocks
+
+
+def _fenced_bash(markdown: str) -> str:
+    """The ```bash fences only, concatenated into one string -- what an agent
+    actually EXECUTES.
+
+    Scanning the whole file would also match prose that merely *describes* a
+    command (quoting it while explaining a past defect), so a pin that wants
+    to assert something about what actually runs has to separate the executed
+    fences from the surrounding description. That split is also the point:
+    the fence is the one part of these skill docs no other gate parses, which
+    is how more than one bug here survived unnoticed until someone read the
+    file by hand.
+
+    ``tests/test_land_lock.py`` and ``tests/test_assert_main_checkout.py``
+    each carried their own copy of this until lode-0mkv; the parser's rules
+    and blind spots live next to :func:`bash_fence_blocks`, not here.
+    """
+    return "\n".join(bash_fence_blocks(markdown))
+
+
+#: The land skill doc. Three of its readers parse its fenced bash blocks (via
+#: :func:`bash_fence_blocks`/:func:`_fenced_bash` above), which is why it lives
+#: here; test_worktree_gc_classify.py reads the same file but scans its
+#: ``case "$BUCKET"`` dispatch directly rather than through the fence parser.
+#: Was defined byte-identically in four modules (test_worktree_gc_classify.py,
+#: test_land_conflicts_state.py, test_land_lock.py,
+#: test_assert_main_checkout.py) until lode-va47 consolidated it here.
+LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------

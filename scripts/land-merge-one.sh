@@ -36,16 +36,33 @@
 #        retry). Nothing on stdout.
 #   1 -- a REAL textual conflict. The conflicting path(s) (one per line, no
 #        other chatter) are printed to STDOUT for the caller to capture as
-#        $CONFLICTS -- e.g. `CONFLICTS=$(rtk scripts/land-merge-one.sh "$id"
+#        $CONFLICTS -- e.g. `CONFLICTS=$(scripts/land-merge-one.sh "$id"
 #        "$MSG_DIR")`. The merge is already aborted (working tree left clean)
 #        before this script returns.
-#   2 -- could not even attempt the merge: bad usage, a missing/empty message
-#        file for <id> (Section 3a's precompute did not run, or did not cover
-#        this id), or an unexpected git failure that is neither the retryable
+#   2 -- could not even attempt the merge: bad usage, cwd is not lode's main
+#        checkout -- or that guard could not run at all (lode-1nty, see
+#        below; the two are distinguished in the diagnostic, never conflated),
+#        a missing/empty message file for
+#        <id> (Section 3a's precompute did not run, or did not cover this
+#        id), or an unexpected git failure that is neither the retryable
 #        jsonl trap nor a real conflict (an empty `git ls-files -u` yet the
 #        merge still failed). Stderr names the cause. This is the "LOUD, never
 #        a silent empty-message merge" acceptance criterion -- refusing here
 #        is exactly what closes lode-sfnb's failure mode.
+#
+# MAIN-CHECKOUT IDENTITY (lode-1nty): every git call below --
+# `git merge --no-ff`, `git restore --staged --worktree`, `git merge --abort`
+# -- is cwd-resolved, with no `-C`/`--git-dir` of its own pinning it to a
+# specific checkout. This script therefore asserts its own main-checkout
+# identity (`scripts/assert-main-checkout.sh`) as its first real action,
+# below, folding any failure into its exit-2 contract -- rather than relying
+# on each call site to fence-guard it, which is a discipline every future
+# caller would have had to remember independently. NO CALLER NEEDS TO FENCE
+# THIS SCRIPT; a caller with cwd-resolved mutations of its OWN still needs
+# its own guard. Do NOT list the call sites here -- the same roster went
+# stale within one ticket of being written in assert-main-checkout.sh's
+# header, which is why neither script keeps one now. Full decision and
+# reasoning: docs/agents-workflow.md's main-checkout section.
 #
 # Never touches bd, never pushes, never runs a gate -- purely the merge step,
 # plus one side effect: it heartbeats the single-lander lock (lode-m87j) via
@@ -80,8 +97,37 @@ if ! . "$(dirname "$0")/gate-lib.sh" \
   exit 2
 fi
 
-# Arg-count check FIRST, and it must exit 2 -- never `${1:?...}`, whose exit 1
-# is exactly the CONFLICT code (same reasoning as merge-precheck.sh's header).
+# Main-checkout identity guard (lode-1nty) -- FIRST, ahead of even the
+# arg-count check: it is a cwd PRECONDITION (see the file header), not caller
+# input, and holds regardless of whether the arguments are well-formed.
+#
+# The guard MISSING is a different fault from the guard saying no, and must
+# not be reported as one (the same distinction gate-lib.sh's source guard
+# above draws, and recycled-worktree-guard.sh's bootstrap-gap rule, lode-ivth):
+# without this check a non-executable script exits 127 and would be narrated
+# below as a location verdict.
+if [ ! -x "$(dirname "$0")/assert-main-checkout.sh" ]; then
+  gate_could_not_run \
+    "scripts/assert-main-checkout.sh is missing or not executable next to $0." \
+    "This is a bootstrap/checkout fault -- the guard could not run at all, which" \
+    "is NOT a verdict that cwd is the wrong checkout, and never a branch conflict."
+fi
+
+# Both of the guard's failure modes (exit 1: wrong location; exit 2: machine
+# fault) fold into THIS script's exit 2, never its exit 1 (the real-conflict
+# code): neither is a branch's content. The guard already printed its own
+# diagnostic to stderr.
+if ! "$(dirname "$0")/assert-main-checkout.sh"; then
+  gate_could_not_run \
+    "not running in lode's main checkout (see the diagnostic above)." \
+    "scripts/assert-main-checkout.sh refused -- every git call in this" \
+    "script is cwd-resolved with no -C of its own, so this is a" \
+    "machine/dispatch fault, never a branch conflict."
+fi
+
+# Arg-count check next -- first among the CALLER-INPUT checks -- and it must
+# exit 2, never `${1:?...}`, whose exit 1 is exactly the CONFLICT code (same
+# reasoning as merge-precheck.sh's header).
 if [ "$#" -ne 2 ]; then
   gate_could_not_run \
     "usage: land-merge-one.sh <id> <land-msg-dir>" \

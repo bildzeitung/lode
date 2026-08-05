@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import bash_fence_blocks
+from conftest import _BLOCKQUOTE_MARKER, LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -120,8 +120,8 @@ def _init_repo(tmp_path: Path) -> Path:
     `git worktree add` requires a ref to branch from) fails outright with
     `fatal: empty ident name` on a machine with no ambient global git identity
     -- a fresh clone or a CI container (measured: exit 128). Setting it here
-    rather than in those tests matches the seven sibling script-test modules
-    that all configure it inside their own `_init_repo`, and keeps this file
+    rather than in those tests matches its sibling script-test modules that
+    all configure it inside their own `_init_repo`, and keeps this file
     from passing only on machines that happen to have a global identity
     configured.
     """
@@ -258,6 +258,77 @@ def test_release_with_no_lock_held_is_a_harmless_no_op(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not _lock_path(repo).exists()
+
+
+# ---------------------------------------------------------------------------
+# A rev-parse failure must land inside the documented 0/1/2 contract, never
+# escape as git's own bare 128 (lode-8qkb)
+#
+# PRE-FIX, `$LOCK="$(git rev-parse ...)/land.lock"` was a bare command
+# substitution under `set -euo pipefail`, so running from outside any git
+# repository exited with git's raw 128 and a bare `fatal:` -- a status the
+# script's own header says it never returns. Each subcommand maps that failure
+# onto a DIFFERENT documented exit (the whole reason these are three tests and
+# not one), so the script's exit code IS the assertion here; the stderr
+# substring pins that the diagnostic is attributed to land-lock rather than
+# left as git's unattributable `fatal:`. Why exit 1 and not
+# assert-main-checkout.sh's exit 2 lives in the script, next to the code.
+#
+# `tmp_path` is not itself inside a git repository (unlike a checkout under
+# this repo's own tree), so no `GIT_CEILING_DIRECTORIES` dance is needed --
+# same fixture shape as tests/test_assert_main_checkout.py's
+# test_not_inside_any_repository_is_exit_2_not_a_raw_git_128.
+#
+# All three sabotage-verified together: reverting the `if ! GIT_COMMON_DIR=...`
+# wrap back to the bare form turns all three red with returncode 128.
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """`acquire` maps the failure onto its existing exit-1 MACHINE FAULT
+    branch -- the same class as "cannot create the lockfile", so a caller is
+    never told "another lander is running" when the machine is at fault."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("acquire", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: MACHINE FAULT" in result.stderr
+    assert "skipping this tick" in result.stderr.lower()
+
+
+def test_heartbeat_outside_any_git_repository_exits_1_not_a_raw_128(
+    tmp_path: Path,
+) -> None:
+    """`heartbeat` has its own documented exit-1 "could not write the lock
+    file" branch, with wording distinct from acquire's MACHINE FAULT one --
+    heartbeat is bookkeeping, so its diagnostic must not read as a landing
+    verdict."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("heartbeat", repo=outside)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "land-lock: heartbeat" in result.stderr
+
+
+def test_release_outside_any_git_repository_still_exits_0(tmp_path: Path) -> None:
+    """`release` is documented to ALWAYS exit 0 ("rm -f is idempotent"), and
+    that promise must survive this fix -- so this is the one subcommand whose
+    documented exit is unchanged by the wrap, yet it still went 128 pre-fix.
+    It must reach 0 through the new branch, with a diagnostic, rather than
+    silently."""
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+
+    result = _run("release", repo=outside)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "land-lock: release" in result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +670,7 @@ def test_default_staleness_threshold_is_generous(tmp_path: Path) -> None:
     assert result.returncode == 1, result.stdout + result.stderr
 
 
-def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
+def test_default_staleness_threshold_is_still_about_1800s(tmp_path: Path) -> None:
     """Pin the DEFAULT itself, not just that it exceeds two minutes.
 
     Every other test here passes LAND_LOCK_STALE_SECONDS explicitly, and the
@@ -614,27 +685,48 @@ def test_default_staleness_threshold_is_still_1800s(tmp_path: Path) -> None:
     proposed was reverted for exactly that reason (see scripts/land-lock.sh,
     CAVEAT 1). Lowering it is lode-cp4o's job, and requires the measurement.
 
-    Asserted behaviourally, from the outside: a lock 1799s old is still held,
-    a lock 1801s old is stale. Deliberately not a grep for the literal -- this
+    Asserted behaviourally, from the outside: a lock 1700s old is still held,
+    a lock 1900s old is stale. Deliberately not a grep for the literal -- this
     fails if the semantics change, not merely if the digits move.
+
+    The 100s margins are deliberate, and were 1s until lode-44cq: the age is
+    stamped from ONE clock read here, in Python, then measured against a
+    SECOND, later read inside `land-lock.sh`'s own subprocess, so under load
+    (`-n 8`, interpreter/bash startup, git work) that gap could exceed a
+    second and age a 1799s lock past 1800s -- a false, one-sided red. This is
+    the same hazard `test_fresh_lock_is_not_reclaimed_under_a_large_threshold`
+    calls out for its own boundary; the margin is how this file has always
+    handled it (every other threshold test here uses a 2x-or-wider ratio).
+
+    The trade is real: the pin now catches only a default outside
+    (1700s, 1900s), so a lowering to e.g. 1750s would slip through. Measured
+    on this branch -- defaults of 900s and 3600s each turn it red, 1750s does
+    not.
+
+    Rejected as worse: injecting a pinned "now" into the script. That would
+    put a test-only env var directly into the *decision* input of a
+    production lock's staleness path, unlike the existing
+    LAND_LOCK_TEST_STALL_SECONDS hook, which can only sleep and cannot change
+    a decision.
     """
     repo = _init_repo(tmp_path)
     lock = _lock_path(repo)
 
-    lock.write_text(f"12345 host {int(time.time()) - 1799} 2026-01-01T00:00:00Z\n")
-    just_inside = _run("acquire", repo=repo)
-    assert just_inside.returncode == 1, (
-        "a lock 1799s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
-        "below 1800s. That is lode-cp4o's decision to make, with measurements "
-        "(scripts/land-lock.sh, CAVEAT 1)."
+    lock.write_text(f"12345 host {int(time.time()) - 1700} 2026-01-01T00:00:00Z\n")
+    well_inside = _run("acquire", repo=repo)
+    assert well_inside.returncode == 1, (
+        "a lock 1700s old was reclaimed -- LAND_LOCK_STALE_SECONDS was lowered "
+        "well below 1800s. That is lode-cp4o's decision to make, with "
+        "measurements (scripts/land-lock.sh, CAVEAT 1)."
     )
 
-    lock.write_text(f"12345 host {int(time.time()) - 1801} 2026-01-01T00:00:00Z\n")
-    just_outside = _run("acquire", repo=repo)
-    assert just_outside.returncode == 0, (
-        "a lock 1801s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
-        "raised above 1800s, so an abandoned lock now blocks landing for longer "
-        f"than the documented 30min: {just_outside.stdout + just_outside.stderr}"
+    lock.write_text(f"12345 host {int(time.time()) - 1900} 2026-01-01T00:00:00Z\n")
+    well_outside = _run("acquire", repo=repo)
+    assert well_outside.returncode == 0, (
+        "a lock 1900s old was NOT reclaimed -- LAND_LOCK_STALE_SECONDS was "
+        "raised well above 1800s, so an abandoned lock now blocks landing for "
+        f"much longer than the documented 30min: "
+        f"{well_outside.stdout + well_outside.stderr}"
     )
 
 
@@ -995,10 +1087,19 @@ _STALL_HOOK_VAR = "LAND_LOCK_TEST_STALL_SECONDS"
 # to name `_STALL_HOOK_VAR` (this ticket's own description does) would
 # otherwise redden this scan for a reason unrelated to any real caller --
 # excluded for that reason, not to widen what the scan is willing to miss.
+#
+# lode-do3q: read from the canonical scripts/beads-passive-exports.txt rather
+# than spelled out here (docs/decisions.md has the why). The assert is not
+# ceremony: an empty or missing list would silently empty this set and WIDEN
+# what the scan is willing to miss, with nothing red.
 _STALL_HOOK_SCAN_EXCLUDED_RELPATHS = {
-    ".beads/issues.jsonl",
-    ".beads/interactions.jsonl",
+    line
+    for line in (REPO_ROOT / "scripts" / "beads-passive-exports.txt")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line
 }
+assert _STALL_HOOK_SCAN_EXCLUDED_RELPATHS, "scripts/beads-passive-exports.txt is empty"
 
 
 def _stall_hook_offenders(repo_root: Path, *, allowed: set[Path]) -> list[str]:
@@ -1168,8 +1269,6 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
 
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 def test_land_skill_acquires_and_releases_through_this_script() -> None:
     """The lock only serializes a pass that actually calls this script, and
@@ -1212,26 +1311,6 @@ def test_land_skill_heartbeats_the_lock_once_per_ticket_in_section_2a() -> None:
     )
 
 
-def _fenced_bash(markdown: str) -> str:
-    """The ```bash fences only, concatenated into one string -- what an agent
-    actually EXECUTES.
-
-    Scanning the whole file would match the prose that *explains* the old
-    defect (it necessarily quotes `trap` and `kill -0`), so the pin has to
-    separate what is executed from what is merely described. That split is
-    also the point: the fence is the one part of this skill no gate parses,
-    which is how the bug survived unnoticed in the first place.
-
-    Thin wrapper over the shared `tests/conftest.py::bash_fence_blocks`
-    parser; this function used to carry its own column-0 copy, which silently
-    checked 20 of this file's 24 bash blocks (lode-ovgs). Why it was unified
-    rather than patched in place, and the parser's known blind spots, live
-    next to the parser itself -- deliberately not restated here, per this
-    module's own no-second-copy rule above.
-    """
-    return "\n".join(bash_fence_blocks(markdown))
-
-
 def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     """Regression pin for lode-ovgs, independent of `_fenced_bash`/
     `bash_fence_blocks` itself: derive the EXPECTED fence count a second,
@@ -1265,11 +1344,39 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     took land/SKILL.md to 25 parsed against 24 markers. What stays independent
     is the METHOD -- a flat per-line marker count, no state machine, no call
     into the parser -- not the grammar.
+
+    KNOWN GAP on one axis, opened by lode-kjei and left deliberately unfixed:
+    the parser now refuses to open a bash fence NESTED inside an enclosing
+    non-bash fence (CommonMark -- a fence cannot open inside an open fence), but
+    a flat per-line count cannot see nesting and still counts the inner marker.
+    Measured on this exact file while reviewing lode-kjei: as shipped, 24
+    markers / 24 parsed, green; append one illustrative ````text block
+    containing a ```bash example and it becomes 25 markers / 24 parsed, so this
+    test goes RED blaming the parser for missing a fence it correctly declined.
+    Latent -- zero nested fence openers exist across the repo's 58 tracked .md
+    files. Not fixed here because the only fix is to make the count
+    nesting-aware, i.e. give it a state machine, which is precisely the
+    independence this test trades on. If someone ever adds such a block to
+    land/SKILL.md, the answer is to re-derive the expected count some third way,
+    NOT to relax the parser.
+
+    lode-wroz widened the parser again -- one leading blockquote marker is
+    stripped from every line -- so the count strips it too, through the SAME
+    `_BLOCKQUOTE_MARKER` the parser normalizes with. Sharing the marker shape
+    is not sharing the method: still a flat per-line count, no scan loop.
+    Verified against a scratch copy with one illustrative `> ```bash` /
+    `> echo hi` / `> ``` ` block appended: without the strip, one fewer
+    marker than parsed blocks, and this test goes red blaming the parser for
+    finding a fence the counter simply could not see under its blockquote;
+    with it, the two agree. No blockquoted fence exists in land/SKILL.md
+    today, so the strip is a measured no-op as shipped.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
     expected_marker_count = sum(
-        1 for line in text.splitlines() if opening_marker.match(line.strip())
+        1
+        for raw_line in text.splitlines()
+        if opening_marker.match(_BLOCKQUOTE_MARKER.sub("", raw_line, count=1).strip())
     )
     # A sanity floor on the independent count itself -- if this ever drops to
     # 0 the file lost every bash fence, which is a different, louder bug this
@@ -1281,8 +1388,11 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     assert parsed_block_count == expected_marker_count, (
         f"parsed {parsed_block_count} ```bash/```sh fenced blocks but "
         f"{expected_marker_count} opening ```bash/```sh markers exist in the "
-        "file -- the parser is missing some, e.g. an INDENTED fence a "
-        "column-0-anchored scanner cannot see (lode-ovgs)"
+        "file -- EITHER the parser is missing some (e.g. an INDENTED fence a "
+        "column-0-anchored scanner cannot see, lode-ovgs) OR this test's own "
+        "independent counter has drifted from the parser's fence-shape/"
+        "blockquote rules and is over- or under-counting -- check both "
+        "before assuming the parser is at fault"
     )
 
 

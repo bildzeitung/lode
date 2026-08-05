@@ -63,8 +63,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
 > `merge-tree` snippet). This file just calls it:
 >
 > ```bash
-> REPO_ROOT="$(rtk git rev-parse --show-toplevel)"
-> CODE_MAX_CONCURRENT_AGENTS="$(rtk "$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
+> REPO_ROOT="$(git rev-parse --show-toplevel)"
+> CODE_MAX_CONCURRENT_AGENTS="$("$REPO_ROOT/scripts/code-concurrency-cap.sh")" || CODE_MAX_CONCURRENT_AGENTS=4
 > ```
 >
 > The call is anchored to the repo root rather than resolved against the session's cwd, so *finding*
@@ -118,17 +118,17 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    label, so before resolving the requested task set, always check for stranded kick-backs:
 
    ```bash
-   rtk bd list --label needs-rebase --status in_progress --limit 0 --json
+   bd list --label needs-rebase --status in_progress --limit 0 --json
    ```
 
    **`--limit 0` is load-bearing, not noise** — canonical reason + measurements, and why this is
    hardening rather than a live fix, in [`/sweep`](../sweep/SKILL.md) (`lode-hwbm`). The stake here: a
    capped read would silently strand kick-backs past the 50th, every invocation.
 
-   For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"`, **`isolation:
-   "worktree"`** — required for the same reason as Phase 1 below: a subagent is pinned at the repo
-   root and **cannot** call `EnterWorktree` to *create* its own, so the harness must hand it a launch
-   worktree at dispatch). From there it fetches `origin/land/<id>` and checks it out **into that same
+   For **each** hit, dispatch a `coding` producer (`subagent_type: "coding"` — **no call-site
+   `isolation` option**, per the frontmatter sufficiency stated at Phase 1 below; the harness hands it
+   a launch worktree at dispatch either way).
+   From there it fetches `origin/land/<id>` and checks it out **into that same
    launch worktree** — no `EnterWorktree`, no `git -C` into anything else needed; `Edit`/`Write`/`nox`
    all work natively once the branch is checked out locally. Tell it explicitly this is a **rebase
    pickup**, not a fresh build, e.g.:
@@ -197,9 +197,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    *all* local worktree GC (it discovers worktrees live off `git worktree list --porcelain`; the old
    per-ticket loop that keyed off `review_worktree` is gone).
 
-   Two details that are load-bearing, both verified against live `git` behaviour:
-   - **Plain `git`, not `rtk`** — `rtk` reformats `worktree list --porcelain`, which breaks the field
-     parse, the same way it did for `/land`'s own GC (lode-9j7).
+   One detail that is load-bearing, verified against live `git` behaviour:
    - **A single `--force`, never `-f -f`.** The harness *locks* a launch worktree while its agent runs
      (`locked claude agent <name> (pid …)`) and unlocks it on exit. A single `--force` therefore removes
      a finished agent's worktree but **refuses** a still-locked one — it fails safe. `-f -f` would
@@ -226,7 +224,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    (lode-t83). Check for it the same way as step 0:
 
    ```bash
-   rtk bd list --label ready-for-code-review --status in_progress --limit 0 --json
+   bd list --label ready-for-code-review --status in_progress --limit 0 --json
    ```
 
    **`--limit 0` is load-bearing, not noise — same reason as step 0's `needs-rebase` sweep above.**
@@ -238,13 +236,14 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    reviewable before dispatching:
 
    ```bash
-   rtk bd show <id> --json | jq -r '.[0].metadata.review_head'   # must be non-empty
+   bd show <id> --json | jq -r '.[0].metadata.review_head'   # must be non-empty
    ```
 
    If it's empty (this can only happen for a build-time escalation predating the coding.md fix for
    lode-t83's Gap 1), don't guess a head SHA — leave the label alone and surface it in the final
    report as needing a human to re-escalate or rebuild instead. Otherwise dispatch a `code-reviewer`
-   exactly as Phase 2 does below (`subagent_type: "code-reviewer"`, **`isolation: "worktree"`**, same
+   exactly as Phase 2 does below (`subagent_type: "code-reviewer"` — no call-site `isolation` option,
+   per the frontmatter sufficiency stated at Phase 1 below), same
    prompt shape: read `review_head`, fetch + check out `land/<id>` into its own launch worktree, own
    correctness pass + `/simplify`, re-gate, re-push, swap to `ready-for-land` or escalate again).
    Dispatch every hit **concurrently** with each other, with any step-0 rebase pickups, and with this
@@ -290,7 +289,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > all, so a `human` ticket is indistinguishable from a buildable one unless you ask for the fields:
    >
    > ```bash
-   > rtk bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
+   > bd ready --json | jq -r '.[] | select((.labels // []) | index("human") | not) | select(.issue_type != "epic") | .id'
    > ```
    >
    > (`labels` is `null`, not `[]`, on a ticket with none — hence the `// []`.) `bd ready` is already
@@ -347,10 +346,16 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > re-gating them here would strand in-flight work behind a retroactively-applied check.
 
 3. **Phase 1 — dispatch one `coding` builder per task** via the Agent tool with
-   `subagent_type: "coding"` **and `isolation: "worktree"`**. The isolation is required: a subagent is
-   pinned at the repo root and **cannot** call `EnterWorktree` to *create* its own, so the harness must
-   hand each builder a worktree at dispatch — `isolation: "worktree"` launches it already cwd'd inside
-   `.claude/worktrees/agent-<hash>` on its own branch off `trunk` HEAD.
+   `subagent_type: "coding"` — **no call-site `isolation` option.** A subagent is pinned at the repo
+   root and **cannot** call `EnterWorktree` to *create* its own, so it needs the harness to hand it a
+   launch worktree at dispatch — but that requirement travels with the *role*, not the call site:
+   `coding.md`'s and `code-reviewer.md`'s own agent-definition frontmatter carries `isolation:
+   worktree`, measured sufficient on its own for both roles (`lode-09td`), so the call-site option was
+   dropped as redundant — same treatment `land-review` got after `lode-p2vi`. **This is the reference
+   statement for all four dispatch sites in this file**; probe design, both runs, and the two limits
+   on what the result licenses live in [`docs/decisions.md`](../../../docs/decisions.md) (search
+   "lode-09td"). Every `coding` dispatch launches already cwd'd inside
+   `.claude/worktrees/agent-<hash>` on its own branch off `origin/trunk` HEAD.
 
    > **Claim each resolved ticket from *here*, before dispatch — don't rely on the builder to do it
    > (lode-xr8v).** `coding.md` step 2 also runs `bd update <id> --claim`, but that is an unverified
@@ -365,7 +370,7 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    > from the orchestrator's own (repo-root) context **before** the Agent dispatch:
    >
    > ```bash
-   > rtk bd update <id> --claim     # sets in_progress + assignee; deterministic here, one controlled flow
+   > bd update <id> --claim     # sets in_progress + assignee; deterministic here, one controlled flow
    > ```
    >
    > This is the same local Dolt DB the builder sees, so the claim is visible to it immediately — no
@@ -404,8 +409,8 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    **actual** state in bd and on origin:
 
    ```bash
-   rtk bd show <id> --json | jq -r '.[0].labels'          # ready-for-code-review? land-escalated?
-   rtk git ls-remote origin refs/heads/land/<id>           # must resolve to a SHA
+   bd show <id> --json | jq -r '.[0].labels'          # ready-for-code-review? land-escalated?
+   git ls-remote origin refs/heads/land/<id>           # must resolve to a SHA
    ```
 
    Dispatch the reviewer **only** for a ticket where both checks pass. Otherwise read the labels before
@@ -440,9 +445,9 @@ correctly **in order, build then review**, one task at a time, and relay what ca
    back without new evidence that it beats the reviewer's own pass per token.
 
    For every ticket that passes both checks: use the Agent tool with `subagent_type: "code-reviewer"`
-   **and `isolation: "worktree"`** — the isolation gives it a launch worktree off the repo root, so it
-   never writes `trunk`. From there it fetches `origin/land/<id>` and checks the branch out **into that
-   same launch worktree** — no `EnterWorktree`, no `git -C` into the builder's worktree; the builder's
+   — **no call-site `isolation` option**, per the frontmatter sufficiency stated at Phase 1 above.
+   The frontmatter gives it a launch worktree off the repo root, so it never writes `trunk`. From
+   there it fetches `origin/land/<id>` and checks the branch out **into that same launch worktree** — no `EnterWorktree`, no `git -C` into the builder's worktree; the builder's
    worktree is never opened by the reviewer under this architecture. Match the build cadence: one
    reviewer in the foreground for a solo build; one reviewer per ticket concurrently
    (`run_in_background: true`) for a fan-out, each dispatched as its builder's hand-off is verified —

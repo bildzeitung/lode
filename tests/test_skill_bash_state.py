@@ -158,6 +158,7 @@ the same workaround `tests/test_bd_list_limit_gate.py` already carries on its ow
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from pathlib import Path
 
 from conftest import bash_fence_blocks as _bash_blocks
@@ -172,20 +173,53 @@ AGENTS_DIR = CLAUDE_DIR / "agents"
 _SPECIAL_VARS = {"?", "!", "$", "#", "@", "*", "-", "_"} | {str(i) for i in range(10)}
 
 # Environment variables this repo's skills legitimately rely on being set OUTSIDE any
-# fenced block -- by the calling shell, the operator, or (for the two LAND_* knobs) an
-# explicit override convention documented in docs/agents-workflow.md, which is where
-# landing-loop dev-tooling knobs live rather than docs/configuration.md. Each entry
-# needs a reason, same bar as the per-(file, var) allowlist below.
-_KNOWN_ENV_VARS = {
-    "LAND_LOCK_STALE_SECONDS",  # scripts/land-lock.sh's operator-settable staleness
-    # override; land/SKILL.md and docs/agents-workflow.md document it, this repo's
-    # skills never assign it.
-    "TMPDIR",  # standard POSIX env var; sweep/SKILL.md reads it only via `${TMPDIR:-/tmp}`
-    # to place its own cross-block scratch state, and never assigns it.
-    "LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS",  # (lode-yrtu) operator-settable age floor
-    # for Section 4's clean-not-merged worktree-agent-* dir-only reclaim; read only via
-    # `${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}`, documented in
-    # docs/agents-workflow.md, never assigned by any skill's own bash.
+# fenced block -- by the calling shell, the operator, or (for LAND_* knobs) an explicit
+# override convention documented in docs/agents-workflow.md, which is where landing-loop
+# dev-tooling knobs live rather than docs/configuration.md.
+#
+# dict[name -> reason], not a bare set (lode-rscn) -- mirrors ALLOWLIST's idiom below, so
+# the same non-empty-reason bar applies to both (`test_known_env_vars_all_have_a_reason`).
+# Before this, each entry's justification lived only in an ordinary `#` comment, where no
+# test could reach it -- exactly the gap `test_allowlist_entries_all_have_a_reason`
+# already closed for ALLOWLIST.
+#
+# LIVENESS, not just reason text (lode-rscn, mirroring lode-e49j's fix to ALLOWLIST just
+# below): a reason string stays convincing even after the use it excuses is gone.
+# `LAND_LOCK_STALE_SECONDS` was exactly this -- and its former entry here is the worked
+# example of why this pin exists, not merely a hypothetical: it is a real, IMPLEMENTED,
+# operator-settable knob (`scripts/land-lock.sh` line 449 reads it via
+# `${LAND_LOCK_STALE_SECONDS:-1800}`, and `land/SKILL.md` prose documents it at line 97),
+# but this gate's corpus is fenced ```bash blocks in `.claude/skills/*/SKILL.md` +
+# `.claude/agents/*.md` ONLY (`_source_files()`) -- `scripts/*.sh` is never scanned, and
+# prose outside a fence isn't either. Measured at this ticket's build (lode-rscn): no
+# fenced block anywhere in the real corpus references it, so the entry excused nothing
+# today. It was DELETED rather than kept "because it's a real knob" -- the gate this set
+# feeds is corpus-scoped by construction (every other entry and every ALLOWLIST key names
+# something that shows up as a genuine cross-block reference within THIS corpus); an entry
+# whose only real use lives in a script outside that corpus doesn't correct a false
+# positive here, it just masks one that isn't happening -- ready to silently re-excuse a
+# future reintroduction of the exact bug on that name inside a skill/agent file, the
+# moment one is written (this is not a judgment call about a documented-but-unimplemented
+# knob -- LAND_LOCK_STALE_SECONDS is implemented and used, just never inside this corpus).
+# `test_every_known_env_var_still_matches_a_real_violation`, below the gate itself, pins
+# that every remaining name here is still used-and-unassigned somewhere in the real corpus
+# today; `test_every_known_env_var_is_provably_checked_by_sabotage` proves that pin is not
+# vacuous.
+#
+# That pin is a SIBLING of ALLOWLIST's, not a shared helper: an entry here has no file
+# dimension (it excuses that name in EVERY corpus file, not one), so it asks a
+# different-shaped question. See `_dead_known_env_vars`'s docstring for the rest.
+_KNOWN_ENV_VARS: dict[str, str] = {
+    "TMPDIR": (
+        "standard POSIX env var; sweep/SKILL.md reads it only via `${TMPDIR:-/tmp}` to "
+        "place its own cross-block scratch state, and never assigns it."
+    ),
+    "LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS": (
+        "(lode-yrtu) operator-settable age floor for Section 4's clean-not-merged "
+        "worktree-agent-* dir-only reclaim; read only via "
+        "`${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}`, documented in "
+        "docs/agents-workflow.md, never assigned by any skill's own bash."
+    ),
 }
 
 # (path relative to CLAUDE_DIR, variable name) -> reason a human can audit. Relative
@@ -201,6 +235,15 @@ _KNOWN_ENV_VARS = {
 # would break every time anyone inserted a block earlier in the file, failing on
 # unrelated edits until someone "fixed" it by widening the entry. Keep entries rare and
 # keep the names specific; a generic name here is much costlier than a specific one.
+#
+# LIVENESS, not just reason text (lode-e49j): a reason string stays convincing even
+# after the violation it excuses is fixed -- exactly what happened to $CONFLICTS (see
+# the "no whole-file escape hatch" paragraph in the module docstring above). An entry
+# going stale is not inert; it is a MASK that silently re-excuses a brand-new
+# reintroduction of the same bug. `test_every_allowlist_entry_still_matches_a_real_
+# violation`, below the gate itself, pins that every key here still corresponds to a
+# real, unfiltered violation today; `test_every_allowlist_entry_is_provably_checked_by_
+# sabotage` proves that pin is not vacuous.
 ALLOWLIST: dict[tuple[str, str], str] = {
     ("skills/release/SKILL.md", "PROPOSED"): (
         "The human-confirmed version string from Section 3's confirmation dialogue. "
@@ -321,6 +364,19 @@ def _assigned_vars(block: str) -> set[str]:
     return found
 
 
+def _unassigned_uses(block: str, *, known: Collection[str] = ()) -> set[str]:
+    """Every variable USED in `block` but not ASSIGNED in that same block, minus
+    `known`. The single definition of this gate's core notion -- `find_violations`
+    (the gate), `_violations_in_block` (the unit-test probe) and `_dead_known_env_vars`
+    (the liveness pin) all route through it, differing ONLY in what they pass as
+    `known`. That sharing is load-bearing, not tidiness: the liveness pin's whole job
+    is to ask "would this name have been a finding if it weren't excused", so if its
+    notion of a finding ever drifted from the gate's, the pin would go quietly
+    vacuous -- the exact disease lode-rscn exists to close, one level up. `known`
+    defaults to empty so the unfiltered form is the plain call."""
+    return (_used_vars(block) - set(known)) - _assigned_vars(block)
+
+
 def find_violations(path: Path) -> list[tuple[int, str]]:
     """(block index, variable name) for every USE in a block that is not also
     ASSIGNED somewhere in that same block, excluding special/known-env vars.
@@ -329,9 +385,7 @@ def find_violations(path: Path) -> list[tuple[int, str]]:
     text = path.read_text(encoding="utf-8")
     violations: list[tuple[int, str]] = []
     for i, block in enumerate(_bash_blocks(text)):
-        used = _used_vars(block) - _KNOWN_ENV_VARS
-        assigned = _assigned_vars(block)
-        for var in sorted(used - assigned):
+        for var in sorted(_unassigned_uses(block, known=_KNOWN_ENV_VARS)):
             violations.append((i, var))
     return violations
 
@@ -353,9 +407,7 @@ def _source_files() -> list[Path]:
 
 
 def _violations_in_block(block_text: str) -> set[str]:
-    used = _used_vars(block_text) - _KNOWN_ENV_VARS
-    assigned = _assigned_vars(block_text)
-    return used - assigned
+    return _unassigned_uses(block_text, known=_KNOWN_ENV_VARS)
 
 
 def test_simple_assignment_then_use_is_clean() -> None:
@@ -415,13 +467,17 @@ def test_arithmetic_expansion_does_not_false_positive_on_the_paren() -> None:
 
 def test_default_expansion_is_a_use_not_an_assignment() -> None:
     """`${VAR:-default}` READS var (with a fallback); it must never be mistaken for
-    an assignment of VAR. LAND_LOCK_STALE_SECONDS is excluded via _KNOWN_ENV_VARS
-    (an operator override), so use a plain unknown name here instead."""
+    an assignment of VAR. A name in _KNOWN_ENV_VARS would be filtered out before
+    this check could see it, so use a plain unknown name (TIMEOUT) here instead --
+    test_known_env_var_is_never_flagged below covers the filtered case."""
     assert _violations_in_block('echo "${TIMEOUT:-30}"\n') == {"TIMEOUT"}
 
 
 def test_known_env_var_is_never_flagged() -> None:
-    assert _violations_in_block('echo "${LAND_LOCK_STALE_SECONDS:-1800}"\n') == set()
+    assert (
+        _violations_in_block('echo "${LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS:-21600}"\n')
+        == set()
+    )
 
 
 def test_tmpdir_default_expansion_is_never_flagged() -> None:
@@ -650,6 +706,332 @@ def test_two_separate_blocks_are_returned_separately() -> None:
 def test_allowlist_entries_all_have_a_reason() -> None:
     for key, reason in ALLOWLIST.items():
         assert reason.strip(), f"allowlist entry {key} has an empty reason"
+
+
+def _unfiltered_live_pairs(
+    sources: list[Path] | None = None,
+) -> set[tuple[Path, str]]:
+    """(source path, var) for every used-and-unassigned occurrence anywhere in
+    `sources` (default: the real shipped skill/agent corpus, `_source_files()`),
+    computed with NO filtering at all -- neither ALLOWLIST nor `_KNOWN_ENV_VARS`.
+
+    This is the ONE shared, unfiltered scan both liveness pins below project from
+    (lode-dutt). Before this, `_dead_allowlist_keys` routed through `find_violations`
+    (which subtracts `_KNOWN_ENV_VARS` internally) while `_dead_known_env_vars` called
+    `_unassigned_uses` directly with `known` left empty -- two different primitives
+    that happened to agree only because ALLOWLIST filtering lives outside
+    `find_violations` while `_KNOWN_ENV_VARS` filtering lives inside it. That was an
+    accident of where two filters currently sit, not a property either primitive
+    actually pinned: the day someone moved `_KNOWN_ENV_VARS` filtering out of
+    `find_violations` (a reasonable symmetry cleanup), `_dead_allowlist_keys` would
+    silently start reporting any allowlist key whose var name is also a known env var
+    as dead, with nothing catching it. Routing both pins through this single scan and
+    letting each apply its OWN filter on top (see the two call sites below) removes
+    that hazard structurally: each pin's semantics are now pinned in ITS OWN code,
+    not inherited from where a filter happens to live elsewhere.
+
+    Paths are returned as given (not made root-relative) so this primitive commits to
+    no particular key shape -- `_dead_allowlist_keys` derives a root-relative key from
+    them; `_dead_known_env_vars` only needs the var name and never looks at the path.
+    """
+    if sources is None:
+        sources = _source_files()
+    pairs: set[tuple[Path, str]] = set()
+    for source_md in sources:
+        text = source_md.read_text(encoding="utf-8")
+        for block in _bash_blocks(text):
+            for var in _unassigned_uses(block):
+                pairs.add((source_md, var))
+    return pairs
+
+
+def _dead_allowlist_keys(
+    allowlist: dict[tuple[str, str], str],
+    *,
+    sources: list[Path] | None = None,
+    root: Path = CLAUDE_DIR,
+    known: Collection[str] | None = None,
+) -> list[tuple[str, str]]:
+    """(file, var) keys in `allowlist` that no longer correspond to any real,
+    unfiltered violation across `sources` (default: the real shipped skill/agent
+    corpus, `_source_files()`) whose var name is NOT also in `known`.
+    A key returned here is dead: the (file, var) pair it names does not exist as a
+    live, non-known-env cross-block use anywhere today, so it currently excuses
+    nothing -- but the entry stays in `ALLOWLIST` regardless, ready to silently
+    re-excuse a BRAND-NEW reintroduction of the exact same bug the moment one lands
+    (the `$CONFLICTS` history in the module docstring above is this exact sequence,
+    observed).
+
+    Vars in `known` (default `_KNOWN_ENV_VARS`) are excluded from `live`, mirroring
+    production: `find_violations` subtracts `_KNOWN_ENV_VARS` before ALLOWLIST is ever
+    consulted, so no genuine ALLOWLIST key would legitimately name a known env var.
+    `_dead_known_env_vars` below deliberately applies no such filter -- see
+    `_unfiltered_live_pairs`'s docstring for why that asymmetry is intentional.
+    `test_allowlist_key_for_a_known_env_var_name_is_reported_dead` pins this filter
+    directly, so it can no longer regress silently if the shared scan is refactored
+    again.
+
+    `allowlist`, `sources`, `root` and `known` are all parameters, not read from the
+    module globals directly, so
+    `test_every_allowlist_entry_is_provably_checked_by_sabotage`
+    below can exercise this exact primitive -- the same one the real pin uses --
+    against a deliberately bogus key and a deliberately "already fixed" synthetic
+    file, without mutating any real `.claude/` file on disk (out of this ticket's
+    footprint, and it would make the pin's own correctness depend on real-file state
+    changing underneath it later).
+
+    `root` is what keys are derived relative to, and it exists so the sabotage test
+    runs the SAME `str(path.relative_to(root))` expression the real pin does rather
+    than a lookalike -- a proof over a key-derivation path production never takes
+    would prove nothing about production, which is the very failure mode this module
+    is about. Keys are therefore relative to `CLAUDE_DIR` here exactly as in
+    `test_no_cross_block_shell_state_outside_the_allowlist`, and relative to
+    `tmp_path` there.
+    """
+    if known is None:
+        known = _KNOWN_ENV_VARS
+    live = {
+        (str(path.relative_to(root)), var)
+        for path, var in _unfiltered_live_pairs(sources)
+        if var not in known
+    }
+    return sorted(set(allowlist) - live)
+
+
+def test_every_allowlist_entry_still_matches_a_real_violation() -> None:
+    """The liveness pin lode-e49j adds. `test_allowlist_entries_all_have_a_reason`
+    above only asserts the reason string is non-empty -- it cannot distinguish a live
+    entry from a dead one, and a dead entry's reason string reads exactly as
+    convincing as a live one's (lode-p1r3's `$CONFLICTS` had a perfectly good reason
+    the entire time it was masking). This closes that gap: every key in the real
+    `ALLOWLIST` must still correspond to a real, unfiltered violation found by
+    `find_violations` today. When one doesn't, the remedy is to DELETE the entry --
+    never to change any code -- which is why the message below says so explicitly.
+
+    Passes unmodified against current trunk: both `ALLOWLIST` entries are live,
+    independently verified by `test_every_allowlist_entry_is_provably_checked_by_
+    sabotage` below (which proves this pin is not vacuous) and by lode-p1r3's own
+    review (exactly two violations repo-wide, exactly two keys, at that branch's tip).
+    """
+    dead = _dead_allowlist_keys(ALLOWLIST)
+    assert dead == [], (
+        "these ALLOWLIST entries no longer correspond to any real cross-block "
+        "violation -- they mask nothing today, but they will silently re-mask a "
+        "brand-new reintroduction of the exact same bug the moment one is written. "
+        f"Delete them from ALLOWLIST (do not change any other code): {dead}"
+    )
+
+
+def test_every_allowlist_entry_is_provably_checked_by_sabotage(
+    tmp_path: Path,
+) -> None:
+    """Non-vacuousness proof for the pin above, per lode-e49j's own acceptance
+    criteria: a test that passes both before and after the regression it's meant to
+    catch is worthless here -- that is the exact failure mode this ticket exists to
+    close. Two sabotage shapes, both run directly against `_dead_allowlist_keys` (the
+    same primitive the real pin calls) rather than by mutating any real `.claude/`
+    file on disk:
+
+    1. ADDING A BOGUS KEY -- a (file, var) pair that matches no real violation
+       anywhere -- must be reported dead.
+    2. FIXING THE UNDERLYING VIOLATION -- ONE synthetic file, rewritten in place, so
+       the derived key is held constant and the file's CONTENT is the only thing that
+       varies between the two assertions. First it carries the real cross-block shape
+       (assigned in one fenced block, used in a separate one -- a violation); then the
+       identical assignment and use collapsed into a SINGLE block (no longer a
+       violation, the same fix shape `lode-rfon` applied to the real `$CONFLICTS`
+       instance). The same key is live before and dead after, which is what proves the
+       helper tracks content rather than the key's shape.
+
+       Two files, one "live" and one "fixed", would NOT prove that and must not be
+       reintroduced: distinct filenames derive distinct keys, so the "fixed" assertion
+       would pass on a name mismatch and hold just as green with the violation left
+       fully intact -- a vacuous proof of non-vacuity, the exact self-refuting shape
+       this module exists to catch. Measured, not theorized (lode-e49j review).
+
+    Both shapes run through `_dead_allowlist_keys` (the same primitive the real pin
+    calls), passing `root=tmp_path` so key derivation runs the identical
+    `str(path.relative_to(root))` expression production runs -- and against a fixture
+    path with the same multi-segment shape as a real key -- rather than mutating any
+    real `.claude/` file on disk.
+
+    Sabotage recipe for this ticket's own future maintenance, recorded here per the
+    acceptance criteria: delete either assertion below, or replace `_dead_allowlist_
+    keys`'s body with `return []` unconditionally, and this test goes red.
+    """
+    source = tmp_path / "skills" / "fixture" / "SKILL.md"
+    source.parent.mkdir(parents=True)
+    key = ("skills/fixture/SKILL.md", "FOO")
+
+    def dead(k: tuple[str, str]) -> list[tuple[str, str]]:
+        return _dead_allowlist_keys({k: "fixture"}, sources=[source], root=tmp_path)
+
+    source.write_text(
+        '```bash\nFOO=1\n```\n\n```bash\necho "$FOO"\n```\n', encoding="utf-8"
+    )
+    assert dead(key) == [], (
+        "fixture assumption broken: FOO is not actually a live cross-block violation "
+        "in the unfixed fixture"
+    )
+
+    bogus = ("skills/fixture/SKILL.md", "THIS_VAR_DOES_NOT_EXIST_ANYWHERE_lode_e49j")
+    assert dead(bogus) == [bogus], (
+        "a bogus key matching no real violation must be reported dead"
+    )
+
+    source.write_text('```bash\nFOO=1\necho "$FOO"\n```\n', encoding="utf-8")
+    assert dead(key) == [key], (
+        "fixing the underlying violation must flip the SAME key from live to dead"
+    )
+
+
+def test_allowlist_key_for_a_known_env_var_name_is_reported_dead(
+    tmp_path: Path,
+) -> None:
+    """The gap lode-dutt closes: an ALLOWLIST key whose var name is ALSO a
+    `_KNOWN_ENV_VARS` entry must be reported dead by the allowlist liveness pin, even
+    though the name IS a live unfiltered cross-block occurrence in the fixture --
+    because `_KNOWN_ENV_VARS` filtering happens before ALLOWLIST is ever consulted in
+    production (inside `find_violations`), so no genuine ALLOWLIST key would ever
+    legitimately name a known env var. Before lode-dutt nothing pinned this: the
+    filtering was inherited from `_dead_allowlist_keys` routing through
+    `find_violations`, and the existing sabotage test's synthetic `FOO` is not a known
+    env var, so moving the filter would have gone unnoticed.
+
+    The name is taken FROM `_KNOWN_ENV_VARS` rather than hardcoded, so this test does
+    not go stale (or quietly vacuous) if a particular entry is ever deleted, and the
+    call uses the DEFAULT `known` so the default's binding to `_KNOWN_ENV_VARS` is
+    what's exercised. The second assertion is the in-line non-vacuity control: the
+    same key, same fixture, filter emptied via `known=()` -- it must flip to live, so
+    the first assertion cannot pass for any reason other than the filter.
+    """
+    known_name = min(_KNOWN_ENV_VARS)
+    source = tmp_path / "skills" / "fixture" / "SKILL.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        f'```bash\n{known_name}=1\n```\n\n```bash\necho "${known_name}"\n```\n',
+        encoding="utf-8",
+    )
+    key = ("skills/fixture/SKILL.md", known_name)
+    allowlist = {key: "fixture"}
+    assert _dead_allowlist_keys(allowlist, sources=[source], root=tmp_path) == [key], (
+        f"an ALLOWLIST key naming the known env var {known_name} must be reported "
+        "dead even though it is a live unfiltered cross-block occurrence here"
+    )
+    assert (
+        _dead_allowlist_keys(allowlist, sources=[source], root=tmp_path, known=()) == []
+    ), (
+        "non-vacuity control: with the known-env filter emptied, the SAME key must be "
+        "live -- so the assertion above turns on the filter and nothing else"
+    )
+
+
+def test_known_env_vars_all_have_a_reason() -> None:
+    for name, reason in _KNOWN_ENV_VARS.items():
+        assert reason.strip(), f"_KNOWN_ENV_VARS entry {name!r} has an empty reason"
+
+
+def _dead_known_env_vars(
+    known: Collection[str],
+    *,
+    sources: list[Path] | None = None,
+) -> list[str]:
+    """Names in `known` that no longer correspond to any real, UNFILTERED
+    used-and-unassigned occurrence anywhere in `sources` (default: the real shipped
+    skill/agent corpus, `_source_files()`). A name returned here is dead: nothing in
+    the corpus references it as a cross-block (or any-block) use today, so it
+    currently excuses nothing -- but the entry stays in `_KNOWN_ENV_VARS` regardless,
+    ready to silently re-excuse a BRAND-NEW reintroduction of a cross-block bug on
+    that exact name the moment one is written (`LAND_LOCK_STALE_SECONDS`, deleted
+    above, was measured in exactly this state at this ticket's build, lode-rscn).
+
+    Shares `_unfiltered_live_pairs` with `_dead_allowlist_keys` above (lode-dutt),
+    projected to just the var names since entries here are bare names, not (file, var)
+    keys. Applies NO known-env filter of its own -- `known` IS `_KNOWN_ENV_VARS` here,
+    so filtering by it would report every name dead regardless of corpus content, the
+    self-defeating shape this helper exists to avoid. That asymmetry with
+    `_dead_allowlist_keys` is deliberate; see `_unfiltered_live_pairs`'s docstring.
+
+    `known` and `sources` are parameters, not read from module globals directly, so
+    `test_every_known_env_var_is_provably_checked_by_sabotage` below can exercise
+    this exact primitive against a deliberately bogus name and a deliberately
+    "already fixed" synthetic file, without mutating any real `.claude/` file on
+    disk. `known` is a `Collection[str]`, not the `_KNOWN_ENV_VARS` dict type:
+    liveness is a question about the NAMES only, and typing it that way keeps a
+    caller (the sabotage test) from having to invent a reason string the function
+    never reads. No `root` parameter (unlike `_dead_allowlist_keys`): entries here
+    are bare names, not (file, var) keys, so there is no relative path to derive.
+    """
+    live = {var for _path, var in _unfiltered_live_pairs(sources)}
+    return sorted(set(known) - live)
+
+
+def test_every_known_env_var_still_matches_a_real_violation() -> None:
+    """The `_KNOWN_ENV_VARS` sibling of `test_every_allowlist_entry_still_matches_a_
+    real_violation` above, same liveness rationale (lode-rscn, mirroring lode-e49j).
+    Every name in `_KNOWN_ENV_VARS` must still be used-and-unassigned somewhere in
+    the real corpus today. When one isn't, the remedy is to DELETE the entry -- the
+    exact call this ticket already made for `LAND_LOCK_STALE_SECONDS` (see its
+    former entry's own reasoning, kept in git history and in the comment now
+    documenting the deletion above `_KNOWN_ENV_VARS`).
+
+    Passes unmodified against current trunk: both remaining entries (`TMPDIR`,
+    `LAND_WORKTREE_DIRONLY_MIN_AGE_SECONDS`) are live, independently verified by
+    `test_every_known_env_var_is_provably_checked_by_sabotage` below (which proves
+    this pin is not vacuous) and by this ticket's own measurement at build time.
+    """
+    dead = _dead_known_env_vars(_KNOWN_ENV_VARS)
+    assert dead == [], (
+        "these _KNOWN_ENV_VARS entries no longer correspond to any real "
+        "used-and-unassigned occurrence in the corpus -- they exclude nothing "
+        "today, but they will silently re-excuse a brand-new cross-block "
+        "reintroduction of the same bug on that name the moment one is written. "
+        f"Delete them from _KNOWN_ENV_VARS (do not change any other code): {dead}"
+    )
+
+
+def test_every_known_env_var_is_provably_checked_by_sabotage(
+    tmp_path: Path,
+) -> None:
+    """Non-vacuousness proof for the pin above, same recipe as `test_every_
+    allowlist_entry_is_provably_checked_by_sabotage` and the same lesson that
+    review found the hard way there (lode-e49j): a test that passes both before
+    and after the regression it's meant to catch is worthless. ONE synthetic file,
+    rewritten in place, so the name is held constant and the file's CONTENT is the
+    only thing that varies between assertions -- two files (one "live", one
+    "fixed") would derive nothing comparable and would pass vacuously, the exact
+    self-refuting shape rejected there and rejected here for the same reason.
+
+    Sabotage recipe for this ticket's own future maintenance: delete either
+    assertion below, or replace `_dead_known_env_vars`'s body with `return []`
+    unconditionally, and this test goes red.
+    """
+    source = tmp_path / "skills" / "fixture" / "SKILL.md"
+    source.parent.mkdir(parents=True)
+    name = "FOO_ENV_VAR"
+
+    def dead(n: str) -> list[str]:
+        return _dead_known_env_vars([n], sources=[source])
+
+    source.write_text('```bash\necho "$FOO_ENV_VAR"\n```\n', encoding="utf-8")
+    assert dead(name) == [], (
+        "fixture assumption broken: FOO_ENV_VAR is not actually a live "
+        "used-and-unassigned reference in the unfixed fixture"
+    )
+
+    bogus = "THIS_VAR_DOES_NOT_EXIST_ANYWHERE_lode_rscn"
+    assert dead(bogus) == [bogus], (
+        "a bogus name matching no real used-and-unassigned occurrence must be "
+        "reported dead"
+    )
+
+    source.write_text(
+        '```bash\nFOO_ENV_VAR=1\necho "$FOO_ENV_VAR"\n```\n', encoding="utf-8"
+    )
+    assert dead(name) == [name], (
+        "assigning the var in the same block (removing its only real use) must "
+        "flip the SAME name from live to dead"
+    )
 
 
 def test_every_skill_and_agent_file_is_covered() -> None:

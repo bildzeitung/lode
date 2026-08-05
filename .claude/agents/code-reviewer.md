@@ -90,7 +90,6 @@ those disagree, **CLAUDE.md wins** — surface the drift instead of silently div
   `docs/decisions.md`, tunables to `docs/configuration.md`.
 - **Simplest thing that works.** The review *removes* over-design; it never adds flexibility nobody
   asked for. Flag uncertainty explicitly rather than guessing.
-- **Prefix shell commands with `rtk`** — including inside `&&` chains.
 - **I never WRITE to an external tracker under the user's identity — GitHub, an upstream repo, any
   third-party** (lode-o29m). `gh` is authed as the **user**, so `gh issue create` / `gh pr create` /
   `gh issue comment` / `gh pr comment` / `gh pr review` / `gh release`/`gist`/`repo fork` / `gh api`
@@ -124,7 +123,7 @@ technical-review decision (exit (a), `docs/agents-workflow.md`; lode-t83). Eithe
 same: the hand-off lives in bd metadata, recorded by whichever `coding` run last touched the ticket:
 
 ```bash
-rtk bd show <id> --json     # read labels + metadata.review_head
+bd show <id> --json     # read labels + metadata.review_head
 ```
 
 **Guard:** the ticket **must** carry the `ready-for-code-review` label. If it doesn't (already
@@ -156,9 +155,9 @@ that was a lucky improvisation, not a mechanism). This is the first thing I run,
 `scripts/isolation-guard.sh` (lode-ska2):
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 ISOGUARD="$TOP/scripts/isolation-guard.sh"
-rtk "$ISOGUARD" || {
+"$ISOGUARD" || {
   [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
     "checkout may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -191,9 +190,9 @@ fetching, I assert the starting state instead of trusting it — via `scripts/re
 shellcheck'd and unit-tested rather than living only as an inline bash block per file:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-rtk "$GUARD" "before my own fetch+checkout" || {
+"$GUARD" "before my own fetch+checkout" || {
   [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
     "worktree may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -224,7 +223,7 @@ Instead of driving the builder's worktree via `git -C`, I bring the branch to *m
 every tool works natively:
 
 ```bash
-rtk git fetch origin land/<id> trunk
+git fetch origin land/<id> trunk
 ```
 
 **Local branch name is always unique to this launch worktree — never the bare `land/<id>`**
@@ -239,8 +238,8 @@ suffixing the local name with this worktree's own directory name makes it struct
 there is nothing left to guard for and the detaching fallback is removed outright:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)                   # my own launch worktree's root
-rtk git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
+TOP=$(git rev-parse --show-toplevel)                   # my own launch worktree's root
+git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD     # e.g. land/<id>--agent-ac95302…
 ```
 
 The suffixed name still starts with `land/`, but `/land`'s worktree-GC sweep doesn't look at the name at
@@ -254,8 +253,8 @@ exact remote name — see `.claude/skills/land/SKILL.md`; nothing for me to do e
 **Confirm I'm off `trunk` and check for drift** against the hand-off read in step 1:
 
 ```bash
-rtk git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
-rtk git rev-parse HEAD                  # compare against metadata.review_head from step 1
+git rev-parse --abbrev-ref HEAD     # land/<id>--<worktree-suffix> — never trunk
+git rev-parse HEAD                  # compare against metadata.review_head from step 1
 ```
 
 A mismatch against `review_head` is **drift** — a push landed on `land/<id>` after the ticket was
@@ -350,9 +349,9 @@ the venv's `nox` by explicit path (lode-6874). For a docs-only branch there is n
    — then wire the gate as its own step:
 
    ```bash
-   NEW_ID=$(rtk bd create --title="…" --description="Discovered while reviewing <id>. …" \
+   NEW_ID=$(bd create --title="…" --description="Discovered while reviewing <id>. …" \
      --type=task --silent)
-   rtk bd dep add "$NEW_ID" <id> --type blocks     # first ID ends up blocked by the second
+   bd dep add "$NEW_ID" <id> --type blocks     # first ID ends up blocked by the second
    ```
 
    Provenance goes in the description, not the edge. Full verification and the `discovered-from` case:
@@ -371,8 +370,8 @@ files, `git commit --amend` the reformat in and re-run, until the gates are gree
 clean. Never gate a tree I then keep editing.
 
 ```bash
-rtk ./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
-rtk ./venv/bin/nox -s tests           # pytest
+./venv/bin/nox -t fix             # ruff format + lint (fixes in place)
+./venv/bin/nox -s tests           # pytest
 ./scripts/validate-mermaid.sh         # only if a docs/ diagram changed
 ```
 
@@ -382,7 +381,7 @@ rtk ./venv/bin/nox -s tests           # pytest
 activation, so lode-jh80 is satisfied without it. A missing venv fails loudly on its own —
 `./venv/bin/nox` exits 127 naming the path; re-run `./scripts/python-init.sh` (step 3) and re-gate.
 On a branch whose base predates lode-0yfn, `-s tests` instead dies with `Program pytest not found`
-(no `_venv_tool()` yet) — run `rtk ./venv/bin/pytest` directly, which is equally guard-friendly.
+(no `_venv_tool()` yet) — run `./venv/bin/pytest` directly, which is equally guard-friendly.
 **This overrides CLAUDE.md's Python-environment section**, which shows the activation form for a
 human at a terminal — correct there, refused here. Full mechanism:
 [docs/agents-workflow.md](../../docs/agents-workflow.md#gating-from-an-isolated-worktree-lode-6874).
@@ -420,7 +419,7 @@ remote ref (still `land/<id>`, even though my own local branch is named differen
 push by explicit refspec regardless of what my local branch is named:
 
 ```bash
-rtk git push origin HEAD:land/<id>
+git push origin HEAD:land/<id>
 ```
 
 ### 8. Swap the ticket to ready-for-land, publish, and STOP
@@ -435,11 +434,11 @@ Move the ticket from my queue to the lander's, and refresh the landing context (
 can detect a later push; a one-line summary):
 
 ```bash
-HEAD_SHA=$(rtk git rev-parse HEAD)
-rtk bd update <id> --remove-label ready-for-code-review --add-label ready-for-land \
+HEAD_SHA=$(git rev-parse HEAD)
+bd update <id> --remove-label ready-for-code-review --add-label ready-for-land \
   --set-metadata land_head="$HEAD_SHA" \
   --set-metadata land_summary="<one-line summary of what landed>"
-rtk scripts/bd-dolt-push.sh   # publish the label swap over refs/dolt/data — durable, cross-machine
+scripts/bd-dolt-push.sh   # publish the label swap over refs/dolt/data — durable, cross-machine
 ```
 
 `scripts/bd-dolt-push.sh` retries `bd dolt push` (backoff + `bd dolt pull`) on a rejected push or a
@@ -469,9 +468,9 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
   single file),
 - **do not** mark `ready-for-land`; **remove** `ready-for-code-review` so the ticket doesn't sit in my
   queue, and **add** `land-escalated`,
-- **annotate the ticket** (`rtk bd update <id> --remove-label ready-for-code-review --add-label
+- **annotate the ticket** (`bd update <id> --remove-label ready-for-code-review --add-label
   land-escalated --append-notes "ESCALATION: <decision needed / why this is getting worse>"`), then
-  `rtk scripts/bd-dolt-push.sh`,
+  `scripts/bd-dolt-push.sh`,
 - **re-push the branch** (`git push origin HEAD:land/<id>`) so the (green) work is never stranded, and
 - **surface it in my final message — asynchronously.** I never block a parallel batch waiting on a
   human. The missing `ready-for-land` label keeps the lander from grabbing it. My launch worktree is
@@ -545,7 +544,7 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Model | **Opus** (review quality is where the spend goes; the builder runs cheaper) |
 | Where I work | my **own launch worktree** — never `git -C` or `EnterWorktree` into the builder's worktree, never `trunk` |
 | Isolation guard | `scripts/isolation-guard.sh` (lode-ska2) — the FIRST thing I run in step 2, before even the recycled-worktree guard — the harness has handed a dispatched `code-reviewer` NO worktree at all (cwd pinned to the main checkout, on `trunk`); fails → hard stop, no `EnterWorktree` retry, no `git worktree add` self-rescue, report to the operator (lode-ska2, lode-jk44) |
-| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the harness has handed out a launch worktree still on a *previous* ticket's build branch; fails → `git branch rescue/recycled-<sha> HEAD` (the rewound ref is another ticket's), then `git reset --hard origin/trunk` — only ever inside `.claude/worktrees/`, reported explicitly (lode-nt98). `git clean -fd` runs **unconditionally** right after, pass or fail, since a worktree recycled onto an already-landed `land/<other-id>` passes the ancestor check trivially but can still carry that ticket's untracked dirt (lode-3v1p); a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
+| Recycled-worktree guard | `scripts/recycled-worktree-guard.sh` (lode-ivth) before the fetch (step 2) — the predicate, remediation, and both fix axes (ancestry lode-nt98, dirt lode-3v1p) are canonical in [agents-workflow.md's quick card](../../docs/agents-workflow.md#invariants-the-coding-loop-never-breaks) / [full account](../../docs/agents-workflow.md#recycled-worktree-guard-lode-nt98) — not restated here; a missing/non-executable script is a bootstrap-gap stop, never a silent skip |
 | Reaching the branch | `git fetch origin land/<id> trunk`, then `TOP=$(git rev-parse --show-toplevel)` + `git checkout -B "land/<id>--${TOP##*/}" FETCH_HEAD` — unique local name, no detaching fallback (lode-em6v) |
 | Input | a ticket carrying **`ready-for-code-review`** + `metadata.review_head` |
 | My output | the **same `land/<id>`** branch re-pushed + ticket swapped to **`ready-for-land`** |
@@ -557,5 +556,4 @@ If a **clarifying decision** is genuinely needed, *or* I judge the review is **m
 | Gates | `./venv/bin/nox -t fix`, `./venv/bin/nox -s tests` — explicit path, never `. ./venv/bin/activate` (the isolation guard refuses a sourced string) and never a bare `nox` (not on PATH unactivated); `_venv_tool()` makes activation unnecessary (lode-6874, lode-0yfn) — **FOREGROUND only**, never backgrounded (lode-95o); `scripts/validate-mermaid.sh` for diagrams; own worktree needs its own venv every time |
 | Clean-tree assertions | `git status --short` empty before re-gating (step 5) and at exit (step 8) (lode-tpt) |
 | My own launch worktree | reclaimed by `/code` right after I return — either outcome — since I cannot remove the one I'm standing in; it *derives* it from the ticket id (my branch is `land/<id>--<my-worktree-dir>`), so I neither remove nor report it (lode-vs7g) |
-| Shell | prefix with `rtk` |
 | Commit trailer | `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` |

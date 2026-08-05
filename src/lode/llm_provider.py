@@ -411,6 +411,61 @@ def _anthropic_error_from_exception(
     )
 
 
+#: Stands in for a batch-results line's ``custom_id`` when the line's own is
+#: missing/``None``/not a non-empty ``str`` (lode-i821). Deliberately not a
+#: plausible version id, so a ``job_map`` lookup misses rather than colliding.
+_UNKNOWN_CUSTOM_ID = "<unknown>"
+
+
+def _result_custom_id(result: Any) -> str:
+    """Read one batch-results line's ``custom_id``, honoring the declared type.
+
+    Sole owner of the invariant that **every** :class:`BatchResult` this
+    module returns carries a non-empty ``str`` ``custom_id``, matching the
+    declared ``custom_id: str`` -- consumers may rely on that without a
+    ``None`` check. ``custom_id`` comes off the same
+    ``construct_type_unchecked`` model as every other field, so the wire can
+    make it absent, ``None``, or the wrong type; reading it never *raises* in
+    the loop body, so it would otherwise break the contract silently, one
+    seam downstream in the consumer.
+
+    Every branch goes through here, not just the wrong-shape ones -- a line
+    whose ``result`` block is well-formed and whose ``custom_id`` alone is
+    missing takes the ordinary *succeeded* (or ``errored``/no-``tool_use``)
+    branch and never touches :func:`_wrong_shape_result`. ``docs/stack.md``
+    "Error contract" owns the reasoning and the routing consequence.
+    """
+    custom_id = getattr(result, "custom_id", None)
+    return custom_id if isinstance(custom_id, str) and custom_id else _UNKNOWN_CUSTOM_ID
+
+
+def _wrong_shape_result(result: Any, detail: str) -> BatchResult:
+    """Degrade one well-formed-but-wrong-shape batch-results line (lode-i821).
+
+    ``construct_type_unchecked`` (anthropic's ``jsonl.py``) deliberately does
+    not validate a decoded line's shape, so a missing/malformed field on it
+    surfaces as a raw ``AttributeError``/``TypeError``/``ValidationError``
+    from :meth:`AnthropicProvider.collect_batch`'s loop BODY rather than a
+    caught SDK exception -- ``docs/stack.md`` "Error contract" owns the
+    inventory. Every call site here degrades the *one* item to an
+    ``errored`` :class:`BatchResult` rather than failing the whole
+    collection, matching the pre-existing "no tool_use block" treatment.
+
+    ``result.custom_id`` may itself be the field that's missing/malformed --
+    it comes from the same unvalidated line -- so it is read via
+    :func:`_result_custom_id`, which owns the placeholder substitution that
+    keeps :class:`BatchResult.custom_id`'s declared ``str`` honest.
+    """
+    return BatchResult(
+        custom_id=_result_custom_id(result),
+        outcome="errored",
+        parsed=None,
+        error=LLMProviderError(
+            f"wrong-shape batch result line ({detail})", provider="anthropic"
+        ),
+    )
+
+
 class AnthropicProvider:
     """Wraps today's ``anthropic.Anthropic`` client; the sole provider (T2).
 
@@ -773,7 +828,28 @@ class AnthropicProvider:
                 ) from exc
 
         for result in _stream():
-            if result.result.type == "succeeded":
+            # lode-i821 (rebuild of lode-t7en): `construct_type_unchecked`
+            # (jsonl.py) does not validate -- a well-formed-but-wrong-shape
+            # line (e.g. missing `result`) leaves the *attribute* absent
+            # rather than raising a pydantic `ValidationError`, so
+            # `result.result.type` itself can raise a raw `AttributeError`.
+            # Same treatment as the `StopIteration`/no-tool_use arm below:
+            # degrade the one item to an `errored` `BatchResult` rather than
+            # failing the whole collection -- narrow to `AttributeError`
+            # only, so a genuine bug elsewhere in the loop body still
+            # surfaces raw. `custom_id` may itself be the missing/malformed
+            # field, hence `_wrong_shape_result`'s placeholder (see its
+            # docstring).
+            try:
+                result_type = result.result.type
+            except AttributeError as exc:
+                results.append(
+                    _wrong_shape_result(result, f"missing 'result' field: {exc}")
+                )
+                continue
+            # One read for every branch below; see `_result_custom_id`.
+            custom_id = _result_custom_id(result)
+            if result_type == "succeeded":
                 try:
                     tool_block = next(
                         b for b in result.result.message.content if b.type == "tool_use"
@@ -788,7 +864,7 @@ class AnthropicProvider:
                     message = result.result.message
                     results.append(
                         BatchResult(
-                            custom_id=result.custom_id,
+                            custom_id=custom_id,
                             outcome="errored",
                             parsed=None,
                             error=LLMProviderError(
@@ -802,16 +878,53 @@ class AnthropicProvider:
                         )
                     )
                     continue
+                except (AttributeError, TypeError) as exc:
+                    # Same mechanism, two more unvalidated chains read by
+                    # this one expression: `result.result.message.content`
+                    # missing/`None` raises `TypeError` on iteration. A
+                    # content block that's merely missing its `type` *key*
+                    # decodes fine (the union falls back to a member with
+                    # `type=None`, so `b.type == "tool_use"` is just `False`
+                    # -- already handled by the `StopIteration` arm above);
+                    # `b.type` only raises `AttributeError` when a content
+                    # *item* isn't object-shaped at all (e.g. `null`), so
+                    # `construct_type_unchecked` can't build any union member
+                    # for it -- confirmed against the real SDK. Both failures
+                    # here are the identical "wrong shape, not a stream
+                    # failure" class as the `result.result.type` guard above
+                    # -- one combined except arm, since either means this
+                    # result line cannot be trusted at all.
+                    results.append(
+                        _wrong_shape_result(
+                            result,
+                            "missing 'message.content' field or a content "
+                            f"block missing 'type': {exc}",
+                        )
+                    )
+                    continue
+                try:
+                    parsed = RootModel[dict[str, Any]](tool_block.input)
+                except ValidationError as exc:
+                    # `tool_block.input` absent leaves it `None` rather than
+                    # raising `AttributeError` (the SDK's `input` field
+                    # itself tolerates `None` under `construct_type_unchecked`),
+                    # so this chain fails one step later than the other two,
+                    # inside `RootModel`'s own validation -- still the same
+                    # wrong-shape class.
+                    results.append(
+                        _wrong_shape_result(result, f"missing 'input' field: {exc}")
+                    )
+                    continue
                 results.append(
                     BatchResult(
-                        custom_id=result.custom_id,
+                        custom_id=custom_id,
                         outcome="succeeded",
-                        parsed=RootModel[dict[str, Any]](tool_block.input),
+                        parsed=parsed,
                         error=None,
                     )
                 )
             else:
-                error_type = result.result.type
+                error_type = result_type
                 msg = (
                     f"batch result={error_type}"
                     if not hasattr(result.result, "error")
@@ -819,7 +932,7 @@ class AnthropicProvider:
                 )
                 results.append(
                     BatchResult(
-                        custom_id=result.custom_id,
+                        custom_id=custom_id,
                         outcome=error_type,
                         parsed=None,
                         error=LLMProviderError(msg, provider="anthropic"),

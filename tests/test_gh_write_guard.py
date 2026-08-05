@@ -47,7 +47,7 @@ Deliberately NOT covered (fence, not fix -- same framing as lode-0kbq/lode-s1uz 
 `blocks:` guard). A guard that reads only the command STRING cannot see through:
   - quoted indirection -- `sh -c "gh issue create ..."`, or the command held in a shell
     variable. Closing this would mean treating a quote as a command boundary, which would
-    false-deny this repo's own prose about the rule (`rtk grep "gh issue create" docs/`, a
+    false-deny this repo's own prose about the rule (`grep "gh issue create" docs/`, a
     commit message quoting the verb) -- a worse trade than the residual.
   - non-`gh` routes: `curl` against a tracker REST API, a non-GitHub tracker's own CLI.
 Both residuals are honest, structural, and unaffected by the denylist -> allowlist inversion --
@@ -71,6 +71,7 @@ case still denies against the new script, so the fix demonstrably narrowed nothi
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -80,6 +81,7 @@ from _hookharness import SH, pretooluse_hook, run_hook
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GH_WRITE_GUARD_SCRIPT = REPO_ROOT / "scripts" / "gh-write-guard.sh"
+SCRIPT = GH_WRITE_GUARD_SCRIPT
 
 pytestmark = pytest.mark.skipif(
     shutil.which("jq") is None, reason="the hook shells out to jq"
@@ -225,8 +227,6 @@ DENIED = [
     # GET exemption is scoped to the SAME command segment that supplied the fields.
     "gh api repos/x/y/issues -X GET && gh api repos/x/y/issues -f title=x -f body=y",
     # -- shell shapes: gh still at a command position --
-    "rtk gh issue create --title x",  # the repo's mandated rtk prefix
-    "rtk gh pr comment 1 -b x",
     "cd /r && gh issue create --title x",  # not the first command on the line
     "echo hi; gh pr comment 1 -b x",
     "`gh issue create --title x`",  # command substitution, backtick form
@@ -291,10 +291,12 @@ ALLOWED = [
     # to send a GET query string. Read-only, and it must survive the implicit-POST rule.
     "gh api search/issues -X GET -f q=repo:o/r",
     "gh api search/issues --method GET -f q=x",
-    "rtk gh pr view 123",
     "gh --repo owner/repo issue view 123",
     # -- prose quoting the pattern --
     'git commit -m "guard: deny gh issue create"',
+    'bd update lode-x --notes "denies gh issue create writes"',
+    'bd update lode-x --notes "also gh pr comment posts publicly"',
+    'grep "gh issue create" docs/',
     'rtk bd update lode-x --notes "denies gh issue create writes"',
     'rtk bd update lode-x --notes "also gh pr comment posts publicly"',
     'rtk grep "gh issue create" docs/',
@@ -317,9 +319,9 @@ ALLOWED = [
     'git commit -m "(gh issue create) is forbidden"',
     'rtk grep -E "(gh issue create)" docs/',
     # -- legitimate internal bd usage, unaffected --
-    "rtk bd create --title x --description y --type=task",
-    "rtk bd update lode-1 --add-label ready-for-code-review",
-    "rtk bd dep add lode-new lode-1 --type blocks",
+    "bd create --title x --description y --type=task",
+    "bd update lode-1 --add-label ready-for-code-review",
+    "bd dep add lode-new lode-1 --type blocks",
 ]
 
 # The hook must never *approve* anything: a non-matching command falls through silently so
@@ -616,3 +618,190 @@ def test_hook_falls_through_when_guard_script_present_and_a_real_worktree_root()
     # real, present script -- an unrelated command must fall through with no decision.
     out = _run_hook_with_project_dir("ls -la", str(REPO_ROOT))
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# lode-d5je: a QUOTED heredoc body is inert text -- the shell performs no
+# substitution in it at all -- but neither splitter (this one, nor bd-deps-
+# guard's sed continuation-folder) modeled heredocs, so a command-substitution-
+# wrapped `gh` invocation written as a worked example inside such a body
+# manufactured a fake segment start and got scanned as if it were live shell.
+# Reproduced live, twice, against both the pre-lode-obox splitter and the fixed
+# one -- this is the SAME false-positive class lode-obox closed for quoted
+# string arguments, in the one shape lode-obox did not cover.
+# ---------------------------------------------------------------------------
+
+# A gh-write invocation, command-substitution-wrapped, as a worked example inside
+# a heredoc body -- the exact shape from the ticket's own repro.
+_GH_WRITE_EXAMPLE = "Example: $(gh issue create --title x --body y)"
+
+QUOTED_HEREDOC_BODIES = [
+    # <<'EOF' -- single-quoted delimiter, the canonical "fully inert" form.
+    f"git commit -F - <<'EOF'\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<"EOF" -- double-quoted delimiter, also inert (no expansion inside).
+    f'git commit -F - <<"EOF"\n{_GH_WRITE_EXAMPLE}\nEOF',
+    # <<\\EOF -- a backslash-escaped delimiter, the third quoted spelling POSIX
+    # shells accept; also inert.
+    f"git commit -F - <<\\EOF\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<-'EOF' -- the tab-stripping variant, still quoted.
+    f"cat <<-'EOF'\n\t{_GH_WRITE_EXAMPLE}\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_BODIES)
+def test_quoted_heredoc_body_is_not_scanned_as_live_shell(command: str) -> None:
+    """AC1: a gh-write phrase appearing only inside a QUOTED heredoc body must not deny --
+    the shell performs no substitution there, so it is inert text, not a command position."""
+    assert _run(command) is None, f"quoted heredoc body false-denied: {command!r}"
+
+
+UNQUOTED_HEREDOC_BODIES = [
+    # <<EOF -- substitution IS real here; the gh call inside must still be denied.
+    f"cat <<EOF\n{_GH_WRITE_EXAMPLE}\nEOF",
+    # <<-EOF -- tab-stripping, still unquoted.
+    f"cat <<-EOF\n\t{_GH_WRITE_EXAMPLE}\n\tEOF",
+]
+
+
+@pytest.mark.parametrize("command", UNQUOTED_HEREDOC_BODIES)
+def test_unquoted_heredoc_body_is_still_denied(command: str) -> None:
+    """AC2: an UNQUOTED heredoc keeps its current (pre-fix) behaviour -- substitution is real,
+    so a gh-write invocation inside it must still deny. Pins the direction the fix must NOT
+    touch: this is not a broadening that risks under-denying real gh-write attempts."""
+    assert _run(command) == "deny", (
+        f"unquoted heredoc body wrongly allowed: {command!r}"
+    )
+
+
+def test_quoted_string_argument_behaviour_from_lode_obox_is_unchanged() -> None:
+    """AC3 (regression): the heredoc fix must not disturb lode-obox's own fix -- a gh phrase
+    quoted inside an ordinary string argument (no heredoc involved at all) still falls through."""
+    assert _run('git commit -m "guard: deny gh issue create"') is None
+    assert _run('bd update lode-x --notes "also gh pr comment posts publicly"') is None
+
+
+def test_heredoc_after_a_live_gh_write_does_not_hide_it() -> None:
+    """A quoted heredoc earlier or later in the same command must not swallow a genuine, live
+    gh-write call sitting outside it -- the sanitizer only strips the heredoc BODY, never
+    anything before/after the operator on the same or other lines."""
+    command = "gh issue create --title x --body y; cat <<'EOF'\nnote\nEOF"
+    assert _run(command) == "deny"
+
+
+# The pre-pass DELETES lines before the scan runs, so every input where it strips
+# MORE than the shell would is a fail-OPEN -- a live gh write hidden from the
+# scanner. Each case below is a heredoc LOOKALIKE: a `<<'D'`-shaped token the
+# shell does not treat as a body-consuming heredoc operator at all, followed by a
+# genuine gh write on a later line that the shell really would execute. All four
+# were live fail-opens in the first cut of strip_quoted_heredoc_bodies() and are
+# pinned here so the pre-pass can never regrow them.
+HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE = [
+    # A <<< HERESTRING consumes no body at all -- read as `<<` + `'EOF'` it
+    # swallowed everything after it.
+    "grep -q x <<<'EOF'\ngh issue create --title x --body y",
+    # A lookalike inside a quoted string argument: not an operator, no body. This
+    # pre-pass is line-based, not quote-aware, so what saves it is that the
+    # delimiter never appears alone on a later line -- an UNCLOSED quoted heredoc
+    # must strip nothing rather than swallow the rest of the command.
+    "echo \"see <<'EOF' here\"\ngh issue create --title x --body y",
+    # A lookalike written inside an UNQUOTED heredoc's body -- that body is text
+    # to the shell, so the token opens nothing.
+    "cat <<EOF > /tmp/f\nexample: <<'Q'\nEOF\ngh issue create --title x --body y",
+    # A closing delimiter with trailing whitespace does not close the heredoc in
+    # real bash either, so the pre-pass must not act as though it did.
+    "cat <<'EOF'\nbody\nEOF \ngh issue create --title x --body y",
+    # The two cases above rely on the delimiter word never appearing alone later,
+    # which is what the strip-nothing-unless-closed rule keys on. These two repeat
+    # them WITH such a line present, so the other two rules -- the herestring guard
+    # and unquoted-heredoc tracking -- are each load-bearing on their own.
+    "grep -q x <<<'EOF'\ngh issue create --title x --body y\nEOF",
+    "cat <<EOF > /tmp/f\nexample: <<'Q'\nEOF\ngh issue create --title x --body y\nQ",
+]
+
+
+@pytest.mark.parametrize("command", HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE)
+def test_heredoc_lookalike_does_not_hide_a_live_gh_write(command: str) -> None:
+    """The pre-pass must never strip MORE than the shell would: stripping less costs a
+    false deny (seconds), stripping more is a false ALLOW (unrecoverable)."""
+    assert _run(command) == "deny", (
+        f"fail-open: gh write hidden by pre-pass: {command!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Script-level tests: drive scripts/gh-write-guard.sh directly (lode-fpmi's pattern,
+# applied here when this guard's logic was extracted out of settings.json).
+#
+# The hook-level tests above remain the end-to-end proof -- they run the SHIPPED
+# wrapper through dash, so they exercise wrapper + script together and would catch
+# a delegation that silently stopped working. These add fast, precise coverage of
+# the scanning logic in isolation, and are what makes the extraction worth doing.
+# ---------------------------------------------------------------------------
+
+
+def _script_decision(command: str) -> str | None:
+    """Run the extracted script against `command`; return its decision, or None if allowed."""
+    proc = subprocess.run(
+        ["bash", str(SCRIPT), command],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, f"script exited {proc.returncode}: {proc.stderr}"
+    if not proc.stdout.strip():
+        return None
+    return json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"]
+
+
+# (DENIED/ALLOWED at the script level are already covered by
+# TestGhWriteGuardScriptDirectly above -- these add the heredoc-specific cases
+# that class does not have, on top of the same `_script_decision` mechanism.)
+
+
+@pytest.mark.parametrize("command", QUOTED_HEREDOC_BODIES)
+def test_script_allows_quoted_heredoc_bodies(command: str) -> None:
+    assert _script_decision(command) is None, (
+        f"script false-denied quoted heredoc: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", UNQUOTED_HEREDOC_BODIES)
+def test_script_denies_unquoted_heredoc_bodies(command: str) -> None:
+    assert _script_decision(command) == "deny", (
+        f"script wrongly allowed unquoted heredoc: {command!r}"
+    )
+
+
+@pytest.mark.parametrize("command", HEREDOC_LOOKALIKES_THAT_MUST_NOT_HIDE_A_WRITE)
+def test_script_denies_heredoc_lookalikes(command: str) -> None:
+    assert _script_decision(command) == "deny", (
+        f"fail-open at script level: {command!r}"
+    )
+
+
+def test_script_is_executable_so_the_wrapper_can_resolve_it() -> None:
+    """The wrapper gates on `[ -x "$SCRIPT" ]` and fails OPEN if it is not executable, so a
+    lost exec bit would silently disable this guard with every test above still green."""
+    assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} is not executable"
+
+
+def test_wrapper_delegates_and_embeds_no_scanning_logic() -> None:
+    """lode-fpmi's acceptance criterion, now applied to this guard: "the guard logic lives in a
+    tested script, not untested inline shell"."""
+    hook = _hook_command()
+    assert "scripts/gh-write-guard.sh" in hook
+    for inline in ("--raw-field", "[[:space:]]", "ssh-key"):
+        assert inline not in hook, (
+            f"scanning logic {inline!r} is still embedded inline in the wrapper"
+        )
+
+
+# NOTE: this guard's wrapper FAILS CLOSED (not open) when scripts/gh-write-guard.sh cannot be
+# resolved -- see the "lode-obox: the hook now FAILS CLOSED..." section above
+# (test_hook_fails_closed_when_guard_script_is_missing /
+# test_hook_fails_closed_when_guard_script_is_not_executable). A prior revision of this file
+# pinned the OPPOSITE (fail-open) behaviour; that pin was superseded by lode-obox's fail-closed
+# design, per the human decision recorded on the ticket (2026-08-04 ACCEPT AS BUILT). Do not
+# reintroduce a fail-open pin here.

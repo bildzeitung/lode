@@ -154,7 +154,7 @@ publishes that body as the GitHub release notes.
    construction; a fixed path is only immune if it starts empty:
 
    ```bash
-   NOTES_FILE="$(rtk git rev-parse --git-dir)/release-state/notes.md"
+   NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
    rm -rf "$(dirname "$NOTES_FILE")" && mkdir -p "$(dirname "$NOTES_FILE")"
    # …write the itemized list into "$NOTES_FILE"…
    ```
@@ -208,7 +208,7 @@ operator needs to decide on, not a passive export to throw away.
 # $PROPOSED is the literal version confirmed in Section 3, filled in here like a `<...>` placeholder
 # -- no bash in this file computes it (allowlisted in tests/test_skill_bash_state.py, which carries
 # the full reason).
-NOTES_FILE="$(rtk git rev-parse --git-dir)/release-state/notes.md"
+NOTES_FILE="$(git rev-parse --git-dir)/release-state/notes.md"
 scripts/release.sh "$PROPOSED" "$NOTES_FILE"   # bare X.Y.Z, no leading 'v' — the script adds it
 ```
 

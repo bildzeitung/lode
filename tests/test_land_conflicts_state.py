@@ -27,16 +27,18 @@ record, so 2b was ordered IN PROSE to kick back before 3a ran or lose the
 file. The wipe is hoisted to Section 1, ahead of every writer, which makes
 that ordering structural instead of remembered -- and the pins below are what
 keep it that way, since nothing else in this repo parses this markdown.
+
+lode-youi generalized this file's charter accordingly: it now owns DOCUMENT-ORDER
+invariants of `.claude/skills/land/SKILL.md` that no other gate parses, not only
+the $CONFLICTS/$STATE_DIR ones the paragraphs above describe. The pin added there
+(Section 3's re-gate precedes Section 4's `origin/trunk` push) is about neither
+$CONFLICTS nor $STATE_DIR; it lives here because this is where the block-boundary
+scaffolding and the cross-block-ordering precedent already are.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from conftest import bash_fence_blocks
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
+from conftest import LAND_SKILL, bash_fence_blocks
 
 
 def _skill_blocks() -> list[str]:
@@ -77,7 +79,7 @@ def _only_block_with(*needles: str, what: str) -> str:
 def _kick_back_block() -> str:
     return _only_block_with(
         "--add-label needs-rebase",
-        "rtk bd update",
+        "bd update",
         what="the needs-rebase kick-back",
     )
 
@@ -100,7 +102,7 @@ def test_state_dir_is_wiped_once_in_section_1_ahead_of_every_writer() -> None:
     false positive.
     """
     site = _only_block_with('rm -rf "$STATE_DIR"', what="the per-pass $STATE_DIR wipe")
-    assert "rtk git checkout -f trunk" in site, (
+    assert "git checkout -f trunk" in site, (
         "the $STATE_DIR wipe is no longer in Section 1's setup fence (the only "
         "block that runs `git checkout -f trunk`). Anywhere later and a block "
         "that writes under $STATE_DIR before it -- 2b's conflicts record, 3a's "
@@ -121,14 +123,14 @@ def test_section_1_block_still_ends_on_the_pass_start_reset() -> None:
     `if [ "$rc" = 1 ]` comment reasons about, from the other direction.
     """
     site = _only_block_with(
-        "rtk git reset --hard origin/trunk",
-        "rtk git checkout -f trunk",
+        "git reset --hard origin/trunk",
+        "git checkout -f trunk",
         what="Section 1's pass-start block",
     )
     last = [
         ln for ln in site.splitlines() if ln.strip() and not ln.strip().startswith("#")
     ][-1]
-    assert last.startswith("rtk git reset --hard origin/trunk"), (
+    assert last.startswith("git reset --hard origin/trunk"), (
         "Section 1's setup block no longer ends on `git reset --hard "
         f"origin/trunk` -- its last executed line is {last.strip()!r}. That "
         "command's exit status is the only machine-readable signal the block "
@@ -198,7 +200,7 @@ def test_kick_back_block_reads_conflicts_from_disk_not_a_bare_variable() -> None
     )
 
     read_pos = site.index('CONFLICTS=$(cat "$STATE_DIR/conflicts/<id>"')
-    update_pos = site.index("rtk bd update <id> --remove-label ready-for-land")
+    update_pos = site.index("bd update <id> --remove-label ready-for-land")
     assert read_pos < update_pos, (
         "the kick-back block reads $CONFLICTS from disk AFTER the bd update call "
         "-- too late to be interpolated into the --append-notes text"
@@ -216,10 +218,116 @@ def test_kick_back_block_refuses_loudly_on_missing_or_empty_conflicts() -> None:
     )
 
     guard_pos = site.index("GATE COULD NOT RUN")
-    update_pos = site.index("rtk bd update <id> --remove-label ready-for-land")
+    update_pos = site.index("bd update <id> --remove-label ready-for-land")
     exit_pos = site.index("exit 1", guard_pos)
     assert guard_pos < exit_pos < update_pos, (
         "the loud failure guard does not exit BEFORE the bd update call -- a "
         "missing/empty conflicts record could still produce a kick-back note "
         "with a blank paths section"
+    )
+
+
+_REGATE = "nox -s tests"
+"""The re-gate needle: the session that actually gates CONTENT.
+
+Not `nox -s lock_currency`, which matches the same two blocks today (measured)
+but whose exit 2 SKILL.md explicitly treats as NOT a red gate, and which is the
+chain's newest and most volatile member (lode-sys4). Pinning on it would go red
+when someone drops it for the reason the doc already contemplates, and stay
+green if `nox -s tests` were removed -- both directions wrong.
+"""
+
+_PUSH = "git push origin trunk"
+
+
+def _regate_and_push_indices(blocks: list[str]) -> tuple[list[int], int]:
+    """Document-order positions of the re-gate blocks and the push block.
+
+    Also polices the structural assumption itself, so a SKILL.md reshape that
+    adds or drops one of these blocks fails loudly here rather than silently
+    changing what the ordering pin means.
+    """
+    regate_indices = [i for i, b in enumerate(blocks) if _REGATE in b]
+    push_indices = [i for i, b in enumerate(blocks) if _PUSH in b]
+    assert len(regate_indices) == 2, (
+        f"expected exactly 2 fenced blocks running `{_REGATE}` (Section 3's "
+        f"Green re-gate + the Red isolation-replay re-gate), found "
+        f"{len(regate_indices)} -- this test's assumption about SKILL.md's "
+        "structure has drifted; re-check by hand before adjusting the count"
+    )
+    assert len(push_indices) == 1, (
+        f"expected exactly 1 fenced block running `{_PUSH}`, found "
+        f"{len(push_indices)} -- this test's assumption about SKILL.md's "
+        "structure has drifted; re-check by hand before adjusting the count"
+    )
+    return regate_indices, push_indices[0]
+
+
+def _regate_precedes_push(blocks: list[str]) -> bool:
+    """Whether EVERY re-gate block precedes the push block.
+
+    Shared by the pin below and its sabotage twin ON PURPOSE: a twin that
+    re-derives the comparison instead of calling it proves only that the
+    re-derived expression is order-sensitive, which says nothing about the
+    assertion actually shipped. Routing both through this one function is what
+    makes the sabotage bind -- weaken the comparison here and the twin goes red.
+    """
+    regate_indices, push_index = _regate_and_push_indices(blocks)
+    return max(regate_indices) < push_index
+
+
+def test_section_3_regate_precedes_section_4_push_origin_trunk() -> None:
+    """lode-youi: pins mechanically what lode-rlz8 left to prose -- Section 4's
+    `origin/trunk` push sits after Section 3's re-gate, in document order.
+
+    A DOCUMENT-ORDER pin, not an execution-order guarantee: an agent that skips
+    a section could still push un-gated content even with this test green (the
+    same insufficiency `test_assert_main_checkout.py`'s `_assert_guard_precedes`
+    docstring raises for its own, narrower, intra-block pin). It earns its keep
+    anyway because the threat Section 4's prose names is exactly a document edit
+    ("if a future edit ever reorders push and gate"), and document order is
+    precisely what such an edit changes.
+
+    Owned here as a property of `/land`'s own Section 3 -> Section 4
+    sequencing, not as a service to `scripts/recycled-worktree-guard.sh`: the
+    premise ("`origin/trunk` only ever advances to already-gated content") is
+    relied on by every launch worktree, which branches from `origin/trunk`
+    (`.claude/settings.json`'s `worktree.baseRef: "fresh"`) -- so a reorder's
+    blast radius is every fresh agent worktree, not just that guard's reset
+    path.
+    """
+    blocks = _skill_blocks()
+    regate_indices, push_index = _regate_and_push_indices(blocks)
+    assert _regate_precedes_push(blocks), (
+        f"Section 3's re-gate (`{_REGATE}`) no longer precedes Section 4's "
+        f"`{_PUSH}` in document order -- re-gate blocks at {regate_indices}, "
+        f"push block at {push_index}. A reorder here would let un-gated "
+        "content reach `origin/trunk`, and every fresh agent worktree branches "
+        "from it (lode-youi, lode-rlz8)"
+    )
+
+
+def test_section_3_regate_precedes_push_is_sabotage_proven() -> None:
+    """Proves the pin above is non-vacuous by running the SAME
+    `_regate_precedes_push()` it asserts on, against a minimally reordered copy
+    of the real parsed block list.
+
+    The sabotage is the exact edit the pin exists to catch: swap the push block
+    with the LAST re-gate block, i.e. hoist the push above Section 3's re-gate.
+    Deliberately not "move the push to index 0" -- that makes the comparison
+    `max(regate) < 0`, false for ANY input, so such a twin passes even against a
+    document that is already broken, and proves nothing.
+    """
+    blocks = _skill_blocks()
+    regate_indices, push_index = _regate_and_push_indices(blocks)
+
+    sabotaged = list(blocks)
+    last_regate = max(regate_indices)
+    sabotaged[push_index], sabotaged[last_regate] = (
+        sabotaged[last_regate],
+        sabotaged[push_index],
+    )
+    assert not _regate_precedes_push(sabotaged), (
+        "sabotage (hoisting the push above Section 3's re-gate) did not make "
+        "`_regate_precedes_push()` return False -- the real pin is vacuous"
     )

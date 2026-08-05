@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from pydantic import ValidationError
 
 from lode.config import Settings
 from lode.curation import delete_annotation, delete_edge
@@ -94,6 +95,21 @@ def _insert_note(
             "UPDATE notes SET head_version_id = ? WHERE note_id = ?",
             (version_id, note_id),
         )
+
+
+def _insert_enrich_job(
+    conn: sqlite3.Connection,
+    version_id: str = "ver-1",
+    status: str = "pending",
+) -> int:
+    """Insert a pending enrich job row; return the job id."""
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
+            "VALUES ('enrich', ?, ?, ?)",
+            (version_id, status, now_iso()),
+        )
+    return cur.lastrowid
 
 
 def _insert_external(
@@ -253,7 +269,7 @@ def test_inferred_edge_confidence_validation(
     confidence: float, should_raise: bool
 ) -> None:
     if should_raise:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             InferredEdge(to_id="x", reason="y", confidence=confidence)
     else:
         InferredEdge(to_id="x", reason="y", confidence=confidence)
@@ -1022,12 +1038,7 @@ def test_enrich_gap_skips_disqualifying_note(
 def test_enrich_gap_skips_live_job(conn: sqlite3.Connection) -> None:
     """A version with a live (pending/running/done/failed) enrich job is not re-enqueued."""
     _insert_note(conn)
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, next_attempt_at) "
-            "VALUES ('enrich', 'ver-1', ?)",
-            (now_iso(),),
-        )
+    _insert_enrich_job(conn)
     assert _enrich_gap_step(conn) == 0
 
 
@@ -1058,12 +1069,7 @@ def test_enrich_gap_skips_in_flight_batch_job(conn: sqlite3.Connection) -> None:
 def test_enrich_gap_reenqueues_dead_job(conn: sqlite3.Connection) -> None:
     """A dead-lettered enrich job is treated as a gap and re-enqueued."""
     _insert_note(conn)
-    with conn:
-        conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', 'ver-1', 'dead', ?)",
-            (now_iso(),),
-        )
+    _insert_enrich_job(conn, status="dead")
     count = _enrich_gap_step(conn)
     assert count == 1
     statuses = conn.execute(
@@ -1212,21 +1218,6 @@ def test_enrich_gap_pending_job_not_reenqueued_regardless_of_prompt_ver(
 # ---------------------------------------------------------------------------
 # Batch API helpers — submit_enrich_batch (lode-npx.2)
 # ---------------------------------------------------------------------------
-
-
-def _insert_enrich_job(
-    conn: sqlite3.Connection,
-    version_id: str = "ver-1",
-    status: str = "pending",
-) -> int:
-    """Insert a pending enrich job row; return the job id."""
-    with conn:
-        cur = conn.execute(
-            "INSERT INTO jobs (type, target_version, status, next_attempt_at) "
-            "VALUES ('enrich', ?, ?, ?)",
-            (version_id, status, now_iso()),
-        )
-    return cur.lastrowid
 
 
 def _fake_batch_client(
@@ -1717,6 +1708,126 @@ def test_collect_enrich_batch_marks_failed_on_errored_result(
     assert row[0] == "failed"
     assert row[2] == 1  # attempts incremented
     assert row[1] is not None
+
+
+def _line_without_custom_id() -> bytes:
+    """A fully well-formed ``succeeded`` results line minus only ``custom_id``."""
+    payload = {
+        "result": {
+            "type": "succeeded",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tu_1",
+                        "name": "emit",
+                        "input": {"tags": [], "entities": [], "inferred_edges": []},
+                    }
+                ],
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+    }
+    return (json.dumps(payload) + "\n").encode()
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    "line",
+    [
+        (json.dumps(None) + "\n").encode(),
+        _line_without_custom_id(),
+    ],
+    ids=["line-is-not-an-object", "line-missing-only-custom-id"],
+)
+def test_collect_enrich_batch_survives_a_results_line_with_no_usable_custom_id(
+    line: bytes, conn: sqlite3.Connection, settings: Settings
+) -> None:
+    """lode-i821 criterion 4: drives a results line with no usable
+    ``custom_id`` all the way through ``collect_enrich_batch`` (not just
+    ``AnthropicProvider.collect_batch``), against the REAL SDK -- a
+    ``MagicMock``-based ``_fake_batch_client`` can't reproduce
+    ``construct_type_unchecked``'s leniency, so this uses
+    ``httpx.MockTransport`` instead.
+
+    Two distinct shapes reach the same hazard, and only the first is a
+    *wrong-shape* line in the ``_wrong_shape_result`` sense:
+
+    - ``line-is-not-an-object``: a bare ``null`` has no ``custom_id``
+      attribute at all, and its ``result`` chain raises, so it degrades via
+      ``_wrong_shape_result``.
+    - ``line-missing-only-custom-id``: the ``result`` block is perfectly
+      well-formed, so the line takes the ordinary **succeeded** branch and
+      touches no wrong-shape arm whatsoever -- ``custom_id`` alone is absent.
+      Found in review of the rebuild, which normalized the placeholder only
+      inside ``_wrong_shape_result``; ``_result_custom_id`` now owns it for
+      every branch.
+
+    Either way ``collect_enrich_batch`` does ``job_map.get(version_id)`` and
+    then eagerly ``short_version_id(version_id)`` in the miss arm. Non-vacuous
+    for both: a ``None`` custom_id makes that bare ``version_id[:12]`` slice
+    raise a raw ``TypeError`` right here.
+    """
+    import anthropic
+
+    _insert_note(conn)
+    job_id = _insert_enrich_job(conn, "ver-1", status="running")
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET batch_handle = 'batch-nonobj' WHERE id = ?", (job_id,)
+        )
+
+    def handler(request: object) -> httpx.Response:
+        import httpx
+
+        if request.url.path.endswith("/results"):  # type: ignore[attr-defined]
+            return httpx.Response(200, content=line)
+        return httpx.Response(
+            200,
+            json={
+                "id": "batch-nonobj",
+                "type": "message_batch",
+                "processing_status": "ended",
+                "results_url": (
+                    "https://api.anthropic.com/v1/messages/batches/batch-nonobj/results"
+                ),
+                "created_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-01-02T00:00:00Z",
+                "request_counts": {
+                    "canceled": 0,
+                    "errored": 0,
+                    "expired": 0,
+                    "processing": 0,
+                    "succeeded": 1,
+                },
+            },
+        )
+
+    import httpx
+
+    client = anthropic.Anthropic(
+        api_key="test-key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    ended = collect_enrich_batch(
+        conn, "batch-nonobj", settings, provider=AnthropicProvider(client)
+    )
+    assert ended is True
+
+    # No matching job_map entry for the placeholder custom_id -- the running
+    # job is untouched, and nothing raised getting here.
+    (status,) = conn.execute(
+        "SELECT status FROM jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    assert status == "running"
 
 
 def test_collect_enrich_batch_dead_letters_at_max_attempts(

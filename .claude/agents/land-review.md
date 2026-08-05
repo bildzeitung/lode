@@ -73,9 +73,9 @@ misread as a conflict). My own verdict stays correct either way, since I never c
 what is at risk is `/land`'s merge, so this is the first thing I run:
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 ISOGUARD="$TOP/scripts/isolation-guard.sh"
-rtk "$ISOGUARD" || {
+"$ISOGUARD" || {
   [ -x "$ISOGUARD" ] || echo "BOOTSTRAP GAP: $ISOGUARD is missing or not executable -- this" \
     "checkout may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -110,9 +110,9 @@ lode-qv5t discovered here, ported to a shared, shellcheck'd and unit-tested scri
 fourth inline copy):
 
 ```bash
-TOP=$(rtk git rev-parse --show-toplevel)
+TOP=$(git rev-parse --show-toplevel)
 GUARD="$TOP/scripts/recycled-worktree-guard.sh"
-rtk "$GUARD" "before any fetch/diff work" || {
+"$GUARD" "before any fetch/diff work" || {
   [ -x "$GUARD" ] || echo "BOOTSTRAP GAP (lode-ivth): $GUARD is missing or not executable -- this" \
     "worktree may predate the script landing on trunk. STOP and report; do not proceed."
   exit 1
@@ -172,14 +172,14 @@ Form no opinion until I've read **both sides** — the ticket as written and the
     the **off-trunk** merge-base with it, never a bare single-result `git merge-base`:
     ```bash
     OFF_TRUNK_MB=""
-    for mb in $(rtk git merge-base --all origin/land/<base> origin/land/<id>); do
-      rtk git merge-base --is-ancestor "$mb" origin/trunk || { OFF_TRUNK_MB="$mb"; break; }
+    for mb in $(git merge-base --all origin/land/<base> origin/land/<id>); do
+      git merge-base --is-ancestor "$mb" origin/trunk || { OFF_TRUNK_MB="$mb"; break; }
     done
     # STOP if empty: git resolves an empty rev to HEAD, so `git diff ""..<id>` would silently
     # produce a WRONG diff with exit 0 rather than erroring. An empty result here means the lander
     # named a base this branch does not actually contain — surface that, never diff through it.
     [ -n "$OFF_TRUNK_MB" ] || { echo "NO off-trunk merge-base with land/<base> — do not diff; report this"; exit 1; }
-    rtk git diff "$OFF_TRUNK_MB"..origin/land/<id>
+    git diff "$OFF_TRUNK_MB"..origin/land/<id>
     ```
     A pair can have more than one merge-base — e.g. after `land/<base>` takes a needs-rebase
     trunk-merge pickup (lode-cln) *after* this branch already merged it, the pair acquires a second,
