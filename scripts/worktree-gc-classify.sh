@@ -102,6 +102,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 if [ "$#" -ne 5 ]; then
   echo "usage: $0 <worktree-path> <head-sha> <locked:0|1> <branch-name> <min-age-seconds>" >&2
   exit 2
@@ -134,10 +136,29 @@ fi
 # lode-bns3: the passive bd export is EXCLUDED from this judgment, so a
 # staged/modified `.beads/*.jsonl` can never read as "dirty" and zero out the
 # sweep -- it is BY INVARIANT never real work (import.auto: false, lode-6ra).
+#
+# lode-do3q: the excluded relpath list itself is READ from
+# scripts/beads-passive-exports.txt, the single canonical copy shared with the
+# Stop hook (.claude/settings.json, via scripts/discard-beads-passive-export-churn.sh)
+# and tests/test_land_lock.py's stall-hook scan exclusion -- see that file's
+# header for why a plain newline-delimited list is the one shape all three
+# consumers (bash, JSON-invoked bash, Python) can read without a forced
+# abstraction. Adding/renaming a passive export means editing ONE file now.
+_beads_passive_export_pathspecs() {
+  local list="$SCRIPT_DIR/beads-passive-exports.txt"
+  local rel
+  while IFS= read -r rel; do
+    [ -n "$rel" ] && printf '%s\n' ":(exclude)$rel"
+  done < "$list"
+}
+
 wt_provably_clean() {
   local st
-  st=$(git -C "$1" status --porcelain -- . \
-    ':(exclude).beads/issues.jsonl' ':(exclude).beads/interactions.jsonl' 2>&1) && [ -z "$st" ]
+  local -a excludes=()
+  while IFS= read -r spec; do
+    excludes+=("$spec")
+  done < <(_beads_passive_export_pathspecs)
+  st=$(git -C "$1" status --porcelain -- . "${excludes[@]}" 2>&1) && [ -z "$st" ]
 }
 
 # WIDENED PREDICATE (lode-amif): "merged into trunk" is a PROXY for "this

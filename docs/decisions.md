@@ -3272,3 +3272,45 @@ what that gate cannot catch is recorded in its module docstring (lode-nlk6).
   (lode-e49j) and its `_KNOWN_ENV_VARS` sibling (lode-rscn); the third,
   `tests/test_assert_main_checkout.py::test_every_allowlist_entry_is_provably_checked_by_sabotage`,
   is lode-7zap's own addition.
+
+- **The beads passive-export relpath list (`.beads/issues.jsonl`,
+  `.beads/interactions.jsonl`) is canonicalized into a plain text file, not
+  left as three independent hardcoded copies (2026-08-05, lode-do3q).**
+  Discovered mid-review of lode-qg6g, which added the third copy: the same
+  two-path list was hardcoded independently in `scripts/worktree-gc-classify.sh`'s
+  `wt_provably_clean()` dirty-tree guard (a git pathspec `:(exclude)` pair —
+  the code lode-9owc had already moved out of `SKILL.md` into this script by
+  the time this ticket was picked up, so the ticket's original `SKILL.md:1293`
+  citation is stale; the script is now the live location), the `Stop` hook's
+  command string in `.claude/settings.json`, and
+  `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` Python set.
+  Three files, three syntaxes (bash pathspec, JSON-embedded shell, Python),
+  with nothing keeping them in sync — a fourth candidate already exists and is
+  live rather than hypothetical (`.beads/config.yaml`'s `events-export`,
+  currently `false`, would add `.beads/events.jsonl`).
+
+  **Decision: canonicalize**, rejecting the WONTFIX the ticket flagged as a
+  live possibility. The ticket's own text argued a shared *code* artifact
+  couldn't span all three languages — true, but the actual content that
+  drifts is not code, it's a two-line list of relpaths, and a plain
+  newline-delimited text file is readable natively by both consumers that
+  matter (`bash`'s `read`/`mapfile`, Python's `.read_text().splitlines()`).
+  The third consumer, the `Stop` hook, was the one genuine obstacle — a JSON
+  string can't `source` a file — but this repo's own `settings.json` already
+  established the fix for exactly this shape: every other hook in the file
+  (`bd-deps-blocks-guard.sh`, `gh-write-guard.sh`, `sha-fabrication-guard.sh`)
+  shells out to a script under `scripts/` rather than inlining logic in the
+  JSON string. Applying that same pattern here — extracting the hook's one
+  line of logic into `scripts/discard-beads-passive-export-churn.sh`, which
+  itself reads the canonical list — removed the obstacle rather than forcing
+  an abstraction across it.
+
+  **Mechanism:** `scripts/beads-passive-exports.txt` (one relpath per line)
+  is now the single canonical copy. `scripts/worktree-gc-classify.sh`'s
+  `wt_provably_clean()` reads it to build its `:(exclude)` pathspec list;
+  `scripts/discard-beads-passive-export-churn.sh` (new, called from the
+  `Stop` hook) reads it to build its `git checkout HEAD --` argument list;
+  `tests/test_land_lock.py`'s `_STALL_HOOK_SCAN_EXCLUDED_RELPATHS` reads it
+  directly into the set. Adding or renaming a passive export is now a
+  one-file edit. No behaviour changed at any of the three sites — each still
+  excludes exactly the same two relpaths it did before.
