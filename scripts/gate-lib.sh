@@ -134,6 +134,24 @@
 # were the instant the source command returns (verified, bash 5.2) -- so a
 # consumer's own arg-count check below the source line sees precisely what it
 # would have seen without any of this.
+#
+# WEIGHED AND REJECTED (lode-nwqb): binding GATE_ADVISORY through a variable-
+# assignment PREFIX on the source command instead (e.g.
+# `GATE_ADVISORY_LINES=$'a\nb' . gate-lib.sh`, with this file doing
+# `mapfile -t GATE_ADVISORY <<< "$GATE_ADVISORY_LINES"`) rather than
+# positional args. "No advisory" becomes the natural unset default, which
+# would retire the --no-advisory sentinel, its sweep, and that sweep's
+# non-vacuity proof. Re-measured on bash 5.2.21: the prefix variable does NOT
+# persist past the source in default mode, but DOES persist under
+# `set -o posix` (`.` is a POSIX special builtin, and assignment-prefix
+# persistence on a special builtin is specified behaviour) -- trading this
+# file's one documented, tested subtlety for a less-known, mode-dependent
+# one, and losing the bash array at the point the value is built (a
+# newline-joined string reconstituted with mapfile is more machinery, not
+# less). Not a demonstrated improvement over the sentinel below; full
+# reasoning in docs/decisions.md (search "lode-nwqb") -- and it is THAT
+# entry, not lode-ysr6's, that this paragraph's own scope note refers to:
+# revisiting the rejection means marking the lode-nwqb entry superseded.
 if [ "$#" -eq 1 ] && [ "$1" = "--no-advisory" ]; then
   GATE_ADVISORY=()
 else

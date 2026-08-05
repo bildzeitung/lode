@@ -1187,36 +1187,44 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 
 # --- Fenced ```bash/```sh block parsing (lode-ovgs, lode-p4qb) --------------
 #
-# THE ONE parser for "which bash does an agent actually execute", for the four
-# gates listed below, after four private copies of it drifted apart (a fifth,
-# tests/test_sweep_digest_id.py, was folded in later -- lode-k5qb). That claim
-# was made and falsified from this same prose comment five separate times
-# (lode-ovgs, lode-p4qb, lode-kjei, lode-jm4a, lode-oqqw) before lode-k5qb
-# stopped asserting it here on comment authority alone: it is now a mechanical,
-# AST-based gate, tests/test_no_private_fence_state_machine.py, that fails the
-# suite the moment ANY module under tests/*.py or scripts/*.py (other than
-# this file) hand-rolls a fence-toggle open/close flag again. Trust that gate,
-# not this paragraph.
+# THE ONE parser for "which bash does an agent actually execute", for the gates
+# listed below, after private copies of it drifted apart -- verified by
+# inspection, NOT by a gate, which is why that claim has been falsified from
+# this same prose comment five separate times (lode-ovgs, lode-p4qb, lode-kjei,
+# lode-jm4a, lode-oqqw) before lode-k5qb stopped asserting it here on comment
+# authority alone: it is now a mechanical, AST-based gate,
+# tests/test_no_private_fence_state_machine.py, that fails the suite the
+# moment ANY module under tests/*.py or scripts/*.py (other than this file)
+# hand-rolls a fence-toggle open/close flag again. Trust that gate, not this
+# paragraph. The count is deliberately not restated here either: it has been
+# hand-incremented (and gone stale) once per unification ticket, so the list
+# below carries it and nothing else does.
 #
 # The bug that forced the unification is worth keeping, because it is the shape
 # any re-implementation reinvents: tests/test_land_lock.py matched the fence
 # marker with `line.startswith("```")`, so a fence INDENTED under a markdown
 # list item (e.g. `.claude/skills/land/SKILL.md`'s Section 3 isolation-replay
 # merge loop) never opened at all -- 4 of that file's 24 bash fences were
-# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Three
+# invisible to it, and every fence in `.claude/skills/code/SKILL.md` was. Four
 # other modules each rediscovered and re-fixed that independently before
-# lode-ovgs unified them here and lode-p4qb folded in the fourth
-# (tests/test_assert_main_checkout.py).
+# lode-ovgs unified three of them here, lode-p4qb folded in the fourth
+# (tests/test_assert_main_checkout.py), and lode-jm4a folded in the fifth
+# (tests/test_sweep_digest_id.py).
 #
 # Consumers of the FUNCTION: tests/test_land_lock.py,
 # tests/test_land_conflicts_state.py, tests/test_skill_bash_state.py,
-# tests/test_assert_main_checkout.py. tests/test_bd_list_limit_gate.py's
-# inline-span scan (`inline_violations`) is a fifth consumer -- of
-# `fence_scan` directly, since lode-kjei collapsed its own open/close loop onto
-# the same generator `bash_fence_blocks` is now built on (see `fence_scan`
-# below). A change to the rules stated in `fence_scan`'s docstring changes what
-# all five gates consider "executed"/"fenced", so the rules are stated ONCE
-# there and nowhere else.
+# tests/test_assert_main_checkout.py, tests/test_sweep_digest_id.py.
+# tests/test_bd_list_limit_gate.py's inline-span scan (`inline_violations`) is
+# a further consumer -- of `fence_scan` directly, since lode-kjei collapsed its
+# own open/close loop onto the same generator `bash_fence_blocks` is now built
+# on (see `fence_scan` below). A change to the rules stated in `fence_scan`'s
+# docstring changes what every gate above considers "executed"/"fenced", so the
+# rules are stated ONCE there and nowhere else -- on the TEST side.
+# `scripts/check_links.py`'s `_content_lines` makes the same "single home of
+# the fence rule" claim for its own two consumers (the heading and link
+# scanners) -- deliberately a SEPARATE single home, not a competing one: it is
+# production code and cannot import anything under `tests/` (lode-jm4a). Two
+# homes, each sole owner of its own side of the import boundary.
 
 
 # A markdown blockquote marker: optional leading whitespace, one `>`, one
@@ -1228,13 +1236,15 @@ def nox_session_nodes(noxfile_path: Path) -> dict[str, ast.FunctionDef]:
 # `> REPO_ROOT=...` / `> echo "$REPO_ROOT"` would still show REPO_ROOT as
 # unassigned, since the leading `> ` defeats the `^`-anchored assignment
 # regexes in tests/test_skill_bash_state.py (lode-wroz). Doing it HERE means every
-# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site --
-# `fence_scan` below, which every consumer (fenced and inline alike) reads its lines
-# through -- so the "both paths must unmark to the same shape" hazard this comment used
+# caller gets the fix, not just one. Since lode-kjei there is exactly ONE strip site on
+# any PARSING path -- `fence_scan` below, which every consumer (fenced and inline alike)
+# reads its lines through -- so the "both paths must unmark to the same shape" hazard this comment used
 # to describe is structural rather than a convention: there is no second pass left to
 # disagree. That also keeps lode-3pyo's finding moot: stripping twice is a no-op on
 # today's corpus, measured, but not in general -- a `>>`-leading line double-strips to a
-# bare one -- and nothing strips twice any more.
+# bare one -- and nothing strips twice any more. (tests/test_land_lock.py's independent
+# fence COUNTER strips through this same constant off-path, by design: it must not call
+# `fence_scan` at all, and must not re-type the marker shape either -- lode-bi9h.)
 _BLOCKQUOTE_MARKER = re.compile(r"^[ \t]*>[ \t]?")
 
 # A fence marker: three-or-more backticks, or three-or-more tildes, plus
@@ -1415,6 +1425,16 @@ def _fenced_bash(markdown: str) -> str:
     and blind spots live next to :func:`bash_fence_blocks`, not here.
     """
     return "\n".join(bash_fence_blocks(markdown))
+
+
+#: The land skill doc. Three of its readers parse its fenced bash blocks (via
+#: :func:`bash_fence_blocks`/:func:`_fenced_bash` above), which is why it lives
+#: here; test_worktree_gc_classify.py reads the same file but scans its
+#: ``case "$BUCKET"`` dispatch directly rather than through the fence parser.
+#: Was defined byte-identically in four modules (test_worktree_gc_classify.py,
+#: test_land_conflicts_state.py, test_land_lock.py,
+#: test_assert_main_checkout.py) until lode-va47 consolidated it here.
+LAND_SKILL = _CHECKOUT_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
 
 
 # --- TUI test settle helpers (lode-lcju) -----------------------------------

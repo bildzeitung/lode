@@ -350,6 +350,13 @@ string through `.`, which can't be verified to stay inside the worktree"), so th
 address; hand-rolling `VIRTUAL_ENV=...`/`PATH=...` trips the same guard. The explicit-path form has
 none of those shapes — no sourcing, no substitution, no `$PATH` expansion — so there is nothing to
 refuse. The `./venv/bin/` prefix is load-bearing: `nox` is not on the ambient `PATH` unactivated.
+The refusal is on **shape alone, before any condition is evaluated** — `if [ -x /nonexistent ]; then
+. ./venv/bin/activate; fi` draws the identical message, so burying a `source` in a branch that can
+never run does not get it past the guard. It is the `.` that is refused, not the `if/then/fi`: the
+same compound wrapping a plain `git` command is accepted. So a conditional gate step is available to
+an isolated agent, but never one that sources. (Both verified from a worktree-isolated dispatch,
+lode-828x — the case lode-6874's review raised but could not test, having come up in the main
+checkout rather than a worktree, the fault lode-jk44 later closed.)
 
 **Activation is unnecessary, not merely inconvenient — `_venv_tool()` (lode-0yfn) removed the reason
 for it.** `default_venv_backend = "none"` means sessions inherit the invoking shell's `PATH`, and
@@ -380,7 +387,7 @@ every new worktree branches from `origin/trunk` and so always carries `_venv_too
 guard-friendly fallback for such a branch is `./venv/bin/pytest` directly — a plain command, and
 `tests/conftest.py`'s guard 0 still protects it against a wrong-checkout import. Note that this is
 base skew *transferred*, not eliminated: dropping the wrapper removes the file-missing form of it,
-not the general problem, which is lode-828x's subject.
+not the general problem; lode-828x took that residue up and closed it as needing no further mechanism.
 
 **Why no `scripts/nox.sh` wrapper.** One was built and reviewed for this ticket, justified on three
 grounds — locating `nox`, a guard-friendly single-command shape, and the exit-2 contract — and each
@@ -2847,25 +2854,59 @@ assumption would not have closed it.
   a single protected command into an unguarded fence, and reordering within the block are each
   caught.
 
-  **This mechanism now protects four fenced blocks, not one — the paragraph above describes only
-  Section 1's.** `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
-  `git reset --hard origin/trunk`; `lode-pxyt` then added Section 3's first-pass ("Green") merge loop
-  and Section 4's reformat-commit block, which reach a bare `git merge --no-ff` (via
-  `scripts/land-merge-one.sh`) and a bare `git commit`. **Do not maintain the call-site list here, or
-  in the script's header** — both went stale within one ticket of being written, which is the whole
-  reason `lode-pxyt` exists. `tests/test_assert_main_checkout.py` is the authoritative list, and it no
-  longer keeps it via four hand-anchored per-fence pins. Those were closed-world: a genuinely new
-  unguarded fence matched none of their hand-picked selectors and failed nothing, while every
-  exemption was prose no gate could falsify. `lode-1d2y` added the open-world replacement — a sweep
-  that enumerates every fenced block in `land/SKILL.md`, flags every command that mutates cwd's repo,
-  and passes only where each is guarded earlier in its own block or carries a reasoned entry in that
-  module's allowlist — and `lode-8p3c` then deleted the four per-fence pins outright, but only after
-  widening the sweep's command pattern to cover commands the pins protected and the pattern did not
-  yet match. That generalizes, and is the trap to remember whenever a named pin is retired in favour
-  of a pattern: **a sweep subsumes a pin only for the commands its pattern matches**, so diff the
-  pin's protected set against the pattern *before* deleting it. This paragraph deliberately does not
+  **This mechanism protects three fenced blocks in `land/SKILL.md`, plus one script-level call inside
+  `scripts/land-merge-one.sh` itself — the paragraph above describes only Section 1's fenced block.**
+  `lode-gczf` added Section 3's isolation-replay ("Red") loop, which runs its own
+  `git reset --hard origin/trunk`; `lode-pxyt` then added a fenced guard to Section 3's first-pass
+  ("Green") merge loop and to Section 4's reformat-commit block, which reach a bare `git merge --no-ff`
+  (via `scripts/land-merge-one.sh`) and a bare `git commit` respectively. `lode-1nty` (below) then moved
+  the Green loop's guard *into* `land-merge-one.sh` itself and deleted the fenced copy — that script now
+  asserts its own main-checkout identity as its first action, protecting both of its call sites (the
+  Green loop and the Red loop) by construction, so the Green loop's fence no longer needs a guard of its
+  own. The Red loop **keeps** its fenced guard regardless: it still runs a bare, unprotected
+  `git reset --hard` that `land-merge-one.sh` never touches. **Do not maintain the call-site list here,
+  or in either script's header** — both went stale within one ticket of being written, which is the
+  whole reason `lode-pxyt` (and now `lode-1nty`) exist. `tests/test_assert_main_checkout.py` is the
+  authoritative list for `land/SKILL.md`'s own fences, and it no longer keeps it via four
+  hand-anchored per-fence pins. Those were closed-world: a genuinely new unguarded fence matched none of
+  their hand-picked selectors and failed nothing, while every exemption was prose no gate could falsify.
+  `lode-1d2y` added the open-world replacement — a sweep that enumerates every fenced block in
+  `land/SKILL.md`, flags every command that mutates cwd's repo, and passes only where each is guarded
+  earlier in its own block or carries a reasoned entry in that module's allowlist — and `lode-8p3c` then
+  deleted the four per-fence pins outright, but only after widening the sweep's command pattern to cover
+  commands the pins protected and the pattern did not yet match. That generalizes, and is the trap to
+  remember whenever a named pin is retired in favour of a pattern: **a sweep subsumes a pin only for the
+  commands its pattern matches**, so diff the pin's protected set against the pattern *before* deleting
+  it. `lode-1nty` repeated this discipline in reverse: `scripts/land-merge-one.sh` was named literally
+  in the sweep's `_MUTATING_CMD_RE` pattern as a special case (since Section 3's Green loop had no bare
+  mutating git command of its own, only that script reference); once the script started guarding itself,
+  that special case was **removed** from the pattern rather than papered over with an allowlist entry —
+  the sweep no longer needs to know the script exists at all. This paragraph deliberately does not
   restate the module's contents — it is the *reasoning*, not the roster, and an exemption that stops
   being true fails a test rather than aging quietly here.
+
+  **Fence-level guard vs. script-level guard (`lode-1nty`) — a real decision, not a foregone one, with
+  arguments on both sides.** `lode-pxyt`'s original fix guarded Section 3's Green loop the same way as
+  every other fence: `assert-main-checkout.sh || exit 1` as the fence's first line, immediately ahead of
+  the ONE command that fence protects (`scripts/land-merge-one.sh`). That call-site fix protects the one
+  known caller but not a future one — any new caller of `land-merge-one.sh` would have to remember to
+  fence-guard it independently, the exact "discipline, not mechanism" shape this project has moved away
+  from elsewhere. The alternative — asserting main-checkout identity *inside* `land-merge-one.sh` itself,
+  since the script already sources `gate-lib.sh` and its caller already routes its exit 2 to a hard pass
+  abort — protects every current and future caller by construction, at the cost of two things: the pass
+  now aborts on the FIRST merge attempt instead of before `$ACCEPTED` even loads (a real earliness
+  regression, though nothing destructive happens in that gap — loading state and starting a loop are
+  reads, not writes), and it adds a new exit-2 condition to `land-merge-one.sh`'s own contract (a public
+  interface change, however small its measured blast radius: two known callers, both already routing
+  exit 2 to a hard abort). **Decided: script-level, not fence-level, for Section 3's Green loop.** House
+  precedent points the same way — `lode-09td` dropped `/code`'s redundant call-site `isolation: worktree`
+  option in favor of frontmatter as the SOLE enforcement point for all three producer/reviewer roles, on
+  an explicit gated-vs-ungated argument for why one enforcement point is acceptable against an
+  unrecoverable failure mode; choosing defense-in-depth here would re-litigate that in the opposite
+  direction for a materially similar hazard shape. Section 3's Red loop is deliberately **not** folded
+  into this: it keeps its own fence-level guard, because that fence protects a bare `git reset --hard`
+  that `land-merge-one.sh` does not reach — removing it would leave that command genuinely unguarded, not
+  merely redundantly guarded.
 
   **`lode-gczf`'s "Section 4's worktree/branch GC is exempt" is right as scoped and wrong if
   generalized — the distinction is the point.** Its literal text: those commands "operate on specific

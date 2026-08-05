@@ -24,9 +24,8 @@
 # the exact lode-9i2p inversion. Measured (bash 5.2, shebang honoured):
 # `mktemp -d` failing under -e exits 1, and so do the REPO= assignment, the
 # printf into $CFG/puppeteer.json, and both chmod calls below. All five are
-# now routed to exit 2 -- four through gate_could_not_run, and REPO= through
-# its own pre-library fallback, argued at that line rather than restated here
-# (lode-bss5, lode-3xqb).
+# now routed to exit 2 through gate_could_not_run (lode-bss5, lode-3xqb,
+# lode-dyq0).
 #
 # Two more found reviewing that pass, because guarding a command is not the
 # same as guarding the SHELL (lode-3xqb):
@@ -50,32 +49,53 @@
 set -uo pipefail
 
 IMAGE="minlag/mermaid-cli:latest"
+
+# The ONE owner of the gate-could-not-run contract: the banner callers key on,
+# the caller's cause lines, the standing instruction to a reader, and exit 2.
+# Callers supply only the cause — the part that genuinely differs. Sourced
+# from scripts/gate-lib.sh (lode-090f) so this contract cannot drift out of
+# sync with the other gate scripts — they, plus .claude/agents/coding.md,
+# code-reviewer.md and .claude/skills/land/SKILL.md, key on exactly this
+# stderr shape.
+# The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
+# section for the measurement and why the guard can't use the library it loads.
+# This gate's own advisory trailer, bound at source time (lode-ysr6; see
+# gate-lib.sh's GATE_ADVISORY contract for the mechanism and why it is not a
+# separate assignment). tests/test_validate_mermaid_gate.py's
+# _assert_gate_could_not_run pins the advisory TEXT below on an exit-2 path,
+# which no static sweep can see -- route any new exit-2 test through it.
+#
+# Sourced ABOVE REPO= (lode-dyq0; moved from below the docker probe, where
+# lode-3xqb had left it deliberately -- see that ticket's comment, now
+# obsolete, and lode-dyq0's own description for the ordering argument): the
+# only thing between here and REPO= is IMAGE=, which does not depend on
+# $REPO and cannot fail, so nothing forces gate_could_not_run to stay
+# undefined at the point REPO= needs it. That leaves exactly one hardcoded
+# pre-library fallback in this file -- the guard for the source itself,
+# immediately below, which genuinely cannot call the helper it is checking
+# for.
+# shellcheck source=gate-lib.sh
+if ! . "$(dirname "$0")/gate-lib.sh" \
+     "This is a machine fault a human must fix, not a mermaid syntax error —" \
+     "do not hand-verify diagrams or hand off in place of this gate."; then
+  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
+  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
+  exit 2
+fi
+
 # Guarded rather than left to -e (lode-3xqb): a failing `cd`/`pwd` here --
 # this script's own checkout moved or was deleted out from under it after it
 # started running -- would otherwise abort with -e's own exit 1, which in
 # this script means "invalid mermaid", blaming a fabricated content verdict
-# on a checkout/machine fault. This runs BEFORE gate-lib.sh is sourced below,
-# so gate_could_not_run is not yet defined -- same chicken-and-egg reason the
-# source guard immediately below hardcodes its own fallback instead of
-# calling it.
-#
-# Honest about the cost, though: unlike the source guard -- which is the guard
-# FOR the source and so genuinely cannot use the library it is checking for --
-# this ordering is not forced. Nothing between here and the source line uses
-# $REPO, and that line derives its own path from $0 independently, so the two
-# blocks could be swapped and this could call the helper. Until they are, this
-# fallback emits the banner and cause but NOT the GATE_ADVISORY trailer below
-# -- half the contract, which is exactly what gate-lib.sh's header warns about
-# and what its ordering sweep cannot see, since this is not a call site at all.
-# Deferred to lode-dyq0 rather than done here: lode-ysr6 is rewriting that same
-# source line, and reordering it before that lands is the one edit that could
-# merge into a source line missing its advisory args.
-REPO="$(cd "$(dirname "$0")/.." && pwd)" || {
-  echo "GATE COULD NOT RUN: could not resolve the repo root from \"\$0\" ($0)" >&2
-  echo "-- its parent directory is missing or inaccessible. This is a" >&2
-  echo "machine/checkout fault, not a mermaid syntax error." >&2
-  exit 2
-}
+# on a checkout/machine fault. gate-lib.sh is now sourced above, so this
+# routes through gate_could_not_run like every other guard in this file,
+# and gets the full GATE_ADVISORY trailer (lode-dyq0; previously a
+# hardcoded exit-2 block that emitted the banner and cause but not the
+# trailer -- a half-contract emission tests/test_gate_lib.py's ordering
+# sweep could not see, since it was not a call site at all).
+REPO="$(cd "$(dirname "$0")/.." && pwd)" || gate_could_not_run \
+  "could not resolve the repo root from \"\$0\" ($0)" \
+  "-- its parent directory is missing or inaccessible."
 
 # `command -v docker` is a PROXY — it only proves some binary named `docker`
 # is on PATH. When Docker Desktop's engine is stopped (e.g. Resource Saver
@@ -105,29 +125,6 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)" || {
 # distinction is the whole lode-9i2p lesson. It also aborts before the setup
 # work below. Add new gate-could-not-run conditions to the LOOP check; add to
 # this probe only to say something the exit code alone cannot.
-
-# The ONE owner of the gate-could-not-run contract: the banner callers key on,
-# the caller's cause lines, the standing instruction to a reader, and exit 2.
-# Callers supply only the cause — the part that genuinely differs. Sourced
-# from scripts/gate-lib.sh (lode-090f) so this contract cannot drift out of
-# sync with the other gate scripts — they, plus .claude/agents/coding.md,
-# code-reviewer.md and .claude/skills/land/SKILL.md, key on exactly this
-# stderr shape.
-# The source itself must fail CLOSED (lode-bss5) -- see gate-lib.sh's Usage
-# section for the measurement and why the guard can't use the library it loads.
-# This gate's own advisory trailer, bound at source time (lode-ysr6; see
-# gate-lib.sh's GATE_ADVISORY contract for the mechanism and why it is not a
-# separate assignment). tests/test_validate_mermaid_gate.py's
-# _assert_gate_could_not_run pins the advisory TEXT below on an exit-2 path,
-# which no static sweep can see -- route any new exit-2 test through it.
-# shellcheck source=gate-lib.sh
-if ! . "$(dirname "$0")/gate-lib.sh" \
-     "This is a machine fault a human must fix, not a mermaid syntax error —" \
-     "do not hand-verify diagrams or hand off in place of this gate."; then
-  echo "GATE COULD NOT RUN: scripts/gate-lib.sh is missing or unreadable" >&2
-  echo "next to $0 -- this is a machine/checkout fault, not a branch verdict." >&2
-  exit 2
-fi
 
 if ! docker info >/dev/null 2>&1; then
   if command -v docker >/dev/null 2>&1; then

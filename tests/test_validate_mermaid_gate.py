@@ -60,7 +60,8 @@ def fake_bin(tmp_path: Path) -> Path:
     """A PATH dir with no docker of any kind on it.
 
     It holds only ``dirname`` — the single external binary the script runs
-    before it reaches the docker guard (to resolve its own repo root). That
+    before it reaches the docker guard (twice: to locate gate-lib.sh, then to
+    resolve its own repo root — see ``_add_broken_dirname``). That
     makes a PATH of exactly this one dir enough to reach the guard, and lets
     the docker-absent case be simulated by simply not putting a docker on it.
     """
@@ -152,11 +153,14 @@ def _assert_gate_could_not_run(
     on every ticket that adds a guard (it read "three" while the script had
     four, then seven).
 
-    One caller is not a call site: the REPO= fallback runs before gate-lib.sh
-    is sourced and hardcodes its own exit 2, so what this helper pins there is
-    that the hardcoded copy still says machine-fault-not-content. It does not,
-    and cannot, prove that copy carries the advisory trailer -- it does not
-    (lode-dyq0)."""
+    REPO= is a call site like any other now (lode-dyq0): gate-lib.sh is
+    sourced above it, so its failure routes through gate_could_not_run and
+    carries the full advisory trailer same as every other guard in this file.
+    The one caller that is NOT a call site is the source guard itself
+    (missing/unreadable gate-lib.sh) -- it genuinely cannot call the helper it
+    is checking for, so it hardcodes its own exit 2 with a DIFFERENT message
+    ("not a branch verdict", not "not a mermaid syntax error"); nothing in
+    this suite asserts that one against this helper."""
     assert result.returncode == 2, (
         f"expected exit 2 (gate could not run), got {result.returncode}\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
@@ -255,34 +259,68 @@ def test_genuine_content_failure_inside_loop_still_reports_per_doc_fail(fake_bin
 # ---------------------------------------------------------------------------
 
 
-def _add_broken_dirname(bin_dir: Path) -> None:
-    """A fake ``dirname`` that always reports a path with no existing parent.
+def _add_broken_dirname(bin_dir: Path) -> Path:
+    """A fake ``dirname`` that behaves correctly on its FIRST call, then
+    always reports a path with no existing parent on every call after that.
 
-    REPO= (``cd "$(dirname "$0")/.." && pwd``) is the very first thing in the
-    script that calls dirname -- ahead of even the gate-lib.sh source guard
-    -- so breaking dirname unconditionally is enough to isolate that one call
-    site: nothing before it in the script touches docker, mktemp, or
-    gate-lib.sh, so there is nothing else on the fake PATH to shadow."""
+    gate-lib.sh is now sourced above REPO= (lode-dyq0), and both that source
+    line and REPO= itself resolve their path via the identical
+    ``dirname "$0"`` -- same binary, same argument -- so a dirname that is
+    broken unconditionally would break the SOURCE first (a different failure
+    entirely: "gate-lib.sh is missing or unreadable", not "could not resolve
+    the repo root"). Answering correctly once, then breaking, isolates REPO='s
+    own call: the source line is the first thing in the script that invokes
+    dirname, so it gets the real answer and succeeds; REPO= is the second, and
+    gets the bogus one.
+
+    Returns the counter file, so the caller can assert that ordinal rather
+    than assume it: a future edit that adds a dirname call ABOVE the source
+    would otherwise make this test fail as "gate-lib.sh is missing or
+    unreadable", blaming the source guard for a regression that is not
+    there."""
+    counter = bin_dir / ".dirname-calls"
+    real_dirname = shutil.which("dirname")
+    assert real_dirname, "dirname not found — cannot build a hermetic PATH"
     shim = bin_dir / "dirname"
     shim.unlink()
-    shim.write_text('#!/bin/bash\necho "/nonexistent-repo-root-for-lode-3xqb-test"\n')
+    shim.write_text(
+        "#!/bin/bash\n"
+        f'COUNTER="{counter}"\n'
+        # Builtins only -- PATH on this fake bin dir is exactly this one
+        # directory (see fake_bin), so no external command (cat, expr, ...)
+        # is guaranteed to exist here to read/write the counter.
+        "n=0\n"
+        '[ -f "$COUNTER" ] && read -r n < "$COUNTER"\n'
+        'printf %s "$((n + 1))" > "$COUNTER"\n'
+        'if [ "$n" -eq 0 ]; then\n'
+        f'  exec "{real_dirname}" "$@"\n'
+        "else\n"
+        '  echo "/nonexistent-repo-root-for-lode-3xqb-test"\n'
+        "fi\n"
+    )
     shim.chmod(0o755)
+    return counter
 
 
 def test_repo_root_resolution_failure_is_gate_could_not_run(fake_bin):
-    """REPO= runs BEFORE gate-lib.sh is sourced, so gate_could_not_run is not
-    yet defined when it could fail -- it carries its own hardcoded fallback
-    instead, mirroring the source guard immediately below it in the script
-    (same chicken-and-egg reason). Removing that fallback lets a failing `cd`
-    fall through to -e's own abort with the FAILING COMMAND's exit status
-    (bash's own 1 here), which in this script means "invalid mermaid" --
-    exactly the lode-9i2p inversion, at the very first line that can trigger
-    it."""
-    _add_broken_dirname(fake_bin)
+    """REPO= now runs AFTER gate-lib.sh is sourced (lode-dyq0), so its `cd`
+    failure routes through gate_could_not_run like every other guard in this
+    script, rather than carrying its own hardcoded fallback. Removing the
+    guard entirely would let a failing `cd` fall through to -e's own abort
+    with the FAILING COMMAND's exit status (bash's own 1 here), which in this
+    script means "invalid mermaid" -- exactly the lode-9i2p inversion."""
+    counter = _add_broken_dirname(fake_bin)
 
     result = _run_gate(fake_bin)
 
     _assert_gate_could_not_run(result, says="could not resolve the repo root")
+    # The fixture's correct-once-then-broken behaviour only isolates REPO= if
+    # REPO= really is the SECOND dirname call. Asserted, not assumed.
+    assert counter.read_text() == "2", (
+        "expected exactly 2 dirname calls (gate-lib.sh source, then REPO=); "
+        f"got {counter.read_text()!r} — the call the fixture breaks is no "
+        "longer REPO="
+    )
 
 
 def _add_real_rm(bin_dir: Path) -> None:

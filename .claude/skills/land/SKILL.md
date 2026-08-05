@@ -798,15 +798,16 @@ for its full 0/1/2 exit-code contract (0 = merged, 1 = real conflict, 2 = machin
 message — the same convention `scripts/merge-precheck.sh` and `scripts/validate-mermaid.sh` use,
 lode-9i2p).
 
-That script runs a bare `git merge --no-ff` against **cwd**, with no ref or path pinning the target,
-so this block needs its **own** [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh)
-call as its first line (lode-pxyt) — Section 1's cannot reach it. The
-[rule and its reasoning live in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and
-apply here unchanged: keep the guard first and the `land-merge-one.sh` call it protects **in this
-same fence**. Splitting this block is what would silently un-guard it.
+That script runs a bare `git merge --no-ff` against **cwd**, with no ref or path pinning the target —
+but as of **lode-1nty**, [`land-merge-one.sh`](../../../scripts/land-merge-one.sh) asserts its own
+main-checkout identity internally, as its first real action, before attempting anything. This block
+therefore no longer needs its own `assert-main-checkout.sh` call: the guard now protects this call
+site (and the isolation-replay call site below) by construction, not by a caller remembering to fence
+it. This reverses lode-pxyt's original choice to guard this fence directly — see
+[docs/agents-workflow.md's main-checkout section](../../../docs/agents-workflow.md#mechanics-decided)
+for the decision and its reasoning.
 
 ```bash
-scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed
 STATE_DIR="$(git rev-parse --git-dir)/land-state"   # re-derive here -- this is a fresh Bash
 MSG_DIR="$STATE_DIR/msg"                                # invocation; nothing from 3a's block persists
 CONFLICTS_DIR="$STATE_DIR/conflicts"                    # except the FILES 3a wrote under $STATE_DIR
@@ -930,10 +931,13 @@ machine. A red gate is content; exit 2 is the machine.
   [`assert-main-checkout.sh`](../../../scripts/assert-main-checkout.sh) call as its first line
   (lode-gczf) — Section 1's cannot reach it. The
   [rule and its reasoning live in Section 1](#1-setup-the-pass--dolt-authoritative-fetch-origin) and
-  apply here unchanged: keep the guard first, and keep every destructive command below it **in this
-  same fence** — the replay loop's two `git reset --hard HEAD~1` calls and the `git merge` inside
-  `land-merge-one.sh` are protected only by sharing it. Splitting this block is what would silently
-  un-guard them.
+  apply here unchanged: keep the guard first, and keep this block's own destructive commands below it
+  **in this same fence** — the replay loop's two `git reset --hard HEAD~1` calls are protected only by
+  sharing it, since neither is ref/path-addressed. (The `git merge` inside `land-merge-one.sh` is, as
+  of **lode-1nty**, ALSO self-guarded internally — see Section 3's first-pass loop above — so this
+  fence's guard is now redundant defense-in-depth for that one call, not its sole protection; it stays
+  first here regardless, since it is still the sole protection for the two resets.) Splitting this
+  block is what would silently un-guard the resets.
 
   ```bash
   scripts/assert-main-checkout.sh || exit 1   # STOP THE PASS -- everything below assumes this passed

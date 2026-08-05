@@ -29,6 +29,11 @@ by reverting the script to the `.dependents[]` form: all three fail). That is
 the test satisfying the ticket's bar, "a test that FAILS against today's
 empty-$kids derivation". Same fake-`bd` pattern as
 tests/test_epic_debate_gate.py and tests/test_epic_completion_check.py.
+
+This module's `_fake_bd` is deliberately NOT unified with
+tests/test_blocks_dependents.py's and tests/test_epic_completion_check.py's --
+see the "RATIFIED DEFERRAL" paragraph in test_blocks_dependents.py's
+docstring for the reasoning (lode-863q, ratified by lode-ea5b).
 """
 
 from __future__ import annotations

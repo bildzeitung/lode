@@ -106,7 +106,7 @@ import time
 from pathlib import Path
 
 from _gitrepo import _git
-from conftest import _fenced_bash, bash_fence_blocks
+from conftest import _BLOCKQUOTE_MARKER, LAND_SKILL, _fenced_bash, bash_fence_blocks
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "land-lock.sh"
@@ -120,8 +120,8 @@ def _init_repo(tmp_path: Path) -> Path:
     `git worktree add` requires a ref to branch from) fails outright with
     `fatal: empty ident name` on a machine with no ambient global git identity
     -- a fresh clone or a CI container (measured: exit 128). Setting it here
-    rather than in those tests matches the seven sibling script-test modules
-    that all configure it inside their own `_init_repo`, and keeps this file
+    rather than in those tests matches its sibling script-test modules that
+    all configure it inside their own `_init_repo`, and keeps this file
     from passing only on machines that happen to have a global identity
     configured.
     """
@@ -1087,10 +1087,19 @@ _STALL_HOOK_VAR = "LAND_LOCK_TEST_STALL_SECONDS"
 # to name `_STALL_HOOK_VAR` (this ticket's own description does) would
 # otherwise redden this scan for a reason unrelated to any real caller --
 # excluded for that reason, not to widen what the scan is willing to miss.
+#
+# lode-do3q: read from the canonical scripts/beads-passive-exports.txt rather
+# than spelled out here (docs/decisions.md has the why). The assert is not
+# ceremony: an empty or missing list would silently empty this set and WIDEN
+# what the scan is willing to miss, with nothing red.
 _STALL_HOOK_SCAN_EXCLUDED_RELPATHS = {
-    ".beads/issues.jsonl",
-    ".beads/interactions.jsonl",
+    line
+    for line in (REPO_ROOT / "scripts" / "beads-passive-exports.txt")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line
 }
+assert _STALL_HOOK_SCAN_EXCLUDED_RELPATHS, "scripts/beads-passive-exports.txt is empty"
 
 
 def _stall_hook_offenders(repo_root: Path, *, allowed: set[Path]) -> list[str]:
@@ -1260,8 +1269,6 @@ def test_uncreatable_lock_reports_a_machine_fault_not_another_lander(
 # Call-site pins against the SHIPPED SKILL.md (the fence is where the bug was)
 # ---------------------------------------------------------------------------
 
-LAND_SKILL = REPO_ROOT / ".claude" / "skills" / "land" / "SKILL.md"
-
 
 def test_land_skill_acquires_and_releases_through_this_script() -> None:
     """The lock only serializes a pass that actually calls this script, and
@@ -1352,11 +1359,24 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     independence this test trades on. If someone ever adds such a block to
     land/SKILL.md, the answer is to re-derive the expected count some third way,
     NOT to relax the parser.
+
+    lode-wroz widened the parser again -- one leading blockquote marker is
+    stripped from every line -- so the count strips it too, through the SAME
+    `_BLOCKQUOTE_MARKER` the parser normalizes with. Sharing the marker shape
+    is not sharing the method: still a flat per-line count, no scan loop.
+    Verified against a scratch copy with one illustrative `> ```bash` /
+    `> echo hi` / `> ``` ` block appended: without the strip, one fewer
+    marker than parsed blocks, and this test goes red blaming the parser for
+    finding a fence the counter simply could not see under its blockquote;
+    with it, the two agree. No blockquoted fence exists in land/SKILL.md
+    today, so the strip is a measured no-op as shipped.
     """
     text = LAND_SKILL.read_text(encoding="utf-8")
     opening_marker = re.compile(r"^(?:`{3,}|~{3,})\s*(?:bash|sh)$")
     expected_marker_count = sum(
-        1 for line in text.splitlines() if opening_marker.match(line.strip())
+        1
+        for raw_line in text.splitlines()
+        if opening_marker.match(_BLOCKQUOTE_MARKER.sub("", raw_line, count=1).strip())
     )
     # A sanity floor on the independent count itself -- if this ever drops to
     # 0 the file lost every bash fence, which is a different, louder bug this
@@ -1368,8 +1388,11 @@ def test_fenced_bash_sees_every_bash_marker_including_indented_ones() -> None:
     assert parsed_block_count == expected_marker_count, (
         f"parsed {parsed_block_count} ```bash/```sh fenced blocks but "
         f"{expected_marker_count} opening ```bash/```sh markers exist in the "
-        "file -- the parser is missing some, e.g. an INDENTED fence a "
-        "column-0-anchored scanner cannot see (lode-ovgs)"
+        "file -- EITHER the parser is missing some (e.g. an INDENTED fence a "
+        "column-0-anchored scanner cannot see, lode-ovgs) OR this test's own "
+        "independent counter has drifted from the parser's fence-shape/"
+        "blockquote rules and is over- or under-counting -- check both "
+        "before assuming the parser is at fault"
     )
 
 
