@@ -592,9 +592,12 @@ isolation" below for how that differs from what `drain`'s outer `try` around eac
 pre-step catches.
 
 The roster itself is still by exception **type**, so at the two narrow sites it
-bounds nothing arriving as another type — e.g. `lode-t7en`'s wrong-shape results
-line, a raw `AttributeError`/`TypeError`. What `lode-knnt` changed is the
-*consequence* of that at the collect pre-step, not the roster.
+bounds nothing arriving as another type — e.g. a `sqlite3.OperationalError` from a
+provider-adjacent bug. (`lode-t7en`'s wrong-shape results line was one such
+example until `lode-i821` closed it directly at the `collect_batch` seam — see
+`docs/stack.md` "Error contract" — so it no longer reaches this outer catch at
+all.) What `lode-knnt` changed is the *consequence* of an escaping type at the
+collect pre-step, not the roster.
 
 `run_one` and `_batch_submit_enrich` special-case `(AuthError, LLMAuthError)` ahead
 of their generic catch: the claimed job is reset straight back to `'pending'` with
@@ -668,10 +671,12 @@ any *other*, healthy handle in the same pass from being collected — before
 this fix, a single raise anywhere in the loop aborted the whole function, and
 with it every remaining handle, for as long as the poisoned one stayed stuck.
 The catch is **consequence-scoped, not type-scoped**: it absorbs whatever
-exception type `collect_enrich_batch` raises — including a well-formed but
-wrong-shape results line surfacing as a raw `AttributeError`/`TypeError`
-rather than an `LLMProviderError` (`lode-t7en`) — so the isolation holds
-regardless of what a future provider bug happens to raise. The one exception
+exception type `collect_enrich_batch` raises — a well-formed but wrong-shape
+results line used to be exactly this (`lode-t7en`'s raw `AttributeError`/
+`TypeError` instead of an `LLMProviderError`), until `lode-i821` closed that
+class directly at the `collect_batch` seam (`docs/stack.md` "Error
+contract") — so the isolation holds regardless of what a *future* provider
+bug happens to raise. The one exception
 re-raised **immediately** rather than isolated is `AuthError`/`LLMAuthError`:
 not handle-specific, since every remaining handle would fail identically.
 Everything else is **deferred, not swallowed**: every other handle still gets
@@ -713,9 +718,11 @@ The stuck-batch case gets the same clean, traceback-free rendering the credentia
 case does, since `lode-yx1c` widened `lode work`'s handler to
 `(AuthError, LLMProviderError)` (the `lode work` bullet above owns it). Note that
 covers the *typed* failures only: a poisoned handle now bounded by the
-consequence-scoped catch above can still be of a type no CLI handler names (say
-lode-t7en's raw `AttributeError`), and that one does still surface as a raw
-traceback.
+consequence-scoped catch above can still be of a type no CLI handler names —
+`anthropic`'s non-status errors (`docs/stack.md` "Error contract"'s one
+remaining open class) are the live example now that `lode-i821` closed
+`lode-t7en`'s wrong-shape-line `AttributeError` directly at the seam — and
+that one does still surface as a raw traceback.
 
 **Consecutive-failure budget (`lode-u6he`).** A handle whose *poll itself*
 keeps raising — as opposed to succeeding but reporting an

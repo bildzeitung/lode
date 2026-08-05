@@ -2428,19 +2428,20 @@ def test_drain_still_runs_embed_jobs_when_a_batch_poll_fails_with_a_non_llm_erro
 ) -> None:
     """The starvation bound is consequence-scoped, not type-scoped (lode-knnt).
 
-    A well-formed but wrong-shape batch-results line surfaces from
+    A well-formed but wrong-shape batch-results line USED TO surface from
     ``collect_batch``'s loop body as a raw ``AttributeError``/``TypeError``,
-    not an ``LLMProviderError`` (lode-t7en) -- so ``drain()``'s own outer
-    catch around the collect pre-step must not be narrowly typed either, or
-    this specific failure mode would still starve the ``embed`` jobs exactly
-    as before lode-5zqa, just via a type outside the named tuple instead of
-    via a missing except clause entirely.
+    not an ``LLMProviderError`` -- ``lode-i821`` closed that specific class
+    directly at the ``collect_batch`` seam (``docs/stack.md`` "Error
+    contract"), but ``drain()``'s own outer catch around the collect
+    pre-step must still not be narrowly typed, since *some* future provider
+    bug could raise an equally unclassified type -- this test pins that
+    general contract, using the same ``AttributeError`` shape lode-t7en's
+    bug produced as a stand-in.
 
     Stubbed at the ``lode.enrich.collect_enrich_batch`` seam, matching
     ``test_batch_collect_isolates_one_poisoned_handle_from_a_healthy_one``
-    above -- this pins ``drain()``'s own contract, independent of whether
-    ``AnthropicProvider.collect_batch`` itself has been taught to convert
-    this class of failure yet (lode-t7en, open).
+    above -- this pins ``drain()``'s own contract, independent of what
+    ``AnthropicProvider.collect_batch`` itself does or doesn't convert.
     """
 
     def _fake_collect(conn_, batch_id, settings_, *, outcomes=None):
