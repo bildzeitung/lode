@@ -222,6 +222,31 @@ Consequences of this model, stated honestly:
 formats the Python code fences embedded in `docs/*.md`; the resulting churn to those fences is
 wanted, not something to revert.
 
+**B008 (`function-call-in-default-argument`) on `typer.Option`/`typer.Argument`: adopted with no
+carve-out, via the `Annotated` idiom (`lode-up58`).** `lode-cs5u.3` adopted B008 by hoisting the four
+sites it flagged in `src/lode/cli.py` to module-level singleton defaults — but B008 only flags a
+default whose parameter annotation is a known-immutable builtin (`bool`, `str` were skipped; `Path`
+and enum types were flagged), so the file ended up split between hoisted and inline
+`typer.Option(...)`/`typer.Argument(...)` defaults by a heuristic invisible at the call site, and the
+split would have ratcheted with every future `Path`- or enum-annotated option added. Two other options
+were considered and rejected: `extend-immutable-calls = ["typer.Option", "typer.Argument"]` in
+`pyproject.toml` would have silenced B008 correctly (ruff's own docs name CLI frameworks as the
+false-positive case) but only removes the lint, not the call-site inconsistency, and is a per-rule
+semantics carve-out this file's own "`ignore` is a work queue, not a policy" bar was written against;
+keeping the split as-is was rejected outright.
+
+**The decided fix:** all `typer.Option`/`typer.Argument` defaults in `src/lode/cli.py` (and
+`scripts/check_links.py`'s `--root`) use `Annotated[<type>, typer.Option(...)]` — Typer's current
+idiom — which moots B008 permanently rather than negotiating with it, since the construction no longer
+lives in the default-argument position at all. No `extend-immutable-calls` carve-out was added. The
+previously-hoisted single-use singletons (`_JOBS_STATUS_OPTION`, `_EGRESS_PURPOSE_OPTION`,
+`_DUMP_HTML_DIR_OPTION` in `cli.py`; `_ROOT_OPTION` in `check_links.py`) were unwound back to their
+call sites under `Annotated`. The genuinely-shared `_DEBUG_OPTION`/`_DB_OPTION` (used across many
+commands, not hoisted for lint) became shared `Annotated` type aliases (`DebugOption`, `DbOption`)
+instead of bare option-object defaults — same sharing, same reason, new idiom. A future `Path`- or
+enum-annotated option needs no hoist and no config change: every option/argument in the file is
+`Annotated`, so B008 has nothing left to flag.
+
 ### The lock-gen command is derived from `.python-version`, not hard-coded (lode-sys4)
 
 **Root cause of the original flap (`lode-gyag`):** `uv pip compile` does **not** read

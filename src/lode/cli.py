@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Annotated, NoReturn
 from urllib.parse import urlsplit
 
 import typer
@@ -313,20 +313,22 @@ def _tabular_table() -> SafeTable:
 #: Shared ``--debug`` option: raises the log level to DEBUG, which turns on every
 #: DEBUG-gated diagnostic (e.g. ``lode.tui.latency_probe``'s event-loop-lag probe,
 #: gated on ``log.isEnabledFor(logging.DEBUG)``) -- see main()'s docstring.
-_DEBUG_OPTION = typer.Option(
-    False,
-    "--debug",
-    help=(
-        "Enable DEBUG-level logging, turning on DEBUG-gated diagnostic "
-        "instrumentation (e.g. the event-loop-lag probe). Takes precedence "
-        "over LODE_LOG_LEVEL when passed; unset, LODE_LOG_LEVEL (default "
-        "INFO) still applies. See docs/configuration.md."
+DebugOption = Annotated[
+    bool,
+    typer.Option(
+        "--debug",
+        help=(
+            "Enable DEBUG-level logging, turning on DEBUG-gated diagnostic "
+            "instrumentation (e.g. the event-loop-lag probe). Takes precedence "
+            "over LODE_LOG_LEVEL when passed; unset, LODE_LOG_LEVEL (default "
+            "INFO) still applies. See docs/configuration.md."
+        ),
     ),
-)
+]
 
 
 @app.callback()
-def main(ctx: typer.Context, debug: bool = _DEBUG_OPTION) -> None:
+def main(ctx: typer.Context, debug: DebugOption = False) -> None:
     """lode — capture and retrieve what you learn at work."""
     # Group callback: keeps lode a multi-command app so ``--help`` lists the
     # subcommands. Configure logging once, here, so every subcommand (and the
@@ -357,11 +359,13 @@ def _open_db(db: Path | None) -> sqlite3.Connection:
 
 #: Shared ``--db`` option for the db-backed commands — an explicit per-invocation
 #: override of just the DB file; the default root is ``$LODE_HOME`` (lode.config).
-_DB_OPTION = typer.Option(
-    None,
-    "--db",
-    help="SQLite database path (default: $LODE_HOME/lode.db, i.e. ~/.lode/lode.db).",
-)
+DbOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--db",
+        help="SQLite database path (default: $LODE_HOME/lode.db, i.e. ~/.lode/lode.db).",
+    ),
+]
 
 
 def _write_draft(db_path: Path, note_id: str, body: str) -> Path:
@@ -454,10 +458,11 @@ def _enrich_immediately(
 
 @app.command()
 def add(
-    text: str | None = typer.Argument(
-        None, help="Note body. Omit to read the note verbatim from stdin."
-    ),
-    db: Path | None = _DB_OPTION,
+    text: Annotated[
+        str | None,
+        typer.Argument(help="Note body. Omit to read the note verbatim from stdin."),
+    ] = None,
+    db: DbOption = None,
 ) -> None:
     """Capture a note, enqueue its derive jobs, and fast-track enrichment.
 
@@ -533,15 +538,20 @@ _ABSTAIN_LINE = (
 
 @app.command()
 def ask(
-    question: str = typer.Argument(
-        ..., help="Your question, answered from your own notes with citations."
-    ),
-    think_harder: bool = typer.Option(
-        False,
-        "--think-harder",
-        help="Use the higher-quality 'think harder' Q&A model (Claude Opus).",
-    ),
-    db: Path | None = _DB_OPTION,
+    question: Annotated[
+        str,
+        typer.Argument(
+            help="Your question, answered from your own notes with citations."
+        ),
+    ],
+    think_harder: Annotated[
+        bool,
+        typer.Option(
+            "--think-harder",
+            help="Use the higher-quality 'think harder' Q&A model (Claude Opus).",
+        ),
+    ] = False,
+    db: DbOption = None,
 ) -> None:
     """Answer a question from your notes -- retrieve, synthesize, gate, then cite.
 
@@ -729,10 +739,13 @@ def _resolve_as_of(conn: sqlite3.Connection, support: Support) -> str | None:
 
 @app.command()
 def purge(
-    target: str = typer.Argument(
-        ..., help="Note id, or an unambiguous prefix of one, to hard-delete."
-    ),
-    db: Path | None = _DB_OPTION,
+    target: Annotated[
+        str,
+        typer.Argument(
+            help="Note id, or an unambiguous prefix of one, to hard-delete."
+        ),
+    ],
+    db: DbOption = None,
 ) -> None:
     """Hard-delete a note and its derived data (see docs/externals.md).
 
@@ -764,10 +777,11 @@ def purge(
 
 @app.command()
 def recover(
-    target: str = typer.Argument(
-        ..., help="Note id, or an unambiguous prefix of one, to recover."
-    ),
-    db: Path | None = _DB_OPTION,
+    target: Annotated[
+        str,
+        typer.Argument(help="Note id, or an unambiguous prefix of one, to recover."),
+    ],
+    db: DbOption = None,
 ) -> None:
     """Undo a soft-delete: repoint a tombstoned note's head past the tombstone.
 
@@ -933,12 +947,14 @@ def _abort_on_provider_error(command: str, err: BaseException) -> NoReturn:
 
 @app.command(name="notes")
 def notes_(
-    deleted: bool = typer.Option(
-        False,
-        "--deleted",
-        help="List only tombstoned (soft-deleted) notes, instead of live ones.",
-    ),
-    db: Path | None = _DB_OPTION,
+    deleted: Annotated[
+        bool,
+        typer.Option(
+            "--deleted",
+            help="List only tombstoned (soft-deleted) notes, instead of live ones.",
+        ),
+    ] = False,
+    db: DbOption = None,
 ) -> None:
     """List notes -- live by default, tombstoned with --deleted.
 
@@ -1057,10 +1073,10 @@ def _render_external(external: ExternalView) -> str:
 
 @app.command(name="show")
 def show_(
-    target: str = typer.Argument(
-        ..., help="Note id, or an unambiguous prefix of one, to show."
-    ),
-    db: Path | None = _DB_OPTION,
+    target: Annotated[
+        str, typer.Argument(help="Note id, or an unambiguous prefix of one, to show.")
+    ],
+    db: DbOption = None,
 ) -> None:
     """Show a note's head body plus its derived enrichment (on-demand introspection).
 
@@ -1517,7 +1533,7 @@ def _enrichment_model_stale(
 
 @app.command()
 def status(
-    db: Path | None = _DB_OPTION,
+    db: DbOption = None,
 ) -> None:
     """Show work-queue health: job counts, dead-letters, an egress summary, and what needs your attention.
 
@@ -1735,7 +1751,7 @@ def status(
 
 @app.command()
 def reembed(
-    db: Path | None = _DB_OPTION,
+    db: DbOption = None,
 ) -> None:
     """Force a fresh embed job for every live head (lode-g274.7).
 
@@ -1833,7 +1849,7 @@ def reembed(
 
 @app.command()
 def reenrich(
-    db: Path | None = _DB_OPTION,
+    db: DbOption = None,
 ) -> None:
     """Force a fresh enrich job for every live head whose annotations are stale (lode-14jr).
 
@@ -1916,17 +1932,13 @@ def reenrich(
         typer.echo("no stale enrichment found -- nothing to re-enrich.")
 
 
-#: ``jobs --status`` option: narrows the listing to jobs in one status.
-#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
-_JOBS_STATUS_OPTION = typer.Option(
-    None, "--status", help="Only list jobs in this status (default: all)."
-)
-
-
 @app.command(name="jobs")
 def jobs_(
-    status: JobStatus | None = _JOBS_STATUS_OPTION,
-    db: Path | None = _DB_OPTION,
+    status: Annotated[
+        JobStatus | None,
+        typer.Option("--status", help="Only list jobs in this status (default: all)."),
+    ] = None,
+    db: DbOption = None,
 ) -> None:
     """List the derive jobs on the work queue (see docs/storage.md).
 
@@ -1964,17 +1976,15 @@ def jobs_(
         typer.echo(line)
 
 
-#: ``egress --purpose`` option: narrows the listing to sends of one purpose.
-#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
-_EGRESS_PURPOSE_OPTION = typer.Option(
-    None, "--purpose", help="Only list sends of this purpose (default: all)."
-)
-
-
 @app.command()
 def egress(
-    purpose: EgressPurpose | None = _EGRESS_PURPOSE_OPTION,
-    db: Path | None = _DB_OPTION,
+    purpose: Annotated[
+        EgressPurpose | None,
+        typer.Option(
+            "--purpose", help="Only list sends of this purpose (default: all)."
+        ),
+    ] = None,
+    db: DbOption = None,
 ) -> None:
     """List what content has left the box for the cloud, and when.
 
@@ -2013,15 +2023,20 @@ def egress(
 
 @app.command(name="no-egress")
 def no_egress_(
-    external_id: str = typer.Argument(
-        ..., help="The external source's id (its canonical URL) to mark/clear."
-    ),
-    clear: bool = typer.Option(
-        False,
-        "--clear",
-        help="Clear no_egress instead of setting it (source becomes cloud-eligible again).",
-    ),
-    db: Path | None = _DB_OPTION,
+    external_id: Annotated[
+        str,
+        typer.Argument(
+            help="The external source's id (its canonical URL) to mark/clear."
+        ),
+    ],
+    clear: Annotated[
+        bool,
+        typer.Option(
+            "--clear",
+            help="Clear no_egress instead of setting it (source becomes cloud-eligible again).",
+        ),
+    ] = False,
+    db: DbOption = None,
 ) -> None:
     """Mark (or --clear) an external source no_egress (see docs/externals.md).
 
@@ -2208,44 +2223,49 @@ def _dump_all_notes(
         typer.echo("no external HTML captured for any note")
 
 
-#: ``dump-html --dir`` option: where ``--file`` writes its per-note dumps.
-#: Module-level per ruff B008 (no ``typer.Option(...)`` in an argument default).
-_DUMP_HTML_DIR_OPTION = typer.Option(
-    None,
-    "--dir",
-    help="Directory to write files into with --file (created if "
-    "absent). Default: the current directory. Only valid with --file.",
-)
-
-
 @app.command(name="dump-html")
 def dump_html(
-    target: str | None = typer.Argument(
-        None,
-        help="Note id, or an unambiguous prefix of one, to dump an external "
-        "for. Required unless --all is given; conflicts with --all.",
-    ),
-    selector: str | None = typer.Argument(
-        None,
-        help="Which external to dump when the note has more than one: its "
-        "1-based listing index, or its external id (URL) verbatim. "
-        "Conflicts with --all.",
-    ),
-    all_notes: bool = typer.Option(
-        False,
-        "--all",
-        help="Dump every live note's dumpable external(s) instead of one "
-        "target. Conflicts with an explicit target/selector.",
-    ),
-    file: bool = typer.Option(
-        False,
-        "--file",
-        help="Write dump(s) to per-note file(s) (named <note-id>-NNNN.dmp, "
-        "see --dir) instead of printing to stdout. Valid with or without "
-        "--all.",
-    ),
-    dir_: Path | None = _DUMP_HTML_DIR_OPTION,
-    db: Path | None = _DB_OPTION,
+    target: Annotated[
+        str | None,
+        typer.Argument(
+            help="Note id, or an unambiguous prefix of one, to dump an external "
+            "for. Required unless --all is given; conflicts with --all."
+        ),
+    ] = None,
+    selector: Annotated[
+        str | None,
+        typer.Argument(
+            help="Which external to dump when the note has more than one: its "
+            "1-based listing index, or its external id (URL) verbatim. "
+            "Conflicts with --all."
+        ),
+    ] = None,
+    all_notes: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Dump every live note's dumpable external(s) instead of one "
+            "target. Conflicts with an explicit target/selector.",
+        ),
+    ] = False,
+    file: Annotated[
+        bool,
+        typer.Option(
+            "--file",
+            help="Write dump(s) to per-note file(s) (named <note-id>-NNNN.dmp, "
+            "see --dir) instead of printing to stdout. Valid with or without "
+            "--all.",
+        ),
+    ] = False,
+    dir_: Annotated[
+        Path | None,
+        typer.Option(
+            "--dir",
+            help="Directory to write files into with --file (created if "
+            "absent). Default: the current directory. Only valid with --file.",
+        ),
+    ] = None,
+    db: DbOption = None,
 ) -> None:
     """Print a note's drawn-down external's raw HTML (its captured snapshot).
 
@@ -2438,7 +2458,7 @@ def _config_knob_table(rows: list[tuple[str, str, str]]) -> SafeTable:
 
 @app.command()
 def config(
-    db: Path | None = _DB_OPTION,
+    db: DbOption = None,
 ) -> None:
     """Show the resolved on-disk locations and every runtime/tune knob.
 
@@ -2771,19 +2791,24 @@ def _run_verify(
 
 @app.command()
 def verify(
-    jira: bool = typer.Option(False, "--jira", help="Verify the JIRA Cloud connector."),
-    confluence: bool = typer.Option(
-        False, "--confluence", help="Verify the Confluence Cloud connector."
-    ),
-    arg: str | None = typer.Argument(
-        None,
-        metavar="[ISSUE_OR_PAGE]",
-        help=(
-            "Optional JIRA issue key/URL or Confluence page id/URL: also runs "
-            "a read-only content dry-run, and doubles as the base-URL source "
-            "when {connector}_base_url is not configured."
+    jira: Annotated[
+        bool, typer.Option("--jira", help="Verify the JIRA Cloud connector.")
+    ] = False,
+    confluence: Annotated[
+        bool,
+        typer.Option("--confluence", help="Verify the Confluence Cloud connector."),
+    ] = False,
+    arg: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="[ISSUE_OR_PAGE]",
+            help=(
+                "Optional JIRA issue key/URL or Confluence page id/URL: also runs "
+                "a read-only content dry-run, and doubles as the base-URL source "
+                "when {connector}_base_url is not configured."
+            ),
         ),
-    ),
+    ] = None,
 ) -> None:
     """Read-only preflight: confirm a JIRA/Confluence connector is configured and reachable.
 
@@ -2813,7 +2838,7 @@ def verify(
 @app.command()
 def tui(
     ctx: typer.Context,
-    db: Path | None = _DB_OPTION,
+    db: DbOption = None,
 ) -> None:
     """Launch the Textual TUI, starting on the instant capture screen.
 
@@ -3024,34 +3049,40 @@ def _format_outstanding(jobs: list[tuple[int, str, str, str]]) -> str:
 
 @app.command()
 def work(
-    db: Path | None = _DB_OPTION,
-    loop: bool = typer.Option(
-        False,
-        "--loop",
-        "--watch",
-        help="Poll continuously (same as --watch); sleep --interval seconds between passes.",
-    ),
-    interval: float = typer.Option(
-        5.0,
-        "--interval",
-        help="Polling interval in seconds (--loop / --watch / --wait).",
-        min=0.1,
-    ),
-    wait: bool = typer.Option(
-        False,
-        "--wait",
-        "--until-done",
-        help=(
-            "Block, polling every --interval seconds, until the queue is "
-            "fully drained or a bounded timeout elapses (see "
-            "docs/configuration.md), whichever comes first. On timeout, "
-            "exits non-zero naming the still-pending/running jobs -- just "
-            "re-run 'lode work' (or --wait again) to keep collecting; a "
-            "large enrich batch can legitimately take a long time to land. "
-            "Mutually exclusive with --loop/--watch, which never exits on "
-            "its own."
+    db: DbOption = None,
+    loop: Annotated[
+        bool,
+        typer.Option(
+            "--loop",
+            "--watch",
+            help="Poll continuously (same as --watch); sleep --interval seconds between passes.",
         ),
-    ),
+    ] = False,
+    interval: Annotated[
+        float,
+        typer.Option(
+            "--interval",
+            help="Polling interval in seconds (--loop / --watch / --wait).",
+            min=0.1,
+        ),
+    ] = 5.0,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            "--until-done",
+            help=(
+                "Block, polling every --interval seconds, until the queue is "
+                "fully drained or a bounded timeout elapses (see "
+                "docs/configuration.md), whichever comes first. On timeout, "
+                "exits non-zero naming the still-pending/running jobs -- just "
+                "re-run 'lode work' (or --wait again) to keep collecting; a "
+                "large enrich batch can legitimately take a long time to land. "
+                "Mutually exclusive with --loop/--watch, which never exits on "
+                "its own."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Drain the async work queue: claim, run, retry, or dead-letter each job.
 
@@ -3202,34 +3233,42 @@ def work(
 
 @app.command()
 def backfill(
-    connector: str | None = typer.Argument(
-        None,
-        help=(
-            "Registered connector name (see 'lode backfill --list'). Omit to "
-            "list registered connectors."
+    connector: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Registered connector name (see 'lode backfill --list'). Omit to "
+                "list registered connectors."
+            )
         ),
-    ),
-    list_connectors: bool = typer.Option(
-        False,
-        "--list",
-        help="List registered connectors and exit.",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        help="Report what would change without writing anything.",
-    ),
-    retry_tombstoned: bool = typer.Option(
-        False,
-        "--retry-tombstoned",
-        help=(
-            "Also re-enqueue a fresh refresh for a target whose head "
-            "snapshot already tombstoned on a prior backfill pass. Idempotent "
-            "re-run only -- never needed on a first migration, since a first "
-            "migration mints a brand-new, never-tombstoned target."
+    ] = None,
+    list_connectors: Annotated[
+        bool,
+        typer.Option(
+            "--list",
+            help="List registered connectors and exit.",
         ),
-    ),
-    db: Path | None = _DB_OPTION,
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Report what would change without writing anything.",
+        ),
+    ] = False,
+    retry_tombstoned: Annotated[
+        bool,
+        typer.Option(
+            "--retry-tombstoned",
+            help=(
+                "Also re-enqueue a fresh refresh for a target whose head "
+                "snapshot already tombstoned on a prior backfill pass. Idempotent "
+                "re-run only -- never needed on a first migration, since a first "
+                "migration mints a brand-new, never-tombstoned target."
+            ),
+        ),
+    ] = False,
+    db: DbOption = None,
 ) -> None:
     """Re-run a connector's draw-down for its already-processed links under CURRENT routing.
 
