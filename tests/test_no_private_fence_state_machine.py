@@ -26,6 +26,18 @@ name -- i.e. a private open/close toggle. tests/conftest.py's own
 ``fence_scan`` is exactly this shape, which is why it is the one sanctioned
 exemption rather than something the gate could ever selectively allow inside
 other files.
+
+Two things it deliberately does not do. It does not resolve names: a fence
+marker hoisted to a module constant (``_FENCE = "```"`` ... ``if
+line.startswith(_FENCE)``) puts no literal in the ``if`` test and slips
+through, as does the precompiled-regex shape below. And the flag-shape
+narrowing is, today, unexercised -- measured over every scanned module, ZERO
+``if``s carry a literal fence marker in their test at all, so nothing in the
+repo currently depends on the toggle half to stay green. It is kept because
+reading ``fence_scan``'s output and testing a block's own leading marker is a
+legitimate shape (pinned below) that the marker test alone would reject. This
+gate catches the shapes that have actually recurred five times, not an
+adversary.
 """
 
 from __future__ import annotations
@@ -39,8 +51,9 @@ EXEMPT = {REPO_ROOT / "tests" / "conftest.py"}
 
 
 def _contains_fence_literal(node: ast.AST) -> bool:
-    """Whether ``node``'s subtree contains a string constant carrying a 3+
-    run of backticks or tildes -- CommonMark's own fence-marker shape."""
+    """Whether ``node``'s subtree contains a string constant carrying ``` or
+    ~~~ -- a plain substring test, which a longer CommonMark fence run
+    (````bash) contains too."""
     return any(
         isinstance(sub, ast.Constant)
         and isinstance(sub.value, str)
@@ -100,27 +113,27 @@ def _toggles_a_flag(body: list[ast.stmt]) -> bool:
     )
 
 
-def fence_toggle_findings(tree: ast.AST) -> list[tuple[int, str]]:
-    """Every ``ast.If`` in ``tree`` whose test is a literal fence-marker
-    startswith/membership check AND whose body (or else-branch) assigns a
-    boolean-flag-shaped value -- the private open/close state machine this
-    gate exists to forbid. Returns ``(lineno, dumped-test)`` pairs."""
-    findings = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.If)
-            and _is_fence_marker_test(node.test)
-            and (_toggles_a_flag(node.body) or _toggles_a_flag(node.orelse))
-        ):
-            findings.append((node.lineno, ast.dump(node.test)))
-    return findings
+def fence_toggle_findings(tree: ast.AST) -> list[int]:
+    """The line number of every ``ast.If`` in ``tree`` whose test is a literal
+    fence-marker startswith/membership check AND whose body (or else-branch)
+    assigns a boolean-flag-shaped value -- the private open/close state
+    machine this gate exists to forbid."""
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and _is_fence_marker_test(node.test)
+        and (_toggles_a_flag(node.body) or _toggles_a_flag(node.orelse))
+    ]
 
 
 def _scan_paths() -> list[Path]:
-    paths: list[Path] = []
-    for scan_dir in SCAN_DIRS:
-        paths.extend(sorted(scan_dir.glob("*.py")))
-    return [p for p in paths if p not in EXEMPT]
+    return [
+        path
+        for scan_dir in SCAN_DIRS
+        for path in sorted(scan_dir.glob("*.py"))
+        if path not in EXEMPT
+    ]
 
 
 def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
@@ -130,8 +143,10 @@ def test_no_private_fence_toggle_state_machine_outside_conftest() -> None:
     offenders: list[str] = []
     for path in _scan_paths():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for lineno, _test_src in fence_toggle_findings(tree):
-            offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+        offenders.extend(
+            f"{path.relative_to(REPO_ROOT)}:{lineno}"
+            for lineno in fence_toggle_findings(tree)
+        )
     assert not offenders, (
         "private fence-toggle state machine(s) found outside tests/conftest.py: "
         f"{offenders} -- reuse tests/conftest.py's fence_scan/bash_fence_blocks "
@@ -160,9 +175,15 @@ def test_gate_sabotage_catches_the_pre_lode_jm4a_shape() -> None:
     """SABOTAGE PROOF (lode-k5qb AC3): the exact inline state machine that
     lived in tests/test_sweep_digest_id.py's
     ``test_both_sweep_call_sites_use_the_script_not_an_inline_query`` before
-    lode-k5qb unified it onto tests/conftest.py's shared ``bash_fence_blocks``
-    (see git history at 5344414). If this shape is ever reintroduced anywhere
-    in scope, the gate above must go red on it."""
+    lode-k5qb unified it onto tests/conftest.py's shared ``bash_fence_blocks``,
+    reproduced verbatim below rather than cited by sha -- the commit that
+    carried it is on a merged branch and will not survive gc. If this shape is
+    ever reintroduced anywhere in scope, the gate above must go red on it.
+
+    Re-verified during lode-k5qb's review against the REAL file, not just this
+    synthetic copy: restoring the pre-change tests/test_sweep_digest_id.py
+    reddens the gate above with
+    ``tests/test_sweep_digest_id.py:175``."""
     src = """
 def f(text):
     in_block = False
